@@ -16,6 +16,7 @@ loguru
 google-auth
 
 ipython # for debugging
+ipdb # for debugging
 
 django-redis
 redis
