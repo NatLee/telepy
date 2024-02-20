@@ -1,0 +1,30 @@
+supervisor # for handle two or more services
+
+django==4.2.6
+djangorestframework==3.14.0
+
+django-cors-headers==3.11.0
+django-bootstrap3==21.2
+djangorestframework-simplejwt==4.8.0
+
+drf-yasg==1.21.4
+pyparsing==3.0.8
+
+whitenoise==6.5.0 # staticfiles
+
+loguru
+google-auth
+
+ipython # for debugging
+
+django-redis
+redis
+
+# task scheduler
+django-rq
+rq
+
+# websocket
+channels==4.0.0
+channels_redis==4.1.0
+daphne==4.0.0
