@@ -81,6 +81,7 @@ INSTALLED_APPS = [
     # apps
     "custom_jwt",
     "custom_auth",
+    "login",
 ]
 
 MIDDLEWARE = [
