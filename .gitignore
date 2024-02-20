@@ -1,5 +1,9 @@
 # Custom ignore files
 
+ssh/root_ssh_key/authorized_keys
+ssh/ssh_host_keys/*_key
+ssh/ssh_host_keys/*_key.pub
+
 log
 logs
 backend/staticfiles
