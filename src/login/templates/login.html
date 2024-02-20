@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+   <meta charset="utf-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1">
+   <title>Login</title>
+   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+   <style>
+      body, html {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        justify-content: center; /* Aligns horizontally */
+        align-items: center; /* Aligns vertically */
+        background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+        background-size: 400% 400%;
+        animation: gradientBG 15s ease infinite;
+      }
+      @keyframes gradientBG {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+      .login-container {
+        padding: 2rem;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        max-width: 400px;
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0 auto;
+        position: relative;
+        z-index: 2;
+      }
+      .form-control {
+        border-radius: 20px;
+      }
+      .btn-primary {
+        border-radius: 20px;
+        padding: 0.75rem 1.5rem;
+        font-size: 1rem;
+      }
+      .login-title {
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin-bottom: 1.5rem;
+        color: #333;
+        text-align: center;
+      }
+      body.swal2-shown .login-container {
+        transition: transform 0.3s ease-in-out; /* Smooth transition for any position changes */
+        transform: translateY(-100%); /* Adjust the position based on the alert size */
+      }
+   </style>
+</head>
+<body>
+
+<div class="login-container">
+   <h2 class="login-title">Django Docker</h2>
+   <form id="loginForm">
+      <div class="mb-3">
+         <label for="username" class="form-label">Username</label>
+         <input type="text" class="form-control" id="username" required>
+      </div>
+      <div class="mb-3">
+         <label for="password" class="form-label">Password</label>
+         <input type="password" class="form-control" id="password" required>
+      </div>
+      <div class="d-grid">
+         <button type="submit" class="btn btn-primary">Login</button>
+      </div>
+   </form>
+   <p class="text-center text-danger mt-3" id="loginError"></p>
+</div>
+
+</body>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+<!-- SweetAlert2 Library -->
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+<script>
+    // Function to renew the access token
+    async function verifyAccessToken(accseeToken) {
+        const response = await fetch('/api/auth/token/verify', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ token: accseeToken })
+        });
+    
+        if (response.ok) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+    
+    // Function to check if the user is already logged in
+    async function checkLoginStatus() {
+        const accessToken = localStorage.getItem('accessToken');
+        if (accessToken) {
+            const tokenIsValid = await verifyAccessToken(accessToken);
+            if (tokenIsValid) {
+                // Token is valid or was successfully renewed, redirect to /
+                window.location.href = '/';
+                return;
+            }
+        }
+    
+        // If no valid token, continue showing the login form
+        attachLoginFormEvent();
+    }
+    
+    // Function to attach the event to the login form
+    function attachLoginFormEvent() {
+        document.getElementById('loginForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            const payload = {
+               username: username,
+               password: password
+            };
+            
+            fetch('/api/auth/token', {
+               method: 'POST',
+               headers: {
+                  'Content-Type': 'application/json',
+               },
+               body: JSON.stringify(payload)
+            })
+            .then(response => {
+               if (!response.ok) {
+                  throw new Error('Login failed');
+               }
+               return response.json();
+            })
+            .then(data => {
+                // Store the JWT in localStorage
+                localStorage.setItem('accessToken', data.access_token);
+                localStorage.setItem('refreshToken', data.refresh_token);
+             
+                // Redirect to /
+                window.location.href = '/';
+            })
+            .catch(error => {
+                // Use SweetAlert to show the error
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Oops...',
+                    text: 'Login failed, please try again.',
+                })
+            });
+        });
+    }
+    
+    // Check login status when the page loads
+    checkLoginStatus();
+    </script>
+
+</html>
