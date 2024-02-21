@@ -2,8 +2,8 @@ from django.db import models
 
 class AuthorizedKeys(models.Model):
 
-    hostname = models.CharField(max_length=100, unique=True)
-    key = models.TextField()
+    hostname = models.CharField(max_length=128, unique=True)
+    key = models.CharField(max_length=19200, unique=True, blank=False, null=False) # SSH Key (public)
 
     description = models.TextField(blank=True, null=True)
 
