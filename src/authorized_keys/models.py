@@ -2,7 +2,7 @@ from django.db import models
 
 class AuthorizedKeys(models.Model):
 
-    username = models.CharField(max_length=100, unique=True)
+    hostname = models.CharField(max_length=100, unique=True)
     key = models.TextField()
 
     description = models.TextField(blank=True, null=True)
@@ -12,7 +12,7 @@ class AuthorizedKeys(models.Model):
 
 
     def __str__(self):
-        return f'[{self.username}] {self.key[:5]}...{self.key[-5:]}'
+        return f'[{self.hostname}] {self.key[:5]}...{self.key[-5:]}'
 
     class Meta:
         verbose_name = 'Authorized Key'
