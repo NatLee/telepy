@@ -1,5 +1,7 @@
 # Custom ignore files
 
+ssh/backend_ssh_key/id_rsa*
+
 ssh/root_ssh_key/authorized_keys
 ssh/ssh_host_keys/*_key
 ssh/ssh_host_keys/*_key.pub
