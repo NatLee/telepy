@@ -1,0 +1,6 @@
+Host telepy-ssh
+    HostName telepy-ssh
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    User telepy
+    Port 2222
