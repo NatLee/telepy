@@ -3,35 +3,48 @@ from django.db import models
 class ReverseServerAuthorizedKeys(models.Model):
     # Reverse Server Authorized Keys for endpoint to connect with this SSH server
 
-    hostname = models.CharField(max_length=128, unique=True)
-    key = models.CharField(max_length=19200, unique=True, blank=False, null=False) # SSH Key (public)
-
-    description = models.TextField(blank=True, null=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    hostname = models.CharField(max_length=128, unique=True, verbose_name='Host Name')
+    key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
+    reverse_port = models.PositiveIntegerField(blank=False, null=False, unique=True, verbose_name='Reverse Port')
+    description = models.TextField(blank=True, null=True, verbose_name='Description')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
 
     def __str__(self):
-        return f'[{self.hostname}] {self.key[:20]} ... {self.key[-20:]}'
+        return f'[R][{self.hostname}] {self.key[:20]} ... {self.key[-20:]}'
 
     class Meta:
-        verbose_name = 'Reverse Server Authorized Key'
-        verbose_name_plural = 'Reverse Server Authorized Keys'
+        verbose_name = 'Reverse Server Key'
+        verbose_name_plural = 'Reverse Server Keys'
+
+class ServiceAuthorizedKeys(models.Model):
+    # Service Authorized Keys used to check service on the SSH server
+
+    service = models.CharField(max_length=128, unique=True, verbose_name='Service Name')
+    key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
+    description = models.TextField(blank=True, null=True, verbose_name='Description')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
+
+    def __str__(self):
+        return f'[S][{self.service}] {self.key[:20]} ... {self.key[-20:]}'
+
+    class Meta:
+        verbose_name = 'Service Key'
+        verbose_name_plural = 'Service Keys'
 
 class UserAuthorizedKeys(models.Model):
-    # User Authorized Keys for reversed SSH tunnel
+    # User Authorized Keys for reversed SSH tunnel (user to connect with endpoints)
 
-    hostname = models.CharField(max_length=128, unique=True)
-    key = models.CharField(max_length=19200, unique=True, blank=False, null=False) # SSH Key (public)
-
-    description = models.TextField(blank=True, null=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    hostname = models.CharField(max_length=128, unique=True, verbose_name='Host Name')
+    key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
+    description = models.TextField(blank=True, null=True, verbose_name='Description')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
 
     def __str__(self):
-        return f'[{self.hostname}] {self.key[:20]} ... {self.key[-20:]}'
+        return f'[U][{self.hostname}] {self.key[:20]} ... {self.key[-20:]}'
 
     class Meta:
-        verbose_name = 'User Authorized Key'
-        verbose_name_plural = 'User Authorized Keys'
+        verbose_name = 'User Keys'
+        verbose_name_plural = 'User Keys'
