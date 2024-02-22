@@ -23,11 +23,11 @@ class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        ports = monitor_reverse_tunnel()
+        monitor_ports = monitor_reverse_tunnel()
         active_ports = ReverseServerAuthorizedKeys.objects.values_list('reverse_port', flat=True)
         result = {
-            port: True if port in active_ports else False
-            for port in ports
+            port: True if port in monitor_ports else False
+            for port in active_ports
         }
         return Response(result)
 
