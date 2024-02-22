@@ -10,7 +10,10 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
-from reverse_keys.utils import issue_token, verify_token
+from reverse_keys.utils import issue_token, verify_token, remove_token
+from reverse_keys.utils import find_multiple_free_ports
+
+from authorized_keys.utils import is_valid_ssh_public_key
 
 class IssueToken(APIView):
     permission_classes = (IsAuthenticated,)
@@ -67,13 +70,6 @@ class CreateReverseServerKey(APIView):
                 required=True,
             ),
             openapi.Parameter(
-                name="reverse_port",
-                in_=openapi.IN_FORM,
-                description="Reverse Port",
-                type=openapi.TYPE_INTEGER,
-                required=True,
-            ),
-            openapi.Parameter(
                 name="description",
                 in_=openapi.IN_FORM,
                 description="Description of the key",
@@ -96,21 +92,19 @@ class CreateReverseServerKey(APIView):
         hostname = request.data.get('hostname')
         key = request.data.get('key')
 
-        reverse_port = request.data.get('reverse_port')        
-        try:
-            reverse_port = int(reverse_port)
-        except ValueError:
-            return Response({"error": "Invalid reverse port"}, status=status.HTTP_400_BAD_REQUEST)
-    
+        if not is_valid_ssh_public_key(key):
+            return Response({"error": "Invalid SSH public key format"}, status=status.HTTP_400_BAD_REQUEST)
+
         description = request.data.get('description', '')
 
         try:
             reverse_key = ReverseServerAuthorizedKeys.objects.create(
                 hostname=hostname,
                 key=key,
-                reverse_port=reverse_port,
+                reverse_port=find_multiple_free_ports(1)[0],
                 description=description
             )
+            remove_token(token)
             return Response({"message": "Reverse Server Key created successfully"})
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
