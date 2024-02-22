@@ -108,8 +108,8 @@
         if (accessToken) {
             const tokenIsValid = await verifyAccessToken(accessToken);
             if (tokenIsValid) {
-                // Token is valid or was successfully renewed, redirect to /
-                window.location.href = '/';
+                // Token is valid or was successfully renewed, redirect to index
+                window.location.href = '/tunnels/index';
                 return;
             }
         }
@@ -149,8 +149,8 @@
                 localStorage.setItem('accessToken', data.access_token);
                 localStorage.setItem('refreshToken', data.refresh_token);
              
-                // Redirect to /
-                window.location.href = '/';
+                // Redirect to index
+                window.location.href = '/tunnels/index';
             })
             .catch(error => {
                 // Use SweetAlert to show the error
