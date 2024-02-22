@@ -28,7 +28,8 @@ class IssueToken(APIView):
                     }
                 }
             )
-        }
+        },
+        tags=['Reverse Server Keys']
     )
     def get(self, request, *args, **kwargs):
         token = issue_token()
@@ -79,7 +80,8 @@ class CreateReverseServerKey(APIView):
                 type=openapi.TYPE_STRING,
                 required=False,
             ),
-        ]
+        ],
+        tags=['Reverse Server Keys']
     )
     def post(self, request, token, *args, **kwargs):
 
