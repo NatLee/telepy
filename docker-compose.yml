@@ -1,0 +1,47 @@
+version: "3.9"
+   
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    image: telepy-web
+    hostname: telepy-web
+    container_name: telepy-web
+    entrypoint: /src/docker-entrypoint.sh
+    environment:
+      - REVERSE_SERVER_SSH_PORT=${REVERSE_SERVER_SSH_PORT}
+      - WEB_SERVER_PORT=${WEB_SERVER_PORT}
+    ports:
+      - ${WEB_SERVER_PORT}:8000
+    volumes: 
+      - ./logs/backend:/logs
+      - ./src:/src
+      - ./supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:rw
+      - ./ssh/root_ssh_key:/ssh # for reading authorized_keys
+      - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
+
+  redis:
+    image: redis:alpine
+    hostname: telepy-redis
+    container_name: telepy-redis
+
+  ssh:
+    restart: unless-stopped
+    image: lscr.io/linuxserver/openssh-server
+    container_name: telepy-ssh
+    hostname: telepy-ssh
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Taipei
+      - SUDO_ACCESS=true
+      - USER_NAME=telepy
+      - WORK_DIR=/config
+    volumes:
+       - ./logs/ssh:/config/logs
+       - ./ssh/root_ssh_key:/config/.ssh
+       - ./ssh/ssh_host_keys:/config/ssh_host_keys
+       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
+    ports:
+      - ${REVERSE_SERVER_SSH_PORT}:2222 # for SSH connections, REVERSE_SERVER_SSH_PORT
