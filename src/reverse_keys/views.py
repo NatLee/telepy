@@ -16,6 +16,7 @@ from reverse_keys.utils import issue_token, verify_token, remove_token
 from reverse_keys.utils import find_multiple_free_ports
 
 from authorized_keys.utils import is_valid_ssh_public_key
+from tunnels.consumers import send_notification_to_group
 
 class IssueToken(APIView):
     permission_classes = (IsAuthenticated,)
@@ -106,6 +107,12 @@ class CreateReverseServerKey(APIView):
                 description=description
             )
             remove_token(token)
+            send_notification_to_group(
+                {
+                    "action": "UPDATED",
+                    "details": f"[{reverse_key.hostname}] Reverse Server Key Created"
+                }
+            )
             return Response({
                 "id": reverse_key.id,
                 "hostname": reverse_key.hostname,
