@@ -256,7 +256,7 @@ for log_type in LOG_TYPES:
     }
 
 HANDLERS.update({
-    'console': {
+    'tunnels': {
         'class': 'logging.StreamHandler',
         'stream': sys.stdout
     }
@@ -282,8 +282,8 @@ LOGGING = {
             'propagate': True,
             'level': "INFO"
         },
-        'xterm': {
-            'handlers': ['console'],
+        'tunnels': {
+            'handlers': ['tunnels'],
             'propagate': False,
             'level': "DEBUG"
         }
