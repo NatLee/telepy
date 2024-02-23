@@ -22,11 +22,12 @@ def remove_token(token:str) -> None:
 
 
 def find_multiple_free_ports(count: int) -> List[int]:
-    # Find multiple free ports on the host.
+    # Use SSH connection to the remote server to check for used ports
     used_ports = monitor_used_ports()
-    free_ports = list(set(range(1024, 65535)) - set(used_ports))[:count]
+    # Find the first `count` free ports
+    free_ports = sorted(list(set(range(1024, 65535)) - set(used_ports)))[:count]
 
     if len(free_ports) < count:
         raise Exception("Not enough free ports available.")
-    
+
     return free_ports
