@@ -48,7 +48,35 @@ function createToastAlert(msg, isFailure) {
    }, 2000);
 }
 
+function isValidSSHKey(key) {
+   const validKeyPrefixes = [
+       "ssh-rsa", 
+       "ssh-dss", 
+       "ecdsa-sha2-nistp256", 
+       "ecdsa-sha2-nistp384", 
+       "ecdsa-sha2-nistp521", 
+       "ssh-ed25519"
+   ];
+ 
+   // Check if the key starts with any of the valid prefixes
+   const isValidKeyPrefix = validKeyPrefixes.some(prefix => key.startsWith(prefix));
+   if (!isValidKeyPrefix) {
+       return false;
+   }
+ 
+   // Basic pattern to check for base64 part of the key (simplified and may not cover all edge cases)
+   // This regex checks for the base64 string and optionally a comment part.
+   const base64Pattern = /^[A-Za-z0-9+\/]+={0,3}( [^\s]+)?$/;
+   const keyParts = key.split(' ');
+   // Expecting at least two parts: type and key, optionally followed by a comment
+   if (keyParts.length < 2 || !base64Pattern.test(keyParts[1])) {
+       return false;
+   }
+ 
+   return true;
+ }
 
+ 
 // ---------------------------------------
 // check token on page load
 verifyAccessToken();
