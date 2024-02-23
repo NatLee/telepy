@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.parsers import FormParser
+from rest_framework.parsers import FormParser, JSONParser
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -47,7 +47,7 @@ class IssueToken(APIView):
 
 class CreateReverseServerKey(APIView):
     permission_classes = (AllowAny, IsAuthenticated,)
-    parser_classes = (FormParser,)
+    parser_classes = (JSONParser, FormParser,)
 
     @swagger_auto_schema(
         operation_summary="Create Reverse Server Key",
