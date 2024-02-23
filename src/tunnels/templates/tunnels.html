@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+
+{% block title %}Tunnels{% endblock %}
+
+{% block content %}
+<div class="mx-5">
+   <div class="d-flex justify-content-between align-items-center mb-3">
+      <div class="d-flex align-items-center">
+         <h2>Tunnels</h2>
+         <div class="websocket-status status ml-2" id="websocket-status"></div>
+      </div>
+      <div>
+         <button class="btn btn-secondary" id="newTunnels" onclick="window.location.href='/tunnels/create'">+</button>
+         <button class="btn btn-secondary" id="refresh" onclick="fetchAndDisplayReverseServerKeys()">Refresh</button>
+      </div>   
+   </div>
+   <div class="table-responsive">
+      <table class="table">
+         <thead>
+            <tr>
+               <th scope="col">Hostname</th>
+               <th scope="col">Reverse Port</th>
+               <th scope="col">Public Key</th>
+               <th scope="col">Status</th>
+               <th scope="col">Actions</th>
+            </tr>
+         </thead>
+         <tbody id="tunnelsTableBody">
+         </tbody>
+      </table>
+   </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% load static %}
+<script src="{% static 'js/tunnels.js' %}"></script>
+{% endblock %}
