@@ -14,6 +14,9 @@ backend/staticfiles
 *.pid
 
 000*_*.py
+00*_*.py
+0*_*.py
+
 *_initial.py
 
 .vscode
