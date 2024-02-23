@@ -70,12 +70,14 @@ function createTunnel() {
         return;
       }
 
+      const sshPort = document.getElementById('sshPort').value;
+
       const tunnelCommand = `autossh \\
   -M 6769 \\
   -o "ServerAliveInterval 15" \\
   -o "ServerAliveCountMax 3" \\
   -p ${data.port} \\
-  -NR '*:${data.reverse_port}:localhost:2222' \\
+  -NR '*:${data.reverse_port}:localhost:${sshPort}' \\
   telepy@${window.location.hostname}`;
 
       document.getElementById('tunnelCommand').textContent = tunnelCommand;
