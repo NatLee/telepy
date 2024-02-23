@@ -26,3 +26,13 @@ class TunnelsCreate(APIView):
     )
     def get(self, request):
         return render(request, 'create.html')
+
+class UserKeys(APIView):
+    permission_classes = (AllowAny,)
+    @swagger_auto_schema(
+        operation_summary="User Keys",
+        operation_description="User Keys page",
+        tags=['Page']
+    )
+    def get(self, request):
+        return render(request, 'keys.html')
