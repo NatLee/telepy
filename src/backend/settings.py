@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/4.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
+import os
 import sys
 from datetime import timedelta
 import logging
@@ -35,6 +36,12 @@ DEBUG = True
 print(f"---------- Debug mode: {DEBUG}")
 # ------------------------------ END - DEBUG setting --------------------------------
 
+REVERSE_SERVER_SSH_PORT = os.getenv("REVERSE_SERVER_SSH_PORT", None)
+print(f"---------- Reverse SSH Server Port: {REVERSE_SERVER_SSH_PORT}")
+WEB_SERVER_PORT = os.getenv("WEB_SERVER_PORT", None)
+print(f"---------- Web Server Port: {WEB_SERVER_PORT}")
+
+
 ALLOWED_HOSTS = ['*']
 
 # -------------- START - CORS Setting --------------
@@ -43,6 +50,7 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1",
     "http://localhost",
+    f"http://localhost:{WEB_SERVER_PORT}",
 ]
 # -------------- END - CORS Setting -----------------
 
@@ -82,6 +90,9 @@ INSTALLED_APPS = [
     "custom_jwt",
     "custom_auth",
     "login",
+    "authorized_keys",
+    "reverse_keys",
+    "tunnels",
 ]
 
 MIDDLEWARE = [
