@@ -6,6 +6,8 @@ from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import UserAuthorizedKeys
 from authorized_keys.models import ServiceAuthorizedKeys
 
+from authorized_keys.models import ReverseServerUsernames
+
 from authorized_keys.utils import is_valid_ssh_public_key
 
 class ReverseServerAuthorizedKeysForm(forms.ModelForm):
@@ -80,3 +82,8 @@ class ServiceAuthorizedKeysAdmin(admin.ModelAdmin):
             return f"{key[:20]} ... {key[-20:]}"
         return key
     display_key.short_description = 'Key'
+
+@admin.register(ReverseServerUsernames)
+class ReverseServerUsernamesAdmin(admin.ModelAdmin):
+    list_display = ('reverse_server', 'username', 'created_at', 'updated_at')
+    search_fields = ('reverse_server', 'username')
