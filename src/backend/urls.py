@@ -36,8 +36,6 @@ urlpatterns = []
 urlpatterns += [
     # admin
     path(f"{URL_PREFIX}/__hidden_admin/", admin.site.urls),
-    # django-rq
-    path(f'{URL_PREFIX}/__django-rq/', include('django_rq.urls'))
 ]
 
 
