@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.parsers import FormParser, JSONParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -46,7 +46,7 @@ class IssueToken(APIView):
 
 class CreateReverseServerKey(APIView):
     permission_classes = (AllowAny, IsAuthenticated,)
-    parser_classes = (JSONParser, FormParser,)
+    parser_classes = (MultiPartParser, FormParser, JSONParser,)
 
     @swagger_auto_schema(
         operation_summary="Create Reverse Server Key",
@@ -57,29 +57,14 @@ class CreateReverseServerKey(APIView):
             ),
             400: "Invalid or expired token"
         },
-        manual_parameters=[
-            openapi.Parameter(
-                name="hostname",
-                in_=openapi.IN_FORM,
-                description="Host Name",
-                type=openapi.TYPE_STRING,
-                required=True,
-            ),
-            openapi.Parameter(
-                name="key",
-                in_=openapi.IN_FORM,
-                description="SSH Public Key",
-                type=openapi.TYPE_STRING,
-                required=True,
-            ),
-            openapi.Parameter(
-                name="description",
-                in_=openapi.IN_FORM,
-                description="Description of the key",
-                type=openapi.TYPE_STRING,
-                required=False,
-            ),
-        ],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT, 
+            properties={
+                'hostname': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+                'key': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+                'description': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+            },
+        ),
         tags=['Reverse Server Keys']
     )
     def post(self, request, token, *args, **kwargs):
