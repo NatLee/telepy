@@ -26,7 +26,7 @@ function fetchAndDisplayUserKeys() {
             `;
 
             const row = `
-            <tr>
+            <tr onclick="showKeyDetails('${item.hostname}', '${item.key}')">
                 <td>${item.hostname}</td>
                 <td>${item.key.substring(0, 20) || '&lt;none&gt;'}...</td>
                 <td>
@@ -48,6 +48,28 @@ function fetchAndDisplayUserKeys() {
     });
 }
 
+function showKeyDetails(hostname, key) {
+    // Populate the modal with key information
+    document.getElementById('keyHostname').textContent = `Hostname: ${hostname}`;
+    document.getElementById('keyTextArea').value = key;
+
+    // Show the modal
+    var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
+    keyDetailsModal.show();
+}
+
+function copyKeyToClipboard() {
+    var keyTextArea = document.getElementById('keyTextArea');
+    keyTextArea.select(); // Select the text
+    document.execCommand('copy'); // Execute copy command
+    Swal.fire({
+        icon: 'success',
+        title: 'Success',
+        text: 'Key has been copied to clipboard.',
+        showConfirmButton: false,
+        timer: 800
+    })
+}
 
 function notificationWebsocket() {
 
