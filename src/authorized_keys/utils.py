@@ -52,7 +52,7 @@ def ssh(command:str, hostname:str):
 
     return result.stdout
 
-def monitor_reverse_tunnel() -> List[int]:
+def monitor_used_ports() -> List[int]:
     ss_output = ssh(command="ss -tlnp", hostname="telepy-ssh")
     return parse_ss_ports(ss_output)
 

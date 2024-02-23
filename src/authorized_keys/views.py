@@ -8,7 +8,7 @@ from drf_yasg.utils import swagger_auto_schema
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.serializers import ReverseServerAuthorizedKeysSerializer
 
-from authorized_keys.utils import monitor_reverse_tunnel
+from authorized_keys.utils import monitor_used_ports
 
 class ReverseServerAuthorizedKeysList(generics.ListAPIView):
     queryset = ReverseServerAuthorizedKeys.objects.all()
@@ -23,7 +23,7 @@ class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        monitor_ports = monitor_reverse_tunnel()
+        monitor_ports = monitor_used_ports()
         active_ports = ReverseServerAuthorizedKeys.objects.values_list('reverse_port', flat=True)
         result = {
             port: True if port in monitor_ports else False
