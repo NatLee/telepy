@@ -29,7 +29,7 @@ class CheckReverseServerPortStatus(APIView):
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request):
         monitor_ports = monitor_used_ports()
-        active_ports = ReverseServerAuthorizedKeys.objects.values_list('reverse_port', flat=True)
+        active_ports = ReverseServerAuthorizedKeys.objects.all().values_list('reverse_port', flat=True)
         result = {
             port: True if port in monitor_ports else False
             for port in active_ports
