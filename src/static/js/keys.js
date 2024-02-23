@@ -72,7 +72,7 @@ function notificationWebsocket() {
         const data = JSON.parse(event.data);
         console.log('Notification message:', data.message);
         let action = data.message.action;
-        if (action === "UPDATED-USER-KEYS") {
+        if (action === "CREATED-USER-KEYS" || action === "DELETED-USER-KEYS") {
             createToastAlert(data.message.details, false);
             fetchAndDisplayUserKeys();
         }

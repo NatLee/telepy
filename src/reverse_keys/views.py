@@ -111,7 +111,7 @@ class CreateReverseServerKey(APIView):
             remove_token(token)
             send_notification_to_group(
                 {
-                    "action": "UPDATED-TUNNELS",
+                    "action": "CREATED-TUNNELS",
                     "details": f"[{reverse_key.hostname}] Reverse Server Key Created"
                 }
             )

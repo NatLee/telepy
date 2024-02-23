@@ -12,6 +12,7 @@ from authorized_keys.models import UserAuthorizedKeys
 from authorized_keys.serializers import UserAuthorizedKeysSerializer
 
 from authorized_keys.utils import monitor_used_ports
+from tunnels.consumers import send_notification_to_group
 
 class ReverseServerAuthorizedKeysList(generics.ListAPIView):
     queryset = ReverseServerAuthorizedKeys.objects.all()
@@ -48,7 +49,12 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def create(self, request, *args, **kwargs):
         """Create a new user authorized key"""
-        return super().create(request, *args, **kwargs)
+        result = super().create(request, *args, **kwargs)
+        send_notification_to_group({
+            'action': 'CREATED-USER-KEYS',
+            'details': 'A new user authorized key has been created'
+        })
+        return result
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def retrieve(self, request, *args, **kwargs):
@@ -68,4 +74,9 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def destroy(self, request, *args, **kwargs):
         """Delete a user authorized key"""
-        return super().destroy(request, *args, **kwargs)
+        result = super().destroy(request, *args, **kwargs)
+        send_notification_to_group({
+            'action': 'DELETED-USER-KEYS',
+            'details': 'A user authorized key has been deleted'
+        })
+        return result
