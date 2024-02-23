@@ -4,6 +4,8 @@ from uuid import uuid4
 
 from django.core.cache import cache
 
+from authorized_keys.utils import monitor_used_ports
+
 def issue_token() -> str:
     """生成一個token"""
     token = uuid4().hex
@@ -21,17 +23,8 @@ def remove_token(token:str) -> None:
 
 def find_multiple_free_ports(count: int) -> List[int]:
     # Find multiple free ports on the host.
-    free_ports = []
-    for port in range(1024, 65535):
-        if len(free_ports) >= count:
-            break
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(('127.0.0.1', port))  # Try to bind to the port.
-                free_ports.append(port)  # If successful, consider the port free.
-                s.close()  # Close the socket.
-            except socket.error:
-                pass  # If bind fails, the port is in use, so ignore this port.
+    used_ports = monitor_used_ports()
+    free_ports = list(set(range(1024, 65535)) - set(used_ports))[:count]
 
     if len(free_ports) < count:
         raise Exception("Not enough free ports available.")
