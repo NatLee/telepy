@@ -17,6 +17,7 @@ google-auth
 
 ipython # for debugging
 ipdb # for debugging
+pyinstrument # debug
 
 django-redis
 redis

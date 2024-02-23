@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     "drf_yasg",
     # package
     'django_rq',
+    'pyinstrument',
     # apps
     "custom_jwt",
     "custom_auth",
@@ -105,6 +106,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "pyinstrument.middleware.ProfilerMiddleware",
 ]
 
 ROOT_URLCONF = 'backend.urls'
