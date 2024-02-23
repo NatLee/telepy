@@ -17,7 +17,7 @@ function fetchAndDisplayReverseServerKeys() {
 
         data.forEach(item => {
             const actionButtons = `
-                <button class="btn btn-warning btn-sm me-3" onclick="window.open('/tunnels/shell/${item.hostname}')">Console</button>
+                <button class="btn btn-warning btn-sm me-3" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
             `;
 
             const row = `

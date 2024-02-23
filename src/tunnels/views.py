@@ -36,3 +36,13 @@ class UserKeys(APIView):
     )
     def get(self, request):
         return render(request, 'keys.html')
+
+class Terminal(APIView):
+    permission_classes = (AllowAny,)
+    @swagger_auto_schema(
+        operation_summary="Terminal",
+        operation_description="Terminal page",
+        tags=['Page']
+    )
+    def get(self, request, server_id):
+        return render(request, 'terminal.html')
