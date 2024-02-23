@@ -1,9 +1,11 @@
 import datetime
 
+from django.conf import settings
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.parsers import MultiPartParser, FormParser
+
 from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from drf_yasg.utils import swagger_auto_schema
@@ -42,8 +44,7 @@ class IssueToken(APIView):
         })
 
 class CreateReverseServerKey(APIView):
-    permission_classes = (AllowAny,)
-    parser_classes = (FormParser,)
+    permission_classes = (AllowAny, IsAuthenticated,)
 
     @swagger_auto_schema(
         operation_summary="Create Reverse Server Key",
@@ -105,6 +106,13 @@ class CreateReverseServerKey(APIView):
                 description=description
             )
             remove_token(token)
-            return Response({"message": "Reverse Server Key created successfully"})
+            return Response({
+                "id": reverse_key.id,
+                "hostname": reverse_key.hostname,
+                "key": reverse_key.key,
+                "port": settings.REVERSE_SERVER_SSH_PORT,
+                "reverse_port": reverse_key.reverse_port,
+                "description": reverse_key.description,
+            })
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
