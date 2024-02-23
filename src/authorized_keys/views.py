@@ -22,6 +22,7 @@ class ReverseServerAuthorizedKeysList(generics.ListAPIView):
 class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request):
         monitor_ports = monitor_used_ports()
         active_ports = ReverseServerAuthorizedKeys.objects.values_list('reverse_port', flat=True)
