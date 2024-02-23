@@ -22,10 +22,6 @@ pyinstrument # debug
 django-redis
 redis
 
-# task scheduler
-django-rq
-rq
-
 # websocket
 channels==4.0.0
 channels_redis==4.1.0

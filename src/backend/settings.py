@@ -85,7 +85,6 @@ INSTALLED_APPS = [
     "rest_framework",
     "drf_yasg",
     # package
-    'django_rq',
     'pyinstrument',
     # apps
     "custom_jwt",
@@ -207,14 +206,6 @@ STATICFILES_DIRS = [
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-RQ_QUEUES = {
-    'default': {
-        'URL': 'redis://telepy-redis:6379',  # Adjust the Redis URL as needed.
-        'DEFAULT_TIMEOUT': 500,
-        'USE_REDIS_CACHE': 'default',
-    },
-}
 
 CACHES = {
     'default': {
