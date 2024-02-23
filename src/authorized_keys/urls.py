@@ -1,19 +1,20 @@
 from django.urls import path, include
-from authorized_keys.views import ReverseServerAuthorizedKeysList
 from authorized_keys.views import CheckReverseServerPortStatus
-
+from authorized_keys.views import ReverseServerUsernamesMapServerId
 urlpatterns = [
-
-    path('server/keys', ReverseServerAuthorizedKeysList.as_view(), name='reverse-server-keys-list'),
     path('server/status/ports', CheckReverseServerPortStatus.as_view(), name='reverse-server-ports-status'),
-
+    path('server/<int:server_id>/usernames', ReverseServerUsernamesMapServerId.as_view(), name='reverse-server-usernames'),
 ]
 
 from rest_framework.routers import DefaultRouter
 from authorized_keys.views import UserAuthorizedKeysViewSet
+from authorized_keys.views import ReverseServerUsernamesViewSet
+from authorized_keys.views import ReverseServerAuthorizedKeysViewSet
 
 router = DefaultRouter(trailing_slash=False)
 router.register(r'user/keys', UserAuthorizedKeysViewSet)
+router.register(r'server/usernames', ReverseServerUsernamesViewSet)
+router.register(r'server/keys', ReverseServerAuthorizedKeysViewSet)
 
 urlpatterns += [
     path('', include(router.urls)),

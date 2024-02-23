@@ -17,6 +17,23 @@ class ReverseServerAuthorizedKeys(models.Model):
         verbose_name = 'Reverse Server Key'
         verbose_name_plural = 'Reverse Server Keys'
 
+class ReverseServerUsernames(models.Model):
+    # Reverse Server Usernames for endpoint to connect with this SSH server
+
+    reverse_server = models.ForeignKey(ReverseServerAuthorizedKeys, on_delete=models.CASCADE, verbose_name='Reverse Server')
+    username = models.CharField(max_length=128, verbose_name='Username')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
+
+    def __str__(self):
+        return f'[R][{self.username}]'
+
+    class Meta:
+        verbose_name = 'Reverse Server Username'
+        verbose_name_plural = 'Reverse Server Usernames'
+        # Unique together
+        unique_together = ('reverse_server', 'username')
+
 class ServiceAuthorizedKeys(models.Model):
     # Service Authorized Keys used to check service on the SSH server
 
