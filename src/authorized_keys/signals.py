@@ -5,6 +5,8 @@ from django.dispatch import receiver
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ServiceAuthorizedKeys
 
+from tunnels.consumers import send_notification_to_group
+
 def get_authorized_keys() -> List[str]:
     # Get service keys
     service_keys = ServiceAuthorizedKeys.objects.all().values_list('key', flat=True)
@@ -24,6 +26,14 @@ def update_authorized_keys_file(keys: List[str]):
 def update_reverse_server_authorized_keys(sender, **kwargs):
     keys = get_authorized_keys()
     update_authorized_keys_file(keys)
+
+    send_notification_to_group(
+        {
+            "action": "UPDATED-TUNNELS",
+            "details": "Reverse Server Authorized Keys have been updated"
+        }
+    )
+
 
 @receiver(post_save, sender=ServiceAuthorizedKeys)
 @receiver(post_delete, sender=ServiceAuthorizedKeys)
