@@ -17,3 +17,12 @@ class TunnelsIndex(APIView):
     def get(self, request):
         return render(request, 'tunnels.html')
 
+class TunnelsCreate(APIView):
+    permission_classes = (AllowAny,)
+    @swagger_auto_schema(
+        operation_summary="Tunnels Create",
+        operation_description="Create page for Tunnels",
+        tags=['Page']
+    )
+    def get(self, request):
+        return render(request, 'create.html')
