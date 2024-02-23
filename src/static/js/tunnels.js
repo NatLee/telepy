@@ -95,7 +95,7 @@ function notificationWebsocket() {
         const data = JSON.parse(event.data);
         console.log('Notification message:', data.message);
         let action = data.message.action;
-        if (action === "UPDATED") {
+        if (action === "UPDATED-TUNNELS") {
             createToastAlert(data.message.details, false);
             fetchAndDisplayReverseServerKeys();
         }
