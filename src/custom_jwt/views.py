@@ -1,14 +1,11 @@
-from django.shortcuts import render
-
-# Create your views here.
-
-
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework_simplejwt.views import TokenVerifyView
 
+from drf_yasg.utils import swagger_auto_schema
 
 def get_client_ip(request):
     x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
@@ -43,6 +40,10 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 class MyTokenObtainPairView(TokenObtainPairView):
     serializer_class = MyTokenObtainPairSerializer
 
+    @swagger_auto_schema(tags=["Login"])
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
 
 class MyTokenRefreshSerializer(TokenRefreshSerializer):
     def validate(self, attrs):
@@ -55,3 +56,14 @@ class MyTokenRefreshSerializer(TokenRefreshSerializer):
 
 class MyTokenRefreshView(TokenRefreshView):
     serializer_class = MyTokenRefreshSerializer
+
+    @swagger_auto_schema(tags=["Login"])
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+
+class MyTokenVerifyView(TokenVerifyView):
+    @swagger_auto_schema(tags=["Login"])
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
