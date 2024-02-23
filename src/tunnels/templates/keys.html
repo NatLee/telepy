@@ -29,7 +29,7 @@
    </div>
 </div>
 
-<!-- Modal -->
+<!-- Create Modal -->
 <div class="modal fade" id="createKeyModal" tabindex="-1" role="dialog" aria-labelledby="createKeyModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg" role="document">
         <div class="modal-content">
@@ -78,6 +78,28 @@
             </div>
         </div>
     </div>
+</div>
+
+<!-- Key Details Modal -->
+<div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="keyDetailsModalLabel">Key Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="keyDetailsModalBody">
+        <!-- Placeholder for other key information -->
+        <p id="keyHostname">Hostname: </p>
+        <!-- Textarea for the key -->
+        <textarea id="keyTextArea" class="form-control" rows="12" readonly></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="copyKeyToClipboard()">Copy Key</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 {% endblock %}
