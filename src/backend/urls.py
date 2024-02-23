@@ -48,6 +48,12 @@ urlpatterns += [
     path(f"{URL_PREFIX}/auth/", include("custom_jwt.urls")),
     # login
     path("login", include("login.urls"), name="login"),
+    # reverse_keys
+    path(f"{URL_PREFIX}/reverse/", include("reverse_keys.urls")),
+    # tunnels
+    path(f"tunnels/", include("tunnels.urls")),
+    # authorized_keys
+    path(f"{URL_PREFIX}/reverse/", include("authorized_keys.urls")),
 ]
 
 # -------------- START - Swagger View --------------
