@@ -2,6 +2,9 @@ from django.contrib.auth import login
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from drf_yasg.utils import swagger_auto_schema
+
 from custom_jwt.views import MyTokenObtainPairView
 
 from custom_auth.serializers import SocialLoginSerializer
@@ -25,6 +28,7 @@ class GoogleLogin(MyTokenObtainPairView):
     permission_classes = (AllowAny,)  # AllowAny for login
     serializer_class = SocialLoginSerializer
 
+    @swagger_auto_schema(tags=["Login"])
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         if serializer.is_valid(raise_exception=True):
