@@ -28,7 +28,16 @@ docker-compose up
 bash dev-create-superuser.sh
 ```
 
-5. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>`, it will show the login page.
+5. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>/login`, it will show the login page.
+
+## API Documentation
+
+If you want to see the API documentation, you need to login first.
+
+1. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>/api/__hidden_admin/` and login with the superuser.
+
+2. Go to `http//localhost:<YOUR_WEB_SERVER_PORT>/api/__hidden_swagger` and you will see the Swagger.
+
 
 ## License
 
