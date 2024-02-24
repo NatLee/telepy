@@ -22,7 +22,7 @@ function fetchAndDisplayUserKeys() {
 
         data.forEach(item => {
             const actionButtons = `
-                <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(${item.id})">Delete</button>
+                <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${item.id})">Delete</button>
             `;
 
             const row = `
@@ -166,7 +166,9 @@ function submitNewKey() {
     });
 }
 
-function deleteUserKey(keyId) {
+function deleteUserKey(event, keyId) {
+    event.stopPropagation(); // Stop the event from bubbling up
+
     const accessToken = localStorage.getItem('accessToken');
 
     fetch(`/api/reverse/user/keys/${keyId}`, {
@@ -177,7 +179,6 @@ function deleteUserKey(keyId) {
     })
     .then(response => {
         if (response.ok) {
-            // Refresh the list or remove the row from the table
             fetchAndDisplayUserKeys(); // Refresh the keys list to reflect the deletion
         } else {
             throw new Error('Failed to delete user key: ' + response.statusText);
