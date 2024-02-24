@@ -99,17 +99,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
 
     async def disconnect(self, close_code):
-        # Handle disconnection: kill the child process (SSH session) if it's still running
+        # Gracefully terminate the child process
         if self.child_pid:
             try:
+                # First, try to terminate the process gently
+                os.kill(self.child_pid, signal.SIGTERM)
+                # Wait a brief period to allow for graceful shutdown
+                await asyncio.sleep(0.5)
+                # Forcefully kill if still alive
                 os.kill(self.child_pid, signal.SIGKILL)
                 os.waitpid(self.child_pid, 0)
             except ProcessLookupError:
                 pass
             finally:
+                # Ensure removal of reader happens before clearing fd
+                if self.fd is not None:
+                    asyncio.get_event_loop().remove_reader(self.fd)
                 self.child_pid = None
                 self.fd = None
-                asyncio.get_event_loop().remove_reader(self.fd)
 
     async def receive(self, text_data=None, bytes_data=None):
         # Handle receiving input from the client (e.g., keyboard input)
