@@ -137,7 +137,13 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
             confirmButtonText: 'Select',
             showDenyButton: true,
             denyButtonText: 'Delete',
-            allowOutsideClick: false, // Prevent closing by clicking outside
+            allowOutsideClick: false, // Prevent closing by clicking outside,
+            backdrop: `
+            rgba(20, 20, 20, 0.9)
+            url("/api/__hidden_statics/images/nyan-cat.gif")
+            left top
+            no-repeat
+          `,
             preConfirm: (username) => {
                 return username; // For selection
             },
