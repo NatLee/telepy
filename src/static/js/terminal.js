@@ -3,21 +3,6 @@ function getDisplayValue(value, defaultValue = 'N/A') {
     return value ? value : defaultValue;
 }
 
-const showError = (error) => {
-    Swal.fire({
-        title: 'Error!',
-        text: error.toString(),
-        icon: 'error',
-        confirmButtonText: 'OK'
-    }).then((result) => {
-        // Redirect to login page after user clicks 'OK'
-        if (result.isConfirmed || result.isDismissed) {
-            window.location.href = '/login';
-        }
-    });
-};
-
-
 function setupWebSocketConnection(serverID, username) {
     // Assuming Terminal and fit are properly imported and available
     Terminal.applyAddon(fit);
@@ -96,7 +81,6 @@ const serverID = getPathSegments();
 console.log(`Server ID:` + serverID);
 
 const accessToken = localStorage.getItem('accessToken');
-
 fetch(`/api/reverse/server/${serverID}/usernames`, {
     headers: {
         'Authorization': `Bearer ${accessToken}`
@@ -209,3 +193,53 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         confirmButtonText: 'OK'
     });
 });
+
+document.getElementById('checkServiceKeyBtn').addEventListener('click', function() {
+    const accessToken = localStorage.getItem('accessToken');
+    fetch('/api/reverse/service/keys', {
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+        },
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data && data.length > 0) {
+            const keyInfo = data[0]; // Assuming you want to show the first key for simplicity
+            Swal.fire({
+                title: 'Service Key',
+                html: `
+                  <p>Service: <strong>${keyInfo.service}</strong></p>
+                  <p>Key</p>
+                  <textarea id="serviceKeyText" readonly style="width: 100%; height: 180px; margin-top: 10px; background-color: #F0F0F0; border: 1px solid #ccc; box-shadow: inset 0 1px 1px rgba(0,0,0,.075); padding: 10px; border-radius: 4px;">${keyInfo.key}</textarea>
+                `,
+                showCancelButton: true,
+                confirmButtonText: 'Copy Key',
+                cancelButtonText: 'OK',
+                preConfirm: () => {
+                    const copyText = document.getElementById("serviceKeyText");
+                    copyText.select();
+                    document.execCommand("copy");
+                    Swal.fire('Copied!', 'The key has been copied to clipboard.', 'success');
+                },
+                footer: '<button id="reloadButton" class="swal2-styled">Reload</button>'
+            }).then((result) => {
+                if (result.dismiss === Swal.DismissReason.cancel) {
+                    Swal.close();
+                }
+            });
+
+            // Add click event listener for the Reload button in the footer
+            document.getElementById('reloadButton').addEventListener('click', function() {
+                location.reload();
+            });
+        } else {
+            Swal.fire('No Service Key Found', 'Please ensure you have a service key available.', 'info');
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching service keys:', error);
+        Swal.fire('Error', 'Failed to fetch service keys.', 'error');
+    });
+});
+
