@@ -70,7 +70,12 @@ class ReverseServerAuthorizedKeysConfig(APIView):
     User telepy
 """
         server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
-           
+
+        if not server_auth_key_user:
+            config_string += f"""
+# ========================================
+# You need to add a user to the reverse server authorized keys.
+# ========================================"""
 
         for username in server_auth_key_user:
             config_string += f"""
