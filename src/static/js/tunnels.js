@@ -18,6 +18,7 @@ function fetchAndDisplayReverseServerKeys() {
         data.forEach(item => {
             const actionButtons = `
                 <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
+                <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${item.id}')">Users</button>
                 <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${item.id})">Config</button>
                 <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${item.id}')">Delete</button>
             `;
@@ -200,7 +201,6 @@ function confirmDelete(serverId) {
     });
 }
 
-
 function deleteKey(serverId) {
     const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/reverse/server/keys/${serverId}`, {
@@ -223,6 +223,106 @@ function deleteKey(serverId) {
     });
 }
 
+function openUserManagementModal(serverId) {
+    $('#manageUsersModal').modal('show');
+
+    const addUserButtonContainer = document.getElementById('addUserButtonContainer');
+    addUserButtonContainer.innerHTML = ''; // Clear previous button if any
+
+    const addUserButton = document.createElement('button');
+    addUserButton.classList.add('btn', 'btn-outline-secondary');
+    addUserButton.textContent = 'Add User';
+    addUserButton.onclick = function() {
+        addUser(serverId);
+    };
+
+    addUserButtonContainer.appendChild(addUserButton);
+
+    fetchUserList(serverId);
+}
+
+
+function fetchUserList(serverId) {
+    const accessToken = localStorage.getItem('accessToken');
+    fetch(`/api/reverse/server/${serverId}/usernames`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      }
+    })
+    .then(response => response.json())
+    .then(users => {
+      const userListDiv = document.getElementById('userList');
+      userListDiv.innerHTML = ''; // Clear current list
+
+      if (users.length === 0) {
+        userListDiv.innerHTML = '<p class="text-muted">No users found.</p>';
+      } else {
+        const listGroup = document.createElement('ul');
+        listGroup.className = 'list-group';
+
+        users.forEach(user => {
+          const listItem = document.createElement('li');
+          listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
+
+          listItem.innerHTML = `
+            <span>${user.username}</span>
+            <button class="btn btn-danger btn-sm">Delete</button>
+          `;
+
+          const deleteUserBtn = listItem.querySelector('button');
+          // Pass the serverId along with the userId to the deleteUser function
+          deleteUserBtn.onclick = () => deleteUser(user.id, serverId);
+
+          listGroup.appendChild(listItem);
+        });
+
+        userListDiv.appendChild(listGroup);
+      }
+    });
+}
+
+
+function addUser(serverId) {
+    const accessToken = localStorage.getItem('accessToken');
+    const username = document.getElementById('newUsername').value;
+    fetch(`/api/reverse/server/usernames`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        reverse_server: serverId,
+        username: username
+      })
+    })
+    .then(response => {
+      if (response.ok) {
+        fetchUserList(serverId); // Refresh user list
+        // clear the input field
+        document.getElementById('newUsername').value = '';
+      } else {
+        // Handle the error, possibly show a message to the user
+      }
+    });
+}
+
+function deleteUser(userId, serverId) { // Add serverId parameter
+    const accessToken = localStorage.getItem('accessToken');
+    fetch(`/api/reverse/server/usernames/${userId}`, {
+        method: 'DELETE',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        }
+    })
+    .then(response => {
+      if (response.ok) {
+        fetchUserList(serverId); // Refresh user list using serverId
+      }
+    });
+}
 
 document.addEventListener('DOMContentLoaded', fetchAndDisplayReverseServerKeys);
 document.addEventListener('DOMContentLoaded', notificationWebsocket);
