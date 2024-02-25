@@ -26,7 +26,7 @@ function fetchAndDisplayUserKeys() {
             `;
 
             const row = `
-            <tr onclick="showKeyDetails('${item.hostname}', '${item.key}')">
+            <tr onclick="showKeyDetails('${item.hostname}', '${item.key}', ${item.description})">
                 <td>${item.hostname}</td>
                 <td>${item.key.substring(0, 20) || '&lt;none&gt;'}...</td>
                 <td>
@@ -48,10 +48,15 @@ function fetchAndDisplayUserKeys() {
     });
 }
 
-function showKeyDetails(hostname, key) {
+function showKeyDetails(hostname, key, description) {
     // Populate the modal with key information
     document.getElementById('keyHostname').textContent = `Hostname: ${hostname}`;
     document.getElementById('keyTextArea').value = key;
+    if (description) {
+        document.getElementById('keyDescriptionText').textContent = `Description: ${description}`;
+    } else {
+        document.getElementById('keyDescriptionText').textContent = 'No description provided.';
+    }
 
     // Show the modal
     var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
