@@ -123,6 +123,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                         });
                     }
                 });
+            } else {
+                location.reload();
             }
         });
     } else {
@@ -133,7 +135,6 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
             input: 'select',
             inputOptions: data.reduce((acc, curr) => ({...acc, [curr.username]: curr.username}), {}),
             inputPlaceholder: 'Select a username',
-            showCancelButton: true,
             confirmButtonText: 'Select',
             showDenyButton: true,
             denyButtonText: 'Delete',
@@ -154,10 +155,15 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                     input: 'text',
                     showCancelButton: true,
                     confirmButtonText: 'Delete',
+                    allowOutsideClick: false,
                     inputValidator: (value) => {
                         if (!value) {
                             return 'You need to enter a username!'
                         }
+                    },
+                    willClose: () => {
+                        // If user cancels the delete action, reload the page
+                        location.reload();
                     }
                 }).then((deleteResult) => {
                     const usernameID = data.find((item) => item.username === deleteResult.value).id;
@@ -176,7 +182,7 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                             } else {
                                 Swal.fire('Failed!', 'Could not delete the username.', 'error');
                             }
-                            return 'deleted'; // Indicate delete action complete
+                            location.reload();
                         });
                     }
                 });
@@ -187,7 +193,9 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                 setupWebSocketConnection(serverID, result.value);
             } else if (result.dismiss === Swal.DismissReason.deny) {
                 // Reload or refresh data after deletion
-                // Consider calling a function here that refreshes the username list
+                location.reload();
+            } else {
+                location.reload();
             }
         });
     }
