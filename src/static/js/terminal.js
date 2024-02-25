@@ -137,6 +137,7 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
             confirmButtonText: 'Select',
             showDenyButton: true,
             denyButtonText: 'Delete',
+            allowOutsideClick: false, // Prevent closing by clicking outside
             preConfirm: (username) => {
                 return username; // For selection
             },
