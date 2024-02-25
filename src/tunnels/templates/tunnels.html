@@ -30,6 +30,29 @@
       </table>
    </div>
 </div>
+
+
+<!-- Config Modal -->
+<div class="modal fade" id="configModal" tabindex="-1" aria-labelledby="configModalLabel" aria-hidden="true">
+   <div class="modal-dialog modal-dialog-scrollable modal-lg">
+     <div class="modal-content">
+       <div class="modal-header">
+         <h5 class="modal-title" id="configModalLabel">Reverse Server Configuration</h5>
+         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+       </div>
+       <div class="modal-body">
+         <!-- Config will be inserted here -->
+         <textarea id="configContent" class="form-control" style="height: 300px" readonly></textarea>
+       </div>
+       <div class="modal-footer">
+         <button type="button" class="btn btn-primary" onclick="copyConfigToClipboard()">Copy</button>
+         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+       </div>
+     </div>
+   </div>
+ </div>
+ 
+
 {% endblock %}
 
 {% block scripts %}
