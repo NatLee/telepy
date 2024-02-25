@@ -15,6 +15,8 @@ from authorized_keys.serializers import UserAuthorizedKeysSerializer
 from authorized_keys.models import ReverseServerUsernames
 from authorized_keys.serializers import ReverseServerUsernamesSerializer
 
+from authorized_keys.models import ServiceAuthorizedKeys
+
 from authorized_keys.utils import monitor_used_ports
 from tunnels.consumers import send_notification_to_group
 
@@ -166,3 +168,10 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
             for pk, username in usernames
         ])
 
+class ServiceAuthorizedKeysListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(tags=['Service Keys'])
+    def get(self, request):
+        services = ServiceAuthorizedKeys.objects.all().values('id', 'service', 'key', 'description')
+        return Response(services)
