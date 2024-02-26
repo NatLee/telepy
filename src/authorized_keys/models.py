@@ -52,6 +52,7 @@ class ServiceAuthorizedKeys(models.Model):
 
 class UserAuthorizedKeys(models.Model):
     # User Authorized Keys for reversed SSH tunnel (user to connect with endpoints)
+    # User also can access the SSH server using the private key
 
     hostname = models.CharField(max_length=128, unique=True, verbose_name='Host Name')
     key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
