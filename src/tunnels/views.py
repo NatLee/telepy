@@ -67,6 +67,7 @@ class ReverseServerAuthorizedKeysConfig(APIView):
         config_string = f"""Host telepy-ssh-server
     HostName {ssh_server_hostname}
     Port {settings.REVERSE_SERVER_SSH_PORT}
+    Compression yes
     User telepy
 """
         server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
@@ -82,6 +83,7 @@ class ReverseServerAuthorizedKeysConfig(APIView):
 Host {server_auth_key.hostname}
     HostName localhost
     Port {server_auth_key.reverse_port}
+    Compression yes
     User {username.username}
     ProxyCommand ssh -W %h:%p telepy-ssh-server"""
         return Response({'config': config_string})
