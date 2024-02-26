@@ -8,7 +8,6 @@ services:
     image: telepy-web
     hostname: telepy-web
     container_name: telepy-web
-    entrypoint: /src/docker-entrypoint.sh
     environment:
       - REVERSE_SERVER_SSH_PORT=${REVERSE_SERVER_SSH_PORT}
       - WEB_SERVER_PORT=${WEB_SERVER_PORT}
