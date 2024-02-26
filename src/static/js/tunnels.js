@@ -170,7 +170,7 @@ function confirmDelete(serverId) {
         allowOutsideClick: false, // Prevent closing by clicking outside
         backdrop: `
         rgba(0,0,123,0.4)
-        url("/api/__hidden_statics/images/nyan-cat.gif")
+        url("/api/__hidden_statics/images/rolling-cat.gif")
         left top
         no-repeat
       `
