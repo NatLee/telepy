@@ -23,6 +23,27 @@
         </div>
 
         <div class="mt-4">
+          <h4>User Keys</h4>
+          <p>You need to add the following keys to your server's <code>~/.ssh/authorized_keys</code> file.</p>
+          <ul id="userKeys">
+              <!-- User keys will be listed here -->
+          </ul>
+      </div>
+
+      <div class="mt-4">
+        <h4>Service Keys</h4>
+        <p>If you want to use console services, you can add the following keys.</p>
+        <ul id="serviceKeys">
+            <!-- Service keys will be listed here -->
+        </ul>
+      </div>
+
+
+        <div class="mt-2">
+            <button type="button" class="btn btn-outline-info" onclick="remindServiceKey()">Remind Me About Service Key</button>
+        </div>
+
+        <div class="mt-4">
             <label for="tunnelCommand">AutoSSH Tunnel Command:</label>
             <pre id="tunnelCommand" class="form-control">Click "Create Tunnel" to generate the command.</pre>
         </div>
@@ -32,6 +53,27 @@
         </div>
     </div>
 </div>
+
+<!-- Key Modal -->
+<div class="modal fade" id="keyModal" tabindex="-1" aria-labelledby="keyModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="keyModalLabel">Key Details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <textarea id="modalKeyContent" class="form-control" rows="5" readonly></textarea>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="copyKeyToClipboard()">Copy</button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+  
+  
 {% endblock %}
 
 {% block scripts %}
