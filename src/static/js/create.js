@@ -112,6 +112,86 @@ function copyToClipboard() {
       });
 }
 
+function fetchUserKeys() {
+  const accessToken = localStorage.getItem('accessToken');
+  fetch('/api/reverse/user/keys', {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  })
+  .then(response => response.json())
+  .then(data => {
+    const keysContainer = document.getElementById('userKeys');
+    let keysHtml = '';
+    data.forEach((key, index) => {
+      // Button triggers the Bootstrap modal
+      keysHtml += `<li>${key.hostname} - <button type="button" class="btn btn-primary" onclick="showKeyModal('${key.key}')">Full Key</button></li>`;
+    });
+    keysContainer.innerHTML = keysHtml;
+  })
+  .catch(error => {
+    console.error('Error fetching user keys:', error);
+  });
+}
+
+function fetchServiceKeys() {
+  const accessToken = localStorage.getItem('accessToken');
+  fetch('/api/reverse/service/keys', {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  })
+  .then(response => response.json())
+  .then(data => {
+    const keysContainer = document.getElementById('serviceKeys');
+    let keysHtml = '';
+    data.forEach((key, index) => {
+      // Button triggers the Bootstrap modal
+      keysHtml += `<li>${key.service} - <button type="button" class="btn btn-primary" onclick="showKeyModal('${key.key}')">Full Key</button></li>`;
+    });
+    keysContainer.innerHTML = keysHtml;
+  })
+  .catch(error => {
+    console.error('Error fetching service keys:', error);
+  });
+}
+
+// Function to populate and show the Bootstrap modal
+function showKeyModal(fullKey) {
+  document.getElementById('modalKeyContent').innerText = fullKey;
+  $('#keyModal').modal('show');
+}
+
+function copyKeyToClipboard() {
+  const keyText = document.getElementById('modalKeyContent').value;
+  navigator.clipboard.writeText(keyText).then(() => {
+    // Show some feedback to the user after copying
+    Swal.fire({
+      icon: 'success',
+      title: 'Key copied!',
+      showConfirmButton: false,
+      timer: 1000
+    });
+  }).catch(err => {
+    console.error('Error copying text to clipboard', err);
+  });
+}
+
+function remindServiceKey() {
+  Swal.fire({
+      icon: 'info',
+      title: 'Remember to Add Service Key',
+      text: 'If you intend to use the console, please make sure to add your service key.',
+      showConfirmButton: true
+  });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   fetchToken();
+  fetchUserKeys();
+  fetchServiceKeys();
 });
