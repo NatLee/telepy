@@ -46,6 +46,7 @@ urlpatterns += [
     path(f"{URL_PREFIX}/auth/", include("custom_jwt.urls")),
     # login
     path("login", include("login.urls"), name="login"),
+    path("", include("login.urls"), name="login-index"),
     # reverse_keys
     path(f"{URL_PREFIX}/reverse/", include("reverse_keys.urls")),
     # tunnels
