@@ -71,6 +71,8 @@ function createTunnel() {
       }
 
       const sshPort = document.getElementById('sshPort').value;
+      const hintElement = document.getElementById('connectionHint');
+      hintElement.innerHTML = `Use the following AutoSSH command to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible and replace <code>${data.reverse_port}</code> with the port provided here.`;
 
       const tunnelCommand = `autossh \\
   -M 6769 \\
