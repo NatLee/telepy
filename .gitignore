@@ -1,5 +1,7 @@
 # Custom ignore files
 
+staticfiles
+
 ssh/backend_ssh_key/id_rsa*
 ssh/backend_ssh_key/known_hosts*
 
