@@ -39,17 +39,45 @@
       </div>
 
 
-        <div class="mt-2">
-            <button type="button" class="btn btn-outline-info" onclick="remindServiceKey()">Remind Me About Service Key</button>
+      <div class="mt-2">
+        <button type="button" class="btn btn-outline-info" onclick="remindServiceKey()">Remind Me About Service Key</button>
+      </div>
+
+      <div class="mt-4">
+        <h4>Connection Details</h4>
+
+        <!-- Tab navigation -->
+        <ul class="nav nav-tabs" id="osTab" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
+          </li>
+        </ul>
+
+        <!-- Tab panes -->
+        <div class="tab-content" id="osTabContent">
+          <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
+            <br><p id="linuxConnectionHint" class="text-muted"></p>
+            <label for="tunnelCommandLinux">AutoSSH Tunnel Command:</label>
+            <pre id="tunnelCommandLinux" class="form-control language-bash"><code class="language-bash">Click "Create Tunnel" to generate the command.</code></pre>
+            <button type="button" id="linuxCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
+          </div>
+          <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
+            <br><p id="windowsConnectionHint" class="text-muted"></p>
+            <label for="tunnelCommandWindows">Powershell SSH Tunnel Command:</label>
+            <pre id="tunnelCommandWindows" class="form-control language-powershell"><code class="language-powershell">Click "Create Tunnel" to generate the command.</code></pre>
+            <button type="button" id="windowsCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
+          </div>
+          <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
+            <br><p id="dockerConnectionHint" class="text-muted"></p>
+            <label for="tunnelCommandDocker">Docker SSH Tunnel Script:</label>
+            <pre id="tunnelCommandDocker" class="form-control language-bash"><code class="language-bash">Click "Create Tunnel" to generate the command.</code></pre>
+            <button type="button" id="dockerCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandDocker')">Copy</button>
+          </div>
         </div>
 
-        <div class="mt-4">
-          <h4>Connection Details</h4>
-          <p id="connectionHint" class="text-muted">
-          </p>
-          <label for="tunnelCommand">AutoSSH Tunnel Command:</label>
-          <pre id="tunnelCommand" class="form-control">Click "Create Tunnel" to generate the command.</pre>
-          <button type="button" id="copyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyToClipboard()">Copy</button>
       </div>
     </div>
 </div>
