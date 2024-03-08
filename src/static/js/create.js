@@ -18,6 +18,48 @@ function fetchToken() {
   });
 }
 
+function updateTunnelCommands(data) {
+  // Update the tunnel command elements
+  const sshPort = document.getElementById('sshPort').value;
+  const tunnelCommandLinux = `autossh \\
+-M 6769 \\
+-o "ServerAliveInterval 15" \\
+-o "ServerAliveCountMax 3" \\
+-p ${data.port} \\
+-NR '*:${data.reverse_port}:localhost:${sshPort}' \\
+telepy@${window.location.hostname}`;
+
+  document.getElementById('tunnelCommandLinux').innerHTML = Prism.highlight(tunnelCommandLinux, Prism.languages.bash, 'bash');
+
+  const tunnelCommandWindows = `$continue = $true
+while($continue)
+{
+    if ([console]::KeyAvailable)
+    {
+        echo "Exit with \`"q\`"";
+        $x = [System.Console]::ReadKey()
+
+        switch ( $x.key)
+        {
+            q { $continue = $false }
+        }
+    }
+    else
+    {
+      ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -p ${data.port} -NR '*:${data.reverse_port}:localhost:${sshPort}' telepy@${window.location.hostname}
+      Start-Sleep -Milliseconds 500
+    }
+}
+echo exited`;
+
+  document.getElementById('tunnelCommandWindows').innerHTML = Prism.highlight(tunnelCommandWindows, Prism.languages.powershell, 'powershell');
+
+  // Enable the copy buttons
+  document.getElementById("linuxCopyTunnelCommandBtn").disabled = false;
+  document.getElementById("windowsCopyTunnelCommandBtn").disabled = false;
+}
+
+
 function createTunnel() {
 
   const hostname = document.getElementById('hostname').value;
@@ -70,52 +112,14 @@ function createTunnel() {
         return;
       }
 
-      const sshPort = document.getElementById('sshPort').value;
       const linuxHintElement = document.getElementById('linuxConnectionHint');
       linuxHintElement.innerHTML = `Use the following AutoSSH command to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
-
-      // Generate Linux command
-      const tunnelCommandLinux = `autossh \\
--M 6769 \\
--o "ServerAliveInterval 15" \\
--o "ServerAliveCountMax 3" \\
--p ${data.port} \\
--NR '*:${data.reverse_port}:localhost:${sshPort}' \\
-telepy@${window.location.hostname}`;
-      document.getElementById('tunnelCommandLinux').querySelector('code').textContent = tunnelCommandLinux;
 
       const windowsHintElement = document.getElementById('windowsConnectionHint');
       windowsHintElement.innerHTML = `Use the following script to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
 
-      // Generate Windows command
-      const tunnelCommandWindows = `$continue = $true
-while($continue)
-{
-    if ([console]::KeyAvailable)
-    {
-        echo "Exit with \`"q\`"";
-        $x = [System.Console]::ReadKey()
+      updateTunnelCommands(data);
 
-        switch ( $x.key)
-        {
-            q { $continue = $false }
-        }
-    }
-    else
-    {
-      ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -p ${data.port} -NR '*:${data.reverse_port}:localhost:${sshPort}' telepy@${window.location.hostname}
-      Start-Sleep -Milliseconds 500
-    }
-}
-echo exited`;
-      document.getElementById('tunnelCommandWindows').querySelector('code').textContent = tunnelCommandWindows;
-
-      // Reapply syntax highlighting
-      Prism.highlightAll();
-
-
-      document.getElementById("linuxCopyTunnelCommandBtn").disabled = false;
-      document.getElementById("windowsCopyTunnelCommandBtn").disabled = false;
     },
     error: function(error) {
       console.error('Error creating tunnel:', error);
@@ -130,21 +134,27 @@ echo exited`;
 }
 
 
-function copyCommandToClipboard(tunnelCommandId) {
-  const curlCommand = document.getElementById(tunnelCommandId).textContent;
-  navigator.clipboard.writeText(curlCommand)
-      .then(() => {
-          Swal.fire({
-              icon: 'success',
-              title: 'Command copied!',
-              showConfirmButton: false,
-              timer: 1000
-          })
-      })
-      .catch(error => {
-          console.error('Error copying text: ', error);
+function copyCommandToClipboard(commandElementId) {
+  const commandText = document.getElementById(commandElementId).innerText;
+  navigator.clipboard.writeText(commandText).then(() => {
+      Swal.fire({
+          title: 'Success!',
+          text: 'Command copied to clipboard.',
+          icon: 'success',
+          timer: 1500,
+          showConfirmButton: false
       });
+  }).catch(err => {
+      console.error('Failed to copy: ', err);
+      Swal.fire({
+          title: 'Oops!',
+          text: 'Unable to copy the command.',
+          icon: 'error',
+          showConfirmButton: true
+      });
+  });
 }
+
 
 function fetchUserKeys() {
   const accessToken = localStorage.getItem('accessToken');
