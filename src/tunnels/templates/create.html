@@ -4,83 +4,94 @@
 
 {% block content %}
 <div class="mx-5">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <div class="d-flex align-items-center">
-           <h2>Create Reverse Tunnels</h2>
-        </div> 
-     </div>
-    <div class="container mt-2">
-        <label for="hostname">Hostname:</label>
-        <input type="text" class="form-control" id="hostname" name="hostname" placeholder="Enter hostname">
-        <label for="key">Key:</label>
-        <input type="text" class="form-control" id="key" name="key" placeholder="Enter key">
-        <label for="key">SSH Port:</label>
-        <input type="text" class="form-control" id="sshPort" name="sshPort" placeholder="Enter your SSH port" value="22">
-        <label for="token">Token:</label>
-        <input type="text" class="form-control" id="token" name="token" placeholder="Token will appear here" readonly>
-        <div class="mt-2">
-            <button type="button" class="btn btn-outline-success" onclick="createTunnel()">Create Tunnel</button>
-        </div>
+  <h2>Create Reverse Tunnels</h2>
+  <div class="form-row mt-3">
+    <div class="col">
+      <input type="text" class="form-control" id="hostname" placeholder="Hostname">
+      <small id="hostnameHelp" class="form-text text-muted">Enter the customized name of your server.</small>
+    </div>
+    <div class="col">
+      <input type="text" class="form-control" id="key" placeholder="Public SSH Key">
+      <small id="keyHelp" class="form-text text-muted">Paste your public SSH key here.</small>
+    </div>
+    <div class="col">
+      <input type="text" class="form-control" id="sshPort" placeholder="SSH Port" value="22">
+      <small id="portHelp" class="form-text text-muted">Enter your server's SSH port. Default is 22.</small>
+    </div>
+    <div class="col">
+      <input type="text" class="form-control" id="token" name="token" placeholder="Token will appear here" readonly>
+      <small id="tokenHelp" class="form-text text-muted">This token is required to create a tunnel. If you use <code>curl</code>, you can use the token as a query parameter.</small>
+    </div>
+  </div>
 
-        <div class="mt-4">
-          <h4>User Keys</h4>
-          <p>You need to add the following keys to your server's <code>~/.ssh/authorized_keys</code> file.</p>
-          <ul id="userKeys">
-              <!-- User keys will be listed here -->
-          </ul>
+  <button class="btn btn-outline-success mt-3" onclick="createTunnel()">Create Tunnel</button>
+
+  <div id="keyDetails" class="mt-4">
+    <h4>Key Details</h4>
+    <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
+
+    <!-- Tab navigation -->
+    <ul class="nav nav-tabs" id="keyTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
+      </li>
+    </ul>
+
+    <!-- Tab Content -->
+    <div class="tab-content" id="keyTabContent">
+      <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
+        <br><p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
+        <div id="userKeys" class="mt-2"></div>
       </div>
-
-      <div class="mt-4">
-        <h4>Service Keys</h4>
-        <p>If you want to use console services, you can add the following keys.</p>
-        <ul id="serviceKeys">
-            <!-- Service keys will be listed here -->
-        </ul>
-      </div>
-
-
-      <div class="mt-2">
-        <button type="button" class="btn btn-outline-info" onclick="remindServiceKey()">Remind Me About Service Key</button>
-      </div>
-
-      <div class="mt-4">
-        <h4>Connection Details</h4>
-
-        <!-- Tab navigation -->
-        <ul class="nav nav-tabs" id="osTab" role="tablist">
-          <li class="nav-item" role="presentation">
-            <button class="nav-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
-          </li>
-          <li class="nav-item" role="presentation">
-            <button class="nav-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
-          </li>
-        </ul>
-
-        <!-- Tab panes -->
-        <div class="tab-content" id="osTabContent">
-          <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
-            <br><p id="linuxConnectionHint" class="text-muted"></p>
-            <label for="tunnelCommandLinux">AutoSSH Tunnel Command:</label>
-            <pre id="tunnelCommandLinux" class="form-control language-bash"><code class="language-bash">Click "Create Tunnel" to generate the command.</code></pre>
-            <button type="button" id="linuxCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
-          </div>
-          <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
-            <br><p id="windowsConnectionHint" class="text-muted"></p>
-            <label for="tunnelCommandWindows">Powershell SSH Tunnel Command:</label>
-            <pre id="tunnelCommandWindows" class="form-control language-powershell"><code class="language-powershell">Click "Create Tunnel" to generate the command.</code></pre>
-            <button type="button" id="windowsCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
-          </div>
-          <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
-            <br><p id="dockerConnectionHint" class="text-muted"></p>
-            <label for="tunnelCommandDocker">Docker SSH Tunnel Script:</label>
-            <pre id="tunnelCommandDocker" class="form-control language-bash"><code class="language-bash">Click "Create Tunnel" to generate the command.</code></pre>
-            <button type="button" id="dockerCopyTunnelCommandBtn" disabled="true" class="btn btn-outline-info" onclick="copyCommandToClipboard('tunnelCommandDocker')">Copy</button>
-          </div>
-        </div>
-
+      <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
+        <br><p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
+        <div id="serviceKeys" class="mt-2"></div>
       </div>
     </div>
+  </div>
+
+  <div id="connectionDetails" class="mt-4">
+    <h4>Connection Details</h4>
+    <p class="text-muted">Use the command below to establish a secure tunnel between your server and the reverse proxy.</p>
+
+    <!-- Tab navigation -->
+    <ul class="nav nav-tabs" id="osTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
+      </li>
+    </ul>
+
+    <!-- Tab Content -->
+    <div class="tab-content" id="osTabContent">
+      <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
+        <br><p id="linuxConnectionHint" class="text-muted"></p>
+        <pre id="tunnelCommandLinux" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
+        <button class="btn btn-outline-info mt-2" id="linuxCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
+      </div>
+      <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
+        <br><p id="windowsConnectionHint" class="text-muted"></p>
+        <pre id="tunnelCommandWindows" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
+        <button class="btn btn-outline-info mt-2" id="windowsCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
+      </div>
+      <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
+        <br><p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
+        <pre id="tunnelCommandDocker" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
+        <button class="btn btn-outline-info mt-2" id="dockerCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandDocker')">Copy</button>
+      </div>
+    </div>
+  </div>
 </div>
+
+
 
 <!-- Key Modal -->
 <div class="modal fade" id="keyModal" tabindex="-1" aria-labelledby="keyModalLabel" aria-hidden="true">
