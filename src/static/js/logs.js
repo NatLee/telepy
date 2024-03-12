@@ -1,38 +1,50 @@
+// Variable to store the fetched log entries
+let fetchedLogEntries = [];
+
 function refreshLogs() {
-    const accessToken = localStorage.getItem('accessToken');
-    fetch(
-        '/api/log/ssh',
-        {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            const logEntries = data.split('\n');
-            const logContentElement = document.getElementById('logContent');
-            logContentElement.innerHTML = ''; // Clear existing logs
-
-            logEntries.forEach(entry => {
-                const timestamp = entry.split(' ', 2).join(' ');
-                const messageParts = entry.split(' ').slice(2);
-                const message = messageParts.join(' ');
-                const highlightedMessage = highlightKeywords(message);
-
-                const row = document.createElement('tr');
-                row.innerHTML = `<td>${timestamp}</td><td>${highlightedMessage}</td>`;
-                logContentElement.appendChild(row);
-            });
-
-            // Scroll to the latest log entry
-            const tableContainer = document.querySelector('.table-responsive');
-            tableContainer.scrollTop = tableContainer.scrollHeight;
-        })
-        .catch(error => {
-            console.error('Error fetching logs:', error);
-        });
+    fetchLogs();
+    displayLogs();
 }
+
+function fetchLogs() {
+    const accessToken = localStorage.getItem('accessToken');
+    fetch('/api/log/ssh', {
+        method: 'GET',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        fetchedLogEntries = data.split('\n');
+        displayLogs(); // Initially display all logs
+    })
+    .catch(error => {
+        console.error('Error fetching logs:', error);
+    });
+}
+
+function displayLogs(filterKeyword = '') {
+    const logContentElement = document.getElementById('logContent');
+    logContentElement.innerHTML = ''; // Clear existing logs
+
+    fetchedLogEntries.forEach(entry => {
+        const timestamp = entry.split(' ', 2).join(' ');
+        const messageParts = entry.split(' ').slice(2);
+        const message = messageParts.join(' ');
+        const highlightedMessage = highlightKeywords(message);
+
+        if (!filterKeyword || message.toLowerCase().includes(filterKeyword.toLowerCase())) {
+            const row = document.createElement('tr');
+            row.innerHTML = `<td>${timestamp}</td><td>${highlightedMessage}</td>`;
+            logContentElement.appendChild(row);
+        }
+    });
+
+    const tableContainer = document.querySelector('.table-responsive');
+    tableContainer.scrollTop = tableContainer.scrollHeight;
+}
+
 
 function highlightKeywords(message) {
     const keywords = {
@@ -69,6 +81,7 @@ function logNotificationWebsocket() {
         createToastAlert(data.message.details, false);
     };
 }
+
 
 document.addEventListener('DOMContentLoaded', function() {
     logNotificationWebsocket();
