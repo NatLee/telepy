@@ -34,5 +34,7 @@ class SSHLogs(APIView):
         if not ssh_logs_path.exists():
             return Response("Logs not found", status=404)
         with open(ssh_logs_path, 'r') as f:
-            logs = f.read()
+            # Only need to read the last 500 lines
+            logs = f.readlines()[-500:]
+            logs = '\n'.join(logs)
         return Response(logs)
