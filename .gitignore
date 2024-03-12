@@ -10,7 +10,9 @@ ssh/ssh_host_keys/*_key
 ssh/ssh_host_keys/*_key.pub
 
 log
-logs
+logs/backend
+logs/ssh
+
 backend/staticfiles
 
 *.pid
