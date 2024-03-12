@@ -93,6 +93,7 @@ INSTALLED_APPS = [
     "authorized_keys",
     "reverse_keys",
     "tunnels",
+    "logs",
 ]
 
 MIDDLEWARE = [
