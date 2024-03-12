@@ -53,6 +53,8 @@ urlpatterns += [
     path(f"tunnels/", include("tunnels.urls")),
     # authorized_keys
     path(f"{URL_PREFIX}/reverse/", include("authorized_keys.urls")),
+    # logs
+    path(f"{URL_PREFIX}/log/", include("logs.urls")),
 ]
 
 # -------------- START - Swagger View --------------
