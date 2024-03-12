@@ -48,6 +48,16 @@ class Terminal(APIView):
     def get(self, request, server_id):
         return render(request, 'terminal.html')
 
+class SSHServerLogs(APIView):
+    permission_classes = (AllowAny,)
+    @swagger_auto_schema(
+        operation_summary="SSH Server Logs",
+        operation_description="SSH Server Logs page",
+        tags=['Page']
+    )
+    def get(self, request):
+        return render(request, 'logs.html')
+
 
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
