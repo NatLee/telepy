@@ -75,52 +75,6 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
-function notificationWebsocket() {
-
-    var ws_scheme = window.location.protocol == "https:" ? "wss" : "ws";
-    var ws_path = ws_scheme + '://' + window.location.host + "/ws/notifications/";
-    var socket = new WebSocket(ws_path);
-
-    // Update the status of the WebSocket connection
-    function updateWebSocketStatus(isConnected) {
-        const statusElement = document.getElementById("websocket-status");
-        if (statusElement) {
-            statusElement.classList.toggle('connected', isConnected);
-            statusElement.classList.toggle('disconnected', !isConnected);
-        }
-    }
-
-    socket.onopen = function () {
-        updateWebSocketStatus(true);
-    };
-
-    socket.onmessage = function (event) {
-        const data = JSON.parse(event.data);
-        console.log('Notification message:', data.message);
-        let action = data.message.action;
-        if (action === "UPDATED-TUNNELS") {
-            createToastAlert(data.message.details, false);
-            fetchAndDisplayReverseServerKeys();
-        }
-
-    };
-
-    socket.onclose = function (e) {
-        updateWebSocketStatus(false);
-        console.error('Notification WebSocket closed unexpectedly:', e);
-
-        // Reconnect after 3 seconds
-        setTimeout(notificationWebsocket, 3000);
-    };
-
-    // Handle any errors that occur.
-    socket.onerror = function (error) {
-        updateWebSocketStatus(false);
-        console.error('WebSocket Error:', error);
-    };
-
-}
-
 function fetchServerConfig(serverId) {
     const accessToken = localStorage.getItem('accessToken');
     const hostname = window.location.hostname;
@@ -142,7 +96,6 @@ function fetchServerConfig(serverId) {
     });
 }
 
-
 function copyConfigToClipboard() {
     const configContent = document.getElementById('configContent');
     configContent.select();
@@ -157,7 +110,6 @@ function copyConfigToClipboard() {
         timer: 800
     });
 }
-
 
 function confirmDelete(serverId) {
     Swal.fire({
@@ -324,5 +276,18 @@ function deleteUser(userId, serverId) { // Add serverId parameter
     });
 }
 
+function tunnelNotificationWebsocket() {
+    var socket = notificationWebsocket();
+    socket.onmessage = function (event) {
+        const data = JSON.parse(event.data);
+        console.log('Notification message:', data.message);
+        let action = data.message.action;
+        createToastAlert(data.message.details, false);
+        if (action === "UPDATED-TUNNELS") {
+            fetchAndDisplayReverseServerKeys();
+        }
+    };
+}
+
 document.addEventListener('DOMContentLoaded', fetchAndDisplayReverseServerKeys);
-document.addEventListener('DOMContentLoaded', notificationWebsocket);
+document.addEventListener('DOMContentLoaded', tunnelNotificationWebsocket);
