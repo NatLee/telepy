@@ -284,3 +284,9 @@ body {
     background-position: 0% 50%;
   }
 }
+.sticky-header th {
+  position: sticky;
+  top: 0;
+  background-color: #fff;
+  z-index: 2;
+}
