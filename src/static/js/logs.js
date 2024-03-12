@@ -31,10 +31,10 @@ function displayLogs(filterKeyword = '') {
     fetchedLogEntries.forEach(entry => {
         const timestamp = entry.split(' ', 2).join(' ');
         const messageParts = entry.split(' ').slice(2);
-        const message = messageParts.join(' ');
+        const message = messageParts.join(' ').trim();
         const highlightedMessage = highlightKeywords(message);
 
-        if (!filterKeyword || message.toLowerCase().includes(filterKeyword.toLowerCase())) {
+        if (!filterKeyword || message.toLowerCase().startsWith(filterKeyword.toLowerCase())) {
             const row = document.createElement('tr');
             row.innerHTML = `<td>${timestamp}</td><td>${highlightedMessage}</td>`;
             logContentElement.appendChild(row);
