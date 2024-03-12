@@ -37,7 +37,7 @@ function refreshLogs() {
 function highlightKeywords(message) {
     const keywords = {
         "Accepted": '<span class="badge bg-success">Accepted</span>',
-        "Invalid": '<span class="badge bg-danger">Failed</span>',
+        "Invalid": '<span class="badge bg-danger">Invalid</span>',
         "Disconnected": '<span class="badge bg-warning">Disconnected</span>',
     };
 
