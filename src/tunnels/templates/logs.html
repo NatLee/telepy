@@ -10,12 +10,15 @@
             <div class="websocket-status status ml-2" id="websocket-status"></div>
         </div>
         <div>
-            <button class="btn btn-secondary" id="refresh" onclick="refreshLogs()">Refresh</button>
+            <button class="btn btn-info mr-2" onclick="displayLogs('Accepted')">Accepted</button>
+            <button class="btn btn-danger mr-2" onclick="displayLogs('Invalid')">Invalid</button>
+            <button class="btn btn-warning mr-2" onclick="displayLogs('Disconnected')">Disconnected</button>
+            <button class="btn btn-secondary" onclick="refreshLogs()">Refresh All</button>
         </div>
     </div>
     <div class="table-responsive" style="height: 400px; overflow-y: scroll;">
         <table class="table sticky-header">
-            <thead>
+            <thead class="sticky-top bg-white">
                 <tr>
                     <th scope="col">Timestamp</th>
                     <th scope="col">Message</th>
@@ -27,6 +30,7 @@
         </table>
     </div>
 </div>
+
 
 
 {% endblock %}
