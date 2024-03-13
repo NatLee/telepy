@@ -29,7 +29,7 @@ class CheckReverseServerPortStatus(APIView):
         reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list('reverse_port', flat=True)
         # if the port is not in the activated ports, it means the port is not connected
         result = {
-            port: False if port not in activated_ports else False
+            port: True if port in activated_ports else False
             for port in reverse_ports
         }
         return Response(result)
