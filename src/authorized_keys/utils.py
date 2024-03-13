@@ -53,14 +53,18 @@ def ssh(command:str, hostname:str):
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 
-def parse_ss_ports_from_redis(ss_output:str) -> Dict[int, bool]:
+def parse_ss_ports_from_redis(ss_output:str, filter:bool) -> Dict[int, bool]:
     used_ports = set()
     for line in ss_output.split(' LISTEN '):
         match = re.search(r'^0 128 (127\.0\.0\.1|0\.0\.0\.0):(\d+)', line)
         if match:
             used_ports.add(int(match.group(2)))
-    reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list("reverse_port", flat=True)
 
+    # If filter is False, return all ports
+    if not filter:
+        return {port: True for port in used_ports}
+
+    reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list("reverse_port", flat=True)
     # Ensure all reverse ports are in the ports
     ports = {}
     for port in reverse_ports:
@@ -70,10 +74,10 @@ def parse_ss_ports_from_redis(ss_output:str) -> Dict[int, bool]:
             ports[port] = True
     return ports
 
-def get_ss_output_from_redis() -> Dict[int, bool]:
+def get_ss_output_from_redis(filter=True) -> Dict[int, bool]:
     # Retrieve the value from Redis
     result = subprocess.run("redis-cli -h telepy-redis GET ss_output", shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result is None:
         return {}
-    parsed_output = parse_ss_ports_from_redis(result.stdout)
+    parsed_output = parse_ss_ports_from_redis(result.stdout, filter=filter)
     return parsed_output

@@ -23,7 +23,7 @@ def remove_token(token:str) -> None:
 
 def find_multiple_free_ports(count: int) -> List[int]:
     # Use SSH connection to the remote server to check for used ports
-    ports = get_ss_output_from_redis()
+    ports = get_ss_output_from_redis(filter=False)
     used_ports = [port for port, used in ports.items() if used]
     # Find the first `count` free ports
     free_ports = sorted(list(set(range(1024, 65535)) - set(used_ports)))[:count]
