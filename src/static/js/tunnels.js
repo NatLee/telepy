@@ -302,6 +302,10 @@ function tunnelNotificationWebsocket() {
         }
         if (action === "UPDATE-TUNNEL-STATUS-DATA") {
             globalThis.data.forEach(item => {
+                // Determine if `item.reverse_port` is in message data
+                if (!data.message.data.includes(item.reverse_port)) {
+                    return;
+                }
                 const isActive = data.message.data[item.reverse_port];
                 updateStatus(isActive, item.hostname);
             });

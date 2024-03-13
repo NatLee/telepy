@@ -52,30 +52,35 @@ def ssh(command:str, hostname:str):
     return result.stdout
 
 from tunnels.consumers import send_notification_to_group
+from authorized_keys.models import ReverseServerAuthorizedKeys
 
 PORTS = []
 
-def parse_ss_ports_from_redis(ss_output:str):
+def parse_ss_ports_from_redis(ss_output:str) -> List[int]:
     ports = []
     for line in ss_output.split(' LISTEN '):
         match = re.search(r'^0 128 (127\.0\.0\.1|0\.0\.0\.0):(\d+)', line)
         if match:
             ports.append(int(match.group(2)))
-    return ports
+    reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list("reverse_port", flat=True)
+    return list(set(ports) & set(reverse_ports))
 
-def get_ss_output_from_redis() -> str:
+def get_ss_output_from_redis() -> List[int]:
     # Retrieve the value from Redis
     result = subprocess.run("redis-cli -h telepy-redis GET ss_output", shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result is None:
-        return ""
+        return []
     parsed_output = parse_ss_ports_from_redis(result.stdout)
     global PORTS
     if set(parsed_output) != set(PORTS):
+        # Send notification for the updated reverse server status
         send_notification_to_group(message={
             "action": "UPDATE-TUNNEL-STATUS-DATA",
             "data": parsed_output,
             "details": "Reverse server status have been updated",
         })
+
+        # Send notification for each port that have been connected or disconnected
         for port in set(PORTS) - set(parsed_output):
             send_notification_to_group(message={
                 "action": "UPDATE-TUNNEL-STATUS",
