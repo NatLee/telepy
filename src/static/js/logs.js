@@ -29,6 +29,7 @@ function displayLogs(filterKeyword = '') {
     logContentElement.innerHTML = ''; // Clear existing logs
 
     fetchedLogEntries.forEach(entry => {
+        if(entry === '') return;
         const timestamp = entry.split(' ', 2).join(' ');
         const messageParts = entry.split(' ').slice(2);
         const message = messageParts.join(' ').trim();
