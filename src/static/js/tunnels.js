@@ -1,6 +1,7 @@
 
+globalThis.data = [];
+
 function fetchAndDisplayReverseServerKeys() {
-    // Retrieve the JWT from local storage
     const accessToken = localStorage.getItem('accessToken');
 
     fetch('/api/reverse/server/keys', {
@@ -12,68 +13,62 @@ function fetchAndDisplayReverseServerKeys() {
     })
     .then(response => response.json())
     .then(data => {
-        const table = document.getElementById('tunnelsTableBody');
-        table.innerHTML = '';
-
-        data.forEach(item => {
-            const actionButtons = `
-                <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
-                <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${item.id}')">Users</button>
-                <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${item.id})">Config</button>
-                <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${item.id}')">Delete</button>
-            `;
-
-            const row = `
-            <tr>
-                <td>${item.hostname}</td>
-                <td>${item.reverse_port}</td>
-                <td>${item.key.substring(0, 20) || '&lt;none&gt;'}...</td>
-                <td>
-                    <div class='d-flex'>
-                        <div class="${item.hostname}-status status ml-2" id="${item.hostname}-status"></div>
-                    </div>
-                </td>
-                <td>
-                    <div class='d-flex' id="actions-${item.id}">
-                        ${actionButtons}
-                    </div>
-                </td>
-            </tr>`;
-            table.innerHTML += row;
-        });
-
-        // Fetch the status after constructing the rows
-        fetch('/api/reverse/server/status/ports', {
-            method: "GET",
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`
-            },
-        })
-        .then(response => response.json())
-        .then(statusData => {
-            // Define a function to update the status of the port
-            function updateStatus(isConnected, hostname) {
-                const statusElement = document.getElementById(`${hostname}-status`);
-                if (statusElement) {
-                    statusElement.classList.toggle('connected', isConnected);
-                    statusElement.classList.toggle('disconnected', !isConnected);
-                }
-            }
-            // Iterate through each item again to update their status
-            data.forEach(item => {
-                // Determine if the port is active based on the status data
-                const isActive = statusData[item.reverse_port];
-                // Call the updateStatus function with the isActive status and hostname
-                updateStatus(isActive, item.hostname);
-            });
-        });
+        displayReverseServerKeys(data);
+        globalThis.data = data; // Store the data in a global variable
     })
-
     .catch(error => {
-        console.error('Error fetching tunnels data or status:', error);
+        console.error('Error fetching tunnels data:', error);
     });
 }
+
+function displayReverseServerKeys(data) {
+    const table = document.getElementById('tunnelsTableBody');
+    table.innerHTML = '';
+
+    data.forEach(item => {
+        const actionButtons = createActionButtons(item);
+        const row = createTableRow(item, actionButtons);
+        table.innerHTML += row;
+    });
+}
+
+function createActionButtons(item) {
+    return `
+        <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
+        <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${item.id}')">Users</button>
+        <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${item.id})">Config</button>
+        <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${item.id}')">Delete</button>
+    `;
+}
+
+function createTableRow(item, actionButtons) {
+    return `
+        <tr>
+            <td>${item.hostname}</td>
+            <td>${item.reverse_port}</td>
+            <td>${item.key.substring(0, 20) || '<none>'}...</td>
+            <td>
+                <div class='d-flex'>
+                    <div class="${item.hostname}-status status ml-2" id="${item.hostname}-status"></div>
+                </div>
+            </td>
+            <td>
+                <div class='d-flex' id="actions-${item.id}">
+                    ${actionButtons}
+                </div>
+            </td>
+        </tr>
+    `;
+}
+
+function updateStatus(isConnected, hostname) {
+    const statusElement = document.getElementById(`${hostname}-status`);
+    if (statusElement) {
+        statusElement.classList.toggle('connected', isConnected);
+        statusElement.classList.toggle('disconnected', !isConnected);
+    }
+}
+
 
 function fetchServerConfig(serverId) {
     const accessToken = localStorage.getItem('accessToken');
@@ -285,6 +280,12 @@ function tunnelNotificationWebsocket() {
         createToastAlert(data.message.details, false);
         if (action === "UPDATED-TUNNELS") {
             fetchAndDisplayReverseServerKeys();
+        }
+        if (action === "UPDATE-TUNNEL-STATUS-DATA") {
+            globalThis.data.forEach(item => {
+                const isActive = data.message.data[item.reverse_port];
+                updateStatus(isActive, item.hostname);
+            });
         }
     };
 }

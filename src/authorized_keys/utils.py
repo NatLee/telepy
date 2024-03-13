@@ -32,7 +32,6 @@ def is_valid_ssh_public_key(key: str) -> bool:
     except Exception:
         return False
 
-
 def ssh(command:str, hostname:str):
     """
     Executes an SSH command on a remote server using subprocess.
@@ -52,17 +51,9 @@ def ssh(command:str, hostname:str):
 
     return result.stdout
 
-def monitor_used_ports() -> List[int]:
-    ss_output = ssh(command="ss -tlnp", hostname="telepy-ssh")
-    return parse_ss_ports(ss_output)
+from tunnels.consumers import send_notification_to_group
 
-def parse_ss_ports(ss_output:str):
-    ports = []
-    for line in ss_output.splitlines():
-        match = re.search(r'LISTEN\s+\d+\s+\d+\s+[\d.:]*:(\d+)', line)
-        if match:
-            ports.append(int(match.group(1)))
-    return ports
+PORTS = []
 
 def parse_ss_ports_from_redis(ss_output:str):
     ports = []
@@ -78,4 +69,20 @@ def get_ss_output_from_redis() -> str:
     if result is None:
         return ""
     parsed_output = parse_ss_ports_from_redis(result.stdout)
+    if set(parsed_output) != set(PORTS):
+        send_notification_to_group(message={
+            "action": "UPDATE-TUNNEL-STATUS-DATA",
+            "data": parsed_output,
+        })
+        for port in set(PORTS) - set(parsed_output):
+            send_notification_to_group(message={
+                "action": "UPDATE-TUNNEL-STATUS",
+                "details": f"Reverse server [{port}] status have been disconnected",
+            })
+        for port in set(parsed_output) - set(PORTS):
+            send_notification_to_group(message={
+                "action": "UPDATE-TUNNEL-STATUS",
+                "details": f"Reverse server [{port}] status have been connected",
+            })
+        PORTS = parsed_output
     return parsed_output
