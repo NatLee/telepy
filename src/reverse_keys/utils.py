@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from django.core.cache import cache
 
-from authorized_keys.utils import monitor_used_ports
+from authorized_keys.utils import get_ss_output_from_redis
 
 def issue_token() -> str:
     """生成一個token"""
@@ -23,7 +23,7 @@ def remove_token(token:str) -> None:
 
 def find_multiple_free_ports(count: int) -> List[int]:
     # Use SSH connection to the remote server to check for used ports
-    used_ports = monitor_used_ports()
+    used_ports = get_ss_output_from_redis()
     # Find the first `count` free ports
     free_ports = sorted(list(set(range(1024, 65535)) - set(used_ports)))[:count]
 

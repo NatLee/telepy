@@ -43,5 +43,6 @@ services:
        - ./ssh/root_ssh_key:/config/.ssh
        - ./ssh/ssh_host_keys:/config/ssh_host_keys
        - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
+       - ./ssh/custom_scripts/custom-services.d:/custom-services.d
     ports:
       - ${REVERSE_SERVER_SSH_PORT}:2222 # for SSH connections, REVERSE_SERVER_SSH_PORT

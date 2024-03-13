@@ -63,3 +63,12 @@ def parse_ss_ports(ss_output:str):
         if match:
             ports.append(int(match.group(1)))
     return ports
+
+
+def get_ss_output_from_redis() -> str:
+    # Retrieve the value from Redis
+    result = subprocess.run("redis-cli -h telepy-redis GET ss_output", shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result is None:
+        return ""
+    parsed_output = parse_ss_ports(result.stdout)
+    return parsed_output

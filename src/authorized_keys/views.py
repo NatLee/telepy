@@ -17,7 +17,7 @@ from authorized_keys.serializers import ReverseServerUsernamesSerializer
 
 from authorized_keys.models import ServiceAuthorizedKeys
 
-from authorized_keys.utils import monitor_used_ports
+from authorized_keys.utils import get_ss_output_from_redis
 from tunnels.consumers import send_notification_to_group
 
 class CheckReverseServerPortStatus(APIView):
@@ -25,7 +25,7 @@ class CheckReverseServerPortStatus(APIView):
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request):
-        monitor_ports = monitor_used_ports()
+        monitor_ports = get_ss_output_from_redis()
         active_ports = ReverseServerAuthorizedKeys.objects.all().values_list('reverse_port', flat=True)
         result = {
             port: True if port in monitor_ports else False
