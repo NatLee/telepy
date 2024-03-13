@@ -10,6 +10,6 @@ COPY ./src /src
 RUN chmod +x /src/docker-entrypoint.sh
 
 RUN apt-get update
-RUN apt-get install -y ssh
+RUN apt-get install -y ssh redis
 
 ENTRYPOINT ["bash", "/src/docker-entrypoint.sh"]

@@ -20,10 +20,7 @@ class SSHLogs(APIView):
             200: openapi.Response(
                 description="Show SSH server logs.",
                 examples={
-                    "application/json": {
-                        "token": "your-issued-token",
-                        "created_at": "2021-01-01T00:00:00.000000"
-                    }
+                    "application/json": "Logs will be shown here."
                 }
             )
         },
