@@ -169,7 +169,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             'message': message
         }))
 
-def send_notification_to_group(message):
+def send_notification_to_group(message:dict):
     channel_layer = get_channel_layer()
     async_to_sync(channel_layer.group_send)(
         'group_notifications',  # Must match the group name used in your consumer
