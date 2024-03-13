@@ -1,10 +1,7 @@
-
-REDIS_HOST="telepy-redis"
-REDIS_PORT="6379"
-REDIS_KEY="ss_output"
+#!/bin/bash
 
 while true; do
-  echo `ss -tlnp` | redis-cli -h $REDIS_HOST -p $REDIS_PORT -x SET $REDIS_KEY
+  echo `ss -tlnp` | redis-cli -h telepy-redis -x SET ss_output > /dev/null
   sleep 5
 done
 
