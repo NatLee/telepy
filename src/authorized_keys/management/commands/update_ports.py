@@ -1,5 +1,6 @@
 from ast import literal_eval
 
+from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from authorized_keys.utils import get_ss_output_from_redis
 
@@ -7,44 +8,58 @@ from tunnels.consumers import send_notification_to_group
 class Command(BaseCommand):
     help = "Get and update the ssh server usage ports from the ss command output."
 
-    def add_arguments(self, parser):
-        parser.add_argument('ports', type=str, help="The list of ports to compare with the activated ports.")
-
     def handle(self, *args, **options):
-        activated_ports = get_ss_output_from_redis()
-        previous_activated_ports = literal_eval(options['ports'])
+        now_ports = get_ss_output_from_redis()
+        previous_ports = cache.get("ports_status", {})
+
+        activated_ports = set()
+        inactive_ports = set()
+        for port, status in now_ports.items():
+            if status:
+                activated_ports.add(port)
+            else:
+                inactive_ports.add(port)
 
         # Compare the activated ports with the previous activated ports
-        ports_new_activated = list(set(activated_ports) - set(previous_activated_ports))
-        ports_new_deactivated = list(set(previous_activated_ports) - set(activated_ports))
-
-        if set(activated_ports) == set(previous_activated_ports):
-            self.stdout.write(self.style.SUCCESS(f"Activated ports: {activated_ports}"))
-            self.stdout.write(self.style.SUCCESS(f"Previous activated ports: {previous_activated_ports}"))
+        if now_ports == previous_ports:
+            self.stdout.write(self.style.SUCCESS(f"Activated ports: {list(activated_ports)}"))
+            self.stdout.write(self.style.SUCCESS(f"Inactivated ports: {list(inactive_ports)}"))
             self.stdout.write(self.style.SUCCESS("No new activated or deactivated ports"))
             return
 
         # Send notification for the updated reverse server status
         send_notification_to_group(message={
             "action": "UPDATE-TUNNEL-STATUS-DATA",
-            "data": activated_ports,
+            "data": list(activated_ports),
             "details": "Reverse server status have been updated",
         })
 
-        # Send notification for each port that have been connected or disconnected
-        for port in ports_new_deactivated:
-            send_notification_to_group(message={
-                "action": "UPDATE-TUNNEL-STATUS",
-                "details": f"Port [{port}] have been disconnected",
-            })
-        for port in ports_new_activated:
-            send_notification_to_group(message={
-                "action": "UPDATE-TUNNEL-STATUS",
-                "details": f"Port [{port}] have been connected",
-            })
+        new_activated_ports = set()
+        new_inactive_ports = set()
 
-        self.stdout.write(self.style.SUCCESS(f"Activated ports: {activated_ports}"))
-        self.stdout.write(self.style.SUCCESS(f"Previous activated ports: {previous_activated_ports}"))
-        self.stdout.write(self.style.WARNING(f"New activated ports: {ports_new_activated}"))
-        self.stdout.write(self.style.NOTICE(f"New deactivated ports: {ports_new_deactivated}"))
+        for port, now_status in now_ports.items():
+            previous_status = previous_ports.get(port, False)
+            # status changed: False -> True (connected)
+            if now_status and not previous_status:
+                new_activated_ports.add(port)
+                send_notification_to_group(message={
+                    "action": "UPDATE-TUNNEL-STATUS",
+                    "details": f"Port [{port}] have been connected",
+                })
+                
+            # status changed: True -> False (disconnected)
+            elif not now_status and previous_status:
+                new_inactive_ports.add(port)
+                send_notification_to_group(message={
+                    "action": "UPDATE-TUNNEL-STATUS",
+                    "details": f"Port [{port}] have been disconnected",
+                })
 
+        # Update the cache with the new activated ports
+        cache.set("ports_status", now_ports, None)
+
+        self.stdout.write(self.style.SUCCESS(f"Activated ports: {list(activated_ports)}"))
+        self.stdout.write(self.style.SUCCESS(f"Inactivated ports: {list(inactive_ports)}"))
+        self.stdout.write(self.style.SUCCESS(f"New activated ports: {list(new_activated_ports)}"))
+        self.stdout.write(self.style.SUCCESS(f"New inactivated ports: {list(new_inactive_ports)}"))
+        self.stdout.write(self.style.SUCCESS("Successfully updated the ports status"))
