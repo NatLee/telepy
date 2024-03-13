@@ -25,6 +25,7 @@ function updateTunnelCommands(data) {
 -M 6769 \\
 -o "ServerAliveInterval 15" \\
 -o "ServerAliveCountMax 3" \\
+-o "StrictHostKeyChecking=false" \\
 -p ${data.port} \\
 -NR '*:${data.reverse_port}:localhost:${sshPort}' \\
 telepy@${window.location.hostname}`;
@@ -46,7 +47,7 @@ while($continue)
     }
     else
     {
-      ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -p ${data.port} -NR '*:${data.reverse_port}:localhost:${sshPort}' telepy@${window.location.hostname}
+      ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p ${data.port} -NR '*:${data.reverse_port}:localhost:${sshPort}' telepy@${window.location.hostname}
       Start-Sleep -Milliseconds 500
     }
 }
