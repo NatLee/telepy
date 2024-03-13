@@ -6,8 +6,8 @@ while true; do
   # Retrieve the current ports from Redis
   PORTS=$(redis-cli -h telepy-redis GET ports_log)
 
-  # Check if the PORTS variable is empty or null or null string
-  if [[ -z "$PORTS" ]] || [[ "$PORTS" == "nil" ]] || [[ "$PORTS" == "null" ]]; then
+  # Check if the PORTS variable is null
+  if [[ "$PORTS" == "nil" ]]; then
       PORTS="[]"
   fi
 
@@ -20,10 +20,6 @@ while true; do
   # Parse the new set of activated ports from the command output
   # This regex looks for the pattern 'Activated ports: [any_content_here]'
   NEW_PORTS=$(echo "$COMMAND_OUTPUT" | grep -oP 'Activated ports: \K.*')
-  if [[ -z "$NEW_PORTS" ]]; then
-      NEW_PORTS="[]"
-  fi
-
   redis-cli -h telepy-redis SET ports_log "$NEW_PORTS"
 
   # Wait for 5 seconds before the next run
