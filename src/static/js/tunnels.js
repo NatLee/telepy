@@ -15,6 +15,25 @@ function fetchAndDisplayReverseServerKeys() {
     .then(data => {
         displayReverseServerKeys(data);
         globalThis.data = data; // Store the data in a global variable
+
+        // Fetch the status after constructing the rows
+        fetch('/api/reverse/server/status/ports', {
+            method: "GET",
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`
+            },
+        })
+        .then(response => response.json())
+        .then(statusData => {
+            // Iterate through each item again to update their status
+            data.forEach(item => {
+                // Determine if the port is active based on the status data
+                const isActive = statusData[item.reverse_port];
+                // Call the updateStatus function with the isActive status and hostname
+                updateStatus(isActive, item.hostname);
+            });
+        });
     })
     .catch(error => {
         console.error('Error fetching tunnels data:', error);
@@ -61,6 +80,7 @@ function createTableRow(item, actionButtons) {
     `;
 }
 
+
 function updateStatus(isConnected, hostname) {
     const statusElement = document.getElementById(`${hostname}-status`);
     if (statusElement) {
@@ -68,7 +88,6 @@ function updateStatus(isConnected, hostname) {
         statusElement.classList.toggle('disconnected', !isConnected);
     }
 }
-
 
 function fetchServerConfig(serverId) {
     const accessToken = localStorage.getItem('accessToken');
