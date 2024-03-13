@@ -18,7 +18,9 @@ class Command(BaseCommand):
         ports_new_activated = list(set(activated_ports) - set(previous_activated_ports))
         ports_new_deactivated = list(set(previous_activated_ports) - set(activated_ports))
 
-        if not set(activated_ports) != set(previous_activated_ports):
+        if set(activated_ports) == set(previous_activated_ports):
+            self.stdout.write(self.style.SUCCESS(f"Activated ports: {activated_ports}"))
+            self.stdout.write(self.style.SUCCESS(f"Previous activated ports: {previous_activated_ports}"))
             self.stdout.write(self.style.SUCCESS("No new activated or deactivated ports"))
             return
 
