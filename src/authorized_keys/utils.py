@@ -69,20 +69,22 @@ def get_ss_output_from_redis() -> str:
     if result is None:
         return ""
     parsed_output = parse_ss_ports_from_redis(result.stdout)
+    global PORTS
     if set(parsed_output) != set(PORTS):
         send_notification_to_group(message={
             "action": "UPDATE-TUNNEL-STATUS-DATA",
             "data": parsed_output,
+            "details": "Reverse server status have been updated",
         })
         for port in set(PORTS) - set(parsed_output):
             send_notification_to_group(message={
                 "action": "UPDATE-TUNNEL-STATUS",
-                "details": f"Reverse server [{port}] status have been disconnected",
+                "details": f"Port [{port}] have been disconnected",
             })
         for port in set(parsed_output) - set(PORTS):
             send_notification_to_group(message={
                 "action": "UPDATE-TUNNEL-STATUS",
-                "details": f"Reverse server [{port}] status have been connected",
+                "details": f"Port [{port}] have been connected",
             })
         PORTS = parsed_output
     return parsed_output
