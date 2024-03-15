@@ -21,6 +21,9 @@ services:
       - ./supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:rw
       - ./ssh/root_ssh_key:/ssh # for reading authorized_keys
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
+    depends_on:
+      - redis
+      - ssh
 
   redis:
     image: redis:alpine
@@ -47,3 +50,5 @@ services:
        - ./ssh/custom_scripts/custom-services.d:/custom-services.d
     ports:
       - ${REVERSE_SERVER_SSH_PORT}:2222 # for SSH connections, REVERSE_SERVER_SSH_PORT
+    depends_on:
+      - redis
