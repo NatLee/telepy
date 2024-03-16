@@ -24,6 +24,10 @@ def update_authorized_keys_file(keys: List[str]):
     with open('/ssh/authorized_keys', 'w') as f:
         f.write(authorized_keys_content)
 
+def update_authorized_keys_on_startup():
+    keys = get_authorized_keys()
+    update_authorized_keys_file(keys)
+
 @receiver(post_save, sender=ReverseServerAuthorizedKeys)
 @receiver(post_delete, sender=ReverseServerAuthorizedKeys)
 def update_reverse_server_authorized_keys(sender, **kwargs):
