@@ -46,6 +46,11 @@ class Terminal(APIView):
         tags=['Page']
     )
     def get(self, request, server_id):
+        # Check if the server exists
+        try:
+            server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Reverse server not found'}, status=404)
         return render(request, 'terminal.html')
 
 class SSHServerLogs(APIView):
