@@ -73,11 +73,13 @@
     <!-- Tab Content -->
     <div class="tab-content" id="osTabContent">
       <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
+        <br><p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
         <br><p id="linuxConnectionHint" class="text-muted"></p>
         <pre id="tunnelCommandLinux" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
         <button class="btn btn-outline-info mt-2" id="linuxCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
       </div>
       <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
+        <br><p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
         <br><p id="windowsConnectionHint" class="text-muted"></p>
         <pre id="tunnelCommandWindows" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
         <button class="btn btn-outline-info mt-2" id="windowsCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
