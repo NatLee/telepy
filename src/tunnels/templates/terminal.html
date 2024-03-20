@@ -5,7 +5,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Terminal</title>
-
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css">
   <link rel="stylesheet" href="https://unpkg.com/xterm@3.6.0/dist/xterm.css" />
 
   <style>
@@ -28,10 +29,21 @@
       color: white;
       padding: 0.5rem;
     }
+    .navbar, .input-group {
+      position: relative;
+    }
     #status {
       font-weight: bold;
       color: black;
     }
+    .dropdown-menu {
+      position: absolute;
+      z-index: 1000; /* Ensure it's above other content */
+      position: relative;
+      display: none;
+      max-height: 300px;
+      overflow-y: auto;
+  }
   </style>
 
   <script src="https://unpkg.com/xterm@3.6.0/dist/xterm.js"></script>
@@ -45,12 +57,26 @@
 
   <nav class="navbar navbar-dark bg-dark">
     <div class="container-fluid">
+      <!-- Status on the left -->
       <span style="font-size: medium;">Status: <span id="status">connecting...</span></span>
+  
+      <!-- Space between -->
+  
+      <!-- Right side with the button, adjust as needed -->
+      <div>
+        <button id="checkServiceKeyBtn" class="btn btn-info">Check Service Key</button>
+      </div>
     </div>
-    <span id="terminal-info"></span>
-    <!-- Service Key Button -->
-    <button id="checkServiceKeyBtn" class="btn btn-info">Check Service Key</button>
+
+  <!-- Search Bar -->
+  <input type="text" class="form-control mr-2 mt-2" id="searchPath" placeholder="Search path" aria-label="Search path">
+
   </nav>
+
+  <!-- Dropdown -->
+  <div class="dropdown position-relative">
+    <div id="dropdownMenu" class="dropdown-menu"></div>
+  </div>
 
   <div style="width: 100%; height: 100%;" id="terminal"></div>
 

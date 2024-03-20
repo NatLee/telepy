@@ -51,6 +51,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1",
     "http://localhost",
     f"http://localhost:{WEB_SERVER_PORT}",
+    "https://test.natlee.info"
 ]
 # -------------- END - CORS Setting -----------------
 
