@@ -164,7 +164,7 @@ class ListPath(APIView):
             output["files"] = elements
             return Response(output)
         else:
-            return Response({"error": stderr.decode()}, status=400)
+            return Response({"error": stderr}, status=400)
 
 class Download(APIView):
     permission_classes = (IsAuthenticated,)
