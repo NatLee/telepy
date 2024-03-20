@@ -199,13 +199,16 @@ class Download(APIView):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             local_path = Path(tmpdir)
+            name = path.split("/")[-1]
             if is_directory:
                 # Handle directory by creating a zip archive
-                local_path = local_path / "temp.zip"
-                command = base_ssh_cmd + f" 'cd {path} && zip -r - .' > '{local_path}'"
+                # Copy the directory to the local machine and zip it
+                command = f'scp -P {reverse_port} -r {server}:\"{path}\" {local_path} && cd {local_path} && zip -r - ./{name} > ./{name}.zip'
+                # Add the zip extension to the local path
+                local_path = local_path / f"{name}.zip"
             else:
-                local_path = local_path / path.split("/")[-1]
                 # Handle file by directly copying
+                local_path = local_path / name
                 command = f"scp -P {reverse_port} {server}:\"{path}\" {local_path}"
 
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
