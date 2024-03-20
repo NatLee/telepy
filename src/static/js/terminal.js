@@ -77,7 +77,7 @@ function getPathSegments() {
 }
 
 const serverID = getPathSegments();
-
+let username = null;
 console.log(`Server ID:` + serverID);
 
 const accessToken = localStorage.getItem('accessToken');
@@ -188,9 +188,12 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                 });
             }
         }).then((result) => {
-            if (result.value) {
+            let username = result.value;
+            if (username) {
                 // Setup WebSocket connection with selected username
-                setupWebSocketConnection(serverID, result.value);
+                setupWebSocketConnection(serverID, username);
+                // Set the username for the global scope
+                window.username = username;
             } else if (result.dismiss === Swal.DismissReason.deny) {
                 // Reload or refresh data after deletion
                 location.reload();
@@ -258,3 +261,174 @@ document.getElementById('checkServiceKeyBtn').addEventListener('click', function
     });
 });
 
+
+function displayDropdown(files) {
+    const dropdownMenu = document.getElementById('dropdownMenu');
+    const searchPathInput = document.getElementById('searchPath');
+    dropdownMenu.innerHTML = ''; // Clear previous results
+    dropdownMenu.style.display = files.length > 0 ? 'block' : 'none';
+
+    files.forEach(file => {
+        const fileItem = document.createElement('div');
+        fileItem.className = 'dropdown-item d-flex justify-content-between align-items-center';
+        dropdownMenu.appendChild(fileItem);
+
+        const fileInfo = document.createElement('a');
+        const isDirectory = file.type === 'directory';
+        fileInfo.href = '#';
+        fileInfo.innerHTML = `
+            <span class="${isDirectory ? 'fas fa-folder' : 'fas fa-file'}"></span>
+            ${file.name} <span class="badge badge-secondary">${file.size}</span>
+        `;
+        fileInfo.addEventListener('click', function(event) {
+            event.preventDefault();
+            dropdownMenu.style.display = 'none'; // Hide the dropdown menu
+
+            if (isDirectory) {
+                const newPath = appendToPath(searchPathInput.value, file.name);
+                searchPathInput.value = newPath; // Update the search bar with the new path
+                triggerSearch(newPath);
+            } else {
+                console.log(`Selected file: ${file.name}`);
+                // Handle file selection for non-directory items here
+            }
+        });
+
+        fileItem.appendChild(fileInfo);
+
+        // Add upload button only for directories
+        if (isDirectory) {
+            const uploadBtn = document.createElement('button');
+            uploadBtn.className = 'btn btn-sm btn-outline-secondary ms-2';
+            uploadBtn.textContent = 'Upload';
+            uploadBtn.addEventListener('click', function(event) {
+                event.stopPropagation(); // Prevent the file info click event
+                const destination = appendToPath(searchPathInput.value, file.name);
+                console.log(`Uploading file to ${destination}`);
+
+                // Open file input dialog
+                let input = document.createElement('input');
+                input.type = 'file';
+                input.onchange = e => { 
+                    let file = e.target.files[0]; // get the file
+                    let formData = new FormData();
+                    formData.append('file', file, file.name);
+                    const destination_path = appendToPath(destination, file.name);
+                    // Implement the upload functionality
+                    fetch(`/api/sftp/upload/${serverID}/${window.username}?destination_path=${encodeURIComponent(destination_path)}`, {
+                        method: 'POST',
+                        headers: {
+                            "Authorization": `Bearer ${localStorage.getItem('accessToken')}`
+                        },
+                        body: formData, // Send the form data
+                    }).then(response => {
+                        if (!response.ok) {
+                            console.error('Upload failed:', response);
+                            return;
+                        }
+                        console.log('Upload successful:', response);
+                        // Optionally refresh or update the UI here
+                    }).catch(error => console.error('Error uploading file:', error));
+                }
+                input.click(); // open dialog
+            });
+            fileItem.appendChild(uploadBtn); // Assume 'fileLink' is your element to append the button
+        }
+
+        // Add download button for both files and directories
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'btn btn-sm btn-outline-primary ms-2';
+        downloadBtn.textContent = 'Download';
+        downloadBtn.addEventListener('click', function(event) {
+            event.stopPropagation(); // Prevent the file info click event
+            const path = appendToPath(searchPathInput.value, file.name);
+            const downloadPathURL = `/api/sftp/download/${serverID}/${window.username}?path=${encodeURIComponent(path)}`;
+            console.log(`Downloading: ${downloadPathURL}`);
+            // Implement the download functionality
+            fetch(downloadPathURL, {
+                headers: {
+                    "Authorization": `Bearer ${localStorage.getItem('accessToken')}`
+                }
+            }).then(response => {
+                if (!response.ok) {
+                    console.error('Download failed:', response);
+                    return;
+                } else {
+                    const blob = response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = file.name;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                }
+            });
+        });
+        fileItem.appendChild(downloadBtn);
+
+    });
+
+    adjustDropdownPosition();
+}
+
+
+function appendToPath(currentPath, folderName) {
+    return currentPath.endsWith('/') ? `${currentPath}${folderName}` : `${currentPath}/${folderName}`;
+}
+
+function triggerSearch(path) {
+    const serverId = getPathSegments();
+    const url = `/api/sftp/list/${serverId}/${window.username}?path=${encodeURIComponent(path)}`;
+
+    fetch(url, {
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            // console.error('Error fetching path:', data.error);
+            // Don't update the search input to the new path if there's an error
+            return;
+        }
+        displayDropdown(data.files);
+    })
+    .catch(error => console.error('Error fetching path:', error));
+}
+
+function adjustDropdownPosition() {
+    const dropdownMenu = document.getElementById('dropdownMenu');
+    const searchInput = document.getElementById('searchPath');
+
+    // Get the search input's position on the page
+    const inputRect = searchInput.getBoundingClientRect();
+
+    // Position dropdown directly below the search input
+    dropdownMenu.style.top = `${inputRect.bottom + window.scrollY}px`; // Add window.scrollY to account for page scroll
+    dropdownMenu.style.left = `${inputRect.left}px`;
+
+    // Match dropdown's width with the search input's width
+    dropdownMenu.style.width = `${inputRect.width}px`;
+}
+
+// Add event listener to the search input to listen for input events and trigger search
+document.getElementById('searchPath').addEventListener('input', function(e) {
+    const path = e.target.value;
+    triggerSearch(path);
+});
+
+// Blur the search input when clicking outside of it
+document.addEventListener('click', function(e) {
+    if (!e.target.matches('#searchPath')) {
+        document.getElementById('dropdownMenu').style.display = 'none';
+    }
+});
+
+// Show the dropdown menu when clicking on the search input
+document.getElementById('searchPath').addEventListener('click', function() {
+    if (this.value) {
+        triggerSearch(this.value);
+    }
+});
