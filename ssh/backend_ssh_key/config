@@ -4,3 +4,10 @@ Host telepy-ssh
     UserKnownHostsFile /dev/null
     User telepy
     Port 2222
+
+Host reverse
+    HostName localhost
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    ProxyCommand ssh -q -W %h:%p telepy-ssh
+
