@@ -65,7 +65,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 # Execute SSH command to connect to telepy@telepy-ssh
                 os.execlp(
                     'bash', 'bash', '-c',
-                    f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {username}@localhost -p {reverse_port}'
+                    f'ssh {username}@reverse -p {reverse_port}'
                 )
             else:  # Parent process
                 # This is the server-side component that reads output from the SSH session
