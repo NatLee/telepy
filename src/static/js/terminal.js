@@ -283,7 +283,7 @@ function displayDropdown(files) {
         const isDirectory = file.type === 'directory';
         fileInfo.href = '#';
         fileInfo.innerHTML = `
-            <span class="${isDirectory ? 'fas fa-folder' : 'fas fa-file'}"></span>
+            <span class="${isDirectory ? 'fas fa-folder folder-icon' : 'fas fa-file file-icon'}"></span>
             ${file.name} <span class="badge badge-secondary">${file.size}</span>
         `;
         fileInfo.addEventListener('click', function(event) {
@@ -338,7 +338,7 @@ function displayDropdown(files) {
                 }
                 input.click(); // open dialog
             });
-            fileItem.appendChild(uploadBtn); // Assume 'fileLink' is your element to append the button
+            fileItem.appendChild(uploadBtn);
         }
 
         // Add download button for both files and directories
