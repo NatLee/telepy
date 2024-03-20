@@ -48,7 +48,7 @@ def execute_ssh_command(server:str, command:str) -> Tuple[str, str, int]:
     ssh_command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} {command}'
     process = Popen(ssh_command, shell=True, stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
-    return stdout.decode(), stderr.decode(), process.returncode
+    return stdout.decode('utf-8', errors='replace'), stderr.decode(), process.returncode
 
 def powershell_to_unix_format(ps_output) -> List[str]:
     unix_style_output = []
@@ -96,8 +96,8 @@ class ListPath(APIView):
         path = request.query_params.get('path', '.')
         
         # Attempt to detect if the target is using PowerShell
-        _, stderr, _ = execute_ssh_command(server, "'$PSVersionTable'")
-        if "cannot be found" not in stderr:
+        _, stderr, _ = execute_ssh_command(server, "'$PSVersionTable | Out-String -Width 4096'")
+        if "command not found" not in stderr:
             # Assuming the target is PowerShell if `$PSVersionTable` does not result in an error
             command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
         else:
