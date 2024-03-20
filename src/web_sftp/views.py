@@ -1,3 +1,5 @@
+from typing import List, Tuple, Dict, Any
+import json
 from pathlib import Path
 import datetime
 import tempfile
@@ -16,7 +18,7 @@ from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 
-def parse_permissions(permission_string:str):
+def parse_permissions(permission_string:str) -> Dict[str, Any]:
     permissions = {
         "type": "directory" if permission_string[0] == 'd' else "file",
         "string": permission_string,
@@ -41,6 +43,35 @@ def parse_permissions(permission_string:str):
     }
     return permissions
 
+def execute_ssh_command(server:str, command:str) -> Tuple[str, str, int]:
+    """Executes a given command via SSH on the server and returns the output."""
+    ssh_command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} {command}'
+    process = Popen(ssh_command, shell=True, stdout=PIPE, stderr=PIPE)
+    stdout, stderr = process.communicate()
+    return stdout.decode(), stderr.decode(), process.returncode
+
+def powershell_to_unix_format(ps_output) -> List[str]:
+    unix_style_output = []
+
+    for item in ps_output:
+        mode = 'd' if item["Mode"].startswith('d') else '-'
+        mode += ''.join(['r' if 'r' in perm else '-' for perm in item["Mode"][1:3]])
+        mode += ''.join(['w' if 'w' in perm else '-' for perm in item["Mode"][3:5]])
+        mode += ''.join(['x' if 'x' in perm else '-' for perm in item["Mode"][5:7]])
+        mode = mode.ljust(10, '-')  # Fill the rest with '-' to mimic Unix style
+
+        # Convert the "LastWriteTime" to a more Unix-like date format, e.g., "Nov 10 02:29"
+        last_write_time = datetime.datetime.fromisoformat(item["LastWriteTime"].rstrip('Z')).strftime('%b %d %H:%M')
+
+        # Assuming directories are of a fixed size like '4096' and files show their actual size
+        size = item["Length"] if item["Length"] is not None else '4096'
+
+        name = item["Name"]
+
+        unix_style_output.append(f"{mode} 1 user group {size.rjust(5)} {last_write_time} {name}")
+
+    return unix_style_output
+
 class ListPath(APIView):
     permission_classes = (IsAuthenticated,)
     @swagger_auto_schema(
@@ -60,17 +91,43 @@ class ListPath(APIView):
 
     def get(self, request, server_id, username, format=None):
         reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        reverse_port = reverser_server.reverse_port    
+        reverse_port = reverser_server.reverse_port
         server = f"{username}@localhost -p {reverse_port}"
         path = request.query_params.get('path', '.')
-        command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} \'ls -la {path}\''
         
-        process = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
-        stdout, stderr = process.communicate()
+        # Attempt to detect if the target is using PowerShell
+        _, stderr, _ = execute_ssh_command(server, "'$PSVersionTable'")
+        if "cannot be found" not in stderr:
+            # Assuming the target is PowerShell if `$PSVersionTable` does not result in an error
+            command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
+        else:
+            # Assuming a Unix-like shell
+            command = f"'ls -la {path}'"
+        
+        stdout, stderr, returncode = execute_ssh_command(server, command)
+      
+        if returncode == 0:
 
-        if process.returncode == 0:
-            lines = stdout.decode().strip().split('\n')
-            output = {"total": lines.pop(0).split()[1]}  # Extract total and remove the first line
+            # Process output based on the executed command
+            if "ConvertTo-Json" in command:
+                # Parse the JSON output
+                try:
+                    result_of_powershell = json.loads(stdout)
+                except json.JSONDecodeError:
+                    return Response({"error": "Powershell result failed to parse JSON output"}, status=400)
+                # Convert the PowerShell output to a Unix-like format
+                output = {
+                    "shell": "powershell",  # Indicate that the shell used was "powershell"
+                    "total": len(result_of_powershell)
+                }
+                lines = powershell_to_unix_format(result_of_powershell)
+            else:
+                lines = stdout.decode().strip().split('\n')
+                output = {
+                    "shell": "unix",  # Indicate that the shell used was "unix
+                    "total": lines.pop(0).split()[1],  # Extract total and remove the first line
+                }
+
             elements = []
 
             for line in lines:
