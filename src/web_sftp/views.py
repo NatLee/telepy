@@ -109,7 +109,6 @@ class ListPath(APIView):
         else:
             return Response({"error": stderr.decode()}, status=400)
 
-
 class Download(APIView):
     permission_classes = (IsAuthenticated,)
     @swagger_auto_schema(
@@ -133,7 +132,7 @@ class Download(APIView):
         path = request.query_params.get('path')
 
         # Set up the base SSH command with options
-        base_ssh_cmd = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server}'
+        base_ssh_cmd = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} -p {reverse_port}'
 
         # Determine if path is a file or directory
         is_dir_command = f"{base_ssh_cmd} '[ -d \"{path}\" ] && echo true || echo false'"
@@ -141,11 +140,11 @@ class Download(APIView):
         stdout, _ = process.communicate()
         is_directory = stdout.decode().strip() == 'true'
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            local_path = f"{tmpdirname}/archive"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir)
             if is_directory:
                 # Handle directory by creating a zip archive
-                local_path += ".zip"
+                local_path = local_path / "temp.zip"
                 command = f"{base_ssh_cmd} 'cd \"{path}\" && zip -r - .' > '{local_path}'"
             else:
                 # Handle file by directly copying
@@ -157,8 +156,11 @@ class Download(APIView):
 
             with open(local_path, 'rb') as f:
                 file_data = f.read()
-                response = HttpResponse(file_data, content_type='application/octet-stream')
-                response['Content-Disposition'] = f'attachment; filename="{path.split("/")[-1]}"'
+                response = HttpResponse(file_data, content_type='application/zip')
+                filename = path.split("/")[-1]
+                if is_directory:
+                    filename += ".zip"
+                response['Content-Disposition'] = f'attachment; filename="{filename}"'
                 return response
 
 class UploadFiles(APIView):
