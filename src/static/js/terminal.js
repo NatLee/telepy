@@ -360,14 +360,15 @@ function displayDropdown(files) {
                     console.error('Download failed:', response);
                     return;
                 } else {
-                    const blob = response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = file.name;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
+                    response.blob().then(blob => {
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = file.name;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                    });
                 }
             });
         });
