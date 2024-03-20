@@ -94,6 +94,7 @@ INSTALLED_APPS = [
     "reverse_keys",
     "tunnels",
     "logs",
+    "web_sftp",
 ]
 
 MIDDLEWARE = [
