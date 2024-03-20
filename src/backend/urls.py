@@ -55,6 +55,8 @@ urlpatterns += [
     path(f"{URL_PREFIX}/reverse/", include("authorized_keys.urls")),
     # logs
     path(f"{URL_PREFIX}/log/", include("logs.urls")),
+    # web sftp
+    path(f"{URL_PREFIX}/sftp/", include("web_sftp.urls")),
 ]
 
 # -------------- START - Swagger View --------------
