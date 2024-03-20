@@ -122,7 +122,7 @@ class ListPath(APIView):
                 }
                 lines = powershell_to_unix_format(result_of_powershell)
             else:
-                lines = stdout.decode().strip().split('\n')
+                lines = stdout.strip().split('\n')
                 output = {
                     "shell": "unix",  # Indicate that the shell used was "unix
                     "total": lines.pop(0).split()[1],  # Extract total and remove the first line
