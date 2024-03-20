@@ -63,7 +63,7 @@ class ListPath(APIView):
         reverse_port = reverser_server.reverse_port    
         server = f"{username}@localhost -p {reverse_port}"
         path = request.query_params.get('path', '.')
-        command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} \'LC_TIME="C" ls -la {path}\''
+        command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} \'ls -la {path}\''
         
         process = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
         stdout, stderr = process.communicate()
