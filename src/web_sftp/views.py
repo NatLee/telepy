@@ -64,7 +64,7 @@ def powershell_to_unix_format(ps_output) -> List[str]:
         last_write_time = datetime.datetime.fromisoformat(item["LastWriteTime"].rstrip('Z')).strftime('%b %d %H:%M')
 
         # Assuming directories are of a fixed size like '4096' and files show their actual size
-        size = item["Length"] if item["Length"] is not None else '4096'
+        size = str(item["Length"]) if item["Length"] is not None else '4096'
 
         name = item["Name"]
 
