@@ -43,9 +43,9 @@ def parse_permissions(permission_string:str) -> Dict[str, Any]:
     }
     return permissions
 
-def execute_ssh_command(server:str, command:str) -> Tuple[str, str, int]:
+def execute_ssh_command(server:str, port:int, command:str) -> Tuple[str, str, int]:
     """Executes a given command via SSH on the server and returns the output."""
-    ssh_command = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} {command}'
+    ssh_command = f'ssh {server} -p {port} {command}'
     process = Popen(ssh_command, shell=True, stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
     return stdout.decode('utf-8', errors='replace'), stderr.decode(), process.returncode
@@ -91,12 +91,12 @@ class ListPath(APIView):
 
     def get(self, request, server_id, username, format=None):
         reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        reverse_port = reverser_server.reverse_port
-        server = f"{username}@localhost -p {reverse_port}"
+        port = reverser_server.reverse_port
+        server = f"{username}@reverse"
         path = request.query_params.get('path', '.')
         
         # Attempt to detect if the target is using PowerShell
-        _, stderr, _ = execute_ssh_command(server, "'$PSVersionTable | Out-String -Width 4096'")
+        _, stderr, _ = execute_ssh_command(server, port, "'$PSVersionTable | Out-String -Width 4096'")
         if "command not found" not in stderr:
             # Assuming the target is PowerShell if `$PSVersionTable` does not result in an error
             command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
@@ -104,7 +104,7 @@ class ListPath(APIView):
             # Assuming a Unix-like shell
             command = f"'ls -la {path}'"
         
-        stdout, stderr, returncode = execute_ssh_command(server, command)
+        stdout, stderr, returncode = execute_ssh_command(server, port, command)
       
         if returncode == 0:
 
@@ -164,7 +164,7 @@ class ListPath(APIView):
             output["files"] = elements
             return Response(output)
         else:
-            return Response({"error": stderr}, status=400)
+            return Response({"error": stderr}, status=404)
 
 class Download(APIView):
     permission_classes = (IsAuthenticated,)
@@ -185,14 +185,14 @@ class Download(APIView):
     def get(self, request, server_id, username, format=None):
         reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
         reverse_port = reverser_server.reverse_port    
-        server = f"{username}@localhost"
+        server = f"{username}@reverse"
         path = request.query_params.get('path')
 
         # Set up the base SSH command with options
-        base_ssh_cmd = f'ssh -o "ProxyCommand=ssh -W %h:%p telepy-ssh" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" {server} -p {reverse_port}'
+        base_ssh_cmd = f'ssh {server} -p {reverse_port}'
 
         # Determine if path is a file or directory
-        is_dir_command = f"{base_ssh_cmd} '[ -d \"{path}\" ] && echo true || echo false'"
+        is_dir_command = base_ssh_cmd + f" '[ -d {path} ] && echo true || echo false'"
         process = subprocess.Popen(is_dir_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout, _ = process.communicate()
         is_directory = stdout.decode().strip() == 'true'
@@ -202,12 +202,14 @@ class Download(APIView):
             if is_directory:
                 # Handle directory by creating a zip archive
                 local_path = local_path / "temp.zip"
-                command = f"{base_ssh_cmd} 'cd \"{path}\" && zip -r - .' > '{local_path}'"
+                command = base_ssh_cmd + f" 'cd {path} && zip -r - .' > '{local_path}'"
             else:
+                local_path = local_path / path.split("/")[-1]
                 # Handle file by directly copying
-                command = f"scp -P {reverse_port} -o ProxyCommand='ssh -W %h:%p telepy-ssh' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {server}:\"{path}\" {local_path}"
+                command = f"scp -P {reverse_port} {server}:\"{path}\" {local_path}"
 
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
             if result.returncode != 0:
                 return Response({"error": "Failed to download file or directory"}, status=400)
 
@@ -248,7 +250,7 @@ class UploadFiles(APIView):
     def post(self, request, server_id, username, format=None):
         reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
         reverse_port = reverser_server.reverse_port    
-        server = f"{username}@localhost"
+        server = f"{username}@reverse"
         destination_path = request.query_params.get('destination_path')
         file_obj = request.FILES.get('file')
 
@@ -263,7 +265,7 @@ class UploadFiles(APIView):
                     temp_file.write(chunk)
 
             # Use SCP to upload the file
-            scp_cmd = f"scp -P {reverse_port} -o ProxyCommand='ssh -W %h:%p telepy-ssh' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '{temp_file_path}' {server}:\"{destination_path}\""
+            scp_cmd = f"scp -P {reverse_port} '{temp_file_path}' {server}:\"{destination_path}\""
             process = subprocess.Popen(scp_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = process.communicate()
 
