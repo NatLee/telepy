@@ -127,6 +127,12 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                 location.reload();
             }
         });
+    } else if (data.length === 1) {
+        console.log('Only one username found:', data[0].username);
+        // Single username found, setup WebSocket connection
+        setupWebSocketConnection(serverID, data[0].username);
+        // Set the username for the global scope
+        window.username = data[0].username;
     } else {
         // Enhanced username selection with delete option
         Swal.fire({
