@@ -112,7 +112,9 @@ class ListPath(APIView):
             if "ConvertTo-Json" in command:
                 # Parse the JSON output
                 try:
-                    result_of_powershell = json.loads(stdout)
+                    result_of_powershell = json.loads(stdout, encoding="utf-8", ensure_ascii=False)
+                    if isinstance(result_of_powershell, dict):
+                        result_of_powershell = [result_of_powershell]
                 except json.JSONDecodeError:
                     return Response({"error": "Powershell result failed to parse JSON output"}, status=400)
                 # Convert the PowerShell output to a Unix-like format
