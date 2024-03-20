@@ -215,9 +215,10 @@ class Download(APIView):
 
             with open(local_path, 'rb') as f:
                 file_data = f.read()
-                response = HttpResponse(file_data, content_type='application/zip')
+                response = HttpResponse(file_data, content_type='application/octet-stream')
                 filename = path.split("/")[-1]
                 if is_directory:
+                    response['Content-Type'] = 'application/zip'
                     filename += ".zip"
                 response['Content-Disposition'] = f'attachment; filename="{filename}"'
                 return response
