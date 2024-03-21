@@ -60,13 +60,13 @@ def parse_ss_ports_from_redis(ss_output:str, filter:bool) -> Dict[int, bool]:
         if match:
             used_ports.add(int(match.group(2)))
 
+    ports = {}
     # If filter is False, return all ports
     if not filter:
-        return {port: True for port in used_ports}
+        ports = {port: True for port in used_ports}
 
-    reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list("reverse_port", flat=True)
     # Ensure all reverse ports are in the ports
-    ports = {}
+    reverse_ports = ReverseServerAuthorizedKeys.objects.all().values_list("reverse_port", flat=True)
     for port in reverse_ports:
         if port not in used_ports:
             ports[port] = False # not used
