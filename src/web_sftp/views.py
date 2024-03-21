@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Union
 import json
 from pathlib import Path
 import datetime
@@ -76,7 +76,13 @@ def is_powershell(server:str, port:int) -> bool:
     """Detects if the remote server is using PowerShell."""
     command = "'$PSVersionTable | Out-String -Width 4096'"
     stdout, stderr, returncode = execute_ssh_command(server, port, command)
-    return "command not found" not in stderr
+    return "PSVersion" in stderr
+
+def is_unix(server:str, port:int) -> bool:
+    """Detects if the remote server is using a Unix-like shell."""
+    command = "'uname -a'"
+    stdout, stderr, returncode = execute_ssh_command(server, port, command)
+    return "Linux" in stdout
 
 class ShellDetect(APIView):
     permission_classes = (IsAuthenticated,)
@@ -92,7 +98,9 @@ class ShellDetect(APIView):
         try:
             if is_powershell(server, port):
                 return Response({"shell": "powershell"})
-            return Response({"shell": "unix"})
+            if is_unix(server, port):
+                return Response({"shell": "unix"})
+            return Response({"shell": "unknown"})
         except Exception as e:
             return Response({"error": str(e)}, status=400)
 
@@ -120,7 +128,7 @@ class ListPath(APIView):
         
         path = request.query_params.get('path', '~/')
         command = f"'ls -la {path}'"
-        
+
         if is_powershell(server, port):
             path = request.query_params.get('path', 'C:\\')
             command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
