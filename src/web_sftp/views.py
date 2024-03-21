@@ -76,7 +76,7 @@ def is_powershell(server:str, port:int) -> bool:
     """Detects if the remote server is using PowerShell."""
     command = "'$PSVersionTable | Out-String -Width 4096'"
     stdout, stderr, returncode = execute_ssh_command(server, port, command)
-    return "PSVersion" in stderr
+    return "PSVersion" in stdout
 
 def is_unix(server:str, port:int) -> bool:
     """Detects if the remote server is using a Unix-like shell."""
@@ -131,7 +131,7 @@ class ListPath(APIView):
 
         if is_powershell(server, port):
             path = request.query_params.get('path', 'C:\\')
-            command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
+            command = f"""'Get-ChildItem -Path "{path}" | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"""
         stdout, stderr, returncode = execute_ssh_command(server, port, command)
       
         if returncode == 0:
