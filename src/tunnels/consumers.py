@@ -17,8 +17,10 @@ from channels.exceptions import StopConsumer
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
 class TerminalConsumer(AsyncWebsocketConsumer):
-    child_pid = None
-    fd = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.child_pid = None
+        self.fd = None
 
     async def connect(self):
         # Extract token from query string
