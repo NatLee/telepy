@@ -104,7 +104,7 @@ function shellType() {
                 document.getElementById('searchPath').value = '~/';
             } else {
                 // Add readonly attribute to the search input for unknown shell types
-                document.getElementById('searchPath').value = 'Cannot determine shell type';
+                document.getElementById('shellType').innerHTML = '<span style="background-color: indianred;">' + getDisplayValue(data.shell) + '</span>';
             }
         }
     ).catch(
