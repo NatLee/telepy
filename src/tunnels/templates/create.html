@@ -33,21 +33,21 @@
     <!-- Tab navigation -->
     <ul class="nav nav-tabs" id="keyTab" role="tablist">
       <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
+        <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
       </li>
       <li class="nav-item" role="presentation">
-        <button class="nav-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
+        <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
       </li>
     </ul>
 
     <!-- Tab Content -->
     <div class="tab-content" id="keyTabContent">
       <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
-        <br><p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
+        <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
         <div id="userKeys" class="mt-2"></div>
       </div>
       <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
-        <br><p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
+        <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
         <div id="serviceKeys" class="mt-2"></div>
       </div>
     </div>
@@ -60,32 +60,32 @@
     <!-- Tab navigation -->
     <ul class="nav nav-tabs" id="osTab" role="tablist">
       <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
+        <button class="tab-link active " id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
       </li>
       <li class="nav-item" role="presentation">
-        <button class="nav-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
+        <button class="tab-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
       </li>
       <li class="nav-item" role="presentation">
-        <button class="nav-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
+        <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
       </li>
     </ul>
 
     <!-- Tab Content -->
     <div class="tab-content" id="osTabContent">
       <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
-        <br><p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-        <br><p id="linuxConnectionHint" class="text-muted"></p>
+        <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+        <p id="linuxConnectionHint" class="text-muted"></p>
         <pre id="tunnelCommandLinux" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
         <button class="btn btn-outline-info mt-2" id="linuxCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
       </div>
       <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
-        <br><p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
-        <br><p id="windowsConnectionHint" class="text-muted"></p>
+        <p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
+        <p id="windowsConnectionHint" class="text-muted"></p>
         <pre id="tunnelCommandWindows" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
         <button class="btn btn-outline-info mt-2" id="windowsCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
       </div>
       <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
-        <br><p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
+        <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
         <pre id="tunnelCommandDocker" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
         <button class="btn btn-outline-info mt-2" id="dockerCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandDocker')">Copy</button>
       </div>

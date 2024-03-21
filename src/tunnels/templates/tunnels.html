@@ -65,47 +65,47 @@
    <div class="modal-dialog modal-dialog-scrollable modal-lg">
      <div class="modal-content">
        <div class="modal-header">
-         <h5 class="modal-title" id="serverScriptModalLabel">Server Script</h5>
+         <h5 class="modal-title" id="serverScriptModalLabel">Reverse Server Tunnel Script</h5>
          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
        </div>
        <div class="modal-body">
          <!-- SSH port -->
          <div class="input-group mb-3">
-            <span class="input-group-text" id="basic-addon1">SSH Port</span>
+            <span class="input-group-text" id="basic-addon1">Target Server SSH Port</span>
             <input type="text" class="form-control" placeholder="22" id="sshPort" value="22" aria-label="SSH Port">
          </div>
          
          <!-- Nav tabs -->
-         <ul class="nav nav-tabs" id="osTab" role="tablist">
-           <li class="nav-item" role="presentation">
-             <button class="nav-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
+         <ul class="nav nav-tabs" id="osTab">
+           <li class="nav-item">
+             <button class="tab-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" aria-controls="linux" aria-selected="true">Linux</button>
            </li>
-           <li class="nav-item" role="presentation">
-             <button class="nav-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
+           <li class="nav-item">
+             <button class="tab-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" aria-controls="windows" aria-selected="false">Windows</button>
            </li>
-           <li class="nav-item" role="presentation">
-             <button class="nav-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
+           <li class="nav-item">
+             <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" aria-controls="docker" aria-selected="false">Docker</button>
            </li>
          </ul>
          
          <!-- Tab content -->
          <div class="tab-content" id="osTabContent">
             <!-- Linux -->
-            <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
+            <div class="tab-pane fade show active" id="linux" aria-labelledby="linux-tab">
                <!-- Linux tab content -->
-               <br><p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+               <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
                <pre id="tunnelCommandLinux" class="form-control" style="height: 300px" readonly></pre>
             </div>
             <!-- Windows -->
-            <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
+            <div class="tab-pane fade" id="windows" aria-labelledby="windows-tab">
                <!-- Windows tab content -->
-               <br><p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
+               <p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
                <pre id="tunnelCommandWindows" class="form-control" style="height: 300px" readonly></pre>
             </div>
             <!-- Docker -->
-            <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
+            <div class="tab-pane fade" id="docker" aria-labelledby="docker-tab">
                <!-- Docker tab content -->
-               <br><p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
+               <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
                <pre id="tunnelCommandDocker" class="form-control" style="height: 300px" readonly></pre>
             </div>
          </div>
