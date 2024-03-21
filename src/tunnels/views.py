@@ -146,18 +146,15 @@ class WindowsSSHTunnelScript(APIView):
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server keys not found'}, status=404)
 
-        config_string = f"""
-$continue = $true
+        config_string = f"""$continue = $true
 echo "[+] Script started"
 # Add-Type for PowerManagement to prevent sleep
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-
 public static class PowerManagement {{
     [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     public static extern uint SetThreadExecutionState(uint esFlags);
-
     public const uint ES_CONTINUOUS = 0x80000000;
     public const uint ES_SYSTEM_REQUIRED = 0x00000001;
     public const uint ES_DISPLAY_REQUIRED = 0x00000002;
@@ -189,7 +186,6 @@ try {{
         $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {ssh_port} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{ssh_server_hostname}'
         # Execute SSH command and wait for its completion before restarting
         Invoke-Expression $sshCommand
-        
         Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
         Start-Sleep -Seconds 5
     }}
