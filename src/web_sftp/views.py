@@ -72,6 +72,31 @@ def powershell_to_unix_format(ps_output) -> List[str]:
 
     return unix_style_output
 
+def is_powershell(server:str, port:int) -> bool:
+    """Detects if the remote server is using PowerShell."""
+    command = "'$PSVersionTable | Out-String -Width 4096'"
+    stdout, stderr, returncode = execute_ssh_command(server, port, command)
+    return "command not found" not in stderr
+
+class ShellDetect(APIView):
+    permission_classes = (IsAuthenticated,)
+    @swagger_auto_schema(
+        operation_summary="Detect Shell",
+        operation_description="Detect the shell used on the remote server",
+        tags=['SFTP'],
+    )
+    def get(self, request, server_id, username, format=None):
+        reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
+        port = reverser_server.reverse_port
+        server = f"{username}@reverse"
+        try:
+            if is_powershell(server, port):
+                return Response({"shell": "powershell"})
+            return Response({"shell": "unix"})
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
+
+
 class ListPath(APIView):
     permission_classes = (IsAuthenticated,)
     @swagger_auto_schema(
@@ -84,26 +109,21 @@ class ListPath(APIView):
                 in_=openapi.IN_QUERY,
                 type=openapi.TYPE_STRING,
                 required=False,
-                description='The path to list. Defaults to the current directory.'
+                description='The path to list. Defaults to the home directory in Unix-like shell and C:\\ in PowerShell.'
             )
         ]
     )
-
     def get(self, request, server_id, username, format=None):
         reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
         port = reverser_server.reverse_port
         server = f"{username}@reverse"
-        path = request.query_params.get('path', '.')
         
-        # Attempt to detect if the target is using PowerShell
-        _, stderr, _ = execute_ssh_command(server, port, "'$PSVersionTable | Out-String -Width 4096'")
-        if "command not found" not in stderr:
-            # Assuming the target is PowerShell if `$PSVersionTable` does not result in an error
+        path = request.query_params.get('path', '~/')
+        command = f"'ls -la {path}'"
+        
+        if is_powershell(server, port):
+            path = request.query_params.get('path', 'C:\\')
             command = f"'Get-ChildItem -Path {path} | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"
-        else:
-            # Assuming a Unix-like shell
-            command = f"'ls -la {path}'"
-        
         stdout, stderr, returncode = execute_ssh_command(server, port, command)
       
         if returncode == 0:

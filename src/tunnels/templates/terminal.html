@@ -45,6 +45,10 @@
       font-weight: bold;
       color: black;
     }
+    #shellType {
+      font-weight: bold;
+      color: black;
+    }
     .dropdown-menu {
       position: absolute;
       z-index: 1000; /* Ensure it's above other content */
@@ -67,8 +71,10 @@
   <nav class="navbar navbar-dark bg-dark">
     <div class="container-fluid">
       <!-- Status on the left -->
-      <span style="font-size: medium;">Status: <span id="status">connecting...</span></span>
-  
+      <div>
+        <span style="font-size: medium;">Status: <span id="status">connecting...</span>
+        <span style="font-size: medium;">Shell: <span id="shellType">detecting...</span>
+      </div>
       <!-- Space between -->
   
       <!-- Right side with the button, adjust as needed -->
@@ -78,7 +84,7 @@
     </div>
 
   <!-- Search Bar -->
-  <input type="text" class="form-control mr-2 mt-2" id="searchPath" placeholder="Search path" aria-label="Search path">
+  <input type="text" class="form-control mr-2 mt-2" id="searchPath" placeholder="Search path" aria-label="Search path" readonly>
 
   </nav>
 
