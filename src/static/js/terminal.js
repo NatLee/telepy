@@ -439,3 +439,7 @@ document.getElementById('searchPath').addEventListener('click', function() {
         triggerSearch(this.value);
     }
 });
+
+// Adjust dropdown position when the window is resized
+window.addEventListener('resize', adjustDropdownPosition);
+
