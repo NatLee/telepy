@@ -102,7 +102,101 @@ Host {server_auth_key.hostname}
     User {username.username}
     ProxyCommand ssh -W %h:%p telepy-ssh-server"""
         return Response({'config': config_string})
+
+class AutoSSHTunnelScript(APIView):
+    permission_classes = (IsAuthenticated,)
+    @swagger_auto_schema(
+        operation_summary="Auto SSH Tunnel Script",
+        operation_description="Auto SSH Tunnel Script",
+        tags=['Script']
+    )
+    def get(self, request, server_id, ssh_port, ssh_server_hostname):
+        try:
+            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            reverse_port = server_auth_key.reverse_port
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Reverse server keys not found'}, status=404)
+
+        config_string = f"""#!/bin/bash
+autossh \\
+-M 6769 \\
+-o "ServerAliveInterval 30" \\
+-o "ServerAliveCountMax 3" \\
+-o "StrictHostKeyChecking=no" \\
+-o "UserKnownHostsFile=/dev/null" \\
+-p {settings.REVERSE_SERVER_SSH_PORT} \\
+-NR '*:{reverse_port}:localhost:{ssh_port}' \\
+telepy@{ssh_server_hostname}"""
+
+        return Response(config_string)
+
+class WindowsSSHTunnelScript(APIView):
+    permission_classes = (IsAuthenticated,)
+    @swagger_auto_schema(
+        operation_summary="Windows SSH Tunnel Script",
+        operation_description="Windows SSH Tunnel Script",
+        tags=['Script']
+    )
+    def get(self, request, server_id, ssh_port, ssh_server_hostname):
+        try:
+            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            reverse_port = server_auth_key.reverse_port
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Reverse server keys not found'}, status=404)
+
+        config_string = f"""
+$continue = $true
+echo "[+] Script started"
+# Add-Type for PowerManagement to prevent sleep
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class PowerManagement {{
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    public static extern uint SetThreadExecutionState(uint esFlags);
+
+    public const uint ES_CONTINUOUS = 0x80000000;
+    public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+    public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+}}
+"@
+# Function to write messages with timestamp
+function Write-TimestampedMessage {{
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    echo "[$timestamp] $Message"
+}}
+# Function to enable or disable sleep prevention
+function Prevent-Sleep {{
+    param([bool]$Enable)
+    if ($Enable) {{
+        [PowerManagement]::SetThreadExecutionState([PowerManagement]::ES_CONTINUOUS -bor [PowerManagement]::ES_SYSTEM_REQUIRED -bor [PowerManagement]::ES_DISPLAY_REQUIRED)
+        Write-TimestampedMessage "Sleep prevention activated."
+    }} else {{
+        [PowerManagement]::SetThreadExecutionState([PowerManagement]::ES_CONTINUOUS)
+        Write-TimestampedMessage "Sleep prevention deactivated."
+    }}
+}}
+# Prevent sleep initially
+Prevent-Sleep -Enable $true
+try {{
+    while ($true) {{
+        Write-TimestampedMessage "Starting SSH Reverse Tunnel."
+        # SSH command with proper options for keeping the connection alive
+        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {ssh_port} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{ssh_server_hostname}'
+        # Execute SSH command and wait for its completion before restarting
+        Invoke-Expression $sshCommand
         
+        Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
+        Start-Sleep -Seconds 5
+    }}
+}} finally {{
+    # Allow the system to sleep again when exiting the loop
+    Prevent-Sleep -Enable $false
+    Write-TimestampedMessage "Script exited, sleep prevention disabled."
+}}
+Write-Host "Press any key to continue..."
+$Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")"""
 
-
-
+        return Response(config_string)
