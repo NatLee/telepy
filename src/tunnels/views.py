@@ -117,8 +117,7 @@ class AutoSSHTunnelScript(APIView):
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server keys not found'}, status=404)
 
-        config_string = f"""#!/bin/bash
-autossh \\
+        config_string = f"""autossh \\
 -M 6769 \\
 -o "ServerAliveInterval 30" \\
 -o "ServerAliveCountMax 3" \\
@@ -128,7 +127,10 @@ autossh \\
 -NR '*:{reverse_port}:localhost:{ssh_port}' \\
 telepy@{ssh_server_hostname}"""
 
-        return Response(config_string)
+        return Response({
+            "script": config_string,
+            "language": "bash",
+        })
 
 class WindowsSSHTunnelScript(APIView):
     permission_classes = (IsAuthenticated,)
@@ -199,4 +201,7 @@ try {{
 Write-Host "Press any key to continue..."
 $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")"""
 
-        return Response(config_string)
+        return Response({
+            "script": config_string,
+            "language": "powershell",
+        })

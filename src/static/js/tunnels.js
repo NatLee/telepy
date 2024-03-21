@@ -56,6 +56,7 @@ function createActionButtons(item) {
         <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
         <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${item.id}')">Users</button>
         <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${item.id})">Config</button>
+        <button class="btn btn-secondary btn-sm me-2" onclick="showServerScriptModal('${item.id}')">Script</button>
         <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${item.id}')">Delete</button>
     `;
 }
@@ -79,7 +80,6 @@ function createTableRow(item, actionButtons) {
         </tr>
     `;
 }
-
 
 function updateStatus(isConnected, hostname) {
     const statusElement = document.getElementById(`${hostname}-status`);
@@ -207,7 +207,6 @@ function openUserManagementModal(serverId) {
     fetchUserList(serverId);
 }
 
-
 function fetchUserList(serverId) {
     const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/reverse/server/${serverId}/usernames`, {
@@ -248,7 +247,6 @@ function fetchUserList(serverId) {
       }
     });
 }
-
 
 function addUser(serverId) {
     const accessToken = localStorage.getItem('accessToken');
@@ -312,6 +310,55 @@ function tunnelNotificationWebsocket() {
         }
     };
 }
+
+
+async function fetchSSHScript(url) {
+    const accessToken = localStorage.getItem('accessToken');
+    const response = await fetch(url, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    });
+
+    if (!response.ok) {
+        throw new Error('Network response was not ok');
+    }
+
+    const data = await response.json();
+    return data;
+}
+
+async function updateServerScriptContent(serverId) {
+    try {
+        const sshPort = document.getElementById('sshPort').value;
+        const linuxScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/autossh/${serverId}/${sshPort}`);
+        const windowsScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/windows/${serverId}/${sshPort}`);
+
+        // Check if Prism is available and highlight the code
+        if (Prism && Prism.highlight && linuxScriptData.script && windowsScriptData.script) {
+            document.getElementById('tunnelCommandLinux').innerHTML = Prism.highlight(linuxScriptData.script, Prism.languages[linuxScriptData.language], linuxScriptData.language);
+            document.getElementById('tunnelCommandWindows').innerHTML = Prism.highlight(windowsScriptData.script, Prism.languages[windowsScriptData.language], windowsScriptData.language);
+        }
+
+    } catch (error) {
+        console.error('Error updating server script content:', error);
+    }
+}
+
+function showServerScriptModal(serverId) {
+    updateServerScriptContent(serverId);
+    // Show the modal after updating its content
+    const modal = new bootstrap.Modal(document.getElementById('serverScriptModal'));
+    modal.show();
+    // Re-fetch script content when SSH port changes and update the modal content
+    document.getElementById('sshPort').onchange = async () => {
+        // Close the old modal
+        await updateServerScriptContent(serverId);
+    };
+}
+
 
 document.addEventListener('DOMContentLoaded', fetchAndDisplayReverseServerKeys);
 document.addEventListener('DOMContentLoaded', tunnelNotificationWebsocket);
