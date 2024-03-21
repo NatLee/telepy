@@ -15,6 +15,10 @@ function setupWebSocketConnection(serverID, username) {
 
     // Convert and send a message to the server
     function sendWebSocketMessage(action, payload) {
+        if (socket.readyState !== WebSocket.OPEN) {
+            console.error('WebSocket is not open');
+            return;
+        }
         socket.send(JSON.stringify({ action: action, payload: payload }));
     }
 
@@ -60,11 +64,55 @@ function setupWebSocketConnection(serverID, username) {
     socket.onclose = function(event) {
         console.log('Connection closed');
         status.innerHTML = '<span style="background-color: #ff8383;">disconnected</span>';
+        // Make the terms color darker to hint the user that the connection is closed
+        term.setOption('theme', {
+            background: '#1e1e1e',
+            foreground: '#707070',
+        });
     };
 
     socket.onerror = function(error) {
         console.error(`WebSocket error observed: ${error}`);
     };
+}
+
+function shellType() {
+    fetch(`/api/sftp/shell/${serverID}/${window.username}`, {
+        headers: {
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        }
+    }).then(
+        response => response.json()
+    ).then(
+        data => {
+            if (data.error) {
+                console.error('Error fetching shell:', data.error);
+                return;
+            }
+            console.log('Shell:', data.shell);
+            if (data.shell === 'powershell') {
+                // Remove readonly attribute from the search input for PowerShell
+                document.getElementById('shellType').innerHTML = '<span style="background-color: lightblue;">' + getDisplayValue(data.shell) + '</span>';
+                document.getElementById('searchPath').removeAttribute('readonly');
+                // Give default path for PowerShell
+                document.getElementById('searchPath').value = 'C:/';
+            } else if(data.shell === 'unix') {
+                // Remove readonly attribute from the search input for UNIX
+                document.getElementById('shellType').innerHTML = '<span style="background-color: lightgray;">' + getDisplayValue(data.shell) + '</span>';
+                document.getElementById('searchPath').removeAttribute('readonly');
+                // Give default path for UNIX
+                document.getElementById('searchPath').value = '~/';
+            } else {
+                // Add readonly attribute to the search input for unknown shell types
+                document.getElementById('searchPath').value = 'Cannot determine shell type';
+            }
+        }
+    ).catch(
+        error => {
+            console.error('Error fetching shell:', error);
+            document.getElementById('shellType').innerHTML = '<span style="background-color: indianred;">N/A</span>';
+        }
+    );
 }
 
 function getPathSegments() {
@@ -133,6 +181,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         setupWebSocketConnection(serverID, data[0].username);
         // Set the username for the global scope
         window.username = data[0].username;
+        // Fetch and display the shell type
+        shellType();
     } else {
         // Enhanced username selection with delete option
         Swal.fire({
@@ -267,7 +317,6 @@ document.getElementById('checkServiceKeyBtn').addEventListener('click', function
     });
 });
 
-
 function displayDropdown(files) {
     const dropdownMenu = document.getElementById('dropdownMenu');
     const searchPathInput = document.getElementById('searchPath');
@@ -378,7 +427,6 @@ function displayDropdown(files) {
 
     adjustDropdownPosition();
 }
-
 
 function appendToPath(currentPath, folderName) {
     return currentPath.endsWith('/') ? `${currentPath}${folderName}` : `${currentPath}/${folderName}`;
