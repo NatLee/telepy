@@ -46,7 +46,6 @@ function displayLogs(filterKeyword = '') {
     tableContainer.scrollTop = tableContainer.scrollHeight;
 }
 
-
 function highlightKeywords(message) {
     const keywords = {
         "Accepted": '<span class="badge bg-success">Accepted</span>',
@@ -73,7 +72,6 @@ function highlightKeywords(message) {
     return message;
 }
 
-
 function logNotificationWebsocket() {
     var socket = notificationWebsocket();
     socket.onmessage = function (event) {
@@ -82,7 +80,6 @@ function logNotificationWebsocket() {
         createToastAlert(data.message.details, false);
     };
 }
-
 
 document.addEventListener('DOMContentLoaded', function() {
     logNotificationWebsocket();

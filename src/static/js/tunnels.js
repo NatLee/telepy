@@ -311,7 +311,6 @@ function tunnelNotificationWebsocket() {
     };
 }
 
-
 async function fetchSSHScript(url) {
     const accessToken = localStorage.getItem('accessToken');
     const response = await fetch(url, {
@@ -360,5 +359,8 @@ function showServerScriptModal(serverId) {
 }
 
 
-document.addEventListener('DOMContentLoaded', fetchAndDisplayReverseServerKeys);
-document.addEventListener('DOMContentLoaded', tunnelNotificationWebsocket);
+document.addEventListener('DOMContentLoaded', function() {
+    fetchAndDisplayReverseServerKeys();
+    tunnelNotificationWebsocket();
+});
+
