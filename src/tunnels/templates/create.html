@@ -4,18 +4,18 @@
 
 {% block content %}
 <div class="mx-5">
-  <h2>Create Reverse Tunnels</h2>
+  <h2>Manual Create Reverse Tunnels</h2>
   <div class="form-row mt-3">
     <div class="col">
       <input type="text" class="form-control" id="hostname" placeholder="Hostname">
       <small id="hostnameHelp" class="form-text text-muted">Enter the customized name of your server.</small>
     </div>
     <div class="col">
-      <input type="text" class="form-control" id="key" placeholder="Public SSH Key">
+      <input type="text" class="form-control" id="key" placeholder="Enter SSH Key" data-toggle="tooltip" data-placement="right" title="Invalid SSH Key">
       <small id="keyHelp" class="form-text text-muted">Paste your public SSH key here.</small>
     </div>
     <div class="col">
-      <input type="text" class="form-control" id="sshPort" placeholder="SSH Port" value="22">
+      <input type="text" class="form-control" id="sshPort" placeholder="Enter SSH Port" value="22" data-toggle="tooltip" data-placement="right" title="Invalid Port Number">
       <small id="portHelp" class="form-text text-muted">Enter your server's SSH port. Default is 22.</small>
     </div>
     <div class="col">
@@ -25,33 +25,6 @@
   </div>
 
   <button class="btn btn-outline-success mt-3" onclick="createTunnel()">Create Tunnel</button>
-
-  <div id="keyDetails" class="mt-4">
-    <h4>Key Details</h4>
-    <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
-
-    <!-- Tab navigation -->
-    <ul class="nav nav-tabs" id="keyTab" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
-      </li>
-    </ul>
-
-    <!-- Tab Content -->
-    <div class="tab-content" id="keyTabContent">
-      <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
-        <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
-        <div id="userKeys" class="mt-2"></div>
-      </div>
-      <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
-        <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
-        <div id="serviceKeys" class="mt-2"></div>
-      </div>
-    </div>
-  </div>
 
   <div id="connectionDetails" class="mt-4">
     <h4>Connection Details</h4>
@@ -91,6 +64,34 @@
       </div>
     </div>
   </div>
+
+  <div id="keyDetails" class="mt-4">
+    <h4>Key Details</h4>
+    <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
+
+    <!-- Tab navigation -->
+    <ul class="nav nav-tabs" id="keyTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
+      </li>
+    </ul>
+
+    <!-- Tab Content -->
+    <div class="tab-content" id="keyTabContent">
+      <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
+        <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
+        <div id="userKeys" class="mt-2"></div>
+      </div>
+      <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
+        <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
+        <div id="serviceKeys" class="mt-2"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 

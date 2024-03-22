@@ -255,8 +255,65 @@ function copyKeyToClipboard() {
   });
 }
 
+function validateInputs() {
+  $('[data-toggle="tooltip"]').tooltip({trigger: 'manual'}).tooltip('hide');
+
+  document.getElementById('key').addEventListener('input', function() {
+    // Trim the input value
+    const keyElement = document.getElementById('key');
+    keyElement.value = keyElement.value.trim();
+    const key = keyElement.value;
+    if (isValidSSHKey(key)) {
+      $('#key').tooltip('hide');
+      document.getElementById('key').classList.remove('is-invalid');
+      document.getElementById('key').classList.add('is-valid');
+    } else {
+      $('#key').tooltip('show');
+      document.getElementById('key').classList.remove('is-valid');
+      document.getElementById('key').classList.add('is-invalid');
+    }
+  });
+
+  document.getElementById('sshPort').addEventListener('input', function() {
+    // Trim the input value
+    const sshPortElement = document.getElementById('sshPort');
+    sshPortElement.value = sshPortElement.value.trim();
+    const sshPort = sshPortElement.value;
+    if (isValidPort(sshPort)) {
+      $('#sshPort').tooltip('hide');
+      document.getElementById('sshPort').classList.remove('is-invalid');
+      document.getElementById('sshPort').classList.add('is-valid');
+    } else {
+      $('#sshPort').tooltip('show');
+      document.getElementById('sshPort').classList.remove('is-valid');
+      document.getElementById('sshPort').classList.add('is-invalid');
+    }
+  });
+}
+
+function autoFillHostname() {
+  // Add a listener to SSH key input field, if user pastes a key and hostname hasn't been filled, try to extract the hostname from the key
+  document.getElementById('key').addEventListener('input', function() {
+    const key = document.getElementById('key').value;
+    const hostname = document.getElementById('hostname').value;
+
+    if (!hostname && isValidSSHKey(key)) {
+      const keyParts = key.split(' ');
+      const keyType = keyParts[0];
+      const keyData = keyParts[1];
+      const keyComment = keyParts[2];
+      console.log('Key parts:', keyParts);
+      if (keyComment) {
+        document.getElementById('hostname').value = keyComment;
+      }
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   fetchToken();
   fetchUserKeys();
   fetchServiceKeys();
+  validateInputs();
+  autoFillHostname();
 });

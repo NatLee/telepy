@@ -76,6 +76,14 @@ function isValidSSHKey(key) {
    return true;
  }
 
+function isValidPort(port) {
+   // Check if the port is a number
+   if (isNaN(port)) {
+       return false;
+   }
+   return port >= 1 && port <= 65535;
+}
+
 // ---------------------------------------
 // check token on page load
 verifyAccessToken();
