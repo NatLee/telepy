@@ -332,6 +332,16 @@ async function fetchSSHScript(url) {
 async function updateServerScriptContent(serverId) {
     try {
         const sshPort = document.getElementById('sshPort').value;
+
+        if (!sshPort) {
+            console.error('SSH port is empty');
+            return;
+        }
+
+        if (!isValidPort(sshPort)) {
+            console.error('Invalid SSH port:', sshPort);
+            return;
+        }
         const linuxScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/autossh/${serverId}/${sshPort}`);
         const windowsScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/windows/${serverId}/${sshPort}`);
 
@@ -358,9 +368,30 @@ function showServerScriptModal(serverId) {
     };
 }
 
+function validateSSHPortInputs() {
+    $('[data-toggle="tooltip"]').tooltip({trigger: 'manual'}).tooltip('hide');
+  
+    document.getElementById('sshPort').addEventListener('input', function() {
+      // Trim the input value
+      const sshPortElement = document.getElementById('sshPort');
+      sshPortElement.value = sshPortElement.value.trim();
+      const sshPort = sshPortElement.value;
+      if (isValidPort(sshPort)) {
+        $('#sshPort').tooltip('hide');
+        document.getElementById('sshPort').classList.remove('is-invalid');
+        document.getElementById('sshPort').classList.add('is-valid');
+      } else {
+        $('#sshPort').tooltip('show');
+        document.getElementById('sshPort').classList.remove('is-valid');
+        document.getElementById('sshPort').classList.add('is-invalid');
+      }
+    });
+  }
+
 
 document.addEventListener('DOMContentLoaded', function() {
     fetchAndDisplayReverseServerKeys();
     tunnelNotificationWebsocket();
+    validateSSHPortInputs();
 });
 
