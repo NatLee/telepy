@@ -64,7 +64,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if self.child_pid == 0:  # Child process
                 # Set TERM environment variable to xterm for the SSH session
                 os.environ['TERM'] = 'xterm'
-                # Execute SSH command to connect to telepy@telepy-ssh
+                # Execute SSH command to connect to the reverse server
                 os.execlp(
                     'bash', 'bash', '-c',
                     f'ssh {username}@reverse -p {reverse_port}'
