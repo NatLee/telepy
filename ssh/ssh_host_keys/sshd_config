@@ -38,7 +38,7 @@ Port 2222
 
 # The default is to check both .ssh/authorized_keys and .ssh/authorized_keys2
 # but this is overridden so installations will only check .ssh/authorized_keys
-AuthorizedKeysFile	.ssh/authorized_keys
+AuthorizedKeysFile .ssh/authorized_keys
 
 #AuthorizedPrincipalsFile none
 
@@ -107,7 +107,7 @@ PidFile /config/sshd.pid
 #Banner none
 
 # override default of no subsystems
-Subsystem	sftp	/usr/lib/ssh/sftp-server -u 022
+Subsystem sftp /usr/lib/ssh/sftp-server -u 022
 
 # Example of overriding settings on a per-user basis
 #Match User anoncvs
@@ -115,3 +115,8 @@ Subsystem	sftp	/usr/lib/ssh/sftp-server -u 022
 #	AllowTcpForwarding no
 #	PermitTTY no
 #	ForceCommand cvs server
+
+Match User telepy
+AllowTcpForwarding yes
+PermitTunnel yes
+ForceCommand echo 'This account can only be used for reverse SSH tunneling'
