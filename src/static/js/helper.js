@@ -76,7 +76,6 @@ function isValidSSHKey(key) {
    return true;
  }
 
- 
 // ---------------------------------------
 // check token on page load
 verifyAccessToken();

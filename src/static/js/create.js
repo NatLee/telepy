@@ -93,7 +93,6 @@ $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")`;
   document.getElementById("windowsCopyTunnelCommandBtn").disabled = false;
 }
 
-
 function createTunnel() {
 
   const hostname = document.getElementById('hostname').value;
@@ -167,7 +166,6 @@ function createTunnel() {
   });
 }
 
-
 function copyCommandToClipboard(commandElementId) {
   const commandText = document.getElementById(commandElementId).innerText;
   navigator.clipboard.writeText(commandText).then(() => {
@@ -188,7 +186,6 @@ function copyCommandToClipboard(commandElementId) {
       });
   });
 }
-
 
 function fetchUserKeys() {
   const accessToken = localStorage.getItem('accessToken');
@@ -238,7 +235,6 @@ function fetchServiceKeys() {
   });
 }
 
-// Function to populate and show the Bootstrap modal
 function showKeyModal(fullKey) {
   document.getElementById('modalKeyContent').innerText = fullKey;
   $('#keyModal').modal('show');
@@ -256,15 +252,6 @@ function copyKeyToClipboard() {
     });
   }).catch(err => {
     console.error('Error copying text to clipboard', err);
-  });
-}
-
-function remindServiceKey() {
-  Swal.fire({
-      icon: 'info',
-      title: 'Remember to Add Service Key',
-      text: 'If you intend to use the console, please make sure to add your service key.',
-      showConfirmButton: true
   });
 }
 
