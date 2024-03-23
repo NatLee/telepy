@@ -11,3 +11,10 @@ Host reverse
     UserKnownHostsFile /dev/null
     ProxyCommand ssh -q -W %h:%p telepy-ssh
 
+Host *
+   StrictHostKeyChecking no
+   UserKnownHostsFile /dev/null
+   LogLevel ERROR
+
+
+
