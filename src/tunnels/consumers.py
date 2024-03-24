@@ -7,7 +7,10 @@ import signal
 from asgiref.sync import sync_to_async
 from asgiref.sync import async_to_sync
 
+from django.contrib.auth.models import User
+
 from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework.authtoken.models import Token
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from channels.layers import get_channel_layer
@@ -32,32 +35,44 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
+        # Extract server_id from query string
+        server_id = params.get('server_id', None)
+        # Check if server_id is provided
+        if not server_id:
+            print("Server ID is not provided")
+            await self.close()
+            return
+
         # Verify JWT token
         try:
-            AccessToken(token)
+            access_token = AccessToken(token)
+            # Get user from token
+            user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
+            # Check if user has access to the server
+            if not await self.check_permissions(user, server_id):
+                await self.close(code=4004)
+                raise StopConsumer(f"User [{user}] does not have access to server [{server_id}]")
             await self.accept()
         except (InvalidToken, TokenError) as e:
             print(f"Token invalid: {e}")
             await self.close(code=4001)  # Close with error code
             raise StopConsumer("Authentication failed")
 
-        server_id = params.get('server_id', None)
-        if not server_id:
-            print("server_id not provided")
-            await self.close()
-            return
-
+        # Get reverse server port
         reverse_port = await self.get_reverse_server_port(server_id)
+        # Check if reverse_port is valid
         if not reverse_port:
-            print("Invalid server_id")
-            await self.close()
-            return
+            await self.close(code=4002)  # Close with error code
+            raise StopConsumer("Invalid server ID")
 
+        # Extract target server's username from query string
         username = params.get('username', None)
+        # Check if username is provided
         if not username or not await self.check_username(server_id, username):
-            print("username not provided")
-            await self.close()
-            return
+            await self.close(code=4003)  # Close with error code
+            raise StopConsumer("Username is not provided or invalid")
+
+        # ========================
 
         if self.child_pid is None:
             self.child_pid, self.fd = pty.fork()
@@ -75,17 +90,27 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
 
     @sync_to_async
+    def check_permissions(self, user, server_id) -> bool:
+        # Check if the user has access to the server
+        try:
+            ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            print(f"User [{user}] does not have access to server [{server_id}]")
+            return False
+        return True
+
+    @sync_to_async
     def check_username(self, server_id, username) -> bool:
         # Check if the username is valid
         try:
             reverser_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            print(f"ReverseServerAuthorizedKeys with id {server_id} does not exist")
+            print(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
             return False
         try:
             reverser_server_username = ReverseServerUsernames.objects.get(reverse_server=reverser_server, username=username)
         except ReverseServerUsernames.DoesNotExist:
-            print(f"ReverseServerUsernames with username {username} does not exist")
+            print(f"ReverseServerUsernames with username [{username}] does not exist")
             return False
         return True
 
