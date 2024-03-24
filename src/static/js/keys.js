@@ -124,7 +124,7 @@ function submitNewKey() {
         Swal.fire({
             icon: 'error',
             title: 'Oops...',
-            text: error.key || 'Failed to create user key', // Displaying the error message
+            text: error.key || error.hostname || 'Failed to create user key', // Displaying the error message
         });
     });
 }
