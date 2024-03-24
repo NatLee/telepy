@@ -32,6 +32,14 @@ class ReverseServerAuthorizedKeysViewSet(viewsets.ModelViewSet):
     serializer_class = ReverseServerAuthorizedKeysSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """
+        This view should return a list of all the records
+        for the currently authenticated user.
+        """
+        user = self.request.user
+        return ReverseServerAuthorizedKeys.objects.filter(user=user)
+
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def list(self, request, *args, **kwargs):
         """List all reverse server authorized keys"""
@@ -66,6 +74,14 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
     queryset = UserAuthorizedKeys.objects.all()
     serializer_class = UserAuthorizedKeysSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """
+        This view should return a list of all the records
+        for the currently authenticated user.
+        """
+        user = self.request.user
+        return UserAuthorizedKeys.objects.filter(user=user)
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def list(self, request, *args, **kwargs):
@@ -112,6 +128,14 @@ class ReverseServerUsernamesViewSet(viewsets.ModelViewSet):
     serializer_class = ReverseServerUsernamesSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """
+        This view should return a list of all the records
+        for the currently authenticated user.
+        """
+        user = self.request.user
+        return ReverseServerUsernames.objects.filter(user=user)
+
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def list(self, request, *args, **kwargs):
         """List all reverse server usernames"""
@@ -143,6 +167,9 @@ class ReverseServerUsernamesViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
+    """
+    使用`server_id`去查詢指定伺服器的所有使用者名稱
+    """
     queryset = ReverseServerUsernames.objects.all()
     serializer_class = ReverseServerUsernamesSerializer
     permission_classes = [IsAuthenticated]
@@ -150,7 +177,8 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request, server_id, *args, **kwargs):
         try:
-            usernames = ReverseServerUsernames.objects.filter(reverse_server=server_id).values_list('id', 'username')
+            user = request.user
+            usernames = ReverseServerUsernames.objects.filter(user=user, reverse_server=server_id).values_list('id', 'username')
         except ReverseServerUsernames.DoesNotExist:
             return Response([])
     
@@ -163,6 +191,10 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
         ])
 
 class ServiceAuthorizedKeysListView(APIView):
+    """
+    List all service authorized keys
+    列出所有服務的公鑰（初始只有一個服務`web service`）
+    """
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(tags=['Service Keys'])
