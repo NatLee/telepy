@@ -71,8 +71,22 @@ function setupWebSocketConnection(serverID, username) {
         });
     };
 
-    socket.onerror = function(error) {
-        console.error(`WebSocket error observed: ${error}`);
+    socket.onerror = function(event) {
+        console.error(`WebSocket error observed: `, event);
+    
+        // Extracting error message
+        let errorMessage = "Unknown error";
+        if (event instanceof ErrorEvent) {
+            errorMessage = event.message;
+        } else if (event && event.type === 'error' && typeof event.reason === 'string') {
+            errorMessage = event.reason;
+        }
+    
+        Swal.fire({
+            icon: 'error',
+            title: 'WebSocket Error',
+            text: 'A WebSocket error has occurred. Check your permissions and network connection.',
+        });
     };
 }
 
