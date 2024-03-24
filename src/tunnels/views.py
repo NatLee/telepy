@@ -48,8 +48,9 @@ class Terminal(APIView):
     def get(self, request, server_id):
         # Check if the server exists
         try:
-            user = request.user
-            server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            # Get the server
+            server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            # In the consumer, we will check if the user has access to the server
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server not found'}, status=404)
         return render(request, 'terminal.html')
