@@ -1,8 +1,10 @@
 from django.db import models
+from django.contrib.auth.models import User
 
 class ReverseServerAuthorizedKeys(models.Model):
     # Reverse Server Authorized Keys for endpoint to connect with this SSH server
-
+    # 反向通道機器的公鑰（用於連線到我們的SSH Server）
+    user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='User')
     hostname = models.CharField(max_length=128, unique=True, verbose_name='Host Name')
     key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
     reverse_port = models.PositiveIntegerField(blank=False, null=False, unique=True, verbose_name='Reverse Port')
@@ -19,7 +21,8 @@ class ReverseServerAuthorizedKeys(models.Model):
 
 class ReverseServerUsernames(models.Model):
     # Reverse Server Usernames for endpoint to connect with this SSH server
-
+    # 反向通道機器上的使用者名稱（用於從web terminal連線到反向通道）
+    user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='User')
     reverse_server = models.ForeignKey(ReverseServerAuthorizedKeys, on_delete=models.CASCADE, verbose_name='Reverse Server')
     username = models.CharField(max_length=128, verbose_name='Username')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
@@ -32,7 +35,8 @@ class ReverseServerUsernames(models.Model):
         verbose_name = 'Reverse Server Username'
         verbose_name_plural = 'Reverse Server Usernames'
         # Unique together
-        unique_together = ('reverse_server', 'username')
+        # 一個使用者在端點上能有多個使用者名稱
+        unique_together = ('user', 'reverse_server', 'username')
 
 class ServiceAuthorizedKeys(models.Model):
     # Service Authorized Keys used to check service on the SSH server
@@ -53,7 +57,9 @@ class ServiceAuthorizedKeys(models.Model):
 class UserAuthorizedKeys(models.Model):
     # User Authorized Keys for reversed SSH tunnel (user to connect with endpoints)
     # User also can access the SSH server using the private key
+    # 使用者的公鑰（用於連線到我們的SSH Server）
 
+    user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='User')
     hostname = models.CharField(max_length=128, unique=True, verbose_name='Host Name')
     key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
     description = models.TextField(blank=True, null=True, verbose_name='Description')
