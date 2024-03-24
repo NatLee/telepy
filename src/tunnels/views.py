@@ -48,7 +48,8 @@ class Terminal(APIView):
     def get(self, request, server_id):
         # Check if the server exists
         try:
-            server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            user = request.user
+            server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server not found'}, status=404)
         return render(request, 'terminal.html')
@@ -75,7 +76,8 @@ class ReverseServerAuthorizedKeysConfig(APIView):
     )
     def get(self, request, server_id, ssh_server_hostname):
         try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            user = request.user
+            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server keys not found'}, status=404)
 
@@ -112,7 +114,8 @@ class AutoSSHTunnelScript(APIView):
     )
     def get(self, request, server_id, ssh_port, ssh_server_hostname):
         try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            user = request.user
+            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
             reverse_port = server_auth_key.reverse_port
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server keys not found'}, status=404)
@@ -141,7 +144,8 @@ class WindowsSSHTunnelScript(APIView):
     )
     def get(self, request, server_id, ssh_port, ssh_server_hostname):
         try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            user = request.user
+            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
             reverse_port = server_auth_key.reverse_port
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Reverse server keys not found'}, status=404)
