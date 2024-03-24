@@ -91,9 +91,10 @@ function setupWebSocketConnection(serverID, username) {
 }
 
 function shellType() {
+    const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/sftp/shell/${serverID}/${window.username}`, {
         headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+            'Authorization': `Bearer ${accessToken}`
         }
     }).then(
         response => response.json()
