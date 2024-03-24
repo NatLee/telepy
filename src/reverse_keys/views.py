@@ -1,6 +1,7 @@
 import datetime
 
 from django.conf import settings
+from django.contrib.auth.models import User
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -13,7 +14,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
-from reverse_keys.utils import issue_token, verify_token, remove_token
+from reverse_keys.utils import issue_token, verify_token, remove_token, get_user_id_from_token
 from reverse_keys.utils import find_multiple_free_ports
 
 from authorized_keys.utils import is_valid_ssh_public_key
@@ -38,9 +39,13 @@ class IssueToken(APIView):
         tags=['Reverse Server Keys']
     )
     def get(self, request, *args, **kwargs):
-        token = issue_token()
+        token = issue_token(request.user.id)
         return Response({
             'token': token,
+            'issuer': {
+                'id': request.user.id,
+                'username': request.user.username
+            },
             'created_at': datetime.datetime.now().isoformat(),
         })
 
@@ -75,10 +80,23 @@ class CreateReverseServerKey(APIView):
         if not verify_token(token):
             return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
 
+        user:User = get_user_id_from_token(token)
+        if not user:
+            return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
+
         # =====================================
 
-        hostname = request.data.get('hostname')
-        key = request.data.get('key')
+        hostname:str = request.data.get('hostname', None)
+        if not hostname:
+            return Response({"error": "Hostname is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Hostname cannot start with a number
+        if not hostname[0].isalpha():
+            return Response({"error": "Hostname cannot start with a number."}, status=status.HTTP_400_BAD_REQUEST)
+
+        key:str = request.data.get('key', None)
+        if not key:
+            return Response({"error": "Key is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not is_valid_ssh_public_key(key):
             return Response({"error": "Invalid SSH public key format"}, status=status.HTTP_400_BAD_REQUEST)
@@ -87,6 +105,7 @@ class CreateReverseServerKey(APIView):
 
         try:
             reverse_key = ReverseServerAuthorizedKeys.objects.create(
+                user=user,
                 hostname=hostname,
                 key=key,
                 reverse_port=find_multiple_free_ports(1)[0],
@@ -98,8 +117,13 @@ class CreateReverseServerKey(APIView):
                 "hostname": reverse_key.hostname,
                 "key": reverse_key.key,
                 "port": settings.REVERSE_SERVER_SSH_PORT,
+                "issuer": {
+                    "id": user.id,
+                    "username": user.username
+                },
                 "reverse_port": reverse_key.reverse_port,
                 "description": reverse_key.description,
             })
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
