@@ -32,6 +32,9 @@ class ReverseServerAuthorizedKeysViewSet(viewsets.ModelViewSet):
     serializer_class = ReverseServerAuthorizedKeysSerializer
     permission_classes = [IsAuthenticated]
 
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
     def get_queryset(self):
         """
         This view should return a list of all the records
@@ -75,6 +78,9 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
     serializer_class = UserAuthorizedKeysSerializer
     permission_classes = [IsAuthenticated]
 
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
     def get_queryset(self):
         """
         This view should return a list of all the records
@@ -94,7 +100,7 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
         result = super().create(request, *args, **kwargs)
         send_notification_to_group({
             'action': 'CREATED-USER-KEYS',
-            'details': 'A new user authorized key has been created'
+            'details': 'A new user authorized key has been created by {}'.format(request.user.username)
         })
         return result
 
@@ -119,7 +125,7 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
         result = super().destroy(request, *args, **kwargs)
         send_notification_to_group({
             'action': 'DELETED-USER-KEYS',
-            'details': 'A user authorized key has been deleted'
+            'details': 'An user authorized key has been deleted by {}'.format(request.user.username)
         })
         return result
 
@@ -127,6 +133,9 @@ class ReverseServerUsernamesViewSet(viewsets.ModelViewSet):
     queryset = ReverseServerUsernames.objects.all()
     serializer_class = ReverseServerUsernamesSerializer
     permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
 
     def get_queryset(self):
         """
