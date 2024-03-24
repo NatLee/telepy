@@ -46,13 +46,6 @@ class Terminal(APIView):
         tags=['Page']
     )
     def get(self, request, server_id):
-        # Check if the server exists
-        try:
-            # Get the server
-            server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-            # In the consumer, we will check if the user has access to the server
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Reverse server not found'}, status=404)
         return render(request, 'terminal.html')
 
 class SSHServerLogs(APIView):
@@ -64,7 +57,6 @@ class SSHServerLogs(APIView):
     )
     def get(self, request):
         return render(request, 'logs.html')
-
 
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
