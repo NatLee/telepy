@@ -1,20 +1,27 @@
-from typing import List
-import socket
+from typing import List, Union
 from uuid import uuid4
 
 from django.core.cache import cache
-
+from django.contrib.auth.models import User
 from authorized_keys.utils import get_ss_output_from_redis
 
-def issue_token() -> str:
-    """生成一個token"""
+def issue_token(user_id:int) -> str:
+    """生成一個token，並將值設定為user_id，有效期10分鐘"""
     token = uuid4().hex
-    cache.set(token, "valid", timeout=10 * 60)
+    cache.set(token, user_id, timeout=10 * 60)
     return token
 
 def verify_token(token:str) -> bool:
     """驗證token是否存在（有效）"""
     return True if cache.get(token) else False
+
+def get_user_id_from_token(token:str) -> Union[User, None]:
+    """從token中取得user instance"""
+    user_id = cache.get(token)
+    try:
+        return User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return None
 
 def remove_token(token:str) -> None:
     """移除token"""
