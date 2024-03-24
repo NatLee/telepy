@@ -186,11 +186,20 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request, server_id, *args, **kwargs):
         try:
+            # get the currently authenticated user
             user = request.user
-            usernames = ReverseServerUsernames.objects.filter(user=user, reverse_server=server_id).values_list('id', 'username')
+            # check server_id exists
+            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            # get all usernames for the specified server
+            usernames = ReverseServerUsernames.objects.filter(
+                user=user,
+                reverse_server=reverse_server
+            ).values_list('id', 'username')
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Server not found'}, status=404)
         except ReverseServerUsernames.DoesNotExist:
-            return Response([])
-    
+            return Response([]) # return empty list if no usernames found
+
         return Response([
             {
                 'id': pk,
