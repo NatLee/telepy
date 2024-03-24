@@ -176,7 +176,10 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                     body: JSON.stringify({ reverse_server: serverID, username: result.value })
                 }).then(response => {
                     if(response.ok) {
+                        // Setup WebSocket connection with the newly created username
                         setupWebSocketConnection(serverID, result.value);
+                        // Fetch and display the shell type
+                        shellType();
                     } else {
                         Swal.fire({
                             title: 'Error!',
@@ -199,7 +202,7 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         // Fetch and display the shell type
         shellType();
     } else {
-        // Enhanced username selection with delete option
+        // Selection with delete option
         Swal.fire({
             title: 'Select or Delete a Username',
             text: 'Select a username or delete one.',
@@ -265,6 +268,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                 setupWebSocketConnection(serverID, username);
                 // Set the username for the global scope
                 window.username = username;
+                // Fetch and display the shell type
+                shellType();
             } else if (result.dismiss === Swal.DismissReason.deny) {
                 // Reload or refresh data after deletion
                 location.reload();
