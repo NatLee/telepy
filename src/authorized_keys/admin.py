@@ -47,8 +47,8 @@ class ServiceAuthorizedKeysForm(forms.ModelForm):
 @admin.register(ReverseServerAuthorizedKeys)
 class ReverseServerAuthorizedKeysAdmin(admin.ModelAdmin):
     form = ReverseServerAuthorizedKeysForm
-    list_display = ('hostname', 'display_key', 'reverse_port', 'created_at', 'updated_at')
-    search_fields = ('hostname', 'key', 'reverse_port', 'description')
+    list_display = ('user', 'hostname', 'display_key', 'reverse_port', 'created_at', 'updated_at')
+    search_fields = ('user', 'hostname', 'key', 'reverse_port', 'description')
 
     def display_key(self, obj):
         key = obj.key
@@ -60,8 +60,8 @@ class ReverseServerAuthorizedKeysAdmin(admin.ModelAdmin):
 @admin.register(UserAuthorizedKeys)
 class UserAuthorizedKeysAdmin(admin.ModelAdmin):
     form = UserAuthorizedKeysForm
-    list_display = ('hostname', 'display_key', 'created_at', 'updated_at')
-    search_fields = ('hostname', 'key', 'description')
+    list_display = ('user', 'hostname', 'display_key', 'created_at', 'updated_at')
+    search_fields = ('user', 'hostname', 'key', 'description')
 
     def display_key(self, obj):
         key = obj.key
@@ -85,5 +85,5 @@ class ServiceAuthorizedKeysAdmin(admin.ModelAdmin):
 
 @admin.register(ReverseServerUsernames)
 class ReverseServerUsernamesAdmin(admin.ModelAdmin):
-    list_display = ('reverse_server', 'username', 'created_at', 'updated_at')
-    search_fields = ('reverse_server', 'username')
+    list_display = ('user', 'reverse_server', 'username', 'created_at', 'updated_at')
+    search_fields = ('user', 'reverse_server', 'username')
