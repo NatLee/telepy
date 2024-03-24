@@ -139,11 +139,11 @@ function getPathSegments() {
     return segments[2];
 }
 
+const accessToken = localStorage.getItem('accessToken');
 const serverID = getPathSegments();
 let username = null;
 console.log(`Server ID:` + serverID);
 
-const accessToken = localStorage.getItem('accessToken');
 fetch(`/api/reverse/server/${serverID}/usernames`, {
     headers: {
         'Authorization': `Bearer ${accessToken}`
@@ -286,6 +286,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         icon: 'error',
         confirmButtonText: 'OK'
     });
+    // Redirect to the tunnels page if an error occurs
+    window.location.href = '/tunnels/index';
 });
 
 document.getElementById('checkServiceKeyBtn').addEventListener('click', function() {
