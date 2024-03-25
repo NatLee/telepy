@@ -24,7 +24,9 @@ def update_authorized_keys_file(keys: List[str]):
     with open('/ssh/authorized_keys', 'w') as f:
         f.write(authorized_keys_content)
 
-def update_authorized_keys_on_startup():
+# Update the authorized_keys file on startup
+@receiver(post_migrate)
+def update_authorized_keys_on_startup(sender, **kwargs):
     keys = get_authorized_keys()
     update_authorized_keys_file(keys)
 
