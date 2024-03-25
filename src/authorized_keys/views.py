@@ -27,21 +27,25 @@ class CheckReverseServerPortStatus(APIView):
     def get(self, request):
         return Response(get_ss_output_from_redis())
 
-class ReverseServerAuthorizedKeysViewSet(viewsets.ModelViewSet):
-    queryset = ReverseServerAuthorizedKeys.objects.all()
-    serializer_class = ReverseServerAuthorizedKeysSerializer
+class BaseKeyViewSet(viewsets.ModelViewSet):
+    """
+    Base ViewSet for handling records associated with keys.
+    """
+    serializer_class = None  # Define in subclass
+    model = None  # Define in subclass
     permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
     def get_queryset(self):
         """
-        This view should return a list of all the records
-        for the currently authenticated user.
+        Return records for the currently authenticated user.
         """
-        user = self.request.user
-        return ReverseServerAuthorizedKeys.objects.filter(user=user)
+        return self.model.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        """
+        Associate the new record with the currently authenticated user upon creation.
+        """
+        serializer.save(user=self.request.user)
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def list(self, request, *args, **kwargs):
@@ -73,26 +77,15 @@ class ReverseServerAuthorizedKeysViewSet(viewsets.ModelViewSet):
         """Delete a reverse server authorized key"""
         return super().destroy(request, *args, **kwargs)
 
-class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
-    queryset = UserAuthorizedKeys.objects.all()
+class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
+    serializer_class = ReverseServerAuthorizedKeysSerializer
+    model = ReverseServerAuthorizedKeys
+    queryset = ReverseServerAuthorizedKeys.objects.all()
+
+class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     serializer_class = UserAuthorizedKeysSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-    def get_queryset(self):
-        """
-        This view should return a list of all the records
-        for the currently authenticated user.
-        """
-        user = self.request.user
-        return UserAuthorizedKeys.objects.filter(user=user)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def list(self, request, *args, **kwargs):
-        """List all user authorized keys"""
-        return super().list(request, *args, **kwargs)
+    model = UserAuthorizedKeys
+    queryset = UserAuthorizedKeys.objects.all()
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def create(self, request, *args, **kwargs):
@@ -105,21 +98,6 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
         return result
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def retrieve(self, request, *args, **kwargs):
-        """Retrieve a specific user authorized key"""
-        return super().retrieve(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def update(self, request, *args, **kwargs):
-        """Update a user authorized key"""
-        return super().update(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def partial_update(self, request, *args, **kwargs):
-        """Partial update a user authorized key"""
-        return super().partial_update(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
     def destroy(self, request, *args, **kwargs):
         """Delete a user authorized key"""
         result = super().destroy(request, *args, **kwargs)
@@ -129,51 +107,10 @@ class UserAuthorizedKeysViewSet(viewsets.ModelViewSet):
         })
         return result
 
-class ReverseServerUsernamesViewSet(viewsets.ModelViewSet):
-    queryset = ReverseServerUsernames.objects.all()
+class ReverseServerUsernamesViewSet(BaseKeyViewSet):
     serializer_class = ReverseServerUsernamesSerializer
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-
-    def get_queryset(self):
-        """
-        This view should return a list of all the records
-        for the currently authenticated user.
-        """
-        user = self.request.user
-        return ReverseServerUsernames.objects.filter(user=user)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def list(self, request, *args, **kwargs):
-        """List all reverse server usernames"""
-        return super().list(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def create(self, request, *args, **kwargs):
-        """Create a new reverse server username"""
-        return super().create(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def retrieve(self, request, *args, **kwargs):
-        """Retrieve a specific reverse server username"""
-        return super().retrieve(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def update(self, request, *args, **kwargs):
-        """Update a reverse server username"""
-        return super().update(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def partial_update(self, request, *args, **kwargs):
-        """Partial update a reverse server username"""
-        return super().partial_update(request, *args, **kwargs)
-
-    @swagger_auto_schema(tags=['Reverse Server Keys'])
-    def destroy(self, request, *args, **kwargs):
-        """Delete a reverse server username"""
-        return super().destroy(request, *args, **kwargs)
+    model = ReverseServerUsernames
+    queryset = ReverseServerUsernames.objects.all()
 
 class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
     """
