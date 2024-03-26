@@ -32,25 +32,27 @@ URL_PREFIX = 'api'
 
 urlpatterns = []
 
-# pages
 urlpatterns += [
-    # admin
+    # admin page
     path(f"{URL_PREFIX}/__hidden_admin/", admin.site.urls),
 ]
 
 
 urlpatterns += [
+
+    # ================== Pages ==================
+    # login
+    path("", include("login.urls"), name="login-operation"),
+    # tunnels
+    path(f"tunnels/", include("tunnels.urls")),
+
+    # ================== App APIs ==================
     # google login
     path(f"{URL_PREFIX}/auth/google/", include("custom_auth.urls")),
     # auth
     path(f"{URL_PREFIX}/auth/", include("custom_jwt.urls")),
-    # login
-    path("login", include("login.urls"), name="login"),
-    path("", include("login.urls"), name="login-index"),
     # reverse_keys
     path(f"{URL_PREFIX}/reverse/", include("reverse_keys.urls")),
-    # tunnels
-    path(f"tunnels/", include("tunnels.urls")),
     # authorized_keys
     path(f"{URL_PREFIX}/reverse/", include("authorized_keys.urls")),
     # logs
@@ -59,6 +61,7 @@ urlpatterns += [
     path(f"{URL_PREFIX}/sftp/", include("web_sftp.urls")),
     # user management
     path(f"{URL_PREFIX}/user/", include("user_management.urls")),
+
 ]
 
 # -------------- START - Swagger View --------------
