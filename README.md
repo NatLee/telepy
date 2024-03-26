@@ -20,13 +20,17 @@ bash dev-keygen.sh
 docker-compose up
 ```
 
-4. Create a superuser for Django admin.
+4. (Optional) Create a superuser for Django admin.
 
-> Check the script `./dev-create-superuser.sh` and change the username and password if you want.
+> Be aware that the first user created will be the superuser whatever the method you use. See [this function](./src/user_management/signals.py) for more details.
+> So, if you want to login with Google account, just visit the login page and login with Google account.
+
+You need to check the script `./dev-create-superuser.sh` and change the username and password if you want.
 
 ```bash
 bash dev-create-superuser.sh
 ```
+
 
 5. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>/login`, it will show the login page.
 
