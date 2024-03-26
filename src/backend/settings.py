@@ -96,6 +96,7 @@ INSTALLED_APPS = [
     "tunnels",
     "logs",
     "web_sftp",
+    "user_management",
 ]
 
 MIDDLEWARE = [
