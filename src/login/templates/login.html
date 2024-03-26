@@ -81,7 +81,7 @@
       data: { credential: credential },
       success: function (data) {
           console.log(data);
-          const access_token = data.access;
+          const access_token = data.access_token;
           const refresh_token = data.refresh_token;
           localStorage.setItem('accessToken', access_token);
           localStorage.setItem('refreshToken', refresh_token);
@@ -95,11 +95,11 @@
               },
               success: function (data) {
                 console.log('Google Login Success');
-                //window.location.href = '/tunnels/index';
+                window.location.href = '/tunnels/index';
               },
               error: function (data) {
                 console.log('Google Login Failed');
-                const error = data.responseJSON.detail;
+                const error = JSON.stringify(data.responseJSON) || 'Unknown error.';
                 Swal.fire({
                   icon: 'error',
                   title: 'Oops...',
