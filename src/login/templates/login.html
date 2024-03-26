@@ -65,10 +65,6 @@
     </div>
     {% endif %}
 
-    <div class="mt-3">
-      <p class="text-center text-danger mt-3" id="loginError"></p>
-    </div>
-
   </div>
 </body>
 {% endblock %}
@@ -102,14 +98,23 @@
                 //window.location.href = '/tunnels/index';
               },
               error: function (data) {
-                  // Get `loginError` element and set the text to `login failed ${data}
-                  $("#loginError").text(`Login failed ${data}`).css('color', 'red');
+                console.log('Google Login Failed');
+                const error = data.responseJSON.detail;
+                Swal.fire({
+                  icon: 'error',
+                  title: 'Oops...',
+                  text: `Login failed. ${error}`,
+                });
               }
           });
       },
       error: function (data) {
-          // Get `loginError` element and set the text to `login failed ${data}
-          $("#loginError").text(`Login failed. ${data.responseJSON.detail}`).css('color', 'red');
+        const error = data.responseJSON.detail;
+        Swal.fire({
+          icon: 'error',
+          title: 'Oops...',
+          text: `Login failed. ${error}`,
+        });
       }
     });
   }
