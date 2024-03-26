@@ -21,8 +21,8 @@ def make_first_user_as_superuser(sender, instance, created, **kwargs):
 
 @receiver(pre_save, sender=User)
 def check_user_creation_allowed(sender, instance, **kwargs):
-    # 檢查是否為新使用者（確認使用者是否有pk）
-    if not instance.pk:
+    # 檢查是否為新使用者且使用者數量不為 0
+    if not instance.pk and User.objects.count() != 0:
         # 檢查是否允許註冊新使用者
         settings = SiteSettings.get_solo()
         if not settings.allow_registration:
