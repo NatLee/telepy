@@ -65,7 +65,9 @@
     </div>
     {% endif %}
 
-    <p class="text-center text-danger mt-3" id="loginError"></p>
+    <div class="mt-3">
+      <p class="text-center text-danger mt-3" id="loginError"></p>
+    </div>
 
   </div>
 </body>
@@ -78,32 +80,37 @@
   function get_jwt_using_google_credential(data) {
     const credential = data.credential;
     $.ajax({
-        method: "POST",
-        url: "/api/auth/google/token",
-        data: { credential: credential }
-    }).done(function (data) {
-        console.log(data);
-        const access_token = data.access;
-        const refresh_token = data.refresh_token;
-        localStorage.setItem('accessToken', access_token);
-        localStorage.setItem('refreshToken', refresh_token);
-        console.log('Google Login');
-        $.ajax({
-            type: "POST",
-            url: "/api/auth/token/verify",
-            data: {"token":access_token},
-            headers: {
-                "Authorization": "Bearer" + " " + access_token
-            },
-            success: function (data) {
-              console.log('Google Login Success');
-              //window.location.href = '/tunnels/index';
-            },
-            error: function (data) {
-                // Get `loginError` element and set the text to `login failed ${data}
-                $("#loginError").text(`Login failed ${data}`).css('color', 'red');
-            }
-        });
+      method: "POST",
+      url: "/api/auth/google/token",
+      data: { credential: credential },
+      success: function (data) {
+          console.log(data);
+          const access_token = data.access;
+          const refresh_token = data.refresh_token;
+          localStorage.setItem('accessToken', access_token);
+          localStorage.setItem('refreshToken', refresh_token);
+          console.log('Google Login');
+          $.ajax({
+              type: "POST",
+              url: "/api/auth/token/verify",
+              data: {"token":access_token},
+              headers: {
+                  "Authorization": "Bearer" + " " + access_token
+              },
+              success: function (data) {
+                console.log('Google Login Success');
+                //window.location.href = '/tunnels/index';
+              },
+              error: function (data) {
+                  // Get `loginError` element and set the text to `login failed ${data}
+                  $("#loginError").text(`Login failed ${data}`).css('color', 'red');
+              }
+          });
+      },
+      error: function (data) {
+          // Get `loginError` element and set the text to `login failed ${data}
+          $("#loginError").text(`Login failed. ${data.responseJSON.detail}`).css('color', 'red');
+      }
     });
   }
 
