@@ -60,12 +60,10 @@ CSRF_TRUSTED_ORIGINS = [
 SECURE_REFERRER_POLICY = "no-referrer-when-downgrade"
 # SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin-allow-popups"
 SECURE_CROSS_ORIGIN_OPENER_POLICY = None
-SOCIAL_GOOGLE_CLIENT_ID = (
-    "376808175534-d6mefo6b1kqih3grjjose2euree2g3cs.apps.googleusercontent.com"
-)
+SOCIAL_GOOGLE_CLIENT_ID = os.getenv("SOCIAL_GOOGLE_CLIENT_ID", None)
 LOGIN_REDIRECT_URL = "/"
-#VALID_REGISTER_DOMAINS = ["gmail.com"]
-VALID_REGISTER_DOMAINS = []
+VALID_REGISTER_DOMAINS = ["gmail.com"]
+
 # --------------- END - Google Auth Setting -----------------
 
 
