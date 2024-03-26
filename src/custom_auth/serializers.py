@@ -1,11 +1,12 @@
 from django.conf import settings
 from django.contrib.auth.models import User
+
 from rest_framework import serializers
+
 from google.oauth2 import id_token
 from google.auth.transport import requests
 
 from custom_auth.models import SocialAccount
-
 from custom_auth.exception import InvalidEmailError
 
 import logging
@@ -13,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class SocialLoginSerializer(serializers.Serializer):
+class GoogleLoginSerializer(serializers.Serializer):
     # Google login
     credential = serializers.CharField(required=True)
 
@@ -41,37 +42,47 @@ class SocialLoginSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         idinfo = self.verify_token(validated_data.get("credential"))
-        if idinfo:
-            # User not exists
-            if not SocialAccount.objects.filter(unique_id=idinfo["sub"]).exists():
-                email = idinfo["email"]
-
-                # check email
-                if not email.endswith("dailyview.tw"):
-                    logger.warning(f"`{email}` attempts to register!!")
-                    raise InvalidEmailError
-
-                first_name = idinfo["given_name"]
-                last_name = idinfo["family_name"]
-                username = email.split("@")[0]
-                user = User.objects.create_user(
-                    # Username has to be unique
-                    username=username,
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email,
-                )
-                logger.debug(f"Created user [{username}] - [{email}]")
-                SocialAccount.objects.create(user=user, unique_id=idinfo["sub"])
-                return user
-            else:
-                social = SocialAccount.objects.get(unique_id=idinfo["sub"])
-                return social.user
-        else:
+        if not idinfo:
             raise ValueError("Incorrect Credentials")
 
+        # 抽取資料
+        email = idinfo["email"]
+        account, domain = email.split("@")
 
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ["username", "email", "first_name", "last_name"]
+        # 檢查是否為註冊的 domain
+        if domain not in settings.VALID_REGISTER_DOMAINS:
+            logger.warning(f"[AUTH][GOOGLE] `{email}` attempts to register!!")
+            raise InvalidEmailError
+
+        # 抽取使用者名稱
+        first_name = idinfo["given_name"]
+        last_name = idinfo["family_name"]
+
+        # 查找是否有同樣的使用者名稱
+        try:
+            user = User.objects.get(username=account)
+        except User.DoesNotExist:
+            # 如果沒有，則建立一個新的使用者
+            user = User.objects.create_user(
+                # Username has to be unique
+                username=account,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+            )
+            logger.debug(f"[AUTH][GOOGLE] Created user [{account}][{first_name}.{last_name}] - [{email}]")
+            # 建立 SocialAccount
+            SocialAccount.objects.create(
+                user=user,
+                provider="google",
+                unique_id=idinfo["sub"]
+            )
+
+        # 這邊要注意，帳號已經存在，但是可能是用其他方式註冊的，所以要檢查是否有 SocialAccount
+        try:
+            social = SocialAccount.objects.get(user=user, provider="google")
+        except SocialAccount.DoesNotExist:
+            logger.error(f"[AUTH][GOOGLE] SocialAccount does not exist")
+            raise ValueError("SocialAccount does not exist with provider `google`")
+
+        return social.user
