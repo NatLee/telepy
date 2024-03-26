@@ -14,4 +14,8 @@ class GoogleLogin(TokenObtainPairView):
 
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
-        return third_party_login(serializer, request)
+        return third_party_login(
+            serializer=serializer,
+            request=request,
+            session=True
+        )
