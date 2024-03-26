@@ -61,7 +61,8 @@ urlpatterns += [
     path(f"{URL_PREFIX}/sftp/", include("web_sftp.urls")),
     # user management
     path(f"{URL_PREFIX}/user/", include("user_management.urls")),
-
+    # site settings
+    path(f"{URL_PREFIX}/site/", include("site_settings.urls")),
 ]
 
 # -------------- START - Swagger View --------------
