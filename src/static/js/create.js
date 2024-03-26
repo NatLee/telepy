@@ -138,7 +138,7 @@ function createTunnel() {
       if (!data.port || !data.reverse_port) {
         Swal.fire({
             icon: 'error',
-            title: 'Failed to create tunnel. Please try again.',
+            title: 'Failed to create tunnel. Cannot retrieve tunnel ports.',
             showConfirmButton: false,
             timer: 2000
         })
@@ -158,9 +158,9 @@ function createTunnel() {
       console.error('Error creating tunnel:', error);
       Swal.fire({
           icon: 'error',
-          title: 'Failed to create tunnel. Please try again.',
+          title: 'Failed to create tunnel.' + error.responseJSON.error,
           showConfirmButton: false,
-          timer: 2000
+          timer: 3000
       })
     }
   });

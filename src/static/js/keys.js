@@ -107,7 +107,10 @@ function submitNewKey() {
         if (response.ok) {
             return response.json();
         } else {
-            throw new Error('Failed to submit the key: ' + response.statusText);
+            // Instead of throwing an error immediately, parse the response and throw it
+            return response.json().then(err => {
+                throw err;
+            });
         }
     })
     .then(data => {
@@ -116,14 +119,16 @@ function submitNewKey() {
         Swal.fire("Success", "Key has been successfully added.", "success");
     })
     .catch((error) => {
+        // Now error will be the JSON error response from the server
         console.error('Error:', error);
         Swal.fire({
             icon: 'error',
             title: 'Oops...',
-            text: error.toString(),
+            text: error.key || error.hostname || 'Failed to create user key', // Displaying the error message
         });
     });
 }
+
 
 function deleteUserKey(event, keyId) {
     event.stopPropagation(); // Stop the event from bubbling up

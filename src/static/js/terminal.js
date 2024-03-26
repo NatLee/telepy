@@ -71,15 +71,30 @@ function setupWebSocketConnection(serverID, username) {
         });
     };
 
-    socket.onerror = function(error) {
-        console.error(`WebSocket error observed: ${error}`);
+    socket.onerror = function(event) {
+        console.error(`WebSocket error observed: `, event);
+    
+        // Extracting error message
+        let errorMessage = "Unknown error";
+        if (event instanceof ErrorEvent) {
+            errorMessage = event.message;
+        } else if (event && event.type === 'error' && typeof event.reason === 'string') {
+            errorMessage = event.reason;
+        }
+    
+        Swal.fire({
+            icon: 'error',
+            title: 'WebSocket Error',
+            text: 'A WebSocket error has occurred. Check your permissions and network connection.',
+        });
     };
 }
 
 function shellType() {
+    const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/sftp/shell/${serverID}/${window.username}`, {
         headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+            'Authorization': `Bearer ${accessToken}`
         }
     }).then(
         response => response.json()
@@ -124,11 +139,11 @@ function getPathSegments() {
     return segments[2];
 }
 
+const accessToken = localStorage.getItem('accessToken');
 const serverID = getPathSegments();
 let username = null;
 console.log(`Server ID:` + serverID);
 
-const accessToken = localStorage.getItem('accessToken');
 fetch(`/api/reverse/server/${serverID}/usernames`, {
     headers: {
         'Authorization': `Bearer ${accessToken}`
@@ -161,7 +176,10 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                     body: JSON.stringify({ reverse_server: serverID, username: result.value })
                 }).then(response => {
                     if(response.ok) {
+                        // Setup WebSocket connection with the newly created username
                         setupWebSocketConnection(serverID, result.value);
+                        // Fetch and display the shell type
+                        shellType();
                     } else {
                         Swal.fire({
                             title: 'Error!',
@@ -184,7 +202,7 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         // Fetch and display the shell type
         shellType();
     } else {
-        // Enhanced username selection with delete option
+        // Selection with delete option
         Swal.fire({
             title: 'Select or Delete a Username',
             text: 'Select a username or delete one.',
@@ -250,6 +268,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
                 setupWebSocketConnection(serverID, username);
                 // Set the username for the global scope
                 window.username = username;
+                // Fetch and display the shell type
+                shellType();
             } else if (result.dismiss === Swal.DismissReason.deny) {
                 // Reload or refresh data after deletion
                 location.reload();
@@ -266,6 +286,8 @@ fetch(`/api/reverse/server/${serverID}/usernames`, {
         icon: 'error',
         confirmButtonText: 'OK'
     });
+    // Redirect to the tunnels page if an error occurs
+    window.location.href = '/tunnels/index';
 });
 
 document.getElementById('checkServiceKeyBtn').addEventListener('click', function() {

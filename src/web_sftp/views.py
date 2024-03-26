@@ -17,6 +17,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
+from authorized_keys.models import ReverseServerUsernames
 
 def parse_permissions(permission_string:str) -> Dict[str, Any]:
     permissions = {
@@ -92,8 +93,19 @@ class ShellDetect(APIView):
         tags=['SFTP'],
     )
     def get(self, request, server_id, username, format=None):
-        reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        port = reverser_server.reverse_port
+        user = request.user
+        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
+        try:
+            # Check username exists
+            ReverseServerUsernames.objects.get(
+                reverse_server=reverse_server,
+                username=username,
+                user=user
+            )
+        except ReverseServerUsernames.DoesNotExist:
+            return Response({"error": "Username not found"}, status=400)
+
+        port = reverse_server.reverse_port
         server = f"{username}@reverse"
         try:
             if is_powershell(server, port):
@@ -122,8 +134,19 @@ class ListPath(APIView):
         ]
     )
     def get(self, request, server_id, username, format=None):
-        reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        port = reverser_server.reverse_port
+        user = request.user
+        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
+        try:
+            # Check username exists
+            ReverseServerUsernames.objects.get(
+                reverse_server=reverse_server,
+                username=username,
+                user=user
+            )
+        except ReverseServerUsernames.DoesNotExist:
+            return Response({"error": "Username not found"}, status=400)
+
+        port = reverse_server.reverse_port
         server = f"{username}@reverse"
         
         path = request.query_params.get('path', '~/')
@@ -213,8 +236,19 @@ class Download(APIView):
         ]
     )
     def get(self, request, server_id, username, format=None):
-        reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        reverse_port = reverser_server.reverse_port    
+        user = request.user
+        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
+        try:
+            # Check username exists
+            ReverseServerUsernames.objects.get(
+                reverse_server=reverse_server,
+                username=username,
+                user=user
+            )
+        except ReverseServerUsernames.DoesNotExist:
+            return Response({"error": "Username not found"}, status=400)
+
+        reverse_port = reverse_server.reverse_port    
         server = f"{username}@reverse"
         path = request.query_params.get('path')
 
@@ -282,8 +316,19 @@ class UploadFiles(APIView):
         ]
     )
     def post(self, request, server_id, username, format=None):
-        reverser_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id)
-        reverse_port = reverser_server.reverse_port    
+        user = request.user
+        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
+        try:
+            # Check username exists
+            ReverseServerUsernames.objects.get(
+                reverse_server=reverse_server,
+                username=username,
+                user=user
+            )
+        except ReverseServerUsernames.DoesNotExist:
+            return Response({"error": "Username not found"}, status=400)
+
+        reverse_port = reverse_server.reverse_port
         server = f"{username}@reverse"
         destination_path = request.query_params.get('destination_path')
         file_obj = request.FILES.get('file')
