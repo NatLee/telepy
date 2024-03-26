@@ -1,3 +1,7 @@
 from django.contrib import admin
 
-# Register your models here.
+from site_settings.models import SiteSettings
+
+@admin.register(SiteSettings)
+class SiteSettingsAdmin(admin.ModelAdmin):
+    list_display = ['allow_registration']
