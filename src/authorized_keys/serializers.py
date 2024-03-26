@@ -6,14 +6,20 @@ from authorized_keys.models import ReverseServerUsernames
 class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReverseServerAuthorizedKeys
-        fields = ['id', 'hostname', 'key', 'reverse_port', 'description', 'created_at', 'updated_at']
+        fields = '__all__'
+        # Need to set user as read_only field because it is not in the fields list
+        read_only_fields = ('user',)
 
 class UserAuthorizedKeysSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = UserAuthorizedKeys
-        fields = ['id', 'hostname', 'key', 'description', 'created_at', 'updated_at']
+        fields = '__all__'
+        read_only_fields = ('user',)
+
 
 class ReverseServerUsernamesSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReverseServerUsernames
-        fields = ['id', 'reverse_server', 'username', 'created_at', 'updated_at']
+        fields = '__all__'
+        read_only_fields = ('user',)

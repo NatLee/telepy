@@ -1,3 +1,5 @@
+from enum import Enum
+
 from django.conf import settings
 from django.shortcuts import render, redirect
 
@@ -6,7 +8,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 
 from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
+
+from authorized_keys.models import ReverseServerAuthorizedKeys
+
+# ========================================
+# Page
+# ========================================
 
 class TunnelsIndex(APIView):
     permission_classes = (AllowAny,)
@@ -46,11 +53,6 @@ class Terminal(APIView):
         tags=['Page']
     )
     def get(self, request, server_id):
-        # Check if the server exists
-        try:
-            server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Reverse server not found'}, status=404)
         return render(request, 'terminal.html')
 
 class SSHServerLogs(APIView):
@@ -63,23 +65,84 @@ class SSHServerLogs(APIView):
     def get(self, request):
         return render(request, 'logs.html')
 
+# ========================================
+# Script Views
+# ========================================
 
+class ScriptType(Enum):
+    """Enum for script types."""
+    SCRIPT = 'script'
+    CONFIG = 'config'
 
-from authorized_keys.models import ReverseServerAuthorizedKeys
-class ReverseServerAuthorizedKeysConfig(APIView):
+class ReverseServerScriptBase(APIView):
     permission_classes = (IsAuthenticated,)
+    script_type = None
+    def get_server_key(self, server_id):
+        try:
+            return ReverseServerAuthorizedKeys.objects.get(id=server_id, user=self.request.user)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return None
+
+    def get_script(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_port: int,
+        ssh_server_hostname: str
+    ):
+        # This method should be implemented by subclasses
+        raise NotImplementedError()
+
+    def get_config(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_server_hostname: str
+    ):
+        # This method should be implemented by subclasses
+        raise NotImplementedError()
+
+    def get(self, request, *args, **kwargs):
+        server_id = kwargs.get('server_id')
+        if not server_id:
+            return Response({'error': 'Server ID not found'}, status=404)
+        ssh_server_hostname = kwargs.get('ssh_server_hostname')
+        if not ssh_server_hostname:
+            return Response({'error': 'SSH server hostname not found'}, status=404)
+        server_auth_key = self.get_server_key(server_id)
+        if not server_auth_key:
+            return Response({'error': 'Reverse server keys not found'}, status=404)
+        if self.script_type == ScriptType.SCRIPT:
+            ssh_port = kwargs.get('ssh_port')
+            if not ssh_port:
+                return Response({'error': 'SSH port not found'}, status=404)
+            return self.get_script(
+                server_auth_key=server_auth_key,
+                ssh_port=ssh_port,
+                ssh_server_hostname=ssh_server_hostname
+            )
+        elif self.script_type == ScriptType.CONFIG:
+            return self.get_config(
+                server_auth_key=server_auth_key,
+                ssh_server_hostname=ssh_server_hostname
+            )
+        return Response({'error': 'Invalid script type'}, status=400)
+
+class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
+    script_type = ScriptType.CONFIG
     @swagger_auto_schema(
         operation_summary="Reverse Server Authorized Keys Config",
         operation_description="Reverse Server Authorized Keys Config",
         tags=['Script']
     )
-    def get(self, request, server_id, ssh_server_hostname):
-        try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Reverse server keys not found'}, status=404)
+    def get_config(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_server_hostname: str
+    ):
+        config_string = f"""# ========================================
+# Reverse Server Configuration
+# ========================================
 
-        config_string = f"""Host telepy-ssh-server
+Host telepy-ssh-server
     HostName {ssh_server_hostname}
     Port {settings.REVERSE_SERVER_SSH_PORT}
     Compression yes
@@ -92,6 +155,12 @@ class ReverseServerAuthorizedKeysConfig(APIView):
 # ========================================
 # You need to add a user to the reverse server authorized keys.
 # ========================================"""
+        else:
+            config_string += f"""
+# ========================================
+# Endpoint Configuration
+# ========================================
+"""
 
         for username in server_auth_key_user:
             config_string += f"""
@@ -100,23 +169,25 @@ Host {server_auth_key.hostname}
     Port {server_auth_key.reverse_port}
     Compression yes
     User {username.username}
-    ProxyCommand ssh -W %h:%p telepy-ssh-server"""
+    ProxyCommand ssh -W %h:%p telepy-ssh-server
+"""
         return Response({'config': config_string})
 
-class AutoSSHTunnelScript(APIView):
-    permission_classes = (IsAuthenticated,)
+
+class AutoSSHTunnelScript(ReverseServerScriptBase):
+    script_type = ScriptType.SCRIPT
     @swagger_auto_schema(
         operation_summary="Auto SSH Tunnel Script",
         operation_description="Auto SSH Tunnel Script",
         tags=['Script']
     )
-    def get(self, request, server_id, ssh_port, ssh_server_hostname):
-        try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-            reverse_port = server_auth_key.reverse_port
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Reverse server keys not found'}, status=404)
-
+    def get_script(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_port: int,
+        ssh_server_hostname: str
+    ):
+        reverse_port = server_auth_key.reverse_port
         config_string = f"""autossh \\
 -M 6769 \\
 -o "ServerAliveInterval 30" \\
@@ -132,19 +203,21 @@ telepy@{ssh_server_hostname}"""
             "language": "bash",
         })
 
-class WindowsSSHTunnelScript(APIView):
-    permission_classes = (IsAuthenticated,)
+
+class WindowsSSHTunnelScript(ReverseServerScriptBase):
+    script_type = ScriptType.SCRIPT
     @swagger_auto_schema(
         operation_summary="Windows SSH Tunnel Script",
         operation_description="Windows SSH Tunnel Script",
         tags=['Script']
     )
-    def get(self, request, server_id, ssh_port, ssh_server_hostname):
-        try:
-            server_auth_key = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-            reverse_port = server_auth_key.reverse_port
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Reverse server keys not found'}, status=404)
+    def get_script(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_port: int,
+        ssh_server_hostname: str,
+    ):
+        reverse_port = server_auth_key.reverse_port
 
         config_string = f"""$continue = $true
 echo "[+] Script started"
