@@ -33,7 +33,7 @@ def third_party_login(serializer, request, session=False):
             logger.error(exception)
             return Response({
                     "status": "error",
-                    "detail": "Cannot create user now."
+                    "detail": "Disallowed creation of user now."
                 }, status=400
             )
         except Exception as exception:
