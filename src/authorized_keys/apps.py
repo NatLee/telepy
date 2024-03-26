@@ -7,5 +7,3 @@ class AuthorizedKeysConfig(AppConfig):
 
     def ready(self):
         import authorized_keys.signals
-        # Call the update_authorized_keys_on_startup function
-        authorized_keys.signals.update_authorized_keys_on_startup()
