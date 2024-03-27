@@ -1,3 +1,4 @@
+import re
 from enum import Enum
 
 from django.conf import settings
@@ -77,6 +78,9 @@ class ScriptType(Enum):
 class ReverseServerScriptBase(APIView):
     permission_classes = (IsAuthenticated,)
     script_type = None
+    server_domain = settings.SERVER_DOMAIN # This should be the domain of the server
+    reverse_server_ssh_port = settings.REVERSE_SERVER_SSH_PORT
+
     def get_server_key(self, server_id):
         try:
             return ReverseServerAuthorizedKeys.objects.get(id=server_id, user=self.request.user)
@@ -99,6 +103,29 @@ class ReverseServerScriptBase(APIView):
         raise NotImplementedError()
 
     def get(self, request, *args, **kwargs):
+
+        server_domain = request.META.get('HTTP_HOST', None)
+        
+        if server_domain:
+            # Use re to match IPv6 with port, IPv4 with port, and hostname with optional port
+            match_ipv6 = re.match(r'^\[(?P<host>[0-9a-fA-F:]+)\]:?(?P<port>\d+)?$', server_domain)
+            match_ipv4 = re.match(r'^(?P<host>[^:]+):(?P<port>\d+)$', server_domain)
+            match_hostname = re.match(r'^(?P<host>[^:]+):?(?P<port>\d+)?$', server_domain)
+            if match_ipv6:
+                server_domain = match_ipv6.group('host')
+            elif match_ipv4:
+                server_domain = match_ipv4.group('host')
+            elif match_hostname:
+                server_domain = match_hostname.group('host')
+            else:
+                # If the domain is not in the expected format, use the whole domain
+                # Maybe it's `localhost` or something else
+                pass
+
+        # If the server domain is different from the one in settings, update it
+        if server_domain != self.server_domain:
+            self.server_domain = server_domain
+
         server_id = kwargs.get('server_id')
         if not server_id:
             return Response({'error': 'Server ID not found'}, status=404)
@@ -130,14 +157,13 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
     ):
-        
         config_string = f"""# ========================================
 # Reverse Server Configuration
 # ========================================
 
 Host telepy-ssh-server
-    HostName {settings.SERVER_DOMAIN}
-    Port {settings.REVERSE_SERVER_SSH_PORT}
+    HostName {self.server_domain}
+    Port {self.reverse_server_ssh_port}
     Compression yes
     User telepy
 """
@@ -186,9 +212,9 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
 -o "ServerAliveCountMax 3" \\
 -o "StrictHostKeyChecking=no" \\
 -o "UserKnownHostsFile=/dev/null" \\
--p {settings.REVERSE_SERVER_SSH_PORT} \\
+-p {self.reverse_server_ssh_port} \\
 -NR '*:{reverse_port}:localhost:{ssh_port}' \\
-telepy@{settings.SERVER_DOMAIN}"""
+telepy@{self.server_domain}"""
 
         return Response({
             "script": config_string,
@@ -247,7 +273,7 @@ try {{
     while ($true) {{
         Write-TimestampedMessage "Starting SSH Reverse Tunnel."
         # SSH command with proper options for keeping the connection alive
-        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {settings.REVERSE_SERVER_SSH_PORT} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{settings.SERVER_DOMAIN}'
+        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {self.reverse_server_ssh_port} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{self.server_domain}'
         # Execute SSH command and wait for its completion before restarting
         Invoke-Expression $sshCommand
         Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
