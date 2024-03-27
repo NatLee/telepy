@@ -95,6 +95,7 @@ INSTALLED_APPS = [
     "logs",
     "web_sftp",
     "user_management",
+    "site_settings",
 ]
 
 MIDDLEWARE = [

@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 
 from rest_framework import serializers
 
@@ -62,14 +63,19 @@ class GoogleLoginSerializer(serializers.Serializer):
         try:
             user = User.objects.get(username=account)
         except User.DoesNotExist:
-            # 如果沒有，則建立一個新的使用者
-            user = User.objects.create_user(
-                # Username has to be unique
-                username=account,
-                first_name=first_name,
-                last_name=last_name,
-                email=email,
-            )
+            try:
+                # 如果沒有，則建立一個新的使用者
+                user = User.objects.create_user(
+                    # Username has to be unique
+                    username=account,
+                    first_name=first_name,
+                    last_name=last_name,
+                    email=email,
+                )
+            except ValidationError as exception:
+                logger.debug(f"[AUTH][GOOGLE] {email} - {exception}")
+                raise exception
+
             logger.debug(f"[AUTH][GOOGLE] Created user [{account}][{first_name}.{last_name}] - [{email}]")
             # 建立 SocialAccount
             SocialAccount.objects.create(

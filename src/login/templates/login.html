@@ -45,7 +45,7 @@
             data-client_id="376808175534-d6mefo6b1kqih3grjjose2euree2g3cs.apps.googleusercontent.com"
             data-context="signin"
             data-ux_mode="popup"
-            data-callback="get_jwt_using_google_credential"
+            data-callback="getTokenUsingGoogleCredential"
             data-auto_select="false"
             data-itp_support="false"
             data-auto_prompt="false">
@@ -65,8 +65,6 @@
     </div>
     {% endif %}
 
-    <p class="text-center text-danger mt-3" id="loginError"></p>
-
   </div>
 </body>
 {% endblock %}
@@ -74,83 +72,139 @@
 {% block scripts %}
 <script>
 
-  // Function to get JWT using Google credential
-  function get_jwt_using_google_credential(data) {
-    const credential = data.credential;
-    $.ajax({
-        method: "POST",
-        url: "/api/auth/google/token",
-        data: { credential: credential }
-    }).done(function (data) {
-        console.log(data);
-        const access_token = data.access;
-        const refresh_token = data.refresh_token;
-        localStorage.setItem('accessToken', access_token);
-        localStorage.setItem('refreshToken', refresh_token);
-        console.log('Google Login');
-        $.ajax({
-            type: "POST",
-            url: "/api/auth/token/verify",
-            data: {"token":access_token},
-            headers: {
-                "Authorization": "Bearer" + " " + access_token
-            },
-            success: function (data) {
-              console.log('Google Login Success');
-              //window.location.href = '/tunnels/index';
-            },
-            error: function (data) {
-                // Get `loginError` element and set the text to `login failed ${data}
-                $("#loginError").text(`Login failed ${data}`).css('color', 'red');
-            }
-        });
+  // Function to show error using Swal
+  function showError(message) {
+    Swal.fire({
+      icon: 'error',
+      title: 'Oops...',
+      text: message,
     });
+  }
+
+  // =======================================
+  // Token verification and login functions
+  // =======================================
+
+  // Helper function to verify the token
+  async function verifyToken(accessToken) {
+    try {
+      const response = await fetch('/api/auth/token/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ token: accessToken }),
+      });
+      if (!response.ok) {
+        throw new Error(`Token verification failed with status: ${response.status}`);
+      }
+      console.log('Google Login Success');
+      window.location.href = '/tunnels/index';
+    } catch (error) {
+      showError(`Login failed. ${error}`);
+      throw error;
+    }
+  }
+
+  // Helper function to perform the login action
+  async function performLogin(username, password) {
+    const payload = { username, password };
+
+    const response = await fetch('/api/auth/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error('Login failed');
+    }
+
+    const data = await response.json();
+    return data; // Contains access_token and refresh_token
+  }
+
+  // =======================================
+  // Google login functions
+  // =======================================
+
+  // Function to handle the initial token submission to your server
+  async function submitGoogleCredential(credential) {
+    try {
+      const response = await fetch('/api/auth/google/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ credential: credential }),
+      });
+      if (!response.ok) {
+        throw new Error(`Server responded with ${response.status}`);
+      }
+      const data = await response.json();
+      return data; // Contains access_token and refresh_token
+    } catch (error) {
+      showError(`Login failed. ${error}`);
+      throw error; // Rethrow to handle it in the caller function
+    }
+  }
+
+  // Main function to handle Google login
+  async function getTokenUsingGoogleCredential(data) {
+    const credential = data.credential;
+    try {
+      const tokens = await submitGoogleCredential(credential);
+      localStorage.setItem('accessToken', tokens.access_token);
+      localStorage.setItem('refreshToken', tokens.refresh_token);
+      console.log('Google Login');
+      await verifyToken(tokens.access_token);
+    } catch (error) {
+      console.error('Google Login Failed', error);
+    }
+  }
+
+  // =======================================
+  // Event handling functions
+  // =======================================
+
+  // Function to handle the form submission
+  async function handleLoginFormSubmit(event) {
+    event.preventDefault();
+
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    try {
+      const tokens = await performLogin(username, password);
+      localStorage.setItem('accessToken', tokens.access_token);
+      localStorage.setItem('refreshToken', tokens.refresh_token);
+      window.location.href = '/tunnels/index';
+    } catch (error) {
+      showError('Login failed. Please try again.');
+    }
   }
 
   // Function to attach the event to the login form
   function attachLoginFormEvent() {
-      document.getElementById('loginForm').addEventListener('submit', function(event) {
-          event.preventDefault();
-
-          const username = document.getElementById('username').value;
-          const password = document.getElementById('password').value;
-          
-          const payload = {
-            username: username,
-            password: password
-          };
-          
-          fetch('/api/auth/token', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload)
-          })
-          .then(response => {
-            if (!response.ok) {
-                throw new Error('Login failed');
-            }
-            return response.json();
-          })
-          .then(data => {
-              // Store the JWT in localStorage
-              localStorage.setItem('accessToken', data.access_token);
-              localStorage.setItem('refreshToken', data.refresh_token);
-          
-              // Redirect to index
-              window.location.href = '/tunnels/index';
-          })
-          .catch(error => {
-              // Use SweetAlert to show the error
-              Swal.fire({
-                  icon: 'error',
-                  title: 'Oops...',
-                  text: 'Login failed, please try again.',
-              })
-          });
-      });
+    const form = document.getElementById('loginForm');
+    if (form) {
+      form.addEventListener('submit', handleLoginFormSubmit);
+    } else {
+      console.error('LoginForm not found');
+    }
   }
-  attachLoginFormEvent();
+
+  // =======================================
+  // Initialization
+  // =======================================
+
+  // When DOM is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    attachLoginFormEvent();
+  });
+
 </script>
 {% endblock %}
