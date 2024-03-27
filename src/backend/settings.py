@@ -32,7 +32,8 @@ SECRET_KEY = 'django-insecure-uye!=@*gjois#e#8u*3law8=d4^&5s0sh-w*+r3_%+x5tn$lru
 
 # ----------------------------- START - DEBUG setting -------------------------------
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False # Default: False
+# DEBUG default is False
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 print(f"---------- Debug mode: {DEBUG}")
 # ------------------------------ END - DEBUG setting --------------------------------
 
@@ -56,8 +57,8 @@ CSRF_TRUSTED_ORIGINS = [
 
 # Set Server Domain for CSRF
 SERVER_DOMAIN = os.getenv("SERVER_DOMAIN", None)
+print(f"---------- Server Domain: {SERVER_DOMAIN}")
 if SERVER_DOMAIN:
-    print(f"---------- Server Domain: {SERVER_DOMAIN}")
     CSRF_TRUSTED_ORIGINS.extend(
         [
             f"https://{SERVER_DOMAIN}",

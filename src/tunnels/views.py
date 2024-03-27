@@ -86,16 +86,14 @@ class ReverseServerScriptBase(APIView):
     def get_script(
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
-        ssh_port: int,
-        ssh_server_hostname: str
+        ssh_port: int
     ):
         # This method should be implemented by subclasses
         raise NotImplementedError()
 
     def get_config(
         self,
-        server_auth_key: ReverseServerAuthorizedKeys,
-        ssh_server_hostname: str
+        server_auth_key: ReverseServerAuthorizedKeys
     ):
         # This method should be implemented by subclasses
         raise NotImplementedError()
@@ -104,9 +102,6 @@ class ReverseServerScriptBase(APIView):
         server_id = kwargs.get('server_id')
         if not server_id:
             return Response({'error': 'Server ID not found'}, status=404)
-        ssh_server_hostname = kwargs.get('ssh_server_hostname')
-        if not ssh_server_hostname:
-            return Response({'error': 'SSH server hostname not found'}, status=404)
         server_auth_key = self.get_server_key(server_id)
         if not server_auth_key:
             return Response({'error': 'Reverse server keys not found'}, status=404)
@@ -116,13 +111,11 @@ class ReverseServerScriptBase(APIView):
                 return Response({'error': 'SSH port not found'}, status=404)
             return self.get_script(
                 server_auth_key=server_auth_key,
-                ssh_port=ssh_port,
-                ssh_server_hostname=ssh_server_hostname
+                ssh_port=ssh_port
             )
         elif self.script_type == ScriptType.CONFIG:
             return self.get_config(
-                server_auth_key=server_auth_key,
-                ssh_server_hostname=ssh_server_hostname
+                server_auth_key=server_auth_key
             )
         return Response({'error': 'Invalid script type'}, status=400)
 
@@ -136,14 +129,14 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
     def get_config(
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
-        ssh_server_hostname: str
     ):
+        
         config_string = f"""# ========================================
 # Reverse Server Configuration
 # ========================================
 
 Host telepy-ssh-server
-    HostName {ssh_server_hostname}
+    HostName {settings.SERVER_DOMAIN}
     Port {settings.REVERSE_SERVER_SSH_PORT}
     Compression yes
     User telepy
@@ -184,8 +177,7 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
     def get_script(
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
-        ssh_port: int,
-        ssh_server_hostname: str
+        ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
         config_string = f"""autossh \\
@@ -196,7 +188,7 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
 -o "UserKnownHostsFile=/dev/null" \\
 -p {settings.REVERSE_SERVER_SSH_PORT} \\
 -NR '*:{reverse_port}:localhost:{ssh_port}' \\
-telepy@{ssh_server_hostname}"""
+telepy@{settings.SERVER_DOMAIN}"""
 
         return Response({
             "script": config_string,
@@ -214,8 +206,7 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
     def get_script(
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
-        ssh_port: int,
-        ssh_server_hostname: str,
+        ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
 
@@ -256,7 +247,7 @@ try {{
     while ($true) {{
         Write-TimestampedMessage "Starting SSH Reverse Tunnel."
         # SSH command with proper options for keeping the connection alive
-        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {settings.REVERSE_SERVER_SSH_PORT} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{ssh_server_hostname}'
+        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {settings.REVERSE_SERVER_SSH_PORT} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{settings.SERVER_DOMAIN}'
         # Execute SSH command and wait for its completion before restarting
         Invoke-Expression $sshCommand
         Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."

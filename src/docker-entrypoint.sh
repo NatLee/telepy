@@ -9,8 +9,14 @@ chmod 600 /root/.ssh/id_rsa
 # Set scripts to executable
 chmod +x /scripts/*.sh
 
-# Collect static files
-python manage.py collectstatic --noinput
+# Run collectstatic if not in debug mode
+if [ "${DEBUG,,}" = "true" ]; then
+    echo "Running in Debug mode"
+else
+    echo "Running in Production mode"
+    # Remove old static files folder and create a new one
+    rm -rf /src/staticfiles && python manage.py collectstatic --noinput
+fi
 
 # Migrate the database
 python manage.py makemigrations && python manage.py migrate
