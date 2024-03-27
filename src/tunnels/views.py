@@ -256,7 +256,7 @@ try {{
     while ($true) {{
         Write-TimestampedMessage "Starting SSH Reverse Tunnel."
         # SSH command with proper options for keeping the connection alive
-        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {ssh_port} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{ssh_server_hostname}'
+        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {settings.REVERSE_SERVER_SSH_PORT} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{ssh_server_hostname}'
         # Execute SSH command and wait for its completion before restarting
         Invoke-Expression $sshCommand
         Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
