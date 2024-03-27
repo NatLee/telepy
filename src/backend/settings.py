@@ -32,7 +32,7 @@ SECRET_KEY = 'django-insecure-uye!=@*gjois#e#8u*3law8=d4^&5s0sh-w*+r3_%+x5tn$lru
 
 # ----------------------------- START - DEBUG setting -------------------------------
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = False # Default: False
 print(f"---------- Debug mode: {DEBUG}")
 # ------------------------------ END - DEBUG setting --------------------------------
 
@@ -51,9 +51,22 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1",
     "http://localhost",
     f"http://localhost:{WEB_SERVER_PORT}",
-    "https://test.natlee.info"
 ]
 # -------------- END - CORS Setting -----------------
+
+# Set Server Domain for CSRF
+SERVER_DOMAIN = os.getenv("SERVER_DOMAIN", None)
+if SERVER_DOMAIN:
+    print(f"---------- Server Domain: {SERVER_DOMAIN}")
+    CSRF_TRUSTED_ORIGINS.extend(
+        [
+            f"https://{SERVER_DOMAIN}",
+            f"http://{SERVER_DOMAIN}",
+        ]
+    )
+
+# Remove duplicate
+CSRF_TRUSTED_ORIGINS = list(set(CSRF_TRUSTED_ORIGINS))
 
 
 # -------------- START - Google Auth Setting --------------
