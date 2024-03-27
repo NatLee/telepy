@@ -1,4 +1,5 @@
 from django.contrib.auth import login
+from django.core.exceptions import ValidationError
 
 from rest_framework.response import Response
 
@@ -27,6 +28,20 @@ def third_party_login(serializer, request, session=False):
                     "status": "error",
                     "detail": "Something went wrong :("
                 },status=500
+            )
+        except ValidationError as exception:
+            logger.error(exception)
+            return Response({
+                    "status": "error",
+                    "detail": "Disallowed creation of user now."
+                }, status=400
+            )
+        except Exception as exception:
+            logger.error(exception)
+            return Response({
+                    "status": "error",
+                    "detail": "Unknown Error",
+                }, status=500
             )
     else:
         return Response({
