@@ -91,9 +91,8 @@ function updateStatus(isConnected, hostname) {
 
 function fetchServerConfig(serverId) {
     const accessToken = localStorage.getItem('accessToken');
-    const hostname = window.location.hostname;
 
-    fetch(`/tunnels/server/${hostname}/config/${serverId}`, {
+    fetch(`/tunnels/server/config/${serverId}`, {
         method: "GET",
         headers: {
             'Content-Type': 'application/json',
@@ -342,8 +341,8 @@ async function updateServerScriptContent(serverId) {
             console.error('Invalid SSH port:', sshPort);
             return;
         }
-        const linuxScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/autossh/${serverId}/${sshPort}`);
-        const windowsScriptData = await fetchSSHScript(`/tunnels/server/${window.location.hostname}/script/windows/${serverId}/${sshPort}`);
+        const linuxScriptData = await fetchSSHScript(`/tunnels/server/script/autossh/${serverId}/${sshPort}`);
+        const windowsScriptData = await fetchSSHScript(`/tunnels/server/script/windows/${serverId}/${sshPort}`);
 
         // Check if Prism is available and highlight the code
         if (Prism && Prism.highlight && linuxScriptData.script && windowsScriptData.script) {
