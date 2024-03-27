@@ -9,6 +9,9 @@ chmod 600 /root/.ssh/id_rsa
 # Set scripts to executable
 chmod +x /scripts/*.sh
 
+# Collect static files
+python manage.py collectstatic --noinput
+
 # Migrate the database
 python manage.py makemigrations && python manage.py migrate
 
