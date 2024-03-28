@@ -1,5 +1,6 @@
 import re
 from enum import Enum
+from tkinter import SE
 
 from django.conf import settings
 from django.shortcuts import render, redirect
@@ -11,6 +12,30 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from drf_yasg.utils import swagger_auto_schema
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
+
+from authorized_keys.utils import ssh
+from tunnel_script_renderer import ssh_tunnel_script_factory
+from tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
+
+## Static constants
+CLIENT_STEM = """
+# ========================================
+# Endpoint Configuration
+# ========================================
+"""
+
+CLIENT_NO_USER_STEM = """
+# ========================================
+# You need to add a user to the reverse server authorized keys.
+# ========================================
+"""
+
+SERVER_STEM = """
+# ========================================
+# Reverse Server Configuration
+# ========================================
+"""
+##
 
 # ========================================
 # Page
@@ -157,39 +182,32 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
     ):
-        config_string = f"""# ========================================
-# Reverse Server Configuration
-# ========================================
+        # Start constructing the config string.
+        config_string = SERVER_STEM
 
-Host telepy-ssh-server
-    HostName {self.server_domain}
-    Port {self.reverse_server_ssh_port}
-    Compression yes
-    User telepy
-"""
+        # Render the server side config.
+        config_string += sshd_server_config_factory(
+          server_domain=self.server_domain,
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
+
+        # Read all reverse users.
         server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
 
         if not server_auth_key_user:
-            config_string += f"""
-# ========================================
-# You need to add a user to the reverse server authorized keys.
-# ========================================"""
+            config_string += CLIENT_NO_USER_STEM
         else:
-            config_string += f"""
-# ========================================
-# Endpoint Configuration
-# ========================================
-"""
+            config_string += CLIENT_STEM
 
         for username in server_auth_key_user:
-            config_string += f"""
-Host {server_auth_key.host_friendly_name}
-    HostName localhost
-    Port {server_auth_key.reverse_port}
-    Compression yes
-    User {username.username}
-    ProxyCommand ssh -W %h:%p telepy-ssh-server
-"""
+
+            # Render the client side config.
+            config_string += sshd_client_config_factory(
+              host_friendly_name=server_auth_key.hostname,
+              ssh_username=username.username,
+              reverse_port=server_auth_key.reverse_port
+            ).render()
+
         return Response({'config': config_string})
 
 
@@ -206,15 +224,13 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
-        config_string = f"""autossh \\
--M 6769 \\
--o "ServerAliveInterval 30" \\
--o "ServerAliveCountMax 3" \\
--o "StrictHostKeyChecking=no" \\
--o "UserKnownHostsFile=/dev/null" \\
--p {self.reverse_server_ssh_port} \\
--NR '*:{reverse_port}:localhost:{ssh_port}' \\
-telepy@{self.server_domain}"""
+        config_string = ssh_tunnel_script_factory(
+          "autossh", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
 
         return Response({
             "script": config_string,
@@ -236,68 +252,13 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
     ):
         reverse_port = server_auth_key.reverse_port
 
-        config_string = f"""echo "[+] Script start"
-
-# Configuration
-$sshUserHost = "telepy@{self.server_domain}"
-$sshRemoteForward = "*:{reverse_port}:localhost:{ssh_port}"
-$reverseServerSSHPort = "{self.reverse_server_ssh_port}"
-$sshOptions = "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
-$sshCommand = "ssh $sshOptions -p $reverseServerSSHPort -NR $sshRemoteForward $sshUserHost"
-
-# Add-Type for PowerManagement to prevent sleep
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class PowerManagement {{
-    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-    public static extern uint SetThreadExecutionState(uint esFlags);
-    public const uint ES_CONTINUOUS = 0x80000000;
-    public const uint ES_SYSTEM_REQUIRED = 0x00000001;
-    public const uint ES_DISPLAY_REQUIRED = 0x00000002;
-}}
-"@
-
-# Function to write messages with timestamp
-function Write-TimestampedMessage {{
-    param([string]$Message)
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    echo "[$timestamp] $Message"
-}}
-
-# Function to enable or disable sleep prevention
-function Prevent-Sleep {{
-    param([bool]$Enable)
-    if ($Enable) {{
-        [PowerManagement]::SetThreadExecutionState([PowerManagement]::ES_CONTINUOUS -bor [PowerManagement]::ES_SYSTEM_REQUIRED -bor [PowerManagement]::ES_DISPLAY_REQUIRED)
-        Write-TimestampedMessage "Sleep prevention activated."
-    }} else {{
-        [PowerManagement]::SetThreadExecutionState([PowerManagement]::ES_CONTINUOUS)
-        Write-TimestampedMessage "Sleep prevention deactivated."
-    }}
-}}
-
-# Prevent sleep initially
-Prevent-Sleep -Enable $true
-
-try {{
-    while ($true) {{
-        Write-TimestampedMessage "Starting SSH Reverse Tunnel."
-        try {{
-            Invoke-Expression $sshCommand
-        }} catch {{
-            Write-TimestampedMessage "Error executing SSH command: $_"
-        }}
-        Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
-        Start-Sleep -Seconds 5
-    }}
-}} finally {{
-    Prevent-Sleep -Enable $false
-    Write-TimestampedMessage "Sleep prevention disabled."
-    echo "[+] Script end"
-    Write-Host "Press any key to continue..."
-    $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
-}}"""
+        config_string = ssh_tunnel_script_factory(
+          "powershell", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
 
         return Response({
             "script": config_string,
