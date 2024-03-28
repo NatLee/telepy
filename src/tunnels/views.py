@@ -209,7 +209,11 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
-        config_string = ssh_tunnel_script_factory("autossh", server_domain=self.server_domain, reverse_port=reverse_port, ssh_port=ssh_port, reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+        config_string = ssh_tunnel_script_factory("autossh", 
+                                                  server_domain=self.server_domain, 
+                                                  reverse_port=reverse_port, 
+                                                  ssh_port=ssh_port, 
+                                                  reverse_server_ssh_port=self.reverse_server_ssh_port).render()
 
         return Response({
             "script": config_string,
@@ -231,7 +235,11 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
     ):
         reverse_port = server_auth_key.reverse_port
 
-        config_string = ssh_tunnel_script_factory("powershell", server_domain=self.server_domain, reverse_port=reverse_port, ssh_port=ssh_port, reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+        config_string = ssh_tunnel_script_factory("powershell", 
+                                                  server_domain=self.server_domain, 
+                                                  reverse_port=reverse_port, 
+                                                  ssh_port=ssh_port, 
+                                                  reverse_server_ssh_port=self.reverse_server_ssh_port).render()
 
         return Response({
             "script": config_string,
