@@ -28,9 +28,9 @@ class Login(APIView):
             "social_google_client_id": settings.SOCIAL_GOOGLE_CLIENT_ID
         }
         # Determine if there is no User in the database
-        #if User.objects.count() == 0:
+        if User.objects.count() == 0:
             # If there is no User, redirect to the registration page
-        return render(request, "first-login.html", login_settings)
+            return render(request, "first-login.html", login_settings)
         return render(request, "login.html", login_settings)
 
 # ======================================
