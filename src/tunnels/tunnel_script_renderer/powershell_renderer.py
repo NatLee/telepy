@@ -1,5 +1,4 @@
 from string import Template
-from typing import NamedTuple
 from pathlib import Path
 from .template_renderer import BaseTemplateRenderer
 

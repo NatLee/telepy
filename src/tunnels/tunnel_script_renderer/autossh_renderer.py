@@ -1,5 +1,4 @@
 from string import Template
-from typing import NamedTuple
 from pathlib import Path
 from .template_renderer import BaseTemplateRenderer
 
@@ -23,7 +22,7 @@ class AutoSshTemplate(BaseTemplateRenderer):
         return cls(server_domain, reverse_port, ssh_port, reverse_server_ssh_port)
     
     def render(self) -> str:
-        
+
         # Define mapping.
         mapping = self.mapping_factory()
 
