@@ -1,7 +1,7 @@
 from .template_renderer import BaseTemplateRenderer
 from .powershell_renderer import PowerShellTemplate
 from .autossh_renderer import AutoSshTemplate
-from .ssh_config_renderer import SshClientTemplate
+from .ssh_config_renderer import SshClientTemplate, SshServerTemplate
 
 
 def ssh_tunnel_script_factory(tunnel_type: str, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int) -> BaseTemplateRenderer:
@@ -18,4 +18,8 @@ def ssh_tunnel_script_factory(tunnel_type: str, server_domain: str, reverse_port
 
 def sshd_client_config_factory(host_friendly_name: str, ssh_username: str, reverse_port: int) -> SshClientTemplate:
     template = SshClientTemplate.template_factory(host_friendly_name=host_friendly_name, ssh_username=ssh_username, reverse_port=reverse_port)
+    return template
+
+def sshd_server_config_factory(server_domain: str, reverse_server_ssh_port: int) -> SshServerTemplate:
+    template = SshServerTemplate.template_factory(server_domain=server_domain, reverse_server_ssh_port=reverse_server_ssh_port)
     return template

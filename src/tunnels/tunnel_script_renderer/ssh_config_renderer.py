@@ -1,5 +1,7 @@
+import re
 from string import Template
 from pathlib import Path
+from xmlrpc import server
 from .template_renderer import BaseTemplateRenderer
 
 # Absolute path of template directory path.
@@ -38,8 +40,11 @@ class BaseSshTemplate(BaseTemplateRenderer):
         # Check if server side or client side.
         if not self.server_side:  # Client side.
             mapping["client_proxy_command"] = SSH_CLIENT_PROXY_CONF
+            mapping["reverse_server_ssh_port"] = ""
+
         else:
             mapping["client_proxy_command"] = ""
+            mapping["reverse_port"] = ""
 
         return mapping
 
@@ -90,9 +95,29 @@ class SshClientTemplate(BaseSshTemplate):
 
     @classmethod 
     def template_factory(cls, 
-                            host_friendly_name: str,
-                            ssh_username: str,
-                            reverse_port: int) -> "SshClientTemplate":
+                         host_friendly_name: str,
+                         ssh_username: str,
+                         reverse_port: int) -> "SshClientTemplate":
         return cls(host_friendly_name=host_friendly_name,
                    ssh_username=ssh_username,
                    reverse_port=reverse_port)
+    
+class SshServerTemplate(BaseSshTemplate):
+    def __init__(self, 
+                 server_domain: str,
+                 reverse_server_ssh_port: int):
+        
+        super().__init__(server_side=True,
+                         host_friendly_name="telepy-ssh-server",  # Follows the implementation in `views.py`.
+                         ssh_username="telepy",                   # Follows the implementation in `views.py`. 
+                         server_domain=server_domain,
+                         reverse_server_ssh_port=reverse_server_ssh_port,    
+                         ssh_port=-1,                   # It seems these variable are not used in `views.py`
+                         reverse_port=-1)               # So I just to an impossible value.
+
+    @classmethod 
+    def template_factory(cls, 
+                         server_domain: str,
+                         reverse_server_ssh_port: int) -> "SshServerTemplate":
+        return cls(server_domain=server_domain,
+                   reverse_server_ssh_port=reverse_server_ssh_port)
