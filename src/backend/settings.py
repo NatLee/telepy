@@ -69,6 +69,9 @@ if SERVER_DOMAIN:
 # Remove duplicate
 CSRF_TRUSTED_ORIGINS = list(set(CSRF_TRUSTED_ORIGINS))
 
+print(f"---------- Allowed Hosts: {ALLOWED_HOSTS}")
+print("---------- CSRF Trusted Origins:\n\t{}".format('\n\t'.join(CSRF_TRUSTED_ORIGINS)))
+print("-----------------------------------------------")
 
 # -------------- START - Google Auth Setting --------------
 SECURE_REFERRER_POLICY = "no-referrer-when-downgrade"
@@ -99,6 +102,7 @@ INSTALLED_APPS = [
     "drf_yasg",
     # package
     'pyinstrument',
+    "corsheaders",
     # apps
     "custom_jwt",
     "custom_auth",
@@ -114,9 +118,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     'django.contrib.sessions.middleware.SessionMiddleware',
-    "corsheaders.middleware.CorsMiddleware",
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
