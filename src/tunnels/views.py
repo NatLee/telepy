@@ -236,8 +236,15 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
     ):
         reverse_port = server_auth_key.reverse_port
 
-        config_string = f"""$continue = $true
-echo "[+] Script started"
+        config_string = f"""echo "[+] Script start"
+
+# Configuration
+$sshUserHost = "telepy@{self.server_domain}"
+$sshRemoteForward = "*:{reverse_port}:localhost:{ssh_port}"
+$reverseServerSSHPort = "{self.reverse_server_ssh_port}"
+$sshOptions = "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
+$sshCommand = "ssh $sshOptions -p $reverseServerSSHPort -NR $sshRemoteForward $sshUserHost"
+
 # Add-Type for PowerManagement to prevent sleep
 Add-Type -TypeDefinition @"
 using System;
@@ -250,12 +257,14 @@ public static class PowerManagement {{
     public const uint ES_DISPLAY_REQUIRED = 0x00000002;
 }}
 "@
+
 # Function to write messages with timestamp
 function Write-TimestampedMessage {{
     param([string]$Message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     echo "[$timestamp] $Message"
 }}
+
 # Function to enable or disable sleep prevention
 function Prevent-Sleep {{
     param([bool]$Enable)
@@ -267,25 +276,28 @@ function Prevent-Sleep {{
         Write-TimestampedMessage "Sleep prevention deactivated."
     }}
 }}
+
 # Prevent sleep initially
 Prevent-Sleep -Enable $true
+
 try {{
     while ($true) {{
         Write-TimestampedMessage "Starting SSH Reverse Tunnel."
-        # SSH command with proper options for keeping the connection alive
-        $sshCommand = 'ssh -o "ServerAliveInterval 15" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=false" -p {self.reverse_server_ssh_port} -NR "*:{reverse_port}:localhost:{ssh_port}" telepy@{self.server_domain}'
-        # Execute SSH command and wait for its completion before restarting
-        Invoke-Expression $sshCommand
+        try {{
+            Invoke-Expression $sshCommand
+        }} catch {{
+            Write-TimestampedMessage "Error executing SSH command: $_"
+        }}
         Write-TimestampedMessage "SSH command exited. Restarting in 5 seconds..."
         Start-Sleep -Seconds 5
     }}
 }} finally {{
-    # Allow the system to sleep again when exiting the loop
     Prevent-Sleep -Enable $false
-    Write-TimestampedMessage "Script exited, sleep prevention disabled."
-}}
-Write-Host "Press any key to continue..."
-$Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")"""
+    Write-TimestampedMessage "Sleep prevention disabled."
+    echo "[+] Script end"
+    Write-Host "Press any key to continue..."
+    $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+}}"""
 
         return Response({
             "script": config_string,
