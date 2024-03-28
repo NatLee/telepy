@@ -21,16 +21,22 @@ function fetchAndDisplayUserKeys() {
         table.innerHTML = '';
 
         data.forEach(item => {
+            const itemId = item.id;
+            const hostFriendlyName = item.host_friendly_name;
+            const publicKey = item.key;
+            const publicKeyShort = publicKey.substring(0, 20);
+            const itemDescription = item.description;
+
             const actionButtons = `
-                <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${item.id})">Delete</button>
+                <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${itemId})">Delete</button>
             `;
 
             const row = `
-            <tr onclick="showKeyDetails('${item.hostname}', '${item.key}', ${item.description})">
-                <td>${item.hostname}</td>
-                <td>${item.key.substring(0, 20) || '&lt;none&gt;'}...</td>
+            <tr onclick="showKeyDetails('${hostFriendlyName}', '${publicKey}', ${itemDescription})">
+                <td>${hostFriendlyName}</td>
+                <td>${publicKeyShort || '&lt;none&gt;'}...</td>
                 <td>
-                    <div class='d-flex' id="actions-${item.id}">
+                    <div class='d-flex' id="actions-${itemId}">
                         ${actionButtons}
                     </div>
                 </td>
@@ -48,9 +54,9 @@ function fetchAndDisplayUserKeys() {
     });
 }
 
-function showKeyDetails(hostname, key, description) {
+function showKeyDetails(hostFriendlyName, key, description) {
     // Populate the modal with key information
-    document.getElementById('keyHostname').textContent = `Hostname: ${hostname}`;
+    document.getElementById('keyHostFriendlyName').textContent = `Host Friendly Name: ${hostFriendlyName}`;
     document.getElementById('keyTextArea').value = key;
     if (description) {
         document.getElementById('keyDescriptionText').textContent = `Description: ${description}`;
@@ -81,7 +87,7 @@ function createKeys() {
 }
 
 function submitNewKey() {
-    const hostname = document.getElementById('hostname').value;
+    const hostFriendlyName = document.getElementById('hostFriendlyName').value;
     const publicKey = document.getElementById('publicKey').value;
     const description = document.getElementById('description').value;
 
@@ -98,8 +104,8 @@ function submitNewKey() {
             'Authorization': `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-            hostname: hostname,
-            key: publicKey,
+            host_friendly_name: hostFriendlyName, // `host_friendly_name` is the key name in the API
+            key: publicKey, // key is the public key in the API
             description: description
         })
     })
@@ -121,10 +127,12 @@ function submitNewKey() {
     .catch((error) => {
         // Now error will be the JSON error response from the server
         console.error('Error:', error);
+        const errorMsgPublicKey = error.key;
+        const errorMsgHostFriendlyName = error.host_friendly_name;
         Swal.fire({
             icon: 'error',
             title: 'Oops...',
-            text: error.key || error.hostname || 'Failed to create user key', // Displaying the error message
+            text: errorMsgPublicKey || errorMsgHostFriendlyName || 'Failed to create user key', // Displaying the error message
         });
     });
 }

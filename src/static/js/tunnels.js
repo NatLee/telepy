@@ -28,10 +28,13 @@ function fetchAndDisplayReverseServerKeys() {
         .then(statusData => {
             // Iterate through each item again to update their status
             data.forEach(item => {
+                const hostFriendlyName = item.host_friendly_name;
+                const reversePort = item.reverse_port;
+
                 // Determine if the port is active based on the status data
-                const isActive = statusData[item.reverse_port];
-                // Call the updateStatus function with the isActive status and hostname
-                updateStatus(isActive, item.hostname);
+                const isActive = statusData[reversePort];
+                // Call the updateStatus function with the isActive status and host friendly name
+                updateStatus(isActive, hostFriendlyName);
             });
         });
     })
@@ -52,28 +55,37 @@ function displayReverseServerKeys(data) {
 }
 
 function createActionButtons(item) {
+    const itemId = item.id;
+
     return `
-        <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${item.id}')">Console</button>
-        <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${item.id}')">Users</button>
-        <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${item.id})">Config</button>
-        <button class="btn btn-secondary btn-sm me-2" onclick="showServerScriptModal('${item.id}')">Script</button>
-        <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${item.id}')">Delete</button>
+        <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${itemId}')">Console</button>
+        <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${itemId}')">Users</button>
+        <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${itemId})">Config</button>
+        <button class="btn btn-secondary btn-sm me-2" onclick="showServerScriptModal('${itemId}')">Script</button>
+        <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${itemId}')">Delete</button>
     `;
 }
 
 function createTableRow(item, actionButtons) {
+
+    const itemId = item.id;
+    const hostFriendlyName = item.host_friendly_name;
+    const reversePort = item.reverse_port;
+    const publicKey = item.key;
+    const publicKeyShort = publicKey.substring(0, 20) || '<none>';
+
     return `
         <tr>
-            <td>${item.hostname}</td>
-            <td>${item.reverse_port}</td>
-            <td>${item.key.substring(0, 20) || '<none>'}...</td>
+            <td>${hostFriendlyName}</td>
+            <td>${reversePort}</td>
+            <td>${publicKeyShort}...</td>
             <td>
                 <div class='d-flex'>
-                    <div class="${item.hostname}-status status ml-2" id="${item.hostname}-status"></div>
+                    <div class="${hostFriendlyName}-status status ml-2" id="${hostFriendlyName}-status"></div>
                 </div>
             </td>
             <td>
-                <div class='d-flex' id="actions-${item.id}">
+                <div class='d-flex' id="actions-${itemId}">
                     ${actionButtons}
                 </div>
             </td>
@@ -81,8 +93,8 @@ function createTableRow(item, actionButtons) {
     `;
 }
 
-function updateStatus(isConnected, hostname) {
-    const statusElement = document.getElementById(`${hostname}-status`);
+function updateStatus(isConnected, hostFriendlyName) {
+    const statusElement = document.getElementById(`${hostFriendlyName}-status`);
     if (statusElement) {
         statusElement.classList.toggle('connected', isConnected);
         statusElement.classList.toggle('disconnected', !isConnected);
@@ -300,10 +312,13 @@ function tunnelNotificationWebsocket() {
         if (action === "UPDATE-TUNNEL-STATUS-DATA") {
             globalThis.data.forEach(item => {
                 // If port not in message data, it means it's not active 
-                if (!data.message.data.includes(item.reverse_port)) {
-                    updateStatus(false, item.hostname);
+                const hostFriendlyName = item.host_friendly_name;
+                const reversePort = item.reverse_port;
+
+                if (!data.message.data.includes(reversePort)) {
+                    updateStatus(false, hostFriendlyName);
                 } else {
-                    updateStatus(true, item.hostname);
+                    updateStatus(true, hostFriendlyName);
                 }
             });
         }

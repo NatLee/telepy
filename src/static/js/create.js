@@ -95,14 +95,14 @@ $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")`;
 
 function createTunnel() {
 
-  const hostname = document.getElementById('hostname').value;
+  const hostFriendlyName = document.getElementById('hostFriendlyName').value;
   const key = document.getElementById('key').value;
 
-  // Validate hostname and key fields
-  if (!hostname || !key) {
+  // Validate host friendly name and key fields
+  if (!hostFriendlyName || !key) {
     Swal.fire({
         icon: 'error',
-        title: 'Hostname & key are required.',
+        title: 'Host friendly name & key are required.',
         showConfirmButton: false,
         timer: 2000
     })
@@ -120,7 +120,9 @@ function createTunnel() {
   }
 
   const token = document.getElementById('token').value;
-  const apiUrl = `${window.location.protocol}//${window.location.host}/api/reverse/create/key/${token}`;
+  const serverHost = window.location.host;
+  const serverProtocol = window.location.protocol;
+  const apiUrl = `${serverProtocol}//${serverHost}/api/reverse/create/key/${token}`;
 
   const accessToken = localStorage.getItem('accessToken');
   $.ajax({
@@ -131,7 +133,7 @@ function createTunnel() {
         'Authorization': `Bearer ${accessToken}`
     },
     data: JSON.stringify({
-        hostname: hostname,
+      host_friendly_name: hostFriendlyName,
         key: key
     }),
     success: function(data) {
@@ -201,8 +203,10 @@ function fetchUserKeys() {
     const keysContainer = document.getElementById('userKeys');
     let keysHtml = '';
     data.forEach((key, index) => {
+      const hostFriendlyName = key.host_friendly_name;
+      const publicKey = key.key;
       // Button triggers the Bootstrap modal
-      keysHtml += `<li>${key.hostname} - <button type="button" class="btn btn-primary" onclick="showKeyModal('${key.key}')">Full Key</button></li>`;
+      keysHtml += `<li>${hostFriendlyName} - <button type="button" class="btn btn-primary" onclick="showKeyModal('${publicKey}')">Full Key</button></li>`;
     });
     keysContainer.innerHTML = keysHtml;
   })
@@ -291,20 +295,20 @@ function validateInputs() {
   });
 }
 
-function autoFillHostname() {
-  // Add a listener to SSH key input field, if user pastes a key and hostname hasn't been filled, try to extract the hostname from the key
+function autoFillHostFriendlyName() {
+  // Add a listener to SSH key input field, if user pastes a key and host friendly hasn't been filled, try to extract the host friendly name from the key
   document.getElementById('key').addEventListener('input', function() {
     const key = document.getElementById('key').value;
-    const hostname = document.getElementById('hostname').value;
+    const hostFriendlyName = document.getElementById('hostFriendlyName').value;
 
-    if (!hostname && isValidSSHKey(key)) {
+    if (!hostFriendlyName && isValidSSHKey(key)) {
       const keyParts = key.split(' ');
-      const keyType = keyParts[0];
-      const keyData = keyParts[1];
+      // const keyType = keyParts[0];
+      // const keyData = keyParts[1];
       const keyComment = keyParts[2];
       console.log('Key parts:', keyParts);
       if (keyComment) {
-        document.getElementById('hostname').value = keyComment;
+        document.getElementById('hostFriendlyName').value = keyComment;
       }
     }
   });
@@ -315,5 +319,5 @@ document.addEventListener('DOMContentLoaded', function() {
   fetchUserKeys();
   fetchServiceKeys();
   validateInputs();
-  autoFillHostname();
+  autoFillHostFriendlyName();
 });
