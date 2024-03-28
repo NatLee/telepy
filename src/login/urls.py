@@ -8,5 +8,5 @@ urlpatterns = [
 
     path('', views.Login.as_view(), name='login-page-root'), # <- when you go to the root, it will redirect to the login page
     path('login', views.Login.as_view(), name='login-page'), # normal login page
-
+    path('api/auth/register', views.Register.as_view(), name='user-register'),
 ]
