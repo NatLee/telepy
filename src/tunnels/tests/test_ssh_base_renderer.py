@@ -3,7 +3,7 @@ from unittest.mock import Base
 from tunnel_script_renderer import ssh_tunnel_script_factory
 from tunnel_script_renderer.ssh_config_renderer import BaseSshTemplate
 
-class TestPowerShellTemplate(unittest.TestCase):
+class TestSshBaseTemplate(unittest.TestCase):
     def setUp(self):
         self.template_client = BaseSshTemplate.template_factory(False, "halice-server", "halice.art", "test_user", 1234, 22, 4321)
         self.template_host = BaseSshTemplate.template_factory(True, "halice-server", "halice.art", "test_user", 1234, 22, 4321)
