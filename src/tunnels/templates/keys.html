@@ -26,7 +26,7 @@
       <table class="table">
          <thead>
             <tr>
-               <th scope="col">Hostname</th>
+               <th scope="col">Host</th>
                <th scope="col">Public Key</th>
                <th scope="col">Actions</th>
             </tr>
@@ -55,10 +55,10 @@
                 <form id="newKeyForm" onsubmit="return false;"> <!-- Prevent form submission -->
 
                     <div class="mb-3">
-                        <label for="hostname" class="form-label">Hostname</label>
-                        <input type="text" class="form-control" id="hostname" name="hostname" placeholder="Enter a hostname" required>
+                        <label for="hostFriendlyName" class="form-label">Host Friendly Name</label>
+                        <input type="text" class="form-control" id="hostFriendlyName" name="hostFriendlyName" placeholder="Enter a customized host friendly name" required>
                         <div class="invalid-feedback">
-                          Please enter a hostname.
+                          Please enter a customized host friendly name.
                         </div>
                       </div>
 
@@ -98,7 +98,7 @@
       </div>
       <div class="modal-body" id="keyDetailsModalBody">
         <!-- Placeholder for other key information -->
-        <p id="keyHostname">Hostname: </p>
+        <p id="keyhostFriendlyName">Host Friendly Name: </p>
         <!-- Textarea for the key -->
         <textarea id="keyTextArea" class="form-control" rows="12" readonly></textarea>
         <!-- Description -->
