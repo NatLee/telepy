@@ -1,5 +1,6 @@
 import re
 from enum import Enum
+from tkinter import SE
 
 from django.conf import settings
 from django.shortcuts import render, redirect
@@ -14,6 +15,27 @@ from authorized_keys.models import ReverseServerAuthorizedKeys
 
 from authorized_keys.utils import ssh
 from tunnel_script_renderer import ssh_tunnel_script_factory
+from tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
+
+## Static constants
+CLIENT_STEM = """
+# ========================================
+# Endpoint Configuration
+# ========================================
+"""
+
+CLIENT_NO_USER_STEM = """
+# ========================================
+# You need to add a user to the reverse server authorized keys.
+# ========================================
+"""
+
+SERVER_STEM = """
+# ========================================
+# Reverse Server Configuration
+# ========================================
+"""
+##
 
 # ========================================
 # Page
@@ -160,39 +182,24 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
     ):
-        config_string = f"""# ========================================
-# Reverse Server Configuration
-# ========================================
+        # Start constructing the config string.
+        config_string = SERVER_STEM
 
-Host telepy-ssh-server
-    HostName {self.server_domain}
-    Port {self.reverse_server_ssh_port}
-    Compression yes
-    User telepy
-"""
+        # Render the server side config.
+        config_string += sshd_server_config_factory(server_domain=self.server_domain, reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+
+        # Read all reverse users.
         server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
 
         if not server_auth_key_user:
-            config_string += f"""
-# ========================================
-# You need to add a user to the reverse server authorized keys.
-# ========================================"""
+            config_string += CLIENT_NO_USER_STEM
         else:
-            config_string += f"""
-# ========================================
-# Endpoint Configuration
-# ========================================
-"""
+            config_string += CLIENT_STEM
 
         for username in server_auth_key_user:
-            config_string += f"""
-Host {server_auth_key.hostname}
-    HostName localhost
-    Port {server_auth_key.reverse_port}
-    Compression yes
-    User {username.username}
-    ProxyCommand ssh -W %h:%p telepy-ssh-server
-"""
+            # Render the client side config.
+            config_string += sshd_client_config_factory(host_friendly_name=server_auth_key.hostname, ssh_username=username.username, reverse_port=server_auth_key.reverse_port).render()
+
         return Response({'config': config_string})
 
 
