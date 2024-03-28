@@ -1,0 +1,318 @@
+{% extends 'login-base.html' %}
+
+
+{% block title %}Telepy{% endblock %}
+
+{% block styles %}
+<style>
+  body {
+    display: flex;
+    justify-content: center; /* Aligns horizontally */
+    align-items: center; /* Aligns vertically */
+    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<body>
+  <div class="login-container">
+    <h2 class="login-title">Telepy</h2>
+    <div class="text-center mt-3">
+        <p class="text-center">It seems you are the first time here. Please create an user to continue.</p>
+    </div>
+
+    <div id="loginForm">
+        <div class="mb-3">
+          <label for="username" class="form-label">Username</label>
+          <input type="text" class="form-control" id="username" required>
+        </div>
+        <div class="mb-3">
+          <label for="password" class="form-label">Password</label>
+          <input type="password" class="form-control" id="password" required>
+          <div id="passwordStrength" class="mt-2"></div>
+        </div>
+        <div class="mb-3">
+          <label for="password-again" class="form-label">Password Again</label>
+          <input type="password" class="form-control" id="password-again" required>
+          <div id="passwordMatch" class="mt-2"></div>
+        </div>
+        <div class="d-grid">
+          <button class="btn btn-primary" id="loginBtn">Login</button>
+        </div>
+    </div>
+
+    {% if social_google_client_id %}
+    <div class="text-center mt-3">
+      <p class="mb-0">- Or you can login with -</p>
+      <div class="d-flex justify-content-center">
+        <!-- Google login button -->
+        <div class="mt-3">
+
+            <div id="g_id_onload"
+            data-client_id="{{ social_google_client_id }}"
+            data-context="signin"
+            data-ux_mode="popup"
+            data-callback="getTokenUsingGoogleCredential"
+            data-auto_select="false"
+            data-itp_support="false"
+            data-auto_prompt="false"
+            data-use_fedcm_for_prompt="true">
+        </div>
+        
+        <div class="g_id_signin"
+            data-type="standard"
+            data-shape="pill"
+            data-theme="filled_black"
+            data-text="signin_with"
+            data-size="large"
+            data-logo_alignment="left">
+        </div>
+
+      </div>
+      <!-- ========== -->
+    </div>
+    {% endif %}
+
+  </div>
+</body>
+{% endblock %}
+
+{% block scripts %}
+<script>
+
+  // Function to show error using Swal
+  function showError(message) {
+    Swal.fire({
+      icon: 'error',
+      title: 'Oops...',
+      text: message,
+    });
+  }
+
+  // =======================================
+  // Token verification and login functions
+  // =======================================
+
+  // Helper function to verify the token
+  async function verifyToken(accessToken) {
+    try {
+      const response = await fetch('/api/auth/token/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ token: accessToken }),
+      });
+      if (!response.ok) {
+        throw new Error(`Token verification failed with status: ${response.status}`);
+      }
+      console.log('Google Login Success');
+      window.location.href = '/tunnels/index';
+    } catch (error) {
+      const message = error.message || error.detail || 'Token verification failed';
+      throw error;
+    }
+  }
+
+  // Helper function to perform the login action
+  async function performLogin(username, password) {
+    const payload = { username, password };
+
+    const response = await fetch('/api/auth/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      const message = data.error || data.detail || 'Login failed';
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+    return data; // Contains access_token and refresh_token
+  }
+
+  // Helper function to register the user
+  async function registerUser(username, password) {
+      const payload = { username, password };
+
+      const response = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: {
+          'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        const message = data.error || data.detail || 'Registration failed';
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      return data;
+  }
+
+  function evaluatePasswordStrength(password) {
+    const strengthDisplay = document.getElementById('passwordStrength');
+    let strengthText = '';
+    let color = 'black';
+  
+    if (password.length < 6) {
+      strengthText = 'Weak';
+      color = 'red';
+    } else if (password.length < 10) {
+      strengthText = 'Moderate';
+      color = 'orange';
+    } else {
+      strengthText = 'Strong';
+      color = 'green';
+    }
+  
+    strengthDisplay.textContent = `Password strength: ${strengthText}`;
+    strengthDisplay.style.color = color;
+  }
+
+  function passwordCheck(password, passwordAgain) {
+    if (password !== passwordAgain) {
+      return false;
+    }
+    return true;
+  }
+
+  // =======================================
+  // Google login functions
+  // =======================================
+
+  // Function to handle the initial token submission to your server
+  async function submitGoogleCredential(credential) {
+    try {
+      const response = await fetch('/api/auth/google/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ credential: credential }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        const message = data.error || data.detail || 'Google Login failed';
+        throw new Error(`Google Login failed. ${message}`);
+      }
+      return data; // Contains access_token and refresh_token
+    } catch (error) {
+      showError(`Login failed. ${error}`);
+      throw error; // Rethrow to handle it in the caller function
+    }
+  }
+
+  // Main function to handle Google login
+  async function getTokenUsingGoogleCredential(data) {
+    const credential = data.credential;
+    try {
+      const tokens = await submitGoogleCredential(credential);
+      localStorage.setItem('accessToken', tokens.access_token);
+      localStorage.setItem('refreshToken', tokens.refresh_token);
+      console.log('Google Login');
+      await verifyToken(tokens.access_token);
+    } catch (error) {
+      const message = error.message || error.detail || 'Google Login failed';
+      throw new Error(`Google Login failed. ${message}`);
+    }
+  }
+
+  // =======================================
+  // Event handling functions
+  // =======================================
+
+  // Function to handle the form submission
+  async function handleLoginSubmit() {
+
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const passwordAgain = document.getElementById('password-again').value;
+
+    if (username===password) {
+      showError('Username and password cannot be the same.');
+      return;
+    }
+
+    // Check if passwords match
+    if (!passwordCheck(password, passwordAgain)) {
+      return;
+    }
+
+    try {
+      const registerResponse = await registerUser(username, password);
+    } catch (error) {
+        const message = error.message || error.detail || 'Registration failed';
+        showError(`Registration failed. ${message}`);
+        return;
+    }
+    try {
+      if (registerResponse.status === 'success') {
+        const tokens = await performLogin(username, password);
+      } else {
+        const message = error.message || error.detail || 'Registration failed';
+        showError(`Register failed. ${registerResponse.error}`);
+        return;
+      }
+      localStorage.setItem('accessToken', tokens.access_token);
+      localStorage.setItem('refreshToken', tokens.refresh_token);
+      window.location.href = '/tunnels/index';
+    } catch (error) {
+      const message = error.message || error.detail || 'Login failed';
+      showError(`Login failed. ${message}`);
+    }
+
+  }
+
+  // Function to add event listener to the login button
+  function attachLoginButtonEvent() {
+    document.getElementById('loginBtn').addEventListener('click', handleLoginSubmit);
+  }
+
+  // Function to attach the event to password input
+  function attachPasswordInputEvent() {
+    // Attach the event to the password input
+    document.getElementById('password').addEventListener('input', (event) => {
+        evaluatePasswordStrength(event.target.value);
+    });
+    // Attach the event to the password-again input
+    document.getElementById('password-again').addEventListener('input', (event) => {
+        const password = document.getElementById('password').value;
+        const passwordMatchDisplay = document.getElementById('passwordMatch');
+
+        const passwordAgain = event.target.value;
+        if (!passwordCheck(password, passwordAgain)) {
+            passwordMatchDisplay.style.color = "red";
+            passwordMatchDisplay.textContent = "Passwords do not match.";
+            return;
+        }
+        passwordMatchDisplay.style.color = "green";
+        passwordMatchDisplay.textContent = "Passwords match.";
+    });
+}
+
+
+  // =======================================
+  // Initialization
+  // =======================================
+
+  // When DOM is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    attachLoginButtonEvent();
+    attachPasswordInputEvent();
+  });
+
+</script>
+{% endblock %}
