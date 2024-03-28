@@ -105,7 +105,7 @@ class ReverseServerScriptBase(APIView):
     def get(self, request, *args, **kwargs):
 
         server_domain = request.META.get('HTTP_HOST', None)
-        
+
         if server_domain:
             # Use re to match IPv6 with port, IPv4 with port, and hostname with optional port
             match_ipv6 = re.match(r'^\[(?P<host>[0-9a-fA-F:]+)\]:?(?P<port>\d+)?$', server_domain)
@@ -183,7 +183,7 @@ Host telepy-ssh-server
 
         for username in server_auth_key_user:
             config_string += f"""
-Host {server_auth_key.hostname}
+Host {server_auth_key.host_friendly_name}
     HostName localhost
     Port {server_auth_key.reverse_port}
     Compression yes
