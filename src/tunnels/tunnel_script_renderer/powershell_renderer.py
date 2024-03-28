@@ -11,12 +11,10 @@ class PowerShellTemplate(BaseTemplateRenderer):
 
     def __init__(self, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int):
 
-        super().__init__() # It does nothing, but incase it really does something in the future.
-
-        self.server_domain = server_domain
-        self.reverse_port = reverse_port
-        self.ssh_port = ssh_port
-        self.reverse_server_ssh_port = reverse_server_ssh_port
+        super().__init__(server_domain=server_domain,
+                        reverse_port=reverse_port,
+                        ssh_port=ssh_port,
+                        reverse_server_ssh_port=reverse_server_ssh_port)
 
     @classmethod 
     def template_factory(cls, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int) -> "PowerShellTemplate":
@@ -24,12 +22,7 @@ class PowerShellTemplate(BaseTemplateRenderer):
     
     def render(self) -> str:
         # Define mapping.
-        mapping = {
-            "server_domain": self.server_domain,
-            "reverse_port": self.reverse_port,
-            "ssh_port": self.ssh_port,
-            "reverse_server_ssh_port": self.reverse_server_ssh_port
-        }
+        mapping = self.mapping_factory()
 
         # Load template file.
         template_file = TEMPLATE_DIR / Path("powershell_template.ps1")
