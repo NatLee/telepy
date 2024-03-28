@@ -73,3 +73,26 @@ class BaseSshTemplate(BaseTemplateRenderer):
         rendered_template = template.safe_substitute(mapping)
         
         return rendered_template
+    
+class SshClientTemplate(BaseSshTemplate):
+    def __init__(self, 
+                 host_friendly_name: str,
+                 ssh_username: str,
+                 reverse_port: int):
+        
+        super().__init__(server_side=False,
+                         host_friendly_name=host_friendly_name,
+                         server_domain="localhost",
+                         ssh_username=ssh_username,
+                         reverse_port=reverse_port,
+                         ssh_port=-1,                   # It seems these variable are not used in `views.py`
+                         reverse_server_ssh_port=-1)    # So I just to an impossible value.
+
+    @classmethod 
+    def template_factory(cls, 
+                            host_friendly_name: str,
+                            ssh_username: str,
+                            reverse_port: int) -> "SshClientTemplate":
+        return cls(host_friendly_name=host_friendly_name,
+                   ssh_username=ssh_username,
+                   reverse_port=reverse_port)
