@@ -32,7 +32,7 @@ function fetchAndDisplayUserKeys() {
             `;
 
             const row = `
-            <tr onclick="showKeyDetails('${hostFriendlyName}', '${publicKey}', ${itemDescription})">
+            <tr onclick="showKeyDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
                 <td>${hostFriendlyName}</td>
                 <td>${publicKeyShort || '&lt;none&gt;'}...</td>
                 <td>
@@ -56,10 +56,11 @@ function fetchAndDisplayUserKeys() {
 
 function showKeyDetails(hostFriendlyName, key, description) {
     // Populate the modal with key information
-    document.getElementById('keyHostFriendlyName').textContent = `Host Friendly Name: ${hostFriendlyName}`;
+    document.getElementById('keyHostFriendlyName').textContent = hostFriendlyName;
     document.getElementById('keyTextArea').value = key;
+
     if (description) {
-        document.getElementById('keyDescriptionText').textContent = `Description: ${description}`;
+        document.getElementById('keyDescriptionText').textContent = description;
     } else {
         document.getElementById('keyDescriptionText').textContent = 'No description provided.';
     }
