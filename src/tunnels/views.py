@@ -1,6 +1,5 @@
 import re
 from enum import Enum
-from tkinter import SE
 
 from django.conf import settings
 from django.shortcuts import render, redirect
@@ -13,9 +12,8 @@ from drf_yasg.utils import swagger_auto_schema
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 
-from authorized_keys.utils import ssh
-from tunnel_script_renderer import ssh_tunnel_script_factory
-from tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
+from tunnels.tunnel_script_renderer import ssh_tunnel_script_factory
+from tunnels.tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
 
 ## Static constants
 CLIENT_STEM = """
@@ -198,7 +196,11 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
 
         for username in server_auth_key_user:
             # Render the client side config.
-            config_string += sshd_client_config_factory(host_friendly_name=server_auth_key.hostname, ssh_username=username.username, reverse_port=server_auth_key.reverse_port).render()
+            config_string += sshd_client_config_factory(
+              host_friendly_name=server_auth_key.host_friendly_name,
+              ssh_username=username.username,
+              reverse_port=server_auth_key.reverse_port
+            ).render()
 
         return Response({'config': config_string})
 
