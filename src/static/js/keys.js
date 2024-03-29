@@ -138,6 +138,36 @@ function submitNewKey() {
     });
 }
 
+function autoFillHostFriendlyName() {
+    // Add a listener to SSH key input field, if user pastes a key and host friendly hasn't been filled, try to extract the host friendly name from the key
+    document.getElementById('publicKey').addEventListener('input', function() {
+      const key = document.getElementById('publicKey').value;
+      const hostFriendlyName = document.getElementById('hostFriendlyName').value;
+      document.getElementById('hostFriendlyName').value = getHostFriendlyNameFromKey(key, hostFriendlyName);
+    });
+}
+
+function validateInputPublicKey() {
+    $('[data-toggle="tooltip"]').tooltip({trigger: 'manual'}).tooltip('hide');
+  
+    document.getElementById('publicKey').addEventListener('input', function() {
+      // Trim the input value
+      const keyElement = document.getElementById('publicKey');
+      keyElement.value = keyElement.value.trim();
+      const publicKey = keyElement.value;
+      if (isValidSSHKey(publicKey)) {
+        $('#publicKey').tooltip('hide');
+        document.getElementById('publicKey').classList.remove('is-invalid');
+        document.getElementById('publicKey').classList.add('is-valid');
+      } else {
+        $('#publicKey').tooltip('show');
+        document.getElementById('publicKey').classList.remove('is-valid');
+        document.getElementById('publicKey').classList.add('is-invalid');
+      }
+    });
+
+}
+  
 
 function deleteUserKey(event, keyId) {
     event.stopPropagation(); // Stop the event from bubbling up
@@ -180,5 +210,11 @@ function keyNotificationWebsocket() {
     };
 }
 
-document.addEventListener('DOMContentLoaded', fetchAndDisplayUserKeys);
-document.addEventListener('DOMContentLoaded', keyNotificationWebsocket);
+
+document.addEventListener('DOMContentLoaded', function() {
+  fetchAndDisplayUserKeys();
+  autoFillHostFriendlyName();
+  validateInputPublicKey();
+  keyNotificationWebsocket();
+});
+  
