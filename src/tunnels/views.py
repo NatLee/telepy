@@ -128,7 +128,7 @@ class ReverseServerScriptBase(APIView):
     def get(self, request, *args, **kwargs):
 
         server_domain = request.META.get('HTTP_HOST', None)
-        
+
         if server_domain:
             # Use re to match IPv6 with port, IPv4 with port, and hostname with optional port
             match_ipv6 = re.match(r'^\[(?P<host>[0-9a-fA-F:]+)\]:?(?P<port>\d+)?$', server_domain)
@@ -184,7 +184,10 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         config_string = SERVER_STEM
 
         # Render the server side config.
-        config_string += sshd_server_config_factory(server_domain=self.server_domain, reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+        config_string += sshd_server_config_factory(
+          server_domain=self.server_domain,
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
 
         # Read all reverse users.
         server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
@@ -195,6 +198,7 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
             config_string += CLIENT_STEM
 
         for username in server_auth_key_user:
+
             # Render the client side config.
             config_string += sshd_client_config_factory(
               host_friendly_name=server_auth_key.host_friendly_name,
@@ -218,11 +222,13 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
-        config_string = ssh_tunnel_script_factory("autossh", 
-                                                  server_domain=self.server_domain, 
-                                                  reverse_port=reverse_port, 
-                                                  ssh_port=ssh_port, 
-                                                  reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+        config_string = ssh_tunnel_script_factory(
+          "autossh", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
 
         return Response({
             "script": config_string,
@@ -244,11 +250,13 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
     ):
         reverse_port = server_auth_key.reverse_port
 
-        config_string = ssh_tunnel_script_factory("powershell", 
-                                                  server_domain=self.server_domain, 
-                                                  reverse_port=reverse_port, 
-                                                  ssh_port=ssh_port, 
-                                                  reverse_server_ssh_port=self.reverse_server_ssh_port).render()
+        config_string = ssh_tunnel_script_factory(
+          "powershell", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
 
         return Response({
             "script": config_string,
