@@ -300,17 +300,8 @@ function autoFillHostFriendlyName() {
   document.getElementById('key').addEventListener('input', function() {
     const key = document.getElementById('key').value;
     const hostFriendlyName = document.getElementById('hostFriendlyName').value;
+    document.getElementById('hostFriendlyName').value = getHostFriendlyNameFromKey(key, hostFriendlyName);
 
-    if (!hostFriendlyName && isValidSSHKey(key)) {
-      const keyParts = key.split(' ');
-      // const keyType = keyParts[0];
-      // const keyData = keyParts[1];
-      const keyComment = keyParts[2];
-      console.log('Key parts:', keyParts);
-      if (keyComment) {
-        document.getElementById('hostFriendlyName').value = keyComment;
-      }
-    }
   });
 }
 

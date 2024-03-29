@@ -76,6 +76,20 @@ function isValidSSHKey(key) {
    return true;
  }
 
+function getHostFriendlyNameFromKey(key, hostFriendlyName) {
+if (!hostFriendlyName && isValidSSHKey(key)) {
+   const keyParts = key.split(' ');
+   // const keyType = keyParts[0];
+   // const keyData = keyParts[1];
+   const keyComment = keyParts[2];
+   console.log('Key parts:', keyParts);
+   if (keyComment) {
+      return keyComment;
+   }
+}
+return hostFriendlyName;
+}
+
 function isValidPort(port) {
    // Check if the port is a number
    if (isNaN(port)) {
