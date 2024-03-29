@@ -65,7 +65,7 @@ class CreateReverseServerKey(APIView):
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT, 
             properties={
-                'hostname': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+                'host_friendly_name': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
                 'key': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
                 'description': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
             },
@@ -86,13 +86,13 @@ class CreateReverseServerKey(APIView):
 
         # =====================================
 
-        hostname:str = request.data.get('hostname', None)
-        if not hostname:
-            return Response({"error": "Hostname is required"}, status=status.HTTP_400_BAD_REQUEST)
+        host_friendly_name:str = request.data.get('host_friendly_name', None)
+        if not host_friendly_name:
+            return Response({"error": "Host friendly name is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Hostname cannot start with a number
-        if not hostname[0].isalpha():
-            return Response({"error": "Hostname cannot start with a number."}, status=status.HTTP_400_BAD_REQUEST)
+        # Host friendly name cannot start with a number
+        if not host_friendly_name[0].isalpha():
+            return Response({"error": "Host friendly name cannot start with a number."}, status=status.HTTP_400_BAD_REQUEST)
 
         key:str = request.data.get('key', None)
         if not key:
@@ -106,7 +106,7 @@ class CreateReverseServerKey(APIView):
         try:
             reverse_key = ReverseServerAuthorizedKeys.objects.create(
                 user=user,
-                hostname=hostname,
+                host_friendly_name=host_friendly_name,
                 key=key,
                 reverse_port=find_multiple_free_ports(1)[0],
                 description=description
@@ -114,7 +114,7 @@ class CreateReverseServerKey(APIView):
             remove_token(token)
             return Response({
                 "id": reverse_key.id,
-                "hostname": reverse_key.hostname,
+                "host_friendly_name": reverse_key.host_friendly_name,
                 "key": reverse_key.key,
                 "port": settings.REVERSE_SERVER_SSH_PORT,
                 "issuer": {

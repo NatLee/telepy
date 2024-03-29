@@ -26,7 +26,7 @@
       <table class="table">
          <thead>
             <tr>
-               <th scope="col">Hostname</th>
+               <th scope="col">Host</th>
                <th scope="col">Public Key</th>
                <th scope="col">Actions</th>
             </tr>
@@ -55,18 +55,18 @@
                 <form id="newKeyForm" onsubmit="return false;"> <!-- Prevent form submission -->
 
                     <div class="mb-3">
-                        <label for="hostname" class="form-label">Hostname</label>
-                        <input type="text" class="form-control" id="hostname" name="hostname" placeholder="Enter a hostname" required>
+                        <label for="hostFriendlyName" class="form-label">Host</label>
+                        <input type="text" class="form-control" id="hostFriendlyName" name="hostFriendlyName" placeholder="Enter a customized host friendly name" required>
                         <div class="invalid-feedback">
-                          Please enter a hostname.
+                          Please enter a customized host friendly name.
                         </div>
                       </div>
 
                       <div class="mb-3">
                         <label for="publicKey" class="form-label">Public Key</label>
-                        <textarea class="form-control" id="publicKey" name="publicKey" rows="3" placeholder="Enter a public key" required></textarea>
+                        <textarea class="form-control" id="publicKey" name="publicKey" rows="3" data-toggle="tooltip" placeholder="Enter a public key" required></textarea>
                         <div class="invalid-feedback">
-                          Please enter a public key.
+                          Please enter a valid public key.
                         </div>
                       </div>
 
@@ -90,28 +90,33 @@
 
 <!-- Key Details Modal -->
 <div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true">
-  <div class="modal-dialog">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="keyDetailsModalLabel">Key Details</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body" id="keyDetailsModalBody">
-        <!-- Placeholder for other key information -->
-        <p id="keyHostname">Hostname: </p>
-        <!-- Textarea for the key -->
-        <textarea id="keyTextArea" class="form-control" rows="12" readonly></textarea>
+        <!-- Host Name -->
+        <h6 class="text-secondary">Host</h6>
+        <p id="keyHostFriendlyName" class="fw-bold mb-3">Placeholder for Host Name</p>
+        
+        <!-- Public Key -->
+        <h6 class="text-secondary">Public Key</h6>
+        <textarea id="keyTextArea" class="form-control mb-3" rows="12" readonly style="font-family: monospace;"></textarea>
+        
         <!-- Description -->
-        <p id="keyDescription" class="mt-2">Description: </p>
-        <pre id="keyDescriptionText"></pre>
+        <h6 class="text-secondary">Description</h6>
+        <p id="keyDescriptionText" class="mb-0">Placeholder for Description</p>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-primary" onclick="copyKeyToClipboard()">Copy Key</button>
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-outline-primary" onclick="copyKeyToClipboard()">Copy Key</button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
 </div>
+
 
 {% endblock %}
 
