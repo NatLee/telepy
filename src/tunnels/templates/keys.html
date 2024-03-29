@@ -55,7 +55,7 @@
                 <form id="newKeyForm" onsubmit="return false;"> <!-- Prevent form submission -->
 
                     <div class="mb-3">
-                        <label for="hostFriendlyName" class="form-label">Host Friendly Name</label>
+                        <label for="hostFriendlyName" class="form-label">Host</label>
                         <input type="text" class="form-control" id="hostFriendlyName" name="hostFriendlyName" placeholder="Enter a customized host friendly name" required>
                         <div class="invalid-feedback">
                           Please enter a customized host friendly name.
@@ -64,9 +64,9 @@
 
                       <div class="mb-3">
                         <label for="publicKey" class="form-label">Public Key</label>
-                        <textarea class="form-control" id="publicKey" name="publicKey" rows="3" placeholder="Enter a public key" required></textarea>
+                        <textarea class="form-control" id="publicKey" name="publicKey" rows="3" data-toggle="tooltip" placeholder="Enter a public key" required></textarea>
                         <div class="invalid-feedback">
-                          Please enter a public key.
+                          Please enter a valid public key.
                         </div>
                       </div>
 
