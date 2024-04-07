@@ -19,6 +19,7 @@
 
    {% load static %}
    <link rel="stylesheet" href="{% static 'styles/main.css' %}">
+   {% block styles %}{% endblock %}
    <title>{% block title %}{% endblock %}</title>
 </head>
 <body>
