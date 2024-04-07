@@ -74,6 +74,16 @@ function updateSetting(name, value) {
     .catch(error => console.error('Error updating setting:', error));
 }
 
+function settingsNotificationWebsocket() {
+    var socket = notificationWebsocket();
+    socket.onmessage = function (event) {
+        const data = JSON.parse(event.data);
+        console.log('Notification message:', data.message);
+        createToastAlert(data.message.details, false);
+    };
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    settingsNotificationWebsocket();
     fetchSettings();
 });
