@@ -89,6 +89,17 @@ class SSHServerLogs(APIView):
     def get(self, request):
         return render(request, 'logs.html')
 
+class AdminSettings(APIView):
+    permission_classes = (IsAdminUser,)
+    @swagger_auto_schema(
+        operation_summary="Admin Settings",
+        operation_description="Admin Settings page",
+        tags=['Page']
+    )
+    def get(self, request):
+        return render(request, 'settings.html')
+
+
 # ========================================
 # Script Views
 # ========================================
