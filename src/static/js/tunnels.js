@@ -43,6 +43,36 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
+function showTunnelDetails(hostFriendlyName, key, description) {
+    // Populate the modal with tunnel information
+    document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
+    document.getElementById('tunnelKeyTextArea').value = key;
+
+    if (description) {
+        document.getElementById('tunnelDescriptionText').textContent = description;
+    } else {
+        document.getElementById('tunnelDescriptionText').textContent = 'No description provided.';
+    }
+
+    // Show the modal
+    var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
+    tunnelDetailsModal.show();
+}
+
+function copyTunnelPublicKeyToClipboard() {
+    var tunnelKeyTextArea = document.getElementById('tunnelKeyTextArea');
+    tunnelKeyTextArea.select(); // Select the text
+    document.execCommand('copy'); // Execute copy command
+    Swal.fire({
+        icon: 'success',
+        title: 'Success',
+        text: 'Tunnel\'s public key has been copied to clipboard.',
+        showConfirmButton: false,
+        timer: 800
+    })
+}
+
+
 function displayReverseServerKeys(data) {
     const table = document.getElementById('tunnelsTableBody');
     table.innerHTML = '';
@@ -57,12 +87,13 @@ function displayReverseServerKeys(data) {
 function createActionButtons(item) {
     const itemId = item.id;
 
+    // Add `event.stopPropagation()` to avoid triggering the row click event
     return `
-        <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${itemId}')">Console</button>
-        <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${itemId}')">Users</button>
-        <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${itemId})">Config</button>
-        <button class="btn btn-secondary btn-sm me-2" onclick="showServerScriptModal('${itemId}')">Script</button>
-        <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${itemId}')">Delete</button>
+        <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
+        <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
+        <button class="btn btn-info btn-sm me-2" onclick="event.stopPropagation(); fetchServerConfig(${itemId})">Config</button>
+        <button class="btn btn-secondary btn-sm me-2" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')">Script</button>
+        <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
     `;
 }
 
@@ -72,13 +103,12 @@ function createTableRow(item, actionButtons) {
     const hostFriendlyName = item.host_friendly_name;
     const reversePort = item.reverse_port;
     const publicKey = item.key;
-    const publicKeyShort = publicKey.substring(0, 20) || '<none>';
+    const itemDescription = item.description;
 
     return `
-        <tr>
+        <tr onclick="showTunnelDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
             <td>${hostFriendlyName}</td>
             <td>${reversePort}</td>
-            <td>${publicKeyShort}...</td>
             <td>
                 <div class='d-flex'>
                     <div class="${hostFriendlyName}-status status ml-2" id="${hostFriendlyName}-status"></div>
