@@ -87,12 +87,13 @@ function displayReverseServerKeys(data) {
 function createActionButtons(item) {
     const itemId = item.id;
 
+    // Add `event.stopPropagation()` to avoid triggering the row click event
     return `
-        <button class="btn btn-warning btn-sm me-2" onclick="window.open('/tunnels/terminal/${itemId}')">Console</button>
-        <button class="btn btn-primary btn-sm me-2" onclick="openUserManagementModal('${itemId}')">Users</button>
-        <button class="btn btn-info btn-sm me-2" onclick="fetchServerConfig(${itemId})">Config</button>
-        <button class="btn btn-secondary btn-sm me-2" onclick="showServerScriptModal('${itemId}')">Script</button>
-        <button class="btn btn-danger btn-sm me-2" onclick="confirmDelete('${itemId}')">Delete</button>
+        <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
+        <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
+        <button class="btn btn-info btn-sm me-2" onclick="event.stopPropagation(); fetchServerConfig(${itemId})">Config</button>
+        <button class="btn btn-secondary btn-sm me-2" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')">Script</button>
+        <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
     `;
 }
 
