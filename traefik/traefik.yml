@@ -1,0 +1,10 @@
+log:
+  level: DEBUG
+
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml

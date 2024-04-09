@@ -1,0 +1,49 @@
+
+commonRouterSettings: &commonRouterSettings
+  entryPoints:
+    - web
+
+backendRouterSettings: &backendRouterSettings
+  <<: *commonRouterSettings
+  service: backend-service
+
+frontendServiceSettings: &frontendServiceSettings
+  loadBalancer:
+    servers:
+      - url: "http://frontend:80"
+
+backendServiceSettings: &backendServiceSettings
+  loadBalancer:
+    servers:
+      - url: "http://backend:8000"
+
+http:
+  routers:
+    frontend:
+      <<: *commonRouterSettings
+      rule: "PathPrefix(`/`)"
+      service: frontend-service
+
+    backend-api:
+      <<: *backendRouterSettings
+      rule: "PathPrefix(`/api`)"
+
+    backend-login:
+      <<: *backendRouterSettings
+      rule: "PathPrefix(`/login`)"
+
+    backend-page:
+      <<: *backendRouterSettings
+      rule: "PathPrefix(`/tunnels`)"
+
+    backend-websocket:
+      <<: *backendRouterSettings
+      rule: "PathPrefix(`/ws`)"
+
+  services:
+    frontend-service:
+      <<: *frontendServiceSettings
+
+    backend-service:
+      <<: *backendServiceSettings
+
