@@ -43,6 +43,36 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
+function showTunnelDetails(hostFriendlyName, key, description) {
+    // Populate the modal with tunnel information
+    document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
+    document.getElementById('tunnelKeyTextArea').value = key;
+
+    if (description) {
+        document.getElementById('tunnelDescriptionText').textContent = description;
+    } else {
+        document.getElementById('tunnelDescriptionText').textContent = 'No description provided.';
+    }
+
+    // Show the modal
+    var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
+    tunnelDetailsModal.show();
+}
+
+function copyTunnelPublicKeyToClipboard() {
+    var tunnelKeyTextArea = document.getElementById('tunnelKeyTextArea');
+    tunnelKeyTextArea.select(); // Select the text
+    document.execCommand('copy'); // Execute copy command
+    Swal.fire({
+        icon: 'success',
+        title: 'Success',
+        text: 'Tunnel\'s public key has been copied to clipboard.',
+        showConfirmButton: false,
+        timer: 800
+    })
+}
+
+
 function displayReverseServerKeys(data) {
     const table = document.getElementById('tunnelsTableBody');
     table.innerHTML = '';
@@ -72,13 +102,12 @@ function createTableRow(item, actionButtons) {
     const hostFriendlyName = item.host_friendly_name;
     const reversePort = item.reverse_port;
     const publicKey = item.key;
-    const publicKeyShort = publicKey.substring(0, 20) || '<none>';
+    const itemDescription = item.description;
 
     return `
-        <tr>
+        <tr onclick="showTunnelDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
             <td>${hostFriendlyName}</td>
             <td>${reversePort}</td>
-            <td>${publicKeyShort}...</td>
             <td>
                 <div class='d-flex'>
                     <div class="${hostFriendlyName}-status status ml-2" id="${hostFriendlyName}-status"></div>
