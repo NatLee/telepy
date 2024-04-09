@@ -1,6 +1,7 @@
 # Telepy
 
-> Only support Linux-based machine.
+![ui](https://i.imgur.com/tie5vrR.png)
+![terminal](https://i.imgur.com/l6bx20q.png)
 
 A web application for managing and monitoring the reverse SSH tunnels.
 
@@ -52,6 +53,7 @@ If you want to see the API documentation, you need to login first.
     <tr>
       <td align="center"><a href="https://github.com/NatLee"><img src="https://avatars.githubusercontent.com/u/10178964?v=3?s=100" width="100px;" alt="Nat Lee"/><br /><sub><b>Nat Lee</b></sub></a></td>
       <td align="center"><a href="https://github.com/h-alice"><img src="https://avatars.githubusercontent.com/u/16372174?v=3?s=100" width="100px;" alt="H. Alice"/><br /><sub><b>H. Alice</b></sub></a></td>
+      <td align="center"><a href="https://github.com/boris-lok"><img src="https://avatars.githubusercontent.com/u/77889460?v=3?s=100" width="100px;" alt="Boris Lok"/><br /><sub><b>Boris Lok</b></sub></a></td>
     </tr>
   </tbody>
 </table>
