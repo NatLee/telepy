@@ -24,7 +24,6 @@ function fetchAndDisplayUserKeys() {
             const itemId = item.id;
             const hostFriendlyName = item.host_friendly_name;
             const publicKey = item.key;
-            const publicKeyShort = publicKey.substring(0, 20);
             const itemDescription = item.description;
 
             const actionButtons = `
@@ -34,7 +33,6 @@ function fetchAndDisplayUserKeys() {
             const row = `
             <tr onclick="showKeyDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
                 <td>${hostFriendlyName}</td>
-                <td>${publicKeyShort || '&lt;none&gt;'}...</td>
                 <td>
                     <div class='d-flex' id="actions-${itemId}">
                         ${actionButtons}
