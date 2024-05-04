@@ -77,10 +77,13 @@
          <!-- Nav tabs -->
          <ul class="nav nav-tabs" id="osTab">
            <li class="nav-item">
-             <button class="tab-link active" id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" aria-controls="linux" aria-selected="true">Linux</button>
+             <button class="tab-link active" id="ssh-tab" data-bs-toggle="tab" data-bs-target="#ssh" aria-controls="ssh" aria-selected="true">SSH</button>
            </li>
            <li class="nav-item">
-             <button class="tab-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" aria-controls="windows" aria-selected="false">Windows</button>
+            <button class="tab-link" id="ssh-service-tab" data-bs-toggle="tab" data-bs-target="#ssh-service" aria-controls="ssh-service" aria-selected="true">SSH Service</button>
+           </li>
+           <li class="nav-item">
+             <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" aria-controls="powershell" aria-selected="false">Powershell</button>
            </li>
            <li class="nav-item">
              <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" aria-controls="docker" aria-selected="false">Docker</button>
@@ -89,23 +92,33 @@
          
          <!-- Tab content -->
          <div class="tab-content" id="osTabContent">
-            <!-- Linux -->
-            <div class="tab-pane fade show active" id="linux" aria-labelledby="linux-tab">
-               <!-- Linux tab content -->
+            <!-- SSH -->
+            <div class="tab-pane fade show active" id="ssh" aria-labelledby="ssh-tab">
+               <!-- SSH tab content -->
                <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-               <pre id="tunnelCommandLinux" class="form-control" style="height: 300px" readonly></pre>
+               <pre id="tunnelCommandSSH" class="form-control" style="height: 350px" readonly></pre>
             </div>
-            <!-- Windows -->
-            <div class="tab-pane fade" id="windows" aria-labelledby="windows-tab">
-               <!-- Windows tab content -->
+            <!-- SSH Service -->
+            <div class="tab-pane fade" id="ssh-service" aria-labelledby="ssh-service-tab">
+              <!-- SSH Service tab content -->
+              <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+              <p class="text-muted alert-info">You also need to replace <code>User</code> with your own username in the command.</p>
+              <p class="text-muted">Paste the following script in <code>/etc/systemd/system/autossh.service</code> .</p>
+              <pre id="tunnelCommandSSHService" class="form-control" style="height: 400px" readonly></pre>
+              <p class="text-muted">After adding the service file, run the following commands to enable and start the service.</p>
+              <pre id="tunnelCommandSSHServiceSteps" class="form-control" style="height: 100px" readonly></pre>
+            </div>
+            <!-- Powershell -->
+            <div class="tab-pane fade" id="powershell" aria-labelledby="powershell-tab">
+               <!-- Powershell tab content -->
                <p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
-               <pre id="tunnelCommandWindows" class="form-control" style="height: 300px" readonly></pre>
+               <pre id="tunnelCommandPowershell" class="form-control" style="height: 700px" readonly></pre>
             </div>
             <!-- Docker -->
             <div class="tab-pane fade" id="docker" aria-labelledby="docker-tab">
                <!-- Docker tab content -->
                <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
-               <pre id="tunnelCommandDocker" class="form-control" style="height: 300px" readonly></pre>
+               <pre id="tunnelCommandDocker" class="form-control" style="height: 400px" readonly></pre>
             </div>
          </div>
        </div>
