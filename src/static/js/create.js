@@ -21,7 +21,7 @@ function fetchToken() {
 function updateTunnelCommands(data) {
   // Update the tunnel command elements
   const sshPort = document.getElementById('sshPort').value;
-  const tunnelCommandLinux = `autossh \\
+  const tunnelCommandSSH = `autossh \\
 -M 6769 \\
 -o "ServerAliveInterval 15" \\
 -o "ServerAliveCountMax 3" \\
@@ -30,9 +30,9 @@ function updateTunnelCommands(data) {
 -NR '*:${data.reverse_port}:localhost:${sshPort}' \\
 telepy@${window.location.hostname}`;
 
-  document.getElementById('tunnelCommandLinux').innerHTML = Prism.highlight(tunnelCommandLinux, Prism.languages.bash, 'bash');
+  document.getElementById('tunnelCommandSSH').innerHTML = Prism.highlight(tunnelCommandSSH, Prism.languages.bash, 'bash');
 
-  const tunnelCommandWindows = `$continue = $true
+  const tunnelCommandPowershell = `$continue = $true
 echo "[+] Script started"
 # Add-Type for PowerManagement to prevent sleep
 Add-Type -TypeDefinition @"
@@ -86,11 +86,11 @@ try {
 Write-Host "Press any key to continue..."
 $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")`;
 
-  document.getElementById('tunnelCommandWindows').innerHTML = Prism.highlight(tunnelCommandWindows, Prism.languages.powershell, 'powershell');
+  document.getElementById('tunnelCommandPowershell').innerHTML = Prism.highlight(tunnelCommandPowershell, Prism.languages.powershell, 'powershell');
 
   // Enable the copy buttons
-  document.getElementById("linuxCopyTunnelCommandBtn").disabled = false;
-  document.getElementById("windowsCopyTunnelCommandBtn").disabled = false;
+  document.getElementById("sshCopyTunnelCommandBtn").disabled = false;
+  document.getElementById("powershellCopyTunnelCommandBtn").disabled = false;
 }
 
 function createTunnel() {
@@ -147,11 +147,11 @@ function createTunnel() {
         return;
       }
 
-      const linuxHintElement = document.getElementById('linuxConnectionHint');
-      linuxHintElement.innerHTML = `Use the following AutoSSH command to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
+      const sshHintElement = document.getElementById('sshConnectionHint');
+      sshHintElement.innerHTML = `Use the following AutoSSH command to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
 
-      const windowsHintElement = document.getElementById('windowsConnectionHint');
-      windowsHintElement.innerHTML = `Use the following script to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
+      const powershellHintElement = document.getElementById('powershellConnectionHint');
+      powershellHintElement.innerHTML = `Use the following script to create a reverse tunnel. Make sure <code>telepy@${window.location.hostname}</code> is accessible with the port of <code>${data.port}</code>. And the port used to reverse in SSH server is <code>${data.reverse_port}</code>.`;
 
       updateTunnelCommands(data);
 
