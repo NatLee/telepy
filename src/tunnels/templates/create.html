@@ -33,10 +33,10 @@
     <!-- Tab navigation -->
     <ul class="nav nav-tabs" id="osTab" role="tablist">
       <li class="nav-item" role="presentation">
-        <button class="tab-link active " id="linux-tab" data-bs-toggle="tab" data-bs-target="#linux" type="button" role="tab" aria-controls="linux" aria-selected="true">Linux</button>
+        <button class="tab-link active " id="ssh-tab" data-bs-toggle="tab" data-bs-target="#ssh" type="button" role="tab" aria-controls="ssh" aria-selected="true">SSH</button>
       </li>
       <li class="nav-item" role="presentation">
-        <button class="tab-link" id="windows-tab" data-bs-toggle="tab" data-bs-target="#windows" type="button" role="tab" aria-controls="windows" aria-selected="false">Windows</button>
+        <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" type="button" role="tab" aria-controls="powershell" aria-selected="false">Powershell</button>
       </li>
       <li class="nav-item" role="presentation">
         <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
@@ -45,17 +45,17 @@
 
     <!-- Tab Content -->
     <div class="tab-content" id="osTabContent">
-      <div class="tab-pane fade show active" id="linux" role="tabpanel" aria-labelledby="linux-tab">
+      <div class="tab-pane fade show active" id="ssh" role="tabpanel" aria-labelledby="ssh-tab">
         <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-        <p id="linuxConnectionHint" class="text-muted"></p>
-        <pre id="tunnelCommandLinux" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
-        <button class="btn btn-outline-info mt-2" id="linuxCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandLinux')">Copy</button>
+        <p id="sshConnectionHint" class="text-muted"></p>
+        <pre id="tunnelCommandSSH" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
+        <button class="btn btn-outline-info mt-2" id="sshCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandSSH')">Copy</button>
       </div>
-      <div class="tab-pane fade" id="windows" role="tabpanel" aria-labelledby="windows-tab">
+      <div class="tab-pane fade" id="powershell" role="tabpanel" aria-labelledby="powershell-tab">
         <p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
-        <p id="windowsConnectionHint" class="text-muted"></p>
-        <pre id="tunnelCommandWindows" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
-        <button class="btn btn-outline-info mt-2" id="windowsCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandWindows')">Copy</button>
+        <p id="powershellConnectionHint" class="text-muted"></p>
+        <pre id="tunnelCommandPowershell" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
+        <button class="btn btn-outline-info mt-2" id="powershellCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandPowershell')">Copy</button>
       </div>
       <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
         <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
