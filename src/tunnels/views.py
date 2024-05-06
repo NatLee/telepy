@@ -22,14 +22,12 @@ CLIENT_STEM = """
 # ========================================
 """
 
-CLIENT_NO_USER_STEM = """
-# ========================================
+CLIENT_NO_USER_STEM = """# ========================================
 # You need to add a user to the reverse server authorized keys.
 # ========================================
 """
 
-SERVER_STEM = """
-# ========================================
+SERVER_STEM = """# ========================================
 # Reverse Server Configuration
 # ========================================
 """
@@ -220,6 +218,34 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         return Response({'config': config_string})
 
 
+class PowershellSSHTunnelScript(ReverseServerScriptBase):
+    script_type = ScriptType.SCRIPT
+    @swagger_auto_schema(
+        operation_summary="Windows Powershell SSH Tunnel Script",
+        operation_description="Windows Powershell SSH Tunnel Script",
+        tags=['Script']
+    )
+    def get_script(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_port: int
+    ):
+        reverse_port = server_auth_key.reverse_port
+
+        config_string = ssh_tunnel_script_factory(
+          "powershell", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port
+        ).render()
+
+        return Response({
+            "script": config_string,
+            "language": "powershell",
+        })
+
+
 class AutoSSHTunnelScript(ReverseServerScriptBase):
     script_type = ScriptType.SCRIPT
     @swagger_auto_schema(
@@ -247,11 +273,12 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
         })
 
 
-class WindowsSSHTunnelScript(ReverseServerScriptBase):
+
+class AutoSSHServiceTunnelScript(ReverseServerScriptBase):
     script_type = ScriptType.SCRIPT
     @swagger_auto_schema(
-        operation_summary="Windows SSH Tunnel Script",
-        operation_description="Windows SSH Tunnel Script",
+        operation_summary="AutoSSH Service Tunnel Script",
+        operation_description="AutoSSH Service Tunnel Script",
         tags=['Script']
     )
     def get_script(
@@ -260,9 +287,8 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
-
         config_string = ssh_tunnel_script_factory(
-          "powershell", 
+          "autossh-service", 
           server_domain=self.server_domain, 
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
@@ -271,5 +297,6 @@ class WindowsSSHTunnelScript(ReverseServerScriptBase):
 
         return Response({
             "script": config_string,
-            "language": "powershell",
+            "language": "bash",
         })
+

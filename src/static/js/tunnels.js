@@ -386,13 +386,22 @@ async function updateServerScriptContent(serverId) {
             console.error('Invalid SSH port:', sshPort);
             return;
         }
-        const linuxScriptData = await fetchSSHScript(`/tunnels/server/script/autossh/${serverId}/${sshPort}`);
-        const windowsScriptData = await fetchSSHScript(`/tunnels/server/script/windows/${serverId}/${sshPort}`);
+        const sshScriptData = await fetchSSHScript(`/tunnels/server/script/autossh/${serverId}/${sshPort}`);
+
+        const sshServiceScriptData = await fetchSSHScript(`/tunnels/server/script/autossh-service/${serverId}/${sshPort}`);
+        const powershellScriptData = await fetchSSHScript(`/tunnels/server/script/powershell/${serverId}/${sshPort}`);
 
         // Check if Prism is available and highlight the code
-        if (Prism && Prism.highlight && linuxScriptData.script && windowsScriptData.script) {
-            document.getElementById('tunnelCommandLinux').innerHTML = Prism.highlight(linuxScriptData.script, Prism.languages[linuxScriptData.language], linuxScriptData.language);
-            document.getElementById('tunnelCommandWindows').innerHTML = Prism.highlight(windowsScriptData.script, Prism.languages[windowsScriptData.language], windowsScriptData.language);
+        if (Prism && Prism.highlight && sshScriptData.script && sshServiceScriptData.script && powershellScriptData.script) {
+            document.getElementById('tunnelCommandSSH').innerHTML = Prism.highlight(sshScriptData.script, Prism.languages[sshScriptData.language], sshScriptData.language);
+            document.getElementById('tunnelCommandSSHService').innerHTML = Prism.highlight(sshServiceScriptData.script, Prism.languages[sshServiceScriptData.language], sshServiceScriptData.language);
+
+            document.getElementById('tunnelCommandSSHServiceSteps').innerHTML = Prism.highlight(
+                "sudo systemctl daemon-reload\nsudo systemctl start autossh.service\nsudo systemctl enable autossh.service"
+                , Prism.languages['bash'], 'bash'
+            );
+
+            document.getElementById('tunnelCommandPowershell').innerHTML = Prism.highlight(powershellScriptData.script, Prism.languages[powershellScriptData.language], powershellScriptData.language);
         }
 
     } catch (error) {
