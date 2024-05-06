@@ -1,0 +1,15 @@
+[Unit]
+Description=AutoSSH tunnel service for reverse SSH tunnel
+After=network.target
+
+[Service]
+User=<YOUR_USER_NAME>
+ExecStart=/usr/bin/autossh -M 6769 -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" -p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
+
+# Restart service after it exits
+Restart=always
+# Time to sleep before restarting a service
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
