@@ -1,6 +1,6 @@
 #!/bin/bash
 export $(cat ./.env)
-docker exec -it telepy-web bash -c "python manage.py startapp `echo $@`"
+docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py startapp `echo $@`"
 
 # check the folder is created
 if [ ! -d "./src/$@" ]; then

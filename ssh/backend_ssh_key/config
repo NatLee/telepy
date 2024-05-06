@@ -1,5 +1,5 @@
 Host telepy-ssh
-    HostName telepy-ssh
+    HostName ssh
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     User telepy

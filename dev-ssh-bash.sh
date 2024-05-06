@@ -1,2 +1,2 @@
 #!/bin/bash
-docker exec -it telepy-ssh bash
+docker exec -it telepy-ssh-${PROJECT_NAME} bash
