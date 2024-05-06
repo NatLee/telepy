@@ -76,7 +76,7 @@ def parse_ss_ports_from_redis(ss_output:str, filter:bool) -> Dict[int, bool]:
 
 def get_ss_output_from_redis(filter=True) -> Dict[int, bool]:
     # Retrieve the value from Redis
-    result = subprocess.run("redis-cli -h telepy-redis GET ss_output", shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run("redis-cli -h redis GET ss_output", shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if result is None:
         return {}
     parsed_output = parse_ss_ports_from_redis(result.stdout, filter=filter)

@@ -1,2 +1,2 @@
 #!/bin/bash
-docker exec -it telepy-web bash -c 'python manage.py shell'
+docker exec -it telepy-web-${PROJECT_NAME} bash -c 'python manage.py shell'

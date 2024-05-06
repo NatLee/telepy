@@ -12,7 +12,7 @@ services:
   traefik:
     <<: [*common-networks, *common-restart]
     image: traefik:v3.0
-    container_name: telepy-traefik
+    container_name: telepy-traefik-${PROJECT_NAME}
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
@@ -23,7 +23,7 @@ services:
 
   frontend:
     <<: [*common-networks, *common-restart]
-    container_name: telepy-nginx
+    container_name: telepy-nginx-${PROJECT_NAME}
     image: nginx:latest
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf
@@ -36,8 +36,8 @@ services:
       context: .
       dockerfile: ./Dockerfile
     image: telepy-web
-    hostname: telepy-web
-    container_name: telepy-web
+    hostname: telepy-web-${PROJECT_NAME}
+    container_name: telepy-web-${PROJECT_NAME}
     environment:
       - DEBUG=${DEBUG}
       - REVERSE_SERVER_SSH_PORT=${REVERSE_SERVER_SSH_PORT}
@@ -60,14 +60,14 @@ services:
   redis:
     <<: [*common-networks, *common-restart]
     image: redis:alpine
-    hostname: telepy-redis
-    container_name: telepy-redis
+    hostname: telepy-redis-${PROJECT_NAME}
+    container_name: telepy-redis-${PROJECT_NAME}
 
   ssh:
     <<: [*common-networks, *common-restart]
     image: lscr.io/linuxserver/openssh-server
-    container_name: telepy-ssh
-    hostname: telepy-ssh
+    container_name: telepy-ssh-${PROJECT_NAME}
+    hostname: telepy-ssh-${PROJECT_NAME}
     environment:
       - PUID=1000
       - PGID=1000
@@ -88,4 +88,4 @@ services:
 
 networks:
   telepy-network:
-    name: telepy-network
+    name: telepy-network-${PROJECT_NAME}
