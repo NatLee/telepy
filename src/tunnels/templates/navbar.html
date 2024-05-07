@@ -17,9 +17,17 @@
               </li>
           </ul>
           <ul class="navbar-nav ms-auto">
+              {% if user.is_superuser %}
               <li class="nav-item">
                 <a class="nav-link {% if request.path == '/tunnels/settings' %}active{% endif %}" aria-current="page" href="/tunnels/settings">Settings</a>
               </li>
+              <li class="nav-item">
+                <a class="nav-link" aria-current="page" href="/api/__hidden_admin/" target="_blank">Admin</a>
+              </li>
+              <li class="nav-item">
+                <a class="nav-link" aria-current="page" href="/api/__hidden_swagger" target="_blank">Swagger</a>
+              </li>
+              {% endif %}
               <li class="nav-item">
                   <a class="nav-link" href="#" id="logoutButton">Logout</a>
               </li>
