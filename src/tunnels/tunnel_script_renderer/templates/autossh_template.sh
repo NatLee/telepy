@@ -3,7 +3,7 @@
 echo "[+] Script start"
 
 autossh \
--M 6769 \
+-M 0 \
 -o "ServerAliveInterval 30" \
 -o "ServerAliveCountMax 3" \
 -o "StrictHostKeyChecking=no" \
