@@ -287,12 +287,18 @@ class AutoSSHServiceTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
+        try:
+            username = server_auth_key.username_set.first().username
+        except AttributeError:
+            return Response({'error': 'No username found for this server'}, status=404)
+
         config_string = ssh_tunnel_script_factory(
           "autossh-service", 
           server_domain=self.server_domain, 
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
-          reverse_server_ssh_port=self.reverse_server_ssh_port
+          reverse_server_ssh_port=self.reverse_server_ssh_port,
+          username=username
         ).render()
 
         return Response({
