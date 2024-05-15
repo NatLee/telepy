@@ -199,7 +199,7 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         ).render()
 
         # Read all reverse users.
-        server_auth_key_user = server_auth_key.reverseserverusernames_set.all()
+        server_auth_key_user = server_auth_key.username_set.all()
 
         if not server_auth_key_user:
             config_string += CLIENT_NO_USER_STEM
