@@ -2,10 +2,16 @@ from abc import ABC, abstractmethod
 
 class BaseTemplateRenderer(ABC):
 
-    def __init__(self, server_domain: str, 
-                 reverse_port: int, 
-                 ssh_port: int, 
-                 reverse_server_ssh_port: int) -> None:
+    def __init__(
+        self,
+        server_domain: str, 
+        reverse_port: int, 
+        ssh_port: int, 
+        reverse_server_ssh_port: int,
+        username: str="root"
+    ) -> None:
+
+        self.username = username
         self.server_domain = server_domain
         self.reverse_port = reverse_port
         self.ssh_port = ssh_port
@@ -13,6 +19,7 @@ class BaseTemplateRenderer(ABC):
 
     def mapping_factory(self) -> dict:
         return {
+            "username": self.username,
             "server_domain": self.server_domain,
             "reverse_port": self.reverse_port,
             "ssh_port": self.ssh_port,
