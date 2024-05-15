@@ -23,7 +23,7 @@ class ReverseServerUsernames(models.Model):
     # Reverse Server Usernames for endpoint to connect with this SSH server
     # 反向通道機器上的使用者名稱（用於從web terminal連線到反向通道）
     user = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='User')
-    reverse_server = models.ForeignKey(ReverseServerAuthorizedKeys, on_delete=models.CASCADE, verbose_name='Reverse Server')
+    reverse_server = models.ForeignKey(ReverseServerAuthorizedKeys, on_delete=models.CASCADE, verbose_name='Reverse Server', related_name='username_set')
     username = models.CharField(max_length=128, verbose_name='Username')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')

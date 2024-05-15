@@ -102,7 +102,7 @@
             <div class="tab-pane fade" id="ssh-service" aria-labelledby="ssh-service-tab">
               <!-- SSH Service tab content -->
               <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-              <p class="text-muted alert-info">You also need to replace <code>User</code> with your own username in the command.</p>
+              <p class="text-muted alert-info">You can replace <code>User</code> field with your own username in the command.</p>
               <p class="text-muted">Paste the following script in <code>/etc/systemd/system/autossh.service</code> .</p>
               <pre id="tunnelCommandSSHService" class="form-control" style="height: 400px" readonly></pre>
               <p class="text-muted">After adding the service file, run the following commands to enable and start the service.</p>
