@@ -11,7 +11,7 @@ services:
 
   traefik:
     <<: [*common-networks, *common-restart]
-    image: traefik:v3.0
+    image: traefik:v3.0.1
     container_name: telepy-traefik-${PROJECT_NAME}
     command:
       - "--configFile=/etc/traefik/traefik.yml"
