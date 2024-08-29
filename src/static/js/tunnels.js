@@ -111,7 +111,7 @@ function createTableRow(item, actionButtons) {
             <td>${reversePort}</td>
             <td>
                 <div class='d-flex'>
-                    <div class="${hostFriendlyName}-status status ml-2" id="${hostFriendlyName}-status"></div>
+                    <div class="${hostFriendlyName}-status tunnel-status ml-2" id="${hostFriendlyName}-status"></div>
                 </div>
             </td>
             <td>

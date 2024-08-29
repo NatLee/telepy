@@ -22,7 +22,8 @@ CLIENT_STEM = """
 # ========================================
 """
 
-CLIENT_NO_USER_STEM = """# ========================================
+CLIENT_NO_USER_STEM = """
+# ========================================
 # You need to add a user to the reverse server authorized keys.
 # ========================================
 """
