@@ -74,6 +74,8 @@
   }
   
   .dropdown-menu {
+    padding: 0;
+    background-color: var(--bg-medium);
     max-height: 300px;
     overflow-y: auto;
     scrollbar-width: thin;
