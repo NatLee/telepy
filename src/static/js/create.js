@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   document.getElementById('goToIndexBtn').addEventListener('click', function() {
-    window.location.href = '/tunnel/index';
+    window.location.href = '/tunnels/index';
   });
 });
 
