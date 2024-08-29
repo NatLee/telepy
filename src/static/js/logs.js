@@ -23,13 +23,23 @@ function parseLogData(data) {
     // 移除開頭和結尾的引號，然後按換行符分割
     const lines = data.replace(/^"|"$/g, '').split('\\n');
     return lines.filter(line => line.trim() !== '').map(line => {
-        const [timestamp, ...messageParts] = line.split(' ');
-        return {
-            timestamp: timestamp,
-            message: messageParts.join(' ')
-        };
+        // 使用正則表達式來匹配時間戳和消息
+        const match = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) (.+)$/);
+        if (match) {
+            return {
+                timestamp: match[1],
+                message: match[2]
+            };
+        } else {
+            // 如果無法正確解析，則將整行作為消息返回
+            return {
+                timestamp: '',
+                message: line
+            };
+        }
     });
 }
+
 
 function displayLogs(logs) {
     const logContentElement = document.getElementById('logContent');
