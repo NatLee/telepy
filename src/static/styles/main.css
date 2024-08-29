@@ -1,25 +1,41 @@
 /* 基本樣式和背景 */
 body {
-  background-color: #f4f7f6;
-    color: #5a5a5a;
-    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  background-color: #f0f4f8;
+  color: #2c3e50;
+  font-family: 'Poppins', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  transition: background-color 0.5s ease;
 }
 
 /* 導航條 */
 .navbar {
-  border-bottom: 3px solid #00b4d8;
+  background: linear-gradient(45deg, #3498db, #2980b9);
+  border-bottom: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  animation: gradientBG 15s ease infinite;
+  background-size: 400% 400%;
+}
+
+@keyframes gradientBG {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 
 .navbar-brand,
 .nav-link.active {
   font-weight: bold;
-  color: #00b4d8;
+  color: #ecf0f1 !important;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .nav-link {
   position: relative;
-  color: #e9ecef !important;
-  transition: color 0.3s ease;
+  color: #ecf0f1 !important;
+  transition: color 0.3s ease, transform 0.3s ease;
+}
+
+.nav-link:hover {
+  transform: translateY(-2px);
 }
 
 .nav-link::after {
@@ -30,7 +46,7 @@ body {
   display: block;
   margin-top: 5px;
   right: 0;
-  background: #00b4d8;
+  background: #ecf0f1;
   transition: width 0.3s ease;
 }
 
@@ -38,7 +54,6 @@ body {
 .nav-link:focus::after {
   width: 100%;
   left: 0;
-  background: #00b4d8;
 }
 
 /* Tab Styles */
@@ -47,129 +62,100 @@ body {
   margin-right: 0.2rem;
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
-  color: #5a5a5a; /* 更改為與 body 顏色一致 */
-  background-color: #f4f7f6; /* 更改為與 body 背景色一致 */
+  color: #34495e;
+  background-color: #ecf0f1;
   text-decoration: none;
-  transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
-  border-radius: 0.2rem 0.2rem 0 0; /* 只在上方添加圓角 */
-  border: 1px solid #dee2e6;
+  transition: all 0.3s ease-in-out;
+  border-radius: 0.5rem 0.5rem 0 0;
+  border: 1px solid #bdc3c7;
   border-bottom: none;
   position: relative;
+  overflow: hidden;
+}
+
+.tab-link:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(120deg, transparent, rgba(255,255,255,.3), transparent);
+  transition: all 0.5s;
+}
+
+.tab-link:hover:before {
+  left: 100%;
 }
 
 .tab-link:hover, .tab-link:focus {
-  background-color: #e0f7fa; /* 使用與表格懸停顏色一致 */
-  color: #00b4d8; /* 使用主題藍色 */
-  cursor: pointer;
+  background-color: #3498db;
+  color: #ffffff;
+  transform: translateY(-3px);
+  box-shadow: 0 4px 6px rgba(50,50,93,.11), 0 1px 3px rgba(0,0,0,.08);
 }
 
 .tab-link.active {
-  color: #00b4d8; /* 使用主題藍色 */
-  background-color: #fff;
-  border-color: #dee2e6 #dee2e6 #fff;
+  color: #ffffff;
+  background-color: #2980b9;
+  border-color: #2980b9;
   font-weight: bold;
-}
-
-.tab-link::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 0;
-  height: 2px;
-  background-color: #00b4d8; /* 使用主題藍色 */
-  transition: width 0.3s ease-in-out;
-}
-
-.tab-link:hover::after, .tab-link.active::after {
-  width: 100%;
+  transform: translateY(-3px);
+  box-shadow: 0 4px 6px rgba(50,50,93,.11), 0 1px 3px rgba(0,0,0,.08);
 }
 
 .tab-content {
-  border: 1px solid #dee2e6;
+  border: 1px solid #bdc3c7;
   padding: 1.25rem;
-  border-radius: 0 0.2rem 0.2rem 0.2rem; /* 調整圓角以配合 tab */
+  border-radius: 0 0.5rem 0.5rem 0.5rem;
   background-color: #ffffff;
   margin-top: -1px;
+  box-shadow: 0 4px 6px rgba(50,50,93,.11), 0 1px 3px rgba(0,0,0,.08);
+  transition: all 0.3s ease;
 }
-
 
 /* 表格 */
 .table {
   background-color: white;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
   border-collapse: separate;
   border-spacing: 0;
   animation: fadeIn 1s ease-in;
+  border-radius: 0.5rem;
+  overflow: hidden;
 }
 
 .table thead th {
-  background-color: #00b4d8;
+  background-color: #3498db;
   color: white;
+  padding: 1rem;
+  font-weight: 600;
+}
+
+.table tbody tr {
+  transition: all 0.3s ease;
 }
 
 .table tbody tr:hover {
-  background-color: #e0f7fa;
+  background-color: #ecf0f1;
+  transform: scale(1.01);
 }
+
 /* 按鈕 */
 .btn-secondary,
 .btn-custom {
-  background-color: #00b4d8;
-  border-color: #00b4d8;
+  background-color: #3498db;
+  border-color: #3498db;
   transition: all 0.3s ease;
+  box-shadow: 0 4px 6px rgba(50,50,93,.11), 0 1px 3px rgba(0,0,0,.08);
 }
+
 .btn-secondary:hover,
-.btn-custom-light:hover {
-  background-color: #007c91;
-  border-color: #007c91;
-}
-/* 容器、間距和對齊 */
-.container {
-  padding-top: 2rem;
-}
-.mx-5 {
-  margin-left: 3rem;
-  margin-right: 3rem;
-}
-.mb-3,
-.mb-2 {
-  margin-bottom: 1rem;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }  
-  100% { transform: rotate(360deg); }
-}
-#refresh.loading {
-  animation: spin 1s infinite linear;
-}
-
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(0, 180, 216, 0.7); }
-  70% { box-shadow: 0 0 0 10px rgba(0, 180, 216, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(0, 180, 216, 0); }
-}
-.active-pulse {
-  animation: pulse 2s infinite;
-}
-
-
-.status {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background-color: #dc3545;
-  margin-left: 15px;
-  margin-bottom: 12px;
-  margin-top: 4px;
-}
-
-.status.connected {
-  background-color: #28a745;
-}
-
-.status.disconnected {
-  background-color: #dc3545;
+.btn-custom:hover {
+  background-color: #2980b9;
+  border-color: #2980b9;
+  transform: translateY(-2px);
+  box-shadow: 0 7px 14px rgba(50,50,93,.1), 0 3px 6px rgba(0,0,0,.08);
 }
 
 /* Toast 通知 */
@@ -180,40 +166,53 @@ body {
   z-index: 1050;
 }
 
-
-/* Toast Styling */
 .toast {
   opacity: 0;
-  transition: opacity 0.3s ease-in-out, transform 0.3s ease;
+  transition: all 0.5s ease-in-out;
   transform: translateX(100px);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-  border-radius: 12px;
+  box-shadow: 0 15px 35px rgba(50,50,93,.1), 0 5px 15px rgba(0,0,0,.07);
+  border-radius: 1rem;
   overflow: hidden;
-  font-family: 'Arial', sans-serif;
+  font-family: 'Poppins', 'Arial', sans-serif;
   font-size: 0.95rem;
   line-height: 1.5;
   margin-bottom: 1rem;
-  background: linear-gradient(135deg, #6e8efb, #a777e3);
+  background: linear-gradient(135deg, #3498db, #2980b9);
   color: #fff;
 }
 
 .toast.show {
-opacity: 1;
+  opacity: 1;
   transform: translateX(0);
 }
 
 .toast.hide {
-opacity: 0;
+  opacity: 0;
   transform: translateX(100px);
 }
 
 .toast-body {
-padding: 0.75rem 1.2rem;
+  padding: 1rem 1.5rem;
 }
 
 .btn-close-white {
-filter: invert(1);
+  filter: invert(1);
   margin-right: 0.5rem;
+  transition: all 0.3s ease;
+}
+
+.btn-close-white:hover {
+  transform: rotate(90deg);
+}
+
+/* 動畫 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out;
 }
 
 /* 響應式設計 */
@@ -229,34 +228,9 @@ filter: invert(1);
   }
 }
 
-.toast.bg-danger {
-background: linear-gradient(135deg, #f85032, #e73827);
-}
-
-/* Animation for Toast */
-@keyframes fadeInRight {
-  from {
-      opacity: 0;
-      transform: translateX(100px);
-  }
-  to {
-    opacity: 1; transform: translateX(0);
-  }
-}
-
-.toast.show {
-  animation: fadeInRight 0.3s;
-}
-
-@keyframes rainbowAnimation {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
 .sticky-header th {
   position: sticky;
   top: 0;
-  background-color: #fff;
+  background-color: #3498db;
   z-index: 2;
 }
