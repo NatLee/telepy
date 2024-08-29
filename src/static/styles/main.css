@@ -291,12 +291,12 @@ body {
 
 .table th:first-child,
 .table td:first-child {
-  width: 20%;
+  width: 30%;
 }
 
 .table th:last-child,
 .table td:last-child {
-  width: 80%;
+  width: 70%;
   white-space: normal; /* 允許換行 */
   word-wrap: break-word; /* 長單詞換行 */
 }
@@ -307,10 +307,10 @@ body {
 
 /* 確保內容表格的列與表頭對齊 */
 .table-body-container .table td:first-child {
-  width: 20%;
+  width: 30%;
 }
 
 .table-body-container .table td:last-child {
-  width: 80%;
+  width: 70%;
 }
 
