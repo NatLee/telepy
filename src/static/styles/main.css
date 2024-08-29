@@ -158,6 +158,25 @@ body {
   box-shadow: 0 7px 14px rgba(50,50,93,.1), 0 3px 6px rgba(0,0,0,.08);
 }
 
+/* 目前連線狀態顯示 */
+.tunnel-status {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background-color: #dc3545;
+  margin-left: 15px;
+  margin-bottom: 12px;
+  margin-top: 4px;
+}
+
+.tunnel-status.connected {
+  background-color: #28a745;
+}
+
+.tunnel-status.disconnected {
+  background-color: #dc3545;
+}
+
 /* Toast 通知 */
 .toast-container {
   position: fixed;
