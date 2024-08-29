@@ -3,98 +3,96 @@
 {% block title %}Create Reverse Tunnels{% endblock %}
 
 {% block content %}
-<div class="mx-5">
-  <h2>Manual Create Reverse Tunnels</h2>
-  <div class="form-row mt-3">
-    <div class="col">
-      <input type="text" class="form-control" id="hostFriendlyName" placeholder="Enter Customized Host Name">
-      <small id="hostFriendlyNameHelp" class="form-text text-muted">Enter the customized name of your server.</small>
-    </div>
-    <div class="col">
-      <input type="text" class="form-control" id="key" placeholder="Enter SSH Key" data-toggle="tooltip" data-placement="right" title="Invalid SSH Key">
-      <small id="keyHelp" class="form-text text-muted">Paste your public SSH key here.</small>
-    </div>
-    <div class="col">
-      <input type="text" class="form-control" id="sshPort" placeholder="Enter SSH Port" value="22" data-toggle="tooltip" data-placement="right" title="Invalid Port Number">
-      <small id="portHelp" class="form-text text-muted">Enter your server's SSH port. Default is 22.</small>
-    </div>
-    <div class="col">
-      <input type="text" class="form-control" id="token" name="token" placeholder="Token will appear here" readonly>
-      <small id="tokenHelp" class="form-text text-muted">This token is required to create a tunnel. If you use <code>curl</code>, you can use the token as a query parameter.</small>
+<div class="container mt-2">
+  <h2 class="mb-4 text-center" style="color: #00b4d8;">Create Reverse Tunnel</h2>
+
+  <div class="row justify-content-center">
+    <div class="col-md-8">
+      <!-- Step 1: Create Tunnel -->
+      <div class="card shadow-sm mb-5" id="step1Section">
+        <div class="card-body">
+          <h3 class="card-title mb-4">Step 1: Create Tunnel</h3>
+          <form id="createTunnelForm">
+            <div class="mb-4">
+              <label for="hostFriendlyName" class="form-label">Customized Host Name</label>
+              <input type="text" class="form-control" id="hostFriendlyName" placeholder="Enter Customized Host Name">
+              <small class="form-text text-muted">Enter the customized name of your server.</small>
+            </div>
+            
+            <div class="mb-4">
+              <label for="key" class="form-label">SSH Public Key</label>
+              <textarea class="form-control" id="key" rows="3" placeholder="Paste your public SSH key here"></textarea>
+              <small class="form-text text-muted">This is required to create the tunnel.</small>
+              <div id="keyFeedback" class="invalid-feedback mt-2"></div>
+            </div>
+            
+            <div class="mb-4">
+              <label for="sshPort" class="form-label">SSH Port</label>
+              <input type="number" class="form-control" id="sshPort" value="22" min="1" max="65535">
+              <small class="form-text text-muted">Enter your server's SSH port. Default is 22.</small>
+            </div>
+            
+            <div class="mb-4">
+              <label for="token" class="form-label">Token</label>
+              <input type="text" class="form-control" id="token" readonly>
+              <small class="form-text text-muted">This token is required to create a tunnel. It will be generated automatically.</small>
+            </div>
+            
+            <div class="d-grid">
+              <button type="submit" class="btn btn-custom" id="createTunnelBtn">Create Tunnel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Step 2: Verify Tunnel -->
+      <div class="card shadow-sm mb-5" id="step2Section" style="display: none;">
+        <div class="card-body">
+          <h3 class="card-title mb-4">Step 2: Verify Tunnel</h3>
+          <p class="card-text">To complete the tunnel setup, you need to add the following public key to your target machine:</p>
+          <div id="keyDetails" class="mt-4">
+            <h4>Key Details</h4>
+            <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
+
+            <ul class="nav nav-tabs" id="keyTab" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
+              </li>
+            </ul>
+
+            <div class="tab-content mt-3" id="keyTabContent">
+              <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
+                <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
+                <div id="userKeys" class="mt-2"></div>
+              </div>
+              <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
+                <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
+                <div id="serviceKeys" class="mt-2"></div>
+              </div>
+            </div>
+          </div>
+          <div class="d-grid mt-4">
+            <button class="btn btn-custom" id="tunnelVerifiedBtn">I've Added the Key</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Completion -->
+      <div class="card shadow-sm mb-5" id="step3Section" style="display: none;">
+        <div class="card-body text-center">
+          <h3 class="card-title" style="color: #00b4d8;">Step 3: Tunnel Setup Complete</h3>
+          <p class="card-text">Your reverse tunnel has been successfully created and verified.</p>
+          <div class="mt-4">
+            <button class="btn btn-custom" id="goToIndexBtn">Go to Tunnel List</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
-
-  <button class="btn btn-outline-success mt-3" onclick="createTunnel()">Create Tunnel</button>
-
-  <div id="connectionDetails" class="mt-4">
-    <h4>Connection Details</h4>
-    <p class="text-muted">Use the command below to establish a secure tunnel between your server and the reverse proxy.</p>
-
-    <!-- Tab navigation -->
-    <ul class="nav nav-tabs" id="osTab" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="tab-link active " id="ssh-tab" data-bs-toggle="tab" data-bs-target="#ssh" type="button" role="tab" aria-controls="ssh" aria-selected="true">SSH</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" type="button" role="tab" aria-controls="powershell" aria-selected="false">Powershell</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" type="button" role="tab" aria-controls="docker" aria-selected="false">Docker</button>
-      </li>
-    </ul>
-
-    <!-- Tab Content -->
-    <div class="tab-content" id="osTabContent">
-      <div class="tab-pane fade show active" id="ssh" role="tabpanel" aria-labelledby="ssh-tab">
-        <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-        <p id="sshConnectionHint" class="text-muted"></p>
-        <pre id="tunnelCommandSSH" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
-        <button class="btn btn-outline-info mt-2" id="sshCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandSSH')">Copy</button>
-      </div>
-      <div class="tab-pane fade" id="powershell" role="tabpanel" aria-labelledby="powershell-tab">
-        <p class="text-muted">If you want to use private keys to login, you need to touch a file and add public keys in <code>%PROGRAMDATA%/ssh/administrators_authorized_keys</code> in your target server. Click <a href="https://github.com/NatLee/telepy/issues/9" target="_blank">here</a> to meet details.</p>
-        <p id="powershellConnectionHint" class="text-muted"></p>
-        <pre id="tunnelCommandPowershell" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
-        <button class="btn btn-outline-info mt-2" id="powershellCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandPowershell')">Copy</button>
-      </div>
-      <div class="tab-pane fade" id="docker" role="tabpanel" aria-labelledby="docker-tab">
-        <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
-        <pre id="tunnelCommandDocker" class="form-control mt-2">Click "Create Tunnel" to generate the command.</pre>
-        <button class="btn btn-outline-info mt-2" id="dockerCopyTunnelCommandBtn" disabled onclick="copyCommandToClipboard('tunnelCommandDocker')">Copy</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="keyDetails" class="mt-4">
-    <h4>Key Details</h4>
-    <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
-
-    <!-- Tab navigation -->
-    <ul class="nav nav-tabs" id="keyTab" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
-      </li>
-    </ul>
-
-    <!-- Tab Content -->
-    <div class="tab-content" id="keyTabContent">
-      <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
-        <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
-        <div id="userKeys" class="mt-2"></div>
-      </div>
-      <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
-        <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
-        <div id="serviceKeys" class="mt-2"></div>
-      </div>
-    </div>
-  </div>
-
 </div>
-
-
 
 <!-- Key Modal -->
 <div class="modal fade" id="keyModal" tabindex="-1" aria-labelledby="keyModalLabel" aria-hidden="true">
@@ -108,14 +106,12 @@
         <textarea id="modalKeyContent" class="form-control" rows="5" readonly></textarea>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-primary" onclick="copyKeyToClipboard()">Copy</button>
+        <button type="button" class="btn btn-custom" onclick="copyKeyToClipboard()">Copy</button>
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
 </div>
-  
-  
 {% endblock %}
 
 {% block scripts %}

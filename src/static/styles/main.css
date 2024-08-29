@@ -47,45 +47,37 @@ body {
   margin-right: 0.2rem;
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
-  color: #4a4a4a;
-  background-color: #e9ecef;
+  color: #5a5a5a; /* 更改為與 body 顏色一致 */
+  background-color: #f4f7f6; /* 更改為與 body 背景色一致 */
   text-decoration: none;
   transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
-  border-radius: 0.2rem;
-  border: 1px solid transparent;
+  border-radius: 0.2rem 0.2rem 0 0; /* 只在上方添加圓角 */
+  border: 1px solid #dee2e6;
+  border-bottom: none;
+  position: relative;
 }
 
 .tab-link:hover, .tab-link:focus {
-  background-color: #d3d9df;
-  color: #007bff;
+  background-color: #e0f7fa; /* 使用與表格懸停顏色一致 */
+  color: #00b4d8; /* 使用主題藍色 */
   cursor: pointer;
-  border-color: #b3b3b3;
 }
 
 .tab-link.active {
-  color: #495057;
+  color: #00b4d8; /* 使用主題藍色 */
   background-color: #fff;
   border-color: #dee2e6 #dee2e6 #fff;
-  border-bottom: 2px solid #00b4d8; /* Emphasize the active tab */
-  z-index: 1; /* Ensure active tab overlaps the tab content border */
+  font-weight: bold;
 }
 
-.tab-content {
-  border: 1px solid #dee2e6;
-  padding: 1.25rem;
-  border-radius: 0.2rem;
-  background-color: #ffffff;
-  margin-top: -1px; /* Seamless connection with the active tab */
-}
-
-/* Smooth transition for the underline effect */
 .tab-link::after {
   content: '';
   position: absolute;
-  bottom: -1px; /* Align with the bottom of the tab link */
+  bottom: 0;
   left: 0;
   width: 0;
   height: 2px;
+  background-color: #00b4d8; /* 使用主題藍色 */
   transition: width 0.3s ease-in-out;
 }
 
@@ -93,10 +85,14 @@ body {
   width: 100%;
 }
 
-/* Focus Styles */
-.tab-link:focus {
-  outline: none; /* Remove the default focus outline */
+.tab-content {
+  border: 1px solid #dee2e6;
+  padding: 1.25rem;
+  border-radius: 0 0.2rem 0.2rem 0.2rem; /* 調整圓角以配合 tab */
+  background-color: #ffffff;
+  margin-top: -1px;
 }
+
 
 /* 表格 */
 .table {
