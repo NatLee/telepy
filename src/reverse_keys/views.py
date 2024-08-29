@@ -1,3 +1,4 @@
+from typing import Optional
 import datetime
 
 from django.conf import settings
@@ -80,7 +81,7 @@ class CreateReverseServerKey(APIView):
         if not verify_token(token):
             return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
 
-        user:User = get_user_id_from_token(token)
+        user:Optional[User] = get_user_id_from_token(token)
         if not user:
             return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -94,7 +95,7 @@ class CreateReverseServerKey(APIView):
         if not host_friendly_name[0].isalpha():
             return Response({"error": "Host friendly name cannot start with a number."}, status=status.HTTP_400_BAD_REQUEST)
 
-        key:str = request.data.get('key', None)
+        key:Optional[str] = request.data.get('key', None)
         if not key:
             return Response({"error": "Key is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -127,3 +128,103 @@ class CreateReverseServerKey(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+class CheckReverseServerKeyDuplicate(APIView):
+    permission_classes = (AllowAny, IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Check Reverse Server Key Duplicate",
+        operation_description="Check if a Reverse Server Key already exists",
+        responses={
+            200: openapi.Response(
+                description="Success response",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'exists': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
+            400: openapi.Response(
+                description="Bad request",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'error': openapi.Schema(type=openapi.TYPE_STRING),
+                    },
+                ),
+            ),
+        },
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT, 
+            properties={
+                'host_friendly_name': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+                'key': openapi.Schema(type=openapi.TYPE_STRING, description='string'),
+            },
+        ),
+        tags=['Reverse Server Keys']
+    )
+    def post(self, request, token, *args, **kwargs):
+        if not token:
+            return Response({"error": "Token is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not verify_token(token):
+            return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
+
+        user: Optional[User] = get_user_id_from_token(token)
+        if not user:
+            return Response({"error": "Invalid or expired token"}, status=status.HTTP_400_BAD_REQUEST)
+
+        host_friendly_name: str = request.data.get('host_friendly_name')
+        if not host_friendly_name:
+            return Response({"error": "Host friendly name is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        key = request.data.get('key')
+        if not key:
+            return Response({"error": "Key is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        host_friendly_name_exists = ReverseServerAuthorizedKeys.objects.filter(
+            user=user,
+            host_friendly_name=host_friendly_name,
+        ).exists()
+        
+        key_exists = ReverseServerAuthorizedKeys.objects.filter(
+            user=user,
+            key=key,
+        ).exists()
+
+        if host_friendly_name_exists and key_exists:
+            return Response(
+                {
+                    'host_friendly_name_exists': host_friendly_name_exists,
+                    'key_exists': key_exists,
+                    'error': 'Host friendly name and key already exists',
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        elif host_friendly_name_exists:
+            return Response(
+                {
+                    'host_friendly_name_exists': host_friendly_name_exists,
+                    'key_exists': key_exists,
+                    'error': 'Host friendly name already exists',
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        elif key_exists:
+            return Response(
+                {
+                    'host_friendly_name_exists': host_friendly_name_exists,
+                    'key_exists': key_exists,
+                    'error': 'Key already exists',
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            {
+                'host_friendly_name_exists': host_friendly_name_exists,
+                'key_exists': key_exists,
+                'message': 'Host friendly name and key are not used',
+            }
+        )
