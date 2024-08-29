@@ -234,3 +234,64 @@ body {
   background-color: #3498db;
   z-index: 2;
 }
+
+
+/* 表格容器樣式 */
+.table-container {
+  position: relative;
+  height: 600px; /* 調整為所需的高度 */
+  overflow: hidden;
+  border: 1px solid #dee2e6;
+}
+
+.table-container > table {
+  margin-bottom: 0;
+}
+
+.table-container > table > thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: #f8f9fa;
+}
+
+.table-body-container {
+  height: calc(100% - 41px); /* 41px 是表頭的高度，可能需要調整 */
+  overflow-y: auto;
+}
+
+.table-body-container table {
+  margin-top: -1px; /* 消除頂部邊框重疊 */
+}
+
+.table th,
+.table td {
+  padding: 8px;
+  vertical-align: top;
+}
+
+.table th:first-child,
+.table td:first-child {
+  width: 20%;
+}
+
+.table th:last-child,
+.table td:last-child {
+  width: 80%;
+  white-space: normal; /* 允許換行 */
+  word-wrap: break-word; /* 長單詞換行 */
+}
+
+.badge {
+  white-space: nowrap;
+}
+
+/* 確保內容表格的列與表頭對齊 */
+.table-body-container .table td:first-child {
+  width: 20%;
+}
+
+.table-body-container .table td:last-child {
+  width: 80%;
+}
+
