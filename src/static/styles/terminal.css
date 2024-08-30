@@ -1,0 +1,266 @@
+:root {
+    --bg-dark: #1a1a1a;
+    --bg-medium: #2c2c2c;
+    --bg-light: #3a3a3a;
+    --text-primary: #f0f0f0;
+    --text-secondary: #b0b0b0;
+    --accent-blue: #3498db;
+    --accent-green: #2ecc71;
+    --accent-yellow: #f1c40f;
+    --accent-red: #e74c3c;
+  }
+  
+  body {
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    font-family: 'Roboto', sans-serif;
+  }
+  
+  .navbar {
+    background: linear-gradient(to right, #2c3e50, #34495e);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+  
+  .navbar-brand {
+    font-weight: bold;
+    color: var(--accent-blue) !important;
+  }
+  
+  #status, #shellType {
+    font-weight: bold;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    background-color: var(--bg-light);
+  }
+  
+  #checkServiceKeyBtn {
+    background-color: var(--accent-blue);
+    color: var(--text-primary);
+    border: none;
+    transition: all 0.3s ease;
+  }
+  
+  #checkServiceKeyBtn:hover {
+    background-color: #2980b9;
+    transform: translateY(-2px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  }
+  
+  .input-group {
+    margin-bottom: 0;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  }
+  
+  #searchPath {
+    background-color: var(--bg-medium);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-light);
+    transition: all 0.3s ease;
+  }
+  
+  #searchPath:focus {
+    box-shadow: 0 0 0 2px var(--accent-blue);
+  }
+  
+  #searchStatusBtn, #refreshBtn {
+    background-color: var(--bg-light);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-light);
+    transition: all 0.3s ease;
+  }
+  
+  #searchStatusBtn:hover, #refreshBtn:hover {
+    background-color: var(--accent-blue);
+  }
+  
+  .dropdown-menu {
+    padding: 0;
+    background-color: var(--bg-medium);
+    max-height: 300px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-light) var(--bg-medium);
+}
+
+.dropdown-menu::-webkit-scrollbar {
+    width: 8px;
+}
+
+.dropdown-menu::-webkit-scrollbar-track {
+    background: var(--bg-medium);
+}
+
+.dropdown-menu::-webkit-scrollbar-thumb {
+    background-color: var(--bg-light);
+    border-radius: 20px;
+    border: 3px solid var(--bg-medium);
+}
+
+.dropdown-menu::-webkit-scrollbar-thumb:hover {
+    background-color: var(--accent-blue);
+}
+
+.dropdown-item {
+    color: var(--text-primary);
+    background-color: var(--bg-medium);
+    transition: all 0.3s ease;
+}
+
+.dropdown-item:hover {
+    background-color: var(--bg-light);
+}
+
+  .terminal-wrapper {
+    height: calc(100vh - 120px);
+    padding: 10px;
+    background-color: var(--bg-dark);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--bg-light);
+  }
+  
+  #terminal {
+    height: 100%;
+    width: 100%;
+  }
+  .xterm {
+    height: 100%;
+  }    
+  
+  .folder-icon { color: var(--accent-yellow); }
+  .file-icon { color: var(--accent-blue); }
+  
+  .service-key-textarea {
+    background-color: var(--bg-medium);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-light);
+    transition: all 0.3s ease;
+  }
+  
+  .service-key-textarea:focus {
+    box-shadow: 0 0 0 2px var(--accent-blue);
+  }
+  
+  .swal2-styled.swal2-confirm {
+    background-color: var(--accent-green);
+  }
+  
+  .swal2-styled.swal2-cancel {
+    background-color: var(--accent-red);
+  }
+  
+  #reloadButton {
+    background-color: var(--accent-green);
+    transition: all 0.3s ease;
+  }
+  
+  #reloadButton:hover {
+    background-color: #27ae60;
+    transform: translateY(-2px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  }
+  
+  /* 添加一些動畫效果 */
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+  }
+  
+  #status.connected {
+    animation: pulse 2s infinite;
+    background-color: var(--accent-green);
+  }
+  
+  #status.disconnected {
+    animation: pulse 2s infinite;
+    background-color: var(--accent-red);
+  }
+  
+  /* 滾動條樣式 */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: var(--bg-medium);
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    background: var(--bg-light);
+    border-radius: 4px;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-blue);
+  }
+
+  .modal-content {
+    background-color: var(--bg-medium);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-light);
+}
+
+.modal-header {
+    border-bottom: 1px solid var(--bg-light);
+}
+
+.modal-footer {
+    border-top: 1px solid var(--bg-light);
+}
+
+.modal-title {
+    color: var(--accent-blue);
+}
+
+.btn-close {
+    color: var(--text-primary);
+    opacity: 0.5;
+}
+
+.btn-close:hover {
+    opacity: 1;
+}
+
+.service-key-textarea {
+    width: 100%;
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid var(--bg-light);
+    padding: 10px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 14px;
+    resize: vertical;
+}
+
+.btn-primary {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+}
+
+.btn-primary:hover {
+    background-color: #2980b9;
+    border-color: #2980b9;
+}
+
+.btn-secondary {
+    background-color: var(--bg-light);
+    border-color: var(--bg-light);
+}
+
+.btn-secondary:hover {
+    background-color: #4a4a4a;
+    border-color: #4a4a4a;
+}
+
+.btn-success {
+    background-color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+
+.btn-success:hover {
+    background-color: #27ae60;
+    border-color: #27ae60;
+}
