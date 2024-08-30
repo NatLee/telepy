@@ -110,8 +110,9 @@
     background-color: var(--bg-light);
 }
 
-  
   .terminal-wrapper {
+    height: calc(100vh - 120px);
+    padding: 10px;
     background-color: var(--bg-dark);
     border-radius: 6px;
     overflow: hidden;
@@ -120,8 +121,12 @@
   }
   
   #terminal {
-    padding: 10px;
+    height: 100%;
+    width: 100%;
   }
+  .xterm {
+    height: 100%;
+  }    
   
   .folder-icon { color: var(--accent-yellow); }
   .file-icon { color: var(--accent-blue); }
