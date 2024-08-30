@@ -35,7 +35,6 @@ function setupWebSocketConnection(serverID, username) {
 
     term.open(document.getElementById('terminal'));
     term.fit();
-    setupResizeHandler(term);
 
     term.on('key', (key, ev) => {
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -54,6 +53,8 @@ function setupWebSocketConnection(serverID, username) {
 
     socket.onmessage = function(event) {
         term.write(event.data);
+        // Scroll to the bottom of the terminal
+        term.scrollToBottom();
     };
 
     socket.onopen = function() {
@@ -116,28 +117,33 @@ const resizeTerminal = debounce((cols, rows) => {
         }
     });
 
-    if (term) {
-        term.resize(cols, rows);
-    }
 }, 250); // 250ms 的延遲
 
-function setupResizeHandler() {
-    window.addEventListener('resize', debounce(() => {
-        term.fit();
-        const dimensions = term.proposeGeometry();
-        if (dimensions) {
-            resizeTerminal(dimensions.cols, dimensions.rows);
-        }
-    }, 250)); // 同樣使用 250 毫秒的延遲
 
-    // 初始調整大小
-    setTimeout(() => {
-        term.fit();
-        const dimensions = term.proposeGeometry();
+function adjustTerminalHeight(viewportHeight) {
+    const terminalWrapper = document.querySelector('.terminal-wrapper');
+    const navbarHeight = document.querySelector('nav').offsetHeight;
+    const searchBarHeight = document.querySelector('.input-group').offsetHeight;
+    
+    // 計算 terminal 可用的高度
+    let availableHeight = viewportHeight - navbarHeight - searchBarHeight - 40; // 40px for margin
+    
+    // 設定 terminal wrapper 的高度
+    terminalWrapper.style.height = `${availableHeight}px`;
+    
+    // 調整 terminal 大小
+    if (window.term) {
+        window.term.fit();
+        const dimensions = window.term.proposeGeometry();
         if (dimensions) {
             resizeTerminal(dimensions.cols, dimensions.rows);
         }
-    }, 0);
+    }
+}
+
+function handleTerminalResize() {
+    const currentWindowHeight = window.innerHeight;
+    adjustTerminalHeight(currentWindowHeight);
 }
 
 
@@ -628,6 +634,7 @@ function debounce(func, wait) {
     };
 }
 
+
 // ============================
 // Main
 // ============================
@@ -716,6 +723,9 @@ document.getElementById('refreshBtn').addEventListener('click', function() {
     }
 });
 
+// 監聽視窗大小變化
+window.addEventListener('resize', debounce(handleTerminalResize, 250));
+
 document.addEventListener('DOMContentLoaded', function() {
     setupServiceKeyCheck();
     initializeUsernameAndConnection()
@@ -724,6 +734,7 @@ document.addEventListener('DOMContentLoaded', function() {
             window.username = username;
             window.serverID = serverID;
 
+            handleTerminalResize();
             initializeSearchStatus();
             shellType();
 

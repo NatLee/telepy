@@ -112,6 +112,7 @@
 
   .terminal-wrapper {
     height: calc(100vh - 120px);
+    width: 100%;
     padding: 10px;
     background-color: var(--bg-dark);
     border-radius: 6px;
