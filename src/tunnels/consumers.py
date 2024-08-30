@@ -3,6 +3,9 @@ import json
 import asyncio
 import pty
 import signal
+import fcntl
+import termios
+import struct
 
 from asgiref.sync import sync_to_async
 from asgiref.sync import async_to_sync
@@ -19,6 +22,7 @@ from channels.exceptions import StopConsumer
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
+
 class TerminalConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -152,8 +156,18 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             action = data.get('action')
             payload = data.get('payload')
 
+            # Handle pty_input action
             if action == 'pty_input' and self.fd:
                 os.write(self.fd, payload['input'].encode())
+
+            # Handle resize action
+            if action == 'pty_resize' and self.fd:
+                # Resize the pty
+                pty_size = payload['size']
+                # Frontend sends size as dict with keys: rows, cols, height, width
+                # Convert to struct with keys: rows, cols, x, y
+                pty_size_bytes = struct.pack('HHHH', pty_size['rows'], pty_size['cols'], pty_size['height'], pty_size['width'])
+                fcntl.ioctl(self.fd, termios.TIOCSWINSZ, pty_size_bytes)
 
     def forward_output(self):
         try:

@@ -5,26 +5,37 @@
 // WebSocket Connection
 // ============================
 
+function sendWebSocketMessage(action, payload) {
+    if (window.socket.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket is not open');
+        return;
+    }
+    window.socket.send(JSON.stringify({ action: action, payload: payload }));
+}
+
 function setupWebSocketConnection(serverID, username) {
     Terminal.applyAddon(fit);
+    Terminal.applyAddon(fullscreen);
+
+    const term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    });
+
+    // Expose the terminal object to the window
+    window.term = term;
 
     const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const accessToken = localStorage.getItem('accessToken');
     const ws_path = `${ws_scheme}://${window.location.host}/ws/terminal/?token=${accessToken}&server_id=${serverID}&username=${username}`;
     const socket = new WebSocket(ws_path);
-
-    function sendWebSocketMessage(action, payload) {
-        if (socket.readyState !== WebSocket.OPEN) {
-            console.error('WebSocket is not open');
-            return;
-        }
-        socket.send(JSON.stringify({ action: action, payload: payload }));
-    }
-
-    const term = new Terminal({ cursorBlink: true });
+    // Expose the socket object to the window
+    window.socket = socket;
 
     term.open(document.getElementById('terminal'));
     term.fit();
+    setupResizeHandler(term);
 
     term.on('key', (key, ev) => {
         const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -83,6 +94,52 @@ function updateStatus(status) {
     statusElement.textContent = status;
     statusElement.className = 'badge ' + (status === 'connected' ? 'bg-success' : 'bg-danger');
 }
+
+
+// ============================
+// Terminal Actions
+// ============================
+
+const resizeTerminal = debounce((cols, rows) => {
+    const termElement = document.querySelector('.terminal');
+    if (!termElement) return;
+
+    const height = termElement.offsetHeight;
+    const width = termElement.offsetWidth;
+
+    sendWebSocketMessage("pty_resize", { 
+        size: {
+            rows: rows,
+            cols: cols,
+            height: height,
+            width: width
+        }
+    });
+
+    if (term) {
+        term.resize(cols, rows);
+    }
+}, 250); // 250ms 的延遲
+
+function setupResizeHandler() {
+    window.addEventListener('resize', debounce(() => {
+        term.fit();
+        const dimensions = term.proposeGeometry();
+        if (dimensions) {
+            resizeTerminal(dimensions.cols, dimensions.rows);
+        }
+    }, 250)); // 同樣使用 250 毫秒的延遲
+
+    // 初始調整大小
+    setTimeout(() => {
+        term.fit();
+        const dimensions = term.proposeGeometry();
+        if (dimensions) {
+            resizeTerminal(dimensions.cols, dimensions.rows);
+        }
+    }, 0);
+}
+
 
 // ============================
 // Shell Type
