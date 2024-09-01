@@ -78,11 +78,17 @@ class BaseKeyViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
 class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
+    """
+    ViewSet for handling reverse server authorized keys.
+    """
     serializer_class = ReverseServerAuthorizedKeysSerializer
     model = ReverseServerAuthorizedKeys
     queryset = ReverseServerAuthorizedKeys.objects.all()
 
 class UserAuthorizedKeysViewSet(BaseKeyViewSet):
+    """
+    ViewSet for handling user authorized keys.
+    """
     serializer_class = UserAuthorizedKeysSerializer
     model = UserAuthorizedKeys
     queryset = UserAuthorizedKeys.objects.all()
