@@ -75,9 +75,9 @@ class BothHttpAndHttpsSchemaGenerator(OpenAPISchemaGenerator):
 
 schema_view = get_schema_view(
     openapi.Info(
-        title="Backend service API",
+        title="Telepy API",
         default_version="v1",
-        description="API of backend services.",
+        description="API of Telepy.",
     ),
     public=True,
     # permission_classes=(AllowAny,),
