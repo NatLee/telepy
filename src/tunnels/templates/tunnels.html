@@ -151,7 +151,7 @@
 
 
 <!-- Tunnel Details Modal -->
-<div class="modal fade" id="tunnelDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true">
+<div class="modal fade" id="tunnelDetailsModal" tabindex="-1" aria-labelledby="tunnelDetailsModal" aria-hidden="true" onhidden.bs.modal="resetTunnelDetailsModalState()">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
       <div class="modal-header">
@@ -159,6 +159,10 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body" id="keyDetailsModalBody">
+        <!-- Tunnel ID-->
+        <h6 class="text-secondary">Tunnel ID</h6>
+        <p id="tunnelId" class="fw-bold mb-3">Placeholder for Tunnel ID</p>
+
         <!-- Host Name -->
         <h6 class="text-secondary">Host</h6>
         <p id="tunnelHostFriendlyName" class="fw-bold mb-3">Placeholder for Host Name</p>
@@ -169,10 +173,11 @@
         
         <!-- Description -->
         <h6 class="text-secondary">Description</h6>
-        <p id="tunnelDescriptionText" class="mb-0">Placeholder for Description</p>
+        <textarea id="tunnelDescriptionText" class="form-control mb-3" rows="3" oninput="checkTunnelDetailsModalForChanges()"></textarea>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()">Copy Key</button>
+        <button type="button" class="btn btn-outline-success" onclick="saveDescription()">Save Description</button>
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
