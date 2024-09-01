@@ -88,7 +88,7 @@
 </div>
 
 <!-- Key Details Modal -->
-<div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true">
+<div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true" onhidden.bs.modal="resetKeyDetailsModalState()">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
       <div class="modal-header">
@@ -96,6 +96,10 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body" id="keyDetailsModalBody">
+        <!-- Key ID-->
+        <h6 class="text-secondary">Key ID</h6>
+        <p id="keyId" class="fw-bold mb-3">Placeholder for Key ID</p>
+
         <!-- Host Name -->
         <h6 class="text-secondary">Host</h6>
         <p id="keyHostFriendlyName" class="fw-bold mb-3">Placeholder for Host Name</p>
@@ -106,10 +110,11 @@
         
         <!-- Description -->
         <h6 class="text-secondary">Description</h6>
-        <p id="keyDescriptionText" class="mb-0">Placeholder for Description</p>
+        <textarea id="keyDescriptionText" class="form-control mb-3" rows="3" oninput="checkKeyDetailsModalForChanges()"></textarea>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-primary" onclick="copyKeyToClipboard()">Copy Key</button>
+        <button type="button" class="btn btn-outline-success" onclick="saveDescription()">Save Description</button>
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
