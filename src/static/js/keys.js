@@ -25,13 +25,13 @@ function fetchAndDisplayUserKeys() {
             const hostFriendlyName = item.host_friendly_name;
             const publicKey = item.key;
             const itemDescription = item.description;
-
+    
             const actionButtons = `
                 <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${itemId})">Delete</button>
             `;
-
+    
             const row = `
-            <tr onclick="showKeyDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
+            <tr onclick="showKeyDetails('${itemId}', '${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
                 <td>${hostFriendlyName}</td>
                 <td>
                     <div class='d-flex' id="actions-${itemId}">
@@ -52,20 +52,27 @@ function fetchAndDisplayUserKeys() {
     });
 }
 
-function showKeyDetails(hostFriendlyName, key, description) {
+function showKeyDetails(keyId, hostFriendlyName, key, description) {
     // Populate the modal with key information
+    document.getElementById('keyId').textContent = keyId;
     document.getElementById('keyHostFriendlyName').textContent = hostFriendlyName;
     document.getElementById('keyTextArea').value = key;
+    document.getElementById('keyDescriptionText').value = description;
 
-    if (description) {
-        document.getElementById('keyDescriptionText').textContent = description;
-    } else {
-        document.getElementById('keyDescriptionText').textContent = 'No description provided.';
-    }
+    // Store the original values as data attributes
+    document.getElementById('keyDetailsModal').dataset.originalDescription = description;
+
+    // Disable the save button by default
+    document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
 
     // Show the modal
     var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
     keyDetailsModal.show();
+}
+
+function resetKeyDetailsModalState() {
+    document.getElementById('keyDescriptionText').value = '';
+    document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
 }
 
 function copyKeyToClipboard() {
@@ -194,6 +201,76 @@ function deleteUserKey(event, keyId) {
         });
     });
 }
+
+
+function saveDescription() {
+    const keyId = document.getElementById('keyId').textContent;
+    const newDescription = document.getElementById('keyDescriptionText').value;
+
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/api/reverse/user/keys/${keyId}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+            description: newDescription
+        })
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            return response.json().then(err => {
+                throw err;
+            });
+        }
+    })
+    .then(data => {
+        console.log('Success:', data);
+        Swal.fire({
+            icon: 'success',
+            title: 'Success',
+            text: 'Key information has been updated successfully.',
+            showConfirmButton: false,
+            timer: 1500
+        });
+        // Update the key description in the modal
+        fetchAndDisplayUserKeys();
+    })
+    .catch((error) => {
+        console.error('Error:', error);
+        let errorMessage = 'Failed to update key information';
+        if (error.key) {
+            errorMessage = `Public key error: ${error.key}`;
+        } else if (error.host_friendly_name) {
+            errorMessage = `Host name error: ${error.host_friendly_name}`;
+        } else if (error.description) {
+            errorMessage = `Description error: ${error.description}`;
+        }
+        Swal.fire({
+            icon: 'error',
+            title: 'Oops...',
+            text: errorMessage,
+        });
+    });
+}
+
+function checkKeyDetailsModalForChanges() {
+    const modal = document.getElementById('keyDetailsModal');
+    const originalDescription = modal.dataset.originalDescription;
+    const currentDescription = document.getElementById('keyDescriptionText').value;
+
+    const saveButton = document.querySelector('#keyDetailsModal .btn-outline-success');
+    if (originalDescription !== currentDescription) {
+        saveButton.disabled = false;
+    } else {
+        saveButton.disabled = true;
+    }
+}
+
 
 function keyNotificationWebsocket() {
     var socket = notificationWebsocket();
