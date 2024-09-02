@@ -43,20 +43,27 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
-function showTunnelDetails(hostFriendlyName, key, description) {
+function showTunnelDetails(tunnelId, reversePort, hostFriendlyName, key, description) {
     // Populate the modal with tunnel information
+    document.getElementById('tunnelId').textContent = tunnelId;
     document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
     document.getElementById('tunnelKeyTextArea').value = key;
+    document.getElementById('tunnelDescriptionText').value = description;
 
-    if (description) {
-        document.getElementById('tunnelDescriptionText').textContent = description;
-    } else {
-        document.getElementById('tunnelDescriptionText').textContent = 'No description provided.';
-    }
+    // Store the original values as data attributes
+    document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
+
+    // Disable the save button by default
+    document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
 
     // Show the modal
     var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
     tunnelDetailsModal.show();
+}
+
+function resetTunnelDetailsModalState() {
+    document.getElementById('tunnelDescriptionText').value = '';
+    document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
 }
 
 function copyTunnelPublicKeyToClipboard() {
@@ -106,7 +113,7 @@ function createTableRow(item, actionButtons) {
     const itemDescription = item.description;
 
     return `
-        <tr onclick="showTunnelDetails('${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
+        <tr onclick="showTunnelDetails('${itemId}', '${reversePort}', '${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
             <td>${hostFriendlyName}</td>
             <td>${reversePort}</td>
             <td>
@@ -229,6 +236,75 @@ function deleteKey(serverId) {
         Swal.fire("Error", "There was an error deleting the key.", "error");
     });
 }
+
+function saveDescription() {
+    const tunnelId = document.getElementById('tunnelId').textContent;
+    const newDescription = document.getElementById('tunnelDescriptionText').value;
+
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+            description: newDescription
+        })
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            return response.json().then(err => {
+                throw err;
+            });
+        }
+    })
+    .then(data => {
+        console.log('Success:', data);
+        Swal.fire({
+            icon: 'success',
+            title: 'Success',
+            text: 'Key information has been updated successfully.',
+            showConfirmButton: false,
+            timer: 1500
+        });
+        // Update the original description in the modal
+        fetchAndDisplayReverseServerKeys();
+    })
+    .catch((error) => {
+        console.error('Error:', error);
+        let errorMessage = 'Failed to update key information';
+        if (error.key) {
+            errorMessage = `Public key error: ${error.key}`;
+        } else if (error.host_friendly_name) {
+            errorMessage = `Host name error: ${error.host_friendly_name}`;
+        } else if (error.description) {
+            errorMessage = `Description error: ${error.description}`;
+        }
+        Swal.fire({
+            icon: 'error',
+            title: 'Oops...',
+            text: errorMessage,
+        });
+    });
+}
+
+function checkTunnelDetailsModalForChanges() {
+    const modal = document.getElementById('tunnelDetailsModal');
+    const originalDescription = modal.dataset.originalDescription;
+    const currentDescription = document.getElementById('tunnelDescriptionText').value;
+
+    const saveButton = document.querySelector('#tunnelDetailsModal .btn-outline-success');
+    if (originalDescription !== currentDescription) {
+        saveButton.disabled = false;
+    } else {
+        saveButton.disabled = true;
+    }
+}
+
 
 function openUserManagementModal(serverId) {
     $('#manageUsersModal').modal('show');
