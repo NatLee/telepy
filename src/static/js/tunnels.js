@@ -43,22 +43,52 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
-function showTunnelDetails(tunnelId, reversePort, hostFriendlyName, key, description) {
+function showTunnelDetails(tunnelId) {
     // Populate the modal with tunnel information
     document.getElementById('tunnelId').textContent = tunnelId;
-    document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
-    document.getElementById('tunnelKeyTextArea').value = key;
-    document.getElementById('tunnelDescriptionText').value = description;
 
-    // Store the original values as data attributes
-    document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
+    // Use fetch to get the tunnel status
+    const accessToken = localStorage.getItem('accessToken');
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    }).then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            return response.json().then(err => {
+                throw err;
+            });
+        }
+    }).then(data => {
+        const hostFriendlyName = data.hostFriendlyName;
+        const key = data.key;
+        const description = data.description;
 
-    // Disable the save button by default
-    document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
+        document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
+        document.getElementById('tunnelKeyTextArea').value = key;
+        document.getElementById('tunnelDescriptionText').value = description;
 
-    // Show the modal
-    var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
-    tunnelDetailsModal.show();
+        // Store the original values as data attributes
+        document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
+
+        // Disable the save button by default
+        document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
+
+        // Show the modal
+        var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
+        tunnelDetailsModal.show();
+    }).catch(error => {
+        console.error('Error fetching key details:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Oops...',
+            text: error.toString(),
+        });
+    });
 }
 
 function resetTunnelDetailsModalState() {
@@ -109,11 +139,9 @@ function createTableRow(item, actionButtons) {
     const itemId = item.id;
     const hostFriendlyName = item.host_friendly_name;
     const reversePort = item.reverse_port;
-    const publicKey = item.key;
-    const itemDescription = item.description;
 
     return `
-        <tr onclick="showTunnelDetails('${itemId}', '${reversePort}', '${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
+        <tr onclick="showTunnelDetails('${itemId}')">
             <td>${hostFriendlyName}</td>
             <td>${reversePort}</td>
             <td>
@@ -267,12 +295,10 @@ function saveDescription() {
         Swal.fire({
             icon: 'success',
             title: 'Success',
-            text: 'Key information has been updated successfully.',
+            text: 'Tunnel key information has been updated successfully.',
             showConfirmButton: false,
             timer: 1500
         });
-        // Update the original description in the modal
-        fetchAndDisplayReverseServerKeys();
     })
     .catch((error) => {
         console.error('Error:', error);
