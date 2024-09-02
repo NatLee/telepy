@@ -23,15 +23,13 @@ function fetchAndDisplayUserKeys() {
         data.forEach(item => {
             const itemId = item.id;
             const hostFriendlyName = item.host_friendly_name;
-            const publicKey = item.key;
-            const itemDescription = item.description;
-    
+
             const actionButtons = `
                 <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${itemId})">Delete</button>
             `;
     
             const row = `
-            <tr onclick="showKeyDetails('${itemId}', '${hostFriendlyName}', '${publicKey}', '${itemDescription}')">
+            <tr onclick="showKeyDetails('${itemId}')">
                 <td>${hostFriendlyName}</td>
                 <td>
                     <div class='d-flex' id="actions-${itemId}">
@@ -52,22 +50,51 @@ function fetchAndDisplayUserKeys() {
     });
 }
 
-function showKeyDetails(keyId, hostFriendlyName, key, description) {
+function showKeyDetails(keyId) {
     // Populate the modal with key information
     document.getElementById('keyId').textContent = keyId;
-    document.getElementById('keyHostFriendlyName').textContent = hostFriendlyName;
-    document.getElementById('keyTextArea').value = key;
-    document.getElementById('keyDescriptionText').value = description;
 
-    // Store the original values as data attributes
-    document.getElementById('keyDetailsModal').dataset.originalDescription = description;
+    const accessToken = localStorage.getItem('accessToken');
+    fetch(`/api/reverse/user/keys/${keyId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    }).then(response => {
+        if (response.ok) {
+            return response.json();
+        } else {
+            return response.json().then(err => {
+                throw err;
+            });
+        }
+    }).then(data => {
+        const hostFriendlyName = data.hostFriendlyName;
+        const key = data.key;
+        const description = data.description;
 
-    // Disable the save button by default
-    document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
+        document.getElementById('keyHostFriendlyName').textContent = hostFriendlyName;
+        document.getElementById('keyTextArea').value = key;
+        document.getElementById('keyDescriptionText').value = description;
 
-    // Show the modal
-    var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
-    keyDetailsModal.show();
+        // Store the original values as data attributes
+        document.getElementById('keyDetailsModal').dataset.originalDescription = description;
+
+        // Disable the save button by default
+        document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
+
+        // Show the modal
+        var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
+        keyDetailsModal.show();
+    }).catch(error => {
+        console.error('Error fetching key details:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Oops...',
+            text: error.toString(),
+        });
+    });
 }
 
 function resetKeyDetailsModalState() {
@@ -233,12 +260,10 @@ function saveDescription() {
         Swal.fire({
             icon: 'success',
             title: 'Success',
-            text: 'Key information has been updated successfully.',
+            text: 'User key information has been updated successfully.',
             showConfirmButton: false,
             timer: 1500
         });
-        // Update the key description in the modal
-        fetchAndDisplayUserKeys();
     })
     .catch((error) => {
         console.error('Error:', error);
