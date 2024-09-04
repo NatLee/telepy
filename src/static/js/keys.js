@@ -70,7 +70,7 @@ function showKeyDetails(keyId) {
             });
         }
     }).then(data => {
-        const hostFriendlyName = data.hostFriendlyName;
+        const hostFriendlyName = data.host_friendly_name;
         const key = data.key;
         const description = data.description;
 
