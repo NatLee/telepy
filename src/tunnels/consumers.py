@@ -40,28 +40,28 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
         # Check for subprotocols
         if self.scope['subprotocols']:
-            for protocol in self.scope['subprotocols']:
-                if protocol.startswith('token.'):
-                    try:
+            try:
+                for protocol in self.scope['subprotocols']:
+                    if protocol.startswith('token.'):
                         # Extract token from subprotocol
                         base64_encoded_token = protocol.split('.', 1)[1]
                         # Decode token
                         token = base64.b64decode(base64_encoded_token).decode()
-                    except Exception as e:
-                        logger.error(f"Error decoding token: {e}")
-                        await self.close(code=4000)
-                        return
-                elif protocol.startswith('server.'):
-                    # Extract server_id from subprotocol
-                    server_id = protocol.split('.', 1)[1]
-                elif protocol.startswith('username.'):
-                    # Extract username from subprotocol
-                    username = protocol.split('.', 1)[1]
-                elif protocol.startswith('auth.'):
-                    # Use the `auth` ticket as the subprotocol
-                    subprotocol_auth = protocol
-            if not token or not server_id or not username:
-                logger.error("Missing token, server_id, or username")
+                    elif protocol.startswith('server.'):
+                        # Extract server_id from subprotocol
+                        server_id = protocol.split('.', 1)[1]
+                    elif protocol.startswith('username.'):
+                        # Extract username from subprotocol
+                        username = protocol.split('.', 1)[1]
+                    elif protocol.startswith('auth.'):
+                        # Use the `auth` ticket as the subprotocol
+                        subprotocol_auth = protocol
+            except Exception as e:
+                logger.error(f"Error parsing subprotocols: {e}")
+                await self.close(code=4000)
+                return
+            if not token or not server_id or not username or not subprotocol_auth:
+                logger.error("Missing required subprotocols")
                 await self.close(code=4000)
                 return
         else:
