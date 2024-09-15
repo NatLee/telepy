@@ -28,8 +28,16 @@ function setupWebSocketConnection(serverID, username) {
 
     const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const accessToken = localStorage.getItem('accessToken');
-    const ws_path = `${ws_scheme}://${window.location.host}/ws/terminal/?token=${accessToken}&server_id=${serverID}&username=${username}`;
-    const socket = new WebSocket(ws_path);
+    const ws_path = `${ws_scheme}://${window.location.host}/ws/terminal/`;
+    
+    // Token need to be encoded with base64
+    const tokenInfo = `token.${btoa(accessToken)}`;
+    const serverInfo = `server.${serverID}`;
+    const usernameInfo = `username.${username}`;
+    // Create a ticket as auth for subprotocols
+    const ticket = `auth.${btoa(`${serverID}.${username}`)}`;
+    const socket = new WebSocket(ws_path, ['token', tokenInfo, serverInfo, usernameInfo, ticket]);
+
     // Expose the socket object to the window
     window.socket = socket;
 
