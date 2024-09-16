@@ -6,6 +6,7 @@ import signal
 import fcntl
 import termios
 import struct
+import base64
 
 from asgiref.sync import sync_to_async
 from asgiref.sync import async_to_sync
@@ -13,15 +14,16 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 
 from rest_framework_simplejwt.tokens import AccessToken
-from rest_framework.authtoken.models import Token
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 from channels.layers import get_channel_layer
 from channels.generic.websocket import AsyncWebsocketConsumer
-from channels.exceptions import StopConsumer
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
+
+import logging
+logger = logging.getLogger(__name__)
 
 class TerminalConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
@@ -30,68 +32,100 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         self.fd = None
 
     async def connect(self):
-        # Extract token from query string
-        query_string = self.scope['query_string'].decode()
-        params = dict(x.split('=') for x in query_string.split('&'))
+        logger.info("WebSocket connection attempt")
+        subprotocol_auth = None
+        token = None
+        server_id = None
+        username = None
 
-        token = params.get('token', None)
-        if not token:
-            await self.close()
-            return
-
-        # Extract server_id from query string
-        server_id = params.get('server_id', None)
-        # Check if server_id is provided
-        if not server_id:
-            print("Server ID is not provided")
-            await self.close()
+        # Check for subprotocols
+        if self.scope['subprotocols']:
+            try:
+                for protocol in self.scope['subprotocols']:
+                    if protocol.startswith('token.'):
+                        # Extract token from subprotocol
+                        base64_encoded_token = protocol.split('.', 1)[1]
+                        # Decode token
+                        token = base64.b64decode(base64_encoded_token).decode()
+                    elif protocol.startswith('server.'):
+                        # Extract server_id from subprotocol
+                        server_id = protocol.split('.', 1)[1]
+                    elif protocol.startswith('username.'):
+                        # Extract username from subprotocol
+                        username = protocol.split('.', 1)[1]
+                    elif protocol.startswith('auth.'):
+                        # Use the `auth` ticket as the subprotocol
+                        subprotocol_auth = protocol
+            except Exception as e:
+                logger.error(f"Error parsing subprotocols: {e}")
+                await self.close(code=4000)
+                return
+            if not token or not server_id or not username or not subprotocol_auth:
+                logger.error("Missing required subprotocols")
+                await self.close(code=4000)
+                return
+        else:
+            logger.error("No subprotocols provided")
+            await self.close(code=4000)
             return
 
         # Verify JWT token
         try:
             access_token = AccessToken(token)
-            # Get user from token
             user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
+            logger.info(f"User authenticated: {user}")
+
             # Check if user has access to the server
-            if not await self.check_permissions(user, server_id):
+            has_permissions = await self.check_permissions(user, server_id)
+            if not has_permissions:
+                logger.error(f"User [{user}] does not have access to server [{server_id}]")
                 await self.close(code=4004)
-                raise StopConsumer(f"User [{user}] does not have access to server [{server_id}]")
-            await self.accept()
+                return
         except (InvalidToken, TokenError) as e:
-            print(f"Token invalid: {e}")
-            await self.close(code=4001)  # Close with error code
-            raise StopConsumer("Authentication failed")
+            logger.error(f"Token invalid: {e}")
+            await self.close(code=4001)
+            return
+        except User.DoesNotExist:
+            logger.error("User not found")
+            await self.close(code=4001)
+            return
 
         # Get reverse server port
         reverse_port = await self.get_reverse_server_port(server_id)
+
         # Check if reverse_port is valid
         if not reverse_port:
-            await self.close(code=4002)  # Close with error code
-            raise StopConsumer("Invalid server ID")
+            logger.error(f"Invalid server ID: {server_id}")
+            await self.close(code=4002)
+            return
 
-        # Extract target server's username from query string
-        username = params.get('username', None)
-        # Check if username is provided
-        if not username or not await self.check_username(server_id, username):
-            await self.close(code=4003)  # Close with error code
-            raise StopConsumer("Username is not provided or invalid")
+        # Check if username is valid
+        if not await self.check_username(server_id, username):
+            logger.error(f"Invalid username: {username}")
+            await self.close(code=4003)
+            return
 
-        # ========================
+        # Accept the WebSocket connection with the subprotocol token
+        await self.accept(subprotocol_auth)
+        logger.info("WebSocket connection accepted")
 
+        # Start the SSH connection
         if self.child_pid is None:
-            self.child_pid, self.fd = pty.fork()
-            if self.child_pid == 0:  # Child process
-                # Set TERM environment variable to xterm for the SSH session
-                os.environ['TERM'] = 'xterm'
-                # Execute SSH command to connect to the reverse server
-                os.execlp(
-                    'bash', 'bash', '-c',
-                    f'ssh {username}@reverse -p {reverse_port}'
-                )
-            else:  # Parent process
-                # This is the server-side component that reads output from the SSH session
-                # and sends it back to the web client via WebSocket.
-                asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
+            try:
+                # Fork a child process
+                self.child_pid, self.fd = pty.fork()
+                if self.child_pid == 0:  # Child process
+                    # Set TERM environment variable to xterm
+                    os.environ['TERM'] = 'xterm'
+                    # Execute the SSH command
+                    os.execlp('bash', 'bash', '-c', f'ssh {username}@reverse -p {reverse_port}')
+                else:  # Parent process
+                    asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
+                logger.info("SSH connection started")
+            except Exception as e:
+                logger.error(f"Error starting SSH connection: {e}")
+                await self.close(code=4005)
+                return
 
     @sync_to_async
     def check_permissions(self, user, server_id) -> bool:
