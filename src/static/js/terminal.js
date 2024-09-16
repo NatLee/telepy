@@ -34,10 +34,8 @@ function setupWebSocketConnection(serverID, username) {
     const tokenInfo = `token.${btoa(accessToken)}`;
     const serverInfo = `server.${serverID}`;
     const usernameInfo = `username.${username}`;
-    // Create a ticket as auth for subprotocols
-    let ticket = btoa(`${serverID}.${username}`);
-    // Remove symbols from the ticket （only allow letters and numbers）
-    ticket = ticket.replace(/[^a-zA-Z0-9]/g, '');
+    // Create a ticket as auth for subprotocols (avoid special characters)
+    let ticket = encodeURIComponent(btoa(JSON.stringify(`${serverID}.${username}`)));
     ticket = `auth.${ticket}`;
     const socket = new WebSocket(ws_path, [tokenInfo, serverInfo, usernameInfo, ticket]);
 
