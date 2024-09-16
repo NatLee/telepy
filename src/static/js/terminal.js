@@ -34,8 +34,8 @@ function setupWebSocketConnection(serverID, username) {
     const tokenInfo = `token.${btoa(accessToken)}`;
     const serverInfo = `server.${serverID}`;
     const usernameInfo = `username.${username}`;
-    // Create a ticket as auth for subprotocols (avoid special characters)
-    let ticket = encodeURIComponent(btoa(JSON.stringify(`${serverID}.${username}`)));
+    // Create a ticket as auth for subprotocols (avoid special characters like % or =)
+    let ticket = sha256(`${serverID}.${username}`);
     ticket = `auth.${ticket}`;
     const socket = new WebSocket(ws_path, [tokenInfo, serverInfo, usernameInfo, ticket]);
 
