@@ -93,6 +93,11 @@ command_backend_debug() {
     docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py runserver 0.0.0.0:8000"
 }
 
+command_collect_static_files() {
+    # Collect static files.
+    docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py collectstatic --noinput"
+}
+
 ### Main script logic
 
 # Load environment variables
@@ -130,6 +135,10 @@ case "$1" in
     backend-debug)
         shift
         command_backend_debug "$@"
+        ;;
+    collect-static)
+        shift
+        command_collect_static_files "$@"
         ;;
     *)
         echo "Usage: $0 {keygen|create-superuser}"
