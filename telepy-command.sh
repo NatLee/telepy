@@ -98,6 +98,19 @@ command_collect_static_files() {
     docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py collectstatic --noinput"
 }
 
+command_django_startapp() {
+    # Create a new Django app.
+    docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py startapp `echo $@`"
+
+    # check the folder is created
+    if [ ! -d "./src/$@" ]; then
+        echo "Folder not created"
+        exit 1
+    fi
+    # if created, we need to make it editable
+    sudo chown -R $USER:$USER ./src/$@
+}
+
 ### Main script logic
 
 # Load environment variables
@@ -140,6 +153,10 @@ case "$1" in
         shift
         command_collect_static_files "$@"
         ;;
+    django-startapp)
+        shift
+        command_django_startapp "$@"
+        ;;
     *)
         echo "Usage: $0 sub-command [args]"
         echo "Sub-commands:"
@@ -152,5 +169,6 @@ case "$1" in
         echo "  migration: Run migration process."
         echo "  backend-debug: Recreate and attach to backend container."
         echo "  collect-static: Collect static files to increase rendering speed."
+        echo "  django-startapp: Create a new Django app."
         ;;
 esac
