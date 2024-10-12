@@ -20,13 +20,42 @@ ssh_keygen_command() {
     ssh-keygen -f ./ssh/backend_ssh_key/id_rsa -t rsa -C "root@telepy-web" -N '' <<<$'\ny' >/dev/null 2>&1
 }
 
+create_superuser_command() {
+    
+    # Function to prompt for input with a default value
+    prompt_with_default() {
+        local prompt="$1"
+        local default="$2"
+        local input
+
+        read -p "$prompt [$default]: " input
+        echo "${input:-$default}"
+    }
+
+    # Get user input
+    USERNAME=$(prompt_with_default "Enter username" "admin")
+    EMAIL=$(prompt_with_default "Enter email" "admin@admin.com")
+    PASSWORD=$(prompt_with_default "Enter password" "1234")
+
+    # Create superuser
+    docker exec -it telepy-web-${PROJECT_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+}
+
 # Main script logic
+
+# Load environment variables
+export $(grep -v '^#' .env | xargs)
+
 case "$1" in
     keygen)
         shift
         ssh_keygen_command "$@"
         ;;
+    create-superuser)
+        shift
+        create_superuser_command "$@"
+        ;;
     *)
-        echo "Usage: $0 {keygen|...}"
+        echo "Usage: $0 {keygen|create-superuser}"
         ;;
 esac
