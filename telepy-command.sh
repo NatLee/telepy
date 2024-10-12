@@ -61,7 +61,12 @@ command_ssh_shell() {
     docker exec -it telepy-ssh-${PROJECT_NAME} bash
 }
 
-# Main script logic
+command_migration() {
+    # Run migration.
+    docker exec -it telepy-web-${PROJECT_NAME} bash -c 'python manage.py makemigrations && python manage.py migrate'
+}
+
+### Main script logic
 
 # Load environment variables
 export $(grep -v '^#' .env | xargs)
@@ -90,6 +95,10 @@ case "$1" in
     ssh-shell)
         shift
         command_ssh_shell "$@"
+        ;;
+    migration)
+        shift
+        command_migration "$@"
         ;;
     *)
         echo "Usage: $0 {keygen|create-superuser}"
