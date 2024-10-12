@@ -56,6 +56,11 @@ command_supervisor_ctl() {
     docker exec -it telepy-web-${PROJECT_NAME} supervisorctl -c /etc/supervisor/conf.d/supervisord.conf
 }
 
+command_ssh_shell() {
+    # Run ssh shell.
+    docker exec -it telepy-ssh-${PROJECT_NAME} bash
+}
+
 # Main script logic
 
 # Load environment variables
@@ -81,6 +86,10 @@ case "$1" in
     supervisorctl)
         shift
         command_supervisor_ctl "$@"
+        ;;
+    ssh-shell)
+        shift
+        command_ssh_shell "$@"
         ;;
     *)
         echo "Usage: $0 {keygen|create-superuser}"
