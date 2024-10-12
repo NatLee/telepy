@@ -141,6 +141,16 @@ case "$1" in
         command_collect_static_files "$@"
         ;;
     *)
-        echo "Usage: $0 {keygen|create-superuser}"
+        echo "Usage: $0 sub-command [args]"
+        echo "Sub-commands:"
+        echo "  keygen: Generate SSH keys for Telepy service."
+        echo "  create-superuser: Create a admin account for Telepy management."
+        echo "  shell: Create a shell to run arbitrary command."
+        echo "  ipython: Create a shell to run ipython."
+        echo "  supervisorctl: Attach to supervisor control shell."
+        echo "  ssh-shell: Similar to 'shell', but for ssh container."
+        echo "  migration: Run migration process."
+        echo "  backend-debug: Recreate and attach to backend container."
+        echo "  collect-static: Collect static files to increase rendering speed."
         ;;
 esac
