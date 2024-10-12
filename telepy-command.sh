@@ -51,6 +51,11 @@ command_ipython() {
     docker exec -it telepy-web-${PROJECT_NAME} bash -c 'python manage.py shell'
 }
 
+command_supervisor_ctl() {
+    # Run supervisor controll shell.
+    docker exec -it telepy-web-${PROJECT_NAME} supervisorctl -c /etc/supervisor/conf.d/supervisord.conf
+}
+
 # Main script logic
 
 # Load environment variables
@@ -72,6 +77,10 @@ case "$1" in
     ipython)
         shift
         command_ipython "$@"
+        ;;
+    supervisorctl)
+        shift
+        command_supervisor_ctl "$@"
         ;;
     *)
         echo "Usage: $0 {keygen|create-superuser}"
