@@ -50,6 +50,7 @@ services:
       - ./logs/ssh:/ssh-logs
       - ./src:/src
       - ./scripts:/scripts # for custom scripts
+      - ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
       - ./supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:rw
       - ./ssh/root_ssh_key:/ssh # for reading authorized_keys
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
