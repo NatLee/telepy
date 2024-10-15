@@ -1,6 +1,12 @@
 #!/bin/bash
 #TODO: Constder binding "telepy" command with this script.
 
+# Constant: container name for Telepy web backend.
+CONTAINER_WEB_NAME="telepy-web-${PROJECT_NAME}"
+
+# Constant: container name for Telepy ssh service.
+CONTAINER_SSH_NAME="telepy-ssh-${PROJECT_NAME}"
+
 # Function for the 'ssh-keygen' sub-command
 ssh_keygen_command() {
     # TODO: Capture command arguments with "$1".
@@ -38,22 +44,22 @@ command_create_superuser() {
     PASSWORD=$(prompt_with_default "Enter password" "1234")
 
     # Create superuser
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
 }
 
 command_exec() {
     # Run arbitrary command.
-    docker exec -it telepy-web-${PROJECT_NAME} bash
+    docker exec -it ${CONTAINER_WEB_NAME} bash
 }
 
 command_ipython() {
     # Run ipython shell.
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c 'python manage.py shell'
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c 'python manage.py shell'
 }
 
 command_supervisor_ctl() {
     # Run supervisor controll shell.
-    docker exec -it telepy-web-${PROJECT_NAME} supervisorctl -c /etc/supervisor/conf.d/supervisord.conf
+    docker exec -it ${CONTAINER_WEB_NAME} supervisorctl -c /etc/supervisor/conf.d/supervisord.conf
 }
 
 command_ssh_shell() {
@@ -63,24 +69,24 @@ command_ssh_shell() {
 
 command_migration() {
     # Run migration.
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c 'python manage.py makemigrations && python manage.py migrate'
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c 'python manage.py makemigrations && python manage.py migrate'
 }
 
 command_backend_debug() {
     # Recrate and attach to backend container.
     # 檢查 supervisor 是否正在運行 Django
-    supervisor_status=$(docker exec telepy-web-${PROJECT_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf status django")
+    supervisor_status=$(docker exec ${CONTAINER_WEB_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf status django")
 
     if [[ $supervisor_status == *"RUNNING"* ]]; then
     echo "Supervisor 正在運行 Django，使用 supervisor 停止..."
-    docker exec telepy-web-${PROJECT_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf stop django"
+    docker exec ${CONTAINER_WEB_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf stop django"
     else
     echo "Supervisor 未運行 Django，嘗試查找是否有手動啟動的 Django ..."
-    django_pid=$(docker exec telepy-web-${PROJECT_NAME} bash -c "ps aux | grep 'python manage.py runserver' | grep -v grep | awk '{print \$2}'")
+    django_pid=$(docker exec ${CONTAINER_WEB_NAME} bash -c "ps aux | grep 'python manage.py runserver' | grep -v grep | awk '{print \$2}'")
 
     if [ -n "$django_pid" ]; then
         echo "找到手動啟動的 Django (PID: $django_pid)，正在停止..."
-        docker exec telepy-web-${PROJECT_NAME} bash -c "kill $django_pid"
+        docker exec ${CONTAINER_WEB_NAME} bash -c "kill $django_pid"
     else
         echo "未找到運行中的 Django 。"
     fi
@@ -90,17 +96,17 @@ command_backend_debug() {
     sleep 5
 
     echo "啟動新的 Django ..."
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py runserver 0.0.0.0:8000"
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c "python manage.py runserver 0.0.0.0:8000"
 }
 
 command_collect_static_files() {
     # Collect static files.
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py collectstatic --noinput"
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c "python manage.py collectstatic --noinput"
 }
 
 command_django_startapp() {
     # Create a new Django app.
-    docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py startapp `echo $@`"
+    docker exec -it ${CONTAINER_WEB_NAME} bash -c "python manage.py startapp `echo $@`"
 
     # check the folder is created
     if [ ! -d "./src/$@" ]; then
