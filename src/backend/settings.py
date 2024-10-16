@@ -13,6 +13,7 @@ print("-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "backend-data"
 print(f"---------- Project DIR: {BASE_DIR}")
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -158,7 +159,7 @@ SWAGGER_SETTINGS = {
 
 
 # -------------- START - Database Setting --------------
-SQLITE_DIR = BASE_DIR / "db.sqlite3"
+SQLITE_DIR = DATA_DIR / "db.sqlite3"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
