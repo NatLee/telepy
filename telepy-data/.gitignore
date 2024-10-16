@@ -1,4 +1,5 @@
-*
+# Ignore subfolders.
+/*
 
 # Keep this ignore file.
 !.gitignore
