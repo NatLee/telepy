@@ -46,12 +46,18 @@ services:
       - SERVER_DOMAIN=${SERVER_DOMAIN}
 
     volumes: 
-      - ./logs/backend:/logs
-      - ./logs/ssh:/ssh-logs
+      # Source code
       - ./src:/src
       - ./scripts:/scripts # for custom scripts
-      - ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
       - ./supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:rw
+      # Logging
+      - ./telepy-logs/backend:/logs
+      - ./telepy-logs/ssh:/ssh-logs
+      - ./telepy-logs/supervisord:/supervisord-log
+      # Mutable data
+      - ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
+      - ./telepy-data/supervisord:/data/supervisord
+      # SSH
       - ./ssh/root_ssh_key:/ssh # for reading authorized_keys
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
     depends_on:
@@ -77,7 +83,7 @@ services:
       - USER_NAME=telepy
       - WORK_DIR=/config
     volumes:
-      - ./logs/ssh:/config/logs
+      - ./telepy-logs/ssh:/config/logs
       - ./ssh/root_ssh_key:/config/.ssh
       - ./ssh/ssh_host_keys:/config/ssh_host_keys
       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
