@@ -12,9 +12,11 @@ logger = logging.getLogger(__name__)
 print("-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "backend-data"
+BASE_DIR = Path(__file__).resolve().parent.parent # Excepted to be "src" folder.
+ROOT_DIR = BASE_DIR.parent # Excepted to be the root folder of the project (telepy) or root dir of container.
+DATA_DIR = ROOT_DIR / "data"
 print(f"---------- Project DIR: {BASE_DIR}")
+print(f"---------- Data DIR: {DATA_DIR}")
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-uye!=@*gjois#e#8u*3law8=d4^&5s0sh-w*+r3_%+x5tn$lru'
@@ -198,9 +200,10 @@ APPEND_SLASH = False
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = "api/__hidden_statics/"
-STATIC_ROOT = "staticfiles"
+STATIC_ROOT = DATA_DIR / "staticfiles"
 STATICFILES_DIRS = [
     BASE_DIR / "static",
+    STATIC_ROOT,
     # other folders containing static files
 ]
 
