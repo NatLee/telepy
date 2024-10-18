@@ -14,8 +14,8 @@ if [ "${DEBUG,,}" = "true" ]; then
     echo "Running in Debug mode"
 else
     echo "Running in Production mode"
-    # Remove old static files in folder and create a new one
-    rm -rf /src/staticfiles/* && python manage.py collectstatic --noinput
+    # Remove old static files folder and create a new one
+    rm -rf /src/staticfiles && python manage.py collectstatic --noinput
 fi
 
 # Migrate the database
