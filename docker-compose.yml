@@ -55,9 +55,9 @@ services:
       - ./telepy-logs/ssh:/ssh-logs
       - ./telepy-logs/supervisord:/supervisord-log
       # Mutable data
-      - ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
+      - ./telepy-data/staticfiles:/data/staticfiles # Pre-rendered file caches.
       - ./telepy-data/supervisord:/data/supervisord
-      - ./telepy-data/backend:/src/backend-data
+      - ./telepy-data:/data
       # SSH
       - ./ssh/root_ssh_key:/ssh # for reading authorized_keys
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
