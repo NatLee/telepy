@@ -55,7 +55,7 @@ services:
       - ./telepy-logs/ssh:/ssh-logs
       - ./telepy-logs/supervisord:/supervisord-log
       # Mutable data
-      #- ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
+      - ./telepy-data/staticfiles:/src/staticfiles # Pre-rendered file caches.
       - ./telepy-data/supervisord:/data/supervisord
       - ./telepy-data/backend:/src/backend-data
       # SSH
