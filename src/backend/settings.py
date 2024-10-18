@@ -203,7 +203,6 @@ STATIC_URL = "api/__hidden_statics/"
 STATIC_ROOT = DATA_DIR / "staticfiles"
 STATICFILES_DIRS = [
     BASE_DIR / "static",
-    STATIC_ROOT,
     # other folders containing static files
 ]
 
