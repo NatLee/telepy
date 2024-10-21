@@ -1,5 +1,6 @@
 #!/bin/bash
 #TODO: Constder binding "telepy" command with this script.
+export $(grep -v '^#' .env | xargs)
 
 # Constant: container name for Telepy web backend.
 CONTAINER_WEB_NAME="telepy-web-${PROJECT_NAME}"
