@@ -1,21 +1,11 @@
 # Custom ignore files
 
-staticfiles
-
 ssh/backend_ssh_key/id_rsa*
 ssh/backend_ssh_key/known_hosts*
 
 ssh/root_ssh_key/authorized_keys
 ssh/ssh_host_keys/*_key
 ssh/ssh_host_keys/*_key.pub
-
-log
-logs/backend
-logs/ssh
-
-backend/staticfiles
-
-*.pid
 
 000*_*.py
 00*_*.py
@@ -90,8 +80,6 @@ coverage.xml
 # Django stuff:
 *.log
 local_settings.py
-db.sqlite3
-db.sqlite3-journal
 
 # Flask stuff:
 instance/
