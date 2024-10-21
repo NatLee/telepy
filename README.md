@@ -12,7 +12,7 @@ A web application for managing and monitoring the reverse SSH tunnels.
 2. Generate keys for SSH server.
 
 ```bash
-bash dev-keygen.sh
+./telepy.sh keygen
 ```
 
 3. Build and run the Docker container.
@@ -29,7 +29,7 @@ docker-compose up
 You need to check the script `./dev-create-superuser.sh` and change the username and password if you want.
 
 ```bash
-bash dev-create-superuser.sh
+./telepy.sh create-superuser
 ```
 
 
@@ -42,6 +42,28 @@ If you want to see the API documentation, you need to login first.
 1. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>/api/__hidden_admin/` and login with the superuser.
 
 2. Go to `http//localhost:<YOUR_WEB_SERVER_PORT>/api/__hidden_swagger` and you will see the Swagger.
+
+## Misc
+
+There are some scripts in the `dev-scripts` directory.
+
+You can just use `./telepy.sh` to run the scripts.
+
+```bash
+Usage: ./telepy.sh sub-command [args]
+Sub-commands:
+  keygen: Generate SSH keys for Telepy service.
+  create-superuser: Create an admin account for Telepy management.
+  shell: Create a shell to run arbitrary command.
+  ipython: Create a shell to run ipython.
+  supervisorctl: Attach to supervisor control shell.
+  ssh-shell: Similar to 'shell', but for ssh container.
+  migration: Run migration process.
+  backend-debug: Recreate and attach to backend container.
+  collect-static: Collect static files to increase rendering speed.
+  django-startapp: Create a new Django app.
+```
+
 
 ## Contributors
 
