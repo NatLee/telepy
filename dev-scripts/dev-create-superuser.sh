@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# Load environment variables
-export $(grep -v '^#' .env | xargs)
+source "$(dirname "$0")/common.sh"
 
 # Function to prompt for input with a default value
 prompt_with_default() {
@@ -19,4 +18,7 @@ EMAIL=$(prompt_with_default "Enter email" "admin@admin.com")
 PASSWORD=$(prompt_with_default "Enter password" "1234")
 
 # Create superuser
-docker exec -it telepy-web-${PROJECT_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+print_message "$BLUE" "Creating superuser..."
+docker exec -it ${CONTAINER_WEB_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+
+print_message "$GREEN" "Superuser created successfully."

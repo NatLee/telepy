@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Placeholder for authorized keys
+source "$(dirname "$0")/common.sh"
+
+print_message "$BLUE" "Generating SSH keys for Telepy service..."
+
+# Create placeholder for authorized keys
 rm -f ./ssh/root_ssh_key/authorized_keys
 touch ./ssh/root_ssh_key/authorized_keys
 
@@ -12,3 +16,5 @@ ssh-keygen -f ./ssh/ssh_host_keys/ssh_host_ed25519_key -t ed25519 -C "root@telep
 
 # Generate keys for backend
 ssh-keygen -f ./ssh/backend_ssh_key/id_rsa -t rsa -C "root@telepy-web" -N '' <<<$'\ny' >/dev/null 2>&1
+
+print_message "$GREEN" "SSH keys generated successfully."
