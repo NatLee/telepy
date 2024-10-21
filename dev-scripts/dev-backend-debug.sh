@@ -1,28 +1,29 @@
 #!/bin/bash
 
-# 載入環境變數
-export $(grep -v '^#' .env | xargs)
+source "$(dirname "$0")/common.sh"
+
+print_message "$BLUE" "Starting backend debug process..."
 
 # 檢查 supervisor 是否正在運行 Django
-supervisor_status=$(docker exec telepy-web-${PROJECT_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf status django")
+supervisor_status=$(docker exec ${CONTAINER_WEB_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf status django")
 
 if [[ $supervisor_status == *"RUNNING"* ]]; then
-echo "Supervisor 正在運行 Django，使用 supervisor 停止..."
-docker exec telepy-web-${PROJECT_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf stop django"
+  print_message "$YELLOW" "Supervisor is running Django, stopping it..."
+  docker exec ${CONTAINER_WEB_NAME} bash -c "supervisorctl -c /etc/supervisor/conf.d/supervisord.conf stop django"
 else
-echo "Supervisor 未運行 Django，嘗試查找是否有手動啟動的 Django ..."
-django_pid=$(docker exec telepy-web-${PROJECT_NAME} bash -c "ps aux | grep 'python manage.py runserver' | grep -v grep | awk '{print \$2}'")
+  print_message "$YELLOW" "Supervisor is not running Django, checking for manually started Django..."
+  django_pid=$(docker exec ${CONTAINER_WEB_NAME} bash -c "ps aux | grep 'python manage.py runserver' | grep -v grep | awk '{print \$2}'")
 
-if [ -n "$django_pid" ]; then
-    echo "找到手動啟動的 Django (PID: $django_pid)，正在停止..."
-    docker exec telepy-web-${PROJECT_NAME} bash -c "kill $django_pid"
-else
-    echo "未找到運行中的 Django 。"
-fi
+  if [ -n "$django_pid" ]; then
+    print_message "$YELLOW" "Found manually started Django (PID: $django_pid), stopping it..."
+    docker exec ${CONTAINER_WEB_NAME} bash -c "kill $django_pid"
+  else
+    print_message "$YELLOW" "No running Django instance found."
+  fi
 fi
 
-# 等待幾秒鐘，確保舊的 Django 已經完全停止
+print_message "$BLUE" "Waiting for Django to stop completely..."
 sleep 5
 
-echo "啟動新的 Django ..."
-docker exec -it telepy-web-${PROJECT_NAME} bash -c "python manage.py runserver 0.0.0.0:8000"
+print_message "$GREEN" "Starting new Django instance..."
+docker exec -it ${CONTAINER_WEB_NAME} bash -c "python manage.py runserver 0.0.0.0:8000"
