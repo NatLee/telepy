@@ -252,27 +252,36 @@
     }
 
     try {
+      // 先進行註冊
       const registerResponse = await registerUser(username, password);
-    } catch (error) {
-        const message = error.message || error.detail || 'Registration failed';
-        showError(`Registration failed. ${message}`);
-        return;
-    }
-    try {
-      if (registerResponse.status === 'success') {
-        const tokens = await performLogin(username, password);
-      } else {
-        const message = error.message || error.detail || 'Registration failed';
-        showError(`Register failed. ${registerResponse.error}`);
-        return;
+      
+      if (registerResponse.status !== 'success') {
+          showError(`Register failed. ${registerResponse.error}`);
+          return;
       }
+
+      // 註冊成功後進行登入
+      const tokens = await performLogin(username, password);
+      
+      // 儲存 tokens
       localStorage.setItem('accessToken', tokens.access_token);
       localStorage.setItem('refreshToken', tokens.refresh_token);
+      
+      // 重導向
       window.location.href = '/tunnels/index';
+      
     } catch (error) {
-      const message = error.message || error.detail || 'Login failed';
-      showError(`Login failed. ${message}`);
+        // 統一的錯誤處理
+        const message = error.message || error.detail || 'Operation failed';
+        
+        // 根據錯誤發生的階段顯示不同的錯誤訊息
+        if (!registerResponse) {
+            showError(`Registration failed. ${message}`);
+        } else {
+            showError(`Login failed. ${message}`);
+        }
     }
+    
 
   }
 
