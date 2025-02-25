@@ -1,6 +1,8 @@
 [Unit]
 Description=AutoSSH tunnel service for reverse SSH tunnel
 After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 User=${username}
@@ -10,6 +12,17 @@ ExecStart=/usr/bin/autossh -M 0 -o "ServerAliveInterval 30" -o "ServerAliveCount
 Restart=always
 # Time to sleep before restarting a service
 RestartSec=30
+# Timeout for starting the service
+TimeoutStartSec=5min
+# Timeout for stopping the service
+TimeoutStopSec=30
+
+# Use process kill mode
+KillMode=process
+
+# Limit the restart rate
+StartLimitInterval=5min
+StartLimitBurst=3
 
 [Install]
 WantedBy=multi-user.target
