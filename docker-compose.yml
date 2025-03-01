@@ -87,6 +87,7 @@ services:
       - ./telepy-logs/ssh:/config/logs
       - ./ssh/root_ssh_key:/config/.ssh
       - ./ssh/ssh_host_keys:/config/ssh_host_keys
+      - ./ssh/sshd_config:/config/sshd
       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
       - ./ssh/custom_scripts/custom-services.d:/custom-services.d
     ports:
