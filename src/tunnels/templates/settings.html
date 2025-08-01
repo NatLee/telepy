@@ -8,36 +8,68 @@
 {% block title %}Admin Settings{% endblock %}
 
 {% block content %}
-<div class="mx-5">
-   <div class="d-flex justify-content-between align-items-center mb-3">
-      <div class="d-flex align-items-center">
-         <h2>Admin Settings</h2>
-         <div class="websocket-status status ml-2" id="websocket-status"></div>
+<div class="container-fluid px-4 py-4">
+   <!-- Header Section -->
+   <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4">
+      <div class="d-flex align-items-center mb-3 mb-md-0">
+         <div class="page-icon me-3 d-flex align-items-center justify-content-center" style="width: 50px; height: 50px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 16px; box-shadow: 0 8px 25px rgba(16, 185, 129, 0.2);">
+            <i class="fas fa-cog text-white" style="font-size: 1.3rem;"></i>
+         </div>
+         <div>
+            <h1 class="h2 mb-1 fw-bold text-dark" id="pageTitle">Settings</h1>
+            <p class="text-muted mb-0 small" id="pageDescription">Configure preferences</p>
+         </div>
+         <div class="websocket-status status ms-3" id="websocket-status"></div>
       </div>
    </div>
 
-   <!-- Info of this section -->
-   <div class="alert-info p-1 mb-3">
-      <p>
-        <strong>INFO</strong> 
-        This section is for adjusting the settings of this server.
-    </p>
+   <!-- Info Card -->
+   <div class="card mb-4 border-0" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.05), rgba(5, 150, 105, 0.05)); border-radius: 16px; backdrop-filter: blur(10px);">
+      <div class="card-body p-4">
+         <div class="d-flex align-items-start">
+            <div class="info-icon me-3 mt-1" style="color: #10b981;">
+               <i class="fas fa-info-circle fs-5"></i>
+            </div>
+            <div>
+               <h6 class="fw-bold text-dark mb-2" id="sectionTitle">User Settings</h6>
+               <p class="text-muted mb-0 lh-base" id="sectionDescription">
+                  Manage your user preferences and settings.
+                  Changes will be applied to your account only.
+               </p>
+            </div>
+         </div>
+      </div>
    </div>
-   <div class="table-responsive">
-      <table class="table">
-         <thead>
-            <tr>
-               <th scope="col">Setting</th>
-               <th scope="col">Toggle</th>
-            </tr>
-         </thead>
-         <tbody id="settingsTableBody">
-         </tbody>
-      </table>
+
+   <!-- Settings Table Card -->
+   <div class="card border-0 shadow-sm fade-in" style="border-radius: 12px; overflow: hidden;">
+      <div class="card-header bg-transparent border-0 p-4">
+                        <h5 class="card-title mb-0 fw-bold" id="cardTitle">User Settings</h5>
+      </div>
+      <div class="card-body p-0">
+         <div class="table-responsive">
+            <table class="table mb-0">
+               <thead>
+                  <tr>
+                     <th scope="col" style="border-top: none; width: 60%;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-sliders-h me-2 text-muted"></i>Setting
+                        </div>
+                     </th>
+                     <th scope="col" style="border-top: none; width: 40%;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-toggle-on me-2 text-muted"></i>Toggle
+                        </div>
+                     </th>
+                  </tr>
+               </thead>
+               <tbody id="settingsTableBody">
+               </tbody>
+            </table>
+         </div>
+      </div>
    </div>
 </div>
-
-
 {% endblock %}
 
 {% block scripts %}

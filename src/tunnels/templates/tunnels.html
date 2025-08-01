@@ -3,38 +3,84 @@
 {% block title %}Tunnels{% endblock %}
 
 {% block content %}
-<div class="mx-5">
-   <div class="d-flex justify-content-between align-items-center mb-3">
-      <div class="d-flex align-items-center">
-         <h2>Tunnels</h2>
-         <div class="websocket-status status ml-2" id="websocket-status"></div>
+<div class="container-fluid px-4 py-4">
+   <!-- Header Section -->
+   <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4">
+      <div class="d-flex align-items-center mb-3 mb-md-0">
+         <div class="page-icon me-3 d-flex align-items-center justify-content-center" style="width: 50px; height: 50px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 16px; box-shadow: 0 8px 25px rgba(99, 102, 241, 0.2);">
+            <i class="fas fa-project-diagram text-white" style="font-size: 1.3rem;"></i>
+         </div>
+         <div>
+            <h1 class="h2 mb-1 fw-bold text-dark">SSH Tunnels</h1>
+            <p class="text-muted mb-0 small">Manage your reverse tunnel connections</p>
+         </div>
+         <div class="websocket-status status ms-3" id="websocket-status"></div>
       </div>
-      <div>
-         <button class="btn btn-secondary" id="newTunnels" onclick="window.location.href='/tunnels/create'">+</button>
-         <button class="btn btn-secondary" id="refresh" onclick="fetchAndDisplayReverseServerKeys()">Refresh</button>
+      <div class="d-flex gap-2">
+         <button class="btn btn-custom d-flex align-items-center" id="newTunnels" onclick="window.location.href='/tunnels/create'">
+            <i class="fas fa-plus me-2"></i>New Tunnel
+         </button>
+         <button class="btn btn-outline-secondary d-flex align-items-center" id="refresh" onclick="fetchAndDisplayReverseServerKeys()" style="border-radius: 12px;">
+            <i class="fas fa-sync-alt me-2"></i>Refresh
+         </button>
       </div>   
    </div>
-   <!-- Info of this section -->
-   <div class="alert-info p-1 mb-3">
-      <p>
-        <strong>INFO</strong> 
-        This section allows you to manage the reverse tunnels which can reversely connect to this SSH server by using the <strong>private key</strong>.
-         You can create or delete tunnels' <strong>public key</strong> and manage the users existing on the target server.
-      </p>
+
+   <!-- Info Card -->
+   <div class="card mb-4 border-0" style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(139, 92, 246, 0.05)); border-radius: 16px; backdrop-filter: blur(10px);">
+      <div class="card-body p-4">
+         <div class="d-flex align-items-start">
+            <div class="info-icon me-3 mt-1" style="color: #6366f1;">
+               <i class="fas fa-info-circle fs-5"></i>
+            </div>
+            <div>
+               <h6 class="fw-bold text-dark mb-2">About SSH Tunnels</h6>
+               <p class="text-muted mb-0 lh-base">
+                  Manage reverse tunnels that connect to this SSH server using <strong>private keys</strong>.
+                  Create or delete tunnel <strong>public keys</strong> and manage users on your target servers.
+               </p>
+            </div>
+         </div>
+      </div>
    </div>
-   <div class="table-responsive">
-      <table class="table">
-         <thead>
-            <tr>
-               <th scope="col">Host</th>
-               <th scope="col">Reverse Port</th>
-               <th scope="col">Status</th>
-               <th scope="col">Actions</th>
-            </tr>
-         </thead>
-         <tbody id="tunnelsTableBody">
-         </tbody>
-      </table>
+
+   <!-- Tunnels Table Card -->
+   <div class="card border-0 shadow-sm fade-in" style="border-radius: 12px; overflow: hidden;">
+      <div class="card-header bg-transparent border-0 p-4">
+         <h5 class="card-title mb-0 fw-bold">Active Tunnels</h5>
+      </div>
+      <div class="card-body p-0">
+         <div class="table-responsive">
+            <table class="table mb-0">
+               <thead>
+                  <tr>
+                     <th scope="col" style="border-top: none;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-server me-2 text-muted"></i>Host
+                        </div>
+                     </th>
+                     <th scope="col" style="border-top: none;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-ethernet me-2 text-muted"></i>Reverse Port
+                        </div>
+                     </th>
+                     <th scope="col" style="border-top: none;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-signal me-2 text-muted"></i>Status
+                        </div>
+                     </th>
+                     <th scope="col" style="border-top: none;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-cogs me-2 text-muted"></i>Actions
+                        </div>
+                     </th>
+                  </tr>
+               </thead>
+               <tbody id="tunnelsTableBody">
+               </tbody>
+            </table>
+         </div>
+      </div>
    </div>
 </div>
 
@@ -176,9 +222,9 @@
         <textarea id="tunnelDescriptionText" class="form-control mb-3" rows="3" oninput="checkTunnelDetailsModalForChanges()"></textarea>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()">Copy Key</button>
-        <button type="button" class="btn btn-outline-success" onclick="saveDescription()">Save Description</button>
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()"><i class="fas fa-copy me-2"></i>Copy Key</button>
+        <button type="button" class="btn btn-success" onclick="saveDescription()"><i class="fas fa-save me-2"></i>Save Description</button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fas fa-times me-2"></i>Close</button>
       </div>
     </div>
   </div>

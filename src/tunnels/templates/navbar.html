@@ -1,35 +1,51 @@
-<nav class="navbar navbar-expand-sm navbar-dark bg-dark">
-  <div class="container-fluid">
-      <a class="navbar-brand fs-5" href="/">Telepy</a>
-      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+<nav class="navbar navbar-expand-lg navbar-dark">
+  <div class="container-fluid px-4">
+      <a class="navbar-brand d-flex align-items-center" href="/">
+          <div class="brand-icon me-2 d-flex align-items-center justify-content-center" style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+              <i class="fas fa-network-wired" style="color: #3b82f6; font-size: 1.2rem;"></i>
+          </div>
+          <span class="fw-bold" style="font-size: 1.4rem; letter-spacing: -0.02em;">Telepy</span>
+      </a>
+      <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation" style="box-shadow: none;">
           <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarNav">
-          <ul class="navbar-nav">
+          <ul class="navbar-nav mx-auto">
               <li class="nav-item">
-                <a class="nav-link {% if request.path == '/tunnels/index' %}active{% endif %}" aria-current="page" href="/tunnels/index">Tunnels</a>
+                <a class="nav-link {% if request.path == '/tunnels/index' %}active{% endif %}" href="/tunnels/index">
+                    <i class="fas fa-project-diagram me-2"></i>Tunnels
+                </a>
               </li>
               <li class="nav-item">
-                <a class="nav-link {% if request.path == '/tunnels/keys' %}active{% endif %}" aria-current="page" href="/tunnels/keys">Keys</a>
+                <a class="nav-link {% if request.path == '/tunnels/keys' %}active{% endif %}" href="/tunnels/keys">
+                    <i class="fas fa-key me-2"></i>Keys
+                </a>
               </li>
               <li class="nav-item">
-                <a class="nav-link {% if request.path == '/tunnels/logs' %}active{% endif %}" aria-current="page" href="/tunnels/logs">Logs</a>
+                <a class="nav-link {% if request.path == '/tunnels/logs' %}active{% endif %}" href="/tunnels/logs">
+                    <i class="fas fa-file-alt me-2"></i>Logs
+                </a>
               </li>
           </ul>
-          <ul class="navbar-nav ms-auto">
-              {% if user.is_superuser %}
+          <ul class="navbar-nav">
               <li class="nav-item">
-                <a class="nav-link {% if request.path == '/tunnels/settings' %}active{% endif %}" aria-current="page" href="/tunnels/settings">Settings</a>
+                <a class="nav-link {% if request.path == '/tunnels/settings' %}active{% endif %}" href="/tunnels/settings">
+                    <i class="fas fa-cog me-2"></i>Settings
+                </a>
+              </li>
+              <li class="nav-item dropdown" id="adminDropdownContainer" style="display: none;">
+                <a class="nav-link dropdown-toggle" href="#" id="adminDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="fas fa-tools me-2"></i>Admin
+                </a>
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li><a class="dropdown-item" href="/api/__hidden_admin/" target="_blank"><i class="fas fa-user-shield me-2"></i>Admin Panel</a></li>
+                  <li><a class="dropdown-item" href="/api/__hidden_swagger" target="_blank"><i class="fas fa-code me-2"></i>API Docs</a></li>
+                </ul>
               </li>
               <li class="nav-item">
-                <a class="nav-link" aria-current="page" href="/api/__hidden_admin/" target="_blank">Admin</a>
-              </li>
-              <li class="nav-item">
-                <a class="nav-link" aria-current="page" href="/api/__hidden_swagger" target="_blank">Swagger</a>
-              </li>
-              {% endif %}
-              <li class="nav-item">
-                  <a class="nav-link" href="#" id="logoutButton">Logout</a>
+                  <a class="nav-link" href="#" id="logoutButton" style="color: rgba(255,255,255,0.9);">
+                      <i class="fas fa-sign-out-alt me-2"></i>Logout
+                  </a>
               </li>
           </ul>
       </div>
@@ -47,5 +63,42 @@
     // Redirect to the login page
     window.location.href = '/login';
   });
+
+  // Check user permissions and show/hide admin dropdown
+  document.addEventListener('DOMContentLoaded', function() {
+    checkUserPermissions();
+  });
+
+  async function checkUserPermissions() {
+    const accessToken = localStorage.getItem('accessToken');
+    
+    if (!accessToken) {
+      return; // Not logged in
+    }
+
+    try {
+      const response = await fetch('/api/auth/user/profile', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const userData = await response.json();
+        
+        // Show admin dropdown if user is superuser
+        if (userData.is_superuser) {
+          const adminDropdown = document.getElementById('adminDropdownContainer');
+          if (adminDropdown) {
+            adminDropdown.style.display = 'block';
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error checking user permissions:', error);
+    }
+  }
 
 </script>

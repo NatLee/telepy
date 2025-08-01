@@ -3,50 +3,86 @@
 {% block title %}User Public Keys{% endblock %}
 
 {% block content %}
-<div class="mx-5">
-   <div class="d-flex justify-content-between align-items-center mb-3">
-      <div class="d-flex align-items-center">
-         <h2>User Public Keys</h2>
-         <div class="websocket-status status ml-2" id="websocket-status"></div>
+<div class="container-fluid px-4 py-4">
+   <!-- Header Section -->
+   <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center mb-4">
+      <div class="d-flex align-items-center mb-3 mb-md-0">
+         <div class="page-icon me-3 d-flex align-items-center justify-content-center" style="width: 50px; height: 50px; background: #ea580c; border-radius: 12px;">
+            <i class="fas fa-key text-white" style="font-size: 1.3rem;"></i>
+         </div>
+         <div>
+            <h1 class="h2 mb-1 fw-bold text-dark">SSH Public Keys</h1>
+            <p class="text-muted mb-0 small">Manage your SSH public keys</p>
+         </div>
+         <div class="websocket-status status ms-3" id="websocket-status"></div>
       </div>
-      <div>
-         <button class="btn btn-secondary" id="newKeys" onclick="createKeys()">+</button>
-         <button class="btn btn-secondary" id="refresh" onclick="fetchAndDisplayUserKeys()">Refresh</button>
+      <div class="d-flex gap-2">
+         <button class="btn btn-custom d-flex align-items-center" id="newKeys" onclick="createKeys()">
+            <i class="fas fa-plus me-2"></i>Add Key
+         </button>
+         <button class="btn btn-outline-secondary d-flex align-items-center" id="refresh" onclick="fetchAndDisplayUserKeys()">
+            <i class="fas fa-sync-alt me-2"></i>Refresh
+         </button>
       </div>   
    </div>
-   <!-- Info of this section -->
-   <div class="alert-info p-1 mb-3">
-    <p>
-      <strong>INFO</strong> 
-      This section is used to manage the public keys of the users that are allowed to directly connect to this SSH server.
-      You can add the <strong>public keys</strong> you often use to connect to other servers, and we'll hint you with these keys when you try to create a new tunnel.
-    </p>
+
+   <!-- Info Card -->
+   <div class="card mb-4 border-0" style="background: rgba(234, 88, 12, 0.05); border-radius: 12px;">
+      <div class="card-body p-4">
+         <div class="d-flex align-items-start">
+            <div class="info-icon me-3 mt-1" style="color: #ea580c;">
+               <i class="fas fa-info-circle fs-5"></i>
+            </div>
+            <div>
+               <h6 class="fw-bold text-dark mb-2">About SSH Public Keys</h6>
+               <p class="text-muted mb-0 lh-base">
+                  Manage public keys for users allowed to connect to this SSH server.
+                  Add <strong>public keys</strong> you frequently use to connect to other servers, and we'll suggest them when creating new tunnels.
+               </p>
+            </div>
+         </div>
+      </div>
    </div>
-   <div class="table-responsive">
-      <table class="table">
-         <thead>
-            <tr>
-               <th scope="col">Host</th>
-               <th scope="col">Actions</th>
-            </tr>
-         </thead>
-         <tbody id="userTableBody">
-         </tbody>
-      </table>
+
+   <!-- Keys Table Card -->
+   <div class="card border-0 shadow-sm fade-in" style="border-radius: 12px; overflow: hidden;">
+      <div class="card-header bg-transparent border-0 p-4">
+         <h5 class="card-title mb-0 fw-bold">Registered Keys</h5>
+      </div>
+      <div class="card-body p-0">
+         <div class="table-responsive">
+            <table class="table mb-0">
+               <thead>
+                  <tr>
+                     <th scope="col" style="border-top: none; width: 60%;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-server me-2 text-muted"></i>Host
+                        </div>
+                     </th>
+                     <th scope="col" style="border-top: none; width: 40%;">
+                        <div class="d-flex align-items-center">
+                           <i class="fas fa-cogs me-2 text-muted"></i>Actions
+                        </div>
+                     </th>
+                  </tr>
+               </thead>
+               <tbody id="userTableBody">
+               </tbody>
+            </table>
+         </div>
+      </div>
    </div>
 </div>
 
 <!-- Create Modal -->
-<div class="modal fade" id="createKeyModal" tabindex="-1" role="dialog" aria-labelledby="createKeyModalLabel" aria-hidden="true">
+<div class="modal fade" id="createKeyModal" tabindex="-1" role="dialog" aria-labelledby="createKeyModalLabel" inert>
     <div class="modal-dialog modal-lg" role="document">
         <div class="modal-content">
 
             <!-- Modal Header -->
             <div class="modal-header">
                 <h5 class="modal-title" id="createKeyModalLabel"><i class="fas fa-key"></i> Add New User Public Key</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                    <span aria-hidden="true">&times;</span>
-                </button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
 
             <!-- Modal Body -->
@@ -80,15 +116,15 @@
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fas fa-times"></i> Close</button>
-                <button type="button" class="btn btn-outline-primary" onclick="submitNewKey()"><i class="fas fa-save"></i> Save Changes</button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fas fa-times me-2"></i>Close</button>
+                <button type="button" class="btn btn-primary" onclick="submitNewKey()"><i class="fas fa-save me-2"></i>Save Changes</button>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Key Details Modal -->
-<div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" aria-hidden="true" onhidden.bs.modal="resetKeyDetailsModalState()">
+<div class="modal fade" id="keyDetailsModal" tabindex="-1" aria-labelledby="keyDetailsModalLabel" inert>
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
       <div class="modal-header">
@@ -113,9 +149,9 @@
         <textarea id="keyDescriptionText" class="form-control mb-3" rows="3" oninput="checkKeyDetailsModalForChanges()"></textarea>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-outline-primary" onclick="copyKeyToClipboard()">Copy Key</button>
-        <button type="button" class="btn btn-outline-success" onclick="saveDescription()">Save Description</button>
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-outline-primary" onclick="copyKeyToClipboard()"><i class="fas fa-copy me-2"></i>Copy Key</button>
+        <button type="button" class="btn btn-success" onclick="saveDescription()"><i class="fas fa-save me-2"></i>Save Description</button>
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fas fa-times me-2"></i>Close</button>
       </div>
     </div>
   </div>
