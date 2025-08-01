@@ -3,79 +3,111 @@
 
 {% block title %}Telepy{% endblock %}
 
-{% block styles %}
-<style>
-  body {
-    display: flex;
-    justify-content: center; /* Aligns horizontally */
-    align-items: center; /* Aligns vertically */
-    background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
-    background-size: 400% 400%;
-    animation: gradientBG 15s ease infinite;
-  }
-</style>
-{% endblock %}
+{% block styles %}{% endblock %}
 
 {% block body %}
 <body>
   <div class="login-container">
-    <h2 class="login-title">Telepy</h2>
-    <div class="text-center mt-3">
-        <p class="text-center">It seems you are the first time here. Please create an user to continue.</p>
+    <!-- Brand Header -->
+    <div class="text-center mb-4">
+      <div class="d-flex justify-content-center mb-3">
+        <div class="d-flex align-items-center justify-content-center" style="width: 60px; height: 60px; background: #16a34a; border-radius: 12px;">
+          <i class="fas fa-user-plus text-white" style="font-size: 1.5rem;"></i>
+        </div>
+      </div>
+      <h2 class="login-title">Welcome to Telepy</h2>
+      <p class="login-subtitle">Create your administrator account to get started</p>
     </div>
 
+    <!-- Welcome Message -->
+    <div class="alert alert-info border-0 mb-4" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1)); border-radius: 16px;">
+      <div class="d-flex align-items-start">
+        <i class="fas fa-info-circle text-primary me-3 mt-1"></i>
+        <div>
+          <h6 class="fw-bold mb-2">First Time Setup</h6>
+          <p class="mb-0 small">It seems you are setting up Telepy for the first time. Please create an administrator account to continue.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Registration Form -->
     <div id="loginForm">
-        <div class="mb-3">
-          <label for="username" class="form-label">Username</label>
-          <input type="text" class="form-control" id="username" required>
+      <div class="mb-4">
+        <label for="username" class="form-label">
+          <i class="fas fa-user me-2"></i>Username
+        </label>
+        <div class="input-icon">
+          <i class="fas fa-user"></i>
+          <input type="text" class="form-control" id="username" placeholder="Choose a username" required>
         </div>
-        <div class="mb-3">
-          <label for="password" class="form-label">Password</label>
-          <input type="password" class="form-control" id="password" required>
-          <div id="passwordStrength" class="mt-2"></div>
+      </div>
+      
+      <div class="mb-4">
+        <label for="password" class="form-label">
+          <i class="fas fa-lock me-2"></i>Password
+        </label>
+        <div class="input-icon">
+          <i class="fas fa-lock"></i>
+          <input type="password" class="form-control" id="password" placeholder="Create a strong password" required>
         </div>
-        <div class="mb-3">
-          <label for="password-again" class="form-label">Password Again</label>
-          <input type="password" class="form-control" id="password-again" required>
-          <div id="passwordMatch" class="mt-2"></div>
+        <div id="passwordStrength" class="password-strength mt-2"></div>
+      </div>
+      
+      <div class="mb-4">
+        <label for="password-again" class="form-label">
+          <i class="fas fa-shield-alt me-2"></i>Confirm Password
+        </label>
+        <div class="input-icon">
+          <i class="fas fa-shield-alt"></i>
+          <input type="password" class="form-control" id="password-again" placeholder="Confirm your password" required>
         </div>
-        <div class="d-grid">
-          <button class="btn btn-primary" id="loginBtn">Login</button>
-        </div>
+        <div id="passwordMatch" class="password-match mt-2"></div>
+      </div>
+      
+      <div class="d-grid mb-3">
+        <button class="btn btn-primary" id="loginBtn">
+          <i class="fas fa-user-plus me-2"></i>Create Account & Sign In
+        </button>
+      </div>
     </div>
 
     {% if social_google_client_id %}
-    <div class="text-center mt-3">
-      <p class="mb-0">- Or you can login with -</p>
-      <div class="d-flex justify-content-center">
-        <!-- Google login button -->
-        <div class="mt-3">
+    <!-- Social Login Divider -->
+    <div class="divider">
+      <span>or continue with</span>
+    </div>
 
-            <div id="g_id_onload"
-            data-client_id="{{ social_google_client_id }}"
-            data-context="signin"
-            data-ux_mode="popup"
-            data-callback="getTokenUsingGoogleCredential"
-            data-auto_select="false"
-            data-itp_support="false"
-            data-auto_prompt="false"
-            data-use_fedcm_for_prompt="true">
-        </div>
-        
-        <div class="g_id_signin"
-            data-type="standard"
-            data-shape="pill"
-            data-theme="filled_black"
-            data-text="signin_with"
-            data-size="large"
-            data-logo_alignment="left">
-        </div>
-
+    <!-- Google Login -->
+    <div class="social-login">
+      <div id="g_id_onload"
+        data-client_id="{{ social_google_client_id }}"
+        data-context="signin"
+        data-ux_mode="popup"
+        data-callback="getTokenUsingGoogleCredential"
+        data-auto_select="false"
+        data-itp_support="false"
+        data-auto_prompt="false"
+        data-use_fedcm_for_prompt="true">
       </div>
-      <!-- ========== -->
+      
+      <div class="g_id_signin"
+        data-type="standard"
+        data-shape="pill"
+        data-theme="filled_black"
+        data-text="signin_with"
+        data-size="large"
+        data-logo_alignment="left">
+      </div>
     </div>
     {% endif %}
 
+    <!-- Footer -->
+    <div class="text-center mt-4">
+      <small class="text-muted">
+        <i class="fas fa-shield-alt me-1"></i>
+        Your data is encrypted and secure
+      </small>
+    </div>
   </div>
 </body>
 {% endblock %}
@@ -165,21 +197,21 @@
   function evaluatePasswordStrength(password) {
     const strengthDisplay = document.getElementById('passwordStrength');
     let strengthText = '';
-    let color = 'black';
+    let className = '';
   
     if (password.length < 6) {
       strengthText = 'Weak';
-      color = 'red';
+      className = 'strength-weak';
     } else if (password.length < 10) {
       strengthText = 'Moderate';
-      color = 'orange';
+      className = 'strength-moderate';
     } else {
       strengthText = 'Strong';
-      color = 'green';
+      className = 'strength-strong';
     }
   
     strengthDisplay.textContent = `Password strength: ${strengthText}`;
-    strengthDisplay.style.color = color;
+    strengthDisplay.className = `password-strength mt-2 ${className}`;
   }
 
   function passwordCheck(password, passwordAgain) {
@@ -303,11 +335,11 @@
 
         const passwordAgain = event.target.value;
         if (!passwordCheck(password, passwordAgain)) {
-            passwordMatchDisplay.style.color = "red";
+            passwordMatchDisplay.className = "password-match mt-2 strength-weak";
             passwordMatchDisplay.textContent = "Passwords do not match.";
             return;
         }
-        passwordMatchDisplay.style.color = "green";
+        passwordMatchDisplay.className = "password-match mt-2 strength-strong";
         passwordMatchDisplay.textContent = "Passwords match.";
     });
 }
