@@ -82,11 +82,16 @@ function showKeyDetails(keyId) {
         document.getElementById('keyDetailsModal').dataset.originalDescription = description;
 
         // Disable the save button by default
-        document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
+        document.querySelector('#keyDetailsModal .btn-success').disabled = true;
 
-        // Show the modal
-        var keyDetailsModal = new bootstrap.Modal(document.getElementById('keyDetailsModal'));
-        keyDetailsModal.show();
+        // Show the modal with accessibility fix
+        const modalElement = document.getElementById('keyDetailsModal');
+        const modal = new bootstrap.Modal(modalElement);
+        
+        // 修復無障礙問題，並設置關閉時的回調
+        fixModalAccessibility(modalElement, resetKeyDetailsModalState);
+        
+        modal.show();
     }).catch(error => {
         console.error('Error fetching key details:', error);
         Swal.fire({
@@ -99,7 +104,7 @@ function showKeyDetails(keyId) {
 
 function resetKeyDetailsModalState() {
     document.getElementById('keyDescriptionText').value = '';
-    document.querySelector('#keyDetailsModal .btn-outline-success').disabled = true;
+    document.querySelector('#keyDetailsModal .btn-success').disabled = true;
 }
 
 function copyKeyToClipboard() {
@@ -116,7 +121,34 @@ function copyKeyToClipboard() {
 }
 
 function createKeys() {
-    $('#createKeyModal').modal('show');
+    const modalElement = document.getElementById('createKeyModal');
+    const modal = new bootstrap.Modal(modalElement);
+    
+    // 修復無障礙問題
+    fixModalAccessibility(modalElement);
+    
+    modal.show();
+}
+
+// 通用函數：使用現代方式修復modal無障礙問題
+function fixModalAccessibility(modalElement, onHiddenCallback = null) {
+    // 在模態框顯示時移除 inert 和 aria-hidden，確保可訪問性
+    modalElement.addEventListener('shown.bs.modal', function() {
+        modalElement.removeAttribute('inert');
+        modalElement.removeAttribute('aria-hidden');
+        modalElement.setAttribute('aria-modal', 'true');
+    }, { once: true });
+    
+    // 在模態框隱藏後設置 inert，防止焦點問題
+    modalElement.addEventListener('hidden.bs.modal', function() {
+        modalElement.setAttribute('inert', '');
+        modalElement.removeAttribute('aria-modal');
+        
+        // 執行回調函數（如重置狀態）
+        if (onHiddenCallback) {
+            onHiddenCallback();
+        }
+    }, { once: true });
 }
 
 function submitNewKey() {
@@ -154,7 +186,8 @@ function submitNewKey() {
     })
     .then(data => {
         console.log('Success:', data);
-        $('#createKeyModal').modal('hide');
+        const createModal = bootstrap.Modal.getInstance(document.getElementById('createKeyModal'));
+        createModal.hide();
         Swal.fire("Success", "Key has been successfully added.", "success");
     })
     .catch((error) => {
@@ -288,7 +321,7 @@ function checkKeyDetailsModalForChanges() {
     const originalDescription = modal.dataset.originalDescription;
     const currentDescription = document.getElementById('keyDescriptionText').value;
 
-    const saveButton = document.querySelector('#keyDetailsModal .btn-outline-success');
+    const saveButton = document.querySelector('#keyDetailsModal .btn-success');
     if (originalDescription !== currentDescription) {
         saveButton.disabled = false;
     } else {

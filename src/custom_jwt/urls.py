@@ -7,4 +7,5 @@ urlpatterns = [
     path("token", views.MyTokenObtainPairView.as_view(), name="token-get"),
     path("token/refresh", views.MyTokenRefreshView.as_view(), name="token-refresh"),
     path("token/verify", views.MyTokenVerifyView.as_view(), name="token-verify"),
+    path("user/profile", views.UserProfileView.as_view(), name="user-profile"),
 ]

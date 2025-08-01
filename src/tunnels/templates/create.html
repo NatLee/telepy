@@ -1,17 +1,94 @@
 {% extends 'base.html' %}
 
+{% block styles %}
+<link rel="stylesheet" href="https://unpkg.com/xterm@3.6.0/dist/xterm.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-dark.min.css">
+<style>
+.embedded-terminal {
+  background-color: #000;
+  border-radius: 8px;
+}
+.language-bash {
+  border-radius: 8px !important;
+  border: 1px solid #4a5568 !important;
+}
+</style>
+{% endblock %}
+
 {% block title %}Create Reverse Tunnels{% endblock %}
 
 {% block content %}
-<div class="container mt-2">
-  <h2 class="mb-4 text-center" style="color: #00b4d8;">Create Reverse Tunnel</h2>
+<div class="container-fluid px-4 py-4">
+  <!-- Header Section -->
+  <div class="text-center mb-4">
+    <div class="d-flex justify-content-center mb-3">
+      <div class="page-icon d-flex align-items-center justify-content-center" style="width: 60px; height: 60px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 20px; box-shadow: 0 8px 25px rgba(99, 102, 241, 0.2);">
+        <i class="fas fa-plus text-white" style="font-size: 1.5rem;"></i>
+      </div>
+    </div>
+    <h1 class="h2 fw-bold text-dark mb-2">Create New Tunnel</h1>
+    <p class="text-muted">Set up a reverse SSH tunnel connection</p>
+  </div>
+
+  <!-- Step Indicator -->
+  <div class="step-indicator">
+    <div class="step-item">
+      <div class="step-number active" id="stepNumber1">1</div>
+      <div class="step-connector" id="stepConnector1"></div>
+      <div class="step-content">
+        <div class="step-label active" id="stepLabel1">Basic Info</div>
+        <div class="step-description">Tunnel configuration</div>
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-number pending" id="stepNumber2">2</div>
+      <div class="step-connector" id="stepConnector2"></div>
+      <div class="step-content">
+        <div class="step-label" id="stepLabel2">Server Keys</div>
+        <div class="step-description">Add SSH keys</div>
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-number pending" id="stepNumber3">3</div>
+      <div class="step-connector" id="stepConnector3"></div>
+      <div class="step-content">
+        <div class="step-label" id="stepLabel3">Manage Users</div>
+        <div class="step-description">Setup user access</div>
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-number pending" id="stepNumber4">4</div>
+      <div class="step-connector" id="stepConnector4"></div>
+      <div class="step-content">
+        <div class="step-label" id="stepLabel4">Test Connection</div>
+        <div class="step-description">Verify tunnel</div>
+      </div>
+    </div>
+    <div class="step-item">
+      <div class="step-number pending" id="stepNumber5">5</div>
+      <div class="step-content">
+        <div class="step-label" id="stepLabel5">Complete</div>
+        <div class="step-description">Setup finished</div>
+      </div>
+    </div>
+  </div>
 
   <div class="row justify-content-center">
-    <div class="col-md-8">
-      <!-- Step 1: Create Tunnel -->
-      <div class="card shadow-sm mb-5" id="step1Section">
-        <div class="card-body">
-          <h3 class="card-title mb-4">Step 1: Create Tunnel</h3>
+    <div class="col-lg-8">
+      <!-- Step 1: Basic Configuration -->
+      <div class="card border-0 shadow-sm mb-5 fade-in" id="step1Section" style="border-radius: 20px; overflow: hidden;">
+        <div class="card-header bg-transparent border-0 p-4">
+          <div class="d-flex align-items-center">
+            <div class="step-icon me-3 d-flex align-items-center justify-content-center" style="width: 40px; height: 40px; background: linear-gradient(135deg, #6366f1, #8b5cf6); border-radius: 12px;">
+              <i class="fas fa-cog text-white"></i>
+            </div>
+            <div>
+              <h4 class="card-title mb-1 fw-bold">Step 1: Basic Configuration</h4>
+              <p class="text-muted mb-0 small">Configure your tunnel connection details</p>
+            </div>
+          </div>
+        </div>
+        <div class="card-body p-4">
           <form id="createTunnelForm">
             <div class="mb-4">
               <label for="hostFriendlyName" class="form-label">Customized Host Name</label>
@@ -39,54 +116,235 @@
             </div>
             
             <div class="d-grid">
-              <button type="submit" class="btn btn-custom" id="createTunnelBtn">Create Tunnel</button>
+              <button type="submit" class="btn btn-custom" id="createTunnelBtn">
+                <i class="fas fa-arrow-right me-2"></i>Continue to Server Keys
+              </button>
             </div>
           </form>
         </div>
       </div>
 
-      <!-- Step 2: Verify Tunnel -->
-      <div class="card shadow-sm mb-5" id="step2Section" style="display: none;">
-        <div class="card-body">
-          <h3 class="card-title mb-4">Step 2: Verify Tunnel</h3>
-          <p class="card-text">To complete the tunnel setup, you need to add the following public key to your target machine:</p>
-          <div id="keyDetails" class="mt-4">
-            <h4>Key Details</h4>
-            <p class="text-muted">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
-
-            <ul class="nav nav-tabs" id="keyTab" role="tablist">
-              <li class="nav-item" role="presentation">
-                <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">User Keys</button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">Service Keys</button>
-              </li>
-            </ul>
-
-            <div class="tab-content mt-3" id="keyTabContent">
-              <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
-                <p class="text-muted">User keys are used to create tunnels for your personal use. You can edit them in <code>Keys</code> page.</p>
-                <div id="userKeys" class="mt-2"></div>
-              </div>
-              <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
-                <p class="text-muted">Service keys are used to create tunnels for web terminal and other services.</p>
-                <div id="serviceKeys" class="mt-2"></div>
+      <!-- Step 2: Server Keys -->
+      <div class="card border-0 shadow-sm mb-5 fade-in" id="step2Section" style="display: none; border-radius: 12px; overflow: hidden;">
+        <div class="card-header bg-transparent border-0 p-4">
+          <div class="d-flex align-items-center">
+            <div class="step-icon me-3 d-flex align-items-center justify-content-center" style="width: 40px; height: 40px; background: #ea580c; border-radius: 12px;">
+              <i class="fas fa-key text-white"></i>
+            </div>
+            <div>
+              <h4 class="card-title mb-1 fw-bold">Step 2: Add Server Keys</h4>
+              <p class="text-muted mb-0 small">Configure SSH keys for secure connection</p>
+            </div>
+          </div>
+        </div>
+        <div class="card-body p-4">
+          <div class="alert alert-info border-0" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1)); border-radius: 12px;">
+            <div class="d-flex align-items-start">
+              <i class="fas fa-info-circle text-primary me-3 mt-1"></i>
+              <div>
+                <h6 class="fw-bold mb-2">About SSH Keys</h6>
+                <p class="mb-0 small">Add the following keys to your server's <code>~/.ssh/authorized_keys</code> file to allow secure connections.</p>
               </div>
             </div>
           </div>
+
+          <ul class="nav nav-tabs" id="keyTab" role="tablist" style="border: none;">
+            <li class="nav-item" role="presentation">
+              <button class="tab-link active" id="userKeyTab" data-bs-toggle="tab" data-bs-target="#userKeyContent" type="button" role="tab" aria-controls="user-key" aria-selected="true">
+                <i class="fas fa-user me-2"></i>User Keys
+              </button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="tab-link" id="serviceKeyTab" data-bs-toggle="tab" data-bs-target="#serviceKeyContent" type="button" role="tab" aria-controls="service-key" aria-selected="false">
+                <i class="fas fa-server me-2"></i>Service Keys
+              </button>
+            </li>
+          </ul>
+
+          <div class="tab-content mt-3" id="keyTabContent">
+            <div class="tab-pane fade show active" id="userKeyContent" role="tabpanel" aria-labelledby="user-key-tab">
+              <p class="text-muted mb-3">User keys are used for personal tunnel connections. You can manage them in the <strong>Keys</strong> section.</p>
+              <div id="userKeys" class="mt-2"></div>
+            </div>
+            <div class="tab-pane fade" id="serviceKeyContent" role="tabpanel" aria-labelledby="service-key-tab">
+              <p class="text-muted mb-3">Service keys are used for web terminal and automated services.</p>
+              <div id="serviceKeys" class="mt-2"></div>
+            </div>
+          </div>
           <div class="d-grid mt-4">
-            <button class="btn btn-custom" id="tunnelVerifiedBtn">I've Added the Key</button>
+            <button class="btn btn-custom" id="keysAddedBtn">
+              <i class="fas fa-check me-2"></i>Keys Added, Continue
+            </button>
           </div>
         </div>
       </div>
 
-      <!-- Step 3: Completion -->
-      <div class="card shadow-sm mb-5" id="step3Section" style="display: none;">
-        <div class="card-body text-center">
-          <h3 class="card-title" style="color: #00b4d8;">Step 3: Tunnel Setup Complete</h3>
-          <p class="card-text">Your reverse tunnel has been successfully created and verified.</p>
-          <div class="mt-4">
-            <button class="btn btn-custom" id="goToIndexBtn">Go to Tunnel List</button>
+      <!-- Step 3: Manage Users -->
+      <div class="card border-0 shadow-sm mb-5 fade-in" id="step3Section" style="display: none; border-radius: 12px; overflow: hidden;">
+        <div class="card-header bg-transparent border-0 p-4">
+          <div class="d-flex align-items-center">
+            <div class="step-icon me-3 d-flex align-items-center justify-content-center" style="width: 40px; height: 40px; background: #16a34a; border-radius: 12px;">
+              <i class="fas fa-users text-white"></i>
+            </div>
+            <div>
+              <h4 class="card-title mb-1 fw-bold">Step 3: Manage Users</h4>
+              <p class="text-muted mb-0 small">Setup user access for the tunnel machine</p>
+            </div>
+          </div>
+        </div>
+        <div class="card-body p-4">
+          <div class="alert alert-warning">
+            <div class="d-flex align-items-start">
+              <i class="fas fa-exclamation-triangle text-warning me-3 mt-1"></i>
+              <div>
+                <h6 class="fw-bold mb-2">User Management</h6>
+                <p class="mb-0 small">Add users who will have access to this tunnel on the target machine.</p>
+              </div>
+            </div>
+          </div>
+          
+          <div id="userManagementSection">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h6 class="fw-bold mb-0">Current Users</h6>
+              <button class="btn btn-outline-primary btn-sm" id="addUserBtn">
+                <i class="fas fa-plus me-2"></i>Add User
+              </button>
+            </div>
+            <div id="usersList" class="mb-4">
+              <!-- User list will be populated here -->
+            </div>
+            <div class="input-group mb-3">
+              <input type="text" class="form-control" placeholder="Username" id="newUsername">
+              <button class="btn btn-outline-primary" type="button" id="addUserToListBtn">
+                <i class="fas fa-plus me-2"></i>Add
+              </button>
+            </div>
+          </div>
+          
+          <div class="d-grid">
+            <button class="btn btn-custom" id="usersConfiguredBtn">
+              <i class="fas fa-arrow-right me-2"></i>Continue to Test Connection
+            </button>
+            <p class="text-muted small text-center mt-2 mb-0">
+              <i class="fas fa-info-circle me-1"></i>At least one user must be added to proceed
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: Test Connection -->
+      <div class="card border-0 shadow-sm mb-5 fade-in" id="step4Section" style="display: none; border-radius: 12px; overflow: hidden;">
+        <div class="card-header bg-transparent border-0 p-4">
+          <div class="d-flex align-items-center">
+            <div class="step-icon me-3 d-flex align-items-center justify-content-center" style="width: 40px; height: 40px; background: #7c3aed; border-radius: 12px;">
+              <i class="fas fa-terminal text-white"></i>
+            </div>
+            <div>
+              <h4 class="card-title mb-1 fw-bold">Step 4: Test Connection</h4>
+              <p class="text-muted mb-0 small">Verify your tunnel connection is working</p>
+            </div>
+          </div>
+        </div>
+        <div class="card-body p-4">
+          <div class="alert alert-success border-0" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(5, 150, 105, 0.1)); border-radius: 12px;">
+            <div class="d-flex align-items-start">
+              <i class="fas fa-check-circle text-success me-3 mt-1"></i>
+              <div>
+                <h6 class="fw-bold mb-2">Test Your Connection</h6>
+                <p class="mb-0 small">Run the AutoSSH script on your target server to establish the tunnel connection.</p>
+              </div>
+            </div>
+          </div>
+          
+          <!-- AutoSSH Script Section -->
+          <div class="mb-4">
+            <h6 class="fw-bold mb-3">AutoSSH Connection Script</h6>
+            <p class="text-muted small mb-3">Execute this script on your target server to create the tunnel:</p>
+            <div class="position-relative">
+              <pre id="autosshScript" class="form-control language-bash" style="height: 150px; font-family: 'Courier New', monospace; background-color: #2d3748; color: #e2e8f0; padding: 15px;" readonly>Loading script...</pre>
+              <button class="btn btn-outline-secondary btn-sm position-absolute top-0 end-0 m-2" onclick="copyAutosshScript()">
+                <i class="fas fa-copy me-1"></i>Copy
+              </button>
+            </div>
+          </div>
+          
+          <!-- Embedded Terminal Section -->
+          <div class="mb-4">
+            <h6 class="fw-bold mb-3">Terminal Console</h6>
+            <p class="text-muted small mb-3">Use this terminal to test the connection after running the script:</p>
+            <div class="border rounded" style="height: 300px; background-color: #000;">
+              <div id="embeddedTerminal" style="height: 100%; padding: 10px;"></div>
+            </div>
+            <div class="d-flex gap-2 mt-3">
+              <button class="btn btn-success btn-sm" id="connectTerminalBtn">
+                <i class="fas fa-plug me-2"></i>Connect Terminal
+              </button>
+              <button class="btn btn-outline-warning btn-sm" id="disconnectTerminalBtn">
+                <i class="fas fa-unplug me-2"></i>Disconnect
+              </button>
+              <button class="btn btn-outline-secondary btn-sm" id="clearTerminalBtn">
+                <i class="fas fa-eraser me-2"></i>Clear
+              </button>
+            </div>
+          </div>
+          
+          <div class="row">
+            <div class="col-md-6">
+              <div class="d-grid">
+                <button class="btn btn-outline-danger" id="testFailedBtn">
+                  <i class="fas fa-times me-2"></i>Connection Failed
+                </button>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="d-grid">
+                <button class="btn btn-custom" id="testSuccessBtn">
+                  <i class="fas fa-check me-2"></i>Connection Successful
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Completion -->
+      <div class="card border-0 shadow-sm mb-5 fade-in" id="step5Section" style="display: none; border-radius: 12px; overflow: hidden;">
+        <div class="card-header bg-transparent border-0 p-4">
+          <div class="d-flex align-items-center justify-content-center">
+            <div class="step-icon me-3 d-flex align-items-center justify-content-center" style="width: 60px; height: 60px; background: #16a34a; border-radius: 12px;">
+              <i class="fas fa-check text-white" style="font-size: 1.5rem;"></i>
+            </div>
+          </div>
+        </div>
+        <div class="card-body p-4 text-center">
+          <h3 class="card-title fw-bold text-success mb-3">
+            <i class="fas fa-party-horn me-2"></i>Tunnel Setup Complete!
+          </h3>
+          <p class="card-text text-muted mb-4">Your reverse SSH tunnel has been successfully created and verified. You can now use it to connect to your remote server.</p>
+          
+          <!-- Terminal Configuration -->
+          <div class="mb-4 text-start">
+            <h6 class="fw-bold mb-3">Terminal Configuration</h6>
+            <p class="text-muted small mb-3">Use this configuration to access your tunnel via terminal:</p>
+            <div class="position-relative">
+              <pre id="terminalConfig" class="form-control text-start" style="height: 200px; font-family: 'Courier New', monospace; background-color: #f8f9fa;" readonly>Loading configuration...</pre>
+              <button class="btn btn-outline-secondary btn-sm position-absolute top-0 end-0 m-2" onclick="copyTerminalConfig()">
+                <i class="fas fa-copy me-1"></i>Copy
+              </button>
+            </div>
+          </div>
+          
+          <div class="row g-3">
+            <div class="col-md-6">
+              <button class="btn btn-outline-secondary w-100" id="createAnotherBtn">
+                <i class="fas fa-plus me-2"></i>Create Another Tunnel
+              </button>
+            </div>
+            <div class="col-md-6">
+              <button class="btn btn-custom w-100" id="goToIndexBtn">
+                <i class="fas fa-list me-2"></i>View All Tunnels
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -116,5 +374,829 @@
 
 {% block scripts %}
 {% load static %}
+<script src="https://unpkg.com/xterm@3.6.0/dist/xterm.js"></script>
+<script src="https://unpkg.com/xterm@3.6.0/dist/addons/fit/fit.js"></script>
+<script src="https://unpkg.com/xterm@3.6.0/dist/addons/fullscreen/fullscreen.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-sha256@0.11.0/src/sha256.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <script src="{% static 'js/create.js' %}"></script>
+<script>
+// Step Management Functions
+let currentStep = 1;
+const totalSteps = 5;
+
+function updateStepIndicator(step) {
+  // Reset all steps
+  for (let i = 1; i <= totalSteps; i++) {
+    const stepNumber = document.getElementById(`stepNumber${i}`);
+    const stepLabel = document.getElementById(`stepLabel${i}`);
+    const stepConnector = document.getElementById(`stepConnector${i}`);
+    
+    if (stepNumber && stepLabel) {
+      stepNumber.className = 'step-number pending';
+      stepLabel.className = 'step-label';
+    }
+    
+    if (stepConnector) {
+      stepConnector.className = 'step-connector';
+    }
+  }
+  
+  // Update completed steps
+  for (let i = 1; i < step; i++) {
+    const stepNumber = document.getElementById(`stepNumber${i}`);
+    const stepLabel = document.getElementById(`stepLabel${i}`);
+    const stepConnector = document.getElementById(`stepConnector${i}`);
+    
+    if (stepNumber && stepLabel) {
+      stepNumber.className = 'step-number completed';
+      stepNumber.innerHTML = '<i class="fas fa-check"></i>';
+      stepLabel.className = 'step-label completed';
+    }
+    
+    if (stepConnector) {
+      stepConnector.className = 'step-connector completed';
+    }
+  }
+  
+  // Update current step
+  const currentStepNumber = document.getElementById(`stepNumber${step}`);
+  const currentStepLabel = document.getElementById(`stepLabel${step}`);
+  if (currentStepNumber && currentStepLabel) {
+    currentStepNumber.className = 'step-number active';
+    currentStepNumber.innerHTML = step;
+    currentStepLabel.className = 'step-label active';
+  }
+}
+
+function showStep(step) {
+  // Auto-disconnect websocket when leaving step 4
+  if (currentStep === 4 && step !== 4) {
+    autoDisconnectWebSocket();
+  }
+  
+  // Hide all steps
+  for (let i = 1; i <= totalSteps; i++) {
+    const stepSection = document.getElementById(`step${i}Section`);
+    if (stepSection) {
+      stepSection.style.display = 'none';
+    }
+  }
+  
+  // Show current step
+  const currentStepSection = document.getElementById(`step${step}Section`);
+  if (currentStepSection) {
+    currentStepSection.style.display = 'block';
+    currentStepSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  
+  currentStep = step;
+  updateStepIndicator(step);
+}
+
+// Function to auto-disconnect websocket when leaving test connection step
+function autoDisconnectWebSocket() {
+  if (embeddedSocket) {
+    console.log('Auto-disconnecting WebSocket when leaving Test Connection step');
+    embeddedSocket.close();
+    embeddedSocket = null;
+    if (embeddedTerm) {
+      embeddedTerm.writeln('\x1b[33mAuto-disconnected when leaving Test Connection step.\x1b[0m');
+    }
+  }
+}
+
+// Enhanced navigation functions
+function goToServerKeys() {
+  showStep(2);
+}
+
+function goToManageUsers() {
+  showStep(3);
+  // Small delay to ensure tunnel ID is available
+  setTimeout(() => {
+    console.log('goToManageUsers - checking tunnel ID...');
+    const tunnelId = getCurrentTunnelId();
+    if (tunnelId) {
+      console.log('Tunnel ID available, loading user list...');
+      loadUserList();
+    } else {
+      console.warn('No tunnel ID available yet in goToManageUsers');
+    }
+  }, 100);
+}
+
+function goToTestConnection() {
+  showStep(4);
+  // Small delay to ensure tunnel ID is available
+  setTimeout(() => {
+    console.log('goToTestConnection - checking tunnel ID...');
+    const tunnelId = getCurrentTunnelId();
+    if (tunnelId) {
+      console.log('Tunnel ID available, loading autossh script and initializing terminal...');
+      loadAutosshScript();
+      initializeEmbeddedTerminal();
+    } else {
+      console.warn('No tunnel ID available yet in goToTestConnection');
+    }
+  }, 100);
+}
+
+function goToCompletion() {
+  showStep(5);
+  // Small delay to ensure tunnel ID is available
+  setTimeout(() => {
+    console.log('goToCompletion - checking tunnel ID...');
+    const tunnelId = getCurrentTunnelId();
+    if (tunnelId) {
+      console.log('Tunnel ID available, loading terminal config...');
+      loadTerminalConfig();
+    } else {
+      console.warn('No tunnel ID available yet in goToCompletion');
+    }
+  }, 100);
+}
+
+// Event listeners for new buttons
+document.addEventListener('DOMContentLoaded', function() {
+  // Update existing create tunnel button
+  const createTunnelBtn = document.getElementById('createTunnelBtn');
+  if (createTunnelBtn) {
+    createTunnelBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      // Validate form first
+      const hostFriendlyName = document.getElementById('hostFriendlyName').value;
+      const key = document.getElementById('key').value;
+      const sshPort = document.getElementById('sshPort').value;
+      
+      if (!hostFriendlyName || !key || !isValidSSHKey(key) || !isValidPort(sshPort)) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Invalid Input',
+          text: 'Please check your inputs and try again.',
+          showConfirmButton: true,
+        });
+        return;
+      }
+      
+      // If validation passes, create tunnel (it will automatically go to next step)
+      createTunnel();
+    });
+  }
+  
+  // Keys added button
+  const keysAddedBtn = document.getElementById('keysAddedBtn');
+  if (keysAddedBtn) {
+    keysAddedBtn.addEventListener('click', goToManageUsers);
+  }
+  
+  // Users configured button
+  const usersConfiguredBtn = document.getElementById('usersConfiguredBtn');
+  if (usersConfiguredBtn) {
+    usersConfiguredBtn.addEventListener('click', validateUsersAndProceed);
+  }
+  
+  // Test success button
+  const testSuccessBtn = document.getElementById('testSuccessBtn');
+  if (testSuccessBtn) {
+    testSuccessBtn.addEventListener('click', goToCompletion);
+  }
+  
+  // Test failed button
+  const testFailedBtn = document.getElementById('testFailedBtn');
+  if (testFailedBtn) {
+    testFailedBtn.addEventListener('click', function() {
+      Swal.fire({
+        icon: 'error',
+        title: 'Connection Failed',
+        text: 'Please check your configuration and try again.',
+        showConfirmButton: true,
+      });
+    });
+  }
+  
+  // Note: openTerminalBtn has been removed in favor of embedded terminal
+  
+  // Create another tunnel button
+  const createAnotherBtn = document.getElementById('createAnotherBtn');
+  if (createAnotherBtn) {
+    createAnotherBtn.addEventListener('click', function() {
+      window.location.reload();
+    });
+  }
+  
+  // Initialize step indicator
+  updateStepIndicator(1);
+  
+  // User management event listeners
+  const addUserToListBtn = document.getElementById('addUserToListBtn');
+  if (addUserToListBtn) {
+    addUserToListBtn.addEventListener('click', addUserToCurrentTunnel);
+  }
+  
+  // Terminal button event listeners
+  const connectTerminalBtn = document.getElementById('connectTerminalBtn');
+  if (connectTerminalBtn) {
+    connectTerminalBtn.addEventListener('click', connectEmbeddedTerminal);
+  }
+  
+  const disconnectTerminalBtn = document.getElementById('disconnectTerminalBtn');
+  if (disconnectTerminalBtn) {
+    disconnectTerminalBtn.addEventListener('click', disconnectEmbeddedTerminal);
+  }
+  
+  const clearTerminalBtn = document.getElementById('clearTerminalBtn');
+  if (clearTerminalBtn) {
+    clearTerminalBtn.addEventListener('click', clearEmbeddedTerminal);
+  }
+  
+  // Auto-cleanup websocket on page unload
+  window.addEventListener('beforeunload', function() {
+    if (embeddedSocket) {
+      embeddedSocket.close();
+    }
+  });
+});
+
+// Global variables for tunnel management
+let currentTunnelId = null;
+let embeddedTerm = null;
+let embeddedSocket = null;
+
+// Function to set current tunnel ID from create.js
+window.setCurrentTunnelId = function(id) {
+  currentTunnelId = id;
+  console.log('Current tunnel ID set to:', id);
+  
+  // Store in session storage for persistence
+  sessionStorage.setItem('currentTunnelId', id);
+};
+
+// Function to get current tunnel ID with fallback
+function getCurrentTunnelId() {
+  console.log('getCurrentTunnelId called - checking sources...');
+  console.log('currentTunnelId variable:', currentTunnelId);
+  console.log('window.currentTunnelId:', window.currentTunnelId);
+  console.log('sessionStorage currentTunnelId:', sessionStorage.getItem('currentTunnelId'));
+  
+  // First try the global variable
+  if (currentTunnelId) {
+    console.log('Using currentTunnelId variable:', currentTunnelId);
+    return currentTunnelId;
+  }
+  
+  // Then try window.currentTunnelId
+  if (window.currentTunnelId) {
+    currentTunnelId = window.currentTunnelId;
+    console.log('Using window.currentTunnelId:', currentTunnelId);
+    return currentTunnelId;
+  }
+  
+  // Finally try session storage
+  const storedId = sessionStorage.getItem('currentTunnelId');
+  if (storedId) {
+    currentTunnelId = parseInt(storedId);
+    console.log('Using sessionStorage currentTunnelId:', currentTunnelId);
+    return currentTunnelId;
+  }
+  
+  console.warn('No tunnel ID found in any source');
+  return null;
+}
+
+// Override existing step functions to use new step system
+function showStep2() {
+  goToServerKeys();
+  // Keep the original functionality
+  fetchUserKeys();
+  fetchServiceKeys();
+}
+
+function showStep3() {
+  goToCompletion();
+}
+
+// ============================
+// User Management Functions
+// ============================
+
+function validateUsersAndProceed() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    Swal.fire({
+      icon: 'error',
+      title: 'No Tunnel Selected',
+      text: 'Please create a tunnel first',
+      showConfirmButton: true,
+    });
+    return;
+  }
+  
+  const accessToken = localStorage.getItem('accessToken');
+  fetch(`/api/reverse/server/${tunnelId}/usernames`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(users => {
+    if (users.length === 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'No Users Added',
+        text: 'Please add at least one user before proceeding to test connection.',
+        showConfirmButton: true,
+        confirmButtonText: 'OK'
+      });
+    } else {
+      // At least one user exists, proceed to test connection
+      goToTestConnection();
+    }
+  })
+  .catch(error => {
+    console.error('Error checking users:', error);
+    Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: 'Failed to check users. Please try again.',
+      showConfirmButton: true,
+    });
+  });
+}
+
+function loadUserList() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    console.warn('No tunnel ID available for loading user list');
+    return;
+  }
+  
+  console.log('Loading user list for tunnel ID:', tunnelId);
+  const accessToken = localStorage.getItem('accessToken');
+  fetch(`/api/reverse/server/${tunnelId}/usernames`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(users => {
+    const usersList = document.getElementById('usersList');
+    if (users.length === 0) {
+      usersList.innerHTML = '<p class="text-muted">No users added yet.</p>';
+    } else {
+      let usersHtml = '<div class="list-group">';
+      users.forEach(user => {
+        usersHtml += `
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <span><i class="fas fa-user me-2"></i>${user.username}</span>
+            <button class="btn btn-danger btn-sm" onclick="removeUserFromTunnel(${user.id})">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        `;
+      });
+      usersHtml += '</div>';
+      usersList.innerHTML = usersHtml;
+    }
+  })
+  .catch(error => {
+    console.error('Error loading user list:', error);
+    Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: 'Failed to load user list',
+      showConfirmButton: true,
+    });
+  });
+}
+
+function addUserToCurrentTunnel() {
+  const username = document.getElementById('newUsername').value.trim();
+  if (!username) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'Username Required',
+      text: 'Please enter a username',
+      showConfirmButton: true,
+    });
+    return;
+  }
+  
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    Swal.fire({
+      icon: 'error',
+      title: 'No Tunnel Selected',
+      text: 'Please create a tunnel first',
+      showConfirmButton: true,
+    });
+    return;
+  }
+  
+  console.log('Adding user to tunnel ID:', tunnelId);
+  const accessToken = localStorage.getItem('accessToken');
+  fetch('/api/reverse/server/usernames', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    },
+    body: JSON.stringify({
+      reverse_server: tunnelId,
+      username: username
+    })
+  })
+  .then(response => {
+    if (response.ok) {
+      document.getElementById('newUsername').value = '';
+      loadUserList();
+      Swal.fire({
+        icon: 'success',
+        title: 'User Added',
+        text: `User "${username}" has been added successfully`,
+        showConfirmButton: false,
+        timer: 1500
+      });
+    } else {
+      return response.json().then(data => {
+        throw new Error(data.message || 'Failed to add user');
+      });
+    }
+  })
+  .catch(error => {
+    console.error('Error adding user:', error);
+    Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: error.message || 'Failed to add user',
+      showConfirmButton: true,
+    });
+  });
+}
+
+function removeUserFromTunnel(userId) {
+  Swal.fire({
+    title: 'Remove User?',
+    text: 'Are you sure you want to remove this user?',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: 'Yes, remove',
+    cancelButtonText: 'Cancel'
+  }).then((result) => {
+    if (result.isConfirmed) {
+      const accessToken = localStorage.getItem('accessToken');
+      fetch(`/api/reverse/server/usernames/${userId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
+      })
+      .then(response => {
+        if (response.ok) {
+          loadUserList();
+          Swal.fire({
+            icon: 'success',
+            title: 'User Removed',
+            text: 'User has been removed successfully',
+            showConfirmButton: false,
+            timer: 1500
+          });
+        } else {
+          throw new Error('Failed to remove user');
+        }
+      })
+      .catch(error => {
+        console.error('Error removing user:', error);
+        Swal.fire({
+          icon: 'error',
+          title: 'Error',
+          text: 'Failed to remove user',
+          showConfirmButton: true,
+        });
+      });
+    }
+  });
+}
+
+// ============================
+// AutoSSH Script Functions
+// ============================
+
+function loadAutosshScript() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    console.warn('No tunnel ID available for loading autossh script');
+    document.getElementById('autosshScript').textContent = 'Please create a tunnel first.';
+    return;
+  }
+  
+  const sshPort = document.getElementById('sshPort').value || '22';
+  const accessToken = localStorage.getItem('accessToken');
+  
+  console.log('Loading autossh script for tunnel ID:', tunnelId);
+  fetch(`/tunnels/server/script/autossh/${tunnelId}/${sshPort}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    const scriptElement = document.getElementById('autosshScript');
+    scriptElement.textContent = data.script;
+    
+    // Apply syntax highlighting
+    if (typeof Prism !== 'undefined') {
+      Prism.highlightElement(scriptElement);
+    }
+  })
+  .catch(error => {
+    console.error('Error loading autossh script:', error);
+    document.getElementById('autosshScript').textContent = 'Error loading script. Please try again.';
+  });
+}
+
+function copyAutosshScript() {
+  const scriptText = document.getElementById('autosshScript').textContent;
+  navigator.clipboard.writeText(scriptText).then(() => {
+    Swal.fire({
+      icon: 'success',
+      title: 'Script Copied!',
+      text: 'AutoSSH script has been copied to clipboard',
+      showConfirmButton: false,
+      timer: 1500
+    });
+  }).catch(err => {
+    console.error('Error copying script:', err);
+    Swal.fire({
+      icon: 'error',
+      title: 'Copy Failed',
+      text: 'Failed to copy script to clipboard',
+      showConfirmButton: true,
+    });
+  });
+}
+
+// ============================
+// Embedded Terminal Functions
+// ============================
+
+function initializeEmbeddedTerminal() {
+  const terminalContainer = document.getElementById('embeddedTerminal');
+  
+  if (embeddedTerm) {
+    try {
+      embeddedTerm.dispose();
+    } catch (e) {
+      console.log('Terminal dispose error (ignored):', e);
+    }
+  }
+  
+  // Clear container
+  terminalContainer.innerHTML = '';
+  
+  Terminal.applyAddon(fit);
+  embeddedTerm = new Terminal({
+    cursorBlink: true,
+    fontSize: 12,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: {
+      background: '#000000',
+      foreground: '#ffffff'
+    }
+  });
+  
+  embeddedTerm.open(terminalContainer);
+  embeddedTerm.fit();
+  embeddedTerm.writeln('Welcome to the embedded terminal!');
+  embeddedTerm.writeln('Click "Connect Terminal" to establish a connection.');
+  embeddedTerm.writeln('');
+}
+
+function connectEmbeddedTerminal() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    Swal.fire({
+      icon: 'error',
+      title: 'No Tunnel',
+      text: 'Please create a tunnel first',
+      showConfirmButton: true,
+    });
+    return;
+  }
+  
+  console.log('Connecting terminal for tunnel ID:', tunnelId);
+  // First get the list of usernames for this tunnel
+  const accessToken = localStorage.getItem('accessToken');
+  fetch(`/api/reverse/server/${tunnelId}/usernames`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(users => {
+    if (users.length === 0) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'No Users',
+        text: 'Please add at least one user before connecting',
+        showConfirmButton: true,
+      });
+      return;
+    }
+    
+    // Show username selection
+    const usernameOptions = {};
+    users.forEach(user => {
+      usernameOptions[user.username] = user.username;
+    });
+    
+    Swal.fire({
+      title: 'Select Username',
+      input: 'select',
+      inputOptions: usernameOptions,
+      inputPlaceholder: 'Choose a username',
+      showCancelButton: true,
+    }).then((result) => {
+      if (result.isConfirmed && result.value) {
+        establishTerminalConnection(result.value);
+      }
+    });
+  })
+  .catch(error => {
+    console.error('Error fetching users:', error);
+    Swal.fire({
+      icon: 'error',
+      title: 'Error',
+      text: 'Failed to fetch users',
+      showConfirmButton: true,
+    });
+  });
+}
+
+function establishTerminalConnection(username) {
+  if (embeddedSocket) {
+    embeddedSocket.close();
+  }
+  
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    embeddedTerm.writeln('\x1b[31mError: No tunnel ID available\x1b[0m');
+    return;
+  }
+  
+  // Recreate terminal to avoid double event listeners
+  const terminalContainer = document.getElementById('embeddedTerminal');
+  terminalContainer.innerHTML = '';
+  
+  if (embeddedTerm) {
+    try {
+      embeddedTerm.dispose();
+    } catch (e) {
+      console.log('Terminal dispose error (ignored):', e);
+    }
+  }
+  
+  // Recreate terminal
+  Terminal.applyAddon(fit);
+  embeddedTerm = new Terminal({
+    cursorBlink: true,
+    fontSize: 12,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: {
+      background: '#000000',
+      foreground: '#ffffff'
+    }
+  });
+  
+  embeddedTerm.open(terminalContainer);
+  embeddedTerm.fit();
+  
+  const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  const accessToken = localStorage.getItem('accessToken');
+  const ws_path = `${ws_scheme}://${window.location.host}/ws/terminal/`;
+  
+  const tokenInfo = `token.${btoa(accessToken)}`;
+  const serverInfo = `server.${tunnelId}`;
+  const usernameInfo = `username.${username}`;
+  let ticket = sha256(`${tunnelId}.${username}`);
+  ticket = `auth.${ticket}`;
+  
+  console.log('Establishing terminal connection for tunnel ID:', tunnelId, 'username:', username);
+  embeddedSocket = new WebSocket(ws_path, [tokenInfo, serverInfo, usernameInfo, ticket]);
+  
+  embeddedSocket.onopen = function() {
+    embeddedTerm.clear();
+    embeddedTerm.writeln('\x1b[32mConnection established!\x1b[0m');
+    embeddedTerm.writeln('You can now test your tunnel connection.');
+    embeddedTerm.writeln('');
+  };
+  
+  embeddedSocket.onmessage = function(event) {
+    embeddedTerm.write(event.data);
+  };
+  
+  embeddedSocket.onclose = function() {
+    embeddedTerm.writeln('\x1b[31mConnection closed.\x1b[0m');
+  };
+  
+  embeddedSocket.onerror = function(error) {
+    embeddedTerm.writeln('\x1b[31mConnection error occurred.\x1b[0m');
+  };
+  
+  // Add terminal key event handler only once
+  embeddedTerm.on('key', (key, ev) => {
+    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+    const ctrlKey = isMac ? ev.metaKey : ev.ctrlKey;
+
+    // Handle copy operation
+    if (ctrlKey && key === 'c' && embeddedTerm.hasSelection()) {
+      navigator.clipboard.writeText(embeddedTerm.getSelection());
+    } else {
+      // Send key to server only if socket is open
+      if (embeddedSocket && embeddedSocket.readyState === WebSocket.OPEN) {
+        embeddedSocket.send(JSON.stringify({ action: "pty_input", payload: { input: key } }));
+      }
+    }
+  });
+  
+  embeddedTerm.on('paste', (data) => {
+    if (embeddedSocket && embeddedSocket.readyState === WebSocket.OPEN) {
+      embeddedSocket.send(JSON.stringify({ action: "pty_input", payload: { input: data } }));
+    }
+  });
+}
+
+function disconnectEmbeddedTerminal() {
+  if (embeddedSocket) {
+    embeddedSocket.close();
+    embeddedSocket = null;
+    embeddedTerm.writeln('\x1b[33mDisconnected by user.\x1b[0m');
+  }
+}
+
+function clearEmbeddedTerminal() {
+  if (embeddedTerm) {
+    embeddedTerm.clear();
+  }
+}
+
+// ============================
+// Terminal Config Functions
+// ============================
+
+function loadTerminalConfig() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    console.warn('No tunnel ID available for loading terminal config');
+    document.getElementById('terminalConfig').textContent = 'Please create a tunnel first.';
+    return;
+  }
+  
+  console.log('Loading terminal config for tunnel ID:', tunnelId);
+  const accessToken = localStorage.getItem('accessToken');
+  fetch(`/tunnels/server/config/${tunnelId}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    document.getElementById('terminalConfig').textContent = data.config;
+  })
+  .catch(error => {
+    console.error('Error loading terminal config:', error);
+    document.getElementById('terminalConfig').textContent = 'Error loading configuration. Please try again.';
+  });
+}
+
+function copyTerminalConfig() {
+  const configText = document.getElementById('terminalConfig').textContent;
+  navigator.clipboard.writeText(configText).then(() => {
+    Swal.fire({
+      icon: 'success',
+      title: 'Configuration Copied!',
+      text: 'Terminal configuration has been copied to clipboard',
+      showConfirmButton: false,
+      timer: 1500
+    });
+  }).catch(err => {
+    console.error('Error copying configuration:', err);
+    Swal.fire({
+      icon: 'error',
+      title: 'Copy Failed',
+      text: 'Failed to copy configuration to clipboard',
+      showConfirmButton: true,
+    });
+  });
+}
+</script>
 {% endblock %}

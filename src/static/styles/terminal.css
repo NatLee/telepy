@@ -1,124 +1,169 @@
 :root {
-    --bg-dark: #1a1a1a;
-    --bg-medium: #2c2c2c;
-    --bg-light: #3a3a3a;
-    --text-primary: #f0f0f0;
-    --text-secondary: #b0b0b0;
-    --accent-blue: #3498db;
-    --accent-green: #2ecc71;
-    --accent-yellow: #f1c40f;
-    --accent-red: #e74c3c;
+    --bg-dark: #111827;
+    --bg-medium: #1f2937;
+    --bg-light: #374151;
+    --text-primary: #f9fafb;
+    --text-secondary: #d1d5db;
+    --accent-blue: #2563eb;
+    --accent-green: #16a34a;
+    --accent-yellow: #ea580c;
+    --accent-red: #dc2626;
+    --accent-purple: #7c3aed;
   }
   
   body {
-    background-color: var(--bg-dark);
+    background: linear-gradient(135deg, var(--bg-dark) 0%, #1e293b 100%);
     color: var(--text-primary);
-    font-family: 'Roboto', sans-serif;
+    font-family: 'Roboto', 'Fira Code', monospace;
+    min-height: 100vh;
   }
   
   .navbar {
-    background: linear-gradient(to right, #2c3e50, #34495e);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    background: var(--bg-medium);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   }
   
   .navbar-brand {
-    font-weight: bold;
+    font-weight: 700;
     color: var(--accent-blue) !important;
+    font-size: 1.3rem;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   }
   
   #status, #shellType {
-    font-weight: bold;
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.25rem;
-    background-color: var(--bg-light);
+    font-weight: 600;
+    padding: 0.5rem 1rem;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
   }
   
   #checkServiceKeyBtn {
-    background-color: var(--accent-blue);
+    background: var(--accent-blue);
     color: var(--text-primary);
     border: none;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    font-weight: 600;
     transition: all 0.3s ease;
   }
   
   #checkServiceKeyBtn:hover {
-    background-color: #2980b9;
-    transform: translateY(-2px);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    background: #1d4ed8;
+    color: white;
   }
   
   .input-group {
     margin-bottom: 0;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    overflow: hidden;
   }
   
   #searchPath {
-    background-color: var(--bg-medium);
+    background: rgba(255, 255, 255, 0.05);
     color: var(--text-primary);
-    border: 1px solid var(--bg-light);
-    transition: all 0.3s ease;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: 'Fira Code', monospace;
   }
   
   #searchPath:focus {
-    box-shadow: 0 0 0 2px var(--accent-blue);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    color: white;
   }
   
   #searchStatusBtn, #refreshBtn {
-    background-color: var(--bg-light);
-    color: var(--text-primary);
-    border: 1px solid var(--bg-light);
-    transition: all 0.3s ease;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-secondary);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
   
   #searchStatusBtn:hover, #refreshBtn:hover {
-    background-color: var(--accent-blue);
+    background: var(--accent-blue);
+    color: white;
+    border-color: var(--accent-blue);
   }
   
-  .dropdown-menu {
+  .terminal-page .dropdown-menu {
     padding: 0;
     background-color: var(--bg-medium);
     max-height: 300px;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-light) var(--bg-medium);
-}
+    border: 1px solid var(--bg-light);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  }
 
-.dropdown-menu::-webkit-scrollbar {
+  .terminal-page .dropdown-menu::-webkit-scrollbar {
     width: 8px;
-}
+  }
 
-.dropdown-menu::-webkit-scrollbar-track {
+  .terminal-page .dropdown-menu::-webkit-scrollbar-track {
     background: var(--bg-medium);
-}
+  }
 
-.dropdown-menu::-webkit-scrollbar-thumb {
+  .terminal-page .dropdown-menu::-webkit-scrollbar-thumb {
     background-color: var(--bg-light);
     border-radius: 20px;
     border: 3px solid var(--bg-medium);
-}
+  }
 
-.dropdown-menu::-webkit-scrollbar-thumb:hover {
+  .terminal-page .dropdown-menu::-webkit-scrollbar-thumb:hover {
     background-color: var(--accent-blue);
-}
+  }
 
-.dropdown-item {
+  .terminal-page .dropdown-item {
     color: var(--text-primary);
     background-color: var(--bg-medium);
     transition: all 0.3s ease;
-}
+    border-radius: 8px;
+    margin: 0.25rem;
+    padding: 0.75rem 1rem;
+  }
 
-.dropdown-item:hover {
-    background-color: var(--bg-light);
-}
+  .terminal-page .dropdown-item:hover {
+    background: var(--accent-blue);
+    color: white;
+  }
 
   .terminal-wrapper {
-    height: calc(100vh - 120px);
+    height: calc(100vh - 140px);
     width: 100%;
-    padding: 10px;
-    background-color: var(--bg-dark);
-    border-radius: 6px;
+    padding: 20px;
+    background: linear-gradient(135deg, var(--bg-dark), #1e293b);
+    border-radius: 20px;
     overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    border: 1px solid var(--bg-light);
+    box-shadow: 
+      0 32px 64px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    position: relative;
+  }
+  
+  .terminal-wrapper::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(circle at 30% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
   }
   
   #terminal {
@@ -151,16 +196,7 @@
     background-color: var(--accent-red);
   }
   
-  #reloadButton {
-    background-color: var(--accent-green);
-    transition: all 0.3s ease;
-  }
-  
-  #reloadButton:hover {
-    background-color: #27ae60;
-    transform: translateY(-2px);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  }
+
   
   /* 添加一些動畫效果 */
   @keyframes pulse {
@@ -236,32 +272,26 @@
     resize: vertical;
 }
 
-.btn-primary {
-    background-color: var(--accent-blue);
-    border-color: var(--accent-blue);
+/* Terminal specific button overrides */
+#reloadButton {
+    background: var(--accent-green) !important;
+    border: none !important;
+    color: white !important;
+    transition: all 0.3s ease;
 }
 
-.btn-primary:hover {
-    background-color: #2980b9;
-    border-color: #2980b9;
+#reloadButton:hover {
+    background: #15803d !important;
+    color: white !important;
 }
 
-.btn-secondary {
-    background-color: var(--bg-light);
-    border-color: var(--bg-light);
+#copyServiceKey {
+    background: var(--accent-blue) !important;
+    border: none !important;
+    color: white !important;
 }
 
-.btn-secondary:hover {
-    background-color: #4a4a4a;
-    border-color: #4a4a4a;
-}
-
-.btn-success {
-    background-color: var(--accent-green);
-    border-color: var(--accent-green);
-}
-
-.btn-success:hover {
-    background-color: #27ae60;
-    border-color: #27ae60;
+#copyServiceKey:hover {
+    background: #1d4ed8 !important;
+    color: white !important;
 }
