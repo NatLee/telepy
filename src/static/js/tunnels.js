@@ -76,7 +76,7 @@ function showTunnelDetails(tunnelId) {
         document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
 
         // Disable the save button by default
-        document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
+        document.querySelector('#tunnelDetailsModal .btn-success').disabled = true;
 
         // Show the modal
         var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
@@ -93,7 +93,7 @@ function showTunnelDetails(tunnelId) {
 
 function resetTunnelDetailsModalState() {
     document.getElementById('tunnelDescriptionText').value = '';
-    document.querySelector('#tunnelDetailsModal .btn-outline-success').disabled = true;
+    document.querySelector('#tunnelDetailsModal .btn-success').disabled = true;
 }
 
 function copyTunnelPublicKeyToClipboard() {
@@ -323,7 +323,7 @@ function checkTunnelDetailsModalForChanges() {
     const originalDescription = modal.dataset.originalDescription;
     const currentDescription = document.getElementById('tunnelDescriptionText').value;
 
-    const saveButton = document.querySelector('#tunnelDetailsModal .btn-outline-success');
+    const saveButton = document.querySelector('#tunnelDetailsModal .btn-success');
     if (originalDescription !== currentDescription) {
         saveButton.disabled = false;
     } else {
