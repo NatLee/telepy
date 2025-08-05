@@ -2,18 +2,45 @@
 
 
 // ============================
-// WebSocket Connection
+// WebSocket Connections
 // ============================
 
 function sendWebSocketMessage(action, payload) {
     if (window.socket.readyState !== WebSocket.OPEN) {
-        console.error('WebSocket is not open');
+        console.error('Terminal WebSocket is not open');
         return;
     }
     window.socket.send(JSON.stringify({ action: action, payload: payload }));
 }
 
+function sendFileManagerMessage(action, payload) {
+    if (!window.fileManagerSocket) {
+        console.error('FileManager WebSocket not initialized');
+        return;
+    }
+    
+    if (window.fileManagerSocket.readyState !== WebSocket.OPEN) {
+        console.warn(`FileManager WebSocket is not open (state: ${window.fileManagerSocket.readyState}). Queuing message...`);
+        
+        // Queue the message to be sent when connection opens
+        if (!window.fileManagerMessageQueue) {
+            window.fileManagerMessageQueue = [];
+        }
+        window.fileManagerMessageQueue.push({ action, payload });
+        return;
+    }
+    
+    window.fileManagerSocket.send(JSON.stringify({ action: action, payload: payload }));
+}
+
 function setupWebSocketConnection(serverID, username) {
+    // Setup Terminal WebSocket
+    setupTerminalWebSocket(serverID, username);
+    // Setup File Manager WebSocket
+    setupFileManagerWebSocket(serverID, username);
+}
+
+function setupTerminalWebSocket(serverID, username) {
     Terminal.applyAddon(fit);
     Terminal.applyAddon(fullscreen);
 
@@ -67,13 +94,13 @@ function setupWebSocketConnection(serverID, username) {
     };
 
     socket.onopen = function() {
-        console.log("WebSocket connection established");
+        console.log("Terminal WebSocket connection established");
         updateStatus('connected');
         term.focus();
     };
 
     socket.onclose = function(event) {
-        console.log('Connection closed');
+        console.log('Terminal WebSocket connection closed');
         updateStatus('disconnected');
         term.setOption('theme', {
             background: '#1e1e1e',
@@ -83,7 +110,7 @@ function setupWebSocketConnection(serverID, username) {
     };
 
     socket.onerror = function(event) {
-        console.error(`WebSocket error observed: `, event);
+        console.error(`Terminal WebSocket error observed: `, event);
 
         if (event instanceof ErrorEvent) {
             errorMessage = event.message;
@@ -93,8 +120,67 @@ function setupWebSocketConnection(serverID, username) {
     
         Swal.fire({
             icon: 'error',
-            title: 'WebSocket Error',
+            title: 'Terminal WebSocket Error',
             text: 'A WebSocket error has occurred. Check your permissions and network connection.',
+        });
+    };
+}
+
+function setupFileManagerWebSocket(serverID, username) {
+    const ws_scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    const accessToken = localStorage.getItem('accessToken');
+    const ws_path = `${ws_scheme}://${window.location.host}/ws/filemanager/`;
+    
+    // Token need to be encoded with base64
+    const tokenInfo = `token.${btoa(accessToken)}`;
+    const serverInfo = `server.${serverID}`;
+    const usernameInfo = `username.${username}`;
+    // Create a ticket as auth for subprotocols (avoid special characters like % or =)
+    let ticket = sha256(`${serverID}.${username}`);
+    ticket = `auth.${ticket}`;
+    const fileManagerSocket = new WebSocket(ws_path, [tokenInfo, serverInfo, usernameInfo, ticket]);
+
+    // Expose the file manager socket object to the window
+    window.fileManagerSocket = fileManagerSocket;
+
+    fileManagerSocket.onopen = function() {
+        console.log("FileManager WebSocket connection established");
+        
+        // Process any queued messages
+        if (window.fileManagerMessageQueue && window.fileManagerMessageQueue.length > 0) {
+            console.log(`Sending ${window.fileManagerMessageQueue.length} queued messages`);
+            window.fileManagerMessageQueue.forEach(({ action, payload }) => {
+                fileManagerSocket.send(JSON.stringify({ action, payload }));
+            });
+            window.fileManagerMessageQueue = [];
+        }
+        
+        // Enable file operations
+        enableFileOperations();
+    };
+
+    fileManagerSocket.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            handleFileManagerMessage(data);
+        } catch (error) {
+            console.error('Error parsing FileManager message:', error);
+        }
+    };
+
+    fileManagerSocket.onclose = function(event) {
+        console.log('FileManager WebSocket connection closed');
+        // Disable file operations
+        disableFileOperations();
+    };
+
+    fileManagerSocket.onerror = function(event) {
+        console.error(`FileManager WebSocket error observed: `, event);
+        
+        Swal.fire({
+            icon: 'error',
+            title: 'File Manager WebSocket Error',
+            text: 'File management WebSocket connection failed. File browsing may not work properly.',
         });
     };
 }
@@ -161,29 +247,10 @@ function handleTerminalResize() {
 // ============================
 
 function shellType() {
-    const accessToken = localStorage.getItem('accessToken');
-    fetch(`/api/sftp/shell/${window.serverID}/${window.username}`, {
-        headers: {
-            'Authorization': `Bearer ${accessToken}`
-        }
-    }).then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            console.error('Error fetching shell:', data.error);
-            return;
-        }
-        console.log('Shell:', data.shell);
-        updateShellType(data.shell);
-        if (data.shell === 'powershell' || data.shell === 'unix') {
-            document.getElementById('searchPath').removeAttribute('readonly');
-            document.getElementById('searchPath').value = data.shell === 'powershell' ? 'C:/' : '~/';
-        } else {
-            document.getElementById('searchPath').setAttribute('readonly', 'readonly');
-        }
-    }).catch(error => {
-        console.error('Error fetching shell:', error);
-        updateShellType('unknown');
-    });
+    console.log('Detecting shell type via WebSocket');
+    
+    // Use WebSocket to detect shell
+    sendFileManagerMessage('shell_detect', {});
 }
 
 function updateShellType(type) {
@@ -193,7 +260,172 @@ function updateShellType(type) {
 }
 
 // ============================
-// SFTP File Management
+// File Manager WebSocket Functions
+// ============================
+
+function handleFileManagerMessage(data) {
+    const action = data.action;
+    const responseData = data.data;
+
+    switch (action) {
+        case 'list_files':
+            handleListFilesResponse(responseData);
+            break;
+        case 'shell_detect':
+            handleShellDetectResponse(responseData);
+            break;
+        case 'upload_file':
+            handleUploadFileResponse(responseData);
+            break;
+        case 'download_file':
+            handleDownloadFileResponse(responseData);
+            break;
+        case 'error':
+            handleFileManagerError(responseData);
+            break;
+        default:
+            console.log('Unknown FileManager action:', action, responseData);
+    }
+}
+
+function handleListFilesResponse(data) {
+    if (data.status === 'success') {
+        displayDropdown(data.files);
+        updateSearchStatus('success');
+    } else {
+        updateSearchStatus('error', data.message || 'Failed to list files');
+    }
+}
+
+function handleShellDetectResponse(data) {
+    if (data.status === 'success') {
+        console.log('Shell detected:', data.shell);
+        updateShellType(data.shell);
+        
+        // Set initial path based on shell type
+        const searchPathInput = document.getElementById('searchPath');
+        if (data.shell === 'powershell') {
+            searchPathInput.removeAttribute('readonly');
+            searchPathInput.value = 'C:/';
+        } else if (data.shell === 'unix') {
+            searchPathInput.removeAttribute('readonly');
+            searchPathInput.value = '~/';
+        } else {
+            searchPathInput.setAttribute('readonly', 'readonly');
+        }
+    } else {
+        console.error('Failed to detect shell:', data.message);
+        updateShellType('unknown');
+    }
+}
+
+function handleUploadFileResponse(data) {
+    if (data.status === 'success') {
+        console.log('Upload URL received:', data.upload_url);
+        
+        // Check if we have a pending upload
+        if (window.pendingUpload) {
+            performFileUpload(data.upload_url, window.pendingUpload.file, window.pendingUpload.destinationPath);
+            // Clear pending upload
+            window.pendingUpload = null;
+        }
+    } else {
+        console.error('Upload preparation failed:', data.message);
+        // Clear pending upload on error
+        window.pendingUpload = null;
+    }
+}
+
+function performFileUpload(uploadUrl, file, destinationPath) {
+    console.log(`Uploading file: ${file.name} to ${destinationPath}`);
+    
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    
+    fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+            "Authorization": `Bearer ${localStorage.getItem('accessToken')}`
+        },
+        body: formData,
+    }).then(response => {
+        if (!response.ok) {
+            console.error('Upload failed:', response);
+            Swal.fire({
+                icon: 'error',
+                title: 'Upload Failed',
+                text: 'Failed to upload the file. Please try again.',
+            });
+            return;
+        }
+        console.log('Upload successful');
+        Swal.fire({
+            icon: 'success',
+            title: 'Upload Successful',
+            text: `File "${file.name}" uploaded successfully!`,
+            timer: 2000,
+            showConfirmButton: false
+        });
+        
+        // Refresh the current directory to show the new file
+        const currentPath = document.getElementById('searchPath').value;
+        if (currentPath) {
+            triggerSearch(currentPath);
+        }
+    }).catch(error => {
+        console.error('Error uploading file:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Upload Error',
+            text: 'An error occurred while uploading the file.',
+        });
+    });
+}
+
+function handleDownloadFileResponse(data) {
+    if (data.status === 'success') {
+        console.log('Download URL received:', data.download_url);
+        
+        // Create a temporary link and trigger download
+        const downloadLink = document.createElement('a');
+        downloadLink.href = data.download_url;
+        downloadLink.style.display = 'none';
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        
+        console.log('Download initiated successfully');
+    } else {
+        console.error('Download preparation failed:', data.message);
+        Swal.fire({
+            icon: 'error',
+            title: 'Download Failed',
+            text: data.message || 'Failed to prepare download.',
+        });
+    }
+}
+
+function handleFileManagerError(data) {
+    console.error('FileManager error:', data.message);
+    updateSearchStatus('error', data.message);
+}
+
+function enableFileOperations() {
+    console.log('File operations enabled via WebSocket');
+    // Enable search input if shell detection is successful
+    // This will be handled by shell_detect response
+    
+    // Now that FileManager WebSocket is connected, trigger shell detection
+    shellType();
+}
+
+function disableFileOperations() {
+    console.log('File operations disabled - WebSocket disconnected');
+    disableSearch();
+}
+
+// ============================
+// SFTP File Management (Updated to use WebSocket)
 // ============================
 
 function displayDropdown(files) {
@@ -261,58 +493,34 @@ function createButton(text, className, onClick) {
 
 function handleUpload(file, currentPath) {
     const destination = appendToPath(currentPath, file.name);
-    console.log(`Uploading file to ${destination}`);
+    console.log(`Preparing upload to ${destination}`);
 
     const input = document.createElement('input');
     input.type = 'file';
     input.onchange = (e) => {
-        const file = e.target.files[0];
-        const formData = new FormData();
-        formData.append('file', file, file.name);
-        const destinationPath = appendToPath(destination, file.name);
+        const selectedFile = e.target.files[0];
+        if (!selectedFile) return;
         
-        fetch(`/api/sftp/upload/${serverID}/${window.username}?destination_path=${encodeURIComponent(destinationPath)}`, {
-            method: 'POST',
-            headers: {
-                "Authorization": `Bearer ${localStorage.getItem('accessToken')}`
-            },
-            body: formData,
-        }).then(response => {
-            if (!response.ok) {
-                console.error('Upload failed:', response);
-                return;
-            }
-            console.log('Upload successful:', response);
-            // Optionally refresh or update the UI here
-        }).catch(error => console.error('Error uploading file:', error));
+        const destinationPath = appendToPath(destination, selectedFile.name);
+        
+        // Get upload URL via WebSocket first
+        sendFileManagerMessage('upload_file', { destination_path: destinationPath });
+        
+        // Store the file for upload after we get the URL
+        window.pendingUpload = {
+            file: selectedFile,
+            destinationPath: destinationPath
+        };
     }
     input.click();
 }
 
 function handleDownload(file, currentPath) {
     const path = appendToPath(currentPath, file.name);
-    const downloadPathURL = `/api/sftp/download/${serverID}/${window.username}?path=${encodeURIComponent(path)}`;
-    console.log(`Downloading: ${downloadPathURL}`);
+    console.log(`Requesting download for: ${path}`);
 
-    fetch(downloadPathURL, {
-        headers: {
-            "Authorization": `Bearer ${localStorage.getItem('accessToken')}`
-        }
-    }).then(response => {
-        if (!response.ok) {
-            console.error('Download failed:', response);
-            return;
-        }
-        response.blob().then(blob => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = file.name;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-        });
-    });
+    // Use WebSocket to get download URL
+    sendFileManagerMessage('download_file', { path: path });
 }
 
 // ============================
@@ -355,30 +563,11 @@ function updateSearchStatus(status, errorMessage = '') {
 }
 
 function triggerSearch(path) {
-
-    const serverId = getPathSegments();
-    const url = `/api/sftp/list/${serverId}/${window.username}?path=${encodeURIComponent(path)}`;
-
+    console.log(`Searching path via WebSocket: ${path}`);
     updateSearchStatus('neutral');
 
-    fetch(url, {
-        headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            updateSearchStatus('error', data.error);
-            return;
-        }
-        displayDropdown(data.files);
-        updateSearchStatus('success');
-    })
-    .catch(error => {
-        console.error('Error fetching path:', error);
-        updateSearchStatus('error', 'Failed to fetch path');
-    });
+    // Use WebSocket to list files
+    sendFileManagerMessage('list_files', { path: path });
 }
 
 function disableSearch() {
@@ -676,31 +865,13 @@ document.getElementById('searchStatusBtn').addEventListener('hidden.bs.tooltip',
     }
 });
 
-// 使用防抖函數來觸發搜索
+// 使用防抖函數來觸發搜索 (Updated to use WebSocket)
 const debouncedTriggerSearch = debounce((path) => {
-    const serverId = getPathSegments();
-    const url = `/api/sftp/list/${serverId}/${window.username}?path=${encodeURIComponent(path)}`;
-
+    console.log(`Debounced search path via WebSocket: ${path}`);
     updateSearchStatus('neutral');
 
-    fetch(url, {
-        headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            updateSearchStatus('error', data.error);
-            return;
-        }
-        displayDropdown(data.files);
-        updateSearchStatus('success');
-    })
-    .catch(error => {
-        console.error('Error fetching path:', error);
-        updateSearchStatus('error', 'Failed to fetch path');
-    });
+    // Use WebSocket to list files
+    sendFileManagerMessage('list_files', { path: path });
 }, 700); // 700ms 防抖
 
 
@@ -745,7 +916,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             handleTerminalResize();
             initializeSearchStatus();
-            shellType();
+            // shellType() will be called automatically when FileManager WebSocket connects
 
         })
         .catch(error => {
