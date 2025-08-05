@@ -8,10 +8,6 @@ document.addEventListener('DOMContentLoaded', function() {
     createTunnel();
   });
 
-  document.getElementById('tunnelVerifiedBtn').addEventListener('click', function() {
-    showStep3();
-  });
-
   document.getElementById('goToIndexBtn').addEventListener('click', function() {
     window.location.href = '/tunnels/index';
   });
@@ -85,6 +81,22 @@ function createTunnel() {
   })
   .then(data => {
     if (data.port && data.reverse_port) {
+      // Set the global tunnel ID for use in subsequent steps
+      window.currentTunnelId = data.id;
+      
+      // Also expose it globally for create.html functions
+      if (typeof window.setCurrentTunnelId === 'function') {
+        window.setCurrentTunnelId(data.id);
+      } else {
+        // Fallback: set it directly if the function doesn't exist yet
+        window.currentTunnelId = data.id;
+        sessionStorage.setItem('currentTunnelId', data.id);
+      }
+      
+      console.log('Tunnel created successfully with ID:', data.id);
+      console.log('Window.currentTunnelId set to:', window.currentTunnelId);
+      console.log('SessionStorage currentTunnelId:', sessionStorage.getItem('currentTunnelId'));
+      
       Swal.fire({
         icon: 'success',
         title: 'Tunnel Created Successfully',
