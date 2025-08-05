@@ -271,6 +271,11 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         self.username = None
         self.user = None
         self.reverse_server = None
+        # Persistent SSH session
+        self.ssh_process = None
+        self.ssh_stdin = None
+        self.ssh_stdout = None
+        self.ssh_stderr = None
 
     async def connect(self):
         logger.info("FileManager WebSocket connection attempt")
@@ -350,10 +355,21 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
 
         # Accept the WebSocket connection
         await self.accept(subprotocol_auth)
-        logger.info("FileManager WebSocket connection accepted")
+        
+        # Initialize persistent SSH session
+        try:
+            await self.initialize_ssh_session()
+            logger.info("FileManager WebSocket connection accepted with persistent SSH session")
+        except Exception as e:
+            logger.error(f"Failed to initialize SSH session: {e}")
+            await self.close(code=4005)
+            return
 
     async def disconnect(self, close_code):
         logger.info(f"FileManager WebSocket disconnected with code: {close_code}")
+        
+        # Clean up SSH session
+        await self.cleanup_ssh_session()
 
     async def receive(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages for file operations"""
@@ -386,20 +402,18 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         """Handle file listing requests"""
         try:
             path = payload.get('path', '~/')
-            port = self.reverse_server.reverse_port
-            server = f"{self.username}@reverse"
             
-            # Check if it's PowerShell or Unix
-            is_ps = await sync_to_async(self.is_powershell)(server, port)
+            # Check if it's PowerShell or Unix using persistent session
+            is_ps = await self.is_powershell_persistent()
             
             if is_ps:
                 path = payload.get('path', 'C:\\')
-                command = f"""'Get-ChildItem -Path "{path}" | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json'"""
+                command = f"""Get-ChildItem -Path "{path}" | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json"""
             else:
-                command = f"'ls -la {path}'"
+                command = f"ls -la {path}"
 
-            # Execute command asynchronously
-            stdout, stderr, returncode = await sync_to_async(self.execute_ssh_command)(server, port, command)
+            # Execute command using persistent session
+            stdout, stderr, returncode = await self.execute_ssh_command_persistent(command)
             
             if returncode == 0:
                 if is_ps:
@@ -424,10 +438,8 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
     async def handle_shell_detect(self):
         """Handle shell detection requests"""
         try:
-            port = self.reverse_server.reverse_port
-            server = f"{self.username}@reverse"
-            
-            is_ps = await sync_to_async(self.is_powershell)(server, port)
+            # Use persistent session for shell detection
+            is_ps = await self.is_powershell_persistent()
             shell_type = 'powershell' if is_ps else 'unix'
             
             await self.send_response('shell_detect', {
@@ -583,6 +595,109 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
             i += 1
         
         return f"{size_bytes:.1f} {size_names[i]}"
+
+    async def initialize_ssh_session(self):
+        """Initialize persistent SSH session for file operations"""
+        try:
+            port = self.reverse_server.reverse_port
+            server = f"{self.username}@reverse"
+            
+            # Create SSH process with persistent connection
+            ssh_command = [
+                'ssh', 
+                '-p', str(port),
+                '-o', 'ControlMaster=yes',
+                '-o', 'ControlPath=/tmp/ssh_fm_%r@%h:%p',
+                '-o', 'ControlPersist=600',
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'LogLevel=ERROR',
+                server,
+                # Keep connection alive with a simple command
+                'cat'
+            ]
+            
+            self.ssh_process = await asyncio.create_subprocess_exec(
+                *ssh_command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            logger.info(f"SSH session initialized for {server}:{port}")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize SSH session: {e}")
+            raise
+
+    async def cleanup_ssh_session(self):
+        """Clean up persistent SSH session"""
+        if self.ssh_process:
+            try:
+                # Terminate the SSH process gracefully
+                self.ssh_process.terminate()
+                try:
+                    await asyncio.wait_for(self.ssh_process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    # Force kill if not terminated within 5 seconds
+                    self.ssh_process.kill()
+                    await self.ssh_process.wait()
+                
+                logger.info("SSH session cleaned up")
+                
+            except Exception as e:
+                logger.error(f"Error cleaning up SSH session: {e}")
+            finally:
+                self.ssh_process = None
+
+    async def execute_ssh_command_persistent(self, command):
+        """Execute SSH command using persistent session"""
+        if not self.ssh_process:
+            raise Exception("SSH session not initialized")
+            
+        try:
+            port = self.reverse_server.reverse_port
+            server = f"{self.username}@reverse"
+            
+            # Use SSH multiplexing to reuse the connection
+            ssh_exec_command = [
+                'ssh',
+                '-p', str(port),
+                '-o', 'ControlPath=/tmp/ssh_fm_%r@%h:%p',
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'LogLevel=ERROR',
+                server,
+                command
+            ]
+            
+            # Execute command using the persistent connection
+            exec_process = await asyncio.create_subprocess_exec(
+                *ssh_exec_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            stdout, stderr = await exec_process.communicate()
+            
+            return (
+                stdout.decode('utf-8', errors='replace'), 
+                stderr.decode('utf-8', errors='replace'), 
+                exec_process.returncode
+            )
+            
+        except Exception as e:
+            logger.error(f"Error executing SSH command: {e}")
+            raise
+
+    async def is_powershell_persistent(self):
+        """Check if remote shell is PowerShell using persistent session"""
+        try:
+            # Try to execute a PowerShell-specific command
+            stdout, stderr, returncode = await self.execute_ssh_command_persistent('Get-Host')
+            return returncode == 0 and 'Name' in stdout
+        except:
+            return False
 
     # Reuse permission checking methods from TerminalConsumer
     @sync_to_async
