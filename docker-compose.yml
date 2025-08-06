@@ -73,7 +73,7 @@ services:
 
   ssh:
     <<: [*common-networks, *common-restart]
-    image: lscr.io/linuxserver/openssh-server
+    image: lscr.io/linuxserver/openssh-server:version-10.0_p1-r7
     container_name: telepy-ssh-${PROJECT_NAME}
     hostname: telepy-ssh-${PROJECT_NAME}
     environment:
@@ -87,7 +87,6 @@ services:
       - ./telepy-logs/ssh:/config/logs
       - ./ssh/root_ssh_key:/config/.ssh
       - ./ssh/ssh_host_keys:/config/ssh_host_keys
-      - ./ssh/sshd_config:/config/sshd
       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
       - ./ssh/custom_scripts/custom-services.d:/custom-services.d
     ports:
