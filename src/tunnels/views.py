@@ -232,18 +232,62 @@ class PowershellSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
+        
+        # Get optional key_path from query parameters
+        key_path = self.request.GET.get('key_path', None)
+        if key_path:
+            key_path = key_path.strip()
+            if not key_path:  # Empty string after strip
+                key_path = None
 
         config_string = ssh_tunnel_script_factory(
           "powershell", 
           server_domain=self.server_domain, 
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
-          reverse_server_ssh_port=self.reverse_server_ssh_port
+          reverse_server_ssh_port=self.reverse_server_ssh_port,
+          key_path=key_path
         ).render()
 
         return Response({
             "script": config_string,
             "language": "powershell",
+        })
+
+
+class SSHTunnelScript(ReverseServerScriptBase):
+    script_type = ScriptType.SCRIPT
+    @swagger_auto_schema(
+        operation_summary="SSH Tunnel Script",
+        operation_description="SSH Tunnel Script",
+        tags=['Script']
+    )
+    def get_script(
+        self,
+        server_auth_key: ReverseServerAuthorizedKeys,
+        ssh_port: int
+    ):
+        reverse_port = server_auth_key.reverse_port
+        
+        # Get optional key_path from query parameters
+        key_path = self.request.GET.get('key_path', None)
+        if key_path:
+            key_path = key_path.strip()
+            if not key_path:  # Empty string after strip
+                key_path = None
+        
+        config_string = ssh_tunnel_script_factory(
+          "ssh", 
+          server_domain=self.server_domain, 
+          reverse_port=reverse_port, 
+          ssh_port=ssh_port, 
+          reverse_server_ssh_port=self.reverse_server_ssh_port,
+          key_path=key_path
+        ).render()
+
+        return Response({
+            "script": config_string,
+            "language": "bash",
         })
 
 
@@ -260,12 +304,21 @@ class AutoSSHTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
+        
+        # Get optional key_path from query parameters
+        key_path = self.request.GET.get('key_path', None)
+        if key_path:
+            key_path = key_path.strip()
+            if not key_path:  # Empty string after strip
+                key_path = None
+        
         config_string = ssh_tunnel_script_factory(
           "autossh", 
           server_domain=self.server_domain, 
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
-          reverse_server_ssh_port=self.reverse_server_ssh_port
+          reverse_server_ssh_port=self.reverse_server_ssh_port,
+          key_path=key_path
         ).render()
 
         return Response({
@@ -293,13 +346,21 @@ class AutoSSHServiceTunnelScript(ReverseServerScriptBase):
         except AttributeError:
             return Response({'error': 'No username found for this server'}, status=404)
 
+        # Get optional key_path from query parameters
+        key_path = self.request.GET.get('key_path', None)
+        if key_path:
+            key_path = key_path.strip()
+            if not key_path:  # Empty string after strip
+                key_path = None
+
         config_string = ssh_tunnel_script_factory(
           "autossh-service", 
           server_domain=self.server_domain, 
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
           reverse_server_ssh_port=self.reverse_server_ssh_port,
-          username=username
+          username=username,
+          key_path=key_path
         ).render()
 
         return Response({
