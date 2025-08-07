@@ -256,15 +256,79 @@
             </div>
           </div>
           
-          <!-- AutoSSH Script Section -->
+          <!-- Script Configuration Section -->
           <div class="mb-4">
-            <h6 class="fw-bold mb-3">AutoSSH Connection Script</h6>
+            <h6 class="fw-bold mb-3">Script Configuration</h6>
+            <p class="text-muted small mb-3">Verify and adjust the connection parameters before generating the script:</p>
+            
+            <div class="row g-3 mb-3">
+              <div class="col-md-6">
+                <label for="step4SshPort" class="form-label">
+                  <i class="fas fa-network-wired me-2 text-primary"></i>SSH Port
+                </label>
+                <input type="number" class="form-control" id="step4SshPort" value="22" min="1" max="65535">
+                <small class="form-text text-muted">Confirm your server's SSH port (default: 22)</small>
+              </div>
+              <div class="col-md-6">
+                <label for="sshKeyPath" class="form-label">
+                  <i class="fas fa-key me-2 text-warning"></i>SSH Key Path (Optional)
+                </label>
+                <input type="text" class="form-control" id="sshKeyPath" placeholder="e.g., ~/.ssh/id_rsa">
+                <small class="form-text text-muted">Specify custom SSH key location if needed</small>
+              </div>
+            </div>
+            
+            <div class="alert alert-info border-0 mb-3" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1)); border-radius: 12px;">
+              <div class="d-flex align-items-start">
+                <i class="fas fa-info-circle text-primary me-3 mt-1"></i>
+                <div>
+                  <h6 class="fw-bold mb-2">Configuration Tips</h6>
+                  <ul class="mb-0 small">
+                    <li><strong>SSH Port:</strong> Most servers use port 22. Check your server configuration if unsure.</li>
+                    <li><strong>SSH Key:</strong> Leave blank to use default key (~/.ssh/id_rsa). Specify path for custom keys.</li>
+                    <li><strong>Script Update:</strong> The script will automatically update when you change these values.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Connection Script Section -->
+          <div class="mb-4">
+            <h6 class="fw-bold mb-3">Connection Script</h6>
             <p class="text-muted small mb-3">Execute this script on your target server to create the tunnel:</p>
-            <div class="position-relative">
-              <pre id="autosshScript" class="form-control language-bash" style="height: 150px; font-family: 'Courier New', monospace; background-color: #2d3748; color: #e2e8f0; padding: 15px;" readonly>Loading script...</pre>
-              <button class="btn btn-outline-secondary btn-sm position-absolute top-0 end-0 m-2" onclick="copyAutosshScript()">
-                <i class="fas fa-copy me-1"></i>Copy
-              </button>
+            
+            <!-- Script Type Tabs -->
+            <ul class="nav nav-tabs mb-3" id="scriptTypeTab" role="tablist" style="border: none;">
+              <li class="nav-item" role="presentation">
+                <button class="tab-link active" id="sshTab" data-bs-toggle="tab" data-bs-target="#sshContent" type="button" role="tab" aria-controls="ssh" aria-selected="true">
+                  <i class="fas fa-terminal me-2"></i>SSH
+                </button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="tab-link" id="autosshTab" data-bs-toggle="tab" data-bs-target="#autosshContent" type="button" role="tab" aria-controls="autossh" aria-selected="false">
+                  <i class="fas fa-sync-alt me-2"></i>AutoSSH
+                </button>
+              </li>
+            </ul>
+            
+            <div class="tab-content" id="scriptTypeTabContent">
+              <div class="tab-pane fade show active" id="sshContent" role="tabpanel" aria-labelledby="ssh-tab">
+                <div class="position-relative">
+                  <pre id="sshScript" class="form-control language-bash" style="height: 150px; font-family: 'Courier New', monospace; background-color: #2d3748; color: #e2e8f0; padding: 15px;" readonly>Loading SSH script...</pre>
+                  <button class="btn btn-outline-secondary btn-sm position-absolute top-0 end-0 m-2" onclick="copySshScript()">
+                    <i class="fas fa-copy me-1"></i>Copy
+                  </button>
+                </div>
+              </div>
+              <div class="tab-pane fade" id="autosshContent" role="tabpanel" aria-labelledby="autossh-tab">
+                <div class="position-relative">
+                  <pre id="autosshScript" class="form-control language-bash" style="height: 150px; font-family: 'Courier New', monospace; background-color: #2d3748; color: #e2e8f0; padding: 15px;" readonly>Loading AutoSSH script...</pre>
+                  <button class="btn btn-outline-secondary btn-sm position-absolute top-0 end-0 m-2" onclick="copyAutosshScript()">
+                    <i class="fas fa-copy me-1"></i>Copy
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           
@@ -494,7 +558,9 @@ function goToTestConnection() {
     console.log('goToTestConnection - checking tunnel ID...');
     const tunnelId = getCurrentTunnelId();
     if (tunnelId) {
-      console.log('Tunnel ID available, loading autossh script and initializing terminal...');
+      console.log('Tunnel ID available, loading scripts and initializing terminal...');
+      initializeStep4Configuration();
+      loadSshScript();
       loadAutosshScript();
       initializeEmbeddedTerminal();
     } else {
@@ -884,8 +950,126 @@ function removeUserFromTunnel(userId) {
 }
 
 // ============================
+// Step 4 Configuration Functions
+// ============================
+
+function initializeStep4Configuration() {
+  // Copy SSH port from step 1 to step 4
+  const step1SshPort = document.getElementById('sshPort').value || '22';
+  const step4SshPort = document.getElementById('step4SshPort');
+  if (step4SshPort) {
+    step4SshPort.value = step1SshPort;
+  }
+  
+  // Add event listeners for dynamic script updates and validation
+  const step4SshPortElement = document.getElementById('step4SshPort');
+  const sshKeyPathElement = document.getElementById('sshKeyPath');
+  
+  if (step4SshPortElement) {
+    // Add port validation
+    step4SshPortElement.addEventListener('input', function() {
+      step4SshPortElement.value = step4SshPortElement.value.trim();
+      if (isValidPort(step4SshPortElement.value)) {
+        step4SshPortElement.classList.remove('is-invalid');
+        step4SshPortElement.classList.add('is-valid');
+      } else {
+        step4SshPortElement.classList.remove('is-valid');
+        step4SshPortElement.classList.add('is-invalid');
+      }
+      // Update script after validation
+      debounceScriptUpdate();
+    });
+  }
+  
+  if (sshKeyPathElement) {
+    // Add key path validation (basic path validation)
+    sshKeyPathElement.addEventListener('input', function() {
+      const keyPath = sshKeyPathElement.value.trim();
+      sshKeyPathElement.classList.remove('is-invalid', 'is-valid');
+      
+      if (keyPath === '') {
+        // Empty is valid (will use default)
+        sshKeyPathElement.classList.add('is-valid');
+      } else if (isValidKeyPath(keyPath)) {
+        sshKeyPathElement.classList.add('is-valid');
+      } else {
+        sshKeyPathElement.classList.add('is-invalid');
+      }
+      // Update script after validation
+      debounceScriptUpdate();
+    });
+  }
+}
+
+// Basic key path validation function
+function isValidKeyPath(path) {
+  if (!path) return true; // Empty path is valid
+  
+  // Basic path validation - should start with / or ~ or .
+  // and not contain dangerous characters
+  const pathRegex = /^[~\/.][a-zA-Z0-9_\-/.~]*$/;
+  return pathRegex.test(path) && path.length < 256;
+}
+
+// Debounced script update function
+const debounceScriptUpdate = debounce(function() {
+  console.log('Script configuration changed, updating...');
+  loadSshScript();
+  loadAutosshScript();
+}, 500);
+
+// ============================
 // AutoSSH Script Functions
 // ============================
+
+function loadSshScript() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) {
+    console.warn('No tunnel ID available for loading SSH script');
+    document.getElementById('sshScript').textContent = 'Please create a tunnel first.';
+    return;
+  }
+  
+  // Get SSH port from step 4 (or fallback to step 1)
+  const step4SshPort = document.getElementById('step4SshPort');
+  const step1SshPort = document.getElementById('sshPort');
+  const sshPort = (step4SshPort && step4SshPort.value) ? step4SshPort.value : (step1SshPort ? step1SshPort.value : '22');
+  
+  // Get custom SSH key path if specified
+  const sshKeyPathElement = document.getElementById('sshKeyPath');
+  const sshKeyPath = sshKeyPathElement ? sshKeyPathElement.value.trim() : '';
+  
+  const accessToken = localStorage.getItem('accessToken');
+  
+  console.log('Loading SSH script for tunnel ID:', tunnelId, 'SSH port:', sshPort, 'Key path:', sshKeyPath);
+  
+  // Build the API URL with optional key path parameter
+  let apiUrl = `/tunnels/server/script/ssh/${tunnelId}/${sshPort}`;
+  if (sshKeyPath) {
+    apiUrl += `?key_path=${encodeURIComponent(sshKeyPath)}`;
+  }
+  
+  fetch(apiUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`
+    }
+  })
+  .then(response => response.json())
+  .then(data => {
+    const scriptElement = document.getElementById('sshScript');
+    scriptElement.textContent = data.script;
+    
+    // Apply syntax highlighting
+    if (typeof Prism !== 'undefined') {
+      Prism.highlightElement(scriptElement);
+    }
+  })
+  .catch(error => {
+    console.error('Error loading SSH script:', error);
+    document.getElementById('sshScript').textContent = 'Error loading script. Please try again.';
+  });
+}
 
 function loadAutosshScript() {
   const tunnelId = getCurrentTunnelId();
@@ -895,11 +1079,26 @@ function loadAutosshScript() {
     return;
   }
   
-  const sshPort = document.getElementById('sshPort').value || '22';
+  // Get SSH port from step 4 (or fallback to step 1)
+  const step4SshPort = document.getElementById('step4SshPort');
+  const step1SshPort = document.getElementById('sshPort');
+  const sshPort = (step4SshPort && step4SshPort.value) ? step4SshPort.value : (step1SshPort ? step1SshPort.value : '22');
+  
+  // Get custom SSH key path if specified
+  const sshKeyPathElement = document.getElementById('sshKeyPath');
+  const sshKeyPath = sshKeyPathElement ? sshKeyPathElement.value.trim() : '';
+  
   const accessToken = localStorage.getItem('accessToken');
   
-  console.log('Loading autossh script for tunnel ID:', tunnelId);
-  fetch(`/tunnels/server/script/autossh/${tunnelId}/${sshPort}`, {
+  console.log('Loading autossh script for tunnel ID:', tunnelId, 'SSH port:', sshPort, 'Key path:', sshKeyPath);
+  
+  // Build the API URL with optional key path parameter
+  let apiUrl = `/tunnels/server/script/autossh/${tunnelId}/${sshPort}`;
+  if (sshKeyPath) {
+    apiUrl += `?key_path=${encodeURIComponent(sshKeyPath)}`;
+  }
+  
+  fetch(apiUrl, {
     method: 'GET',
     headers: {
       'Authorization': `Bearer ${accessToken}`
@@ -908,7 +1107,12 @@ function loadAutosshScript() {
   .then(response => response.json())
   .then(data => {
     const scriptElement = document.getElementById('autosshScript');
-    scriptElement.textContent = data.script;
+    if (data.script) {
+      scriptElement.textContent = data.script;
+    } else {
+      // Fallback: generate script client-side if server doesn't support key_path param
+      generateAutosshScriptClientSide(data.script, sshKeyPath);
+    }
     
     // Apply syntax highlighting
     if (typeof Prism !== 'undefined') {
@@ -918,6 +1122,49 @@ function loadAutosshScript() {
   .catch(error => {
     console.error('Error loading autossh script:', error);
     document.getElementById('autosshScript').textContent = 'Error loading script. Please try again.';
+  });
+}
+
+function generateAutosshScriptClientSide(originalScript, sshKeyPath) {
+  const scriptElement = document.getElementById('autosshScript');
+  let script = originalScript;
+  
+  if (sshKeyPath && script) {
+    // Add SSH key parameter to the autossh command
+    // Look for autossh command and add -i flag
+    script = script.replace(
+      /autossh\s+([^-\s])/g, 
+      `autossh -i ${sshKeyPath} $1`
+    );
+    
+    // Also add to any ssh commands
+    script = script.replace(
+      /ssh\s+([^-\s])/g,
+      `ssh -i ${sshKeyPath} $1`
+    );
+  }
+  
+  scriptElement.textContent = script;
+}
+
+function copySshScript() {
+  const scriptText = document.getElementById('sshScript').textContent;
+  navigator.clipboard.writeText(scriptText).then(() => {
+    Swal.fire({
+      icon: 'success',
+      title: 'Script Copied!',
+      text: 'SSH script has been copied to clipboard',
+      showConfirmButton: false,
+      timer: 1500
+    });
+  }).catch(err => {
+    console.error('Error copying script:', err);
+    Swal.fire({
+      icon: 'error',
+      title: 'Copy Failed',
+      text: 'Failed to copy script to clipboard',
+      showConfirmButton: true,
+    });
   });
 }
 
