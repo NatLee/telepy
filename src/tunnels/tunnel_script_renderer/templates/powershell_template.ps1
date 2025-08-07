@@ -1,6 +1,6 @@
 # PowerShell script
 
-echo "[+] Script start"
+echo "[+] SSH Script start"
 
 ### Configuration
 
@@ -13,7 +13,7 @@ $sshRemoteForward = "*:${reverse_port}:localhost:${ssh_port}"
 # The {reverse_server_ssh_port} is a placeholder for template rendering.
 $reverseServerSSHPort = "${reverse_server_ssh_port}"
 
-$sshOptions = "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
+$sshOptions = "${key_option}-o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no"
 $sshCommand = "ssh $sshOptions -p $reverseServerSSHPort -NR $sshRemoteForward $sshUserHost"
 
 # Add-Type for PowerManagement to prevent sleep

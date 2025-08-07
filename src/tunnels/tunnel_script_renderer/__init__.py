@@ -2,6 +2,7 @@ from .template_renderer import BaseTemplateRenderer
 from .powershell_renderer import PowerShellTemplate
 from .autossh_renderer import AutoSshTemplate
 from .autossh_service_renderer import AutoSshServiceTemplate
+from .ssh_renderer import SshTemplate
 from .ssh_config_renderer import SshClientTemplate, SshServerTemplate
 
 
@@ -11,7 +12,8 @@ def ssh_tunnel_script_factory(
     reverse_port: int,
     ssh_port: int,
     reverse_server_ssh_port: int,
-    username:str="root") -> BaseTemplateRenderer:
+    username:str="root",
+    key_path: str=None) -> BaseTemplateRenderer:
     
     tunnel_type = tunnel_type.lower() # Normalize `tunnel_type`.
     if tunnel_type == "powershell":
@@ -19,7 +21,17 @@ def ssh_tunnel_script_factory(
             server_domain=server_domain,
             reverse_port=reverse_port,
             ssh_port=ssh_port,
-            reverse_server_ssh_port=reverse_server_ssh_port
+            reverse_server_ssh_port=reverse_server_ssh_port,
+            key_path=key_path
+        )
+        return template
+    elif tunnel_type == "ssh":
+        template = SshTemplate.template_factory(
+            server_domain=server_domain,
+            reverse_port=reverse_port,
+            ssh_port=ssh_port,
+            reverse_server_ssh_port=reverse_server_ssh_port,
+            key_path=key_path
         )
         return template
     elif tunnel_type == "autossh":
@@ -27,7 +39,8 @@ def ssh_tunnel_script_factory(
             server_domain=server_domain,
             reverse_port=reverse_port,
             ssh_port=ssh_port,
-            reverse_server_ssh_port=reverse_server_ssh_port
+            reverse_server_ssh_port=reverse_server_ssh_port,
+            key_path=key_path
         )
         return template
     elif tunnel_type == "autossh-service":
@@ -36,7 +49,8 @@ def ssh_tunnel_script_factory(
             reverse_port=reverse_port,
             ssh_port=ssh_port,
             reverse_server_ssh_port=reverse_server_ssh_port,
-            username=username
+            username=username,
+            key_path=key_path
         )
         return template
     else:
