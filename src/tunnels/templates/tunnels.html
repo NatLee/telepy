@@ -110,7 +110,7 @@
    <div class="modal-dialog modal-dialog-scrollable modal-lg">
      <div class="modal-content">
        <div class="modal-header">
-         <h5 class="modal-title" id="serverScriptModalLabel">Reverse Server Tunnel Script</h5>
+         <h5 class="modal-title" id="serverScriptModalLabel">Reverse Server Tunnel Start Script</h5>
          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
        </div>
        <div class="modal-body">
@@ -120,13 +120,33 @@
             <input type="text" class="form-control" id="sshPort" placeholder="Enter SSH Port" value="22" data-toggle="tooltip" data-placement="right" title="Invalid Port Number">
          </div>
          
+         <!-- SSH Key Path -->
+         <div class="input-group mb-3">
+            <span class="input-group-text" id="basic-addon2">
+               <i class="fas fa-key me-2"></i>SSH Key Path (Optional)
+            </span>
+            <input type="text" class="form-control" id="sshKeyPathTunnels" placeholder="e.g., ~/.ssh/id_rsa" data-toggle="tooltip" data-placement="right" title="Specify custom SSH key location if needed">
+         </div>
+         
+         <div class="alert alert-info border-0 mb-3" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1)); border-radius: 12px;">
+            <div class="d-flex align-items-start">
+               <i class="fas fa-info-circle text-primary me-3 mt-1"></i>
+               <div class="small">
+                  <strong>Configuration Tips:</strong> Leave key path blank to use default SSH key (~/.ssh/id_rsa). Scripts will update automatically when you change these values.
+               </div>
+            </div>
+         </div>
+         
          <!-- Nav tabs -->
          <ul class="nav nav-tabs" id="osTab">
            <li class="nav-item">
-             <button class="tab-link active" id="ssh-tab" data-bs-toggle="tab" data-bs-target="#ssh" aria-controls="ssh" aria-selected="true">SSH</button>
+             <button class="tab-link active" id="ssh-simple-tab" data-bs-toggle="tab" data-bs-target="#ssh-simple" aria-controls="ssh-simple" aria-selected="true">SSH</button>
            </li>
            <li class="nav-item">
-            <button class="tab-link" id="ssh-service-tab" data-bs-toggle="tab" data-bs-target="#ssh-service" aria-controls="ssh-service" aria-selected="true">SSH Service</button>
+             <button class="tab-link" id="autossh-tab" data-bs-toggle="tab" data-bs-target="#autossh" aria-controls="autossh" aria-selected="false">AutoSSH</button>
+           </li>
+           <li class="nav-item">
+            <button class="tab-link" id="ssh-service-tab" data-bs-toggle="tab" data-bs-target="#ssh-service" aria-controls="ssh-service" aria-selected="false">SSH Service</button>
            </li>
            <li class="nav-item">
              <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" aria-controls="powershell" aria-selected="false">Powershell</button>
@@ -138,16 +158,22 @@
          
          <!-- Tab content -->
          <div class="tab-content" id="osTabContent">
-            <!-- SSH -->
-            <div class="tab-pane fade show active" id="ssh" aria-labelledby="ssh-tab">
-               <!-- SSH tab content -->
-               <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
-               <pre id="tunnelCommandSSH" class="form-control" style="height: 350px" readonly></pre>
+            <!-- SSH Simple -->
+            <div class="tab-pane fade show active" id="ssh-simple" aria-labelledby="ssh-simple-tab">
+               <!-- SSH Simple tab content -->
+               <p class="text-muted">Simple SSH tunnel connection. If you want to use private keys to login the remote server, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+               <pre id="tunnelCommandSSHSimple" class="form-control" style="height: 350px" readonly></pre>
+            </div>
+            <!-- AutoSSH -->
+            <div class="tab-pane fade" id="autossh" aria-labelledby="autossh-tab">
+               <!-- AutoSSH tab content -->
+               <p class="text-muted">AutoSSH with automatic reconnection. If you want to use private keys to login the remote server, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+               <pre id="tunnelCommandAutoSSH" class="form-control" style="height: 350px" readonly></pre>
             </div>
             <!-- SSH Service -->
             <div class="tab-pane fade" id="ssh-service" aria-labelledby="ssh-service-tab">
               <!-- SSH Service tab content -->
-              <p class="text-muted">If you want to use private keys to login, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
+              <p class="text-muted">If you want to use private keys to login the remote server, you need to add public keys in <code>~/.ssh/authorized_keys</code> in your target server.</p>
               <p class="text-muted alert-info">You can replace <code>User</code> field with your own username in the command.</p>
               <p class="text-muted">Paste the following script in <code>/etc/systemd/system/autossh.service</code> .</p>
               <pre id="tunnelCommandSSHService" class="form-control" style="height: 400px" readonly></pre>
