@@ -525,18 +525,94 @@ async function updateServerScriptContent(serverId) {
         // Fetch the PowerShell script
         const powershellScriptData = await fetchSSHScript(powershellUrl);
 
+        // Fetch Docker scripts
+        let dockerRunUrl = `/tunnels/server/script/docker-run/${serverId}/${sshPort}`;
+        let dockerComposeUrl = `/tunnels/server/script/docker-compose/${serverId}/${sshPort}`;
+        
+        if (sshKeyPath) {
+            const keyPathParam = `?key_path=${encodeURIComponent(sshKeyPath)}`;
+            dockerRunUrl += keyPathParam;
+            dockerComposeUrl += keyPathParam;
+        }
+        
+        const dockerRunScriptData = await fetchSSHScript(dockerRunUrl);
+        const dockerComposeScriptData = await fetchSSHScript(dockerComposeUrl);
+
         // Check if Prism is available and highlight the code
-        if (Prism && Prism.highlight && sshSimpleScriptData.script && autosshScriptData.script && sshServiceScriptData.script && powershellScriptData.script) {
-            document.getElementById('tunnelCommandSSHSimple').innerHTML = Prism.highlight(sshSimpleScriptData.script, Prism.languages[sshSimpleScriptData.language], sshSimpleScriptData.language);
-            document.getElementById('tunnelCommandAutoSSH').innerHTML = Prism.highlight(autosshScriptData.script, Prism.languages[autosshScriptData.language], autosshScriptData.language);
-            document.getElementById('tunnelCommandSSHService').innerHTML = Prism.highlight(sshServiceScriptData.script, Prism.languages[sshServiceScriptData.language], sshServiceScriptData.language);
+        if (Prism && Prism.highlight) {
+            // Highlight basic scripts
+            if (sshSimpleScriptData.script) {
+                try {
+                    document.getElementById('tunnelCommandSSHSimple').innerHTML = Prism.highlight(sshSimpleScriptData.script, Prism.languages[sshSimpleScriptData.language], sshSimpleScriptData.language);
+                } catch (error) {
+                    console.error('Error highlighting SSH Simple script:', error);
+                    document.getElementById('tunnelCommandSSHSimple').textContent = sshSimpleScriptData.script;
+                }
+            }
+            if (autosshScriptData.script) {
+                try {
+                    document.getElementById('tunnelCommandAutoSSH').innerHTML = Prism.highlight(autosshScriptData.script, Prism.languages[autosshScriptData.language], autosshScriptData.language);
+                } catch (error) {
+                    console.error('Error highlighting AutoSSH script:', error);
+                    document.getElementById('tunnelCommandAutoSSH').textContent = autosshScriptData.script;
+                }
+            }
+            if (sshServiceScriptData.script) {
+                try {
+                    document.getElementById('tunnelCommandSSHService').innerHTML = Prism.highlight(sshServiceScriptData.script, Prism.languages[sshServiceScriptData.language], sshServiceScriptData.language);
+                } catch (error) {
+                    console.error('Error highlighting SSH Service script:', error);
+                    document.getElementById('tunnelCommandSSHService').textContent = sshServiceScriptData.script;
+                }
+            }
 
-            document.getElementById('tunnelCommandSSHServiceSteps').innerHTML = Prism.highlight(
-                "sudo systemctl daemon-reload\nsudo systemctl start autossh.service\nsudo systemctl enable autossh.service"
-                , Prism.languages['bash'], 'bash'
-            );
+            try {
+                document.getElementById('tunnelCommandSSHServiceSteps').innerHTML = Prism.highlight(
+                    "sudo systemctl daemon-reload\nsudo systemctl start autossh.service\nsudo systemctl enable autossh.service"
+                    , Prism.languages['bash'], 'bash'
+                );
+            } catch (error) {
+                console.error('Error highlighting SSH Service Steps:', error);
+                document.getElementById('tunnelCommandSSHServiceSteps').textContent = "sudo systemctl daemon-reload\nsudo systemctl start autossh.service\nsudo systemctl enable autossh.service";
+            }
 
-            document.getElementById('tunnelCommandPowershell').innerHTML = Prism.highlight(powershellScriptData.script, Prism.languages[powershellScriptData.language], powershellScriptData.language);
+            if (powershellScriptData.script) {
+                try {
+                    document.getElementById('tunnelCommandPowershell').innerHTML = Prism.highlight(powershellScriptData.script, Prism.languages[powershellScriptData.language], powershellScriptData.language);
+                } catch (error) {
+                    console.error('Error highlighting PowerShell script:', error);
+                    document.getElementById('tunnelCommandPowershell').textContent = powershellScriptData.script;
+                }
+            }
+            
+            // Highlight Docker scripts
+            if (dockerRunScriptData.script) {
+                console.log('Highlighting Docker Run script with language:', dockerRunScriptData.language);
+                try {
+                    document.getElementById('tunnelCommandDockerRun').innerHTML = Prism.highlight(dockerRunScriptData.script, Prism.languages[dockerRunScriptData.language], dockerRunScriptData.language);
+                } catch (error) {
+                    console.error('Error highlighting Docker Run script:', error);
+                    // Fallback to plain text
+                    document.getElementById('tunnelCommandDockerRun').textContent = dockerRunScriptData.script;
+                }
+            }
+            if (dockerComposeScriptData.script) {
+                console.log('Highlighting Docker Compose script with language:', dockerComposeScriptData.language);
+                console.log('Available Prism languages:', Object.keys(Prism.languages));
+                console.log('Docker Compose script content:', dockerComposeScriptData.script);
+                
+                // Check if yaml language is available, fallback to bash if not
+                const language = Prism.languages[dockerComposeScriptData.language] ? dockerComposeScriptData.language : 'bash';
+                console.log('Using language for highlighting:', language);
+                
+                try {
+                    document.getElementById('tunnelCommandDockerCompose').innerHTML = Prism.highlight(dockerComposeScriptData.script, Prism.languages[language], language);
+                } catch (error) {
+                    console.error('Error highlighting Docker Compose script:', error);
+                    // Fallback to plain text
+                    document.getElementById('tunnelCommandDockerCompose').textContent = dockerComposeScriptData.script;
+                }
+            }
         }
 
     } catch (error) {
@@ -551,13 +627,29 @@ function showServerScriptModal(serverId) {
     modal.show();
     
     // Re-fetch script content when SSH port or key path changes and update the modal content
-    document.getElementById('sshPort').onchange = async () => {
+    const sshPortElement = document.getElementById('sshPort');
+    const sshKeyPathElement = document.getElementById('sshKeyPathTunnels');
+    
+    // Remove existing event listeners to prevent duplicates
+    if (sshPortElement._sshPortChangeHandler) {
+        sshPortElement.removeEventListener('change', sshPortElement._sshPortChangeHandler);
+    }
+    if (sshKeyPathElement._sshKeyPathInputHandler) {
+        sshKeyPathElement.removeEventListener('input', sshKeyPathElement._sshKeyPathInputHandler);
+    }
+    
+    // Create new event handlers
+    sshPortElement._sshPortChangeHandler = async () => {
         await updateServerScriptContent(serverId);
     };
     
-    document.getElementById('sshKeyPathTunnels').oninput = debounce(async () => {
+    sshKeyPathElement._sshKeyPathInputHandler = debounce(async () => {
         await updateServerScriptContent(serverId);
     }, 500);
+    
+    // Add new event listeners
+    sshPortElement.addEventListener('change', sshPortElement._sshPortChangeHandler);
+    sshKeyPathElement.addEventListener('input', sshKeyPathElement._sshKeyPathInputHandler);
 }
 
 // Debounce function for input events
