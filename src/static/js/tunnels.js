@@ -478,6 +478,7 @@ async function fetchSSHScript(url) {
 async function updateServerScriptContent(serverId) {
     try {
         const sshPort = document.getElementById('sshPort').value;
+        const sshKeyPath = document.getElementById('sshKeyPathTunnels').value.trim();
 
         if (!sshPort) {
             console.error('SSH port is empty');
@@ -489,13 +490,30 @@ async function updateServerScriptContent(serverId) {
             return;
         }
 
-        // Fetch the SSH script
-        const sshScriptData = await fetchSSHScript(`/tunnels/server/script/autossh/${serverId}/${sshPort}`);
+        // Build URLs with optional key path parameter
+        let sshUrl = `/tunnels/server/script/ssh/${serverId}/${sshPort}`;
+        let autosshUrl = `/tunnels/server/script/autossh/${serverId}/${sshPort}`;
+        let autosshServiceUrl = `/tunnels/server/script/autossh-service/${serverId}/${sshPort}`;
+        let powershellUrl = `/tunnels/server/script/powershell/${serverId}/${sshPort}`;
+        
+        if (sshKeyPath) {
+            const keyPathParam = `?key_path=${encodeURIComponent(sshKeyPath)}`;
+            sshUrl += keyPathParam;
+            autosshUrl += keyPathParam;
+            autosshServiceUrl += keyPathParam;
+            powershellUrl += keyPathParam;
+        }
+
+        // Fetch the SSH Simple script
+        const sshSimpleScriptData = await fetchSSHScript(sshUrl);
+
+        // Fetch the AutoSSH script
+        const autosshScriptData = await fetchSSHScript(autosshUrl);
 
         // If service script is not available, it means the user have not add usernames to this server
         let sshServiceScriptData = {};
         try {
-            sshServiceScriptData = await fetchSSHScript(`/tunnels/server/script/autossh-service/${serverId}/${sshPort}`);
+            sshServiceScriptData = await fetchSSHScript(autosshServiceUrl);
         } catch (error) {
             console.error('Error fetching SSH service script:', error);
             sshServiceScriptData = {
@@ -505,11 +523,12 @@ async function updateServerScriptContent(serverId) {
         }
 
         // Fetch the PowerShell script
-        const powershellScriptData = await fetchSSHScript(`/tunnels/server/script/powershell/${serverId}/${sshPort}`);
+        const powershellScriptData = await fetchSSHScript(powershellUrl);
 
         // Check if Prism is available and highlight the code
-        if (Prism && Prism.highlight && sshScriptData.script && sshServiceScriptData.script && powershellScriptData.script) {
-            document.getElementById('tunnelCommandSSH').innerHTML = Prism.highlight(sshScriptData.script, Prism.languages[sshScriptData.language], sshScriptData.language);
+        if (Prism && Prism.highlight && sshSimpleScriptData.script && autosshScriptData.script && sshServiceScriptData.script && powershellScriptData.script) {
+            document.getElementById('tunnelCommandSSHSimple').innerHTML = Prism.highlight(sshSimpleScriptData.script, Prism.languages[sshSimpleScriptData.language], sshSimpleScriptData.language);
+            document.getElementById('tunnelCommandAutoSSH').innerHTML = Prism.highlight(autosshScriptData.script, Prism.languages[autosshScriptData.language], autosshScriptData.language);
             document.getElementById('tunnelCommandSSHService').innerHTML = Prism.highlight(sshServiceScriptData.script, Prism.languages[sshServiceScriptData.language], sshServiceScriptData.language);
 
             document.getElementById('tunnelCommandSSHServiceSteps').innerHTML = Prism.highlight(
@@ -530,10 +549,27 @@ function showServerScriptModal(serverId) {
     // Show the modal after updating its content
     const modal = new bootstrap.Modal(document.getElementById('serverScriptModal'));
     modal.show();
-    // Re-fetch script content when SSH port changes and update the modal content
+    
+    // Re-fetch script content when SSH port or key path changes and update the modal content
     document.getElementById('sshPort').onchange = async () => {
-        // Close the old modal
         await updateServerScriptContent(serverId);
+    };
+    
+    document.getElementById('sshKeyPathTunnels').oninput = debounce(async () => {
+        await updateServerScriptContent(serverId);
+    }, 500);
+}
+
+// Debounce function for input events
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
     };
 }
 
