@@ -116,7 +116,9 @@
        <div class="modal-body">
          <!-- SSH port -->
          <div class="input-group mb-3">
-            <span class="input-group-text" id="basic-addon1">Target Server SSH Port</span>
+            <span class="input-group-text" id="basic-addon1">
+               <i class="fas fa-network-wired me-2"></i>Target Server SSH Port
+            </span>
             <input type="text" class="form-control" id="sshPort" placeholder="Enter SSH Port" value="22" data-toggle="tooltip" data-placement="right" title="Invalid Port Number">
          </div>
          
@@ -140,19 +142,29 @@
          <!-- Nav tabs -->
          <ul class="nav nav-tabs" id="osTab">
            <li class="nav-item">
-             <button class="tab-link active" id="ssh-simple-tab" data-bs-toggle="tab" data-bs-target="#ssh-simple" aria-controls="ssh-simple" aria-selected="true">SSH</button>
+             <button class="tab-link active" id="ssh-simple-tab" data-bs-toggle="tab" data-bs-target="#ssh-simple" aria-controls="ssh-simple" aria-selected="true">
+               <i class="fas fa-terminal me-2"></i>SSH
+             </button>
            </li>
            <li class="nav-item">
-             <button class="tab-link" id="autossh-tab" data-bs-toggle="tab" data-bs-target="#autossh" aria-controls="autossh" aria-selected="false">AutoSSH</button>
+             <button class="tab-link" id="autossh-tab" data-bs-toggle="tab" data-bs-target="#autossh" aria-controls="autossh" aria-selected="false">
+               <i class="fas fa-sync-alt me-2"></i>AutoSSH
+             </button>
            </li>
            <li class="nav-item">
-            <button class="tab-link" id="ssh-service-tab" data-bs-toggle="tab" data-bs-target="#ssh-service" aria-controls="ssh-service" aria-selected="false">SSH Service</button>
+            <button class="tab-link" id="ssh-service-tab" data-bs-toggle="tab" data-bs-target="#ssh-service" aria-controls="ssh-service" aria-selected="false">
+              <i class="fas fa-server me-2"></i>SSH Service
+            </button>
            </li>
            <li class="nav-item">
-             <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" aria-controls="powershell" aria-selected="false">Powershell</button>
+             <button class="tab-link" id="powershell-tab" data-bs-toggle="tab" data-bs-target="#powershell" aria-controls="powershell" aria-selected="false">
+               <i class="fab fa-windows me-2"></i>Powershell
+             </button>
            </li>
            <li class="nav-item">
-             <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" aria-controls="docker" aria-selected="false">Docker</button>
+             <button class="tab-link" id="docker-tab" data-bs-toggle="tab" data-bs-target="#docker" aria-controls="docker" aria-selected="false">
+               <i class="fab fa-docker me-2"></i>Docker
+             </button>
            </li>
          </ul>
          
@@ -189,8 +201,39 @@
             <!-- Docker -->
             <div class="tab-pane fade" id="docker" aria-labelledby="docker-tab">
                <!-- Docker tab content -->
-               <p id="dockerConnectionHint" class="text-muted">Coming Soon.</p>
-               <pre id="tunnelCommandDocker" class="form-control" style="height: 400px" readonly></pre>
+               <div class="alert alert-info border-0 mb-3" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(16, 185, 129, 0.1)); border-radius: 12px;">
+                  <div class="d-flex align-items-start">
+                     <i class="fas fa-info-circle text-primary me-3 mt-1"></i>
+                     <div class="small">
+                        <strong>Docker Options:</strong> Choose between Docker Run (single command) or Docker Compose (service management). Both options automatically handle SSH key mounting and port mapping.
+                     </div>
+                  </div>
+               </div>
+               
+               <!-- Docker sub-tabs -->
+               <ul class="nav nav-tabs mb-3" id="dockerSubTab">
+                 <li class="nav-item">
+                   <button class="tab-link active" id="docker-run-tab" data-bs-toggle="tab" data-bs-target="#docker-run" aria-controls="docker-run" aria-selected="true">
+                     <i class="fas fa-play me-2"></i>Docker Run
+                   </button>
+                 </li>
+                 <li class="nav-item">
+                   <button class="tab-link" id="docker-compose-tab" data-bs-toggle="tab" data-bs-target="#docker-compose" aria-controls="docker-compose" aria-selected="false">
+                     <i class="fas fa-layer-group me-2"></i>Docker Compose
+                   </button>
+                 </li>
+               </ul>
+               
+               <div class="tab-content" id="dockerSubTabContent">
+                 <div class="tab-pane fade show active" id="docker-run" aria-labelledby="docker-run-tab">
+                   <p class="text-muted">Single Docker command to run AutoSSH in a container. Automatically handles SSH key mounting and port mapping.</p>
+                   <pre id="tunnelCommandDockerRun" class="form-control" style="height: 350px" readonly></pre>
+                 </div>
+                 <div class="tab-pane fade" id="docker-compose" aria-labelledby="docker-compose-tab">
+                   <p class="text-muted">Docker Compose configuration for managing AutoSSH as a service. Includes restart policies and environment variables.</p>
+                   <pre id="tunnelCommandDockerCompose" class="form-control" style="height: 350px" readonly></pre>
+                 </div>
+               </div>
             </div>
          </div>
        </div>
