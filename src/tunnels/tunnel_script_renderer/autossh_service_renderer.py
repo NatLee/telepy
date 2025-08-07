@@ -15,6 +15,7 @@ class AutoSshServiceTemplate(BaseTemplateRenderer):
         ssh_port: int,
         reverse_server_ssh_port: int,
         username: str="root",
+        key_path: str=None,
     ) -> None:
 
         super().__init__(
@@ -24,11 +25,25 @@ class AutoSshServiceTemplate(BaseTemplateRenderer):
             reverse_server_ssh_port=reverse_server_ssh_port,
             username=username,
         )
+        
+        self.key_path = key_path
 
 
     @classmethod 
-    def template_factory(cls, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int, username:str) -> "AutoSshTemplate":
-        return cls(server_domain, reverse_port, ssh_port, reverse_server_ssh_port, username)
+    def template_factory(cls, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int, username:str, key_path: str=None) -> "AutoSshServiceTemplate":
+        return cls(server_domain, reverse_port, ssh_port, reverse_server_ssh_port, username, key_path)
+    
+    def mapping_factory(self) -> dict:
+        mapping = super().mapping_factory()
+        
+        # Add key_path to mapping if provided
+        # For service files, we don't want line breaks - keep everything on one line
+        if self.key_path:
+            mapping["key_option"] = f"-i {self.key_path} "
+        else:
+            mapping["key_option"] = ""
+            
+        return mapping
     
     def render(self) -> str:
 
