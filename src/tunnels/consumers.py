@@ -258,6 +258,138 @@ def send_notification_to_group(message:dict):
         }
     )
 
+class TunnelConnectionConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for monitoring tunnel connection status during creation.
+    Requires JWT via subprotocols similar to TerminalConsumer.
+    """
+    async def connect(self):
+        logger.info("TunnelConnection WebSocket connection attempt")
+        subprotocol_auth = None
+        token = None
+        tunnel_id = None
+
+        # Parse subprotocols: token.<base64(jwt)>, tunnel.<id>, auth.<ticket>
+        if self.scope.get('subprotocols'):
+            try:
+                for protocol in self.scope['subprotocols']:
+                    if protocol.startswith('token.'):
+                        base64_encoded_token = protocol.split('.', 1)[1]
+                        token = base64.b64decode(base64_encoded_token).decode()
+                    elif protocol.startswith('tunnel.'):
+                        tunnel_id = protocol.split('.', 1)[1]
+                    elif protocol.startswith('auth.'):
+                        subprotocol_auth = protocol
+            except Exception as e:
+                logger.error(f"[TunnelConnection] Error parsing subprotocols: {e}")
+                await self.close(code=4000)
+                return
+        else:
+            logger.error("[TunnelConnection] No subprotocols provided")
+            await self.close(code=4000)
+            return
+
+        # Fallback to URL param if not provided via subprotocol (shouldn't happen)
+        if not tunnel_id:
+            tunnel_id = self.scope['url_route']['kwargs'].get('tunnel_id')
+
+        if not token or not tunnel_id or not subprotocol_auth:
+            logger.error("[TunnelConnection] Missing required subprotocols (token/tunnel/auth)")
+            await self.close(code=4000)
+            return
+
+        self.tunnel_id = str(tunnel_id)
+        self.room_group_name = f'tunnel_connection_{self.tunnel_id}'
+
+        # Verify JWT token and permission to access this tunnel
+        try:
+            access_token = AccessToken(token)
+            user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
+            logger.info(f"[TunnelConnection] User authenticated: {user}")
+
+            # Ensure the tunnel belongs to the user
+            has_permissions = await self._check_tunnel_permission(user, self.tunnel_id)
+            if not has_permissions:
+                logger.error(f"[TunnelConnection] User [{user}] has no access to tunnel [{self.tunnel_id}]")
+                await self.close(code=4004)
+                return
+        except (InvalidToken, TokenError) as e:
+            logger.error(f"[TunnelConnection] Token invalid: {e}")
+            await self.close(code=4001)
+            return
+        except User.DoesNotExist:
+            logger.error("[TunnelConnection] User not found")
+            await self.close(code=4001)
+            return
+
+        # Join room and accept
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        await self.accept(subprotocol_auth)
+
+        # Send initial connection status
+        await self.send_connection_status()
+
+    async def disconnect(self, close_code):
+        # Leave room group
+        if hasattr(self, 'room_group_name'):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
+
+    async def send_connection_status(self):
+        """Check and send current tunnel connection status"""
+        try:
+            from django.core.cache import cache
+            from authorized_keys.models import ReverseServerAuthorizedKeys
+
+            reverse_server = await sync_to_async(ReverseServerAuthorizedKeys.objects.get)(id=self.tunnel_id)
+            reverse_port = reverse_server.reverse_port
+
+            ports_status = cache.get("ports_status", {})
+            is_connected = ports_status.get(reverse_port, False)
+
+            await self.send(text_data=json.dumps({
+                'type': 'connection_status',
+                'tunnel_id': int(self.tunnel_id),
+                'reverse_port': reverse_port,
+                'is_connected': is_connected,
+                'host_friendly_name': reverse_server.host_friendly_name
+            }))
+
+        except Exception as e:
+            logger.error(f"[TunnelConnection] Error checking tunnel connection status: {e}")
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Failed to check connection status'
+            }))
+
+    # Receive message from room group
+    async def tunnel_connection_update(self, event):
+        """Handle tunnel connection status updates"""
+        await self.send(text_data=json.dumps(event['message']))
+
+    @sync_to_async
+    def _check_tunnel_permission(self, user, tunnel_id) -> bool:
+        try:
+            ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=user)
+            return True
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return False
+
+def send_tunnel_connection_update(tunnel_id: int, message: dict):
+    """Send tunnel connection status update to specific tunnel room"""
+    channel_layer = get_channel_layer()
+    if channel_layer:
+        room_group_name = f'tunnel_connection_{tunnel_id}'
+        async_to_sync(channel_layer.group_send)(
+            room_group_name,
+            {
+                'type': 'tunnel_connection_update',
+                'message': message
+            }
+        )
+
 
 class FileManagerConsumer(AsyncWebsocketConsumer):
     """
