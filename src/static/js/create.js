@@ -19,8 +19,6 @@ document.addEventListener('DOMContentLoaded', function() {
 let currentStep = 1;
 const totalSteps = 5;
 let currentTunnelId = null;
-let embeddedTerm = null;
-let embeddedSocket = null;
 let tunnelConnectionSocket = null;
 
 // Expose setter so other scripts can set tunnel id
@@ -102,13 +100,6 @@ function showStep(step) {
 }
 
 function autoDisconnectWebSocket() {
-  if (embeddedSocket) {
-    try { embeddedSocket.close(); } catch(_) {}
-    embeddedSocket = null;
-    if (embeddedTerm) {
-      try { embeddedTerm.writeln('\x1b[33mAuto-disconnected when leaving Test Connection step.\x1b[0m'); } catch(_) {}
-    }
-  }
   if (tunnelConnectionSocket) {
     try { tunnelConnectionSocket.close(); } catch(_) {}
     tunnelConnectionSocket = null;
@@ -123,7 +114,6 @@ function goToManageUsers() {
 function goToTestConnection() {
   showStep(4);
   setTimeout(() => {
-    try { initializeStep4Configuration(); } catch(_) {}
     try { loadAllScripts(); } catch(_) {}
     try { initializeTunnelConnectionMonitoring(); } catch(_) {}
   }, 100);
@@ -606,31 +596,11 @@ document.addEventListener('DOMContentLoaded', function() {
     addUserToListBtn.addEventListener('click', addUserToCurrentTunnel);
   }
 
-  // Terminal buttons
-  const connectTerminalBtn = document.getElementById('connectTerminalBtn');
-  if (connectTerminalBtn && !connectTerminalBtn.dataset.bound) {
-    connectTerminalBtn.dataset.bound = '1';
-    connectTerminalBtn.addEventListener('click', connectEmbeddedTerminal);
-  }
-  const disconnectTerminalBtn = document.getElementById('disconnectTerminalBtn');
-  if (disconnectTerminalBtn && !disconnectTerminalBtn.dataset.bound) {
-    disconnectTerminalBtn.dataset.bound = '1';
-    disconnectTerminalBtn.addEventListener('click', disconnectEmbeddedTerminal);
-  }
-  const clearTerminalBtn = document.getElementById('clearTerminalBtn');
-  if (clearTerminalBtn && !clearTerminalBtn.dataset.bound) {
-    clearTerminalBtn.dataset.bound = '1';
-    clearTerminalBtn.addEventListener('click', clearEmbeddedTerminal);
-  }
-
   // Initialize step indicator
   try { updateStepIndicator(1); } catch(_) {}
 
   // Cleanup websocket on unload
   window.addEventListener('beforeunload', function() {
-    if (embeddedSocket) {
-      try { embeddedSocket.close(); } catch(_) {}
-    }
     if (tunnelConnectionSocket) {
       try { tunnelConnectionSocket.close(); } catch(_) {}
     }
@@ -654,16 +624,12 @@ window.addEventListener('load', function() {
     window.loadUserList = loadUserList;
     window.addUserToCurrentTunnel = addUserToCurrentTunnel;
     window.removeUserFromTunnel = removeUserFromTunnel;
-    window.initializeStep4Configuration = initializeStep4Configuration;
     window.loadAllScripts = loadAllScripts;
     window.loadSshScript = loadSshScript;
     window.loadAutosshScript = loadAutosshScript;
-    window.copySshScript = copySshScript;
-    window.copyAutosshScript = copyAutosshScript;
     window.initializeTunnelConnectionMonitoring = initializeTunnelConnectionMonitoring;
     window.updateConnectionStatus = updateConnectionStatus;
     window.loadTerminalConfig = loadTerminalConfig;
-    window.copyTerminalConfig = copyTerminalConfig;
     window.copyKeyToClipboard = copyKeyToClipboard;
   } catch (_) {}
 });
@@ -752,6 +718,40 @@ document.addEventListener('DOMContentLoaded', function() {
     keyPathInput.addEventListener('input', debounce(loadAllScripts, 500));
   }
 });
+
+// ============================
+// Step 5: Terminal Configuration
+// ============================
+
+function loadTerminalConfig() {
+  const tunnelId = getCurrentTunnelId();
+  if (!tunnelId) return;
+
+  const accessToken = localStorage.getItem('accessToken');
+  fetch(`/tunnels/server/config/${tunnelId}`, {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  })
+    .then(async response => {
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load terminal configuration');
+      }
+      return data;
+    })
+    .then(data => {
+      const pre = document.getElementById('terminalConfig');
+      if (pre) pre.textContent = data.config || 'No configuration available';
+    })
+    .catch(error => {
+      console.error('Error loading terminal configuration:', error);
+      const pre = document.getElementById('terminalConfig');
+      if (pre) pre.textContent = 'Error loading configuration';
+    });
+}
 
 // ============================
 // Tunnel Connection Monitoring
