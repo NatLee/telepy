@@ -4,7 +4,7 @@ from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from authorized_keys.utils import get_ss_output_from_redis
 
-from tunnels.consumers import send_notification_to_group
+from tunnels.consumers import send_notification_to_group, send_tunnel_connection_update
 class Command(BaseCommand):
     help = "Get and update the ssh server usage ports from the ss command output."
 
@@ -46,6 +46,8 @@ class Command(BaseCommand):
                     "action": "UPDATE-TUNNEL-STATUS",
                     "details": f"Port [{port}] have been connected",
                 })
+                # Send tunnel-specific connection update
+                self._send_tunnel_connection_updates(port, True)
                 
             # status changed: True -> False (disconnected)
             elif not now_status and previous_status:
@@ -54,6 +56,8 @@ class Command(BaseCommand):
                     "action": "UPDATE-TUNNEL-STATUS",
                     "details": f"Port [{port}] have been disconnected",
                 })
+                # Send tunnel-specific connection update
+                self._send_tunnel_connection_updates(port, False)
 
         # Update the cache with the new activated ports
         cache.set("ports_status", now_ports, None)
@@ -63,3 +67,23 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"New activated ports: {list(new_activated_ports)}"))
         self.stdout.write(self.style.SUCCESS(f"New inactivated ports: {list(new_inactive_ports)}"))
         self.stdout.write(self.style.SUCCESS("Successfully updated the ports status"))
+    
+    def _send_tunnel_connection_updates(self, port, is_connected):
+        """Send tunnel connection status updates for a specific port"""
+        try:
+            from authorized_keys.models import ReverseServerAuthorizedKeys
+            
+            # Find tunnels that use this port
+            tunnels = ReverseServerAuthorizedKeys.objects.filter(reverse_port=port)
+            
+            for tunnel in tunnels:
+                send_tunnel_connection_update(tunnel.id, {
+                    'type': 'connection_status',
+                    'tunnel_id': tunnel.id,
+                    'reverse_port': port,
+                    'is_connected': is_connected,
+                    'host_friendly_name': tunnel.host_friendly_name
+                })
+                
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Error sending tunnel connection updates for port {port}: {e}"))
