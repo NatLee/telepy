@@ -6,7 +6,7 @@ from .template_renderer import BaseTemplateRenderer
 # NOTE: change if the directory structure changed.
 TEMPLATE_DIR = Path(__file__).resolve().parent / Path("templates")
 
-class AutoSshTemplate(BaseTemplateRenderer):
+class SshTemplate(BaseTemplateRenderer):
 
     def __init__(self, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int, key_path: str = None):
 
@@ -18,9 +18,8 @@ class AutoSshTemplate(BaseTemplateRenderer):
         self.key_path = key_path
 
 
-
     @classmethod 
-    def template_factory(cls, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int, key_path: str = None) -> "AutoSshTemplate":
+    def template_factory(cls, server_domain: str, reverse_port: int, ssh_port: int, reverse_server_ssh_port: int, key_path: str = None) -> "SshTemplate":
         return cls(server_domain, reverse_port, ssh_port, reverse_server_ssh_port, key_path)
     
     def mapping_factory(self) -> dict:
@@ -40,7 +39,7 @@ class AutoSshTemplate(BaseTemplateRenderer):
         mapping = self.mapping_factory()
 
         # Load template file.
-        template_file = TEMPLATE_DIR / Path("autossh_template.sh")
+        template_file = TEMPLATE_DIR / Path("ssh_template.sh")
 
         # Render template.
         template = Template(template_file.read_text())
