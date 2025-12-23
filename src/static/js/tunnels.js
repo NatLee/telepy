@@ -416,10 +416,13 @@ function deleteKey(serverId) {
     })
     .then(response => {
         if (response.ok) {
-            Swal.fire("Deleted!", "The key has been deleted.", "success");
-            // Optionally, refresh the list of keys or remove the row from the table
+            console.log('Tunnel deleted successfully, refreshing list...');
+            Swal.fire("Deleted!", "The tunnel has been deleted.", "success");
+            // Refresh the tunnel list immediately
+            fetchAndDisplayReverseServerKeys();
         } else {
-            Swal.fire("Error", "There was an error deleting the key.", "error");
+            console.log('Tunnel deletion failed:', response.status, response.statusText);
+            Swal.fire("Error", "There was an error deleting the tunnel.", "error");
         }
     })
     .catch(error => {
@@ -702,26 +705,66 @@ function deleteUser(userId, serverId) { // Add serverId parameter
 
 function tunnelNotificationWebsocket() {
     var socket = notificationWebsocket();
+    if (!socket) {
+        console.error('Failed to create notification WebSocket');
+        return;
+    }
+
     socket.onmessage = function (event) {
         const data = JSON.parse(event.data);
         console.log('Notification message:', data.message);
         let action = data.message.action;
-        createToastAlert(data.message.details, false);
-        if (action === "UPDATED-TUNNELS") {
-            fetchAndDisplayReverseServerKeys();
-        }
-        if (action === "UPDATE-TUNNEL-STATUS-DATA") {
-            globalThis.data.forEach(item => {
-                // If port not in message data, it means it's not active 
-                const hostFriendlyName = item.host_friendly_name;
-                const reversePort = item.reverse_port;
 
-                if (!data.message.data.includes(reversePort)) {
-                    updateStatus(false, hostFriendlyName);
-                } else {
-                    updateStatus(true, hostFriendlyName);
+        // Handle different notification types
+        if (action === "UPDATED-TUNNELS") {
+            console.log('Received UPDATED-TUNNELS notification:', data.message);
+            createToastAlert(data.message.details || "Tunnels updated", false);
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-SHARED") {
+            console.log('Received TUNNEL-SHARED notification:', data.message);
+            createToastAlert(data.message.details, false, 'success');
+            // Refresh tunnel list to show any changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-UNSHARED") {
+            createToastAlert(data.message.details, false, 'warning');
+            // Refresh tunnel list to reflect access changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-PERMISSION-UPDATED") {
+            createToastAlert(data.message.details, false, 'info');
+            // Refresh tunnel list to reflect permission changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "UPDATE-TUNNEL-STATUS") {
+            // Update status for specific tunnel based on port
+            const port = data.message.port;
+            const status = data.message.status;
+            const isConnected = status === 'connected';
+
+            // Find tunnel with this port and update its status
+            if (globalThis.data) {
+                const tunnel = globalThis.data.find(item => item.reverse_port === port);
+                if (tunnel) {
+                    updateStatus(isConnected, tunnel.host_friendly_name);
+                    console.log(`Updated status for tunnel ${tunnel.host_friendly_name} (port ${port}): ${status}`);
                 }
-            });
+            }
+        } else if (action === "UPDATE-TUNNEL-STATUS-DATA") {
+            // Update status for all tunnels based on activated ports
+            const activatedPorts = data.message.data || [];
+
+            if (globalThis.data) {
+                globalThis.data.forEach(item => {
+                    const hostFriendlyName = item.host_friendly_name;
+                    const reversePort = item.reverse_port;
+
+                    // Check if port is in activated ports list
+                    const isConnected = activatedPorts.includes(reversePort);
+                    updateStatus(isConnected, hostFriendlyName);
+                });
+                console.log('Updated status for all tunnels based on activated ports:', activatedPorts);
+            }
+        } else {
+            // For unknown actions, just show a general toast
+            createToastAlert(data.message.details || "Notification received", false);
         }
     };
 }
@@ -1349,9 +1392,29 @@ document.addEventListener('DOMContentLoaded', function() {
     validateSSHPortInputs();
 });
 
-// Add resize listener to handle responsive display
-window.addEventListener('resize', function() {
-    // Re-fetch data to refresh display mode based on screen size
-    fetchAndDisplayReverseServerKeys();
-});
+// Function to re-display existing data based on screen size
+function refreshDisplayMode() {
+    if (globalThis.data && globalThis.data.length > 0) {
+        displayReverseServerKeys(globalThis.data);
+    }
+}
+
+// Debounce function to limit how often resize events trigger
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// Add debounced resize listener to handle responsive display
+window.addEventListener('resize', debounce(function() {
+    // Only refresh display mode, don't re-fetch data
+    refreshDisplayMode();
+}, 250)); // Wait 250ms after resize stops before executing
 
