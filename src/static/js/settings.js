@@ -83,6 +83,19 @@ function populateSettingsTable(settings) {
             messageCell.className = 'text-center text-muted p-4';
             messageCell.innerHTML = '<i class="fas fa-info-circle me-2"></i>No settings available for your user level.';
         }
+
+        // Show/hide appropriate containers for empty state
+        const tableContainer = document.querySelector('.table-responsive');
+        const cardsContainerWrapper = document.getElementById('settingsCardsWrapper');
+
+        if (isMobile) {
+            if (tableContainer) tableContainer.style.display = 'none';
+            if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+        } else {
+            if (tableContainer) tableContainer.style.display = 'block';
+            if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
+        }
+
         return;
     }
 

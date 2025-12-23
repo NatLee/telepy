@@ -192,6 +192,7 @@ function createActionButtons(item) {
     const itemId = item.id;
     const canEdit = item.can_edit;
     const canShare = item.can_share;
+    const canDelete = item.can_delete;
 
     // Create desktop version (original layout)
     let desktopButtons = `
@@ -200,7 +201,7 @@ function createActionButtons(item) {
             <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
     `;
 
-    if (canEdit) {
+    if (canDelete) {
         desktopButtons += `<button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>`;
     }
 
@@ -226,7 +227,7 @@ function createActionButtons(item) {
                 </button>
     `;
 
-    if (canEdit) {
+    if (canDelete) {
         mobileButtons += `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
             <i class="fas fa-trash"></i>
         </button>`;
