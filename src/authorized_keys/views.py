@@ -16,6 +16,7 @@ from authorized_keys.models import ReverseServerUsernames
 from authorized_keys.serializers import ReverseServerUsernamesSerializer
 
 from authorized_keys.models import ServiceAuthorizedKeys
+from tunnels.models import TunnelSharing
 
 from authorized_keys.utils import get_ss_output_from_redis
 from tunnels.consumers import send_notification_to_group
@@ -80,10 +81,67 @@ class BaseKeyViewSet(viewsets.ModelViewSet):
 class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
     """
     ViewSet for handling reverse server authorized keys.
+    Includes both owned tunnels and tunnels shared with the user.
     """
     serializer_class = ReverseServerAuthorizedKeysSerializer
     model = ReverseServerAuthorizedKeys
     queryset = ReverseServerAuthorizedKeys.objects.all()
+
+    def get_queryset(self):
+        """
+        Return tunnels owned by the user or shared with the user.
+        """
+        # Get tunnels owned by the user
+        owned_tunnels = self.model.objects.filter(user=self.request.user)
+
+        # Get tunnels shared with the user
+        shared_tunnel_ids = TunnelSharing.objects.filter(
+            shared_with=self.request.user
+        ).values_list('tunnel_id', flat=True)
+
+        shared_tunnels = self.model.objects.filter(id__in=shared_tunnel_ids)
+
+        # Combine both querysets
+        return (owned_tunnels | shared_tunnels).distinct()
+
+    def can_edit_tunnel(self, tunnel):
+        """
+        Check if the current user can edit the given tunnel.
+        Returns True if user owns the tunnel or has edit permission via sharing.
+        """
+        # If user owns the tunnel, they can always edit
+        if tunnel.user == self.request.user:
+            return True
+
+        # Check if tunnel is shared with edit permission
+        sharing = TunnelSharing.objects.filter(
+            tunnel=tunnel,
+            shared_with=self.request.user,
+            can_edit=True
+        ).first()
+
+        return sharing is not None
+
+    def perform_update(self, serializer):
+        """
+        Override to check edit permissions before updating.
+        """
+        tunnel = self.get_object()
+        if not self.can_edit_tunnel(tunnel):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to edit this tunnel.")
+
+        return super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        """
+        Override to check edit permissions before deleting.
+        """
+        if not self.can_edit_tunnel(instance):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to delete this tunnel.")
+
+        return super().perform_destroy(instance)
 
 class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     """
