@@ -102,11 +102,29 @@ class TunnelSharingAdmin(admin.ModelAdmin):
         """
         View to display all registered permission groups and their permissions.
         """
+        permission_choices = dict(TunnelPermission.PERMISSION_CHOICES)
+        groups_data = []
+
+        for group in PermissionRegistry.get_all_groups():
+            permissions_data = []
+            for permission in group.permissions:
+                display_name = permission_choices.get(permission, permission)
+                permissions_data.append({
+                    'key': permission,
+                    'display': display_name
+                })
+
+            groups_data.append({
+                'name': group.name,
+                'description': group.description,
+                'permissions': permissions_data
+            })
+
         context = {
             **self.admin_site.each_context(request),
             'title': 'Permission Groups',
-            'groups': list(PermissionRegistry.get_all_groups()),
-            'permission_choices': dict(TunnelPermission.PERMISSION_CHOICES),
+            'groups': groups_data,
+            'permission_choices': permission_choices,
         }
         return TemplateResponse(request, 'admin/tunnels/permission_groups.html', context)
 
