@@ -151,18 +151,15 @@ function createActionButtons(item) {
     // Add `event.stopPropagation()` to avoid triggering the row click event
     let buttons = `
         <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
+        <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
     `;
 
     // Only show management buttons if user has edit permission
     if (canEdit) {
         buttons += `
-            <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
             <button class="btn btn-success btn-sm me-2" onclick="event.stopPropagation(); openShareModal('${itemId}')">Share</button>
             <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
         `;
-    } else {
-        // For read-only access, only show share button if user is owner (for viewing shares)
-        // But actually, let's check if this is needed - maybe read-only users don't need share button
     }
 
     buttons += `
@@ -385,21 +382,38 @@ function openUserManagementModal(serverId) {
         return;
     }
 
+    // Find the tunnel item to check permissions
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    // Check if user can edit this tunnel
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
     // Reset form
     usernameInput.value = '';
     addUserButton.disabled = true;
 
-    // Set click handler
-    addUserButton.onclick = function() {
-        addUser(serverId);
-    };
+    // Disable add user functionality if no edit permission
+    if (!canEdit) {
+        addUserButton.disabled = true;
+        addUserButton.textContent = 'No Edit Permission';
+        usernameInput.disabled = true;
+        usernameInput.placeholder = 'No edit permission to add users';
+    } else {
+        addUserButton.textContent = 'Add User';
+        usernameInput.disabled = false;
+        usernameInput.placeholder = 'Enter username';
 
-    // Enable button when username is entered
-    usernameInput.addEventListener('input', function() {
-        if (addUserButton) {
-            addUserButton.disabled = !this.value.trim();
-        }
-    });
+        // Set click handler
+        addUserButton.onclick = function() {
+            addUser(serverId);
+        };
+
+        // Enable button when username is entered
+        usernameInput.addEventListener('input', function() {
+            if (addUserButton) {
+                addUserButton.disabled = !this.value.trim();
+            }
+        });
+    }
 
     fetchUserList(serverId);
 }
@@ -423,6 +437,10 @@ function fetchUserList(serverId) {
 
       userListDiv.innerHTML = ''; // Clear current list
 
+      // Find the tunnel item to check permissions
+      const tunnelItem = globalThis.data.find(item => item.id == serverId);
+      const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
       if (users.length === 0) {
         userListDiv.innerHTML = '<p class="text-muted">No users found.</p>';
       } else {
@@ -433,14 +451,23 @@ function fetchUserList(serverId) {
           const listItem = document.createElement('li');
           listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
 
-          listItem.innerHTML = `
-            <span>${user.username}</span>
-            <button class="btn btn-danger btn-sm">Delete</button>
-          `;
+          if (canEdit) {
+            // Show delete button if user has edit permission
+            listItem.innerHTML = `
+              <span>${user.username}</span>
+              <button class="btn btn-danger btn-sm">Delete</button>
+            `;
 
-          const deleteUserBtn = listItem.querySelector('button');
-          // Pass the serverId along with the userId to the deleteUser function
-          deleteUserBtn.onclick = () => deleteUser(user.id, serverId);
+            const deleteUserBtn = listItem.querySelector('button');
+            // Pass the serverId along with the userId to the deleteUser function
+            deleteUserBtn.onclick = () => deleteUser(user.id, serverId);
+          } else {
+            // Show username only if no edit permission
+            listItem.innerHTML = `
+              <span>${user.username}</span>
+              <span class="text-muted small">Read-only access</span>
+            `;
+          }
 
           listGroup.appendChild(listItem);
         });
@@ -451,6 +478,19 @@ function fetchUserList(serverId) {
 }
 
 function addUser(serverId) {
+    // Double-check permissions before attempting to add user
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
+    if (!canEdit) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Permission Denied',
+            text: 'You do not have permission to add users to this tunnel.',
+        });
+        return;
+    }
+
     const accessToken = localStorage.getItem('accessToken');
     const username = document.getElementById('newUsername').value;
     fetch(`/api/reverse/server/usernames`, {
@@ -470,12 +510,39 @@ function addUser(serverId) {
         // clear the input field
         document.getElementById('newUsername').value = '';
       } else {
-        // Handle the error, possibly show a message to the user
+        response.json().then(data => {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to add user.',
+            });
+        });
       }
+    })
+    .catch(error => {
+        console.error('Error adding user:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to add user.',
+        });
     });
 }
 
 function deleteUser(userId, serverId) { // Add serverId parameter
+    // Double-check permissions before attempting to delete user
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
+    if (!canEdit) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Permission Denied',
+            text: 'You do not have permission to delete users from this tunnel.',
+        });
+        return;
+    }
+
     const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/reverse/server/usernames/${userId}`, {
         method: 'DELETE',
@@ -486,7 +553,23 @@ function deleteUser(userId, serverId) { // Add serverId parameter
     .then(response => {
       if (response.ok) {
         fetchUserList(serverId); // Refresh user list using serverId
+      } else {
+        response.json().then(data => {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to delete user.',
+            });
+        });
       }
+    })
+    .catch(error => {
+        console.error('Error deleting user:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to delete user.',
+        });
     });
 }
 
@@ -794,7 +877,11 @@ function loadSharedUsers(tunnelId) {
         if (data.users && data.users.length > 0) {
             let html = '<div class="list-group">';
             data.users.forEach(user => {
-                const permissionBadge = user.can_edit
+                // Determine permission level and display
+                const canEdit = user.permission_type === 'edit' || user.permission_type === 'admin';
+                const permissionBadge = user.permission_type === 'admin'
+                    ? '<span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Admin</span>'
+                    : user.permission_type === 'edit'
                     ? '<span class="badge bg-success"><i class="fas fa-edit me-1"></i>Can Edit</span>'
                     : '<span class="badge bg-secondary"><i class="fas fa-eye me-1"></i>Read-only</span>';
 
@@ -811,8 +898,8 @@ function loadSharedUsers(tunnelId) {
                                 <div class="d-flex align-items-center gap-2">
                                 <label class="switch mb-0">
                                     <input type="checkbox"
-                                           ${user.can_edit ? 'checked' : ''}
-                                           onchange="updateSharingPermission('${user.id}', this.checked, this)">
+                                           ${canEdit ? 'checked' : ''}
+                                           onchange="updateSharingPermission('${user.id}', this.checked ? 'edit' : 'view', this)">
                                     <span class="slider round"></span>
                                 </label>
                                 <button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
@@ -901,7 +988,7 @@ function shareTunnel() {
         },
         body: JSON.stringify({
             shared_with_user_id: parseInt(userId),
-            can_edit: canEdit
+            permission_type: canEdit ? 'edit' : 'view'
         })
     })
     .then(response => {
@@ -944,7 +1031,7 @@ function shareTunnel() {
     });
 }
 
-function updateSharingPermission(userId, canEdit, checkboxElement) {
+function updateSharingPermission(userId, permissionType, checkboxElement) {
     const accessToken = localStorage.getItem('accessToken');
 
     fetch(`/tunnels/update-permission/${currentSharingTunnelId}/${userId}`, {
@@ -954,7 +1041,7 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
             'Authorization': `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-            can_edit: canEdit
+            permission_type: permissionType
         })
     })
     .then(response => {
@@ -971,9 +1058,10 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
                 title: 'Error',
                 text: data.error || 'Failed to update permission.',
             });
-            // Revert the checkbox state
+            // Revert the checkbox state based on permission type
             if (checkboxElement) {
-                checkboxElement.checked = !canEdit;
+                const shouldBeChecked = permissionType === 'edit';
+                checkboxElement.checked = !shouldBeChecked;
             }
         }
     })
@@ -984,9 +1072,10 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
             title: 'Error',
             text: 'Failed to update permission.',
         });
-        // Revert the checkbox state
+        // Revert the checkbox state based on permission type
         if (checkboxElement) {
-            checkboxElement.checked = !canEdit;
+            const shouldBeChecked = permissionType === 'edit';
+            checkboxElement.checked = !shouldBeChecked;
         }
     });
 }
