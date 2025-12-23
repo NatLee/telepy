@@ -7,6 +7,184 @@ body {
   line-height: 1.6;
 }
 
+/* Modal 樣式優化 */
+.modal-content {
+  border-radius: 12px;
+  border: none;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.modal-header {
+  border-bottom: 1px solid #e2e8f0;
+  border-radius: 12px 12px 0 0;
+}
+
+.modal-footer {
+  border-top: 1px solid #e2e8f0;
+  border-radius: 0 0 12px 12px;
+}
+
+/* Form 控制項樣式優化 */
+.form-select, .form-control {
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  transition: all 0.2s ease;
+}
+
+.form-select:focus, .form-control:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+/* 按鈕樣式優化 */
+.btn {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.btn-outline-primary {
+  border-color: #6366f1;
+  color: #6366f1;
+}
+
+.btn-outline-primary:hover {
+  background-color: #6366f1;
+  border-color: #6366f1;
+  transform: translateY(-1px);
+}
+
+.btn-outline-secondary {
+  border-color: #6b7280;
+  color: #6b7280;
+}
+
+.btn-outline-secondary:hover {
+  background-color: #6b7280;
+  border-color: #6b7280;
+  transform: translateY(-1px);
+}
+
+/* Switch 樣式優化 */
+.form-check-input:checked {
+  background-color: #6366f1;
+  border-color: #6366f1;
+}
+
+.form-check-input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+/* Permission toggle 樣式 - 更大的設計 */
+.permission-toggle {
+  width: 3.5em !important;
+  height: 2em !important;
+  border-radius: 2em !important;
+  background-color: #e5e7eb !important;
+  border: 3px solid #d1d5db !important;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  position: relative;
+  cursor: pointer;
+}
+
+.permission-toggle:checked {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  border-color: #6366f1 !important;
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4) !important;
+  transform: scale(1.05);
+}
+
+.permission-toggle::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 1.4em;
+  height: 1.4em;
+  background: linear-gradient(135deg, #ffffff, #f8fafc);
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+}
+
+.permission-toggle:checked::before {
+  transform: translateX(1.5em);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  background: linear-gradient(135deg, #ffffff, #f0f4ff);
+}
+
+.permission-toggle:focus {
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2) !important;
+}
+
+/* 小型 permission toggle 樣式 (用於共享用戶列表) */
+.permission-toggle-sm {
+  width: 2.5em !important;
+  height: 1.25em !important;
+  border-radius: 1.25em !important;
+  background-color: #e5e7eb !important;
+  border: 2px solid #d1d5db !important;
+  transition: all 0.2s ease !important;
+  position: relative;
+}
+
+.permission-toggle-sm:checked {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+  border-color: #6366f1 !important;
+}
+
+.permission-toggle-sm::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 0.85em;
+  height: 0.85em;
+  background-color: white;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transform: translateY(-50%);
+}
+
+.permission-toggle-sm:checked::before {
+  transform: translateX(1.2em) translateY(-50%);
+}
+
+/* Permission card 樣式 */
+.card.bg-light {
+  background: linear-gradient(135deg, #f8fafc, #f1f5f9) !important;
+  border: 2px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05) !important;
+  transition: all 0.3s ease;
+}
+
+.card.bg-light:hover {
+  border-color: #6366f1 !important;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.1) !important;
+  transform: translateY(-1px);
+}
+
+/* Input group 中 switch 的樣式調整 */
+.input-group .form-check {
+  margin-bottom: 0;
+  padding: 0.375rem 0.75rem;
+}
+
+.input-group .form-check-input {
+  margin-right: 0.5rem;
+}
+
+.input-group .form-check-label {
+  margin-bottom: 0;
+  vertical-align: middle;
+  font-weight: 500;
+  color: #374151;
+}
+
 /* 導航條 */
 .navbar {
   background: #1e293b;
