@@ -19,7 +19,7 @@ from authorized_keys.models import ServiceAuthorizedKeys
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
 from authorized_keys.utils import get_ss_output_from_redis
-from tunnels.consumers import send_notification_to_group
+from tunnels.consumers import send_notification_to_user
 
 class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
@@ -146,7 +146,7 @@ class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     def create(self, request, *args, **kwargs):
         """Create a new user authorized key"""
         result = super().create(request, *args, **kwargs)
-        send_notification_to_group({
+        send_notification_to_user(request.user.id, {
             'action': 'CREATED-USER-KEYS',
             'details': 'A new user authorized key has been created by {}'.format(request.user.username)
         })
@@ -156,7 +156,7 @@ class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     def destroy(self, request, *args, **kwargs):
         """Delete a user authorized key"""
         result = super().destroy(request, *args, **kwargs)
-        send_notification_to_group({
+        send_notification_to_user(request.user.id, {
             'action': 'DELETED-USER-KEYS',
             'details': 'An user authorized key has been deleted by {}'.format(request.user.username)
         })
