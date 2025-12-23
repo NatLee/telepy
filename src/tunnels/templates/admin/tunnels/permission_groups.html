@@ -1,0 +1,97 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div class="module">
+    <h2>Permission Groups Overview</h2>
+    <p>This page shows all registered permission groups and their associated permissions.</p>
+
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Group Name</th>
+                <th>Description</th>
+                <th>Permission Levels</th>
+                <th>Capabilities</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for group in groups %}
+            <tr>
+                <td><strong>{{ group.name }}</strong></td>
+                <td>{{ group.description }}</td>
+                <td>
+                    {% for permission in group.permissions %}
+                        <span class="badge bg-secondary me-1">{{ permission.display }}</span>
+                    {% endfor %}
+                </td>
+                <td>
+                    <ul class="list-unstyled mb-0">
+                        {% for capability in group.capabilities %}
+                        <li>
+                            <i class="fas fa-check text-success me-1"></i>
+                            {{ capability.display }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="4">No permission groups registered.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="card mt-4">
+        <div class="card-header">
+            <h4 class="mb-0">Permission Levels & Capabilities Reference</h4>
+        </div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <h5>Permission Levels</h5>
+                    <dl class="row">
+                        {% for permission_key, permission_display in permission_choices.items %}
+                        <dt class="col-sm-4">{{ permission_key }}</dt>
+                        <dd class="col-sm-8">{{ permission_display }}</dd>
+                        {% endfor %}
+                    </dl>
+                </div>
+                <div class="col-md-6">
+                    <h5>Functional Capabilities</h5>
+                    <ul class="list-group list-group-flush">
+                        {% for capability in all_capabilities %}
+                        <li class="list-group-item d-flex align-items-center">
+                            {% if capability.key == 'view' %}
+                                <i class="fas fa-eye text-primary me-2"></i>
+                            {% elif capability.key == 'edit' %}
+                                <i class="fas fa-edit text-warning me-2"></i>
+                            {% elif capability.key == 'share' %}
+                                <i class="fas fa-share text-info me-2"></i>
+                            {% elif capability.key == 'delete' %}
+                                <i class="fas fa-trash text-danger me-2"></i>
+                            {% else %}
+                                <i class="fas fa-cog text-secondary me-2"></i>
+                            {% endif %}
+                            <strong>{{ capability.display|title }}:</strong>
+                            {% if capability.key == 'view' %}
+                                Can view tunnel configurations
+                            {% elif capability.key == 'edit' %}
+                                Can modify tunnel configurations
+                            {% elif capability.key == 'share' %}
+                                Can share tunnels with other users
+                            {% elif capability.key == 'delete' %}
+                                Can delete tunnels
+                            {% else %}
+                                {{ capability.display }}
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

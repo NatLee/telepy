@@ -16,10 +16,10 @@ from authorized_keys.models import ReverseServerUsernames
 from authorized_keys.serializers import ReverseServerUsernamesSerializer
 
 from authorized_keys.models import ServiceAuthorizedKeys
-from tunnels.models import TunnelSharing
+from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
 from authorized_keys.utils import get_ss_output_from_redis
-from tunnels.consumers import send_notification_to_group
+from tunnels.consumers import send_notification_to_user
 
 class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
@@ -107,20 +107,11 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
     def can_edit_tunnel(self, tunnel):
         """
         Check if the current user can edit the given tunnel.
-        Returns True if user owns the tunnel or has edit permission via sharing.
+        Returns True if user has edit permission or higher.
         """
-        # If user owns the tunnel, they can always edit
-        if tunnel.user == self.request.user:
-            return True
-
-        # Check if tunnel is shared with edit permission
-        sharing = TunnelSharing.objects.filter(
-            tunnel=tunnel,
-            shared_with=self.request.user,
-            can_edit=True
-        ).first()
-
-        return sharing is not None
+        return TunnelPermissionManager.check_access(
+            self.request.user, tunnel, TunnelPermission.EDIT
+        )
 
     def perform_update(self, serializer):
         """
@@ -135,9 +126,9 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
 
     def perform_destroy(self, instance):
         """
-        Override to check edit permissions before deleting.
+        Override to check delete permissions before deleting.
         """
-        if not self.can_edit_tunnel(instance):
+        if not TunnelPermissionManager.check_delete_access(self.request.user, instance):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("You don't have permission to delete this tunnel.")
 
@@ -155,7 +146,7 @@ class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     def create(self, request, *args, **kwargs):
         """Create a new user authorized key"""
         result = super().create(request, *args, **kwargs)
-        send_notification_to_group({
+        send_notification_to_user(request.user.id, {
             'action': 'CREATED-USER-KEYS',
             'details': 'A new user authorized key has been created by {}'.format(request.user.username)
         })
@@ -165,7 +156,7 @@ class UserAuthorizedKeysViewSet(BaseKeyViewSet):
     def destroy(self, request, *args, **kwargs):
         """Delete a user authorized key"""
         result = super().destroy(request, *args, **kwargs)
-        send_notification_to_group({
+        send_notification_to_user(request.user.id, {
             'action': 'DELETED-USER-KEYS',
             'details': 'An user authorized key has been deleted by {}'.format(request.user.username)
         })
@@ -175,6 +166,74 @@ class ReverseServerUsernamesViewSet(BaseKeyViewSet):
     serializer_class = ReverseServerUsernamesSerializer
     model = ReverseServerUsernames
     queryset = ReverseServerUsernames.objects.all()
+
+    def get_queryset(self):
+        """
+        Return usernames for tunnels owned by the user or shared with the user.
+        """
+        # Get usernames for tunnels owned by the user
+        owned_usernames = self.model.objects.filter(user=self.request.user)
+
+        # Get usernames for tunnels shared with the user
+        shared_tunnel_ids = TunnelSharing.objects.filter(
+            shared_with=self.request.user
+        ).values_list('tunnel_id', flat=True)
+
+        shared_usernames = self.model.objects.filter(
+            reverse_server_id__in=shared_tunnel_ids
+        )
+
+        # Combine both querysets
+        return (owned_usernames | shared_usernames).distinct()
+
+    def can_edit_username(self, username_obj):
+        """
+        Check if the current user can edit the given username.
+        Returns True if user has edit permission on the associated tunnel.
+        """
+        tunnel = username_obj.reverse_server
+        return TunnelPermissionManager.check_access(
+            self.request.user, tunnel, TunnelPermission.EDIT
+        )
+
+    def perform_create(self, serializer):
+        """
+        Override to check edit permissions before creating.
+        Only allow creation for owned tunnels or tunnels shared with edit permission.
+        """
+        reverse_server_id = self.request.data.get('reverse_server')
+        if reverse_server_id:
+            try:
+                reverse_server = ReverseServerAuthorizedKeys.objects.get(id=reverse_server_id)
+                if not self.can_edit_username(type('MockObj', (), {'reverse_server': reverse_server})()):
+                    from rest_framework.exceptions import PermissionDenied
+                    raise PermissionDenied("You don't have permission to add usernames to this tunnel.")
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError("Invalid reverse server.")
+
+        return super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        """
+        Override to check edit permissions before updating.
+        """
+        username_obj = self.get_object()
+        if not self.can_edit_username(username_obj):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to edit this username.")
+
+        return super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        """
+        Override to check edit permissions before deleting.
+        """
+        if not self.can_edit_username(instance):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied("You don't have permission to delete this username.")
+
+        return super().perform_destroy(instance)
 
 class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
     """
@@ -189,15 +248,28 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
         try:
             # get the currently authenticated user
             user = request.user
-            # check server_id exists
-            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+
+            # First try to get the server as owner
+            try:
+                reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                # Check if tunnel is shared with the user
+                try:
+                    reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+                    sharing_exists = TunnelSharing.objects.filter(
+                        tunnel=reverse_server,
+                        shared_with=user
+                    ).exists()
+                    if not sharing_exists:
+                        return Response({'error': 'Server not found'}, status=404)
+                except ReverseServerAuthorizedKeys.DoesNotExist:
+                    return Response({'error': 'Server not found'}, status=404)
+
             # get all usernames for the specified server
+            # Note: usernames are owned by the tunnel owner, not the shared user
             usernames = ReverseServerUsernames.objects.filter(
-                user=user,
                 reverse_server=reverse_server
             ).values_list('id', 'username')
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Server not found'}, status=404)
         except ReverseServerUsernames.DoesNotExist:
             return Response([]) # return empty list if no usernames found
 

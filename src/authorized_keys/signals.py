@@ -6,7 +6,9 @@ from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ServiceAuthorizedKeys
 from authorized_keys.models import UserAuthorizedKeys
 
-from tunnels.consumers import send_notification_to_group
+from tunnels.consumers import send_notification_to_users
+from tunnels.models import TunnelPermissionManager
+from django.contrib.auth.models import User
 
 def get_authorized_keys() -> List[str]:
     # Get service keys
@@ -32,16 +34,33 @@ def update_authorized_keys_on_startup(sender, **kwargs):
 
 @receiver(post_save, sender=ReverseServerAuthorizedKeys)
 @receiver(post_delete, sender=ReverseServerAuthorizedKeys)
-def update_reverse_server_authorized_keys(sender, **kwargs):
+def update_reverse_server_authorized_keys(sender, instance, **kwargs):
     keys = get_authorized_keys()
     update_authorized_keys_file(keys)
 
-    send_notification_to_group(
-        {
-            "action": "UPDATED-TUNNELS",
-            "details": "Reverse Server Authorized Keys have been updated"
-        }
-    )
+    # Find all users who have access to this tunnel
+    authorized_users = set()
+
+    # Owner always has access
+    authorized_users.add(instance.user.id)
+
+    # Find users who have been granted access via sharing
+    from tunnels.models import TunnelSharing
+    sharings = TunnelSharing.objects.filter(tunnel=instance).select_related('shared_with')
+    for sharing in sharings:
+        authorized_users.add(sharing.shared_with.id)
+
+    # Send notification only to users who have access to this tunnel
+    if authorized_users:
+        print(f"Sending UPDATED-TUNNELS notification to users {list(authorized_users)} for tunnel {instance.id}")
+        send_notification_to_users(
+            list(authorized_users),
+            {
+                "action": "UPDATED-TUNNELS",
+                "details": f"Tunnel '{instance.host_friendly_name}' has been updated",
+                "tunnel_id": instance.id
+            }
+        )
 
 
 @receiver(post_save, sender=ServiceAuthorizedKeys)
