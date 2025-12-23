@@ -106,10 +106,27 @@ class TunnelSharingAdmin(admin.ModelAdmin):
         groups_data = []
 
         for group in PermissionRegistry.get_all_groups():
-            permissions_data = []
+            # Get capabilities based on the highest permission level in this group
+            capabilities = []
+            capability_keys = set()
+
+            # Find the highest permission level and get its capabilities
+            highest_permission = None
+            if TunnelPermission.ADMIN in group.permissions:
+                highest_permission = TunnelPermission.ADMIN
+            elif TunnelPermission.EDIT in group.permissions:
+                highest_permission = TunnelPermission.EDIT
+            elif TunnelPermission.VIEW in group.permissions:
+                highest_permission = TunnelPermission.VIEW
+
+            if highest_permission:
+                capabilities = TunnelPermission.get_capabilities_for_permission(highest_permission)
+
+            # Get permission level displays
+            permission_levels = []
             for permission in group.permissions:
                 display_name = permission_choices.get(permission, permission)
-                permissions_data.append({
+                permission_levels.append({
                     'key': permission,
                     'display': display_name
                 })
@@ -117,7 +134,8 @@ class TunnelSharingAdmin(admin.ModelAdmin):
             groups_data.append({
                 'name': group.name,
                 'description': group.description,
-                'permissions': permissions_data
+                'permissions': permission_levels,  # Permission levels (VIEW, EDIT, ADMIN)
+                'capabilities': capabilities      # Functional capabilities (view, edit, share, delete)
             })
 
         context = {
@@ -125,6 +143,7 @@ class TunnelSharingAdmin(admin.ModelAdmin):
             'title': 'Permission Groups',
             'groups': groups_data,
             'permission_choices': permission_choices,
+            'all_capabilities': TunnelPermission.get_all_capabilities(),
         }
         return TemplateResponse(request, 'admin/tunnels/permission_groups.html', context)
 
