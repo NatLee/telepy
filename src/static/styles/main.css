@@ -7,6 +7,88 @@ body {
   line-height: 1.6;
 }
 
+/* Modern Switch Component - 通用樣式 */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 64px;
+  height: 36px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #cbd5e1;
+  transition: all 0.3s ease;
+  border-radius: 36px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 28px;
+  width: 28px;
+  left: 4px;
+  bottom: 4px;
+  background: #ffffff;
+  transition: all 0.3s ease;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+input:checked + .slider {
+  background: #2563eb;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+}
+
+input:checked + .slider:before {
+  transform: translateX(28px);
+  background: #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.slider:hover {
+  transform: scale(1.01);
+}
+
+input:checked + .slider:hover {
+  background: #1d4ed8;
+}
+
+/* Icon indicators inside switch */
+.slider::after {
+  content: '✕';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: bold;
+  transition: all 0.4s ease;
+}
+
+input:checked + .slider::after {
+  content: '✓';
+  left: 8px;
+  right: auto;
+  color: rgba(255, 255, 255, 0.8);
+}
+
 /* Modal 樣式優化 */
 .modal-content {
   border-radius: 12px;
@@ -76,82 +158,6 @@ body {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
-/* Permission toggle 樣式 - 更大的設計 */
-.permission-toggle {
-  width: 3.5em !important;
-  height: 2em !important;
-  border-radius: 2em !important;
-  background-color: #e5e7eb !important;
-  border: 3px solid #d1d5db !important;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-  position: relative;
-  cursor: pointer;
-}
-
-.permission-toggle:checked {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-  border-color: #6366f1 !important;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4) !important;
-  transform: scale(1.05);
-}
-
-.permission-toggle::before {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 1.4em;
-  height: 1.4em;
-  background: linear-gradient(135deg, #ffffff, #f8fafc);
-  border-radius: 50%;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  border: 2px solid rgba(255, 255, 255, 0.8);
-}
-
-.permission-toggle:checked::before {
-  transform: translateX(1.5em);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
-  background: linear-gradient(135deg, #ffffff, #f0f4ff);
-}
-
-.permission-toggle:focus {
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.2) !important;
-}
-
-/* 小型 permission toggle 樣式 (用於共享用戶列表) */
-.permission-toggle-sm {
-  width: 2.5em !important;
-  height: 1.25em !important;
-  border-radius: 1.25em !important;
-  background-color: #e5e7eb !important;
-  border: 2px solid #d1d5db !important;
-  transition: all 0.2s ease !important;
-  position: relative;
-}
-
-.permission-toggle-sm:checked {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
-  border-color: #6366f1 !important;
-}
-
-.permission-toggle-sm::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 2px;
-  width: 0.85em;
-  height: 0.85em;
-  background-color: white;
-  border-radius: 50%;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  transform: translateY(-50%);
-}
-
-.permission-toggle-sm:checked::before {
-  transform: translateX(1.2em) translateY(-50%);
-}
 
 /* Permission card 樣式 */
 .card.bg-light {
