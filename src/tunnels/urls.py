@@ -12,6 +12,11 @@ from tunnels.views import AutoSSHTunnelScript
 from tunnels.views import AutoSSHServiceTunnelScript
 from tunnels.views import DockerRunTunnelScript
 from tunnels.views import DockerComposeTunnelScript
+from tunnels.views import ShareTunnelView
+from tunnels.views import UnshareTunnelView
+from tunnels.views import ListSharedUsersView
+from tunnels.views import ListAvailableUsersView
+from tunnels.views import UpdateSharingPermissionView
 urlpatterns = [
 
     path('index', TunnelsIndex.as_view(), name='tunnels-index'),
@@ -28,6 +33,13 @@ urlpatterns = [
     path('server/script/autossh-service/<int:server_id>/<int:ssh_port>', AutoSSHServiceTunnelScript.as_view(), name='auto-ssh-service-tunnel-script'),
     path('server/script/docker-run/<int:server_id>/<int:ssh_port>', DockerRunTunnelScript.as_view(), name='docker-run-tunnel-script'),
     path('server/script/docker-compose/<int:server_id>/<int:ssh_port>', DockerComposeTunnelScript.as_view(), name='docker-compose-tunnel-script'),
+
+    # Tunnel sharing endpoints
+    path('share/<int:tunnel_id>', ShareTunnelView.as_view(), name='share-tunnel'),
+    path('unshare/<int:tunnel_id>/<int:user_id>', UnshareTunnelView.as_view(), name='unshare-tunnel'),
+    path('update-permission/<int:tunnel_id>/<int:user_id>', UpdateSharingPermissionView.as_view(), name='update-sharing-permission'),
+    path('shared-users/<int:tunnel_id>', ListSharedUsersView.as_view(), name='list-shared-users'),
+    path('available-users/<int:tunnel_id>', ListAvailableUsersView.as_view(), name='list-available-users'),
 
 ]
 
