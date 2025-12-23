@@ -45,7 +45,7 @@
    </div>
 
    <!-- Tunnels Table Card -->
-   <div class="card border-0 shadow-sm fade-in" style="border-radius: 12px; overflow: hidden;">
+   <div class="card border-0 shadow-sm fade-in" style="border-radius: 12px;">
       <div class="card-header bg-transparent border-0 p-4">
          <h5 class="card-title mb-0 fw-bold">Active Tunnels</h5>
       </div>
@@ -79,6 +79,13 @@
                <tbody id="tunnelsTableBody">
                </tbody>
             </table>
+         </div>
+
+         <!-- Mobile Cards View -->
+         <div id="tunnelsCardsWrapper" class="d-md-none" style="display: none;">
+            <div id="tunnelsCardsContainer" class="p-2">
+               <!-- Cards will be inserted here by JavaScript -->
+            </div>
          </div>
       </div>
    </div>
@@ -290,6 +297,12 @@
         <!-- Description -->
         <h6 class="text-secondary">Description</h6>
         <textarea id="tunnelDescriptionText" class="form-control mb-3" rows="3" oninput="checkTunnelDetailsModalForChanges()"></textarea>
+
+        <!-- Permission Level -->
+        <h6 class="text-secondary">Your Permission</h6>
+        <p id="tunnelPermissionDisplay" class="fw-bold mb-3">
+            <span id="tunnelPermissionBadge" class="badge"></span>
+        </p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()"><i class="fas fa-copy me-2"></i>Copy Key</button>
@@ -331,21 +344,22 @@
             </button>
           </div>
 
-          <!-- Can Edit permission toggle -->
+          <!-- Permission level selection -->
           <div class="card border-0 bg-light">
             <div class="card-body py-3">
               <div class="d-flex align-items-center justify-content-between">
                 <div class="d-flex align-items-center">
-                  <i class="fas fa-user-edit text-primary me-3 fs-5"></i>
+                  <i class="fas fa-user-shield text-primary me-3 fs-5"></i>
                   <div>
-                    <h6 class="mb-1 fw-bold text-dark">Grant Edit Permission</h6>
-                    <p class="mb-0 small text-muted">Allow user to modify tunnel settings, manage users, and delete tunnel</p>
+                    <h6 class="mb-1 fw-bold text-dark">Permission Level</h6>
+                    <p class="mb-0 small text-muted">Choose what level of access to grant to the user</p>
                   </div>
                 </div>
-                  <label class="switch">
-                    <input type="checkbox" id="canEditSwitch">
-                    <span class="slider round"></span>
-                  </label>
+                <select class="form-select" id="permissionSelect" style="width: 150px;">
+                  <option value="view">Read-only</option>
+                  <option value="edit" selected>Can Edit</option>
+                  <option value="admin">Admin</option>
+                </select>
               </div>
             </div>
           </div>

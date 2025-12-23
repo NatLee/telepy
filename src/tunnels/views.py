@@ -13,7 +13,34 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
-from tunnels.models import TunnelSharing
+from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
+from services.tunnel_permissions import TunnelPermissionService
+
+
+def validate_permission_type(permission_type_str):
+    """
+    Validate and normalize permission type string.
+    Returns (is_valid, normalized_permission_type)
+    """
+    if not permission_type_str:
+        return False, None
+
+    # Normalize to lowercase for comparison
+    permission_type_str = str(permission_type_str).lower()
+
+    valid_permissions = [TunnelPermission.VIEW, TunnelPermission.EDIT, TunnelPermission.ADMIN]
+    valid_permissions_lower = [p.lower() for p in valid_permissions]
+
+    if permission_type_str not in valid_permissions_lower:
+        return False, None
+
+    # Map back to correct case
+    permission_map = {
+        'view': TunnelPermission.VIEW,
+        'edit': TunnelPermission.EDIT,
+        'admin': TunnelPermission.ADMIN
+    }
+    return True, permission_map[permission_type_str]
 
 from tunnels.tunnel_script_renderer import ssh_tunnel_script_factory
 from tunnels.tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
@@ -123,6 +150,20 @@ class ReverseServerScriptBase(APIView):
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return None
 
+    def check_tunnel_access(self, server_id, required_permission=TunnelPermission.VIEW):
+        """
+        Check if the current user has access to the tunnel with the required permission level.
+        Returns the tunnel object if access is granted, None otherwise.
+        """
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            if TunnelPermissionManager.check_access(self.request.user, tunnel, required_permission):
+                return tunnel
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            pass
+
+        return None
+
     def get_script(
         self,
         server_auth_key: ReverseServerAuthorizedKeys,
@@ -165,7 +206,7 @@ class ReverseServerScriptBase(APIView):
         server_id = kwargs.get('server_id')
         if not server_id:
             return Response({'error': 'Server ID not found'}, status=404)
-        server_auth_key = self.get_server_key(server_id)
+        server_auth_key = self.check_tunnel_access(server_id)
         if not server_auth_key:
             return Response({'error': 'Reverse server keys not found'}, status=404)
         if self.script_type == ScriptType.SCRIPT:
@@ -461,7 +502,8 @@ class ShareTunnelView(APIView):
             type=openapi.TYPE_OBJECT,
             properties={
                 'shared_with_user_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='User ID to share with'),
-                'can_edit': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether the user can edit the tunnel', default=False),
+                'permission_type': openapi.Schema(type=openapi.TYPE_STRING, description='Permission type (view, edit, admin)', default='view',
+                    enum=['view', 'edit', 'admin']),
             },
             required=['shared_with_user_id']
         ),
@@ -469,8 +511,15 @@ class ShareTunnelView(APIView):
     )
     def post(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to share this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to share this tunnel'}, status=403)
 
             # Get the user to share with
             shared_with_user_id = request.data.get('shared_with_user_id')
@@ -491,23 +540,38 @@ class ShareTunnelView(APIView):
             if existing_share:
                 return Response({'error': 'Tunnel already shared with this user'}, status=400)
 
+            # Don't allow sharing with the tunnel owner
+            if shared_with_user == tunnel.user:
+                return Response({'error': 'Cannot share tunnel with its owner'}, status=400)
+
             # Don't allow sharing with self
             if shared_with_user == request.user:
                 return Response({'error': 'Cannot share tunnel with yourself'}, status=400)
 
             # Create the sharing record
-            can_edit = request.data.get('can_edit', False)
-            TunnelSharing.objects.create(
-                tunnel=tunnel,
+            permission_type = request.data.get('permission_type', TunnelPermission.VIEW)
+
+            is_valid, normalized_permission = validate_permission_type(permission_type)
+            if not is_valid:
+                return Response({
+                    'error': f'Invalid permission type: {permission_type}. Valid values are: view, edit, admin'
+                }, status=400)
+
+            permission_type = normalized_permission
+
+            # Use the service layer to handle the sharing logic
+            result = TunnelPermissionService.share_tunnel(
                 shared_by=request.user,
-                shared_with=shared_with_user,
-                can_edit=can_edit
+                tunnel_id=tunnel_id,
+                shared_with_user_id=shared_with_user_id,
+                permission_type=normalized_permission
             )
 
-            return Response({'message': 'Tunnel shared successfully'}, status=201)
+            if result['success']:
+                return Response({'message': result['message']}, status=201)
+            else:
+                return Response({'error': result['error']}, status=400)
 
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Tunnel not found or access denied'}, status=404)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
@@ -525,23 +589,20 @@ class UnshareTunnelView(APIView):
     )
     def delete(self, request, tunnel_id, user_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
-
-            # Get the sharing record
-            sharing = TunnelSharing.objects.get(
-                tunnel=tunnel,
-                shared_with_id=user_id
+            # Use the service layer to handle the unsharing logic
+            result = TunnelPermissionService.unshare_tunnel(
+                shared_by=request.user,
+                tunnel_id=tunnel_id,
+                shared_with_user_id=user_id
             )
 
-            sharing.delete()
+            if result['success']:
+                return Response({'message': result['message']})
+            else:
+                # Determine appropriate status code based on error
+                status_code = 404 if 'not found' in result['error'].lower() else 400
+                return Response({'error': result['error']}, status=status_code)
 
-            return Response({'message': 'Tunnel unshared successfully'})
-
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Tunnel not found or access denied'}, status=404)
-        except TunnelSharing.DoesNotExist:
-            return Response({'error': 'Sharing not found'}, status=404)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
@@ -558,37 +619,44 @@ class UpdateSharingPermissionView(APIView):
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
-                'can_edit': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether the user can edit the tunnel'),
+                'permission_type': openapi.Schema(type=openapi.TYPE_STRING, description='Permission type (view, edit, admin)',
+                    enum=['view', 'edit', 'admin']),
             },
-            required=['can_edit']
+            required=['permission_type']
         ),
         tags=['Tunnel Sharing']
     )
     def patch(self, request, tunnel_id, user_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get permission type and validate
+            permission_type = request.data.get('permission_type')
+            if not permission_type:
+                return Response({'error': 'permission_type is required'}, status=400)
 
-            # Get the sharing record
-            sharing = TunnelSharing.objects.get(
-                tunnel=tunnel,
-                shared_with_id=user_id
+            is_valid, normalized_permission = validate_permission_type(permission_type)
+            if not is_valid:
+                return Response({
+                    'error': f'Invalid permission type: {permission_type}. Valid values are: view, edit, admin'
+                }, status=400)
+
+            # Use the service layer to handle the permission update logic
+            result = TunnelPermissionService.update_sharing_permission(
+                shared_by=request.user,
+                tunnel_id=tunnel_id,
+                shared_with_user_id=user_id,
+                permission_type=normalized_permission
             )
 
-            # Update permission
-            can_edit = request.data.get('can_edit', False)
-            sharing.can_edit = can_edit
-            sharing.save()
+            if result['success']:
+                return Response({
+                    'message': result['message'],
+                    'permission_type': normalized_permission
+                })
+            else:
+                # Determine appropriate status code based on error
+                status_code = 404 if 'not found' in result['error'].lower() else 400
+                return Response({'error': result['error']}, status=status_code)
 
-            return Response({
-                'message': 'Sharing permission updated successfully',
-                'can_edit': can_edit
-            })
-
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return Response({'error': 'Tunnel not found or access denied'}, status=404)
-        except TunnelSharing.DoesNotExist:
-            return Response({'error': 'Sharing not found'}, status=404)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
@@ -606,8 +674,15 @@ class ListSharedUsersView(APIView):
     )
     def get(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to view sharing for this tunnel'}, status=403)
 
             # Get sharing records
             sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
@@ -618,7 +693,7 @@ class ListSharedUsersView(APIView):
                     'id': sharing.shared_with.id,
                     'username': sharing.shared_with.username,
                     'email': sharing.shared_with.email,
-                    'can_edit': sharing.can_edit,
+                    'permission_type': sharing.permission_type,
                     'shared_at': sharing.shared_at.isoformat()
                 })
 
@@ -641,17 +716,25 @@ class ListAvailableUsersView(APIView):
     )
     def get(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to manage sharing for this tunnel'}, status=403)
 
             # Get already shared user IDs
             shared_user_ids = TunnelSharing.objects.filter(
                 tunnel=tunnel
             ).values_list('shared_with_id', flat=True)
 
-            # Get available users (exclude current user and already shared users)
+            # Get available users (exclude current user, already shared users, and tunnel owner)
+            exclude_ids = list(shared_user_ids) + [request.user.id, tunnel.user.id]
             available_users = User.objects.exclude(
-                id__in=list(shared_user_ids) + [request.user.id]
+                id__in=exclude_ids
             ).values('id', 'username', 'email')
 
             return Response({'users': list(available_users)})

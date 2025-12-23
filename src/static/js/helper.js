@@ -21,9 +21,32 @@ function uniqueID() {
    return Math.random().toString(36).substr(2, 16);
 }
 
-function createToastAlert(msg, isFailure) {
+function createToastAlert(msg, isFailure, type) {
    const toastId = uniqueID();
-   const toastColorClass = isFailure ? 'bg-danger' : 'bg-primary';
+
+   // Determine toast color class
+   let toastColorClass = 'bg-primary'; // default
+   if (isFailure) {
+       toastColorClass = 'bg-danger';
+   } else if (type) {
+       switch (type) {
+           case 'success':
+               toastColorClass = 'bg-success';
+               break;
+           case 'warning':
+               toastColorClass = 'bg-warning';
+               break;
+           case 'info':
+               toastColorClass = 'bg-info';
+               break;
+           case 'danger':
+               toastColorClass = 'bg-danger';
+               break;
+           default:
+               toastColorClass = 'bg-primary';
+       }
+   }
+
    const toastHtml = `
        <div id="${toastId}" class="toast align-items-center text-white ${toastColorClass} border-0" role="alert" aria-live="assertive" aria-atomic="true">
            <div class="d-flex">

@@ -43,6 +43,15 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
+// Handle window resize to switch between table and cards
+window.addEventListener('resize', debounce(function() {
+    // Re-render content to properly switch between table and cards
+    const currentData = globalThis.data || [];
+    if (currentData.length > 0) {
+        displayReverseServerKeysWithStatus(currentData);
+    }
+}, 250));
+
 function showTunnelDetails(tunnelId) {
     // Populate the modal with tunnel information
     document.getElementById('tunnelId').textContent = tunnelId;
@@ -68,6 +77,9 @@ function showTunnelDetails(tunnelId) {
         const key = data.key;
         const description = data.description;
         const canEdit = data.can_edit;
+        const canShare = data.can_share;
+        const canDelete = data.can_delete;
+        const isOwner = data.is_owner;
 
         document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
         document.getElementById('tunnelKeyTextArea').value = key;
@@ -76,8 +88,38 @@ function showTunnelDetails(tunnelId) {
         // Store the original values as data attributes
         document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
 
-        // Store can_edit permission
+        // Store permissions
         document.getElementById('tunnelDetailsModal').dataset.canEdit = canEdit;
+        document.getElementById('tunnelDetailsModal').dataset.canShare = canShare;
+        document.getElementById('tunnelDetailsModal').dataset.canDelete = canDelete;
+        document.getElementById('tunnelDetailsModal').dataset.isOwner = isOwner;
+
+        // Display permission level
+        const permissionBadge = document.getElementById('tunnelPermissionBadge');
+        const permissionDisplay = document.getElementById('tunnelPermissionDisplay');
+
+        let permissionText = '';
+        let badgeClass = '';
+
+        if (isOwner) {
+            permissionText = 'Owner';
+            badgeClass = 'badge bg-success';
+        } else if (canDelete) {
+            permissionText = 'Admin';
+            badgeClass = 'badge bg-warning';
+        } else if (canShare) {
+            permissionText = 'Editor';
+            badgeClass = 'badge bg-info';
+        } else if (canEdit) {
+            permissionText = 'Viewer';
+            badgeClass = 'badge bg-secondary';
+        } else {
+            permissionText = 'No Access';
+            badgeClass = 'badge bg-danger';
+        }
+
+        permissionBadge.className = `badge ${badgeClass}`;
+        permissionBadge.textContent = permissionText;
 
         // If user doesn't have edit permission, make description readonly and disable save button
         const descriptionTextarea = document.getElementById('tunnelDescriptionText');
@@ -134,43 +176,175 @@ function copyTunnelPublicKeyToClipboard() {
 
 function displayReverseServerKeys(data) {
     const table = document.getElementById('tunnelsTableBody');
+    const cardsContainer = document.getElementById('tunnelsCardsContainer');
+
+    // Clear both containers
     table.innerHTML = '';
+    if (cardsContainer) {
+        cardsContainer.innerHTML = '';
+    }
+
+    // Check if we should show cards (mobile) or table (desktop)
+    const isMobile = window.innerWidth < 768;
 
     data.forEach(item => {
-        console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, owner = ${item.user}`);
         const actionButtons = createActionButtons(item);
-        const row = createTableRow(item, actionButtons);
-        table.innerHTML += row;
+
+        if (isMobile) {
+            // Create card for mobile
+            const card = createTunnelCard(item, actionButtons);
+            if (cardsContainer) {
+                cardsContainer.innerHTML += card;
+            } else {
+                // Fallback: still use table but with card styling
+                const row = createTableRow(item, actionButtons);
+                table.innerHTML += row;
+            }
+        } else {
+            // Create table row for desktop
+            const row = createTableRow(item, actionButtons);
+            table.innerHTML += row;
+        }
     });
+
+    // Use the new switch display mode function
+    switchDisplayMode();
 }
 
 function createActionButtons(item) {
     const itemId = item.id;
     const canEdit = item.can_edit;
+    const canShare = item.can_share;
+    const canDelete = item.can_delete;
 
-    // Add `event.stopPropagation()` to avoid triggering the row click event
-    let buttons = `
-        <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
+    // Create full desktop version (xl and above - all buttons with text)
+    let xlButtons = `
+        <div class="d-none d-xl-flex action-buttons-full">
+            <button class="btn btn-warning btn-sm me-1 action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">Console</button>
+            <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
     `;
 
-    // Only show management buttons if user has edit permission
-    if (canEdit) {
-        buttons += `
-            <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
-            <button class="btn btn-success btn-sm me-2" onclick="event.stopPropagation(); openShareModal('${itemId}')">Share</button>
-            <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
-        `;
-    } else {
-        // For read-only access, only show share button if user is owner (for viewing shares)
-        // But actually, let's check if this is needed - maybe read-only users don't need share button
+    if (canDelete) {
+        xlButtons += `<button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>`;
     }
 
-    buttons += `
-        <button class="btn btn-info btn-sm me-2" onclick="event.stopPropagation(); fetchServerConfig(${itemId})">Config</button>
-        <button class="btn btn-secondary btn-sm me-2" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')">Script</button>
+    if (canShare) {
+        xlButtons += `<button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>`;
+    }
+
+    xlButtons += `
+            <button class="btn btn-info btn-sm me-1 action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">Config</button>
+            <button class="btn btn-secondary btn-sm me-1 action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">Script</button>
+        </div>
     `;
 
-    return buttons;
+    // Create scrollable desktop version (lg to xl - icons with horizontal scroll)
+    let lgButtons = `
+        <div class="d-none d-lg-flex d-xl-none action-buttons-scrollable">
+            <div class="action-buttons-scroll-container">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canDelete) {
+        lgButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
+    }
+
+    if (canShare) {
+        lgButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
+    }
+
+    lgButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Create compact scrollable version (md to lg - icons with horizontal scroll)
+    let mdButtons = `
+        <div class="d-none d-md-flex d-lg-none action-buttons-scrollable">
+            <div class="action-buttons-scroll-container">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canDelete) {
+        mdButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
+    }
+
+    if (canShare) {
+        mdButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
+    }
+
+    mdButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Create mobile version (all buttons visible, flex wrap)
+    let mobileButtons = `
+        <div class="d-md-none action-buttons-mobile">
+            <div class="d-flex flex-wrap gap-1">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canDelete) {
+        mobileButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
+    }
+
+    if (canShare) {
+        mobileButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
+    }
+
+    mobileButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Combine all responsive versions
+    return xlButtons + lgButtons + mdButtons + mobileButtons;
 }
 
 function createTableRow(item, actionButtons) {
@@ -178,10 +352,16 @@ function createTableRow(item, actionButtons) {
     const itemId = item.id;
     const hostFriendlyName = item.host_friendly_name;
     const reversePort = item.reverse_port;
+    const isOwner = item.is_owner;
+
+    // Create ownership label next to hostname for shared tunnels
+    const displayName = isOwner
+        ? hostFriendlyName
+        : `${hostFriendlyName} <span class="badge bg-light text-muted ms-1 border" style="font-size: 0.7em;">🏷️ Shared</span>`;
 
     return `
         <tr onclick="showTunnelDetails('${itemId}')">
-            <td>${hostFriendlyName}</td>
+            <td>${displayName}</td>
             <td>${reversePort}</td>
             <td>
                 <div class='d-flex'>
@@ -194,6 +374,44 @@ function createTableRow(item, actionButtons) {
                 </div>
             </td>
         </tr>
+    `;
+}
+
+function createTunnelCard(item, actionButtons) {
+    const itemId = item.id;
+    const hostFriendlyName = item.host_friendly_name;
+    const reversePort = item.reverse_port;
+    const isOwner = item.is_owner;
+
+    // Create ownership label
+    const ownershipLabel = isOwner ? '' : '<span class="badge bg-light text-muted border ms-2" style="font-size: 0.7em;">🏷️ Shared</span>';
+
+    return `
+        <div class="tunnel-card mb-3" onclick="showTunnelDetails('${itemId}')">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div class="flex-grow-1">
+                            <h6 class="card-title mb-1 d-flex align-items-center">
+                                <i class="fas fa-server text-muted me-2"></i>
+                                ${hostFriendlyName}${ownershipLabel}
+                            </h6>
+                            <p class="card-text small text-muted mb-2">
+                                <i class="fas fa-ethernet text-muted me-1"></i>
+                                Port: ${reversePort}
+                            </p>
+                        </div>
+                        <div class="${hostFriendlyName}-status tunnel-status" id="${hostFriendlyName}-status"></div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div id="actions-${itemId}" class="flex-grow-1">
+                            ${actionButtons}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     `;
 }
 
@@ -292,10 +510,13 @@ function deleteKey(serverId) {
     })
     .then(response => {
         if (response.ok) {
-            Swal.fire("Deleted!", "The key has been deleted.", "success");
-            // Optionally, refresh the list of keys or remove the row from the table
+            console.log('Tunnel deleted successfully, refreshing list...');
+            Swal.fire("Deleted!", "The tunnel has been deleted.", "success");
+            // Refresh the tunnel list immediately
+            fetchAndDisplayReverseServerKeys();
         } else {
-            Swal.fire("Error", "There was an error deleting the key.", "error");
+            console.log('Tunnel deletion failed:', response.status, response.statusText);
+            Swal.fire("Error", "There was an error deleting the tunnel.", "error");
         }
     })
     .catch(error => {
@@ -385,21 +606,38 @@ function openUserManagementModal(serverId) {
         return;
     }
 
+    // Find the tunnel item to check permissions
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    // Check if user can edit this tunnel
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
     // Reset form
     usernameInput.value = '';
     addUserButton.disabled = true;
 
-    // Set click handler
-    addUserButton.onclick = function() {
-        addUser(serverId);
-    };
+    // Disable add user functionality if no edit permission
+    if (!canEdit) {
+        addUserButton.disabled = true;
+        addUserButton.textContent = 'No Edit Permission';
+        usernameInput.disabled = true;
+        usernameInput.placeholder = 'No edit permission to add users';
+    } else {
+        addUserButton.textContent = 'Add User';
+        usernameInput.disabled = false;
+        usernameInput.placeholder = 'Enter username';
 
-    // Enable button when username is entered
-    usernameInput.addEventListener('input', function() {
-        if (addUserButton) {
-            addUserButton.disabled = !this.value.trim();
-        }
-    });
+        // Set click handler
+        addUserButton.onclick = function() {
+            addUser(serverId);
+        };
+
+        // Enable button when username is entered
+        usernameInput.addEventListener('input', function() {
+            if (addUserButton) {
+                addUserButton.disabled = !this.value.trim();
+            }
+        });
+    }
 
     fetchUserList(serverId);
 }
@@ -423,6 +661,10 @@ function fetchUserList(serverId) {
 
       userListDiv.innerHTML = ''; // Clear current list
 
+      // Find the tunnel item to check permissions
+      const tunnelItem = globalThis.data.find(item => item.id == serverId);
+      const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
       if (users.length === 0) {
         userListDiv.innerHTML = '<p class="text-muted">No users found.</p>';
       } else {
@@ -433,14 +675,23 @@ function fetchUserList(serverId) {
           const listItem = document.createElement('li');
           listItem.className = 'list-group-item d-flex justify-content-between align-items-center';
 
-          listItem.innerHTML = `
-            <span>${user.username}</span>
-            <button class="btn btn-danger btn-sm">Delete</button>
-          `;
+          if (canEdit) {
+            // Show delete button if user has edit permission
+            listItem.innerHTML = `
+              <span>${user.username}</span>
+              <button class="btn btn-danger btn-sm">Delete</button>
+            `;
 
-          const deleteUserBtn = listItem.querySelector('button');
-          // Pass the serverId along with the userId to the deleteUser function
-          deleteUserBtn.onclick = () => deleteUser(user.id, serverId);
+            const deleteUserBtn = listItem.querySelector('button');
+            // Pass the serverId along with the userId to the deleteUser function
+            deleteUserBtn.onclick = () => deleteUser(user.id, serverId);
+          } else {
+            // Show username only if no edit permission
+            listItem.innerHTML = `
+              <span>${user.username}</span>
+              <span class="text-muted small">Read-only access</span>
+            `;
+          }
 
           listGroup.appendChild(listItem);
         });
@@ -451,6 +702,19 @@ function fetchUserList(serverId) {
 }
 
 function addUser(serverId) {
+    // Double-check permissions before attempting to add user
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
+    if (!canEdit) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Permission Denied',
+            text: 'You do not have permission to add users to this tunnel.',
+        });
+        return;
+    }
+
     const accessToken = localStorage.getItem('accessToken');
     const username = document.getElementById('newUsername').value;
     fetch(`/api/reverse/server/usernames`, {
@@ -470,12 +734,39 @@ function addUser(serverId) {
         // clear the input field
         document.getElementById('newUsername').value = '';
       } else {
-        // Handle the error, possibly show a message to the user
+        response.json().then(data => {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to add user.',
+            });
+        });
       }
+    })
+    .catch(error => {
+        console.error('Error adding user:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to add user.',
+        });
     });
 }
 
 function deleteUser(userId, serverId) { // Add serverId parameter
+    // Double-check permissions before attempting to delete user
+    const tunnelItem = globalThis.data.find(item => item.id == serverId);
+    const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
+    if (!canEdit) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Permission Denied',
+            text: 'You do not have permission to delete users from this tunnel.',
+        });
+        return;
+    }
+
     const accessToken = localStorage.getItem('accessToken');
     fetch(`/api/reverse/server/usernames/${userId}`, {
         method: 'DELETE',
@@ -486,32 +777,106 @@ function deleteUser(userId, serverId) { // Add serverId parameter
     .then(response => {
       if (response.ok) {
         fetchUserList(serverId); // Refresh user list using serverId
+      } else {
+        response.json().then(data => {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to delete user.',
+            });
+        });
       }
+    })
+    .catch(error => {
+        console.error('Error deleting user:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to delete user.',
+        });
     });
 }
 
 function tunnelNotificationWebsocket() {
     var socket = notificationWebsocket();
+    if (!socket) {
+        console.error('Failed to create notification WebSocket');
+        return;
+    }
+
     socket.onmessage = function (event) {
         const data = JSON.parse(event.data);
         console.log('Notification message:', data.message);
         let action = data.message.action;
-        createToastAlert(data.message.details, false);
-        if (action === "UPDATED-TUNNELS") {
-            fetchAndDisplayReverseServerKeys();
-        }
-        if (action === "UPDATE-TUNNEL-STATUS-DATA") {
-            globalThis.data.forEach(item => {
-                // If port not in message data, it means it's not active 
-                const hostFriendlyName = item.host_friendly_name;
-                const reversePort = item.reverse_port;
 
-                if (!data.message.data.includes(reversePort)) {
-                    updateStatus(false, hostFriendlyName);
-                } else {
-                    updateStatus(true, hostFriendlyName);
+        // Handle different notification types
+        if (action === "UPDATED-TUNNELS") {
+            console.log('Received UPDATED-TUNNELS notification:', data.message);
+            createToastAlert(data.message.details || "Tunnels updated", false);
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-SHARED") {
+            console.log('Received TUNNEL-SHARED notification:', data.message);
+            createToastAlert(data.message.details, false, 'success');
+            // Refresh tunnel list to show any changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-UNSHARED") {
+            createToastAlert(data.message.details, false, 'warning');
+            // Refresh tunnel list to reflect access changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "TUNNEL-PERMISSION-UPDATED") {
+            createToastAlert(data.message.details, false, 'info');
+            // Refresh tunnel list to reflect permission changes
+            fetchAndDisplayReverseServerKeys();
+        } else if (action === "UPDATE-TUNNEL-STATUS") {
+            // Update status for specific tunnel based on port
+            const port = data.message.port;
+            const status = data.message.status;
+            const isConnected = status === 'connected';
+
+            // Find tunnel with this port and update its status
+            if (globalThis.data) {
+                const tunnel = globalThis.data.find(item => item.reverse_port === port);
+                if (tunnel) {
+                    updateStatus(isConnected, tunnel.host_friendly_name);
+                    console.log(`Updated status for tunnel ${tunnel.host_friendly_name} (port ${port}): ${status}`);
+
+                    // Show toast notification for status change
+                    const statusText = isConnected ? 'online' : 'offline';
+                    const iconType = isConnected ? 'success' : 'warning';
+                    createToastAlert(`Tunnel "${tunnel.host_friendly_name}" is now ${statusText}`, false, iconType);
                 }
-            });
+            }
+        } else if (action === "UPDATE-TUNNEL-STATUS-DATA") {
+            // Update status for all tunnels based on activated ports
+            const activatedPorts = data.message.data || [];
+
+            if (globalThis.data) {
+                globalThis.data.forEach(item => {
+                    const hostFriendlyName = item.host_friendly_name;
+                    const reversePort = item.reverse_port;
+
+                    // Check if port is in activated ports list
+                    const isConnected = activatedPorts.includes(reversePort);
+                    updateStatus(isConnected, hostFriendlyName);
+                });
+                console.log('Updated status for all tunnels based on activated ports:', activatedPorts);
+
+                // Show a summary toast notification
+                const onlineCount = activatedPorts.length;
+                const totalCount = globalThis.data.length;
+                const offlineCount = totalCount - onlineCount;
+
+                if (onlineCount > 0 && offlineCount > 0) {
+                    createToastAlert(`Tunnel status updated: ${onlineCount} online, ${offlineCount} offline`, false, 'info');
+                } else if (onlineCount === totalCount) {
+                    createToastAlert(`All ${totalCount} tunnels are online`, false, 'success');
+                } else if (offlineCount === totalCount) {
+                    createToastAlert(`All ${totalCount} tunnels are offline`, false, 'warning');
+                }
+            }
+        } else {
+            // For unknown actions, just show a general toast
+            createToastAlert(data.message.details || "Notification received", false);
         }
     };
 }
@@ -755,10 +1120,72 @@ function openShareModal(tunnelId) {
     currentSharingTunnelId = tunnelId;
     $('#shareTunnelModal').modal('show');
 
-    // Reset form
-    document.getElementById('shareUserSelect').value = '';
-    document.getElementById('canEditSwitch').checked = false;
-    document.getElementById('shareButton').disabled = true;
+    // Check if current user can set admin permissions
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        },
+    })
+    .then(response => response.json())
+    .then(tunnelData => {
+        const canSetAdmin = tunnelData.can_share || false;
+        const permissionSelect = document.getElementById('permissionSelect');
+
+        // Clear existing options
+        permissionSelect.innerHTML = '';
+
+        // Add available options based on user permissions
+        const options = [
+            {value: 'view', label: 'Read-only'},
+            {value: 'edit', label: 'Can Edit'}
+        ];
+
+        if (canSetAdmin) {
+            options.push({value: 'admin', label: 'Admin'});
+        }
+
+        options.forEach(option => {
+            const optionElement = document.createElement('option');
+            optionElement.value = option.value;
+            optionElement.textContent = option.label;
+            permissionSelect.appendChild(optionElement);
+        });
+
+        // Reset form
+        document.getElementById('shareUserSelect').value = '';
+        permissionSelect.value = 'view';
+        document.getElementById('shareButton').disabled = true;
+
+        // Enable share button when user is selected
+        const userSelect = document.getElementById('shareUserSelect');
+        const shareButton = document.getElementById('shareButton');
+
+        userSelect.addEventListener('change', function() {
+            shareButton.disabled = !this.value;
+        });
+
+        // Load shared users and available users
+        loadSharedUsers(tunnelId);
+        loadAvailableUsers(tunnelId);
+    })
+    .catch(error => {
+        console.error('Error checking permissions:', error);
+        // Fallback to basic options
+        const permissionSelect = document.getElementById('permissionSelect');
+        permissionSelect.innerHTML = `
+            <option value="view">Read-only</option>
+            <option value="edit" selected>Can Edit</option>
+        `;
+
+        document.getElementById('shareUserSelect').value = '';
+        document.getElementById('shareButton').disabled = true;
+
+        // Load shared users and available users
+        loadSharedUsers(tunnelId);
+        loadAvailableUsers(tunnelId);
+    });
 
     // Enable share button when user is selected
     const userSelect = document.getElementById('shareUserSelect');
@@ -776,7 +1203,8 @@ function openShareModal(tunnelId) {
 function loadSharedUsers(tunnelId) {
     const accessToken = localStorage.getItem('accessToken');
 
-    fetch(`/tunnels/shared-users/${tunnelId}`, {
+    // First check if user can manage sharing for this tunnel
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
         method: "GET",
         headers: {
             'Content-Type': 'application/json',
@@ -784,7 +1212,21 @@ function loadSharedUsers(tunnelId) {
         },
     })
     .then(response => response.json())
-    .then(data => {
+    .then(tunnelData => {
+        const canManageSharing = tunnelData.can_share || false;
+
+        // Now load shared users
+        return fetch(`/tunnels/shared-users/${tunnelId}`, {
+            method: "GET",
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`
+            },
+        })
+        .then(response => response.json())
+        .then(data => ({ data, canManageSharing }));
+    })
+    .then(({ data, canManageSharing }) => {
         const sharedUsersList = document.getElementById('sharedUsersList');
         if (!sharedUsersList) {
             console.error('sharedUsersList element not found');
@@ -794,9 +1236,36 @@ function loadSharedUsers(tunnelId) {
         if (data.users && data.users.length > 0) {
             let html = '<div class="list-group">';
             data.users.forEach(user => {
-                const permissionBadge = user.can_edit
+                // Determine permission level and display
+                const permissionBadge = user.permission_type === 'admin'
+                    ? '<span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Admin</span>'
+                    : user.permission_type === 'edit'
                     ? '<span class="badge bg-success"><i class="fas fa-edit me-1"></i>Can Edit</span>'
                     : '<span class="badge bg-secondary"><i class="fas fa-eye me-1"></i>Read-only</span>';
+
+                let permissionControl = '';
+                if (canManageSharing) {
+                    // Create permission select dropdown
+                    const options = [
+                        {value: 'view', label: 'Read-only', selected: user.permission_type === 'view'},
+                        {value: 'edit', label: 'Can Edit', selected: user.permission_type === 'edit'},
+                        {value: 'admin', label: 'Admin', selected: user.permission_type === 'admin'}
+                    ];
+
+                    const optionHtml = options.map(opt =>
+                        `<option value="${opt.value}" ${opt.selected ? 'selected' : ''}>${opt.label}</option>`
+                    ).join('');
+
+                    permissionControl = `
+                        <select class="form-select form-select-sm" style="width: 120px;"
+                                onchange="updateSharingPermission('${user.id}', this.value, this)">
+                            ${optionHtml}
+                        </select>
+                    `;
+                } else {
+                    // Show current permission as read-only
+                    permissionControl = `<span class="text-muted small">${permissionBadge}</span>`;
+                }
 
                 html += `
                     <div class="list-group-item">
@@ -808,16 +1277,11 @@ function loadSharedUsers(tunnelId) {
                                 </div>
                                 ${user.email ? `<small class="text-muted">${user.email}</small>` : ''}
                             </div>
-                                <div class="d-flex align-items-center gap-2">
-                                <label class="switch mb-0">
-                                    <input type="checkbox"
-                                           ${user.can_edit ? 'checked' : ''}
-                                           onchange="updateSharingPermission('${user.id}', this.checked, this)">
-                                    <span class="slider round"></span>
-                                </label>
-                                <button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
+                            <div class="d-flex align-items-center gap-2">
+                                ${permissionControl}
+                                ${canManageSharing ? `<button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
                                     <i class="fas fa-times"></i>
-                                </button>
+                                </button>` : ''}
                             </div>
                         </div>
                     </div>
@@ -880,7 +1344,7 @@ function loadAvailableUsers(tunnelId) {
 
 function shareTunnel() {
     const userId = document.getElementById('shareUserSelect').value;
-    const canEdit = document.getElementById('canEditSwitch').checked;
+    const permissionType = document.getElementById('permissionSelect').value;
 
     if (!userId) {
         Swal.fire({
@@ -901,7 +1365,7 @@ function shareTunnel() {
         },
         body: JSON.stringify({
             shared_with_user_id: parseInt(userId),
-            can_edit: canEdit
+            permission_type: permissionType
         })
     })
     .then(response => {
@@ -924,7 +1388,7 @@ function shareTunnel() {
 
             // Clear the form and disable button
             document.getElementById('shareUserSelect').value = '';
-            document.getElementById('canEditSwitch').checked = false;
+            document.getElementById('permissionSelect').value = 'view';
             document.getElementById('shareButton').disabled = true;
         } else {
             Swal.fire({
@@ -944,7 +1408,7 @@ function shareTunnel() {
     });
 }
 
-function updateSharingPermission(userId, canEdit, checkboxElement) {
+function updateSharingPermission(userId, permissionType, selectElement) {
     const accessToken = localStorage.getItem('accessToken');
 
     fetch(`/tunnels/update-permission/${currentSharingTunnelId}/${userId}`, {
@@ -954,7 +1418,7 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
             'Authorization': `Bearer ${accessToken}`
         },
         body: JSON.stringify({
-            can_edit: canEdit
+            permission_type: permissionType
         })
     })
     .then(response => {
@@ -971,9 +1435,10 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
                 title: 'Error',
                 text: data.error || 'Failed to update permission.',
             });
-            // Revert the checkbox state
-            if (checkboxElement) {
-                checkboxElement.checked = !canEdit;
+            // Revert the select value
+            if (selectElement) {
+                // Revert to previous value - this would need more complex state management
+                loadSharedUsers(currentSharingTunnelId);
             }
         }
     })
@@ -984,9 +1449,9 @@ function updateSharingPermission(userId, canEdit, checkboxElement) {
             title: 'Error',
             text: 'Failed to update permission.',
         });
-        // Revert the checkbox state
-        if (checkboxElement) {
-            checkboxElement.checked = !canEdit;
+        // Revert the select value
+        if (selectElement) {
+            loadSharedUsers(currentSharingTunnelId);
         }
     });
 }
@@ -1039,3 +1504,103 @@ document.addEventListener('DOMContentLoaded', function() {
     validateSSHPortInputs();
 });
 
+// Function to switch display mode without re-rendering DOM
+function switchDisplayMode() {
+    const isMobile = window.innerWidth < 768;
+    const tableContainer = document.querySelector('.table-responsive');
+    const cardsContainerWrapper = document.getElementById('tunnelsCardsWrapper');
+
+    if (isMobile) {
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+    } else {
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
+    }
+
+    // Switch action button visibility based on screen size
+    switchActionButtonVisibility();
+}
+
+// Function to switch action button visibility without re-rendering
+function switchActionButtonVisibility() {
+    const isXLarge = window.innerWidth >= 1400; // xl breakpoint - increased for better button display
+    const isLarge = window.innerWidth >= 992 && window.innerWidth < 1400; // lg to xl
+    const isMedium = window.innerWidth >= 768 && window.innerWidth < 992; // md to lg
+    const isSmall = window.innerWidth < 768; // sm and below
+
+    // Get all action button containers
+    const fullButtons = document.querySelectorAll('.action-buttons-full');
+    const scrollableLgButtons = document.querySelectorAll('.d-none.d-lg-flex.d-xl-none.action-buttons-scrollable');
+    const scrollableMdButtons = document.querySelectorAll('.d-none.d-md-flex.d-lg-none.action-buttons-scrollable');
+    const mobileButtons = document.querySelectorAll('.action-buttons-mobile');
+
+    fullButtons.forEach(btn => {
+        btn.style.display = isXLarge ? 'flex' : 'none';
+    });
+
+    // Show scrollable buttons for large screens (992px to 1399px)
+    scrollableLgButtons.forEach(btn => {
+        btn.style.display = isLarge ? 'block' : 'none';
+    });
+
+    // Show scrollable buttons for medium screens (768px to 991px)
+    scrollableMdButtons.forEach(btn => {
+        btn.style.display = isMedium ? 'block' : 'none';
+    });
+
+    mobileButtons.forEach(btn => {
+        btn.style.display = isSmall ? 'block' : 'none';
+    });
+}
+
+// Function to display reverse server keys and immediately fetch status
+function displayReverseServerKeysWithStatus(data) {
+    displayReverseServerKeys(data);
+    // Immediately fetch and update status after re-rendering
+    fetchStatusAndUpdate();
+}
+
+// Function to fetch status data and update existing tunnels
+function fetchStatusAndUpdate() {
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+
+    fetch('/api/reverse/server/status/ports', {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    })
+    .then(response => response.json())
+    .then(statusData => {
+        // Update status for existing tunnels
+        if (globalThis.data) {
+            globalThis.data.forEach(item => {
+                const hostFriendlyName = item.host_friendly_name;
+                const reversePort = item.reverse_port;
+
+                // Determine if the port is active based on the status data
+                const isActive = statusData[reversePort] || false;
+                updateStatus(isActive, hostFriendlyName);
+            });
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching status data:', error);
+    });
+}
+
+// Debounce function to limit how often resize events trigger
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
