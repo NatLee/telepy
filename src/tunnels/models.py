@@ -39,6 +39,63 @@ class TunnelPermission(models.Model):
         """Check if user can share this tunnel with others"""
         return self.permission_type == self.ADMIN
 
+    def can_delete(self):
+        """Check if user can delete this tunnel"""
+        return self.permission_type == self.ADMIN
+
+    @classmethod
+    def get_capabilities_for_permission(cls, permission_type):
+        """
+        Get all functional capabilities for a given permission type.
+        Returns a list of capability dictionaries with 'key' and 'display' fields.
+        """
+        capabilities = []
+
+        # Always can view (this is a basic capability)
+        if permission_type in [cls.VIEW, cls.EDIT, cls.ADMIN]:
+            capabilities.append({
+                'key': 'view',
+                'display': 'View tunnels'
+            })
+
+        # Can edit if EDIT or ADMIN permission
+        if permission_type in [cls.EDIT, cls.ADMIN]:
+            capabilities.append({
+                'key': 'edit',
+                'display': 'Edit tunnel configurations'
+            })
+
+        # Can share and delete if ADMIN permission
+        if permission_type == cls.ADMIN:
+            capabilities.append({
+                'key': 'share',
+                'display': 'Share tunnels with others'
+            })
+            capabilities.append({
+                'key': 'delete',
+                'display': 'Delete tunnels'
+            })
+
+        return capabilities
+
+    @classmethod
+    def get_all_capabilities(cls):
+        """
+        Get all possible functional capabilities across all permission types.
+        Useful for documentation or UI generation.
+        """
+        all_capabilities = []
+        capability_keys = set()
+
+        for permission_type, _ in cls.PERMISSION_CHOICES:
+            capabilities = cls.get_capabilities_for_permission(permission_type)
+            for cap in capabilities:
+                if cap['key'] not in capability_keys:
+                    capability_keys.add(cap['key'])
+                    all_capabilities.append(cap)
+
+        return all_capabilities
+
 class TunnelSharing(TunnelPermission):
     """
     Model to track tunnel sharing between users.
@@ -241,6 +298,25 @@ class TunnelPermissionManager:
         Only tunnel owners and users with ADMIN permission can share.
         """
         # If user owns the tunnel, they can always share
+        if tunnel.user == user:
+            return True
+
+        # Check if tunnel is shared with admin permission
+        sharing = TunnelSharing.objects.filter(
+            tunnel=tunnel,
+            shared_with=user,
+            permission_type=TunnelPermission.ADMIN
+        ).first()
+
+        return sharing is not None
+
+    @staticmethod
+    def check_delete_access(user, tunnel):
+        """
+        Check if user has permission to delete this tunnel.
+        Only tunnel owners and users with ADMIN permission can delete.
+        """
+        # If user owns the tunnel, they can always delete
         if tunnel.user == user:
             return True
 
