@@ -67,6 +67,7 @@ function showTunnelDetails(tunnelId) {
         const hostFriendlyName = data.host_friendly_name;
         const key = data.key;
         const description = data.description;
+        const canEdit = data.can_edit;
 
         document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
         document.getElementById('tunnelKeyTextArea').value = key;
@@ -75,8 +76,22 @@ function showTunnelDetails(tunnelId) {
         // Store the original values as data attributes
         document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
 
-        // Disable the save button by default
-        document.querySelector('#tunnelDetailsModal .btn-success').disabled = true;
+        // Store can_edit permission
+        document.getElementById('tunnelDetailsModal').dataset.canEdit = canEdit;
+
+        // If user doesn't have edit permission, make description readonly and disable save button
+        const descriptionTextarea = document.getElementById('tunnelDescriptionText');
+        const saveButton = document.querySelector('#tunnelDetailsModal .btn-success');
+
+        if (!canEdit) {
+            descriptionTextarea.setAttribute('readonly', 'readonly');
+            saveButton.disabled = true;
+            saveButton.textContent = 'No Edit Permission';
+        } else {
+            descriptionTextarea.removeAttribute('readonly');
+            saveButton.disabled = true; // Still disabled by default until changes are made
+            saveButton.textContent = 'Save Description';
+        }
 
         // Show the modal
         var tunnelDetailsModal = new bootstrap.Modal(document.getElementById('tunnelDetailsModal'));
@@ -92,8 +107,15 @@ function showTunnelDetails(tunnelId) {
 }
 
 function resetTunnelDetailsModalState() {
-    document.getElementById('tunnelDescriptionText').value = '';
-    document.querySelector('#tunnelDetailsModal .btn-success').disabled = true;
+    const descriptionTextarea = document.getElementById('tunnelDescriptionText');
+    const saveButton = document.querySelector('#tunnelDetailsModal .btn-success');
+
+    descriptionTextarea.value = '';
+    saveButton.disabled = true;
+
+    // Reset readonly state and button text
+    descriptionTextarea.removeAttribute('readonly');
+    saveButton.textContent = 'Save Description';
 }
 
 function copyTunnelPublicKeyToClipboard() {
@@ -115,6 +137,7 @@ function displayReverseServerKeys(data) {
     table.innerHTML = '';
 
     data.forEach(item => {
+        console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, owner = ${item.user}`);
         const actionButtons = createActionButtons(item);
         const row = createTableRow(item, actionButtons);
         table.innerHTML += row;
@@ -123,15 +146,31 @@ function displayReverseServerKeys(data) {
 
 function createActionButtons(item) {
     const itemId = item.id;
+    const canEdit = item.can_edit;
 
     // Add `event.stopPropagation()` to avoid triggering the row click event
-    return `
+    let buttons = `
         <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
-        <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
+    `;
+
+    // Only show management buttons if user has edit permission
+    if (canEdit) {
+        buttons += `
+            <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
+            <button class="btn btn-success btn-sm me-2" onclick="event.stopPropagation(); openShareModal('${itemId}')">Share</button>
+            <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
+        `;
+    } else {
+        // For read-only access, only show share button if user is owner (for viewing shares)
+        // But actually, let's check if this is needed - maybe read-only users don't need share button
+    }
+
+    buttons += `
         <button class="btn btn-info btn-sm me-2" onclick="event.stopPropagation(); fetchServerConfig(${itemId})">Config</button>
         <button class="btn btn-secondary btn-sm me-2" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')">Script</button>
-        <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
     `;
+
+    return buttons;
 }
 
 function createTableRow(item, actionButtons) {
@@ -322,9 +361,12 @@ function checkTunnelDetailsModalForChanges() {
     const modal = document.getElementById('tunnelDetailsModal');
     const originalDescription = modal.dataset.originalDescription;
     const currentDescription = document.getElementById('tunnelDescriptionText').value;
+    const canEdit = modal.dataset.canEdit === 'true';
 
     const saveButton = document.querySelector('#tunnelDetailsModal .btn-success');
-    if (originalDescription !== currentDescription) {
+
+    // Only enable save button if user has edit permission and description has changed
+    if (canEdit && originalDescription !== currentDescription) {
         saveButton.disabled = false;
     } else {
         saveButton.disabled = true;
@@ -335,17 +377,29 @@ function checkTunnelDetailsModalForChanges() {
 function openUserManagementModal(serverId) {
     $('#manageUsersModal').modal('show');
 
-    const addUserButtonContainer = document.getElementById('addUserButtonContainer');
-    addUserButtonContainer.innerHTML = ''; // Clear previous button if any
+    const addUserButton = document.getElementById('addUserBtn');
+    const usernameInput = document.getElementById('newUsername');
 
-    const addUserButton = document.createElement('button');
-    addUserButton.classList.add('btn', 'btn-outline-secondary');
-    addUserButton.textContent = 'Add User';
+    if (!addUserButton || !usernameInput) {
+        console.error('Required DOM elements not found in user management modal');
+        return;
+    }
+
+    // Reset form
+    usernameInput.value = '';
+    addUserButton.disabled = true;
+
+    // Set click handler
     addUserButton.onclick = function() {
         addUser(serverId);
     };
 
-    addUserButtonContainer.appendChild(addUserButton);
+    // Enable button when username is entered
+    usernameInput.addEventListener('input', function() {
+        if (addUserButton) {
+            addUserButton.disabled = !this.value.trim();
+        }
+    });
 
     fetchUserList(serverId);
 }
@@ -362,6 +416,11 @@ function fetchUserList(serverId) {
     .then(response => response.json())
     .then(users => {
       const userListDiv = document.getElementById('userList');
+      if (!userListDiv) {
+        console.error('userList element not found');
+        return;
+      }
+
       userListDiv.innerHTML = ''; // Clear current list
 
       if (users.length === 0) {
@@ -685,6 +744,294 @@ function validateSSHPortInputs() {
     });
   }
 
+
+// ========================================
+// Tunnel Sharing Functions
+// ========================================
+
+let currentSharingTunnelId = null;
+
+function openShareModal(tunnelId) {
+    currentSharingTunnelId = tunnelId;
+    $('#shareTunnelModal').modal('show');
+
+    // Reset form
+    document.getElementById('shareUserSelect').value = '';
+    document.getElementById('canEditSwitch').checked = false;
+    document.getElementById('shareButton').disabled = true;
+
+    // Enable share button when user is selected
+    const userSelect = document.getElementById('shareUserSelect');
+    const shareButton = document.getElementById('shareButton');
+
+    userSelect.addEventListener('change', function() {
+        shareButton.disabled = !this.value;
+    });
+
+    // Load shared users and available users
+    loadSharedUsers(tunnelId);
+    loadAvailableUsers(tunnelId);
+}
+
+function loadSharedUsers(tunnelId) {
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/tunnels/shared-users/${tunnelId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    })
+    .then(response => response.json())
+    .then(data => {
+        const sharedUsersList = document.getElementById('sharedUsersList');
+        if (!sharedUsersList) {
+            console.error('sharedUsersList element not found');
+            return;
+        }
+
+        if (data.users && data.users.length > 0) {
+            let html = '<div class="list-group">';
+            data.users.forEach(user => {
+                const permissionBadge = user.can_edit
+                    ? '<span class="badge bg-success"><i class="fas fa-edit me-1"></i>Can Edit</span>'
+                    : '<span class="badge bg-secondary"><i class="fas fa-eye me-1"></i>Read-only</span>';
+
+                html += `
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <div class="d-flex align-items-center mb-2">
+                                    <strong class="me-2">${user.username}</strong>
+                                    ${permissionBadge}
+                                </div>
+                                ${user.email ? `<small class="text-muted">${user.email}</small>` : ''}
+                            </div>
+                                <div class="d-flex align-items-center gap-2">
+                                <label class="switch mb-0">
+                                    <input type="checkbox"
+                                           ${user.can_edit ? 'checked' : ''}
+                                           onchange="updateSharingPermission('${user.id}', this.checked, this)">
+                                    <span class="slider round"></span>
+                                </label>
+                                <button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            sharedUsersList.innerHTML = html;
+        } else {
+            sharedUsersList.innerHTML = '<p class="text-muted">Not shared with anyone yet.</p>';
+        }
+    })
+    .catch(error => {
+        console.error('Error loading shared users:', error);
+        const sharedUsersList = document.getElementById('sharedUsersList');
+        if (sharedUsersList) {
+            sharedUsersList.innerHTML = '<p class="text-danger">Error loading shared users.</p>';
+        }
+    });
+}
+
+function loadAvailableUsers(tunnelId) {
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/tunnels/available-users/${tunnelId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    })
+    .then(response => response.json())
+    .then(data => {
+        const userSelect = document.getElementById('shareUserSelect');
+        if (!userSelect) {
+            console.error('shareUserSelect element not found');
+            return;
+        }
+
+        userSelect.innerHTML = '<option value="">Select a user...</option>';
+
+        if (data.users && data.users.length > 0) {
+            data.users.forEach(user => {
+                const option = document.createElement('option');
+                option.value = user.id;
+                option.textContent = `${user.username}${user.email ? ` (${user.email})` : ''}`;
+                userSelect.appendChild(option);
+            });
+        } else {
+            userSelect.innerHTML = '<option value="" disabled>No users available</option>';
+        }
+    })
+    .catch(error => {
+        console.error('Error loading available users:', error);
+        const userSelect = document.getElementById('shareUserSelect');
+        if (userSelect) {
+            userSelect.innerHTML = '<option value="" disabled>Error loading users</option>';
+        }
+    });
+}
+
+function shareTunnel() {
+    const userId = document.getElementById('shareUserSelect').value;
+    const canEdit = document.getElementById('canEditSwitch').checked;
+
+    if (!userId) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'No User Selected',
+            text: 'Please select a user to share with.',
+        });
+        return;
+    }
+
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/tunnels/share/${currentSharingTunnelId}`, {
+        method: "POST",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+            shared_with_user_id: parseInt(userId),
+            can_edit: canEdit
+        })
+    })
+    .then(response => {
+        const isOk = response.ok;
+        return response.json().then(data => ({ data, isOk, response }));
+    })
+    .then(({ data, isOk }) => {
+        if (isOk) {
+            Swal.fire({
+                icon: 'success',
+                title: 'Success',
+                text: 'Tunnel shared successfully!',
+                showConfirmButton: false,
+                timer: 1500
+            });
+
+            // Refresh the shared users list and available users
+            loadSharedUsers(currentSharingTunnelId);
+            loadAvailableUsers(currentSharingTunnelId);
+
+            // Clear the form and disable button
+            document.getElementById('shareUserSelect').value = '';
+            document.getElementById('canEditSwitch').checked = false;
+            document.getElementById('shareButton').disabled = true;
+        } else {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to share tunnel.',
+            });
+        }
+    })
+    .catch(error => {
+        console.error('Error sharing tunnel:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to share tunnel.',
+        });
+    });
+}
+
+function updateSharingPermission(userId, canEdit, checkboxElement) {
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/tunnels/update-permission/${currentSharingTunnelId}/${userId}`, {
+        method: "PATCH",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+            can_edit: canEdit
+        })
+    })
+    .then(response => {
+        const isOk = response.ok;
+        return response.json().then(data => ({ data, isOk, response }));
+    })
+    .then(({ data, isOk }) => {
+        if (isOk) {
+            // Refresh the shared users list to show updated permissions
+            loadSharedUsers(currentSharingTunnelId);
+        } else {
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: data.error || 'Failed to update permission.',
+            });
+            // Revert the checkbox state
+            if (checkboxElement) {
+                checkboxElement.checked = !canEdit;
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error updating sharing permission:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to update permission.',
+        });
+        // Revert the checkbox state
+        if (checkboxElement) {
+            checkboxElement.checked = !canEdit;
+        }
+    });
+}
+
+function unshareTunnel(userId) {
+    const accessToken = localStorage.getItem('accessToken');
+
+    fetch(`/tunnels/unshare/${currentSharingTunnelId}/${userId}`, {
+        method: "DELETE",
+        headers: {
+            'Authorization': `Bearer ${accessToken}`
+        }
+    })
+    .then(response => {
+        if (response.ok) {
+            Swal.fire({
+                icon: 'success',
+                title: 'Success',
+                text: 'Tunnel unshared successfully!',
+                showConfirmButton: false,
+                timer: 1500
+            });
+
+            // Refresh the shared users list and available users
+            loadSharedUsers(currentSharingTunnelId);
+            loadAvailableUsers(currentSharingTunnelId);
+        } else {
+            return response.json().then(data => {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: data.error || 'Failed to unshare tunnel.',
+                });
+            });
+        }
+    })
+    .catch(error => {
+        console.error('Error unsharing tunnel:', error);
+        Swal.fire({
+            icon: 'error',
+            title: 'Error',
+            text: 'Failed to unshare tunnel.',
+        });
+    });
+}
 
 document.addEventListener('DOMContentLoaded', function() {
     fetchAndDisplayReverseServerKeys();

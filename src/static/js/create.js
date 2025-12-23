@@ -589,11 +589,24 @@ document.addEventListener('DOMContentLoaded', function() {
     nextStepBtn.addEventListener('click', goToCompletion);
   }
 
-  // Add user button
+  // Add user button and username input
   const addUserToListBtn = document.getElementById('addUserToListBtn');
+  const usernameInput = document.getElementById('newUsername');
+
   if (addUserToListBtn && !addUserToListBtn.dataset.bound) {
     addUserToListBtn.dataset.bound = '1';
     addUserToListBtn.addEventListener('click', addUserToCurrentTunnel);
+  }
+
+  // Enable button when username is entered
+  if (usernameInput && !usernameInput.dataset.bound) {
+    usernameInput.dataset.bound = '1';
+    usernameInput.value = ''; // Reset input
+    usernameInput.addEventListener('input', function() {
+      if (addUserToListBtn) {
+        addUserToListBtn.disabled = !this.value.trim();
+      }
+    });
   }
 
   // Initialize step indicator

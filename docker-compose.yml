@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-common-networks: &common-networks
   networks:
     - telepy-network
