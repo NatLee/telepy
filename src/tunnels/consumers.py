@@ -8,8 +8,6 @@ import termios
 import struct
 import base64
 import subprocess
-import tempfile
-from pathlib import Path
 
 from asgiref.sync import sync_to_async
 from asgiref.sync import async_to_sync
@@ -221,42 +219,119 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.room_name = 'notifications'  # Can be dynamic based on path
-        self.room_group_name = f'group_{self.room_name}'
 
-        # Join room group
+        # Authenticate user via JWT token in subprotocols
+        self.user = None
+        subprotocol_auth = None
+        token = None
+
+        # Check for subprotocols
+        if self.scope['subprotocols']:
+            try:
+                for protocol in self.scope['subprotocols']:
+                    if protocol.startswith('token.'):
+                        # Extract token from subprotocol
+                        base64_encoded_token = protocol.split('.', 1)[1]
+                        # Decode token
+                        token = base64.b64decode(base64_encoded_token).decode()
+                    elif protocol.startswith('auth.'):
+                        # Use the `auth` ticket as the subprotocol
+                        subprotocol_auth = protocol
+            except Exception as e:
+                logger.error(f"Error parsing subprotocols: {e}")
+                await self.close(code=4000)
+                return
+            if not token:
+                logger.error("Missing required subprotocols")
+                await self.close(code=4000)
+                return
+        else:
+            logger.error("No subprotocols provided")
+            await self.close(code=4000)
+            return
+
+        # Check if required subprotocols are present
+        if not token or not subprotocol_auth:
+            logger.error("Missing required subprotocols")
+            await self.close(code=4000)
+            return
+
+
+        # Verify JWT token
+        try:
+            access_token = AccessToken(token)
+            self.user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
+            logger.info(f"User authenticated: {self.user}")
+
+        except (InvalidToken, TokenError) as e:
+            logger.error(f"Token invalid: {e}")
+            await self.close(code=4001)
+            return
+        except User.DoesNotExist:
+            logger.error("User not found")
+            await self.close(code=4001)
+            return
+
+
+        # Join user-specific notification group
+        self.user_group_name = f'user_{self.user.id}_notifications'
         await self.channel_layer.group_add(
-            self.room_group_name,
+            self.user_group_name,
             self.channel_name
         )
 
-        await self.accept()
+        await self.accept(subprotocol_auth)
 
     async def disconnect(self, close_code):
         # Leave room group
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name
-        )
+        if hasattr(self, 'room_group_name'):
+            await self.channel_layer.group_discard(
+                self.room_group_name,
+                self.channel_name
+            )
 
     # Receive message from room group
     async def send_notification(self, event):
         message = event['message']
+        action = message.get('action')
 
-        # Send message to WebSocket
+        logger.info(f"Sending notification to user {self.user}: {action}")
+
+        # Send message to WebSocket (no permission check needed since notifications are targeted)
         await self.send(text_data=json.dumps({
             'message': message
         }))
+        logger.info(f"Notification sent to user {self.user}: {action}")
 
-def send_notification_to_group(message:dict):
-    channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        'group_notifications',  # Must match the group name used in your consumer
-        {
-            'type': 'send_notification',
-            'message': message
-        }
-    )
+
+def send_notification_to_user(user_id: int, message: dict):
+    """
+    Send notification to a specific user.
+    """
+    logger.info(f"Sending notification to user {user_id}: {message.get('action')}")
+    try:
+        channel_layer = get_channel_layer()
+        group_name = f'user_{user_id}_notifications'
+        async_to_sync(channel_layer.group_send)(
+            group_name,
+            {
+                'type': 'send_notification',
+                'message': message
+            }
+        )
+        logger.info(f"Notification sent to user {user_id}: {message.get('action')}")
+    except Exception as e:
+        logger.error(f"Failed to send notification to user {user_id}: {e}")
+
+
+def send_notification_to_users(user_ids: list[int], message: dict):
+    """
+    Send notification to multiple specific users.
+    """
+    for user_id in user_ids:
+        send_notification_to_user(user_id, message)
+
+
 
 class TunnelConnectionConsumer(AsyncWebsocketConsumer):
     """
@@ -405,7 +480,6 @@ def send_tunnel_connection_update(tunnel_id: int, message: dict):
                 'message': message
             }
         )
-
 
 class FileManagerConsumer(AsyncWebsocketConsumer):
     """
