@@ -7,6 +7,7 @@ from tunnels.models import TunnelPermissionManager, TunnelPermission
 class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
     can_share = serializers.SerializerMethodField()
+    can_delete = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
 
     def get_can_edit(self, obj):
@@ -32,6 +33,19 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
 
         # Use the new permission manager to check share access
         return TunnelPermissionManager.check_share_access(
+            request.user, obj
+        )
+
+    def get_can_delete(self, obj):
+        """
+        Check if the current user can delete this tunnel.
+        """
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+
+        # Use the new permission manager to check delete access
+        return TunnelPermissionManager.check_delete_access(
             request.user, obj
         )
 
