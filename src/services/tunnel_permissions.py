@@ -9,6 +9,7 @@ from django.contrib.auth.models import User
 from django.db import transaction
 from authorized_keys.models import ReverseServerAuthorizedKeys, ReverseServerUsernames
 from tunnels.models import TunnelSharing, TunnelPermission, TunnelPermissionManager
+from tunnels.consumers import send_notification_to_user
 
 
 class TunnelPermissionService:
@@ -64,6 +65,16 @@ class TunnelPermissionService:
                 permission_type=permission_type
             )
 
+            # Send notification to the shared user
+            print(f"Sending TUNNEL-SHARED notification to user {shared_with.id} for tunnel {tunnel_id}")
+            send_notification_to_user(shared_with.id, {
+                'action': 'TUNNEL-SHARED',
+                'details': f'Tunnel "{tunnel.host_friendly_name}" has been shared with you by {shared_by.username}',
+                'tunnel_id': tunnel_id,
+                'shared_by': shared_by.username,
+                'permission_type': permission_type
+            })
+
             return {'success': True, 'message': 'Tunnel shared successfully'}
 
         except ReverseServerAuthorizedKeys.DoesNotExist:
@@ -93,7 +104,21 @@ class TunnelPermissionService:
                 shared_with_id=shared_with_user_id
             )
 
+            # Store sharing info before deletion for notification
+            shared_with = sharing.shared_with
+            tunnel_name = sharing.tunnel.host_friendly_name
+
             sharing.delete()
+
+            # Send notification to the user whose access was revoked
+            print(f"Sending TUNNEL-UNSHARED notification to user {shared_with.id} for tunnel {tunnel_id}")
+            send_notification_to_user(shared_with.id, {
+                'action': 'TUNNEL-UNSHARED',
+                'details': f'Access to tunnel "{tunnel_name}" has been revoked by {shared_by.username}',
+                'tunnel_id': tunnel_id,
+                'revoked_by': shared_by.username
+            })
+
             return {'success': True, 'message': 'Tunnel unshared successfully'}
 
         except ReverseServerAuthorizedKeys.DoesNotExist:
@@ -128,8 +153,21 @@ class TunnelPermissionService:
                 return {'success': False, 'error': 'Invalid permission type'}
 
             # Update permission
+            old_permission = sharing.permission_type
             sharing.permission_type = permission_type
             sharing.save()
+
+            # Send notification to the user whose permission was updated
+            permission_display = dict(TunnelPermission.PERMISSION_CHOICES).get(permission_type, permission_type)
+            print(f"Sending TUNNEL-PERMISSION-UPDATED notification to user {sharing.shared_with.id} for tunnel {tunnel_id}")
+            send_notification_to_user(sharing.shared_with.id, {
+                'action': 'TUNNEL-PERMISSION-UPDATED',
+                'details': f'Your permission for tunnel "{sharing.tunnel.host_friendly_name}" has been updated to "{permission_display}" by {shared_by.username}',
+                'tunnel_id': tunnel_id,
+                'updated_by': shared_by.username,
+                'old_permission': old_permission,
+                'new_permission': permission_type
+            })
 
             return {'success': True, 'message': 'Sharing permission updated successfully'}
 
