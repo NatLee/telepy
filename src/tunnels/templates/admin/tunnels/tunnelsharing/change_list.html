@@ -1,0 +1,12 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+{{ block.super }}
+{% if permission_groups_url %}
+<li>
+    <a href="{% url 'admin:tunnels_tunnelsharing_permission_groups' %}" class="btn btn-primary">
+        <i class="fas fa-users-cog"></i> View Permission Groups
+    </a>
+</li>
+{% endif %}
+{% endblock %}

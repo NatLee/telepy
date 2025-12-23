@@ -1,0 +1,53 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div class="module">
+    <h2>Permission Groups Overview</h2>
+    <p>This page shows all registered permission groups and their associated permissions.</p>
+
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Group Name</th>
+                <th>Description</th>
+                <th>Permissions</th>
+                <th>Permission Levels</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for group in groups %}
+            <tr>
+                <td><strong>{{ group.name }}</strong></td>
+                <td>{{ group.description }}</td>
+                <td>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        {% for permission in group.permissions %}
+                        <li>{{ permission.display }}</li>
+                        {% endfor %}
+                    </ul>
+                </td>
+                <td>
+                    {% for permission in group.permissions %}
+                        <span class="label label-default" style="margin-right: 5px;">{{ permission.display }}</span>
+                    {% endfor %}
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="4">No permission groups registered.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="well">
+        <h4>Permission Levels Reference</h4>
+        <dl class="dl-horizontal">
+            {% for permission_key, permission_display in permission_choices.items %}
+            <dt>{{ permission_key }}</dt>
+            <dd>{{ permission_display }}</dd>
+            {% endfor %}
+        </dl>
+    </div>
+</div>
+{% endblock %}
