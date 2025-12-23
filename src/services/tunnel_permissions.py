@@ -75,6 +75,17 @@ class TunnelPermissionService:
                 'permission_type': permission_type
             })
 
+            # Send notification to the owner as well
+            if tunnel.user.id != shared_by.id:
+                print(f"Sending TUNNEL-SHARED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
+                send_notification_to_user(tunnel.user.id, {
+                    'action': 'TUNNEL-SHARED',
+                    'details': f'You shared tunnel "{tunnel.host_friendly_name}" with {shared_with.username}',
+                    'tunnel_id': tunnel_id,
+                    'shared_with': shared_with.username,
+                    'permission_type': permission_type
+                })
+
             return {'success': True, 'message': 'Tunnel shared successfully'}
 
         except ReverseServerAuthorizedKeys.DoesNotExist:
@@ -118,6 +129,16 @@ class TunnelPermissionService:
                 'tunnel_id': tunnel_id,
                 'revoked_by': shared_by.username
             })
+
+            # Send notification to the owner as well
+            if tunnel.user.id != shared_by.id:
+                print(f"Sending TUNNEL-UNSHARED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
+                send_notification_to_user(tunnel.user.id, {
+                    'action': 'TUNNEL-UNSHARED',
+                    'details': f'You revoked access to tunnel "{tunnel_name}" from {shared_with.username}',
+                    'tunnel_id': tunnel_id,
+                    'revoked_from': shared_with.username
+                })
 
             return {'success': True, 'message': 'Tunnel unshared successfully'}
 
@@ -168,6 +189,18 @@ class TunnelPermissionService:
                 'old_permission': old_permission,
                 'new_permission': permission_type
             })
+
+            # Send notification to the owner as well
+            if tunnel.user.id != shared_by.id:
+                print(f"Sending TUNNEL-PERMISSION-UPDATED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
+                send_notification_to_user(tunnel.user.id, {
+                    'action': 'TUNNEL-PERMISSION-UPDATED',
+                    'details': f'You updated permission for tunnel "{sharing.tunnel.host_friendly_name}" to "{permission_display}" for {sharing.shared_with.username}',
+                    'tunnel_id': tunnel_id,
+                    'updated_for': sharing.shared_with.username,
+                    'old_permission': old_permission,
+                    'new_permission': permission_type
+                })
 
             return {'success': True, 'message': 'Sharing permission updated successfully'}
 

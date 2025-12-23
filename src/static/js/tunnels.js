@@ -44,13 +44,13 @@ function fetchAndDisplayReverseServerKeys() {
 }
 
 // Handle window resize to switch between table and cards
-window.addEventListener('resize', function() {
-    // Re-render current data with new layout
+window.addEventListener('resize', debounce(function() {
+    // Re-render content to properly switch between table and cards
     const currentData = globalThis.data || [];
     if (currentData.length > 0) {
-        displayReverseServerKeys(currentData);
+        displayReverseServerKeysWithStatus(currentData);
     }
-});
+}, 250));
 
 function showTunnelDetails(tunnelId) {
     // Populate the modal with tunnel information
@@ -77,6 +77,9 @@ function showTunnelDetails(tunnelId) {
         const key = data.key;
         const description = data.description;
         const canEdit = data.can_edit;
+        const canShare = data.can_share;
+        const canDelete = data.can_delete;
+        const isOwner = data.is_owner;
 
         document.getElementById('tunnelHostFriendlyName').textContent = hostFriendlyName;
         document.getElementById('tunnelKeyTextArea').value = key;
@@ -85,8 +88,38 @@ function showTunnelDetails(tunnelId) {
         // Store the original values as data attributes
         document.getElementById('tunnelDetailsModal').dataset.originalDescription = description;
 
-        // Store can_edit permission
+        // Store permissions
         document.getElementById('tunnelDetailsModal').dataset.canEdit = canEdit;
+        document.getElementById('tunnelDetailsModal').dataset.canShare = canShare;
+        document.getElementById('tunnelDetailsModal').dataset.canDelete = canDelete;
+        document.getElementById('tunnelDetailsModal').dataset.isOwner = isOwner;
+
+        // Display permission level
+        const permissionBadge = document.getElementById('tunnelPermissionBadge');
+        const permissionDisplay = document.getElementById('tunnelPermissionDisplay');
+
+        let permissionText = '';
+        let badgeClass = '';
+
+        if (isOwner) {
+            permissionText = 'Owner';
+            badgeClass = 'badge bg-success';
+        } else if (canDelete) {
+            permissionText = 'Admin';
+            badgeClass = 'badge bg-warning';
+        } else if (canShare) {
+            permissionText = 'Editor';
+            badgeClass = 'badge bg-info';
+        } else if (canEdit) {
+            permissionText = 'Viewer';
+            badgeClass = 'badge bg-secondary';
+        } else {
+            permissionText = 'No Access';
+            badgeClass = 'badge bg-danger';
+        }
+
+        permissionBadge.className = `badge ${badgeClass}`;
+        permissionBadge.textContent = permissionText;
 
         // If user doesn't have edit permission, make description readonly and disable save button
         const descriptionTextarea = document.getElementById('tunnelDescriptionText');
@@ -155,7 +188,6 @@ function displayReverseServerKeys(data) {
     const isMobile = window.innerWidth < 768;
 
     data.forEach(item => {
-        console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, can_share = ${item.can_share}, is_owner = ${item.is_owner}`);
         const actionButtons = createActionButtons(item);
 
         if (isMobile) {
@@ -175,17 +207,8 @@ function displayReverseServerKeys(data) {
         }
     });
 
-    // Show/hide appropriate containers
-    const tableContainer = document.querySelector('.table-responsive');
-    const cardsContainerWrapper = document.getElementById('tunnelsCardsWrapper');
-
-    if (isMobile) {
-        if (tableContainer) tableContainer.style.display = 'none';
-        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
-    } else {
-        if (tableContainer) tableContainer.style.display = 'block';
-        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
-    }
+    // Use the new switch display mode function
+    switchDisplayMode();
 }
 
 function createActionButtons(item) {
@@ -194,63 +217,134 @@ function createActionButtons(item) {
     const canShare = item.can_share;
     const canDelete = item.can_delete;
 
-    // Create desktop version (original layout)
-    let desktopButtons = `
-        <div class="d-none d-md-flex">
+    // Create full desktop version (xl and above - all buttons with text)
+    let xlButtons = `
+        <div class="d-none d-xl-flex action-buttons-full">
             <button class="btn btn-warning btn-sm me-1 action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">Console</button>
             <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
     `;
 
     if (canDelete) {
-        desktopButtons += `<button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>`;
+        xlButtons += `<button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>`;
     }
 
     if (canShare) {
-        desktopButtons += `<button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>`;
+        xlButtons += `<button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>`;
     }
 
-    desktopButtons += `
+    xlButtons += `
             <button class="btn btn-info btn-sm me-1 action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">Config</button>
             <button class="btn btn-secondary btn-sm me-1 action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">Script</button>
         </div>
     `;
 
-    // Create mobile version (inline buttons)
-    let mobileButtons = `
-        <div class="d-md-none" id="actions-mobile-${itemId}">
-            <div class="d-flex flex-wrap gap-1 mt-2">
-                <button class="btn btn-warning btn-sm" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+    // Create scrollable desktop version (lg to xl - icons with horizontal scroll)
+    let lgButtons = `
+        <div class="d-none d-lg-flex d-xl-none action-buttons-scrollable">
+            <div class="action-buttons-scroll-container">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
                     <i class="fas fa-terminal"></i>
                 </button>
-                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
                     <i class="fas fa-users"></i>
                 </button>
     `;
 
     if (canDelete) {
-        mobileButtons += `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
-            <i class="fas fa-trash"></i>
-        </button>`;
+        lgButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
     }
 
     if (canShare) {
-        mobileButtons += `<button class="btn btn-success btn-sm" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
-            <i class="fas fa-share"></i>
-        </button>`;
+        lgButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
     }
 
-    mobileButtons += `
-                <button class="btn btn-info btn-sm" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+    lgButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
                     <i class="fas fa-code"></i>
                 </button>
-                <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
                     <i class="fas fa-file-code"></i>
                 </button>
             </div>
         </div>
     `;
 
-    return desktopButtons + mobileButtons;
+    // Create compact scrollable version (md to lg - icons with horizontal scroll)
+    let mdButtons = `
+        <div class="d-none d-md-flex d-lg-none action-buttons-scrollable">
+            <div class="action-buttons-scroll-container">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canDelete) {
+        mdButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
+    }
+
+    if (canShare) {
+        mdButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
+    }
+
+    mdButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Create mobile version (all buttons visible, flex wrap)
+    let mobileButtons = `
+        <div class="d-md-none action-buttons-mobile">
+            <div class="d-flex flex-wrap gap-1">
+                <button class="btn btn-warning btn-sm action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canDelete) {
+        mobileButtons += `<button class="btn btn-danger btn-sm action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+                <i class="fas fa-trash"></i>
+            </button>`;
+    }
+
+    if (canShare) {
+        mobileButtons += `<button class="btn btn-success btn-sm action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+                <i class="fas fa-share"></i>
+            </button>`;
+    }
+
+    mobileButtons += `
+                <button class="btn btn-info btn-sm action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Combine all responsive versions
+    return xlButtons + lgButtons + mdButtons + mobileButtons;
 }
 
 function createTableRow(item, actionButtons) {
@@ -745,6 +839,11 @@ function tunnelNotificationWebsocket() {
                 if (tunnel) {
                     updateStatus(isConnected, tunnel.host_friendly_name);
                     console.log(`Updated status for tunnel ${tunnel.host_friendly_name} (port ${port}): ${status}`);
+
+                    // Show toast notification for status change
+                    const statusText = isConnected ? 'online' : 'offline';
+                    const iconType = isConnected ? 'success' : 'warning';
+                    createToastAlert(`Tunnel "${tunnel.host_friendly_name}" is now ${statusText}`, false, iconType);
                 }
             }
         } else if (action === "UPDATE-TUNNEL-STATUS-DATA") {
@@ -761,6 +860,19 @@ function tunnelNotificationWebsocket() {
                     updateStatus(isConnected, hostFriendlyName);
                 });
                 console.log('Updated status for all tunnels based on activated ports:', activatedPorts);
+
+                // Show a summary toast notification
+                const onlineCount = activatedPorts.length;
+                const totalCount = globalThis.data.length;
+                const offlineCount = totalCount - onlineCount;
+
+                if (onlineCount > 0 && offlineCount > 0) {
+                    createToastAlert(`Tunnel status updated: ${onlineCount} online, ${offlineCount} offline`, false, 'info');
+                } else if (onlineCount === totalCount) {
+                    createToastAlert(`All ${totalCount} tunnels are online`, false, 'success');
+                } else if (offlineCount === totalCount) {
+                    createToastAlert(`All ${totalCount} tunnels are offline`, false, 'warning');
+                }
             }
         } else {
             // For unknown actions, just show a general toast
@@ -1392,11 +1504,92 @@ document.addEventListener('DOMContentLoaded', function() {
     validateSSHPortInputs();
 });
 
-// Function to re-display existing data based on screen size
-function refreshDisplayMode() {
-    if (globalThis.data && globalThis.data.length > 0) {
-        displayReverseServerKeys(globalThis.data);
+// Function to switch display mode without re-rendering DOM
+function switchDisplayMode() {
+    const isMobile = window.innerWidth < 768;
+    const tableContainer = document.querySelector('.table-responsive');
+    const cardsContainerWrapper = document.getElementById('tunnelsCardsWrapper');
+
+    if (isMobile) {
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+    } else {
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
     }
+
+    // Switch action button visibility based on screen size
+    switchActionButtonVisibility();
+}
+
+// Function to switch action button visibility without re-rendering
+function switchActionButtonVisibility() {
+    const isXLarge = window.innerWidth >= 1400; // xl breakpoint - increased for better button display
+    const isLarge = window.innerWidth >= 992 && window.innerWidth < 1400; // lg to xl
+    const isMedium = window.innerWidth >= 768 && window.innerWidth < 992; // md to lg
+    const isSmall = window.innerWidth < 768; // sm and below
+
+    // Get all action button containers
+    const fullButtons = document.querySelectorAll('.action-buttons-full');
+    const scrollableLgButtons = document.querySelectorAll('.d-none.d-lg-flex.d-xl-none.action-buttons-scrollable');
+    const scrollableMdButtons = document.querySelectorAll('.d-none.d-md-flex.d-lg-none.action-buttons-scrollable');
+    const mobileButtons = document.querySelectorAll('.action-buttons-mobile');
+
+    fullButtons.forEach(btn => {
+        btn.style.display = isXLarge ? 'flex' : 'none';
+    });
+
+    // Show scrollable buttons for large screens (992px to 1399px)
+    scrollableLgButtons.forEach(btn => {
+        btn.style.display = isLarge ? 'block' : 'none';
+    });
+
+    // Show scrollable buttons for medium screens (768px to 991px)
+    scrollableMdButtons.forEach(btn => {
+        btn.style.display = isMedium ? 'block' : 'none';
+    });
+
+    mobileButtons.forEach(btn => {
+        btn.style.display = isSmall ? 'block' : 'none';
+    });
+}
+
+// Function to display reverse server keys and immediately fetch status
+function displayReverseServerKeysWithStatus(data) {
+    displayReverseServerKeys(data);
+    // Immediately fetch and update status after re-rendering
+    fetchStatusAndUpdate();
+}
+
+// Function to fetch status data and update existing tunnels
+function fetchStatusAndUpdate() {
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+
+    fetch('/api/reverse/server/status/ports', {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+        },
+    })
+    .then(response => response.json())
+    .then(statusData => {
+        // Update status for existing tunnels
+        if (globalThis.data) {
+            globalThis.data.forEach(item => {
+                const hostFriendlyName = item.host_friendly_name;
+                const reversePort = item.reverse_port;
+
+                // Determine if the port is active based on the status data
+                const isActive = statusData[reversePort] || false;
+                updateStatus(isActive, hostFriendlyName);
+            });
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching status data:', error);
+    });
 }
 
 // Debounce function to limit how often resize events trigger
@@ -1411,10 +1604,3 @@ function debounce(func, wait) {
         timeout = setTimeout(later, wait);
     };
 }
-
-// Add debounced resize listener to handle responsive display
-window.addEventListener('resize', debounce(function() {
-    // Only refresh display mode, don't re-fetch data
-    refreshDisplayMode();
-}, 250)); // Wait 250ms after resize stops before executing
-

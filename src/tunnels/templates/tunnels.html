@@ -297,6 +297,12 @@
         <!-- Description -->
         <h6 class="text-secondary">Description</h6>
         <textarea id="tunnelDescriptionText" class="form-control mb-3" rows="3" oninput="checkTunnelDetailsModalForChanges()"></textarea>
+
+        <!-- Permission Level -->
+        <h6 class="text-secondary">Your Permission</h6>
+        <p id="tunnelPermissionDisplay" class="fw-bold mb-3">
+            <span id="tunnelPermissionBadge" class="badge"></span>
+        </p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()"><i class="fas fa-copy me-2"></i>Copy Key</button>
