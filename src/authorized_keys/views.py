@@ -126,9 +126,9 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
 
     def perform_destroy(self, instance):
         """
-        Override to check edit permissions before deleting.
+        Override to check delete permissions before deleting.
         """
-        if not self.can_edit_tunnel(instance):
+        if not TunnelPermissionManager.check_delete_access(self.request.user, instance):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("You don't have permission to delete this tunnel.")
 
