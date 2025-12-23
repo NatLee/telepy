@@ -2,7 +2,7 @@ from rest_framework import serializers
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import UserAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
-from tunnels.models import TunnelSharing
+from tunnels.models import TunnelPermissionManager, TunnelPermission
 
 class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
@@ -15,18 +15,10 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
 
-        # If user owns the tunnel, they can always edit
-        if obj.user == request.user:
-            return True
-
-        # Check if tunnel is shared with edit permission
-        sharing = TunnelSharing.objects.filter(
-            tunnel=obj,
-            shared_with=request.user,
-            can_edit=True
-        ).first()
-
-        return sharing is not None
+        # Use the new permission manager to check edit access
+        return TunnelPermissionManager.check_access(
+            request.user, obj, TunnelPermission.EDIT
+        )
 
     class Meta:
         model = ReverseServerAuthorizedKeys
