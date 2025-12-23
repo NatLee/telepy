@@ -254,10 +254,11 @@
        </div>
        <div class="modal-body">
          <div id="userList"></div>
-         <div class="input-group mb-3 mt-3">
-            <input type="text" class="form-control" placeholder="Username" id="newUsername">
-            <!-- The addUserButton will be appended here dynamically -->
-            <div id="addUserButtonContainer"></div>
+         <div class="input-group mt-3">
+           <input type="text" class="form-control" placeholder="Username" id="newUsername">
+           <button class="btn btn-outline-secondary" id="addUserBtn" disabled>
+             <i class="fas fa-plus me-2"></i>Add User
+           </button>
          </div>
        </div>
      </div>
@@ -281,11 +282,11 @@
         <!-- Host Name -->
         <h6 class="text-secondary">Host</h6>
         <p id="tunnelHostFriendlyName" class="fw-bold mb-3">Placeholder for Host Name</p>
-        
+
         <!-- Public Key in Endpoint -->
         <h6 class="text-secondary">Public Key</h6>
         <textarea id="tunnelKeyTextArea" class="form-control mb-3" rows="12" readonly style="font-family: monospace;"></textarea>
-        
+
         <!-- Description -->
         <h6 class="text-secondary">Description</h6>
         <textarea id="tunnelDescriptionText" class="form-control mb-3" rows="3" oninput="checkTunnelDetailsModalForChanges()"></textarea>
@@ -294,6 +295,64 @@
         <button type="button" class="btn btn-outline-primary" onclick="copyTunnelPublicKeyToClipboard()"><i class="fas fa-copy me-2"></i>Copy Key</button>
         <button type="button" class="btn btn-success" onclick="saveDescription()"><i class="fas fa-save me-2"></i>Save Description</button>
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal"><i class="fas fa-times me-2"></i>Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Share Tunnel Modal -->
+<div class="modal fade" id="shareTunnelModal" tabindex="-1" aria-labelledby="shareTunnelModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="shareTunnelModalLabel">Share Tunnel</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <!-- Current shared users -->
+        <div id="currentSharedUsers" class="mb-4">
+          <h6 class="text-secondary mb-3">Currently Shared With:</h6>
+          <div id="sharedUsersList" class="mb-3">
+            <p class="text-muted">Loading...</p>
+          </div>
+        </div>
+
+        <!-- Share with new users -->
+        <div id="shareWithNewUsers">
+          <h6 class="text-secondary mb-3">Share with New Users:</h6>
+
+          <!-- User selection and share button -->
+          <div class="input-group mb-3">
+            <select class="form-select" id="shareUserSelect">
+              <option value="">Select a user...</option>
+            </select>
+            <button class="btn btn-outline-primary" onclick="shareTunnel()" id="shareButton" disabled>
+              <i class="fas fa-share me-2"></i>Share
+            </button>
+          </div>
+
+          <!-- Can Edit permission toggle -->
+          <div class="card border-0 bg-light">
+            <div class="card-body py-3">
+              <div class="d-flex align-items-center justify-content-between">
+                <div class="d-flex align-items-center">
+                  <i class="fas fa-user-edit text-primary me-3 fs-5"></i>
+                  <div>
+                    <h6 class="mb-1 fw-bold text-dark">Grant Edit Permission</h6>
+                    <p class="mb-0 small text-muted">Allow user to modify tunnel settings, manage users, and delete tunnel</p>
+                  </div>
+                </div>
+                <div class="form-check form-switch">
+                  <input class="form-check-input permission-toggle" type="checkbox" id="canEditSwitch">
+                  <label class="form-check-label fw-semibold" for="canEditSwitch"></label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
