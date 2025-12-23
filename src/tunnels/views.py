@@ -510,8 +510,15 @@ class ShareTunnelView(APIView):
     )
     def post(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to share this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to share this tunnel'}, status=403)
 
             # Get the user to share with
             shared_with_user_id = request.data.get('shared_with_user_id')
@@ -575,8 +582,15 @@ class UnshareTunnelView(APIView):
     )
     def delete(self, request, tunnel_id, user_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to manage sharing for this tunnel'}, status=403)
 
             # Get the sharing record
             sharing = TunnelSharing.objects.get(
@@ -617,8 +631,15 @@ class UpdateSharingPermissionView(APIView):
     )
     def patch(self, request, tunnel_id, user_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to manage sharing for this tunnel'}, status=403)
 
             # Get the sharing record
             sharing = TunnelSharing.objects.get(

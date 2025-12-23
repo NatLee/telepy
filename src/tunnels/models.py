@@ -35,6 +35,10 @@ class TunnelPermission(models.Model):
     def can_admin(self):
         return self.permission_type == self.ADMIN
 
+    def can_share(self):
+        """Check if user can share this tunnel with others"""
+        return self.permission_type == self.ADMIN
+
 class TunnelSharing(TunnelPermission):
     """
     Model to track tunnel sharing between users.
@@ -139,13 +143,13 @@ PermissionRegistry.register_group(PermissionGroup(
 PermissionRegistry.register_group(PermissionGroup(
     'editor',
     [TunnelPermission.VIEW, TunnelPermission.EDIT],
-    'Can view and edit tunnel configurations'
+    'Can view and edit tunnel configurations (cannot share with others)'
 ))
 
 PermissionRegistry.register_group(PermissionGroup(
     'admin',
     [TunnelPermission.VIEW, TunnelPermission.EDIT, TunnelPermission.ADMIN],
-    'Full access including administration'
+    'Full access including administration and sharing with others'
 ))
 
 
@@ -231,6 +235,25 @@ class TunnelPermissionManager:
         return user_permissions.permission_type in group_permissions
 
     @staticmethod
+    def check_share_access(user, tunnel):
+        """
+        Check if user has permission to share this tunnel with others.
+        Only tunnel owners and users with ADMIN permission can share.
+        """
+        # If user owns the tunnel, they can always share
+        if tunnel.user == user:
+            return True
+
+        # Check if tunnel is shared with admin permission
+        sharing = TunnelSharing.objects.filter(
+            tunnel=tunnel,
+            shared_with=user,
+            permission_type=TunnelPermission.ADMIN
+        ).first()
+
+        return sharing is not None
+
+    @staticmethod
     def require_access(user, tunnel, required_permission=TunnelPermission.VIEW, raise_exception=True):
         """
         Require that user has the specified permission level for a tunnel.
@@ -300,6 +323,10 @@ class TunnelPermissionInstance:
         return self.permission_type in [TunnelPermission.EDIT, TunnelPermission.ADMIN]
 
     def can_admin(self):
+        return self.permission_type == TunnelPermission.ADMIN
+
+    def can_share(self):
+        """Check if this permission level allows sharing tunnel with others"""
         return self.permission_type == TunnelPermission.ADMIN
 
     def __str__(self):

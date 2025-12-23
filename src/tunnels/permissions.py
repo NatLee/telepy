@@ -72,8 +72,13 @@ class TunnelPermissionService:
         Returns dict with success status and message.
         """
         try:
-            # Get the tunnel (must be owned by shared_by)
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=shared_by)
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+
+            # Check if shared_by has permission to share this tunnel
+            from .models import TunnelPermissionManager
+            if not TunnelPermissionManager.check_share_access(shared_by, tunnel):
+                return {'success': False, 'error': 'You do not have permission to share this tunnel'}
 
             # Get the user to share with
             shared_with = User.objects.get(id=shared_with_user_id)
@@ -119,8 +124,13 @@ class TunnelPermissionService:
         Remove sharing of a tunnel from a user.
         """
         try:
-            # Get the tunnel (must be owned by shared_by)
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=shared_by)
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+
+            # Check if shared_by has permission to manage sharing for this tunnel
+            from .models import TunnelPermissionManager
+            if not TunnelPermissionManager.check_share_access(shared_by, tunnel):
+                return {'success': False, 'error': 'You do not have permission to manage sharing for this tunnel'}
 
             # Get and delete the sharing record
             sharing = TunnelSharing.objects.get(
@@ -145,8 +155,13 @@ class TunnelPermissionService:
         Update sharing permission for a user.
         """
         try:
-            # Get the tunnel (must be owned by shared_by)
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=shared_by)
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+
+            # Check if shared_by has permission to manage sharing for this tunnel
+            from .models import TunnelPermissionManager
+            if not TunnelPermissionManager.check_share_access(shared_by, tunnel):
+                return {'success': False, 'error': 'You do not have permission to manage sharing for this tunnel'}
 
             # Get the sharing record
             sharing = TunnelSharing.objects.get(
