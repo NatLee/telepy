@@ -96,6 +96,10 @@ class TunnelPermissionService:
             if existing_share:
                 return {'success': False, 'error': 'Tunnel already shared with this user'}
 
+            # Don't allow sharing with the tunnel owner
+            if shared_with == tunnel.user:
+                return {'success': False, 'error': 'Cannot share tunnel with its owner'}
+
             # Don't allow sharing with self
             if shared_with == shared_by:
                 return {'success': False, 'error': 'Cannot share tunnel with yourself'}

@@ -137,7 +137,7 @@ function displayReverseServerKeys(data) {
     table.innerHTML = '';
 
     data.forEach(item => {
-        console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, owner = ${item.user}`);
+        console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, can_share = ${item.can_share}, is_owner = ${item.is_owner}`);
         const actionButtons = createActionButtons(item);
         const row = createTableRow(item, actionButtons);
         table.innerHTML += row;
@@ -147,24 +147,31 @@ function displayReverseServerKeys(data) {
 function createActionButtons(item) {
     const itemId = item.id;
     const canEdit = item.can_edit;
+    const canShare = item.can_share;
 
     // Add `event.stopPropagation()` to avoid triggering the row click event
     let buttons = `
-        <button class="btn btn-warning btn-sm me-2" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')">Console</button>
-        <button class="btn btn-primary btn-sm me-2" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')">Users</button>
+        <button class="btn btn-warning btn-sm me-1 action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">Console</button>
+        <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
     `;
 
-    // Only show management buttons if user has edit permission
+    // Show edit button if user has edit permission
     if (canEdit) {
         buttons += `
-            <button class="btn btn-success btn-sm me-2" onclick="event.stopPropagation(); openShareModal('${itemId}')">Share</button>
-            <button class="btn btn-danger btn-sm me-2" onclick="event.stopPropagation(); confirmDelete('${itemId}')">Delete</button>
+            <button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>
+        `;
+    }
+
+    // Show share button only if user has share permission (admin or owner)
+    if (canShare) {
+        buttons += `
+            <button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>
         `;
     }
 
     buttons += `
-        <button class="btn btn-info btn-sm me-2" onclick="event.stopPropagation(); fetchServerConfig(${itemId})">Config</button>
-        <button class="btn btn-secondary btn-sm me-2" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')">Script</button>
+        <button class="btn btn-info btn-sm me-1 action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">Config</button>
+        <button class="btn btn-secondary btn-sm me-1 action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">Script</button>
     `;
 
     return buttons;
@@ -175,10 +182,16 @@ function createTableRow(item, actionButtons) {
     const itemId = item.id;
     const hostFriendlyName = item.host_friendly_name;
     const reversePort = item.reverse_port;
+    const isOwner = item.is_owner;
+
+    // Create ownership label next to hostname for shared tunnels
+    const displayName = isOwner
+        ? hostFriendlyName
+        : `${hostFriendlyName} <span class="badge bg-light text-muted ms-1 border" style="font-size: 0.7em;">🏷️ Shared</span>`;
 
     return `
         <tr onclick="showTunnelDetails('${itemId}')">
-            <td>${hostFriendlyName}</td>
+            <td>${displayName}</td>
             <td>${reversePort}</td>
             <td>
                 <div class='d-flex'>
@@ -838,10 +851,72 @@ function openShareModal(tunnelId) {
     currentSharingTunnelId = tunnelId;
     $('#shareTunnelModal').modal('show');
 
-    // Reset form
-    document.getElementById('shareUserSelect').value = '';
-    document.getElementById('canEditSwitch').checked = false;
-    document.getElementById('shareButton').disabled = true;
+    // Check if current user can set admin permissions
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
+        method: "GET",
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        },
+    })
+    .then(response => response.json())
+    .then(tunnelData => {
+        const canSetAdmin = tunnelData.can_share || false;
+        const permissionSelect = document.getElementById('permissionSelect');
+
+        // Clear existing options
+        permissionSelect.innerHTML = '';
+
+        // Add available options based on user permissions
+        const options = [
+            {value: 'view', label: 'Read-only'},
+            {value: 'edit', label: 'Can Edit'}
+        ];
+
+        if (canSetAdmin) {
+            options.push({value: 'admin', label: 'Admin'});
+        }
+
+        options.forEach(option => {
+            const optionElement = document.createElement('option');
+            optionElement.value = option.value;
+            optionElement.textContent = option.label;
+            permissionSelect.appendChild(optionElement);
+        });
+
+        // Reset form
+        document.getElementById('shareUserSelect').value = '';
+        permissionSelect.value = 'view';
+        document.getElementById('shareButton').disabled = true;
+
+        // Enable share button when user is selected
+        const userSelect = document.getElementById('shareUserSelect');
+        const shareButton = document.getElementById('shareButton');
+
+        userSelect.addEventListener('change', function() {
+            shareButton.disabled = !this.value;
+        });
+
+        // Load shared users and available users
+        loadSharedUsers(tunnelId);
+        loadAvailableUsers(tunnelId);
+    })
+    .catch(error => {
+        console.error('Error checking permissions:', error);
+        // Fallback to basic options
+        const permissionSelect = document.getElementById('permissionSelect');
+        permissionSelect.innerHTML = `
+            <option value="view">Read-only</option>
+            <option value="edit" selected>Can Edit</option>
+        `;
+
+        document.getElementById('shareUserSelect').value = '';
+        document.getElementById('shareButton').disabled = true;
+
+        // Load shared users and available users
+        loadSharedUsers(tunnelId);
+        loadAvailableUsers(tunnelId);
+    });
 
     // Enable share button when user is selected
     const userSelect = document.getElementById('shareUserSelect');
@@ -859,7 +934,8 @@ function openShareModal(tunnelId) {
 function loadSharedUsers(tunnelId) {
     const accessToken = localStorage.getItem('accessToken');
 
-    fetch(`/tunnels/shared-users/${tunnelId}`, {
+    // First check if user can manage sharing for this tunnel
+    fetch(`/api/reverse/server/keys/${tunnelId}`, {
         method: "GET",
         headers: {
             'Content-Type': 'application/json',
@@ -867,7 +943,21 @@ function loadSharedUsers(tunnelId) {
         },
     })
     .then(response => response.json())
-    .then(data => {
+    .then(tunnelData => {
+        const canManageSharing = tunnelData.can_share || false;
+
+        // Now load shared users
+        return fetch(`/tunnels/shared-users/${tunnelId}`, {
+            method: "GET",
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`
+            },
+        })
+        .then(response => response.json())
+        .then(data => ({ data, canManageSharing }));
+    })
+    .then(({ data, canManageSharing }) => {
         const sharedUsersList = document.getElementById('sharedUsersList');
         if (!sharedUsersList) {
             console.error('sharedUsersList element not found');
@@ -878,12 +968,35 @@ function loadSharedUsers(tunnelId) {
             let html = '<div class="list-group">';
             data.users.forEach(user => {
                 // Determine permission level and display
-                const canEdit = user.permission_type === 'edit' || user.permission_type === 'admin';
                 const permissionBadge = user.permission_type === 'admin'
                     ? '<span class="badge bg-danger"><i class="fas fa-crown me-1"></i>Admin</span>'
                     : user.permission_type === 'edit'
                     ? '<span class="badge bg-success"><i class="fas fa-edit me-1"></i>Can Edit</span>'
                     : '<span class="badge bg-secondary"><i class="fas fa-eye me-1"></i>Read-only</span>';
+
+                let permissionControl = '';
+                if (canManageSharing) {
+                    // Create permission select dropdown
+                    const options = [
+                        {value: 'view', label: 'Read-only', selected: user.permission_type === 'view'},
+                        {value: 'edit', label: 'Can Edit', selected: user.permission_type === 'edit'},
+                        {value: 'admin', label: 'Admin', selected: user.permission_type === 'admin'}
+                    ];
+
+                    const optionHtml = options.map(opt =>
+                        `<option value="${opt.value}" ${opt.selected ? 'selected' : ''}>${opt.label}</option>`
+                    ).join('');
+
+                    permissionControl = `
+                        <select class="form-select form-select-sm" style="width: 120px;"
+                                onchange="updateSharingPermission('${user.id}', this.value, this)">
+                            ${optionHtml}
+                        </select>
+                    `;
+                } else {
+                    // Show current permission as read-only
+                    permissionControl = `<span class="text-muted small">${permissionBadge}</span>`;
+                }
 
                 html += `
                     <div class="list-group-item">
@@ -895,16 +1008,11 @@ function loadSharedUsers(tunnelId) {
                                 </div>
                                 ${user.email ? `<small class="text-muted">${user.email}</small>` : ''}
                             </div>
-                                <div class="d-flex align-items-center gap-2">
-                                <label class="switch mb-0">
-                                    <input type="checkbox"
-                                           ${canEdit ? 'checked' : ''}
-                                           onchange="updateSharingPermission('${user.id}', this.checked ? 'edit' : 'view', this)">
-                                    <span class="slider round"></span>
-                                </label>
-                                <button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
+                            <div class="d-flex align-items-center gap-2">
+                                ${permissionControl}
+                                ${canManageSharing ? `<button class="btn btn-outline-danger btn-sm" onclick="unshareTunnel('${user.id}')">
                                     <i class="fas fa-times"></i>
-                                </button>
+                                </button>` : ''}
                             </div>
                         </div>
                     </div>
@@ -967,7 +1075,7 @@ function loadAvailableUsers(tunnelId) {
 
 function shareTunnel() {
     const userId = document.getElementById('shareUserSelect').value;
-    const canEdit = document.getElementById('canEditSwitch').checked;
+    const permissionType = document.getElementById('permissionSelect').value;
 
     if (!userId) {
         Swal.fire({
@@ -988,7 +1096,7 @@ function shareTunnel() {
         },
         body: JSON.stringify({
             shared_with_user_id: parseInt(userId),
-            permission_type: canEdit ? 'edit' : 'view'
+            permission_type: permissionType
         })
     })
     .then(response => {
@@ -1011,7 +1119,7 @@ function shareTunnel() {
 
             // Clear the form and disable button
             document.getElementById('shareUserSelect').value = '';
-            document.getElementById('canEditSwitch').checked = false;
+            document.getElementById('permissionSelect').value = 'view';
             document.getElementById('shareButton').disabled = true;
         } else {
             Swal.fire({
@@ -1031,7 +1139,7 @@ function shareTunnel() {
     });
 }
 
-function updateSharingPermission(userId, permissionType, checkboxElement) {
+function updateSharingPermission(userId, permissionType, selectElement) {
     const accessToken = localStorage.getItem('accessToken');
 
     fetch(`/tunnels/update-permission/${currentSharingTunnelId}/${userId}`, {
@@ -1058,10 +1166,10 @@ function updateSharingPermission(userId, permissionType, checkboxElement) {
                 title: 'Error',
                 text: data.error || 'Failed to update permission.',
             });
-            // Revert the checkbox state based on permission type
-            if (checkboxElement) {
-                const shouldBeChecked = permissionType === 'edit';
-                checkboxElement.checked = !shouldBeChecked;
+            // Revert the select value
+            if (selectElement) {
+                // Revert to previous value - this would need more complex state management
+                loadSharedUsers(currentSharingTunnelId);
             }
         }
     })
@@ -1072,10 +1180,9 @@ function updateSharingPermission(userId, permissionType, checkboxElement) {
             title: 'Error',
             text: 'Failed to update permission.',
         });
-        // Revert the checkbox state based on permission type
-        if (checkboxElement) {
-            const shouldBeChecked = permissionType === 'edit';
-            checkboxElement.checked = !shouldBeChecked;
+        // Revert the select value
+        if (selectElement) {
+            loadSharedUsers(currentSharingTunnelId);
         }
     });
 }
