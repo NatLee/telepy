@@ -3,14 +3,17 @@ from enum import Enum
 
 from django.conf import settings
 from django.shortcuts import render, redirect
+from django.contrib.auth.models import User
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 
 from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
+from tunnels.models import TunnelSharing
 
 from tunnels.tunnel_script_renderer import ssh_tunnel_script_factory
 from tunnels.tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
@@ -439,4 +442,173 @@ class DockerComposeTunnelScript(ReverseServerScriptBase):
             "script": config_string,
             "language": "yaml",
         })
+
+
+# ========================================
+# Tunnel Sharing APIs
+# ========================================
+
+class ShareTunnelView(APIView):
+    """
+    Share a tunnel with another user
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Share Tunnel",
+        operation_description="Share a tunnel with another user",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'shared_with_user_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='User ID to share with'),
+                'can_edit': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether the user can edit the tunnel', default=False),
+            },
+            required=['shared_with_user_id']
+        ),
+        tags=['Tunnel Sharing']
+    )
+    def post(self, request, tunnel_id):
+        try:
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+
+            # Get the user to share with
+            shared_with_user_id = request.data.get('shared_with_user_id')
+            if not shared_with_user_id:
+                return Response({'error': 'shared_with_user_id is required'}, status=400)
+
+            try:
+                shared_with_user = User.objects.get(id=shared_with_user_id)
+            except User.DoesNotExist:
+                return Response({'error': 'User not found'}, status=404)
+
+            # Check if already shared
+            existing_share = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=shared_with_user
+            ).first()
+
+            if existing_share:
+                return Response({'error': 'Tunnel already shared with this user'}, status=400)
+
+            # Don't allow sharing with self
+            if shared_with_user == request.user:
+                return Response({'error': 'Cannot share tunnel with yourself'}, status=400)
+
+            # Create the sharing record
+            can_edit = request.data.get('can_edit', False)
+            TunnelSharing.objects.create(
+                tunnel=tunnel,
+                shared_by=request.user,
+                shared_with=shared_with_user,
+                can_edit=can_edit
+            )
+
+            return Response({'message': 'Tunnel shared successfully'}, status=201)
+
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found or access denied'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+class UnshareTunnelView(APIView):
+    """
+    Unshare a tunnel from a user
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Unshare Tunnel",
+        operation_description="Remove sharing of a tunnel from a user",
+        tags=['Tunnel Sharing']
+    )
+    def delete(self, request, tunnel_id, user_id):
+        try:
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+
+            # Get the sharing record
+            sharing = TunnelSharing.objects.get(
+                tunnel=tunnel,
+                shared_with_id=user_id
+            )
+
+            sharing.delete()
+
+            return Response({'message': 'Tunnel unshared successfully'})
+
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found or access denied'}, status=404)
+        except TunnelSharing.DoesNotExist:
+            return Response({'error': 'Sharing not found'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+class ListSharedUsersView(APIView):
+    """
+    List users a tunnel is shared with
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="List Shared Users",
+        operation_description="Get list of users a tunnel is shared with",
+        tags=['Tunnel Sharing']
+    )
+    def get(self, request, tunnel_id):
+        try:
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+
+            # Get sharing records
+            sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
+
+            users = []
+            for sharing in sharings:
+                users.append({
+                    'id': sharing.shared_with.id,
+                    'username': sharing.shared_with.username,
+                    'email': sharing.shared_with.email,
+                    'can_edit': sharing.can_edit,
+                    'shared_at': sharing.shared_at.isoformat()
+                })
+
+            return Response({'users': users})
+
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found or access denied'}, status=404)
+
+
+class ListAvailableUsersView(APIView):
+    """
+    List users available for sharing (all users except current user and already shared users)
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="List Available Users",
+        operation_description="Get list of users available for sharing a tunnel",
+        tags=['Tunnel Sharing']
+    )
+    def get(self, request, tunnel_id):
+        try:
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+
+            # Get already shared user IDs
+            shared_user_ids = TunnelSharing.objects.filter(
+                tunnel=tunnel
+            ).values_list('shared_with_id', flat=True)
+
+            # Get available users (exclude current user and already shared users)
+            available_users = User.objects.exclude(
+                id__in=list(shared_user_ids) + [request.user.id]
+            ).values('id', 'username', 'email')
+
+            return Response({'users': list(available_users)})
+
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found or access denied'}, status=404)
 
