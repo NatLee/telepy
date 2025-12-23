@@ -539,6 +539,10 @@ class ShareTunnelView(APIView):
             if existing_share:
                 return Response({'error': 'Tunnel already shared with this user'}, status=400)
 
+            # Don't allow sharing with the tunnel owner
+            if shared_with_user == tunnel.user:
+                return Response({'error': 'Cannot share tunnel with its owner'}, status=400)
+
             # Don't allow sharing with self
             if shared_with_user == request.user:
                 return Response({'error': 'Cannot share tunnel with yourself'}, status=400)
@@ -689,8 +693,15 @@ class ListSharedUsersView(APIView):
     )
     def get(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to view sharing for this tunnel'}, status=403)
 
             # Get sharing records
             sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
@@ -724,17 +735,25 @@ class ListAvailableUsersView(APIView):
     )
     def get(self, request, tunnel_id):
         try:
-            # Get the tunnel
-            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+            # Get the tunnel and check share permission
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            # Check if user has permission to manage sharing for this tunnel
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to manage sharing for this tunnel'}, status=403)
 
             # Get already shared user IDs
             shared_user_ids = TunnelSharing.objects.filter(
                 tunnel=tunnel
             ).values_list('shared_with_id', flat=True)
 
-            # Get available users (exclude current user and already shared users)
+            # Get available users (exclude current user, already shared users, and tunnel owner)
+            exclude_ids = list(shared_user_ids) + [request.user.id, tunnel.user.id]
             available_users = User.objects.exclude(
-                id__in=list(shared_user_ids) + [request.user.id]
+                id__in=exclude_ids
             ).values('id', 'username', 'email')
 
             return Response({'users': list(available_users)})
