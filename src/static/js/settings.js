@@ -49,43 +49,108 @@ function fetchSettings() {
 
 function populateSettingsTable(settings) {
     const tableBody = document.getElementById('settingsTableBody');
-    tableBody.innerHTML = ''; // Clear existing table content
+    const cardsContainer = document.getElementById('settingsCardsContainer');
+
+    // Clear both containers
+    tableBody.innerHTML = '';
+    if (cardsContainer) {
+        cardsContainer.innerHTML = '';
+    }
+
+    // Check if we should show cards (mobile) or table (desktop)
+    const isMobile = window.innerWidth < 768;
 
     // Check if there are any settings to display
     if (Object.keys(settings).length === 0) {
-        const row = tableBody.insertRow();
-        const messageCell = row.insertCell(0);
-        messageCell.colSpan = 2;
-        messageCell.className = 'text-center text-muted p-4';
-        messageCell.innerHTML = '<i class="fas fa-info-circle me-2"></i>No settings available for your user level.';
+        if (isMobile) {
+            const card = `
+                <div class="setting-card mb-3">
+                    <div class="card border-0 shadow-sm">
+                        <div class="card-body p-4 text-center">
+                            <i class="fas fa-info-circle text-muted fa-2x mb-3"></i>
+                            <p class="text-muted mb-0">No settings available for your user level.</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            if (cardsContainer) {
+                cardsContainer.innerHTML = card;
+            }
+        } else {
+            const row = tableBody.insertRow();
+            const messageCell = row.insertCell(0);
+            messageCell.colSpan = 2;
+            messageCell.className = 'text-center text-muted p-4';
+            messageCell.innerHTML = '<i class="fas fa-info-circle me-2"></i>No settings available for your user level.';
+        }
         return;
     }
 
     Object.keys(settings).forEach(key => {
         if (typeof settings[key] === 'boolean') { // Assuming setting values are boolean
-            const row = tableBody.insertRow();
-            const nameCell = row.insertCell(0);
-            const toggleCell = row.insertCell(1);
-            nameCell.textContent = formatSettingName(key);
+            if (isMobile) {
+                // Create card for mobile
+                const card = `
+                    <div class="setting-card mb-3">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body p-3">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div class="flex-grow-1">
+                                        <h6 class="card-title mb-1">${formatSettingName(key)}</h6>
+                                        <p class="card-text small text-muted mb-0">
+                                            Toggle this setting on or off
+                                        </p>
+                                    </div>
+                                    <label class="switch">
+                                        <input type="checkbox" ${settings[key] ? 'checked' : ''} onchange="updateSetting('${key}', this.checked)">
+                                        <span class="slider round"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                if (cardsContainer) {
+                    cardsContainer.innerHTML += card;
+                }
+            } else {
+                // Create table row for desktop
+                const row = tableBody.insertRow();
+                const nameCell = row.insertCell(0);
+                const toggleCell = row.insertCell(1);
+                nameCell.textContent = formatSettingName(key);
 
-            // Create the label that will act as the toggle switch
-            const switchLabel = document.createElement('label');
-            switchLabel.classList.add('switch');
+                // Create the label that will act as the toggle switch
+                const switchLabel = document.createElement('label');
+                switchLabel.classList.add('switch');
 
-            const toggle = document.createElement('input');
-            toggle.setAttribute('type', 'checkbox');
-            toggle.checked = settings[key];
-            toggle.addEventListener('change', () => updateSetting(key, toggle.checked));
+                const toggle = document.createElement('input');
+                toggle.setAttribute('type', 'checkbox');
+                toggle.checked = settings[key];
+                toggle.addEventListener('change', () => updateSetting(key, toggle.checked));
 
-            const sliderSpan = document.createElement('span');
-            sliderSpan.classList.add('slider', 'round');
+                const sliderSpan = document.createElement('span');
+                sliderSpan.classList.add('slider', 'round');
 
-            switchLabel.appendChild(toggle);
-            switchLabel.appendChild(sliderSpan);
+                switchLabel.appendChild(toggle);
+                switchLabel.appendChild(sliderSpan);
 
-            toggleCell.appendChild(switchLabel);
+                toggleCell.appendChild(switchLabel);
+            }
         }
     });
+
+    // Show/hide appropriate containers
+    const tableContainer = document.querySelector('.table-responsive');
+    const cardsContainerWrapper = document.getElementById('settingsCardsWrapper');
+
+    if (isMobile) {
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+    } else {
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
+    }
 }
 
 function formatSettingName(key) {
@@ -246,5 +311,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // Initialize websocket and fetch settings
     settingsNotificationWebsocket();
+    fetchSettings();
+});
+
+// Add resize listener to handle responsive display
+window.addEventListener('resize', function() {
+    // Re-fetch data to refresh display mode based on screen size
     fetchSettings();
 });

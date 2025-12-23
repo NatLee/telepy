@@ -43,6 +43,15 @@ function fetchAndDisplayReverseServerKeys() {
     });
 }
 
+// Handle window resize to switch between table and cards
+window.addEventListener('resize', function() {
+    // Re-render current data with new layout
+    const currentData = globalThis.data || [];
+    if (currentData.length > 0) {
+        displayReverseServerKeys(currentData);
+    }
+});
+
 function showTunnelDetails(tunnelId) {
     // Populate the modal with tunnel information
     document.getElementById('tunnelId').textContent = tunnelId;
@@ -134,14 +143,49 @@ function copyTunnelPublicKeyToClipboard() {
 
 function displayReverseServerKeys(data) {
     const table = document.getElementById('tunnelsTableBody');
+    const cardsContainer = document.getElementById('tunnelsCardsContainer');
+
+    // Clear both containers
     table.innerHTML = '';
+    if (cardsContainer) {
+        cardsContainer.innerHTML = '';
+    }
+
+    // Check if we should show cards (mobile) or table (desktop)
+    const isMobile = window.innerWidth < 768;
 
     data.forEach(item => {
         console.log(`Tunnel ${item.id} (${item.host_friendly_name}): can_edit = ${item.can_edit}, can_share = ${item.can_share}, is_owner = ${item.is_owner}`);
         const actionButtons = createActionButtons(item);
-        const row = createTableRow(item, actionButtons);
-        table.innerHTML += row;
+
+        if (isMobile) {
+            // Create card for mobile
+            const card = createTunnelCard(item, actionButtons);
+            if (cardsContainer) {
+                cardsContainer.innerHTML += card;
+            } else {
+                // Fallback: still use table but with card styling
+                const row = createTableRow(item, actionButtons);
+                table.innerHTML += row;
+            }
+        } else {
+            // Create table row for desktop
+            const row = createTableRow(item, actionButtons);
+            table.innerHTML += row;
+        }
     });
+
+    // Show/hide appropriate containers
+    const tableContainer = document.querySelector('.table-responsive');
+    const cardsContainerWrapper = document.getElementById('tunnelsCardsWrapper');
+
+    if (isMobile) {
+        if (tableContainer) tableContainer.style.display = 'none';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+    } else {
+        if (tableContainer) tableContainer.style.display = 'block';
+        if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
+    }
 }
 
 function createActionButtons(item) {
@@ -149,32 +193,63 @@ function createActionButtons(item) {
     const canEdit = item.can_edit;
     const canShare = item.can_share;
 
-    // Add `event.stopPropagation()` to avoid triggering the row click event
-    let buttons = `
-        <button class="btn btn-warning btn-sm me-1 action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">Console</button>
-        <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
+    // Create desktop version (original layout)
+    let desktopButtons = `
+        <div class="d-none d-md-flex">
+            <button class="btn btn-warning btn-sm me-1 action-btn" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">Console</button>
+            <button class="btn btn-primary btn-sm me-1 action-btn" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">Users</button>
     `;
 
-    // Show edit button if user has edit permission
     if (canEdit) {
-        buttons += `
-            <button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>
-        `;
+        desktopButtons += `<button class="btn btn-danger btn-sm me-1 action-btn" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">Delete</button>`;
     }
 
-    // Show share button only if user has share permission (admin or owner)
     if (canShare) {
-        buttons += `
-            <button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>
-        `;
+        desktopButtons += `<button class="btn btn-success btn-sm me-1 action-btn" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">Share</button>`;
     }
 
-    buttons += `
-        <button class="btn btn-info btn-sm me-1 action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">Config</button>
-        <button class="btn btn-secondary btn-sm me-1 action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">Script</button>
+    desktopButtons += `
+            <button class="btn btn-info btn-sm me-1 action-btn" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">Config</button>
+            <button class="btn btn-secondary btn-sm me-1 action-btn" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">Script</button>
+        </div>
     `;
 
-    return buttons;
+    // Create mobile version (inline buttons)
+    let mobileButtons = `
+        <div class="d-md-none" id="actions-mobile-${itemId}">
+            <div class="d-flex flex-wrap gap-1 mt-2">
+                <button class="btn btn-warning btn-sm" onclick="event.stopPropagation(); window.open('/tunnels/terminal/${itemId}')" title="Open Console">
+                    <i class="fas fa-terminal"></i>
+                </button>
+                <button class="btn btn-primary btn-sm" onclick="event.stopPropagation(); openUserManagementModal('${itemId}')" title="Manage Users">
+                    <i class="fas fa-users"></i>
+                </button>
+    `;
+
+    if (canEdit) {
+        mobileButtons += `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); confirmDelete('${itemId}')" title="Delete Tunnel">
+            <i class="fas fa-trash"></i>
+        </button>`;
+    }
+
+    if (canShare) {
+        mobileButtons += `<button class="btn btn-success btn-sm" onclick="event.stopPropagation(); openShareModal('${itemId}')" title="Share Tunnel">
+            <i class="fas fa-share"></i>
+        </button>`;
+    }
+
+    mobileButtons += `
+                <button class="btn btn-info btn-sm" onclick="event.stopPropagation(); fetchServerConfig(${itemId})" title="Get Config">
+                    <i class="fas fa-code"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); showServerScriptModal('${itemId}')" title="Get Script">
+                    <i class="fas fa-file-code"></i>
+                </button>
+            </div>
+        </div>
+    `;
+
+    return desktopButtons + mobileButtons;
 }
 
 function createTableRow(item, actionButtons) {
@@ -204,6 +279,44 @@ function createTableRow(item, actionButtons) {
                 </div>
             </td>
         </tr>
+    `;
+}
+
+function createTunnelCard(item, actionButtons) {
+    const itemId = item.id;
+    const hostFriendlyName = item.host_friendly_name;
+    const reversePort = item.reverse_port;
+    const isOwner = item.is_owner;
+
+    // Create ownership label
+    const ownershipLabel = isOwner ? '' : '<span class="badge bg-light text-muted border ms-2" style="font-size: 0.7em;">🏷️ Shared</span>';
+
+    return `
+        <div class="tunnel-card mb-3" onclick="showTunnelDetails('${itemId}')">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div class="flex-grow-1">
+                            <h6 class="card-title mb-1 d-flex align-items-center">
+                                <i class="fas fa-server text-muted me-2"></i>
+                                ${hostFriendlyName}${ownershipLabel}
+                            </h6>
+                            <p class="card-text small text-muted mb-2">
+                                <i class="fas fa-ethernet text-muted me-1"></i>
+                                Port: ${reversePort}
+                            </p>
+                        </div>
+                        <div class="${hostFriendlyName}-status tunnel-status" id="${hostFriendlyName}-status"></div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div id="actions-${itemId}" class="flex-grow-1">
+                            ${actionButtons}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     `;
 }
 
@@ -1233,5 +1346,11 @@ document.addEventListener('DOMContentLoaded', function() {
     fetchAndDisplayReverseServerKeys();
     tunnelNotificationWebsocket();
     validateSSHPortInputs();
+});
+
+// Add resize listener to handle responsive display
+window.addEventListener('resize', function() {
+    // Re-fetch data to refresh display mode based on screen size
+    fetchAndDisplayReverseServerKeys();
 });
 

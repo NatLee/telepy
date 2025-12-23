@@ -18,27 +18,81 @@ function fetchAndDisplayUserKeys() {
     })
     .then(data => {
         const table = document.getElementById('userTableBody');
+        const cardsContainer = document.getElementById('keysCardsContainer');
+
+        // Clear both containers
         table.innerHTML = '';
+        if (cardsContainer) {
+            cardsContainer.innerHTML = '';
+        }
+
+        // Check if we should show cards (mobile) or table (desktop)
+        const isMobile = window.innerWidth < 768;
 
         data.forEach(item => {
             const itemId = item.id;
             const hostFriendlyName = item.host_friendly_name;
 
-            const actionButtons = `
-                <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${itemId})">Delete</button>
-            `;
-    
-            const row = `
-            <tr onclick="showKeyDetails('${itemId}')">
-                <td>${hostFriendlyName}</td>
-                <td>
-                    <div class='d-flex' id="actions-${itemId}">
-                        ${actionButtons}
+            if (isMobile) {
+                // Create card for mobile
+                const card = `
+                    <div class="key-card mb-3" onclick="showKeyDetails('${itemId}')">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body p-3">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <div class="flex-grow-1">
+                                        <h6 class="card-title mb-1 d-flex align-items-center">
+                                            <i class="fas fa-key text-muted me-2"></i>
+                                            ${hostFriendlyName}
+                                        </h6>
+                                        <p class="card-text small text-muted mb-2">
+                                            SSH Public Key
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div class="d-flex justify-content-end">
+                                    <button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); deleteUserKey(event, ${itemId})">
+                                        <i class="fas fa-trash me-1"></i>Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </td>
-            </tr>`;
-            table.innerHTML += row;
+                `;
+                if (cardsContainer) {
+                    cardsContainer.innerHTML += card;
+                }
+            } else {
+                // Create table row for desktop
+                const actionButtons = `
+                    <button class="btn btn-danger btn-sm me-3" onclick="deleteUserKey(event, ${itemId})">Delete</button>
+                `;
+
+                const row = `
+                <tr onclick="showKeyDetails('${itemId}')">
+                    <td>${hostFriendlyName}</td>
+                    <td>
+                        <div class='d-flex' id="actions-${itemId}">
+                            ${actionButtons}
+                        </div>
+                    </td>
+                </tr>`;
+                table.innerHTML += row;
+            }
         });
+
+        // Show/hide appropriate containers
+        const tableContainer = document.querySelector('.table-responsive');
+        const cardsContainerWrapper = document.getElementById('keysCardsWrapper');
+
+        if (isMobile) {
+            if (tableContainer) tableContainer.style.display = 'none';
+            if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'block';
+        } else {
+            if (tableContainer) tableContainer.style.display = 'block';
+            if (cardsContainerWrapper) cardsContainerWrapper.style.display = 'none';
+        }
     })
     .catch(error => {
         console.error('Error fetching user keys data:', error);
@@ -49,6 +103,12 @@ function fetchAndDisplayUserKeys() {
         });
     });
 }
+
+// Add resize listener to handle responsive display
+window.addEventListener('resize', function() {
+    // Re-fetch data to refresh display mode based on screen size
+    fetchAndDisplayUserKeys();
+});
 
 function showKeyDetails(keyId) {
     // Populate the modal with key information

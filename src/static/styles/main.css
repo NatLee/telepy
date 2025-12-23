@@ -1351,3 +1351,207 @@ pre {
   width: 70%;
 }
 
+/* Consistent button sizing for actions */
+.action-btn {
+  min-width: 70px;
+  white-space: nowrap;
+}
+
+/* Table responsive settings - allow natural wrapping on mobile */
+.table-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-body-container .table {
+  width: 100%;
+  table-layout: auto;
+}
+
+/* Ensure actions column doesn't get too cramped */
+/* Desktop actions layout */
+.table-body-container .table td:last-child .d-none.d-md-flex {
+  gap: 0.25rem;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.action-btn {
+  min-width: 65px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* Mobile actions layout */
+.table-body-container .table td:last-child .d-md-none {
+  text-align: center;
+}
+
+/* Ensure table cells have appropriate padding on mobile */
+@media (max-width: 767.98px) {
+  .table-body-container .table td {
+    padding: 0.5rem 0.25rem;
+  }
+
+  .table-body-container .table td:last-child {
+    width: 80px; /* Fixed width for mobile actions column */
+    min-width: 80px;
+  }
+}
+
+/* Mobile dropdown menu styling */
+.dropdown-menu {
+  min-width: 180px;
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 0.375rem;
+}
+
+.dropdown-item {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+}
+
+.dropdown-item:hover {
+  background-color: #f8f9fa;
+}
+
+.dropdown-item i {
+  width: 1rem;
+  text-align: center;
+}
+
+.dropdown-item.text-danger:hover {
+  background-color: #f8d7da;
+  color: #721c24;
+}
+
+.dropdown-item.text-success:hover {
+  background-color: #d1edff;
+  color: #0c63e4;
+}
+
+/* Mobile card layout for tunnels */
+.tunnel-card {
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tunnel-card:hover {
+  transform: translateY(-2px);
+}
+
+.tunnel-card .card {
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+
+.tunnel-card .card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+.tunnel-card .card-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.tunnel-card .card-text {
+  margin-bottom: 0.5rem;
+}
+
+.tunnel-card .tunnel-status {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Mobile actions styling */
+.tunnel-card #actions-mobile .dropdown-toggle {
+  border: none;
+  background: none;
+  color: #6b7280;
+  padding: 0.25rem;
+}
+
+.tunnel-card #actions-mobile .dropdown-toggle:hover {
+  color: #374151;
+  background-color: #f3f4f6;
+}
+
+.tunnel-card #actions-mobile .dropdown-menu {
+  min-width: 160px;
+}
+
+/* All tunnel rows use white background (default) */
+/* No special styling needed */
+
+/* Mobile Cards for Keys */
+.key-card {
+    margin-bottom: 1rem;
+}
+
+.key-card .card {
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.key-card .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.key-card .card-body {
+    padding: 1rem;
+}
+
+.key-card .card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.key-card .card-text {
+    font-size: 0.875rem;
+    color: #6c757d;
+}
+
+.key-card .btn {
+    font-size: 0.875rem;
+    padding: 0.375rem 0.75rem;
+}
+
+/* Mobile Cards for Settings */
+.setting-card {
+    margin-bottom: 1rem;
+}
+
+.setting-card .card {
+    border-radius: 12px;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.setting-card .card-body {
+    padding: 1rem;
+}
+
+.setting-card .card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.setting-card .card-text {
+    font-size: 0.875rem;
+    color: #6c757d;
+    margin-bottom: 0;
+}
+
+.setting-card .switch {
+    transform: scale(0.9);
+}
+
