@@ -25,6 +25,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
+from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
 import logging
 logger = logging.getLogger(__name__)
@@ -133,13 +134,12 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def check_permissions(self, user, server_id) -> bool:
-        # Check if the user has access to the server
+        """Check if user has access to the tunnel"""
         try:
-            ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            return TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            print(f"User [{user}] does not have access to server [{server_id}]")
             return False
-        return True
 
     @sync_to_async
     def check_username(self, server_id, username) -> bool:
@@ -371,11 +371,27 @@ class TunnelConnectionConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def _check_tunnel_permission(self, user, tunnel_id) -> bool:
+        # Check if the user owns the tunnel
         try:
             ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=user)
             return True
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            return False
+            pass
+
+        # Check if tunnel is shared with the user
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            # Check if there's a sharing record for this user
+            sharing_exists = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=user
+            ).exists()
+            if sharing_exists:
+                return True
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            pass
+
+        return False
 
 def send_tunnel_connection_update(tunnel_id: int, message: dict):
     """Send tunnel connection status update to specific tunnel room"""
@@ -481,9 +497,33 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         self.server_id = server_id
         self.username = username
         self.user = user
-        self.reverse_server = await sync_to_async(
-            lambda: ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
-        )()
+
+        # Get reverse server (checking ownership or sharing)
+        try:
+            self.reverse_server = await sync_to_async(
+                lambda: ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            )()
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            # Check if tunnel is shared with the user
+            try:
+                self.reverse_server = await sync_to_async(
+                    lambda: ReverseServerAuthorizedKeys.objects.get(id=server_id)
+                )()
+                # Verify sharing exists
+                sharing_exists = await sync_to_async(
+                    lambda: TunnelSharing.objects.filter(
+                        tunnel=self.reverse_server,
+                        shared_with=user
+                    ).exists()
+                )()
+                if not sharing_exists:
+                    logger.error(f"User [{user}] does not have access to server [{server_id}]")
+                    await self.close(code=4004)
+                    return
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
+                await self.close(code=4004)
+                return
 
         # Accept the WebSocket connection
         await self.accept(subprotocol_auth)
@@ -834,36 +874,64 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
     # Reuse permission checking methods from TerminalConsumer
     @sync_to_async
     def check_permissions(self, user, server_id) -> bool:
-        """Check if user has permissions for the server"""
+        """Check if user has access to the tunnel"""
         try:
-            ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            return TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            logger.error(f"User [{user}] does not have access to server [{server_id}]")
             return False
-        return True
 
     @sync_to_async
     def check_username(self, server_id, username, user) -> bool:
-        """Check if username exists for the server"""
+        """Check if username exists for the server (checking ownership or sharing)"""
         try:
             reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist for user {user}")
-            return False
+            # Check if tunnel is shared with the user
+            try:
+                reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+                # Check if there's a sharing record for this user
+                sharing_exists = TunnelSharing.objects.filter(
+                    tunnel=reverse_server,
+                    shared_with=user
+                ).exists()
+                if not sharing_exists:
+                    logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist for user {user}")
+                    return False
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist for user {user}")
+                return False
+
+        # Check if the username exists for this reverse server (regardless of who created it)
         try:
-            ReverseServerUsernames.objects.get(reverse_server=reverse_server, username=username, user=user)
+            ReverseServerUsernames.objects.get(reverse_server=reverse_server, username=username)
         except ReverseServerUsernames.DoesNotExist:
-            logger.error(f"ReverseServerUsernames with username [{username}] does not exist for user {user}")
+            logger.error(f"ReverseServerUsernames with username [{username}] does not exist for server {server_id}")
             return False
         return True
 
     @sync_to_async
     def get_reverse_server_port(self, server_id, user) -> int:
-        """Get reverse server port by server ID"""
+        """Get reverse server port by server ID (checking ownership or sharing)"""
         try:
             reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            return reverse_server.reverse_port
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            logger.error(f"ReverseServerAuthorizedKeys with id {server_id} does not exist for user {user}")
-            return None
-        return reverse_server.reverse_port
+            pass
+
+        # Check if tunnel is shared with the user
+        try:
+            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            # Check if there's a sharing record for this user
+            sharing_exists = TunnelSharing.objects.filter(
+                tunnel=reverse_server,
+                shared_with=user
+            ).exists()
+            if sharing_exists:
+                return reverse_server.reverse_port
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            pass
+
+        logger.error(f"ReverseServerAuthorizedKeys with id {server_id} does not exist for user {user}")
+        return None
 
