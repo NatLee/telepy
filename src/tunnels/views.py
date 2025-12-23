@@ -546,6 +546,53 @@ class UnshareTunnelView(APIView):
             return Response({'error': str(e)}, status=500)
 
 
+class UpdateSharingPermissionView(APIView):
+    """
+    Update sharing permission for a user
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Update Sharing Permission",
+        operation_description="Update edit permission for a shared tunnel",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'can_edit': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Whether the user can edit the tunnel'),
+            },
+            required=['can_edit']
+        ),
+        tags=['Tunnel Sharing']
+    )
+    def patch(self, request, tunnel_id, user_id):
+        try:
+            # Get the tunnel
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id, user=request.user)
+
+            # Get the sharing record
+            sharing = TunnelSharing.objects.get(
+                tunnel=tunnel,
+                shared_with_id=user_id
+            )
+
+            # Update permission
+            can_edit = request.data.get('can_edit', False)
+            sharing.can_edit = can_edit
+            sharing.save()
+
+            return Response({
+                'message': 'Sharing permission updated successfully',
+                'can_edit': can_edit
+            })
+
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found or access denied'}, status=404)
+        except TunnelSharing.DoesNotExist:
+            return Response({'error': 'Sharing not found'}, status=404)
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
 class ListSharedUsersView(APIView):
     """
     List users a tunnel is shared with
