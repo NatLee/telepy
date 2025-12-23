@@ -673,55 +673,55 @@ function initializeUsernameAndConnection() {
         const serverID = getPathSegments();
         console.log(`Server ID:` + serverID);
 
-        fetch(`/api/reverse/server/${serverID}/usernames`, {
+        // First fetch tunnel data to check permissions
+        fetch('/api/reverse/server/keys', {
+            method: "GET",
             headers: {
+                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${accessToken}`
-            }
+            },
+        })
+        .then(response => response.json())
+        .then(tunnelData => {
+            // Store tunnel data globally for permission checks
+            window.tunnelData = tunnelData;
+
+            // Now fetch usernames
+            return fetch(`/api/reverse/server/${serverID}/usernames`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
         })
         .then(response => response.json())
         .then(data => {
             if (data.length === 0) {
                 Swal.fire({
-                    title: 'Create Username',
-                    text: 'No usernames found for this server. Please enter a username to create:',
-                    input: 'text',
-                    showCancelButton: false,
-                    allowOutsideClick: false,
-                    inputValidator: (value) => {
-                        if (!value) {
-                            return 'You need to write something!'
-                        }
-                    }
-                }).then((result) => {
-                    if (result.value) {
-                        fetch('/api/reverse/server/usernames', {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({ reverse_server: serverID, username: result.value })
-                        }).then(response => {
-                            if(response.ok) {
-                                resolve({ serverID, username: result.value });
-                            } else {
-                                Swal.fire({
-                                    title: 'Error!',
-                                    text: 'Failed to create username',
-                                    icon: 'error',
-                                    confirmButtonText: 'OK'
-                                });
-                                reject('Failed to create username');
-                            }
-                        });
-                    } else {
-                        location.reload();
-                    }
+                    title: 'No Usernames Available',
+                    text: 'No usernames have been configured for this server. Please contact the tunnel owner to add usernames, or ask them to grant you edit permissions.',
+                    icon: 'warning',
+                    confirmButtonText: 'OK'
+                }).then(() => {
+                    // Redirect back to tunnels page
+                    window.location.href = '/tunnels/index';
                 });
-            } else if (data.length === 1) {
+                reject('No usernames available for this server');
+                return;
+            }
+
+            if (data.length === 1) {
                 console.log('Only one username found:', data[0].username);
                 resolve({ serverID, username: data[0].username });
-            } else {
+                return;
+            }
+
+            // Check if user has edit permission for this tunnel
+            const tunnelData = window.tunnelData || [];
+            const tunnelItem = tunnelData.find(item => item.id == serverID);
+            const canEdit = tunnelItem ? tunnelItem.can_edit : false;
+
+            if (canEdit) {
+                // User has edit permission, show delete option
                 Swal.fire({
                     title: 'Select or Delete a Username',
                     text: 'Select a username or delete one.',
@@ -733,11 +733,11 @@ function initializeUsernameAndConnection() {
                     denyButtonText: 'Delete',
                     allowOutsideClick: false,
                     backdrop: `
-                    rgba(20, 20, 20, 0.9)
-                    url("/api/__hidden_statics/images/nyan-cat.gif")
-                    left top
-                    no-repeat
-                  `,
+                        rgba(20, 20, 20, 0.9)
+                        url("/api/__hidden_statics/images/nyan-cat.gif")
+                        left top
+                        no-repeat
+                    `,
                     preConfirm: (username) => {
                         return username;
                     },
@@ -751,15 +751,15 @@ function initializeUsernameAndConnection() {
                             allowOutsideClick: false,
                             inputValidator: (value) => {
                                 if (!value) {
-                                    return 'You need to enter a username!'
+                                    return 'You need to enter a username!';
                                 }
                             },
                             willClose: () => {
                                 location.reload();
                             }
                         }).then((deleteResult) => {
-                            const usernameID = data.find((item) => item.username === deleteResult.value).id;
                             if (deleteResult.value) {
+                                const usernameID = data.find((item) => item.username === deleteResult.value).id;
                                 return fetch(`/api/reverse/server/usernames/${usernameID}`, {
                                     method: 'DELETE',
                                     headers: {
@@ -768,7 +768,7 @@ function initializeUsernameAndConnection() {
                                     },
                                     body: JSON.stringify({ username: deleteResult.value })
                                 }).then(deleteResponse => {
-                                    if(deleteResponse.ok) {
+                                    if (deleteResponse.ok) {
                                         Swal.fire('Deleted!', 'The username has been deleted.', 'success');
                                     } else {
                                         Swal.fire('Failed!', 'Could not delete the username.', 'error');
@@ -788,12 +788,39 @@ function initializeUsernameAndConnection() {
                         location.reload();
                     }
                 });
+            } else {
+                // User doesn't have edit permission, only show selection
+                Swal.fire({
+                    title: 'Select a Username',
+                    text: 'Select a username to connect with.',
+                    input: 'select',
+                    inputOptions: data.reduce((acc, curr) => ({...acc, [curr.username]: curr.username}), {}),
+                    inputPlaceholder: 'Select a username',
+                    confirmButtonText: 'Connect',
+                    allowOutsideClick: false,
+                    backdrop: `
+                        rgba(20, 20, 20, 0.9)
+                        url("/api/__hidden_statics/images/nyan-cat.gif")
+                        left top
+                        no-repeat
+                    `,
+                    preConfirm: (username) => {
+                        return username;
+                    }
+                }).then((result) => {
+                    let username = result.value;
+                    if (username) {
+                        resolve({ serverID, username });
+                    } else {
+                        location.reload();
+                    }
+                });
             }
         })
         .catch(error => {
             Swal.fire({
                 title: 'Error!',
-                text: 'An error occurred',
+                text: 'An error occurred while fetching data',
                 icon: 'error',
                 confirmButtonText: 'OK'
             });
