@@ -75,24 +75,56 @@ cat <<EOF
   >>> Usage Reference <<<
 
   [Option A] Reverse SSH Tunnel (Expose local service)
-  1) Connect to this SSH server (public port) and keep session open:
-  $ ${SSH_PORT_HINT_1}
+  Step 1) On the INTERNAL machine (can reach internet), create a reverse tunnel to this server:
+  - Publish the internal SSH (local :22) as this server's localhost:<REMOTE_PORT>:
+    $ ssh -N ${SSH_PORT_FLAG} -R <REMOTE_PORT>:localhost:22 telepy@${SERVER_DOMAIN}
+
+  - Publish an internal web app (local :8080) as this server's localhost:<REMOTE_PORT>:
+    $ ssh -N ${SSH_PORT_FLAG} -R <REMOTE_PORT>:localhost:8080 telepy@${SERVER_DOMAIN}
 EOF
 
 if [[ -n "${SSH_PORT_HINT_2}" ]]; then
   cat <<EOF
-  $ ${SSH_PORT_HINT_2}
+  (If your SSH server port is NOT known, connect with one of these formats:)
+    $ ${SSH_PORT_HINT_1}
+    $ ${SSH_PORT_HINT_2}
 EOF
 fi
 
 cat <<EOF
 
-  2) Expose a local service (example: local SSH :22) to a port on this server:
-  $ ssh -N ${SSH_PORT_FLAG} -R <REMOTE_PORT>:localhost:22 telepy@${SERVER_DOMAIN}
+  Step 2) From your laptop/desktop, connect THROUGH this server to the internal machine:
+  (Because GatewayPorts is disabled, the reverse port is only reachable as "localhost:<REMOTE_PORT>" on THIS server.)
+
+  A) One-off command (no ssh config):
+    $ ssh -o ProxyCommand="ssh -W %h:%p ${SSH_PORT_FLAG} telepy@${SERVER_DOMAIN}" -p <REMOTE_PORT> <internal_user>@localhost
+
+  B) Recommended: ~/.ssh/config (example)
+    # ========================================
+    # Reverse Server Configuration
+    # ========================================
+    Host telepy-ssh-server
+        HostName ${SERVER_DOMAIN}
+        Port  ${REVERSE_SERVER_SSH_PORT}
+        Compression yes
+        User telepy
+
+    # ========================================
+    # Endpoint Configuration (example)
+    # ========================================
+    Host internal-target
+        HostName localhost
+        Port <REMOTE_PORT>
+        Compression yes
+        User <internal_user>
+        ProxyCommand ssh -W %h:%p telepy-ssh-server
+
+    # Then:
+    #   $ ssh internal-target
 
   [Option B] sshuttle (VPN-like Tunnel)
-  Route all traffic through this host, excluding the host IP:
-  $ sshuttle -v -r telepy@${SERVER_DOMAIN}:${REVERSE_SERVER_SSH_PORT} 0/0 -x ${SERVER_DOMAIN} --dns --to-ns <TO_NS>
+  If you've created the ssh config above, you can route traffic through the INTERNAL machine via the alias:
+  $ sshuttle -v -r internal-target 0/0 -x ${SERVER_DOMAIN} --dns --to-ns <TO_NS>
 =======================================================
 EOF
 
