@@ -81,12 +81,17 @@ services:
       - SUDO_ACCESS=true
       - USER_NAME=telepy
       - WORK_DIR=/config
+      - PROJECT_NAME=${PROJECT_NAME}
+      - WEB_SERVER_PORT=${WEB_SERVER_PORT}
+      - REVERSE_SERVER_SSH_PORT=${REVERSE_SERVER_SSH_PORT}
+      - SERVER_DOMAIN=${SERVER_DOMAIN}
     volumes:
       - ./telepy-logs/ssh:/config/logs
       - ./ssh/root_ssh_key:/config/.ssh
       - ./ssh/ssh_host_keys:/config/ssh_host_keys
       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
       - ./ssh/custom_scripts/custom-services.d:/custom-services.d
+      - ./ssh/telepy-msg:/usr/local/bin/telepy-msg:ro
     ports:
       - ${REVERSE_SERVER_SSH_PORT}:2222 # for SSH connections, REVERSE_SERVER_SSH_PORT
     depends_on:
