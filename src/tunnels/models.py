@@ -229,6 +229,16 @@ class TunnelPermissionManager:
             return TunnelPermissionInstance(TunnelPermission.ADMIN)
 
         # Check if tunnel is shared with the user
+        # Check if we have prefetched sharing info
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            if sharings:
+                # Assuming current_user_sharing contains sharings for the current user
+                # We take the first one (should be unique per user-tunnel pair)
+                sharing = sharings[0]
+                return TunnelPermissionInstance(sharing.permission_type)
+            return None
+
         sharing = TunnelSharing.objects.filter(
             tunnel=tunnel,
             shared_with=user
@@ -301,6 +311,14 @@ class TunnelPermissionManager:
         if tunnel.user == user:
             return True
 
+        # Check if we have prefetched sharing info
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            if sharings:
+                sharing = sharings[0]
+                return sharing.permission_type == TunnelPermission.ADMIN
+            return False
+
         # Check if tunnel is shared with admin permission
         sharing = TunnelSharing.objects.filter(
             tunnel=tunnel,
@@ -319,6 +337,14 @@ class TunnelPermissionManager:
         # If user owns the tunnel, they can always delete
         if tunnel.user == user:
             return True
+
+        # Check if we have prefetched sharing info
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            if sharings:
+                sharing = sharings[0]
+                return sharing.permission_type == TunnelPermission.ADMIN
+            return False
 
         # Check if tunnel is shared with admin permission
         sharing = TunnelSharing.objects.filter(

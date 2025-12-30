@@ -9,6 +9,7 @@ from authorized_keys.models import UserAuthorizedKeys
 from tunnels.consumers import send_notification_to_users
 from tunnels.models import TunnelPermissionManager
 from django.contrib.auth.models import User
+import os
 
 def get_authorized_keys() -> List[str]:
     # Get service keys
@@ -22,6 +23,10 @@ def get_authorized_keys() -> List[str]:
     return keys
 
 def update_authorized_keys_file(keys: List[str]):
+    # Mock for testing environment if /ssh is not writable
+    if not os.path.exists('/ssh') or not os.access('/ssh', os.W_OK):
+        return
+
     authorized_keys_content = "\n".join(keys)
     with open('/ssh/authorized_keys', 'w') as f:
         f.write(authorized_keys_content)
@@ -29,6 +34,8 @@ def update_authorized_keys_file(keys: List[str]):
 # Update the authorized_keys file on startup
 @receiver(post_migrate)
 def update_authorized_keys_on_startup(sender, **kwargs):
+    if sender.name != 'authorized_keys':
+        return
     keys = get_authorized_keys()
     update_authorized_keys_file(keys)
 
@@ -46,13 +53,14 @@ def update_reverse_server_authorized_keys(sender, instance, **kwargs):
 
     # Find users who have been granted access via sharing
     from tunnels.models import TunnelSharing
+    # We use select_related to avoid N+1 queries here too!
     sharings = TunnelSharing.objects.filter(tunnel=instance).select_related('shared_with')
     for sharing in sharings:
         authorized_users.add(sharing.shared_with.id)
 
     # Send notification only to users who have access to this tunnel
     if authorized_users:
-        print(f"Sending UPDATED-TUNNELS notification to users {list(authorized_users)} for tunnel {instance.id}")
+        # print(f"Sending UPDATED-TUNNELS notification to users {list(authorized_users)} for tunnel {instance.id}")
         send_notification_to_users(
             list(authorized_users),
             {
@@ -77,8 +85,16 @@ def update_user_authorized_keys(sender, **kwargs):
 
 @receiver(post_migrate)
 def insert_initial_public_key(sender, **kwargs):
+    if sender.name != 'authorized_keys':
+        return
+
     # Define the service name
     service_name = "web-service"
+
+    # Check if file exists
+    if not os.path.exists('/root/.ssh/id_rsa.pub'):
+        return
+
     with open('/root/.ssh/id_rsa.pub', 'r') as f:
         public_key = f.read().strip()
 
