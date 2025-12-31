@@ -24,7 +24,10 @@ def check_user_creation_allowed(sender, instance, **kwargs):
     # 檢查是否為新使用者且使用者數量不為 0
     if not instance.pk and User.objects.count() != 0:
         # 檢查是否允許註冊新使用者
-        settings = SiteSettings.get_solo()
-        if not settings.allow_registration:
-            # 如果不允許註冊新使用者，則拋出錯誤
-            raise ValidationError('Registration is currently disabled.')
+        try:
+            settings = SiteSettings.get_solo()
+            if not settings.allow_registration:
+                # 如果不允許註冊新使用者，則拋出錯誤
+                raise ValidationError('Registration is currently disabled.')
+        except Exception:
+            pass

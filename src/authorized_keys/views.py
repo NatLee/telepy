@@ -15,6 +15,8 @@ from authorized_keys.serializers import UserAuthorizedKeysSerializer
 from authorized_keys.models import ReverseServerUsernames
 from authorized_keys.serializers import ReverseServerUsernamesSerializer
 
+from django.db.models import Prefetch
+
 from authorized_keys.models import ServiceAuthorizedKeys
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
@@ -102,7 +104,17 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
         shared_tunnels = self.model.objects.filter(id__in=shared_tunnel_ids)
 
         # Combine both querysets
-        return (owned_tunnels | shared_tunnels).distinct()
+        qs = (owned_tunnels | shared_tunnels).distinct()
+
+        # Optimize by prefetching the sharing info for the current user
+        # This prevents N+1 queries when checking permissions in the serializer
+        return qs.prefetch_related(
+            Prefetch(
+                'shared_with',
+                queryset=TunnelSharing.objects.filter(shared_with=self.request.user),
+                to_attr='current_user_sharing'
+            )
+        )
 
     def can_edit_tunnel(self, tunnel):
         """

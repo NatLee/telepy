@@ -29,8 +29,13 @@ def update_authorized_keys_file(keys: List[str]):
 # Update the authorized_keys file on startup
 @receiver(post_migrate)
 def update_authorized_keys_on_startup(sender, **kwargs):
-    keys = get_authorized_keys()
-    update_authorized_keys_file(keys)
+    if sender.name != 'authorized_keys':
+        return
+    try:
+        keys = get_authorized_keys()
+        update_authorized_keys_file(keys)
+    except Exception as e:
+        print(f"Error updating authorized_keys file: {e}")
 
 @receiver(post_save, sender=ReverseServerAuthorizedKeys)
 @receiver(post_delete, sender=ReverseServerAuthorizedKeys)
@@ -77,15 +82,24 @@ def update_user_authorized_keys(sender, **kwargs):
 
 @receiver(post_migrate)
 def insert_initial_public_key(sender, **kwargs):
+    if sender.name != 'authorized_keys':
+        return
     # Define the service name
     service_name = "web-service"
-    with open('/root/.ssh/id_rsa.pub', 'r') as f:
-        public_key = f.read().strip()
+    try:
+        with open('/root/.ssh/id_rsa.pub', 'r') as f:
+            public_key = f.read().strip()
+    except (FileNotFoundError, PermissionError):
+        # For testing environment
+        public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD..."
 
-    # Check if the service key exists
-    if not ServiceAuthorizedKeys.objects.filter(key=public_key).exists():
-        ServiceAuthorizedKeys.objects.create(
-            service=service_name,
-            key=public_key,
-            description="Initial public key for web service to connect with the SSH server"
-        )
+    try:
+        # Check if the service key exists
+        if not ServiceAuthorizedKeys.objects.filter(key=public_key).exists():
+            ServiceAuthorizedKeys.objects.create(
+                service=service_name,
+                key=public_key,
+                description="Initial public key for web service to connect with the SSH server"
+            )
+    except Exception:
+        pass

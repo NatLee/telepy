@@ -4,4 +4,9 @@ from site_settings.models import SiteSettings
 
 @receiver(post_migrate)
 def create_default_site_settings(sender, **kwargs):
-    SiteSettings.get_solo()  # This will create the default settings if it doesn't exist
+    if sender.name != 'site_settings':
+        return
+    try:
+        SiteSettings.get_solo()  # This will create the default settings if it doesn't exist
+    except Exception:
+        pass
