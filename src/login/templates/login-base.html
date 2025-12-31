@@ -225,9 +225,19 @@
       }
 
       /* Loading state */
-      .btn-loading {
+      .btn-loading,
+      .btn-loading:hover,
+      .btn-loading:focus,
+      .btn-loading:active,
+      .btn-loading:disabled {
         position: relative;
         color: transparent !important;
+        text-shadow: none !important;
+      }
+
+      .btn-loading > * {
+        color: transparent !important;
+        text-shadow: none !important;
       }
 
       .btn-loading::after {

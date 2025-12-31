@@ -195,6 +195,11 @@
 
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
+    const submitBtn = document.querySelector('button[type="submit"]');
+
+    // Add loading state
+    submitBtn.classList.add('btn-loading');
+    submitBtn.disabled = true;
 
     try {
       const tokens = await performLogin(username, password);
@@ -202,6 +207,9 @@
       localStorage.setItem('refreshToken', tokens.refresh_token);
       window.location.href = '/tunnels/index';
     } catch (error) {
+      // Remove loading state on error
+      submitBtn.classList.remove('btn-loading');
+      submitBtn.disabled = false;
       showError('Login failed. Please try again.');
     }
   }
