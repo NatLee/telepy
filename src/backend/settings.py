@@ -229,7 +229,7 @@ CHANNEL_LAYERS = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # -------------- START - Log setting --------------
-LOG_ROOT = Path('/logs')
+LOG_ROOT = Path(os.getenv("LOG_ROOT", "/logs"))
 LOG_ROOT.mkdir(exist_ok=True)
 
 LOG_TYPES = ['file', 'database']

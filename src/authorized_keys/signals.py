@@ -29,8 +29,9 @@ def update_authorized_keys_file(keys: List[str]):
 # Update the authorized_keys file on startup
 @receiver(post_migrate)
 def update_authorized_keys_on_startup(sender, **kwargs):
-    keys = get_authorized_keys()
-    update_authorized_keys_file(keys)
+    if sender.name == 'authorized_keys':
+        keys = get_authorized_keys()
+        update_authorized_keys_file(keys)
 
 @receiver(post_save, sender=ReverseServerAuthorizedKeys)
 @receiver(post_delete, sender=ReverseServerAuthorizedKeys)
@@ -77,6 +78,9 @@ def update_user_authorized_keys(sender, **kwargs):
 
 @receiver(post_migrate)
 def insert_initial_public_key(sender, **kwargs):
+    if sender.name != 'authorized_keys':
+        return
+
     # Define the service name
     service_name = "web-service"
     with open('/root/.ssh/id_rsa.pub', 'r') as f:

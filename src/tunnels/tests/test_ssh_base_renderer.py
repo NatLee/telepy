@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Base
-from tunnel_script_renderer import ssh_tunnel_script_factory
-from tunnel_script_renderer.ssh_config_renderer import BaseSshTemplate
+from tunnels.tunnel_script_renderer import ssh_tunnel_script_factory
+from tunnels.tunnel_script_renderer.ssh_config_renderer import BaseSshTemplate
 
 class TestSshBaseTemplate(unittest.TestCase):
     def setUp(self):

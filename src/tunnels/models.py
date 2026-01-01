@@ -229,10 +229,18 @@ class TunnelPermissionManager:
             return TunnelPermissionInstance(TunnelPermission.ADMIN)
 
         # Check if tunnel is shared with the user
-        sharing = TunnelSharing.objects.filter(
-            tunnel=tunnel,
-            shared_with=user
-        ).first()
+        # Optimization: Check if sharing info was prefetched
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            # Filter for the specific user just in case, though the prefetch should have handled it
+            # Since current_user_sharing is a list of TunnelSharing objects
+            # And unique_together constraint ensures max 1 record per user/tunnel
+            sharing = next((s for s in sharings if s.shared_with_id == user.id), None)
+        else:
+            sharing = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=user
+            ).first()
 
         if sharing:
             return TunnelPermissionInstance(sharing.permission_type)
@@ -302,11 +310,15 @@ class TunnelPermissionManager:
             return True
 
         # Check if tunnel is shared with admin permission
-        sharing = TunnelSharing.objects.filter(
-            tunnel=tunnel,
-            shared_with=user,
-            permission_type=TunnelPermission.ADMIN
-        ).first()
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            sharing = next((s for s in sharings if s.shared_with_id == user.id and s.permission_type == TunnelPermission.ADMIN), None)
+        else:
+            sharing = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=user,
+                permission_type=TunnelPermission.ADMIN
+            ).first()
 
         return sharing is not None
 
@@ -321,11 +333,15 @@ class TunnelPermissionManager:
             return True
 
         # Check if tunnel is shared with admin permission
-        sharing = TunnelSharing.objects.filter(
-            tunnel=tunnel,
-            shared_with=user,
-            permission_type=TunnelPermission.ADMIN
-        ).first()
+        if hasattr(tunnel, 'current_user_sharing'):
+            sharings = tunnel.current_user_sharing
+            sharing = next((s for s in sharings if s.shared_with_id == user.id and s.permission_type == TunnelPermission.ADMIN), None)
+        else:
+            sharing = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=user,
+                permission_type=TunnelPermission.ADMIN
+            ).first()
 
         return sharing is not None
 
