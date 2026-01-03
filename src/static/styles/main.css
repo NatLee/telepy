@@ -1652,3 +1652,37 @@ pre {
     transform: scale(0.9);
 }
 
+/* Loading State Pattern */
+.btn-loading {
+  position: relative;
+  color: transparent !important;
+  text-shadow: none !important;
+  pointer-events: none;
+}
+
+.btn-loading > * {
+  visibility: hidden;
+}
+
+.btn-loading::after {
+  content: '';
+  display: inline-block;
+  width: 1.2rem;
+  height: 1.2rem;
+  vertical-align: text-bottom;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spinner-border .75s linear infinite;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin-top: -0.6rem;
+  margin-left: -0.6rem;
+}
+
+/* Specific color override for outline buttons in loading state */
+.btn-outline-secondary.btn-loading::after {
+  border-color: #64748b;
+  border-right-color: transparent;
+}

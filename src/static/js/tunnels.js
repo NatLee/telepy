@@ -3,6 +3,10 @@ globalThis.data = [];
 
 function fetchAndDisplayReverseServerKeys() {
     const accessToken = localStorage.getItem('accessToken');
+    const refreshBtn = document.getElementById('refresh');
+
+    // Add loading state
+    if (refreshBtn) refreshBtn.classList.add('btn-loading');
 
     fetch('/api/reverse/server/keys', {
         method: "GET",
@@ -15,6 +19,12 @@ function fetchAndDisplayReverseServerKeys() {
     .then(data => {
         displayReverseServerKeys(data);
         globalThis.data = data; // Store the data in a global variable
+
+        // If no data, we are done
+        if (data.length === 0) {
+            if (refreshBtn) refreshBtn.classList.remove('btn-loading');
+            return;
+        }
 
         // Fetch the status after constructing the rows
         fetch('/api/reverse/server/status/ports', {
@@ -36,10 +46,19 @@ function fetchAndDisplayReverseServerKeys() {
                 // Call the updateStatus function with the isActive status and host friendly name
                 updateStatus(isActive, hostFriendlyName);
             });
+        })
+        .catch(error => {
+            console.error('Error fetching status data:', error);
+        })
+        .finally(() => {
+            // Remove loading state when status fetch is done
+            if (refreshBtn) refreshBtn.classList.remove('btn-loading');
         });
     })
     .catch(error => {
         console.error('Error fetching tunnels data:', error);
+        // Remove loading state on error
+        if (refreshBtn) refreshBtn.classList.remove('btn-loading');
     });
 }
 
@@ -182,6 +201,43 @@ function displayReverseServerKeys(data) {
     table.innerHTML = '';
     if (cardsContainer) {
         cardsContainer.innerHTML = '';
+    }
+
+    // Show friendly empty state if no data
+    if (data.length === 0) {
+        const emptyStateHtml = `
+            <tr>
+                <td colspan="4" class="text-center py-5">
+                    <div class="d-flex flex-column align-items-center justify-content-center">
+                        <div class="mb-3 p-3 bg-light rounded-circle" style="width: 80px; height: 80px; display: flex; align-items: center; justify-content: center;">
+                            <i class="fas fa-network-wired text-muted fa-3x" aria-hidden="true"></i>
+                        </div>
+                        <h5 class="text-muted fw-bold">No Tunnels Found</h5>
+                        <p class="text-muted mb-3">Create your first SSH tunnel to get started.</p>
+                        <button class="btn btn-primary btn-sm" onclick="window.location.href='/tunnels/create'">
+                            <i class="fas fa-plus me-2" aria-hidden="true"></i>New Tunnel
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+        table.innerHTML = emptyStateHtml;
+
+        if (cardsContainer) {
+            cardsContainer.innerHTML = `
+                <div class="text-center py-5">
+                    <div class="mb-3 p-3 bg-light rounded-circle mx-auto" style="width: 80px; height: 80px; display: flex; align-items: center; justify-content: center;">
+                        <i class="fas fa-network-wired text-muted fa-3x" aria-hidden="true"></i>
+                    </div>
+                    <h5 class="text-muted fw-bold">No Tunnels Found</h5>
+                    <p class="text-muted mb-3">Create your first SSH tunnel to get started.</p>
+                    <button class="btn btn-primary btn-sm" onclick="window.location.href='/tunnels/create'">
+                        <i class="fas fa-plus me-2" aria-hidden="true"></i>New Tunnel
+                    </button>
+                </div>
+            `;
+        }
+        return;
     }
 
     // Check if we should show cards (mobile) or table (desktop)
