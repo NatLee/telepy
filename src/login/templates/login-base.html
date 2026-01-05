@@ -228,6 +228,12 @@
       .btn-loading {
         position: relative;
         color: transparent !important;
+        text-shadow: none !important;
+        pointer-events: none;
+      }
+
+      .btn-loading > * {
+        visibility: hidden;
       }
 
       .btn-loading::after {
