@@ -10,6 +10,20 @@ TEMPLATE_DIR = Path(__file__).resolve().parent / Path("templates")
 
 SSH_CLIENT_PROXY_CONF = "ProxyCommand ssh -W %h:%p telepy-ssh-server"
 
+_SSH_HOST_ALIAS_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+def _sanitize_ssh_host_alias(value: str) -> str:
+    """
+    Make a safe SSH config Host alias.
+
+    OpenSSH allows flexible patterns, but spaces / odd chars often create confusing configs.
+    We normalize to a conservative subset: [A-Za-z0-9._-], replacing everything else with '-'.
+    """
+    value = (value or "").strip()
+    value = _SSH_HOST_ALIAS_SAFE_RE.sub("-", value)
+    value = value.strip("-")
+    return value or "telepy-endpoint"
+
 class BaseSshTemplate(BaseTemplateRenderer):
 
     def __init__(self, 
@@ -76,7 +90,12 @@ class BaseSshTemplate(BaseTemplateRenderer):
         # Render template.
         template = Template(template_file.read_text())
         rendered_template = template.safe_substitute(mapping)
-        
+
+        # Ensure each rendered stanza ends with a newline so concatenating multiple
+        # stanzas won't glue the next "Host ..." onto the previous line.
+        if rendered_template and not rendered_template.endswith("\n"):
+            rendered_template += "\n"
+
         return rendered_template
     
 class SshClientTemplate(BaseSshTemplate):
@@ -84,9 +103,14 @@ class SshClientTemplate(BaseSshTemplate):
                  host_friendly_name: str,
                  ssh_username: str,
                  reverse_port: int):
-        
+
+        # `host_friendly_name` is treated as the final SSH Host alias. Any logic for
+        # uniqueness across multiple users (e.g. appending "-<user>") should be
+        # decided by the caller (typically `views.py` where user count is known).
+        host_alias = _sanitize_ssh_host_alias(host_friendly_name)
+
         super().__init__(server_side=False,
-                         host_friendly_name=host_friendly_name,
+                         host_friendly_name=host_alias,
                          server_domain="localhost",
                          ssh_username=ssh_username,
                          reverse_port=reverse_port,

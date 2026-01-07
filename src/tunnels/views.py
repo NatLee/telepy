@@ -244,18 +244,22 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
         ).render()
 
         # Read all reverse users.
-        server_auth_key_user = server_auth_key.username_set.all()
+        server_auth_key_user = list(server_auth_key.username_set.all())
 
         if not server_auth_key_user:
             config_string += CLIENT_NO_USER_STEM
         else:
             config_string += CLIENT_STEM
 
+        multi_user = len(server_auth_key_user) > 1
         for username in server_auth_key_user:
 
             # Render the client side config.
+            host_alias = server_auth_key.host_friendly_name
+            if multi_user:
+                host_alias = f"{host_alias}-{username.username}"
             config_string += sshd_client_config_factory(
-              host_friendly_name=server_auth_key.host_friendly_name,
+              host_friendly_name=host_alias,
               ssh_username=username.username,
               reverse_port=server_auth_key.reverse_port
             ).render()
