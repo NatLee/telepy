@@ -1,11 +1,28 @@
 # Telepy
 
-![ui](https://i.imgur.com/tie5vrR.png)
-![terminal](https://i.imgur.com/l6bx20q.png)
-
 A web application for managing and monitoring the reverse SSH tunnels.
 
 ## Usage
+
+### Create a tunnel
+
+Go to `/tunnels/create` and follow the steps to create a tunnel.
+
+![create tunnel](./docs/telepy-create-tunnel.gif)
+
+### Enter the console
+
+Go to `/tunnels/index` and click the "Console" button to enter the console of the tunnel.
+
+![enter console](./docs/telepy-enter-console.gif)
+
+### Share a tunnel
+
+Go to `/tunnels/index` and click the "Share" button to share the tunnel.
+
+![share tunnel](./docs/telepy-share-tunnel.gif)
+
+## Deployment
 
 1. Copy the `.env.example` to `.env` and change the environment variables.
 
@@ -32,8 +49,8 @@ You need to check the script `./dev-create-superuser.sh` and change the username
 ./telepy.sh create-superuser
 ```
 
-
 5. Go to `http://localhost:<YOUR_WEB_SERVER_PORT>/login`, it will show the login page.
+
 
 ## API Documentation
 
