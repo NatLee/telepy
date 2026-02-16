@@ -32,7 +32,7 @@ Match User telepy
   X11Forwarding no
   AllowAgentForwarding no
   PermitTTY yes
-  ForceCommand /usr/local/bin/telepy-msg
+  ForceCommand /usr/local/bin/telepy-msg.sh
 EOF
 
 echo "--- SSHD configuration updated successfully."
