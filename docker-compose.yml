@@ -71,7 +71,7 @@ services:
 
   ssh:
     <<: [*common-networks, *common-restart]
-    image: lscr.io/linuxserver/openssh-server:version-10.0_p1-r7
+    image: lscr.io/linuxserver/openssh-server:version-10.2_p1-r0
     container_name: telepy-ssh-${PROJECT_NAME}
     hostname: telepy-ssh-${PROJECT_NAME}
     environment:
