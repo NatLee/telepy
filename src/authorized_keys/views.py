@@ -1,3 +1,7 @@
+import logging
+
+from django.http import HttpResponse
+
 from rest_framework import generics
 from rest_framework import viewsets
 from rest_framework.views import APIView
@@ -7,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from drf_yasg.utils import swagger_auto_schema
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
+from authorized_keys.permissions import IsInternalService
 from authorized_keys.serializers import ReverseServerAuthorizedKeysSerializer
 
 from authorized_keys.models import UserAuthorizedKeys
@@ -292,3 +297,145 @@ class ServiceAuthorizedKeysListView(APIView):
     def get(self, request):
         services = ServiceAuthorizedKeys.objects.all().values('id', 'service', 'key', 'description')
         return Response(services)
+
+
+internal_keys_logger = logging.getLogger('authorized_keys.internal')
+
+
+class InternalKeysView(APIView):
+    """Internal endpoint for sshd AuthorizedKeysCommand.
+
+    Accepts the offered key via query parameters ``key_type`` and ``key``
+    (base64 blob).  The API reverse-looks-up the key's owner, then returns
+    **all** of that user's keys plus all tunnel keys and service keys
+    (deduplicated) so sshd can verify the client.
+
+    Flow:
+      1. offered key → reverse-lookup owner User
+      2. collect all keys for that user (UserAuthorizedKeys + their tunnels)
+      3. add ALL tunnel keys (ReverseServerAuthorizedKeys)
+      4. add ALL service keys (ServiceAuthorizedKeys)
+      5. deduplicate → return multi-line text/plain
+    """
+    permission_classes = [IsInternalService]
+    authentication_classes = []  # Skip JWT/session auth; token checked by IsInternalService
+
+    def get(self, request):
+        key_type = request.GET.get('key_type', '')
+        key_blob = request.GET.get('key', '')
+
+        client_ip = request.META.get('REMOTE_ADDR', 'unknown')
+
+        if not key_type or not key_blob:
+            internal_keys_logger.warning(
+                "Missing key_type or key param | IP=%s", client_ip,
+            )
+            return HttpResponse("", content_type="text/plain")
+
+        # Reconstruct the full key string for DB lookup
+        offered_key = f"{key_type} {key_blob}"
+
+        internal_keys_logger.info(
+            "Key lookup | IP=%s | type=%s | key_prefix=%s...",
+            client_ip, key_type, key_blob[:20],
+        )
+
+        from authorized_keys.models import (
+            ReverseServerAuthorizedKeys,
+            UserAuthorizedKeys,
+        )
+
+        # --- Step 1: Reverse-lookup the offered key's owner ---
+        owner = None
+
+        # Check tunnel keys
+        tunnel_match = ReverseServerAuthorizedKeys.objects.filter(
+            key__startswith=offered_key,
+        ).select_related('user').first()
+        if tunnel_match:
+            owner = tunnel_match.user
+            internal_keys_logger.info(
+                "Key owner found via tunnel key | user=%s", owner.username,
+            )
+
+        # Check user keys
+        if owner is None:
+            user_match = UserAuthorizedKeys.objects.filter(
+                key__startswith=offered_key,
+            ).select_related('user').first()
+            if user_match:
+                owner = user_match.user
+                internal_keys_logger.info(
+                    "Key owner found via user key | user=%s", owner.username,
+                )
+
+        # Check service keys (no user, but still authorized)
+        if owner is None:
+            service_match = ServiceAuthorizedKeys.objects.filter(
+                key__startswith=offered_key,
+            ).exists()
+            if service_match:
+                internal_keys_logger.info("Key matched service key (no user)")
+                # Service key: return just service keys + all tunnel keys
+                # (no user-scoped keys to add)
+
+        # --- Step 2 & 3: Collect keys ---
+        all_keys = set()
+
+        # Owner's keys — include personal keys if owner has tunnels or shared tunnels
+        if owner:
+            owner_tunnel_keys = list(
+                ReverseServerAuthorizedKeys.objects.filter(
+                    user=owner,
+                ).values_list('key', flat=True)
+            )
+
+            # Check if this user has tunnels shared with them
+            from tunnels.models import TunnelSharing
+            has_shared_tunnels = TunnelSharing.objects.filter(
+                shared_with=owner,
+            ).exists()
+
+            if owner_tunnel_keys or has_shared_tunnels:
+                # Owner has own tunnels or shared tunnels → include ALL their keys
+                all_keys.update(owner_tunnel_keys)
+                user_keys = UserAuthorizedKeys.objects.filter(
+                    user=owner,
+                ).values_list('key', flat=True)
+                all_keys.update(user_keys)
+                internal_keys_logger.info(
+                    "Owner %s authorized | own_tunnels=%d | shared_tunnels=%s → including personal keys",
+                    owner.username, len(owner_tunnel_keys), has_shared_tunnels,
+                )
+            else:
+                # Owner has NO tunnels and NO shared tunnels → deny personal keys
+                internal_keys_logger.info(
+                    "Owner %s has NO tunnels and NO shared tunnels → personal keys excluded",
+                    owner.username,
+                )
+
+        # ALL tunnel keys (always included)
+        all_tunnel_keys = ReverseServerAuthorizedKeys.objects.all().values_list(
+            'key', flat=True,
+        )
+        all_keys.update(all_tunnel_keys)
+
+        # ALL service keys (always included)
+        all_service_keys = ServiceAuthorizedKeys.objects.all().values_list(
+            'key', flat=True,
+        )
+        all_keys.update(all_service_keys)
+
+        internal_keys_logger.info(
+            "Returning %d keys | owner=%s",
+            len(all_keys),
+            owner.username if owner else "none",
+        )
+
+        if all_keys:
+            content = "\n".join(all_keys) + "\n"
+            return HttpResponse(content, content_type="text/plain")
+
+        internal_keys_logger.info("No keys found in database")
+        return HttpResponse("", content_type="text/plain")
+
