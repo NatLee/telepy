@@ -37,14 +37,23 @@ def notify_reverse_server_authorized_keys_changed(sender, instance, **kwargs):
 
 @receiver(post_migrate)
 def insert_initial_public_key(sender, **kwargs):
-    """Seed the database with the web-service SSH public key on first migration."""
+    """Seed or update the web-service SSH public key on every migration.
+
+    The backend's SSH keypair may be regenerated on container rebuild,
+    so we must update the stored key to stay in sync.
+    """
     service_name = "web-service"
     with open('/root/.ssh/id_rsa.pub', 'r') as f:
         public_key = f.read().strip()
 
-    if not ServiceAuthorizedKeys.objects.filter(key=public_key).exists():
-        ServiceAuthorizedKeys.objects.create(
-            service=service_name,
-            key=public_key,
-            description="Initial public key for web service to connect with the SSH server"
-        )
+    obj, created = ServiceAuthorizedKeys.objects.update_or_create(
+        service=service_name,
+        defaults={
+            'key': public_key,
+            'description': "Public key for web service to connect with the SSH server",
+        },
+    )
+    if created:
+        print(f"[authorized_keys] Created service key for '{service_name}'")
+    else:
+        print(f"[authorized_keys] Updated service key for '{service_name}'")
