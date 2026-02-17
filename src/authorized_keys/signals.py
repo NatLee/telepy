@@ -35,13 +35,20 @@ def notify_reverse_server_authorized_keys_changed(sender, instance, **kwargs):
         )
 
 
-@receiver(post_migrate)
+@receiver(post_migrate, dispatch_uid='seed_web_service_ssh_key')
 def insert_initial_public_key(sender, **kwargs):
     """Seed or update the web-service SSH public key on every migration.
 
     The backend's SSH keypair may be regenerated on container rebuild,
     so we must update the stored key to stay in sync.
+
+    ``post_migrate`` fires once per INSTALLED_APP.  The ``dispatch_uid``
+    prevents duplicate handler registration, and the ``sender.name``
+    guard ensures this only runs once (for the ``authorized_keys`` app).
     """
+    if sender.name != 'authorized_keys':
+        return
+
     service_name = "web-service"
     with open('/root/.ssh/id_rsa.pub', 'r') as f:
         public_key = f.read().strip()
