@@ -119,11 +119,3 @@ Subsystem	sftp	internal-sftp
 #	AllowTcpForwarding yes
 #	PermitTTY no
 #	ForceCommand cvs server
-
-Match User telepy
-  AllowTcpForwarding yes
-  PermitTunnel yes
-  X11Forwarding no
-  AllowAgentForwarding no
-  PermitTTY yes
-  ForceCommand /usr/local/bin/telepy-msg.sh
