@@ -239,6 +239,7 @@ for log_type in LOG_TYPES:
 
 HANDLERS = {}
 
+# Add file handlers for each log type
 for log_type in LOG_TYPES:
     HANDLERS[log_type] = {
         'class': 'common.log.InterceptTimedRotatingFileHandler',
@@ -250,11 +251,16 @@ for log_type in LOG_TYPES:
         'encoding': 'utf-8',
     }
 
+# Add stream handlers for each log type
 HANDLERS.update({
     'tunnels': {
         'class': 'logging.StreamHandler',
         'stream': sys.stdout
-    }
+    },
+    'internal_keys_api': {
+        'class': 'logging.StreamHandler',
+        'stream': sys.stdout
+    },
 })
 
 LOGGING = {
@@ -281,6 +287,11 @@ LOGGING = {
             'handlers': ['tunnels'],
             'propagate': False,
             'level': "DEBUG"
+        },
+        'authorized_keys.internal': {
+            'handlers': ['internal_keys_api'],
+            'propagate': False,
+            'level': 'INFO',
         }
     }
 }
