@@ -46,8 +46,8 @@ services:
 
     volumes:
       # Source code
-      - ./src:/src
-      - ./scripts:/scripts # for custom scripts
+      - ./src/backend:/src
+      - ./src/scripts:/scripts # for custom scripts
       - ./src/configs/supervisord/supervisord.conf:/etc/supervisor/conf.d/supervisord.conf:rw
       # Logging
       - ./telepy-logs/backend:/logs
