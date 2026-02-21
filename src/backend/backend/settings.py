@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 print("-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent # Excepted to be "src" folder.
+BASE_DIR = Path(__file__).resolve().parent.parent # Excepted to be "src/backend" folder.
 ROOT_DIR = BASE_DIR.parent # Excepted to be the root folder of the project (telepy) or root dir of container.
-DATA_DIR = ROOT_DIR / "data"
+# In container, /data is mounted from host telepy-data; use it when present.
+DATA_DIR = Path("/data") if Path("/data").exists() else (ROOT_DIR / "data")
 print(f"---------- Project DIR: {BASE_DIR}")
 print(f"---------- Data DIR: {DATA_DIR}")
 

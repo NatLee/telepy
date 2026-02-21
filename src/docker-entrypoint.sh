@@ -11,13 +11,16 @@ chmod 600 /root/.ssh/id_rsa
 # Set scripts to executable
 chmod +x /scripts/*.sh
 
+# Backend root is under /src/backend
+cd /src/backend
+
 # Run collectstatic if not in debug mode
 if [ "${DEBUG,,}" = "true" ]; then
     echo "Running in Debug mode"
 else
     echo "Running in Production mode"
-    # Remove old static files in folder and create a new one
-    rm -rf /src/staticfiles/* && python manage.py collectstatic --noinput
+    # Remove old static files in folder and create a new one (STATIC_ROOT is under /data/staticfiles when mounted)
+    rm -rf /data/staticfiles/* && python manage.py collectstatic --noinput
 fi
 
 # Migrate the database
