@@ -11,7 +11,7 @@ fi
 APP_NAME="$1"
 
 print_message "$BLUE" "Creating new Django app '${APP_NAME}' in ${CONTAINER_WEB_NAME}..."
-docker exec -it ${CONTAINER_WEB_NAME} bash -c "cd /src/backend && python manage.py startapp ${APP_NAME}"
+docker exec -it ${CONTAINER_WEB_NAME} bash -c "cd /src && python manage.py startapp ${APP_NAME}"
 
 if [ ! -d "./src/backend/${APP_NAME}" ]; then
   print_message "$RED" "Error: Folder not created."
@@ -23,10 +23,10 @@ print_message "$YELLOW" "Adjusting permissions for the new app folder..."
 # Check if we're on macOS
 if [[ "$OSTYPE" == "darwin"* ]]; then
   # On macOS, we use the current user's UID and GID
-  docker exec -it ${CONTAINER_WEB_NAME} bash -c "chown -R $(id -u):$(id -g) /app/src/backend/${APP_NAME}"
+  docker exec -it ${CONTAINER_WEB_NAME} bash -c "chown -R $(id -u):$(id -g) /app/src/${APP_NAME}"
 else
   # On Linux, we can use $USER
-  docker exec -it ${CONTAINER_WEB_NAME} bash -c "chown -R $USER:$USER /app/src/backend/${APP_NAME}"
+  docker exec -it ${CONTAINER_WEB_NAME} bash -c "chown -R $USER:$USER /app/src/${APP_NAME}"
 fi
 
 # Ensure the current user has read and write permissions

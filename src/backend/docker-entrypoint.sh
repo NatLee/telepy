@@ -11,8 +11,8 @@ chmod 600 /root/.ssh/id_rsa
 # Set scripts to executable
 chmod +x /scripts/*.sh
 
-# Backend root is under /src/backend
-cd /src/backend
+# Backend root is under /src
+cd /src
 
 # Run collectstatic if not in debug mode
 if [ "${DEBUG,,}" = "true" ]; then
