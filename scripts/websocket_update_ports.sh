@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd /src
+cd /src/backend
 
 while true; do
   # Run the update_ports command with the current ports and capture its output
