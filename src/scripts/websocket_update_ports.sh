@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# ================================
+# This is a script that will update the ports of the backend server
+# ================================
+
 cd /src/backend
 
 while true; do
