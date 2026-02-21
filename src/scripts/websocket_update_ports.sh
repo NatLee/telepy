@@ -4,7 +4,7 @@
 # This is a script that will update the ports of the backend server
 # ================================
 
-cd /src/backend
+cd /src
 
 while true; do
   # Run the update_ports command with the current ports and capture its output

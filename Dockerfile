@@ -18,5 +18,5 @@ RUN pip install -r requirements.txt
 COPY ./src /src
 RUN chmod +x /src/docker-entrypoint.sh
 
-WORKDIR /src/backend
+WORKDIR /src
 ENTRYPOINT ["bash", "/src/docker-entrypoint.sh"]
