@@ -91,7 +91,11 @@ services:
       - ./ssh/ssh_host_keys:/config/ssh_host_keys
       - ./ssh/custom_scripts/custom-cont-init.d:/custom-cont-init.d
       - ./ssh/custom_scripts/custom-services.d:/custom-services.d
-      - ./ssh/telepy-authorized-keys.sh:/usr/local/bin/telepy-authorized-keys.sh:ro
+      - ./ssh/telepy-msg.sh:/usr/local/bin/telepy-msg.sh:ro
+      # Stage scripts to /opt/telepy/ — set-config.sh copies them to
+      # /usr/local/bin/ with correct permissions (Docker Desktop mounts
+      # files as 777, which sshd rejects for AuthorizedKeysCommand).
+      - ./ssh/telepy-authorized-keys.sh:/opt/telepy/telepy-authorized-keys.sh:ro
     ports:
       - ${REVERSE_SERVER_SSH_PORT}:2222 # for SSH connections, REVERSE_SERVER_SSH_PORT
     depends_on:
