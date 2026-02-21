@@ -15,7 +15,7 @@ COPY requirements.txt /src
 RUN pip install -r requirements.txt
 
 # Copy project
-COPY ./src /src
+COPY ./src/backend /src
 RUN chmod +x /src/docker-entrypoint.sh
 
 WORKDIR /src
