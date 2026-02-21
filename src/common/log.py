@@ -1,4 +1,5 @@
 import logging
+import os
 import os.path
 from logging import config
 
@@ -54,6 +55,10 @@ class InterceptTimedRotatingFileHandler(logging.Handler):
         for k, f in {_: levels[_] for _ in level_keys}.items():
             # avoid duplicate sink
             filename_fmt = filename.replace(".log", "_%s_%s.log" % (time_format, k))
+            # 確保日誌文件所在的目錄存在
+            log_dir = os.path.dirname(filename_fmt)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
             # noinspection PyUnresolvedReferences,PyProtectedMember
             file_key = {_._name: han_id for han_id, _ in self.logger_._core.handlers.items()}
             filename_fmt_key = "'{}'".format(filename_fmt)
