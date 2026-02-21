@@ -24,8 +24,23 @@ chmod 600 "$TOKEN_FILE"
 chown "${USER_NAME:-telepy}:users" "$TOKEN_FILE"
 echo "--- INTERNAL_API_TOKEN persisted to $TOKEN_FILE"
 
-# --- AuthorizedKeysCommand: fetch keys from Backend API ---
-chmod +x /usr/local/bin/telepy-authorized-keys.sh
+# --- AuthorizedKeysCommand: deploy script with correct permissions ---
+# Docker Desktop (Windows) mounts files as 777 (world-writable).
+# OpenSSH silently refuses to run AuthorizedKeysCommand scripts that are
+# writable by group/others.  We copy from the staged mount to a writable
+# location, strip any Windows CRLF, and set strict permissions.
+STAGED_SCRIPT="/opt/telepy/telepy-authorized-keys.sh"
+DEST_SCRIPT="/usr/local/bin/telepy-authorized-keys.sh"
+if [ -f "$STAGED_SCRIPT" ]; then
+    cp "$STAGED_SCRIPT" "$DEST_SCRIPT"
+    # Strip Windows \r (CRLF → LF)
+    sed -i 's/\r$//' "$DEST_SCRIPT"
+    chown root:root "$DEST_SCRIPT"
+    chmod 755 "$DEST_SCRIPT"
+    echo "--- Deployed $DEST_SCRIPT (owner=root, mode=755)"
+else
+    echo "--- WARNING: $STAGED_SCRIPT not found!"
+fi
 
 # Remove any existing directives to avoid duplicates on restart
 sed -i '/^[[:space:]]*AuthorizedKeysCommand /d' "$CONFIG_FILE"
