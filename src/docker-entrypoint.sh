@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Set the correct permissions for the SSH config file
-chown -R root:root /root/.ssh/config
+# (Docker Desktop mounts host files as 777, SSH rejects world-writable config)
+chmod 600 /root/.ssh/config
+chown root:root /root/.ssh/config
 
 # Set the correct permissions for the SSH key
 chmod 600 /root/.ssh/id_rsa
