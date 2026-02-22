@@ -5,6 +5,9 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
+# Next.js bakes NEXT_PUBLIC_* at build time; pass via: docker compose build --build-arg NEXT_PUBLIC_GOOGLE_CLIENT_ID=your-client-id
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ENV NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
 RUN npm run build
 
 # Production image
