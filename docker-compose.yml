@@ -25,6 +25,8 @@ services:
     build:
       context: ./src/frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${SOCIAL_GOOGLE_CLIENT_ID}
     environment:
       - NEXT_PUBLIC_API_BASE=
       - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}

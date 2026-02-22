@@ -4,6 +4,7 @@ from django.urls import path
 from custom_jwt import views
 
 urlpatterns = [
+    path("setup-status", views.SetupStatusView.as_view(), name="setup-status"),
     path("token", views.MyTokenObtainPairView.as_view(), name="token-get"),
     path("token/refresh", views.MyTokenRefreshView.as_view(), name="token-refresh"),
     path("token/verify", views.MyTokenVerifyView.as_view(), name="token-verify"),

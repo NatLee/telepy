@@ -1,5 +1,13 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Environment
+
+To sync environment variables from the repo root `.env` into `src/frontend/.env.local` (e.g. `SOCIAL_GOOGLE_CLIENT_ID` → `NEXT_PUBLIC_GOOGLE_CLIENT_ID`), run from the frontend directory:
+
+```bash
+npm run env:sync
+```
+
 ## Getting Started
 
 First, run the development server:

@@ -5,9 +5,11 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.views import TokenVerifyView
 
+from django.contrib.auth.models import User
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from drf_yasg.utils import swagger_auto_schema
 
 def get_client_ip(request):
@@ -71,9 +73,23 @@ class MyTokenVerifyView(TokenVerifyView):
         return super().post(request, *args, **kwargs)
 
 
+class SetupStatusView(APIView):
+    """Public endpoint: whether the app is in first-time setup (no users yet)."""
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary="Setup status",
+        operation_description="Returns first_time_setup: true when no users exist (initial setup).",
+        tags=["Login"],
+    )
+    def get(self, request):
+        first_time_setup = User.objects.count() == 0
+        return Response({"first_time_setup": first_time_setup})
+
+
 class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
-    
+
     @swagger_auto_schema(
         operation_summary="Get User Profile",
         operation_description="Get current user's profile information",

@@ -5,8 +5,7 @@ import Script from "next/script";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
-import { User, Lock, ExternalLink } from "lucide-react";
-import Link from "next/link";
+import { User, Lock } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,7 +23,18 @@ export default function LoginPage() {
     useEffect(() => {
         if (isAuthenticated) {
             router.replace("/tunnels");
+            return;
         }
+        // When no users exist, redirect to first-login to create admin
+        const base = process.env.NEXT_PUBLIC_API_BASE || "";
+        fetch(`${base}/api/auth/setup-status`)
+            .then((res) => res.json())
+            .then((data) => {
+                if (data.first_time_setup === true) {
+                    router.replace("/first-login");
+                }
+            })
+            .catch(() => {});
     }, [isAuthenticated, router]);
 
     useEffect(() => {
@@ -170,16 +180,6 @@ export default function LoginPage() {
                             </div>
                         </div>
                     )}
-
-                    <div className="mt-8 text-center">
-                        <Link
-                            href="/first-login"
-                            className="text-sm font-medium text-muted-foreground hover:text-primary inline-flex items-center transition-colors"
-                        >
-                            First time setup? Create admin account
-                            <ExternalLink size={14} className="ml-1" />
-                        </Link>
-                    </div>
                 </div>
             </div>
         </>
