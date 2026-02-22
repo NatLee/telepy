@@ -1,5 +1,7 @@
 # Custom ignore files
 
+example-*
+
 staticfiles/
 
 ssh/backend_ssh_key/id_rsa*
@@ -38,8 +40,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
