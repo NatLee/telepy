@@ -4,7 +4,8 @@ import React, { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { apiFetch } from "@/lib/api";
-import { useNotificationWebSocket } from "@/lib/websocket";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
 import { X, Plus, User, Shield, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,7 +31,6 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
     const [loading, setLoading] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; user: ReverseServerUsername | null }>({ isOpen: false, user: null });
     const { showSuccess, showError } = useToast();
-    const { lastMessage } = useNotificationWebSocket();
 
     const fetchUsers = async () => {
         if (!tunnelId) return;
@@ -61,14 +61,13 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
     }, [isOpen, tunnelId]);
 
     // Handle WebSocket updates
-    useEffect(() => {
-        if (!lastMessage?.message || !isOpen || !tunnelId) return;
-        const { action, tunnel_id } = lastMessage.message;
-        if (action === "TUNNEL-USERNAMES-UPDATED" && tunnel_id === tunnelId) {
-            fetchUsers();
+    useNotificationHandlers({
+        [NOTIFICATION_ACTIONS.TUNNEL_USERNAMES_UPDATED]: (msg) => {
+            if (isOpen && msg.tunnel_id === tunnelId) {
+                fetchUsers();
+            }
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [lastMessage, isOpen, tunnelId]);
+    });
 
     const handleAddUser = async (e: React.FormEvent) => {
         e.preventDefault();

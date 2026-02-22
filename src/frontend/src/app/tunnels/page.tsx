@@ -11,7 +11,8 @@ import { ServerScriptModal } from "@/components/tunnels/ServerScriptModal";
 import { ManageUsersModal } from "@/components/tunnels/ManageUsersModal";
 import { TunnelDetailsModal } from "@/components/tunnels/TunnelDetailsModal";
 import { ShareModal } from "@/components/tunnels/ShareModal";
-import { useNotificationWebSocket } from "@/lib/websocket";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import {
     Plus,
     TerminalSquare,
@@ -46,12 +47,25 @@ import {
     TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
+import { ViewToggle } from "@/components/ui/ViewToggle";
 
 export default function TunnelsPage() {
     const [tunnels, setTunnels] = useState<any[]>([]);
     // Backend returns Dict[int, bool]: { "1024": true, "8080": false }
     const [portsMap, setPortsMap] = useState<Record<string, boolean>>({});
     const [loading, setLoading] = useState(true);
+    const [viewMode, setViewMode] = useState<"list" | "card">("card");
+
+    useEffect(() => {
+        if (typeof window !== "undefined") {
+            if (window.innerWidth < 1200) {
+                setViewMode("card");
+            } else {
+                const saved = localStorage.getItem("tunnels-view");
+                setViewMode(saved === "card" ? "card" : "list");
+            }
+        }
+    }, []);
 
     // Modals state
     const [configModal, setConfigModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
@@ -64,10 +78,6 @@ export default function TunnelsPage() {
 
     const { showSuccess, showError } = useToast();
     const { user } = useAuth();
-
-    // Actually, we can just use the hook here and it will connect. 
-    // If AppLayout also connected, there might be two connections.
-    const { lastMessage } = useNotificationWebSocket();
 
     const fetchData = async () => {
         try {
@@ -100,38 +110,47 @@ export default function TunnelsPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Update ports map from websocket notification.
-    // Backend wraps messages as: { message: { action: "...", ... } }
-    useEffect(() => {
-        if (!lastMessage?.message) return;
-        const { action, data, port, status } = lastMessage.message;
-
-        if (action === "UPDATE-TUNNEL-STATUS-DATA" && Array.isArray(data)) {
-            // Backend sends list of currently ACTIVE ports for this user
-            const map: Record<string, boolean> = {};
-            for (const p of data) {
-                map[String(p)] = true;
+    // Use the abstract hook to handle grouped actions
+    // AppLayout or other components might connect to the same WebSocket, 
+    // but React's state isolates the lastMessage in useNotificationWebSocket inside the hook
+    useNotificationHandlers({
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS_DATA]: (msg) => {
+            if (Array.isArray(msg.data)) {
+                // Backend sends list of currently ACTIVE ports for this user
+                const map: Record<string, boolean> = {};
+                for (const p of msg.data) {
+                    map[String(p)] = true;
+                }
+                setPortsMap(map);
             }
-            setPortsMap(map);
-        } else if (action === "UPDATE-TUNNEL-STATUS" && port !== undefined) {
-            // Individual port status change
-            setPortsMap(prev => ({ ...prev, [String(port)]: status === "connected" }));
-        }
-    }, [lastMessage]);
-
-    // Handle share/unshare/permission/username WS notifications by refreshing tunnel list
-    useEffect(() => {
-        if (!lastMessage?.message) return;
-        const { action, details } = lastMessage.message;
-        if (action === "TUNNEL-SHARED" || action === "TUNNEL-UNSHARED" || action === "TUNNEL-PERMISSION-UPDATED" || action === "TUNNEL-USERNAMES-UPDATED") {
-            if (details) {
-                // Show notification to user that something happened
-                showSuccess(details);
+        },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg) => {
+            if (msg.port !== undefined) {
+                // Individual port status change
+                setPortsMap(prev => ({ ...prev, [String(msg.port)]: msg.status === "connected" }));
             }
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg) => {
+            if (msg.details) showSuccess(msg.details);
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_UNSHARED]: (msg) => {
+            if (msg.details) showSuccess(msg.details);
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_PERMISSION_UPDATED]: (msg) => {
+            if (msg.details) showSuccess(msg.details);
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_USERNAMES_UPDATED]: (msg) => {
+            if (msg.details) showSuccess(msg.details);
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.UPDATED_TUNNELS]: (msg) => {
+            // Optional: if (msg.details) showSuccess(msg.details);
             fetchData();
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [lastMessage]);
+    });
 
     const handleDelete = async () => {
         if (!deleteConfirm.tunnelId) return;
@@ -202,7 +221,11 @@ export default function TunnelsPage() {
                         Manage your reverse proxy tunnels and configurations.
                     </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
+                    <div className="hidden min-[1200px]:flex items-center">
+                        <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
+                        <div className="h-5 w-px bg-border mx-2"></div>
+                    </div>
                     <Button variant="outline" onClick={fetchData} disabled={loading} aria-label="Refresh tunnels">
                         <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
                         Refresh
@@ -237,7 +260,7 @@ export default function TunnelsPage() {
                         </Button>
                     </div>
                 </div>
-            ) : (
+            ) : viewMode === "card" ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {tunnels.map((tunnel) => {
                         const isActive = portsMap[String(tunnel.reverse_port)] === true;
@@ -395,6 +418,164 @@ export default function TunnelsPage() {
                             </Card>
                         );
                     })}
+                </div>
+            ) : (
+                <div className="border border-border rounded-lg overflow-x-auto bg-card shadow-sm">
+                    <table className="min-w-full divide-y divide-border">
+                        <thead className="bg-muted/50">
+                            <tr>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Name</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Port / Status</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Key Preview</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Sharing</th>
+                                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                            {tunnels.map((tunnel) => {
+                                const isActive = portsMap[String(tunnel.reverse_port)] === true;
+                                const sharedCount = tunnel.shared_with_count ?? 0;
+                                return (
+                                    <tr key={tunnel.id} className="hover:bg-muted/50 transition-colors">
+                                        <td className="px-4 py-3 text-sm font-medium text-foreground whitespace-nowrap">
+                                            {tunnel.host_friendly_name}
+                                        </td>
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <div className="flex items-center gap-2 text-sm">
+                                                <span className="font-mono">{tunnel.reverse_port}</span>
+                                                {getStatus(tunnel.reverse_port)}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <div className="bg-muted/50 rounded px-2 py-1 font-mono text-[11px] truncate text-muted-foreground max-w-[150px]" title={tunnel.key ?? ''}>
+                                                {tunnel.key ? `${tunnel.key.substring(0, 15)}...` : '—'}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 whitespace-nowrap">
+                                            <div className="flex items-center gap-1">
+                                                {!tunnel.is_owner && (
+                                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300">
+                                                        <Share2 size={10} /> Shared with you
+                                                    </Badge>
+                                                )}
+                                                {tunnel.is_owner && tunnel.can_share && (
+                                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300">
+                                                        <Share2 size={10} /> Owner
+                                                    </Badge>
+                                                )}
+                                                {tunnel.is_owner && sharedCount > 0 && (
+                                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300">
+                                                        <Share2 size={10} /> {sharedCount === 1 ? "1" : sharedCount}
+                                                    </Badge>
+                                                )}
+                                                {tunnel.is_owner && !tunnel.can_share && sharedCount === 0 && (
+                                                    <span className="text-muted-foreground text-xs">—</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                                            <div className="flex items-center justify-end gap-0.5">
+                                                {isActive ? (
+                                                    <Button asChild variant="ghost" size="sm" className="h-8 px-2 text-xs text-primary hover:text-primary transition-colors hover:bg-primary/10 mr-1">
+                                                        <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`}>
+                                                            <TerminalSquare size={14} className="mr-1.5" /> Terminal
+                                                        </Link>
+                                                    </Button>
+                                                ) : (
+                                                    <Button variant="ghost" size="sm" disabled className="h-8 px-2 text-xs opacity-50 cursor-not-allowed mr-1">
+                                                        <TerminalSquare size={14} className="mr-1.5" /> Terminal
+                                                    </Button>
+                                                )}
+
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setDetailsModal({ isOpen: true, tunnelId: tunnel.id })} title="Details">
+                                                    <FileText size={15} />
+                                                </Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setConfigModal({ isOpen: true, tunnelId: tunnel.id })} title="Config">
+                                                    <Settings size={15} />
+                                                </Button>
+                                                {tunnel.is_owner && (
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setScriptModal({ isOpen: true, tunnelId: tunnel.id, sshPort: tunnel.reverse_port })} title="Scripts">
+                                                        <Terminal size={15} />
+                                                    </Button>
+                                                )}
+
+                                                {!tunnel.is_owner && (
+                                                    <>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id, readOnly: !tunnel.can_edit })} title={tunnel.can_edit ? "Manage Target Server Users" : "View Target Server Users"}>
+                                                            <Users size={15} />
+                                                        </Button>
+
+                                                        <DropdownMenu>
+                                                            <DropdownMenuTrigger asChild>
+                                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+                                                                    <span className="sr-only">Open menu</span>
+                                                                    <MoreHorizontal size={15} />
+                                                                </Button>
+                                                            </DropdownMenuTrigger>
+                                                            <DropdownMenuContent align="end" className="w-48">
+                                                                <DropdownMenuLabel>More Actions</DropdownMenuLabel>
+                                                                <DropdownMenuSeparator />
+                                                                {tunnel.can_share && (
+                                                                    <>
+                                                                        <DropdownMenuItem onClick={() => setShareModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                                            <Share2 className="mr-2 h-4 w-4" /> Manage Sharing
+                                                                        </DropdownMenuItem>
+                                                                        <DropdownMenuSeparator />
+                                                                    </>
+                                                                )}
+                                                                <DropdownMenuItem
+                                                                    onClick={() => setLeaveConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })}
+                                                                    className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                                                                >
+                                                                    <LogOut className="mr-2 h-4 w-4" /> Leave Tunnel
+                                                                </DropdownMenuItem>
+                                                            </DropdownMenuContent>
+                                                        </DropdownMenu>
+                                                    </>
+                                                )}
+
+                                                {tunnel.is_owner && (tunnel.can_edit || tunnel.can_share || tunnel.can_delete) && (
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+                                                                <span className="sr-only">Open menu</span>
+                                                                <MoreHorizontal size={15} />
+                                                            </Button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="end" className="w-48">
+                                                            <DropdownMenuLabel>More Actions</DropdownMenuLabel>
+                                                            <DropdownMenuSeparator />
+                                                            {tunnel.can_edit && (
+                                                                <DropdownMenuItem onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id, readOnly: false })}>
+                                                                    <Users className="mr-2 h-4 w-4" /> Target Server Users
+                                                                </DropdownMenuItem>
+                                                            )}
+                                                            {tunnel.can_share && (
+                                                                <DropdownMenuItem onClick={() => setShareModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                                    <Share2 className="mr-2 h-4 w-4" /> Share Tunnel
+                                                                </DropdownMenuItem>
+                                                            )}
+                                                            {tunnel.can_delete && (
+                                                                <>
+                                                                    {(tunnel.can_edit || tunnel.can_share) && <DropdownMenuSeparator />}
+                                                                    <DropdownMenuItem
+                                                                        onClick={() => setDeleteConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })}
+                                                                        className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                                                                    >
+                                                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                                                    </DropdownMenuItem>
+                                                                </>
+                                                            )}
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
                 </div>
             )}
 

@@ -137,16 +137,22 @@ class TunnelPermissionService:
                 'permission_type': permission_type
             })
 
-            # Send notification to the owner as well
+            # Send notification to the owner as well (if the owner didn't share it)
             if tunnel.user.id != shared_by.id:
                 print(f"Sending TUNNEL-SHARED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
                 send_notification_to_user(tunnel.user.id, {
                     'action': 'TUNNEL-SHARED',
-                    'details': f'You shared tunnel "{tunnel.host_friendly_name}" with {shared_with.username}',
+                    'details': f'{shared_by.username} shared your tunnel "{tunnel.host_friendly_name}" with {shared_with.username}',
                     'tunnel_id': tunnel_id,
                     'shared_with': shared_with.username,
                     'permission_type': permission_type
                 })
+
+            # Silently notify the user who performed the action so their UI updates
+            send_notification_to_user(shared_by.id, {
+                'action': 'TUNNEL-SHARED',
+                'tunnel_id': tunnel_id
+            })
 
             return {'success': True, 'message': 'Tunnel shared successfully'}
 
@@ -191,23 +197,31 @@ class TunnelPermissionService:
             sharing.delete()
 
             # Send notification to the user whose access was revoked
-            print(f"Sending TUNNEL-UNSHARED notification to user {shared_with.id} for tunnel {tunnel_id}")
-            send_notification_to_user(shared_with.id, {
-                'action': 'TUNNEL-UNSHARED',
-                'details': f'Access to tunnel "{tunnel_name}" has been revoked by {shared_by.username}',
-                'tunnel_id': tunnel_id,
-                'revoked_by': shared_by.username
-            })
+            if not is_self_unshare:
+                print(f"Sending TUNNEL-UNSHARED notification to user {shared_with.id} for tunnel {tunnel_id}")
+                send_notification_to_user(shared_with.id, {
+                    'action': 'TUNNEL-UNSHARED',
+                    'details': f'Access to tunnel "{tunnel_name}" has been revoked by {shared_by.username}',
+                    'tunnel_id': tunnel_id,
+                    'revoked_by': shared_by.username
+                })
 
             # Send notification to the owner as well
             if tunnel.user.id != shared_by.id:
                 print(f"Sending TUNNEL-UNSHARED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
+                action_str = "left" if is_self_unshare else f"revoked access from {shared_with.username} for"
                 send_notification_to_user(tunnel.user.id, {
                     'action': 'TUNNEL-UNSHARED',
-                    'details': f'You revoked access to tunnel "{tunnel_name}" from {shared_with.username}',
+                    'details': f'{shared_by.username} {action_str} your tunnel "{tunnel_name}"',
                     'tunnel_id': tunnel_id,
                     'revoked_from': shared_with.username
                 })
+
+            # Silently notify the user who performed the action to update their UI
+            send_notification_to_user(shared_by.id, {
+                'action': 'TUNNEL-UNSHARED',
+                'tunnel_id': tunnel_id
+            })
 
             return {'success': True, 'message': 'Tunnel unshared successfully'}
 
@@ -268,12 +282,18 @@ class TunnelPermissionService:
                 print(f"Sending TUNNEL-PERMISSION-UPDATED notification to owner {tunnel.user.id} for tunnel {tunnel_id}")
                 send_notification_to_user(tunnel.user.id, {
                     'action': 'TUNNEL-PERMISSION-UPDATED',
-                    'details': f'You updated permission for tunnel "{sharing.tunnel.host_friendly_name}" to "{permission_display}" for {sharing.shared_with.username}',
+                    'details': f'{shared_by.username} updated permission for your tunnel "{sharing.tunnel.host_friendly_name}" to "{permission_display}" for {sharing.shared_with.username}',
                     'tunnel_id': tunnel_id,
                     'updated_for': sharing.shared_with.username,
                     'old_permission': old_permission,
                     'new_permission': permission_type
                 })
+
+            # Silently notify the user who performed the action to update their UI
+            send_notification_to_user(shared_by.id, {
+                'action': 'TUNNEL-PERMISSION-UPDATED',
+                'tunnel_id': tunnel_id
+            })
 
             return {'success': True, 'message': 'Sharing permission updated successfully'}
 
