@@ -240,9 +240,13 @@ export default function TunnelsPage() {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {tunnels.map((tunnel) => {
-                        const hasMoreActions = tunnel.can_edit || tunnel.can_share || tunnel.can_delete || !tunnel.is_owner;
+                        const isActive = portsMap[String(tunnel.reverse_port)] === true;
+                        const sharedCount = tunnel.shared_with_count ?? 0;
                         return (
-                            <Card key={tunnel.id} className="flex flex-col h-full hover:shadow-md transition-shadow">
+                            <Card
+                                key={tunnel.id}
+                                className={`flex flex-col h-full hover:shadow-md transition-shadow ${!isActive ? "border-muted bg-muted/30 dark:bg-muted/40" : ""}`}
+                            >
                                 <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3 p-4">
                                     <div className="space-y-1 min-w-0 pr-4">
                                         <CardTitle className="text-lg font-semibold text-primary truncate" title={tunnel.host_friendly_name}>
@@ -259,6 +263,11 @@ export default function TunnelsPage() {
                                             {tunnel.is_owner && tunnel.can_share && (
                                                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 gap-1 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300">
                                                     <Share2 size={10} /> Owner
+                                                </Badge>
+                                            )}
+                                            {tunnel.is_owner && sharedCount > 0 && (
+                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 gap-1 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300">
+                                                    <Share2 size={10} /> {sharedCount === 1 ? "Shared with 1" : `Shared with ${sharedCount}`}
                                                 </Badge>
                                             )}
                                         </div>
@@ -284,11 +293,17 @@ export default function TunnelsPage() {
                                     </div>
                                 </CardContent>
                                 <CardFooter className="p-3 border-t border-border flex justify-between items-center gap-1.5 bg-muted/10 rounded-b-xl">
-                                    <Button asChild variant="default" size="sm" className="flex-1 h-8 text-xs shrink-0 min-w-0">
-                                        <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`} className="truncate">
+                                    {isActive ? (
+                                        <Button asChild variant="default" size="sm" className="flex-1 h-8 text-xs shrink-0 min-w-0">
+                                            <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`} className="truncate">
+                                                <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
+                                            </Link>
+                                        </Button>
+                                    ) : (
+                                        <Button variant="secondary" size="sm" disabled className="flex-1 h-8 text-xs shrink-0 min-w-0 opacity-60 cursor-not-allowed">
                                             <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
-                                        </Link>
-                                    </Button>
+                                        </Button>
+                                    )}
 
                                     <div className="flex items-center gap-0.5 shrink-0">
                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setDetailsModal({ isOpen: true, tunnelId: tunnel.id })} title="Details">

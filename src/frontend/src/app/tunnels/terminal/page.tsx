@@ -657,7 +657,7 @@ export default function TerminalPage() {
                 </div>
 
                 {/* Main Content Area */}
-                <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col md:flex-row gap-2 md:gap-4 transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === 'terminal' ? 'mb-[340px]' : (activeTab === 'terminal' ? 'mb-[70px]' : 'mb-0')}`}>
+                <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col md:flex-row gap-2 md:gap-4 transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === 'terminal' ? 'mb-[320px]' : (activeTab === 'terminal' ? 'mb-[70px]' : 'mb-0')}`}>
 
                     {/* Terminal View */}
                     <div
@@ -718,6 +718,13 @@ export default function TerminalPage() {
                 onInput={(input) => {
                     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                         wsRef.current.send(JSON.stringify({ action: "pty_input", payload: { input } }));
+                    }
+                    if (input === "\r" || input === "\n") {
+                        setTimeout(() => {
+                            try {
+                                xtermRef.current?.scrollToBottom?.();
+                            } catch { }
+                        }, 80);
                     }
                 }}
             />
