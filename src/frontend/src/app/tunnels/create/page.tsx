@@ -137,7 +137,7 @@ export default function CreateTunnelWizard() {
             const res = await apiFetch(`/api/reverse/server/${tunnelId}/usernames`);
             if (res.ok) {
                 const data = await res.json();
-                const list = Array.isArray(data) ? data : (data.results ?? []);
+                const list = data?.usernames ?? (Array.isArray(data) ? data : (data.results ?? []));
                 setUsers(list);
             }
         } catch (e) { console.error(e); }

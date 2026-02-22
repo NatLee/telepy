@@ -17,6 +17,7 @@ from tunnels.views import UnshareTunnelView
 from tunnels.views import ListSharedUsersView
 from tunnels.views import ListAvailableUsersView
 from tunnels.views import UpdateSharingPermissionView
+from tunnels.views import UpdateAllowedUsernamesView
 urlpatterns = [
 
     path('index', TunnelsIndex.as_view(), name='tunnels-index'),
@@ -40,6 +41,5 @@ urlpatterns = [
     path('update-permission/<int:tunnel_id>/<int:user_id>', UpdateSharingPermissionView.as_view(), name='update-sharing-permission'),
     path('shared-users/<int:tunnel_id>', ListSharedUsersView.as_view(), name='list-shared-users'),
     path('available-users/<int:tunnel_id>', ListAvailableUsersView.as_view(), name='list-available-users'),
-
+    path('share/<int:tunnel_id>/<int:user_id>/allowed-usernames', UpdateAllowedUsernamesView.as_view(), name='update-allowed-usernames'),
 ]
-

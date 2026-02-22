@@ -24,7 +24,7 @@ from authorized_keys.models import ServiceAuthorizedKeys
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
 from authorized_keys.utils import get_ss_output_from_redis
-from tunnels.consumers import send_notification_to_user
+from tunnels.consumers import send_notification_to_user, send_notification_to_users
 
 class CheckReverseServerPortStatus(APIView):
     permission_classes = [IsAuthenticated]
@@ -172,6 +172,17 @@ class ReverseServerUsernamesViewSet(BaseKeyViewSet):
     model = ReverseServerUsernames
     queryset = ReverseServerUsernames.objects.all()
 
+    def _notify_tunnel_users(self, tunnel, action, details):
+        """Helper to send WS notification to owner and all shared users"""
+        user_ids = [tunnel.user.id]
+        shared_ids = TunnelSharing.objects.filter(tunnel=tunnel).values_list('shared_with_id', flat=True)
+        user_ids.extend(list(shared_ids))
+        send_notification_to_users(user_ids, {
+            'action': action,
+            'details': details,
+            'tunnel_id': tunnel.id
+        })
+
     def get_queryset(self):
         """
         Return usernames for tunnels owned by the user or shared with the user.
@@ -217,7 +228,19 @@ class ReverseServerUsernamesViewSet(BaseKeyViewSet):
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError("Invalid reverse server.")
 
-        return super().perform_create(serializer)
+            # Check for duplicate username (same user + same tunnel + same username)
+            username_value = self.request.data.get('username', '').strip()
+            if username_value and ReverseServerUsernames.objects.filter(
+                user=self.request.user,
+                reverse_server=reverse_server,
+                username=username_value
+            ).exists():
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError(f"You already have a target user named '{username_value}' on this tunnel.")
+
+        super().perform_create(serializer)
+        tunnel = serializer.instance.reverse_server
+        self._notify_tunnel_users(tunnel, 'TUNNEL-USERNAMES-UPDATED', f"Usernames updated for tunnel '{tunnel.host_friendly_name}'")
 
     def perform_update(self, serializer):
         """
@@ -233,12 +256,45 @@ class ReverseServerUsernamesViewSet(BaseKeyViewSet):
     def perform_destroy(self, instance):
         """
         Override to check edit permissions before deleting.
+        - Owners, Admins, and the user who created this username can truly delete it.
+        - Editors who didn't create it can only "leave" it (remove from their allowed list).
         """
         if not self.can_edit_username(instance):
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied("You don't have permission to delete this username.")
 
-        return super().perform_destroy(instance)
+        tunnel = instance.reverse_server
+        
+        # Check if they have full delete privileges (Owner, Admin, or Creator)
+        can_full_delete = False
+        if self.request.user == tunnel.user:
+            can_full_delete = True
+        elif self.request.user == instance.user:
+            can_full_delete = True
+        elif TunnelPermissionManager.check_access(self.request.user, tunnel, TunnelPermission.ADMIN):
+            can_full_delete = True
+            
+        if can_full_delete:
+            super().perform_destroy(instance)
+            action_msg = f"Usernames updated for tunnel '{tunnel.host_friendly_name}'"
+        else:
+            # For Editors who didn't create it: "leave" the user
+            from tunnels.models import TunnelSharingAllowedUsername
+            sharing = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with=self.request.user
+            ).first()
+            if sharing:
+                # Remove this username from their allowed list
+                TunnelSharingAllowedUsername.objects.filter(
+                    tunnel_sharing=sharing,
+                    reverse_server_username=instance
+                ).delete()
+            action_msg = f"A user left Target Server Users for tunnel '{tunnel.host_friendly_name}'"
+
+        self._notify_tunnel_users(tunnel, 'TUNNEL-USERNAMES-UPDATED', action_msg)
+
+from tunnels.models import TunnelSharing, TunnelPermission, TunnelPermissionManager
 
 class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
     """
@@ -253,38 +309,106 @@ class ReverseServerUsernamesMapServerId(generics.RetrieveAPIView):
         try:
             # get the currently authenticated user
             user = request.user
+            is_owner = False
+            is_admin = False
 
             # First try to get the server as owner
             try:
                 reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+                is_owner = True
             except ReverseServerAuthorizedKeys.DoesNotExist:
                 # Check if tunnel is shared with the user
                 try:
                     reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-                    sharing_exists = TunnelSharing.objects.filter(
+                    sharing = TunnelSharing.objects.filter(
                         tunnel=reverse_server,
                         shared_with=user
-                    ).exists()
-                    if not sharing_exists:
+                    ).first()
+                    if not sharing:
                         return Response({'error': 'Server not found'}, status=404)
                 except ReverseServerAuthorizedKeys.DoesNotExist:
                     return Response({'error': 'Server not found'}, status=404)
 
-            # get all usernames for the specified server
-            # Note: usernames are owned by the tunnel owner, not the shared user
-            usernames = ReverseServerUsernames.objects.filter(
-                reverse_server=reverse_server
-            ).values_list('id', 'username')
+            from services.tunnel_permissions import TunnelPermissionService
+            all_usernames = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
+            usernames = list(all_usernames.values('id', 'username', 'user__username', 'user__id'))
         except ReverseServerUsernames.DoesNotExist:
-            return Response([]) # return empty list if no usernames found
+            return Response({'usernames': [], 'default_username_id': None})
 
-        return Response([
-            {
-                'id': pk,
-                'username': username
-            }
-            for pk, username in usernames
-        ])
+        username_ids = [u['id'] for u in usernames]
+        default_id = reverse_server.default_username_id
+        # Only include default_username_id if it's in the returned list
+        if default_id and default_id not in username_ids:
+            default_id = None
+
+        return Response({
+            'usernames': [
+                {
+                    'id': u['id'],
+                    'username': u['username'],
+                    'created_by': u['user__username'],
+                    'created_by_id': u['user__id']
+                }
+                for u in usernames
+            ],
+            'default_username_id': default_id
+        })
+
+class SetDefaultUsernameView(APIView):
+    """
+    Set or clear the default username for a tunnel.
+    PATCH accepts { default_username_id: int | null }.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _notify_tunnel_users(self, tunnel, action, details):
+        """Helper to send WS notification to owner and all shared users"""
+        user_ids = [tunnel.user.id]
+        shared_ids = TunnelSharing.objects.filter(tunnel=tunnel).values_list('shared_with_id', flat=True)
+        user_ids.extend(list(shared_ids))
+        send_notification_to_users(user_ids, {
+            'action': action,
+            'details': details,
+            'tunnel_id': tunnel.id
+        })
+
+    @swagger_auto_schema(tags=['Reverse Server Keys'])
+    def patch(self, request, server_id):
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found'}, status=404)
+
+        # Check if user has edit permission
+        if not TunnelPermissionManager.check_access(request.user, tunnel, TunnelPermission.EDIT):
+            return Response({'error': 'You do not have permission to update this tunnel'}, status=403)
+
+        default_username_id = request.data.get('default_username_id')
+
+        if default_username_id is None:
+            # Clear default
+            tunnel.default_username = None
+            tunnel.save(update_fields=['default_username'])
+            self._notify_tunnel_users(tunnel, 'TUNNEL-USERNAMES-UPDATED', f"Default username updated for tunnel '{tunnel.host_friendly_name}'")
+            return Response({'message': 'Default username cleared'})
+
+        # Validate the username belongs to this tunnel
+        try:
+            username_obj = ReverseServerUsernames.objects.get(
+                id=default_username_id,
+                reverse_server=tunnel
+            )
+        except ReverseServerUsernames.DoesNotExist:
+            return Response({'error': 'Username not found for this tunnel'}, status=400)
+
+        tunnel.default_username = username_obj
+        tunnel.save(update_fields=['default_username'])
+        self._notify_tunnel_users(tunnel, 'TUNNEL-USERNAMES-UPDATED', f"Default username updated for tunnel '{tunnel.host_friendly_name}'")
+        return Response({
+            'message': f'Default username set to {username_obj.username}',
+            'default_username_id': username_obj.id
+        })
+
 
 class ServiceAuthorizedKeysListView(APIView):
     """

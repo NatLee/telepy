@@ -56,7 +56,7 @@ export default function TunnelsPage() {
     // Modals state
     const [configModal, setConfigModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [scriptModal, setScriptModal] = useState<{ isOpen: boolean, tunnelId: number | null, sshPort: number | null }>({ isOpen: false, tunnelId: null, sshPort: null });
-    const [usersModal, setUsersModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
+    const [usersModal, setUsersModal] = useState<{ isOpen: boolean, tunnelId: number | null, readOnly: boolean }>({ isOpen: false, tunnelId: null, readOnly: false });
     const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [shareModal, setShareModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
@@ -119,11 +119,15 @@ export default function TunnelsPage() {
         }
     }, [lastMessage]);
 
-    // Handle share/unshare/permission WS notifications by refreshing tunnel list
+    // Handle share/unshare/permission/username WS notifications by refreshing tunnel list
     useEffect(() => {
         if (!lastMessage?.message) return;
-        const { action } = lastMessage.message;
-        if (action === "TUNNEL-SHARED" || action === "TUNNEL-UNSHARED" || action === "TUNNEL-PERMISSION-UPDATED") {
+        const { action, details } = lastMessage.message;
+        if (action === "TUNNEL-SHARED" || action === "TUNNEL-UNSHARED" || action === "TUNNEL-PERMISSION-UPDATED" || action === "TUNNEL-USERNAMES-UPDATED") {
+            if (details) {
+                // Show notification to user that something happened
+                showSuccess(details);
+            }
             fetchData();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,14 +303,43 @@ export default function TunnelsPage() {
                                             </Button>
                                         )}
 
-                                        {/* Non-owner: direct Leave button instead of dropdown */}
+                                        {/* Non-owner: Actions logic */}
                                         {!tunnel.is_owner && (
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors" onClick={() => setLeaveConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })} title="Leave Tunnel">
-                                                <LogOut size={15} />
-                                            </Button>
+                                            <>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id, readOnly: !tunnel.can_edit })} title={tunnel.can_edit ? "Manage Target Server Users" : "View Target Server Users"}>
+                                                    <Users size={15} />
+                                                </Button>
+
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+                                                            <span className="sr-only">Open menu</span>
+                                                            <MoreHorizontal size={15} />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end" className="w-48">
+                                                        <DropdownMenuLabel>More Actions</DropdownMenuLabel>
+                                                        <DropdownMenuSeparator />
+                                                        {tunnel.can_share && (
+                                                            <>
+                                                                <DropdownMenuItem onClick={() => setShareModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                                    <Share2 className="mr-2 h-4 w-4" /> Manage Sharing
+                                                                </DropdownMenuItem>
+                                                                <DropdownMenuSeparator />
+                                                            </>
+                                                        )}
+                                                        <DropdownMenuItem
+                                                            onClick={() => setLeaveConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })}
+                                                            className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                                                        >
+                                                            <LogOut className="mr-2 h-4 w-4" /> Leave Tunnel
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </>
                                         )}
 
-                                        {/* Owner: more actions dropdown (only if have any actions) */}
+                                        {/* Owner: more actions dropdown */}
                                         {tunnel.is_owner && (tunnel.can_edit || tunnel.can_share || tunnel.can_delete) && (
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
@@ -319,7 +352,7 @@ export default function TunnelsPage() {
                                                     <DropdownMenuLabel>More Actions</DropdownMenuLabel>
                                                     <DropdownMenuSeparator />
                                                     {tunnel.can_edit && (
-                                                        <DropdownMenuItem onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                        <DropdownMenuItem onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id, readOnly: false })}>
                                                             <Users className="mr-2 h-4 w-4" /> Target Server Users
                                                         </DropdownMenuItem>
                                                     )}
@@ -363,8 +396,9 @@ export default function TunnelsPage() {
             />
             <ManageUsersModal
                 isOpen={usersModal.isOpen}
-                onClose={() => setUsersModal({ isOpen: false, tunnelId: null })}
+                onClose={() => setUsersModal({ isOpen: false, tunnelId: null, readOnly: usersModal.readOnly })}
                 tunnelId={usersModal.tunnelId}
+                readOnly={usersModal.readOnly}
             />
             <TunnelDetailsModal
                 isOpen={detailsModal.isOpen}
@@ -376,6 +410,7 @@ export default function TunnelsPage() {
                 isOpen={shareModal.isOpen}
                 onClose={() => setShareModal({ isOpen: false, tunnelId: null })}
                 tunnelId={shareModal.tunnelId}
+                readOnly={shareModal.tunnelId ? !tunnels.find(t => t.id === shareModal.tunnelId)?.is_owner : false}
             />
 
             <ConfirmDialog

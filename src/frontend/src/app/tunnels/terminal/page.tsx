@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
-import { Terminal as TerminalIcon, X, Server, FolderSync, KeyRound, Copy, FolderOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, FolderSync, KeyRound, Copy, FolderOpen, ChevronDown, ChevronUp, User as UserIcon } from "lucide-react";
 import { getWsOrigin } from "@/lib/websocket";
 import { Button } from "@/components/ui/button";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
@@ -31,6 +31,7 @@ export default function TerminalPage() {
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
+    const [noUsers, setNoUsers] = useState(false);
     const [showFileManager, setShowFileManager] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
@@ -45,22 +46,39 @@ export default function TerminalPage() {
     // Fetch the username for this server (needed for SSH connection)
     const [username, setUsername] = useState<string | null>(null);
 
+    interface TerminalUsername {
+        id: number;
+        username: string;
+        created_by?: string;
+        created_by_id?: number;
+    }
+    const [availableUsernames, setAvailableUsernames] = useState<TerminalUsername[]>([]);
+
     useEffect(() => {
         if (!serverId || !accessToken) return;
 
-        // Fetch available usernames for this server and pick the first one
+        // Fetch available usernames for this server
         apiFetch(`/api/reverse/server/${serverId}/usernames`)
             .then(r => r.ok ? r.json() : null)
             .then(data => {
-                const list = Array.isArray(data) ? data : (data?.results ?? []);
+                // New API shape: { usernames: [...], default_username_id: int|null }
+                const list = data?.usernames ?? (Array.isArray(data) ? data : []);
+                const defaultId = data?.default_username_id;
+                setAvailableUsernames(list);
                 if (list.length > 0) {
-                    setUsername(list[0].username ?? list[0]);
+                    // Preselect: default_username_id if available, otherwise first
+                    const defaultItem = defaultId ? list.find((u: any) => u.id === defaultId) : null;
+                    setUsername(defaultItem ? defaultItem.username : (list[0].username ?? list[0]));
+                    setNoUsers(false);
                 } else {
-                    // Fallback: try using serverId as username
-                    setUsername("root");
+                    setNoUsers(true);
+                    setConnecting(false);
                 }
             })
-            .catch(() => setUsername("root"));
+            .catch(() => {
+                setNoUsers(true);
+                setConnecting(false);
+            });
     }, [serverId, accessToken]);
 
     useEffect(() => {
@@ -224,6 +242,9 @@ export default function TerminalPage() {
                 } else if (code === 4002) {
                     setPermissionDenied("Tunnel not found or server ID is invalid.");
                     term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
+                } else if (code === 4006) {
+                    setNoUsers(true);
+                    term.write("\r\n\x1b[31m[No Users] No target server users configured for this tunnel.\x1b[0m\r\n");
                 } else {
                     term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
                 }
@@ -383,6 +404,28 @@ export default function TerminalPage() {
             </div>
         );
     }
+    if (noUsers) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)] p-4 bg-background w-full">
+                <Card className="max-w-md w-full border-warning/30 shadow-sm">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-warning">
+                            <Server size={20} />
+                            No Target Server Users
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+                        <p className="text-sm text-muted-foreground">
+                            This tunnel does not have any target server users configured. Please add at least one user in the tunnel&apos;s <strong>Target Server Users</strong> settings before connecting.
+                        </p>
+                        <Button onClick={() => router.push("/tunnels")} className="w-full">
+                            Return to Tunnels List
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)] w-full overflow-hidden bg-background relative">
@@ -419,6 +462,29 @@ export default function TerminalPage() {
                                     <div className={`w-2 h-2 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]' : 'bg-destructive'}`}></div>
                                     {connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
                                 </Badge>
+
+                                {/* Username Switcher */}
+                                {availableUsernames.length > 1 && (
+                                    <div className="flex items-center gap-1.5">
+                                        <UserIcon size={12} className="text-muted-foreground" />
+                                        <select
+                                            value={username || ''}
+                                            onChange={(e) => setUsername(e.target.value)}
+                                            className="h-7 text-xs bg-muted/50 border border-border rounded px-1.5 py-0.5 text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                                        >
+                                            {availableUsernames.map(u => (
+                                                <option key={u.id} value={u.username}>
+                                                    {u.username} {u.created_by ? `(By: ${u.created_by} #${u.created_by_id})` : ''}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+                                {availableUsernames.length === 1 && username && (
+                                    <Badge variant="secondary" className="gap-1 px-2 py-0.5 font-mono text-xs">
+                                        <UserIcon size={11} /> {username}
+                                    </Badge>
+                                )}
 
                                 {syncedPath && (
                                     <button
@@ -492,7 +558,21 @@ export default function TerminalPage() {
                                     {username && (
                                         <div className="col-span-2 flex justify-between items-center bg-muted/50 p-1.5 rounded border border-border/50">
                                             <span>User</span>
-                                            <code className="bg-background px-1.5 py-0.5 rounded border border-border/50">{username}</code>
+                                            {availableUsernames.length > 1 ? (
+                                                <select
+                                                    value={username}
+                                                    onChange={(e) => setUsername(e.target.value)}
+                                                    className="bg-background px-1.5 py-0.5 rounded border border-border/50 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                                                >
+                                                    {availableUsernames.map(u => (
+                                                        <option key={u.id} value={u.username}>
+                                                            {u.username} {u.created_by ? `(By: ${u.created_by} #${u.created_by_id})` : ''}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            ) : (
+                                                <code className="bg-background px-1.5 py-0.5 rounded border border-border/50">{username}</code>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -624,7 +704,7 @@ export default function TerminalPage() {
                         <div
                             className={`flex-1 min-h-0 min-w-0 md:max-w-md w-full bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 ${activeTab === 'files' ? 'translate-x-0 z-10' : 'translate-x-full z-0'}`}
                         >
-                            <FileManagerPanel serverId={serverId!} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                            <FileManagerPanel key={username} serverId={serverId!} username={username} accessToken={accessToken} initialPath={syncedPath} />
                         </div>
                     )}
                 </div>
