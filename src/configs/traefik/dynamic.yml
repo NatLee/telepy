@@ -10,7 +10,7 @@ backendRouterSettings: &backendRouterSettings
 frontendServiceSettings: &frontendServiceSettings
   loadBalancer:
     servers:
-      - url: "http://frontend:80"
+      - url: "http://frontend:3000"
 
 backendServiceSettings: &backendServiceSettings
   loadBalancer:
@@ -28,13 +28,10 @@ http:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/api`)"
 
-    backend-login:
+    backend-tunnel-sharing:
       <<: *backendRouterSettings
-      rule: "PathPrefix(`/login`)"
-
-    backend-page:
-      <<: *backendRouterSettings
-      rule: "PathPrefix(`/tunnels`)"
+      rule: "PathPrefix(`/tunnels/share`) || PathPrefix(`/tunnels/unshare`) || PathPrefix(`/tunnels/shared-users`) || PathPrefix(`/tunnels/available-users`) || PathPrefix(`/tunnels/update-permission`) || PathPrefix(`/tunnels/server`)"
+      priority: 100
 
     backend-websocket:
       <<: *backendRouterSettings
