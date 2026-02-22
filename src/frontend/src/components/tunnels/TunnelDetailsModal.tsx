@@ -93,18 +93,20 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                         >
                             Close
                         </Button>
-                        <Button
-                            type="button"
-                            onClick={handleSaveDescription}
-                            disabled={isSaving}
-                        >
-                            {isSaving ? (
-                                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                            ) : (
-                                <Save size={16} className="mr-2" />
-                            )}
-                            Save Changes
-                        </Button>
+                        {details.user_permission !== 'view' && (
+                            <Button
+                                type="button"
+                                onClick={handleSaveDescription}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? (
+                                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
+                                ) : (
+                                    <Save size={16} className="mr-2" />
+                                )}
+                                Save Changes
+                            </Button>
+                        )}
                     </>
                 ) : undefined
             }
@@ -137,8 +139,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 rows={3}
+                                disabled={details.user_permission === 'view'}
                                 className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-                                placeholder="Enter an optional description..."
+                                placeholder={details.user_permission === 'view' ? "No description available" : "Enter an optional description..."}
                             />
                         </div>
 
