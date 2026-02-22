@@ -4,7 +4,8 @@ import React, { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { apiFetch } from "@/lib/api";
-import { useNotificationWebSocket } from "@/lib/websocket";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
 import { Share2, UserPlus, X, Command, Shield, Users, Edit2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,6 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
     const [selectedAllowedIds, setSelectedAllowedIds] = useState<number[]>([]);
     const [editTargetUsersModal, setEditTargetUsersModal] = useState<{ userId: number, username: string, allowedIds: number[] } | null>(null);
     const { showSuccess, showError } = useToast();
-    const { lastMessage } = useNotificationWebSocket();
 
     const fetchUsers = async () => {
         if (!tunnelId) return;
@@ -72,14 +72,20 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
     }, [isOpen, tunnelId]);
 
     // Handle WebSocket updates for shares, permissions, and allowed usernames
-    useEffect(() => {
-        if (!lastMessage?.message || !isOpen || !tunnelId) return;
-        const { action, tunnel_id } = lastMessage.message;
-        if ((action === "TUNNEL-SHARED" || action === "TUNNEL-UNSHARED" || action === "TUNNEL-PERMISSION-UPDATED" || action === "TUNNEL-USERNAMES-UPDATED") && tunnel_id === tunnelId) {
-            fetchUsers();
+    useNotificationHandlers({
+        [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg) => {
+            if (isOpen && msg.tunnel_id === tunnelId) fetchUsers();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_UNSHARED]: (msg) => {
+            if (isOpen && msg.tunnel_id === tunnelId) fetchUsers();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_PERMISSION_UPDATED]: (msg) => {
+            if (isOpen && msg.tunnel_id === tunnelId) fetchUsers();
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_USERNAMES_UPDATED]: (msg) => {
+            if (isOpen && msg.tunnel_id === tunnelId) fetchUsers();
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [lastMessage, isOpen, tunnelId]);
+    });
 
     const handleShare = async (e: React.FormEvent) => {
         e.preventDefault();

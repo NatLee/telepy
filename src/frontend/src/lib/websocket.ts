@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth";
+import { NotificationPayload } from "./notificationActions";
 
 // Re-export getWsOrigin for use elsewhere (e.g. terminal page)
 export function getWsOrigin(): string {
@@ -114,6 +115,34 @@ export function useNotificationWebSocket() {
     }, [accessToken]);
 
     return { isConnected, lastMessage };
+}
+
+/**
+ * Hook to abstract WebSocket notification dispatching based on action.
+ * Maps incoming WS actions to provided handler functions.
+ */
+export function useNotificationHandlers(
+    handlers: Partial<Record<string, (msg: NotificationPayload) => void>>
+) {
+    const { isConnected, lastMessage } = useNotificationWebSocket();
+
+    // Store handlers in a ref so we don't trigger the effect on every re-render
+    const handlersRef = useRef(handlers);
+    useEffect(() => {
+        handlersRef.current = handlers;
+    }, [handlers]);
+
+    useEffect(() => {
+        if (!lastMessage?.message) return;
+        const msg = lastMessage.message as NotificationPayload;
+        const action = msg.action as string;
+
+        if (action && handlersRef.current[action]) {
+            handlersRef.current[action]!(msg);
+        }
+    }, [lastMessage]);
+
+    return { isConnected };
 }
 
 /**
