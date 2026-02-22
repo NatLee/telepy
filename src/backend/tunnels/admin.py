@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.template.response import TemplateResponse
 from django.urls import path
-from .models import TunnelSharing, PermissionRegistry, TunnelPermission
+from .models import TunnelSharing, TunnelSharingAllowedUsername, PermissionRegistry, TunnelPermission
 
 
 class PermissionGroupFilter(admin.SimpleListFilter):
@@ -177,3 +177,14 @@ class TunnelSharingAdmin(admin.ModelAdmin):
         extra_context = extra_context or {}
         extra_context['permission_groups_url'] = '../permission-groups/'
         return super().changelist_view(request, extra_context)
+
+
+@admin.register(TunnelSharingAllowedUsername)
+class TunnelSharingAllowedUsernameAdmin(admin.ModelAdmin):
+    list_display = ('tunnel_sharing', 'reverse_server_username')
+    list_filter = ('tunnel_sharing__tunnel',)
+    search_fields = (
+        'tunnel_sharing__tunnel__host_friendly_name',
+        'tunnel_sharing__shared_with__username',
+        'reverse_server_username__username',
+    )

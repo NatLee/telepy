@@ -9,6 +9,11 @@ class ReverseServerAuthorizedKeys(models.Model):
     key = models.CharField(max_length=19200, unique=True, blank=False, null=False, verbose_name='SSH Key (public)')
     reverse_port = models.PositiveIntegerField(blank=False, null=False, unique=True, verbose_name='Reverse Port')
     description = models.TextField(blank=True, null=True, verbose_name='Description')
+    default_username = models.ForeignKey(
+        'ReverseServerUsernames', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='default_for_tunnels',
+        verbose_name='Default Username'
+    )
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Created At')
     updated_at = models.DateTimeField(auto_now=True, verbose_name='Updated At')
 

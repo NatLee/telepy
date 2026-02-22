@@ -102,8 +102,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4002)
             return
 
+        # Check if any target server usernames exist (4006 = none configured)
+        has_usernames = await self.has_target_server_usernames(server_id)
+        if not has_usernames:
+            logger.error(f"No target server usernames configured for server [{server_id}]")
+            await self.close(code=4006)
+            return
+
         # Check if username is valid
-        if not await self.check_username(server_id, username):
+        if not await self.check_username(server_id, username, user):
             logger.error(f"Invalid username: {username}")
             await self.close(code=4003)
             return
@@ -140,19 +147,30 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return False
 
     @sync_to_async
-    def check_username(self, server_id, username) -> bool:
-        # Check if the username is valid
+    def check_username(self, server_id, username, user) -> bool:
         try:
-            reverser_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
         except ReverseServerAuthorizedKeys.DoesNotExist:
             print(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
             return False
-        try:
-            reverser_server_username = ReverseServerUsernames.objects.get(reverse_server=reverser_server, username=username)
-        except ReverseServerUsernames.DoesNotExist:
-            print(f"ReverseServerUsernames with username [{username}] does not exist")
+
+        from services.tunnel_permissions import TunnelPermissionService
+        allowed_usernames = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
+        
+        if not allowed_usernames.filter(username=username).exists():
+            print(f"Username [{username}] not in allowed list for user [{user}]")
             return False
+            
         return True
+
+    @sync_to_async
+    def has_target_server_usernames(self, server_id) -> bool:
+        """Check if the server has any configured target server usernames"""
+        try:
+            reverser_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return False
+        return ReverseServerUsernames.objects.filter(reverse_server=reverser_server).exists()
 
     @sync_to_async
     def get_reverse_server_port(self, server_id) -> int:
@@ -561,6 +579,15 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
             await self.close(code=4002)
             return
 
+        # Check if any target server usernames exist (4006 = none configured)
+        has_usernames = await sync_to_async(
+            lambda: ReverseServerUsernames.objects.filter(reverse_server_id=server_id).exists()
+        )()
+        if not has_usernames:
+            logger.error(f"No target server usernames configured for server [{server_id}]")
+            await self.close(code=4006)
+            return
+
         # Check if username is valid
         if not await self.check_username(server_id, username, user):
             logger.error(f"Invalid username: {username}")
@@ -957,31 +984,19 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
 
     @sync_to_async
     def check_username(self, server_id, username, user) -> bool:
-        """Check if username exists for the server (checking ownership or sharing)"""
         try:
-            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id, user=user)
+            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            # Check if tunnel is shared with the user
-            try:
-                reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-                # Check if there's a sharing record for this user
-                sharing_exists = TunnelSharing.objects.filter(
-                    tunnel=reverse_server,
-                    shared_with=user
-                ).exists()
-                if not sharing_exists:
-                    logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist for user {user}")
-                    return False
-            except ReverseServerAuthorizedKeys.DoesNotExist:
-                logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist for user {user}")
-                return False
-
-        # Check if the username exists for this reverse server (regardless of who created it)
-        try:
-            ReverseServerUsernames.objects.get(reverse_server=reverse_server, username=username)
-        except ReverseServerUsernames.DoesNotExist:
-            logger.error(f"ReverseServerUsernames with username [{username}] does not exist for server {server_id}")
+            logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
             return False
+
+        from services.tunnel_permissions import TunnelPermissionService
+        allowed_usernames = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
+        
+        if not allowed_usernames.filter(username=username).exists():
+            logger.error(f"Username [{username}] not in allowed list for user [{user}]")
+            return False
+            
         return True
 
     @sync_to_async

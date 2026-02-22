@@ -1,11 +1,13 @@
 from django.urls import path, include
 from authorized_keys.views import CheckReverseServerPortStatus
 from authorized_keys.views import ReverseServerUsernamesMapServerId
+from authorized_keys.views import SetDefaultUsernameView
 from authorized_keys.views import ServiceAuthorizedKeysListView
 from authorized_keys.views import InternalKeysView
 urlpatterns = [
     path('server/status/ports', CheckReverseServerPortStatus.as_view(), name='reverse-server-ports-status'),
     path('server/<int:server_id>/usernames', ReverseServerUsernamesMapServerId.as_view(), name='reverse-server-usernames'),
+    path('server/<int:server_id>/default-username', SetDefaultUsernameView.as_view(), name='set-default-username'),
     path('service/keys', ServiceAuthorizedKeysListView.as_view(), name='service-authorized-keys'),
     path('internal/keys', InternalKeysView.as_view(), name='internal-keys'),
 ]

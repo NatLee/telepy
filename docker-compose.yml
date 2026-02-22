@@ -21,12 +21,15 @@ services:
 
   frontend:
     <<: [ *common-networks, *common-restart ]
-    container_name: telepy-nginx-${PROJECT_NAME}
-    image: nginx:latest
-    volumes:
-      - ./src/configs/nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./src/configs/nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - ./src/frontend:/src
+    container_name: telepy-nextjs-${PROJECT_NAME}
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${SOCIAL_GOOGLE_CLIENT_ID}
+    environment:
+      - NEXT_PUBLIC_API_BASE=
+      - NEXT_PUBLIC_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
 
   backend:
     <<: [ *common-networks, *common-restart ]
@@ -58,6 +61,7 @@ services:
       - ./telepy-data:/data
       # SSH
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
+      - ./telepy-logs/ssh:/ssh-logs:ro # SSH logs for backend API
     depends_on:
       - redis
       - ssh
