@@ -13,7 +13,8 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
-from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
+from authorized_keys.models import ReverseServerUsernames
+from tunnels.models import TunnelSharing, TunnelSharingAllowedUsername, TunnelPermissionManager, TunnelPermission
 from services.tunnel_permissions import TunnelPermissionService
 
 
@@ -52,11 +53,7 @@ CLIENT_STEM = """
 # ========================================
 """
 
-CLIENT_NO_USER_STEM = """
-# ========================================
-# You need to add a user to the reverse server authorized keys.
-# ========================================
-"""
+CLIENT_NO_USER_STEM = ""
 
 SERVER_STEM = """# ========================================
 # Reverse Server Configuration
@@ -243,8 +240,29 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
           reverse_server_ssh_port=self.reverse_server_ssh_port
         ).render()
 
-        # Read all reverse users.
-        server_auth_key_user = list(server_auth_key.username_set.all())
+        # Read all reverse users accessible by this user
+        from services.tunnel_permissions import TunnelPermissionService
+        server_auth_key_user = list(TunnelPermissionService.get_allowed_usernames(self.request.user, server_auth_key))
+
+        # Build usernames list for the frontend selector
+        usernames_list = [
+            {
+                'id': u.id,
+                'username': u.username,
+                'created_by': u.user.username if u.user else None,
+                'created_by_id': u.user.id if u.user else None,
+            }
+            for u in server_auth_key_user
+        ]
+
+        # Check if a specific username_id was requested
+        selected_username_id = self.request.query_params.get('username_id')
+        if selected_username_id:
+            try:
+                selected_username_id = int(selected_username_id)
+                server_auth_key_user = [u for u in server_auth_key_user if u.id == selected_username_id]
+            except (ValueError, TypeError):
+                pass
 
         if not server_auth_key_user:
             config_string += CLIENT_NO_USER_STEM
@@ -264,7 +282,7 @@ class ReverseServerAuthorizedKeysConfig(ReverseServerScriptBase):
               reverse_port=server_auth_key.reverse_port
             ).render()
 
-        return Response({'config': config_string})
+        return Response({'config': config_string, 'usernames': usernames_list})
 
 
 class PowershellSSHTunnelScript(ReverseServerScriptBase):
@@ -572,6 +590,23 @@ class ShareTunnelView(APIView):
             )
 
             if result['success']:
+                # Create allowed username records if specified
+                allowed_ids = request.data.get('allowed_target_username_ids', [])
+                if allowed_ids and isinstance(allowed_ids, list):
+                    sharing = TunnelSharing.objects.filter(
+                        tunnel_id=tunnel_id,
+                        shared_with_id=shared_with_user_id
+                    ).first()
+                    if sharing:
+                        valid_usernames = ReverseServerUsernames.objects.filter(
+                            id__in=allowed_ids,
+                            reverse_server=tunnel
+                        )
+                        for username_obj in valid_usernames:
+                            TunnelSharingAllowedUsername.objects.get_or_create(
+                                tunnel_sharing=sharing,
+                                reverse_server_username=username_obj
+                            )
                 return Response({'message': result['message']}, status=201)
             else:
                 return Response({'error': result['error']}, status=400)
@@ -684,8 +719,10 @@ class ListSharedUsersView(APIView):
             except ReverseServerAuthorizedKeys.DoesNotExist:
                 return Response({'error': 'Tunnel not found'}, status=404)
 
-            # Check if user has permission to manage sharing for this tunnel
-            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+            # Check if user has ANY access to the tunnel to view the share list
+            # We allow viewers and editors to see who else has access to the tunnel
+            user_has_access = (tunnel.user == request.user) or TunnelSharing.objects.filter(tunnel=tunnel, shared_with=request.user).exists()
+            if not user_has_access:
                 return Response({'error': 'You do not have permission to view sharing for this tunnel'}, status=403)
 
             # Get sharing records
@@ -693,12 +730,21 @@ class ListSharedUsersView(APIView):
 
             users = []
             for sharing in sharings:
+                # Get allowed usernames for this sharing
+                allowed = TunnelSharingAllowedUsername.objects.filter(
+                    tunnel_sharing=sharing
+                ).select_related('reverse_server_username')
+                allowed_usernames = [
+                    {'id': a.reverse_server_username.id, 'username': a.reverse_server_username.username}
+                    for a in allowed
+                ]
                 users.append({
                     'id': sharing.shared_with.id,
                     'username': sharing.shared_with.username,
                     'email': sharing.shared_with.email,
                     'permission_type': sharing.permission_type,
-                    'shared_at': sharing.shared_at.isoformat()
+                    'shared_at': sharing.shared_at.isoformat(),
+                    'allowed_target_usernames': allowed_usernames
                 })
 
             return Response({'users': users})
@@ -745,4 +791,76 @@ class ListAvailableUsersView(APIView):
 
         except ReverseServerAuthorizedKeys.DoesNotExist:
             return Response({'error': 'Tunnel not found or access denied'}, status=404)
+
+
+class UpdateAllowedUsernamesView(APIView):
+    """
+    Update the allowed target server usernames for a shared user.
+    PATCH replaces all allowed username records for the given sharing.
+    """
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Update Allowed Usernames",
+        operation_description="Update which target server usernames a shared user can access",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'allowed_target_username_ids': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(type=openapi.TYPE_INTEGER),
+                    description='List of ReverseServerUsernames IDs. Empty array = allow all.'
+                ),
+            },
+            required=['allowed_target_username_ids']
+        ),
+        tags=['Tunnel Sharing']
+    )
+    def patch(self, request, tunnel_id, user_id):
+        try:
+            try:
+                tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
+            except ReverseServerAuthorizedKeys.DoesNotExist:
+                return Response({'error': 'Tunnel not found'}, status=404)
+
+            if not TunnelPermissionManager.check_share_access(request.user, tunnel):
+                return Response({'error': 'You do not have permission to manage this tunnel'}, status=403)
+
+            sharing = TunnelSharing.objects.filter(
+                tunnel=tunnel,
+                shared_with_id=user_id
+            ).first()
+            if not sharing:
+                return Response({'error': 'Sharing record not found'}, status=404)
+
+            allowed_ids = request.data.get('allowed_target_username_ids', [])
+            if not isinstance(allowed_ids, list):
+                return Response({'error': 'allowed_target_username_ids must be a list'}, status=400)
+
+            # Delete existing allowed records
+            TunnelSharingAllowedUsername.objects.filter(tunnel_sharing=sharing).delete()
+
+            # Create new allowed records (only for valid username IDs belonging to this tunnel)
+            if allowed_ids:
+                valid_usernames = ReverseServerUsernames.objects.filter(
+                    id__in=allowed_ids,
+                    reverse_server=tunnel
+                )
+                for username_obj in valid_usernames:
+                    TunnelSharingAllowedUsername.objects.create(
+                        tunnel_sharing=sharing,
+                        reverse_server_username=username_obj
+                    )
+
+            from tunnels.consumers import send_notification_to_users
+            send_notification_to_users([request.user.id, user_id], {
+                'action': 'TUNNEL-USERNAMES-UPDATED',
+                'details': 'Allowed target usernames updated',
+                'tunnel_id': tunnel.id
+            })
+
+            return Response({'message': 'Allowed usernames updated'})
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
 

@@ -130,6 +130,33 @@ class TunnelSharing(TunnelPermission):
     def __str__(self):
         return f'{self.tunnel.host_friendly_name} shared by {self.shared_by.username} with {self.shared_with.username} ({self.get_permission_type_display()})'
 
+
+class TunnelSharingAllowedUsername(models.Model):
+    """
+    Restricts which target server usernames a sharee can use.
+    If a TunnelSharing has NO TunnelSharingAllowedUsername records,
+    it means the sharee can use ALL target server usernames (backward compatible).
+    If it HAS records, only those usernames are allowed.
+    """
+    tunnel_sharing = models.ForeignKey(
+        TunnelSharing,
+        on_delete=models.CASCADE,
+        related_name='allowed_usernames'
+    )
+    reverse_server_username = models.ForeignKey(
+        'authorized_keys.ReverseServerUsernames',
+        on_delete=models.CASCADE,
+        related_name='sharing_restrictions'
+    )
+
+    class Meta:
+        unique_together = ('tunnel_sharing', 'reverse_server_username')
+        verbose_name = 'Allowed Username for Sharing'
+        verbose_name_plural = 'Allowed Usernames for Sharing'
+
+    def __str__(self):
+        return f'{self.tunnel_sharing} → {self.reverse_server_username.username}'
+
     @property
     def can_edit(self):
         """Backward compatibility property - checks if user can edit"""

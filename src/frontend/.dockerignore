@@ -1,0 +1,8 @@
+# Don't copy host .env files; build uses build-args -> ENV for NEXT_PUBLIC_*
+.env*
+.env.local
+
+# Standard
+node_modules
+.next
+.git

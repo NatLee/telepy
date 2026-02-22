@@ -19,6 +19,68 @@ class TunnelPermissionService:
     """
 
     @staticmethod
+    def get_allowed_usernames(user: User, tunnel: ReverseServerAuthorizedKeys):
+        """
+        Returns a QuerySet of all ReverseServerUsernames the given user is allowed
+        to access on the given tunnel.
+        """
+        from django.db.models import Q
+        
+        all_usernames = ReverseServerUsernames.objects.filter(reverse_server=tunnel)
+
+        # 1. Owner or Admin check -> Full access
+        if tunnel.user == user or TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.ADMIN):
+            return all_usernames
+
+        # 2. Check sharing for non-owners/non-admins
+        sharing = TunnelSharing.objects.filter(tunnel=tunnel, shared_with=user).first()
+        if not sharing:
+            # Not shared -> no access
+            return all_usernames.none()
+
+        # 3. If shared, check restricted allowed usernames
+        from tunnels.models import TunnelSharingAllowedUsername
+        allowed = TunnelSharingAllowedUsername.objects.filter(
+            tunnel_sharing=sharing
+        ).values_list('reverse_server_username_id', flat=True)
+
+        if allowed.exists():
+            # explicitly allowed OR self-created
+            return all_usernames.filter(Q(id__in=allowed) | Q(user=user))
+        else:
+            # explicitly allowed list is empty -> ONLY self-created
+            return all_usernames.filter(user=user)
+
+    @staticmethod
+    def _transfer_usernames_to_owner(tunnel, user):
+        """
+        Transfer all Target Server Usernames created by `user` for `tunnel` to the tunnel owner.
+        If the owner already has a username with the same name, delete the duplicate instead.
+        """
+        owner = tunnel.user
+        if owner == user:
+            return  # Owner's usernames stay as-is
+
+        user_usernames = ReverseServerUsernames.objects.filter(
+            reverse_server=tunnel,
+            user=user
+        )
+        for uname in user_usernames:
+            # Check if the owner already has one with the same name
+            owner_has_same = ReverseServerUsernames.objects.filter(
+                reverse_server=tunnel,
+                user=owner,
+                username=uname.username
+            ).exists()
+            if owner_has_same:
+                # Delete the duplicate
+                uname.delete()
+            else:
+                # Transfer to owner
+                uname.user = owner
+                uname.save(update_fields=['user'])
+
+    @staticmethod
     @transaction.atomic
     def share_tunnel(shared_by: User, tunnel_id: int, shared_with_user_id: int, permission_type: str = 'view') -> dict:
         """
@@ -105,8 +167,12 @@ class TunnelPermissionService:
             # Get the tunnel
             tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
 
+            # Allow the shared_with user to remove themselves (self-unshare / leave)
+            is_self_unshare = (shared_by.id == shared_with_user_id)
+
             # Check if shared_by has permission to manage sharing for this tunnel
-            if not TunnelPermissionManager.check_share_access(shared_by, tunnel):
+            # OR if the user is removing themselves
+            if not is_self_unshare and not TunnelPermissionManager.check_share_access(shared_by, tunnel):
                 return {'success': False, 'error': 'You do not have permission to manage sharing for this tunnel'}
 
             # Get and delete the sharing record
@@ -118,6 +184,9 @@ class TunnelPermissionService:
             # Store sharing info before deletion for notification
             shared_with = sharing.shared_with
             tunnel_name = sharing.tunnel.host_friendly_name
+
+            # Transfer Target Server Usernames created by this user to the owner
+            TunnelPermissionService._transfer_usernames_to_owner(tunnel, shared_with)
 
             sharing.delete()
 
@@ -177,6 +246,10 @@ class TunnelPermissionService:
             old_permission = sharing.permission_type
             sharing.permission_type = permission_type
             sharing.save()
+
+            # If downgraded to view-only, transfer their Target Server Usernames to owner
+            if permission_type == TunnelPermission.VIEW and old_permission in [TunnelPermission.EDIT, TunnelPermission.ADMIN]:
+                TunnelPermissionService._transfer_usernames_to_owner(tunnel, sharing.shared_with)
 
             # Send notification to the user whose permission was updated
             permission_display = dict(TunnelPermission.PERMISSION_CHOICES).get(permission_type, permission_type)

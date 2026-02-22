@@ -19,11 +19,18 @@ django_asgi_app = get_asgi_application()
 
 import tunnels.routing
 
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+# In development, skip AllowedHostsOriginValidator so the Next.js dev server
+# (localhost:3000) can connect to WebSockets on a different port (e.g. 8787).
+# In production, keep the validator for security.
+_ws_stack = AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
+if not DEBUG:
+    _ws_stack = AllowedHostsOriginValidator(_ws_stack)
+
 application = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
-        "websocket": AllowedHostsOriginValidator(
-            AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
-        ),
+        "websocket": _ws_stack,
     }
 )

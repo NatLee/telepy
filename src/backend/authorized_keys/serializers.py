@@ -9,6 +9,7 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     can_share = serializers.SerializerMethodField()
     can_delete = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
+    user_permission = serializers.SerializerMethodField()
 
     def get_can_edit(self, obj):
         """
@@ -58,6 +59,21 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
             return False
 
         return obj.user == request.user
+
+    def get_user_permission(self, obj):
+        """
+        Get the specific permission level of the current user for this tunnel.
+        Returns 'owner', 'admin', 'edit', 'view', or None.
+        """
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+
+        if obj.user == request.user:
+            return 'owner'
+
+        perm = TunnelPermissionManager.get_user_permissions_for_tunnel(request.user, obj)
+        return perm.permission_type if perm else None
 
     class Meta:
         model = ReverseServerAuthorizedKeys
