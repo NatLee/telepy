@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ConfigModal } from "@/components/tunnels/ConfigModal";
@@ -24,7 +25,8 @@ import {
     Activity,
     MoreHorizontal,
     Info,
-    RefreshCw
+    RefreshCw,
+    LogOut
 } from "lucide-react";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -58,8 +60,10 @@ export default function TunnelsPage() {
     const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [shareModal, setShareModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
+    const [leaveConfirm, setLeaveConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
 
     const { showSuccess, showError } = useToast();
+    const { user } = useAuth();
 
     // Actually, we can just use the hook here and it will connect. 
     // If AppLayout also connected, there might be two connections.
@@ -115,6 +119,16 @@ export default function TunnelsPage() {
         }
     }, [lastMessage]);
 
+    // Handle share/unshare/permission WS notifications by refreshing tunnel list
+    useEffect(() => {
+        if (!lastMessage?.message) return;
+        const { action } = lastMessage.message;
+        if (action === "TUNNEL-SHARED" || action === "TUNNEL-UNSHARED" || action === "TUNNEL-PERMISSION-UPDATED") {
+            fetchData();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [lastMessage]);
+
     const handleDelete = async () => {
         if (!deleteConfirm.tunnelId) return;
         try {
@@ -129,6 +143,21 @@ export default function TunnelsPage() {
             }
         } catch (e: any) {
             showError(e.message || "Failed to delete tunnel");
+        }
+    };
+
+    const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {
+        if (!user?.id) { showError("Failed to get current user"); return; }
+        try {
+            const res = await apiFetch(`/tunnels/unshare/${tunnelId}/${user.id}`, { method: "DELETE" });
+            if (res.ok) {
+                showSuccess(`You left tunnel '${tunnelName}'`);
+                fetchData();
+            } else {
+                showError("Failed to leave tunnel");
+            }
+        } catch (e: any) {
+            showError(e.message || "Failed to leave tunnel");
         }
     };
 
@@ -206,93 +235,118 @@ export default function TunnelsPage() {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {tunnels.map((tunnel) => (
-                        <Card key={tunnel.id} className="flex flex-col h-full hover:shadow-md transition-shadow">
-                            <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3 p-4">
-                                <div className="space-y-1 min-w-0 pr-4">
-                                    <CardTitle className="text-lg font-semibold text-primary truncate" title={tunnel.host_friendly_name}>
-                                        {tunnel.host_friendly_name}
-                                    </CardTitle>
-                                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                        <Activity size={13} />
-                                        <span>Port: <span className="font-mono font-medium text-foreground">{tunnel.reverse_port}</span></span>
-                                    </div>
-                                </div>
-                                <div className="shrink-0">{getStatus(tunnel.reverse_port)}</div>
-                            </CardHeader>
-                            <CardContent className="flex-1 p-4 pt-1">
-                                <div className="space-y-3">
-                                    <div>
-                                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Public Key</p>
-                                        <div className="bg-muted rounded px-2 py-1.5 font-mono text-[11px] truncate text-muted-foreground" title={tunnel.key ?? ''}>
-                                            {tunnel.key ? `${tunnel.key.substring(0, 45)}...` : '—'}
+                    {tunnels.map((tunnel) => {
+                        const hasMoreActions = tunnel.can_edit || tunnel.can_share || tunnel.can_delete || !tunnel.is_owner;
+                        return (
+                            <Card key={tunnel.id} className="flex flex-col h-full hover:shadow-md transition-shadow">
+                                <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3 p-4">
+                                    <div className="space-y-1 min-w-0 pr-4">
+                                        <CardTitle className="text-lg font-semibold text-primary truncate" title={tunnel.host_friendly_name}>
+                                            {tunnel.host_friendly_name}
+                                        </CardTitle>
+                                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground flex-wrap">
+                                            <Activity size={13} />
+                                            <span>Port: <span className="font-mono font-medium text-foreground">{tunnel.reverse_port}</span></span>
+                                            {!tunnel.is_owner && (
+                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 gap-1 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300">
+                                                    <Share2 size={10} /> Shared with you
+                                                </Badge>
+                                            )}
+                                            {tunnel.is_owner && tunnel.can_share && (
+                                                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 gap-1 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300">
+                                                    <Share2 size={10} /> Owner
+                                                </Badge>
+                                            )}
                                         </div>
                                     </div>
-                                    {tunnel.description && (
+                                    <div className="shrink-0">{getStatus(tunnel.reverse_port)}</div>
+                                </CardHeader>
+                                <CardContent className="flex-1 p-4 pt-1">
+                                    <div className="space-y-3">
                                         <div>
-                                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Description</p>
-                                            <p className="text-xs text-foreground break-words line-clamp-2" title={tunnel.description}>
-                                                {tunnel.description}
-                                            </p>
+                                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Public Key</p>
+                                            <div className="bg-muted rounded px-2 py-1.5 font-mono text-[11px] truncate text-muted-foreground" title={tunnel.key ?? ''}>
+                                                {tunnel.key ? `${tunnel.key.substring(0, 45)}...` : '—'}
+                                            </div>
                                         </div>
-                                    )}
-                                </div>
-                            </CardContent>
-                            <CardFooter className="p-3 border-t border-border flex justify-between items-center gap-1.5 bg-muted/10 rounded-b-xl">
-                                <Button asChild variant="default" size="sm" className="flex-1 h-8 text-xs shrink-0 min-w-0">
-                                    <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`} className="truncate">
-                                        <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
-                                    </Link>
-                                </Button>
-
-                                <div className="flex items-center gap-0.5 shrink-0">
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setDetailsModal({ isOpen: true, tunnelId: tunnel.id })} title="Details">
-                                        <FileText size={15} />
-                                    </Button>
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setConfigModal({ isOpen: true, tunnelId: tunnel.id })} title="Config">
-                                        <Settings size={15} />
-                                    </Button>
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setScriptModal({ isOpen: true, tunnelId: tunnel.id, sshPort: tunnel.reverse_port })} title="Scripts">
-                                        <Terminal size={15} />
+                                        {tunnel.description && (
+                                            <div>
+                                                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">Description</p>
+                                                <p className="text-xs text-foreground break-words line-clamp-2" title={tunnel.description}>
+                                                    {tunnel.description}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </CardContent>
+                                <CardFooter className="p-3 border-t border-border flex justify-between items-center gap-1.5 bg-muted/10 rounded-b-xl">
+                                    <Button asChild variant="default" size="sm" className="flex-1 h-8 text-xs shrink-0 min-w-0">
+                                        <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`} className="truncate">
+                                            <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
+                                        </Link>
                                     </Button>
 
-                                    <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-                                                <span className="sr-only">Open menu</span>
-                                                <MoreHorizontal size={15} />
+                                    <div className="flex items-center gap-0.5 shrink-0">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setDetailsModal({ isOpen: true, tunnelId: tunnel.id })} title="Details">
+                                            <FileText size={15} />
+                                        </Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setConfigModal({ isOpen: true, tunnelId: tunnel.id })} title="Config">
+                                            <Settings size={15} />
+                                        </Button>
+                                        {tunnel.is_owner && (
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => setScriptModal({ isOpen: true, tunnelId: tunnel.id, sshPort: tunnel.reverse_port })} title="Scripts">
+                                                <Terminal size={15} />
                                             </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" className="w-48">
-                                            <DropdownMenuLabel>More Actions</DropdownMenuLabel>
-                                            <DropdownMenuSeparator />
-                                            {tunnel.can_edit && (
-                                                <DropdownMenuItem onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id })}>
-                                                    <Users className="mr-2 h-4 w-4" /> Target Server Users
-                                                </DropdownMenuItem>
-                                            )}
-                                            {tunnel.can_share && (
-                                                <DropdownMenuItem onClick={() => setShareModal({ isOpen: true, tunnelId: tunnel.id })}>
-                                                    <Share2 className="mr-2 h-4 w-4" /> Share Tunnel
-                                                </DropdownMenuItem>
-                                            )}
-                                            {tunnel.can_delete && (
-                                                <>
-                                                    {(tunnel.can_edit || tunnel.can_share) && <DropdownMenuSeparator />}
-                                                    <DropdownMenuItem
-                                                        onClick={() => setDeleteConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })}
-                                                        className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                                                    >
-                                                        <Trash2 className="mr-2 h-4 w-4" /> Delete
-                                                    </DropdownMenuItem>
-                                                </>
-                                            )}
-                                        </DropdownMenuContent>
-                                    </DropdownMenu>
-                                </div>
-                            </CardFooter>
-                        </Card>
-                    ))}
+                                        )}
+
+                                        {/* Non-owner: direct Leave button instead of dropdown */}
+                                        {!tunnel.is_owner && (
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10 transition-colors" onClick={() => setLeaveConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })} title="Leave Tunnel">
+                                                <LogOut size={15} />
+                                            </Button>
+                                        )}
+
+                                        {/* Owner: more actions dropdown (only if have any actions) */}
+                                        {tunnel.is_owner && (tunnel.can_edit || tunnel.can_share || tunnel.can_delete) && (
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
+                                                        <span className="sr-only">Open menu</span>
+                                                        <MoreHorizontal size={15} />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end" className="w-48">
+                                                    <DropdownMenuLabel>More Actions</DropdownMenuLabel>
+                                                    <DropdownMenuSeparator />
+                                                    {tunnel.can_edit && (
+                                                        <DropdownMenuItem onClick={() => setUsersModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                            <Users className="mr-2 h-4 w-4" /> Target Server Users
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {tunnel.can_share && (
+                                                        <DropdownMenuItem onClick={() => setShareModal({ isOpen: true, tunnelId: tunnel.id })}>
+                                                            <Share2 className="mr-2 h-4 w-4" /> Share Tunnel
+                                                        </DropdownMenuItem>
+                                                    )}
+                                                    {tunnel.can_delete && (
+                                                        <>
+                                                            {(tunnel.can_edit || tunnel.can_share) && <DropdownMenuSeparator />}
+                                                            <DropdownMenuItem
+                                                                onClick={() => setDeleteConfirm({ isOpen: true, tunnelId: tunnel.id, name: tunnel.host_friendly_name })}
+                                                                className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                                                            >
+                                                                <Trash2 className="mr-2 h-4 w-4" /> Delete
+                                                            </DropdownMenuItem>
+                                                        </>
+                                                    )}
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        )}
+                                    </div>
+                                </CardFooter>
+                            </Card>
+                        );
+                    })}
                 </div>
             )}
 
@@ -335,6 +389,24 @@ export default function TunnelsPage() {
                     </span>
                 }
                 confirmText="Delete"
+                isDestructive={true}
+            />
+            <ConfirmDialog
+                isOpen={leaveConfirm.isOpen}
+                onClose={() => setLeaveConfirm({ isOpen: false, tunnelId: null, name: "" })}
+                onConfirm={() => {
+                    if (leaveConfirm.tunnelId && leaveConfirm.name) {
+                        handleLeaveTunnel(leaveConfirm.tunnelId, leaveConfirm.name);
+                    }
+                    setLeaveConfirm({ isOpen: false, tunnelId: null, name: "" });
+                }}
+                title="Leave Tunnel"
+                message={
+                    <span>
+                        Are you sure you want to leave tunnel <strong className="font-semibold">{leaveConfirm.name}</strong>? You will lose access to this tunnel until the owner shares it with you again.
+                    </span>
+                }
+                confirmText="Leave"
                 isDestructive={true}
             />
         </div>

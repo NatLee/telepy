@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Copy, Plus, Key as KeyIcon, Trash2, Edit3, Settings, AlertCircle, RefreshCw } from "lucide-react";
+import { Copy, Plus, Key as KeyIcon, Trash2, Edit3, Settings, AlertCircle, RefreshCw, Info } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { CodeBlock } from "@/components/ui/CodeBlock";
@@ -12,6 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export default function UserKeysPage() {
     const [keys, setKeys] = useState<any[]>([]);
@@ -151,9 +157,23 @@ export default function UserKeysPage() {
         <div className="animate-fade-in-up">
             <div className="sm:flex sm:items-center sm:justify-between mb-8">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-foreground flex items-center gap-2 tracking-tight">
                         <KeyIcon className="text-primary animate-float" />
                         SSH Keys
+                        <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label="About SSH Keys">
+                                        <Info size={18} />
+                                    </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
+                                    <p>
+                                        Your SSH public keys are registered here to authorize you on the Telepy SSH server. When you connect via terminal, the server verifies your identity using these keys. Add your <code className="bg-muted text-foreground px-1 rounded">~/.ssh/id_rsa.pub</code> or <code className="bg-muted text-foreground px-1 rounded">id_ed25519.pub</code> to get started.
+                                    </p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
                         <WebSocketStatusBadge />
                     </h1>
                     <p className="mt-2 text-sm text-muted-foreground">
@@ -179,10 +199,16 @@ export default function UserKeysPage() {
                         Loading keys...
                     </div>
                 ) : keys.length === 0 ? (
-                    <div className="col-span-full py-16 text-center text-muted-foreground bg-card border border-border rounded-lg shadow-sm">
-                        <KeyIcon size={48} className="mx-auto text-muted mb-4 opacity-50" />
-                        <h3 className="text-lg font-medium text-foreground">No keys found</h3>
-                        <p className="mt-1 text-sm text-muted-foreground">Add an SSH public key to get started.</p>
+                    <div className="col-span-full py-16 text-center text-muted-foreground bg-card border-2 border-dashed border-border rounded-lg shadow-sm flex flex-col items-center">
+                        <KeyIcon size={48} className="text-muted mb-4 opacity-50" />
+                        <h3 className="text-lg font-semibold text-foreground">No keys found</h3>
+                        <p className="mt-1 text-sm text-muted-foreground max-w-sm">Add an SSH public key to authorize yourself on the Telepy SSH server and start connecting.</p>
+                        <div className="mt-6">
+                            <Button onClick={() => setAddModalOpen(true)}>
+                                <Plus size={16} className="mr-2" />
+                                Add Key
+                            </Button>
+                        </div>
                     </div>
                 ) : (
                     keys.map((k) => (
