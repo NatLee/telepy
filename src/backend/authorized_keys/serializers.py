@@ -2,7 +2,7 @@ from rest_framework import serializers
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import UserAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
-from tunnels.models import TunnelPermissionManager, TunnelPermission
+from tunnels.models import TunnelPermissionManager, TunnelPermission, TunnelSharing
 
 class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     can_edit = serializers.SerializerMethodField()
@@ -10,6 +10,7 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
     can_delete = serializers.SerializerMethodField()
     is_owner = serializers.SerializerMethodField()
     user_permission = serializers.SerializerMethodField()
+    shared_with_count = serializers.SerializerMethodField()
 
     def get_can_edit(self, obj):
         """
@@ -74,6 +75,10 @@ class ReverseServerAuthorizedKeysSerializer(serializers.ModelSerializer):
 
         perm = TunnelPermissionManager.get_user_permissions_for_tunnel(request.user, obj)
         return perm.permission_type if perm else None
+
+    def get_shared_with_count(self, obj):
+        """Number of users this tunnel is shared with (for owner display)."""
+        return TunnelSharing.objects.filter(tunnel=obj).count()
 
     class Meta:
         model = ReverseServerAuthorizedKeys

@@ -251,7 +251,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                             </div>
                             {selectedUser && tunnelUsernames.length > 0 && (
                                 <div className="bg-muted/30 border border-border rounded-lg p-3">
-                                    <p className="text-xs font-medium text-muted-foreground mb-2">Restrict to specific Target Server Users (leave unchecked for all):</p>
+                                    <p className="text-xs font-medium text-muted-foreground mb-2">Restrict to specific Target Server Users:</p>
                                     <div className="flex flex-wrap gap-2">
                                         {tunnelUsernames.map(u => (
                                             <label key={u.id} className="flex items-center gap-1.5 text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors">
