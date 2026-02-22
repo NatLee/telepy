@@ -30,6 +30,7 @@ export default function TerminalPage() {
 
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
+    const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [showFileManager, setShowFileManager] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
@@ -204,14 +205,28 @@ export default function TerminalPage() {
             };
 
             ws.onerror = () => {
-                showError("Terminal WebSocket connection failed");
                 setConnecting(false);
             };
 
-            ws.onclose = () => {
+            ws.onclose = (event) => {
                 setConnected(false);
                 setConnecting(false);
-                term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
+                const code = event.code;
+                if (code === 4004) {
+                    setPermissionDenied("You do not have permission to access this tunnel.");
+                    term.write("\r\n\x1b[31m[Permission Denied] You do not have access to this tunnel.\x1b[0m\r\n");
+                } else if (code === 4003) {
+                    setPermissionDenied("The specified username is not authorized for this tunnel.");
+                    term.write("\r\n\x1b[31m[Invalid Username] The username is not authorized for this tunnel.\x1b[0m\r\n");
+                } else if (code === 4001) {
+                    setPermissionDenied("Authentication failed. Please log in again.");
+                    term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                } else if (code === 4002) {
+                    setPermissionDenied("Tunnel not found or server ID is invalid.");
+                    term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
+                } else {
+                    term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
+                }
             };
 
             term.onData((data) => {
@@ -346,6 +361,28 @@ export default function TerminalPage() {
             </div>
         );
     }
+    if (permissionDenied) {
+        return (
+            <div className="flex items-center justify-center h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)] p-4 bg-background w-full">
+                <Card className="max-w-md w-full border-destructive/30 shadow-sm">
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-destructive">
+                            <X size={20} />
+                            Access Denied
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-4">
+                        <p className="text-sm text-muted-foreground">
+                            {permissionDenied}
+                        </p>
+                        <Button onClick={() => router.push("/tunnels")} className="w-full">
+                            Return to Tunnels List
+                        </Button>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-[calc(100dvh-4rem)] md:h-[calc(100dvh-5rem)] w-full overflow-hidden bg-background relative">
@@ -424,6 +461,7 @@ export default function TerminalPage() {
                                     variant="outline"
                                     size="sm"
                                     onClick={() => setShowFileManager(!showFileManager)}
+                                    disabled={!connected}
                                     className={`h-8 text-xs gap-1.5 ${showFileManager ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                                 >
                                     <FolderSync size={14} /> {showFileManager ? "Hide Files" : "Files"}
@@ -469,7 +507,7 @@ export default function TerminalPage() {
                                     </button>
                                 )}
 
-                                <div className="grid grid-cols-3 gap-2 mt-1">
+                                <div className="grid grid-cols-2 gap-2 mt-1">
                                     <Button
                                         variant="outline"
                                         size="sm"
@@ -494,18 +532,7 @@ export default function TerminalPage() {
                                     >
                                         <KeyRound size={14} /> Keys
                                     </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => {
-                                            setShowFileManager(true);
-                                            setActiveTab("files");
-                                            setHeaderExpanded(false);
-                                        }}
-                                        className={`h-10 text-xs gap-1.5 ${showFileManager && activeTab === 'files' ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
-                                    >
-                                        <FolderSync size={14} /> Files
-                                    </Button>
+
                                     <Button
                                         variant="secondary"
                                         size="sm"
@@ -538,10 +565,12 @@ export default function TerminalPage() {
                     </button>
                     <button
                         onClick={() => {
+                            if (!connected) return;
                             setShowFileManager(true);
                             setActiveTab("files");
                         }}
-                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${activeTab === 'files' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                        disabled={!connected}
+                        className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? 'text-muted-foreground/40 cursor-not-allowed' : activeTab === 'files' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                     >
                         Files
                     </button>
@@ -578,6 +607,15 @@ export default function TerminalPage() {
                     `}} />
                         <div className="flex-1 relative min-h-0 bg-black terminal-container">
                             <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
+                            {/* Disconnect overlay */}
+                            {!connected && !connecting && (
+                                <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center rounded-lg">
+                                    <div className="text-center">
+                                        <div className="w-3 h-3 rounded-full bg-destructive mx-auto mb-2" />
+                                        <p className="text-sm text-muted-foreground">Disconnected</p>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 

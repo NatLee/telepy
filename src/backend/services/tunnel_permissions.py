@@ -105,8 +105,12 @@ class TunnelPermissionService:
             # Get the tunnel
             tunnel = ReverseServerAuthorizedKeys.objects.get(id=tunnel_id)
 
+            # Allow the shared_with user to remove themselves (self-unshare / leave)
+            is_self_unshare = (shared_by.id == shared_with_user_id)
+
             # Check if shared_by has permission to manage sharing for this tunnel
-            if not TunnelPermissionManager.check_share_access(shared_by, tunnel):
+            # OR if the user is removing themselves
+            if not is_self_unshare and not TunnelPermissionManager.check_share_access(shared_by, tunnel):
                 return {'success': False, 'error': 'You do not have permission to manage sharing for this tunnel'}
 
             # Get and delete the sharing record
