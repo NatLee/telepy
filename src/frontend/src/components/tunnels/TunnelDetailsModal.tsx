@@ -1,80 +1,23 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { Modal } from "@/components/ui/Modal";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+import { useTunnelDetailsModal } from "@/hooks/useTunnelDetailsModal";
 import { Copy, Save, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
-interface TunnelDetailsModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    tunnelId: number | null;
+import { TunnelModalProps } from "@/types/tunnel";
+
+interface TunnelDetailsModalProps extends TunnelModalProps {
     onUpdate: () => void;
 }
 
 export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: TunnelDetailsModalProps) {
-    const [details, setDetails] = useState<any>(null);
-    const [loading, setLoading] = useState(false);
-    const [description, setDescription] = useState("");
-    const [isSaving, setIsSaving] = useState(false);
-    const [copiedKey, setCopiedKey] = useState(false);
-    const { showSuccess, showError } = useToast();
-
-    useEffect(() => {
-        if (isOpen && tunnelId) {
-            const fetchDetails = async () => {
-                setLoading(true);
-                try {
-                    const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        setDetails(data);
-                        setDescription(data.description || "");
-                    } else {
-                        showError("Failed to fetch tunnel details");
-                    }
-                } catch (e: any) {
-                    showError(e.message || "Failed to fetch tunnel details");
-                } finally {
-                    setLoading(false);
-                }
-            };
-            fetchDetails();
-        }
-    }, [isOpen, tunnelId, showError]);
-
-    const handleSaveDescription = async () => {
-        if (!tunnelId) return;
-        setIsSaving(true);
-        try {
-            const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, {
-                method: "PATCH",
-                body: JSON.stringify({ description }),
-            });
-            if (res.ok) {
-                showSuccess("Description updated");
-                onUpdate();
-                onClose();
-            } else {
-                showError("Failed to update description");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to update description");
-        } finally {
-            setIsSaving(false);
-        }
-    };
-
-    const copyKey = () => {
-        if (details?.key) {
-            navigator.clipboard.writeText(details.key);
-            setCopiedKey(true);
-            setTimeout(() => setCopiedKey(false), 2000);
-        }
-    };
+    const {
+        state: { details, loading, description, setDescription, isSaving, copiedKey },
+        actions: { handleSaveDescription, copyKey }
+    } = useTunnelDetailsModal(tunnelId, isOpen, onUpdate, onClose);
 
     return (
         <Modal

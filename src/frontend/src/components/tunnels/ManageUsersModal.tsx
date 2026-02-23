@@ -1,131 +1,33 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { apiFetch } from "@/lib/api";
-import { useNotificationHandlers } from "@/lib/websocket";
-import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
-import { useToast } from "@/components/ui/Toast";
-import { X, Plus, User, Shield, UserPlus } from "lucide-react";
+import { X, User, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-interface ManageUsersModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    tunnelId: number | null;
+import { TunnelModalProps, ReverseServerUsername } from "@/types/tunnel";
+
+import { useManageUsersModal } from "@/hooks/useManageUsersModal";
+
+interface ManageUsersModalProps extends TunnelModalProps {
     readOnly?: boolean;
 }
 
-interface ReverseServerUsername {
-    id: number;
-    username: string;
-    created_by?: string;
-    created_by_id?: number;
-}
-
 export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }: ManageUsersModalProps) {
-    const [users, setUsers] = useState<ReverseServerUsername[]>([]);
-    const [newUsername, setNewUsername] = useState("");
-    const [loading, setLoading] = useState(false);
-    const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; user: ReverseServerUsername | null }>({ isOpen: false, user: null });
-    const { showSuccess, showError } = useToast();
+    const { state, actions } = useManageUsersModal(tunnelId, isOpen);
+    const {
+        users,
+        newUsername, setNewUsername,
+        loading,
+        deleteConfirm, setDeleteConfirm
+    } = state;
 
-    const fetchUsers = async () => {
-        if (!tunnelId) return;
-        setLoading(true);
-        try {
-            const res = await apiFetch(`/api/reverse/server/${tunnelId}/usernames`);
-            if (res.ok) {
-                const data = await res.json();
-                // API returns { usernames: [{id, username}], default_username_id } or legacy array
-                const list = data?.usernames ?? (Array.isArray(data) ? data : (data.results ?? []));
-                setUsers(list);
-            } else {
-                showError("Failed to fetch users");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to fetch users");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        if (isOpen) {
-            fetchUsers();
-            setNewUsername("");
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isOpen, tunnelId]);
-
-    // Handle WebSocket updates
-    useNotificationHandlers({
-        [NOTIFICATION_ACTIONS.TUNNEL_USERNAMES_UPDATED]: (msg) => {
-            if (isOpen && msg.tunnel_id === tunnelId) {
-                fetchUsers();
-            }
-        }
-    });
-
-    const handleAddUser = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!newUsername.trim() || !tunnelId) return;
-
-        try {
-            const res = await apiFetch(`/api/reverse/server/usernames`, {
-                method: "POST",
-                body: JSON.stringify({ reverse_server: tunnelId, username: newUsername.trim() }),
-            });
-            if (res.ok) {
-                setNewUsername("");
-                fetchUsers();
-            } else {
-                let errorMsg = "Failed to add user";
-                try {
-                    const data = await res.json();
-                    if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'string') {
-                        errorMsg = data[0];
-                    } else if (data.detail) {
-                        errorMsg = data.detail;
-                    } else if (data.error) {
-                        errorMsg = data.error;
-                    } else if (data.non_field_errors && data.non_field_errors.length > 0) {
-                        errorMsg = data.non_field_errors[0];
-                    } else if (typeof data === 'string') {
-                        errorMsg = data;
-                    } else if (data.message) {
-                        errorMsg = data.message;
-                    }
-                } catch (jsonError) {
-                    // Ignored
-                }
-                showError(errorMsg);
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to add user");
-        }
-    };
-
-    const handleDeleteUser = async () => {
-        const user = deleteConfirm.user;
-        if (!user || !tunnelId) return;
-
-        try {
-            // Delete by the username record id
-            const res = await apiFetch(`/api/reverse/server/usernames/${user.id}`, {
-                method: "DELETE",
-            });
-            if (res.ok) {
-                fetchUsers();
-            } else {
-                showError("Failed to remove user");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to remove user");
-        }
-    };
+    const {
+        handleAddUser,
+        handleDeleteUser
+    } = actions;
 
     return (
         <>

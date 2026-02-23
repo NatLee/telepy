@@ -1,87 +1,20 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+/**
+ * 登入頁：帳密與 Google 登入表單。
+ * Login page: credentials and Google sign-in form.
+ */
+import React from "react";
 import Script from "next/script";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
-import { useToast } from "@/components/ui/Toast";
 import { User, Lock } from "lucide-react";
-import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useLoginPage } from "@/hooks/useLoginPage";
 
 export default function LoginPage() {
-    const [username, setUsername] = useState("");
-    const [password, setPassword] = useState("");
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const { login, isAuthenticated } = useAuth();
-    const { showSuccess, showError } = useToast();
-    const router = useRouter();
-
-    const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-
-    useEffect(() => {
-        if (isAuthenticated) {
-            router.replace("/tunnels");
-            return;
-        }
-        // When no users exist, redirect to first-login to create admin
-        const base = process.env.NEXT_PUBLIC_API_BASE || "";
-        fetch(`${base}/api/auth/setup-status`)
-            .then((res) => res.json())
-            .then((data) => {
-                if (data.first_time_setup === true) {
-                    router.replace("/first-login");
-                }
-            })
-            .catch(() => {});
-    }, [isAuthenticated, router]);
-
-    useEffect(() => {
-        // Expose callback for Google Sign-In
-        (window as any).getTokenUsingGoogleCredential = async (response: any) => {
-            try {
-                const res = await apiFetch("/api/auth/google/token", {
-                    method: "POST",
-                    body: JSON.stringify({ credential: response.credential }),
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    login(data.access_token, data.refresh_token);
-                    showSuccess("Google Login successful");
-                    router.push("/tunnels");
-                } else {
-                    showError(data.error || data.detail || "Google Login failed");
-                }
-            } catch (err: any) {
-                showError(err.message || "Google Login failed");
-            }
-        };
-    }, [login, router, showError, showSuccess]);
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setIsSubmitting(true);
-        try {
-            const res = await apiFetch("/api/auth/token", {
-                method: "POST",
-                body: JSON.stringify({ username, password }),
-            });
-            const data = await res.json();
-            // Backend custom_jwt returns 'access_token' and 'refresh_token'
-            if (res.ok && data.access_token) {
-                login(data.access_token, data.refresh_token);
-                showSuccess("Login successful");
-                router.push("/tunnels");
-            } else {
-                showError(data.detail || data.error || "Login failed");
-            }
-        } catch (err: any) {
-            showError(err.message || "Login failed");
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
+    const { state, actions } = useLoginPage();
+    const { username, setUsername, password, setPassword, isSubmitting, googleClientId } = state;
+    const { handleSubmit } = actions;
 
     return (
         <>

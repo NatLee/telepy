@@ -1,5 +1,9 @@
 "use client"
 
+/**
+ * 下拉選單基底元件（Radix UI 封裝），用於操作選單、篩選等。
+ * Dropdown menu primitive (Radix UI wrapper) for actions menu, filters, etc.
+ */
 import * as React from "react"
 import { CheckIcon, ChevronRightIcon, CircleIcon } from "lucide-react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"

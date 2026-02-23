@@ -1,12 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+/**
+ * SSH 金鑰管理頁：個人公鑰列表、新增/刪除/詳情、列表與卡片視圖切換。
+ * SSH keys management page: list, add/delete/detail, list and card view toggle.
+ */
+import React from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Copy, Plus, Key as KeyIcon, Trash2, Edit3, Settings, AlertCircle, RefreshCw, Info } from "lucide-react";
+import { Copy, Plus, Key as KeyIcon, Trash2, Edit3, RefreshCw, Info } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
-import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,153 +21,33 @@ import {
 } from "@/components/ui/tooltip";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 
+import { useKeysPage } from "@/hooks/useKeysPage";
+
 export default function UserKeysPage() {
-    const [keys, setKeys] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [viewMode, setViewMode] = useState<"list" | "card">("card");
+    const { state, actions } = useKeysPage();
+    const {
+        keys,
+        loading,
+        viewMode, setViewMode,
+        addModalOpen, setAddModalOpen,
+        detailsModal, setDetailsModal,
+        deleteConfirm, setDeleteConfirm,
+        newKeyContent,
+        newKeyName, setNewKeyName,
+        newKeyDescription, setNewKeyDescription,
+        isSubmitting,
+        editDescription, setEditDescription,
+        isUpdating,
+        isEditingDesc, setIsEditingDesc
+    } = state;
 
-    useEffect(() => {
-        if (typeof window !== "undefined") {
-            if (window.innerWidth < 1200) {
-                setViewMode("card");
-            } else {
-                const saved = localStorage.getItem("ssh-keys-view");
-                setViewMode(saved === "card" ? "card" : "list");
-            }
-        }
-    }, []);
-
-    const { showSuccess, showError } = useToast();
-
-    // Modals state
-    const [addModalOpen, setAddModalOpen] = useState(false);
-    const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, key: any }>({ isOpen: false, key: null });
-    const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, keyId: number | null, name: string }>({ isOpen: false, keyId: null, name: "" });
-
-    // Add Key Form state
-    const [newKeyContent, setNewKeyContent] = useState("");
-    const [newKeyName, setNewKeyName] = useState("");
-    const [newKeyDescription, setNewKeyDescription] = useState("");
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    // Edit Description state
-    const [editDescription, setEditDescription] = useState("");
-    const [isUpdating, setIsUpdating] = useState(false);
-    const [isEditingDesc, setIsEditingDesc] = useState(false);
-
-    const fetchKeys = async () => {
-        setLoading(true);
-        try {
-            const res = await apiFetch("/api/reverse/user/keys");
-            if (res.ok) {
-                setKeys(await res.json());
-            } else {
-                showError("Failed to fetch keys");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to fetch keys");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchKeys();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    const handleKeyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        const key = e.target.value;
-        setNewKeyContent(key);
-        if (!newKeyName && isValidSSHKey(key)) {
-            setNewKeyName(getHostFriendlyNameFromKey(key, ""));
-        }
-    };
-
-    const handleAddKey = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!isValidSSHKey(newKeyContent)) {
-            showError("Invalid SSH Public Key format.");
-            return;
-        }
-        setIsSubmitting(true);
-        try {
-            const payload = {
-                key: newKeyContent,
-                host_friendly_name: newKeyName || "Unnamed Key",
-                description: newKeyDescription,
-            };
-            // To add a key, we need /api/reverse/create/key/<token> but this is for tunnels.
-            // Wait, is there a direct API to add user keys? The old keys.js uses `fetch('/api/reverse/user/keys')` via POST? No, wait.
-            // If adding a key is the same as the tunnel wizard, we get a token then create via /api/reverse/create/key/<token>.
-            // The old keys.js does:
-            // 1. /api/reverse/issue/token
-            // 2. /api/reverse/create/key/${token}
-            const tokenRes = await apiFetch("/api/reverse/issue/token");
-            if (!tokenRes.ok) throw new Error("Failed to get issue token");
-            const { token } = await tokenRes.json();
-
-            const createRes = await apiFetch(`/api/reverse/create/key/${token}`, {
-                method: "POST",
-                body: JSON.stringify(payload),
-            });
-
-            if (createRes.ok) {
-                showSuccess("Key added successfully");
-                setAddModalOpen(false);
-                setNewKeyContent("");
-                setNewKeyName("");
-                setNewKeyDescription("");
-                fetchKeys();
-            } else {
-                const err = await createRes.json();
-                showError(err.error || "Failed to add key");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to add key");
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
-
-    const handleDelete = async () => {
-        if (!deleteConfirm.keyId) return;
-        try {
-            const res = await apiFetch(`/api/reverse/user/keys/${deleteConfirm.keyId}`, {
-                method: "DELETE",
-            });
-            if (res.ok) {
-                showSuccess(`Key '${deleteConfirm.name}' deleted`);
-                fetchKeys();
-            } else {
-                showError("Failed to delete key");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to delete key");
-        }
-    };
-
-    const handleUpdateDescription = async () => {
-        if (!detailsModal.key?.id) return;
-        setIsUpdating(true);
-        try {
-            const res = await apiFetch(`/api/reverse/user/keys/${detailsModal.key.id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ description: editDescription }),
-            });
-            if (res.ok) {
-                showSuccess("Description updated");
-                setDetailsModal({ isOpen: false, key: null });
-                fetchKeys();
-            } else {
-                showError("Failed to update description");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to update description");
-        } finally {
-            setIsUpdating(false);
-        }
-    };
+    const {
+        fetchKeys,
+        handleKeyChange,
+        handleAddKey,
+        handleDelete,
+        handleUpdateDescription
+    } = actions;
 
     return (
         <div className="animate-fade-in-up">
@@ -230,21 +111,21 @@ export default function UserKeysPage() {
                 </div>
             ) : viewMode === "card" ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {keys.map((k) => (
-                        <Card key={k.id} className="flex flex-col h-full hover:shadow-md transition-shadow">
+                    {keys.map((keyItem) => (
+                        <Card key={keyItem.id} className="flex flex-col h-full hover:shadow-md transition-shadow">
                             <CardHeader className="p-4 border-b border-border pb-3">
-                                <CardTitle className="flex justify-between items-start text-lg pr-2 truncate" title={k.host_friendly_name}>
-                                    {k.host_friendly_name}
+                                <CardTitle className="flex justify-between items-start text-lg pr-2 truncate" title={keyItem.host_friendly_name}>
+                                    {keyItem.host_friendly_name}
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="p-4 flex-1">
                                 <div className="bg-muted/50 rounded p-2 mb-3">
-                                    <p className="text-[11px] text-muted-foreground font-mono break-all line-clamp-2" title={k.key ?? ''}>
-                                        {k.key ? `${k.key.substring(0, 80)}...` : '—'}
+                                    <p className="text-[11px] text-muted-foreground font-mono break-all line-clamp-2" title={keyItem.key ?? ''}>
+                                        {keyItem.key ? `${keyItem.key.substring(0, 80)}...` : '—'}
                                     </p>
                                 </div>
-                                {k.description && (
-                                    <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{k.description}</p>
+                                {keyItem.description && (
+                                    <p className="text-xs text-muted-foreground mt-2 line-clamp-2">{keyItem.description}</p>
                                 )}
                             </CardContent>
                             <CardFooter className="bg-muted/10 p-3 flex justify-between gap-1.5 border-t border-border mt-auto rounded-b-xl">
@@ -252,8 +133,8 @@ export default function UserKeysPage() {
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => {
-                                        setDetailsModal({ isOpen: true, key: k });
-                                        setEditDescription(k.description || "");
+                                        setDetailsModal({ isOpen: true, key: keyItem });
+                                        setEditDescription(keyItem.description || "");
                                         setIsEditingDesc(false); // Reset editing state
                                     }}
                                     className="text-primary hover:text-primary/90 flex items-center gap-1.5 h-8 text-xs flex-1 bg-primary/5 hover:bg-primary/10 transition-colors"
@@ -263,7 +144,7 @@ export default function UserKeysPage() {
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => setDeleteConfirm({ isOpen: true, keyId: k.id, name: k.host_friendly_name })}
+                                    onClick={() => setDeleteConfirm({ isOpen: true, keyId: keyItem.id, name: keyItem.host_friendly_name })}
                                     className="text-destructive hover:text-destructive/90 flex items-center gap-1.5 h-8 text-xs flex-1 bg-destructive/5 hover:bg-destructive/10 transition-colors"
                                 >
                                     <Trash2 size={14} /> Delete
@@ -284,19 +165,19 @@ export default function UserKeysPage() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border bg-card">
-                            {keys.map((k) => (
-                                <tr key={k.id} className="hover:bg-muted/50 transition-colors">
+                            {keys.map((keyItem) => (
+                                <tr key={keyItem.id} className="hover:bg-muted/50 transition-colors">
                                     <td className="px-4 py-3 text-sm font-medium text-foreground whitespace-nowrap">
-                                        {k.host_friendly_name}
+                                        {keyItem.host_friendly_name}
                                     </td>
                                     <td className="px-4 py-3 whitespace-nowrap">
-                                        <div className="bg-muted/50 rounded px-2 py-1 font-mono text-[11px] truncate text-muted-foreground max-w-[200px]" title={k.key ?? ''}>
-                                            {k.key ? `${k.key.substring(0, 20)}...` : '—'}
+                                        <div className="bg-muted/50 rounded px-2 py-1 font-mono text-[11px] truncate text-muted-foreground max-w-[200px]" title={keyItem.key ?? ''}>
+                                            {keyItem.key ? `${keyItem.key.substring(0, 20)}...` : '—'}
                                         </div>
                                     </td>
                                     <td className="px-4 py-3">
-                                        <div className="text-xs text-muted-foreground line-clamp-1 max-w-[250px]" title={k.description || ''}>
-                                            {k.description || '—'}
+                                        <div className="text-xs text-muted-foreground line-clamp-1 max-w-[250px]" title={keyItem.description || ''}>
+                                            {keyItem.description || '—'}
                                         </div>
                                     </td>
                                     <td className="px-4 py-3 whitespace-nowrap text-right">
@@ -305,8 +186,8 @@ export default function UserKeysPage() {
                                                 variant="ghost"
                                                 size="sm"
                                                 onClick={() => {
-                                                    setDetailsModal({ isOpen: true, key: k });
-                                                    setEditDescription(k.description || "");
+                                                    setDetailsModal({ isOpen: true, key: keyItem });
+                                                    setEditDescription(keyItem.description || "");
                                                     setIsEditingDesc(false); // Reset editing state
                                                 }}
                                                 className="text-primary hover:text-primary/90 flex items-center gap-1.5 h-8 px-2 text-xs hover:bg-primary/10 transition-colors"
@@ -316,7 +197,7 @@ export default function UserKeysPage() {
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
-                                                onClick={() => setDeleteConfirm({ isOpen: true, keyId: k.id, name: k.host_friendly_name })}
+                                                onClick={() => setDeleteConfirm({ isOpen: true, keyId: keyItem.id, name: keyItem.host_friendly_name })}
                                                 className="text-destructive hover:text-destructive/90 flex items-center gap-1.5 h-8 px-2 text-xs hover:bg-destructive/10 transition-colors"
                                             >
                                                 <Trash2 size={14} /> Delete
