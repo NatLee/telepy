@@ -4,12 +4,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { LayoutGrid, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-interface ViewToggleProps {
-    value: "list" | "card";
-    onChange: (value: "list" | "card") => void;
-    storageKey?: string;
-}
-
+import { ViewToggleProps } from "@/types/ui";
 export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
     const [mounted, setMounted] = useState(false);
     // Keep track of previous desktop state to only trigger onChange when crossing the boundary

@@ -1,7 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
-import { getWsOrigin } from "@/lib/websocket";
+import React from "react";
 import {
     Folder,
     File,
@@ -17,6 +14,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+import { FileItem } from "@/types/tunnel";
+
 interface FileManagerPanelProps {
     serverId: string;
     username: string;
@@ -24,279 +23,31 @@ interface FileManagerPanelProps {
     initialPath?: string;
 }
 
-interface FileItem {
-    type: "directory" | "file";
-    permissions?: { string: string };
-    owner?: string;
-    group?: string;
-    size: string | number;
-    date?: string;
-    name: string;
-}
+import { useFileManager } from "@/hooks/useFileManager";
 
 export function FileManagerPanel({ serverId, username, accessToken, initialPath }: FileManagerPanelProps) {
-    const { showError, showSuccess } = useToast();
-    const [connected, setConnected] = useState(false);
-    const [connecting, setConnecting] = useState(true);
-    const [currentPath, setCurrentPath] = useState("~/");
-    const [items, setItems] = useState<FileItem[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [shellType, setShellType] = useState<"unix" | "powershell">("unix");
-    const [uploading, setUploading] = useState(false);
+    const { refs, state, actions } = useFileManager(serverId, username, accessToken, initialPath);
 
-    const wsRef = useRef<WebSocket | null>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const { fileInputRef } = refs;
+    const {
+        connected,
+        connecting,
+        currentPath, setCurrentPath,
+        items,
+        loading,
+        uploading
+    } = state;
 
-    // Track the message we're currently waiting for in a ref to handle async responses
-    const pendingUploadRef = useRef<{ file: File, destPath: string } | null>(null);
-
-    useEffect(() => {
-        let cleanupFn: (() => void) | undefined;
-
-        const initWs = async () => {
-            const base = getWsOrigin();
-            const wsUrl = `${base}/ws/filemanager/`;
-
-            const encodedToken = btoa(accessToken);
-            const jsSha256 = (await import("js-sha256")).sha256;
-            const ticket = `auth.${jsSha256(`filemanager_${serverId}.${Date.now()}`)}`;
-
-            const protocols = [
-                `token.${encodedToken}`,
-                `server.${serverId}`,
-                `username.${username}`,
-                ticket,
-            ];
-
-            const ws = new WebSocket(wsUrl, protocols);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                setConnected(true);
-                setConnecting(false);
-                // After connecting, ask to detect shell
-                ws.send(JSON.stringify({ action: "shell_detect" }));
-            };
-
-            ws.onmessage = async (event) => {
-                try {
-                    const parsed = JSON.parse(event.data);
-                    const action = parsed.action;
-                    const data = parsed.data || {};
-
-                    if (action === "shell_detect" && data.status === "success") {
-                        setShellType(data.shell);
-                        const defaultPath = data.shell === "powershell" ? "C:\\" : "~/";
-                        setCurrentPath(defaultPath);
-                        loadDirectory(defaultPath, ws);
-                    } else if (action === "list_files") {
-                        if (data.status === "success") {
-                            setItems(data.files || []);
-                            setCurrentPath(data.path);
-                        } else {
-                            showError(data.error || "Failed to list directory");
-                        }
-                        setLoading(false);
-                    } else if (action === "upload_file") {
-                        if (data.status === "success" && pendingUploadRef.current) {
-                            const { file } = pendingUploadRef.current;
-                            pendingUploadRef.current = null;
-                            await performActualUpload(data.upload_url, file);
-                        } else {
-                            showError(data.error || "Failed to prepare upload");
-                            setUploading(false);
-                            pendingUploadRef.current = null;
-                        }
-                    } else if (action === "download_file") {
-                        if (data.status === "success") {
-                            downloadUrl(data.download_url);
-                        } else {
-                            showError(data.error || "Failed to prepare download");
-                        }
-                    } else if (action === "error") {
-                        showError(data.message || "An error occurred");
-                        setLoading(false);
-                        setUploading(false);
-                    }
-                } catch (e) {
-                    console.error("Error parsing WS message", e);
-                }
-            };
-
-            ws.onerror = () => {
-                showError("FileManager WebSocket connection failed");
-                setConnecting(false);
-                setLoading(false);
-            };
-
-            ws.onclose = () => {
-                setConnected(false);
-                setConnecting(false);
-            };
-
-            cleanupFn = () => {
-                ws.close();
-            };
-        };
-
-        if (serverId && username && accessToken) {
-            initWs();
-        }
-
-        return () => {
-            cleanupFn?.();
-        };
-    }, [serverId, username, accessToken]);
-
-    // Sync path from Terminal if OSC 7 is fired and passed via props
-    useEffect(() => {
-        if (connected && initialPath && initialPath !== currentPath) {
-            setCurrentPath(initialPath);
-            loadDirectory(initialPath);
-        }
-    }, [initialPath, connected]);
-
-    const loadDirectory = (path: string, wsInstance: WebSocket | null = wsRef.current) => {
-        if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN) return;
-        setLoading(true);
-        wsInstance.send(JSON.stringify({ action: "list_files", payload: { path: path || currentPath } }));
-    };
-
-    const handlePathSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        loadDirectory(currentPath);
-    };
-
-    const navigateTo = (folderName: string) => {
-        let newPath = currentPath;
-        if (shellType === "powershell") {
-            newPath = currentPath.endsWith("\\") ? currentPath + folderName : currentPath + "\\" + folderName;
-        } else {
-            newPath = currentPath.endsWith("/") ? currentPath + folderName : currentPath + "/" + folderName;
-        }
-        loadDirectory(newPath);
-    };
-
-    const goUp = () => {
-        let newPath = currentPath;
-        if (shellType === "powershell") {
-            const parts = newPath.split("\\").filter(Boolean);
-            if (parts.length > 1) {
-                parts.pop();
-                newPath = parts.join("\\") + "\\";
-            } else {
-                newPath = parts[0] + "\\";
-            }
-        } else {
-            if (newPath === "/" || newPath === "~" || newPath === "~/") return;
-            const stripped = newPath.endsWith("/") ? newPath.slice(0, -1) : newPath;
-            const lastSlashIndex = stripped.lastIndexOf("/");
-            if (lastSlashIndex > 0) {
-                newPath = stripped.slice(0, lastSlashIndex);
-                if (newPath === "~") newPath = "~/";
-            } else if (lastSlashIndex === 0) {
-                newPath = "/";
-            }
-        }
-        loadDirectory(newPath);
-    };
-
-    const goHome = () => {
-        const homePath = shellType === "powershell" ? "C:\\" : "~/";
-        loadDirectory(homePath);
-    };
-
-    const handleUploadClick = () => {
-        fileInputRef.current?.click();
-    };
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-
-        setUploading(true);
-        const separator = shellType === "powershell" ? "\\" : "/";
-        const destPath = currentPath.endsWith(separator) ? currentPath + file.name : currentPath + separator + file.name;
-
-        pendingUploadRef.current = { file, destPath };
-
-        // Request upload url mapping via websocket
-        wsRef.current.send(JSON.stringify({
-            action: "upload_file",
-            payload: { destination_path: currentPath } // Backend API seems to expect destination_path to be the DIR
-        }));
-
-        // Clear input
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-        }
-    };
-
-    const performActualUpload = async (uploadUrl: string, file: File) => {
-        try {
-            const formData = new FormData();
-            formData.append("file", file);
-
-            const res = await apiFetch(uploadUrl, {
-                method: "POST",
-                body: formData,
-            });
-
-            if (res.ok) {
-                showSuccess("File uploaded successfully");
-                loadDirectory(currentPath);
-            } else {
-                const data = await res.json();
-                showError(data.error || "Upload failed");
-            }
-        } catch (err: any) {
-            showError("Upload request failed: " + err.message);
-        } finally {
-            setUploading(false);
-        }
-    };
-
-    const handleDownload = (item: FileItem) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const separator = shellType === "powershell" ? "\\" : "/";
-        const path = currentPath.endsWith(separator) ? currentPath + item.name : currentPath + separator + item.name;
-
-        wsRef.current.send(JSON.stringify({
-            action: "download_file",
-            payload: { path }
-        }));
-        showSuccess("Preparing download...");
-    };
-
-    const downloadUrl = async (url: string, path?: string) => {
-        try {
-            const res = await apiFetch(url);
-            if (!res.ok) throw new Error("Download request failed");
-
-            // Get filename from Content-Disposition or fallback to path
-            let filename = path && typeof path === 'string' ? path.split(/[/\\]/).pop() || "download" : "download";
-            const disposition = res.headers.get('Content-Disposition');
-            if (disposition && disposition.includes('filename=')) {
-                const match = disposition.match(/filename="?([^"]+)"?/);
-                if (match && match[1]) {
-                    filename = match[1];
-                }
-            }
-
-            const blob = await res.blob();
-            const blobUrl = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(blobUrl);
-
-        } catch (err: any) {
-            showError("Failed to download file: " + err.message);
-        }
-    };
+    const {
+        loadDirectory,
+        handlePathSubmit,
+        navigateTo,
+        goUp,
+        goHome,
+        handleUploadClick,
+        handleFileChange,
+        handleDownload
+    } = actions;
 
     const getIcon = (item: FileItem) => {
         if (item.type === "directory" || (item.permissions && item.permissions.string.startsWith("d"))) {

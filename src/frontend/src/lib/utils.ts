@@ -48,25 +48,3 @@ export function getHostFriendlyNameFromKey(
     }
     return hostFriendlyName;
 }
-
-export function isValidPort(port: string | number): boolean {
-    const p = Number(port);
-    if (isNaN(p)) {
-        return false;
-    }
-    return p >= 1 && p <= 65535;
-}
-
-// Debounce helper
-export function debounce<T extends (...args: any[]) => void>(
-    func: T,
-    wait: number
-): (...args: Parameters<T>) => void {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    return function (...args: Parameters<T>) {
-        if (timeout) clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            func(...args);
-        }, wait);
-    };
-}

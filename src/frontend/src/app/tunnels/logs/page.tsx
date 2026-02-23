@@ -1,93 +1,27 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+/**
+ * SSH 伺服器日誌頁：載入日誌、關鍵字篩選與關鍵字標籤。
+ * SSH server logs page: load logs, keyword filter and keyword badges.
+ */
+import React from "react";
 import { Search, FileText, AlertCircle, RefreshCw, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
+import { useLogsPage } from "@/hooks/useLogsPage";
+
 export default function LogsPage() {
-    const [logs, setLogs] = useState<{ id: number, time: string, message: string, originalTime?: string, parsedAt?: Date | null }[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [search, setSearch] = useState("");
-    const { showError } = useToast();
+    const { state, actions } = useLogsPage();
+    const {
+        logs,
+        filteredLogs,
+        loading,
+        search, setSearch
+    } = state;
 
-    const fetchLogs = async () => {
-        setLoading(true);
-        try {
-            const res = await apiFetch("/api/log/ssh");
-            if (res.ok) {
-                let raw = await res.text();
-                // DRF Response() wraps the string in JSON quotes — try to unwrap
-                try {
-                    const parsed = JSON.parse(raw);
-                    if (typeof parsed === 'string') raw = parsed;
-                } catch (_) { /* not JSON, use raw text as-is */ }
-                const lines = raw.split("\n").filter(l => l.trim() !== "");
-                const parsedLogs = lines.map((line, idx) => {
-                    let time = "";
-                    let message = line;
-                    let parsedAt: Date | null = null;
-
-                    // Typical log format: 2026-02-17 16:28:12.033001978  Message
-                    // Note: Date could have more digits, and optional message
-                    const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)(?:\s+(.*))?/);
-                    if (dateMatch) {
-                        time = dateMatch[1].split('.')[0]; // e.g. 2026-02-17 16:28:12
-                        message = dateMatch[2] || "";
-                        // Log time is usually UTC from docker, we can safely treat it as UTC to let browser convert it locally.
-                        parsedAt = new Date(time.replace(' ', 'T') + 'Z');
-                    } else {
-                        const altMatch = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})(?:\s+(.*))?/);
-                        if (altMatch) {
-                            time = altMatch[1];
-                            message = altMatch[2] || "";
-                        } else {
-                            const parts = line.split(" ");
-                            if (parts.length > 2 && (parts[0].includes("-") || parts[0].includes("/"))) {
-                                time = parts[0] + " " + parts[1];
-                                message = parts.slice(2).join(" ");
-                                const potentialDate = new Date(time.replace(' ', 'T') + 'Z');
-                                if (!isNaN(potentialDate.getTime())) {
-                                    parsedAt = potentialDate;
-                                }
-                            }
-                        }
-                    }
-
-                    let timeText = time;
-                    if (parsedAt && !isNaN(parsedAt.getTime())) {
-                        timeText = new Intl.DateTimeFormat('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                            hour12: false
-                        }).format(parsedAt);
-                    }
-
-                    return { id: idx, time: timeText, originalTime: time, message, parsedAt };
-                });
-
-                // Reverse to show newest first
-                setLogs(parsedLogs.reverse());
-            } else {
-                showError("Failed to fetch logs");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to fetch logs");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchLogs();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    const { fetchLogs } = actions;
 
     const getKeywordBadge = (message: string) => {
         const keywords = [
@@ -106,12 +40,6 @@ export default function LogsPage() {
         }
         return null;
     };
-
-    const filteredLogs = logs.filter(log =>
-        log.message.toLowerCase().includes(search.toLowerCase()) ||
-        log.time.toLowerCase().includes(search.toLowerCase()) ||
-        (log.originalTime && log.originalTime.toLowerCase().includes(search.toLowerCase()))
-    );
 
     return (
         <div className="flex flex-col h-[calc(100vh-8rem)] animate-fade-in-up">

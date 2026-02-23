@@ -1,3 +1,7 @@
+/**
+ * 根版面：字型、Auth 與 Toast Provider、全域 metadata。
+ * Root layout: fonts, Auth and Toast providers, global metadata.
+ */
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";

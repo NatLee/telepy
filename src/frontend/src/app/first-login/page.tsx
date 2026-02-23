@@ -1,111 +1,31 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+/**
+ * 首次登入頁：建立管理員帳號（帳密或 Google），僅在 first_time_setup 時顯示。
+ * First login page: create admin account (credentials or Google); shown only when first_time_setup.
+ */
+import React from "react";
 import Script from "next/script";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { useToast } from "@/components/ui/Toast";
 import { UserPlus, User, Lock, ShieldAlert } from "lucide-react";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+import { useFirstLogin } from "@/hooks/useFirstLogin";
+
 export default function FirstLoginPage() {
-    const [username, setUsername] = useState("");
-    const [password, setPassword] = useState("");
-    const [confirmPassword, setConfirmPassword] = useState("");
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const { state, actions } = useFirstLogin();
+    const {
+        username, setUsername,
+        password, setPassword,
+        confirmPassword, setConfirmPassword,
+        isSubmitting,
+        strength,
+        googleClientId
+    } = state;
 
-    const { login, isAuthenticated } = useAuth();
-    const { showSuccess, showError, showToast } = useToast();
-    const router = useRouter();
-
-    const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-
-    useEffect(() => {
-        if (isAuthenticated) {
-            router.replace("/tunnels");
-        }
-    }, [isAuthenticated, router]);
-
-    useEffect(() => {
-        (window as any).getTokenUsingGoogleCredential = async (response: any) => {
-            try {
-                const res = await apiFetch("/api/auth/google/token", {
-                    method: "POST",
-                    body: JSON.stringify({ credential: response.credential }),
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    login(data.access_token, data.refresh_token);
-                    showSuccess("Google Login successful");
-                    router.push("/tunnels");
-                } else {
-                    showError(data.error || data.detail || "Google Login failed");
-                }
-            } catch (err: any) {
-                showError(err.message || "Google Login failed");
-            }
-        };
-    }, [login, router, showError, showSuccess]);
-
-    const getPasswordStrength = () => {
-        if (!password) return { text: "", color: "bg-slate-200" };
-        if (password.length < 6) return { text: "Weak", color: "bg-red-500" };
-        if (password.length < 10) return { text: "Moderate", color: "bg-yellow-500" };
-        return { text: "Strong", color: "bg-green-500" };
-    };
-    const strength = getPasswordStrength();
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (username === password) {
-            showError("Username and password cannot be the same.");
-            return;
-        }
-        if (password !== confirmPassword) {
-            showError("Passwords do not match.");
-            return;
-        }
-
-        setIsSubmitting(true);
-        try {
-            // 1. Register User
-            const regRes = await apiFetch("/api/auth/register", {
-                method: "POST",
-                body: JSON.stringify({ username, password }),
-            });
-            const regData = await regRes.json();
-
-            if (!regRes.ok || regData.status !== "success") {
-                showError(regData.error || regData.detail || "Registration failed");
-                setIsSubmitting(false);
-                return;
-            }
-
-            showSuccess("Admin account created successfully.");
-
-            // 2. Login newly created user
-            const loginRes = await apiFetch("/api/auth/token", {
-                method: "POST",
-                body: JSON.stringify({ username, password }),
-            });
-            const loginData = await loginRes.json();
-
-            if (loginRes.ok && loginData.access_token) {
-                login(loginData.access_token, loginData.refresh_token);
-                router.push("/tunnels");
-            } else {
-                showError("Automatic login failed. Please sign in.");
-                router.push("/login");
-            }
-        } catch (err: any) {
-            showError(err.message || "Operation failed");
-        } finally {
-            setIsSubmitting(false);
-        }
-    };
+    const { handleSubmit } = actions;
 
     return (
         <>

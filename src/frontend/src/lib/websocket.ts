@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * WebSocket 連線與通知：取得 WS 來源、通知訂閱、通道連線狀態。
+ * WebSocket connection and notifications: get WS origin, notification subscription, tunnel connection status.
+ * - 連線建立：token + auth ticket 子協定；建立 / Connection: token + auth ticket subprotocols.
+ * - 重連：onclose 時延遲 RECONNECT_DELAY_MS 重試，最多 MAX_RECONNECT_ATTEMPTS 次。
+ *   Reconnect: on close, retry after RECONNECT_DELAY_MS up to MAX_RECONNECT_ATTEMPTS.
+ * - 訊息路由：useNotificationHandlers 依 action 分發給對應 handler。
+ *   Message routing: useNotificationHandlers dispatches by action to handlers.
+ */
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth";
 import { NotificationPayload } from "./notificationActions";

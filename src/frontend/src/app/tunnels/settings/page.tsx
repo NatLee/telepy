@@ -1,70 +1,24 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+/**
+ * 設定頁：站台設定列表與開關，僅管理員可編輯。
+ * Settings page: site settings list and toggles; only admins can edit.
+ */
+import React from "react";
 import { useAuth } from "@/lib/auth";
 import { Settings, ShieldAlert, Info } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
+import { useSettingsPage } from "@/hooks/useSettingsPage";
 
-// Human-readable labels for known settings keys
 const SETTING_LABELS: Record<string, string> = {
     allow_registration: "Allow User Registration",
 };
 
 export default function SettingsPage() {
-    const [settingsObj, setSettingsObj] = useState<Record<string, any>>({});
-    const [loading, setLoading] = useState(true);
-    const { showSuccess, showError } = useToast();
     const { user } = useAuth();
-
-    const fetchSettings = async () => {
-        setLoading(true);
-        try {
-            const res = await apiFetch("/api/site/settings");
-            if (res.ok) {
-                const data = await res.json();
-                // API returns a single object like { allow_registration: true }
-                setSettingsObj(typeof data === "object" && data !== null ? data : {});
-            } else {
-                showError("Failed to fetch settings");
-            }
-        } catch (e: any) {
-            showError(e.message || "Failed to fetch settings");
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchSettings();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    const handleToggle = async (keyName: string, currentValue: any) => {
-        const newValue = !currentValue;
-        // Optimistic update
-        setSettingsObj(prev => ({ ...prev, [keyName]: newValue }));
-
-        try {
-            const res = await apiFetch("/api/site/settings", {
-                method: "POST",
-                body: JSON.stringify({ [keyName]: newValue }),
-            });
-            if (res.ok) {
-                showSuccess("Setting updated");
-            } else {
-                // Revert on failure
-                setSettingsObj(prev => ({ ...prev, [keyName]: currentValue }));
-                const err = await res.json();
-                showError(err.error || "Failed to update setting");
-            }
-        } catch (e: any) {
-            setSettingsObj(prev => ({ ...prev, [keyName]: currentValue }));
-            showError(e.message || "Failed to update setting");
-        }
-    };
-
+    const { state, actions } = useSettingsPage();
+    const { settingsObj, loading } = state;
+    const { handleToggle } = actions;
     const entries = Object.entries(settingsObj);
 
     return (

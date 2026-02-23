@@ -1,19 +1,16 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { CodeBlock } from "@/components/ui/CodeBlock";
-import { apiFetch } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Info } from "lucide-react";
 
-interface ServerScriptModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    tunnelId: number | null;
+import { TunnelModalProps } from "@/types/tunnel";
+
+interface ServerScriptModalProps extends TunnelModalProps {
     sshPort: number | null;
 }
 
@@ -45,54 +42,17 @@ const TAB_TUTORIALS: Record<string, string[]> = {
     ],
 };
 
+import { useServerScriptModal } from "@/hooks/useServerScriptModal";
+
 export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultSshPort }: ServerScriptModalProps) {
-    const [activeTab, setActiveTab] = useState("ssh");
-    const [scriptContent, setScriptContent] = useState<string>("");
-    const [keyPath, setKeyPath] = useState<string>("");
-    const [targetSshPort, setTargetSshPort] = useState<string>("22");
-    const [loading, setLoading] = useState(false);
-    const { showError } = useToast();
-
-    useEffect(() => {
-        if (isOpen && tunnelId && defaultSshPort) {
-            const fetchScript = async () => {
-                setLoading(true);
-                try {
-                    const port = targetSshPort || "22";
-                    let url = `/tunnels/server/script/${activeTab}/${tunnelId}/${port}`;
-                    if (keyPath) {
-                        url += `?key_path=${encodeURIComponent(keyPath)}`;
-                    }
-                    const res = await apiFetch(url);
-                    if (res.ok) {
-                        const data = await res.json();
-                        setScriptContent(data.script ?? data.config ?? JSON.stringify(data, null, 2));
-                    } else {
-                        showError("Failed to load script");
-                    }
-                } catch (e: any) {
-                    showError(e.message || "Failed to load script");
-                } finally {
-                    setLoading(false);
-                }
-            };
-
-            const timer = setTimeout(() => {
-                fetchScript();
-            }, 300); // debounce keyPath/port entry
-
-            return () => clearTimeout(timer);
-        }
-    }, [isOpen, tunnelId, defaultSshPort, activeTab, keyPath, targetSshPort, showError]);
-
-    // Reset tab when opening
-    useEffect(() => {
-        if (isOpen) {
-            setActiveTab("ssh");
-            setKeyPath("");
-            setTargetSshPort("22");
-        }
-    }, [isOpen]);
+    const { state } = useServerScriptModal(tunnelId, defaultSshPort, isOpen);
+    const {
+        activeTab, setActiveTab,
+        scriptContent,
+        keyPath, setKeyPath,
+        targetSshPort, setTargetSshPort,
+        loading
+    } = state;
 
     const langMap: Record<string, string> = {
         ssh: "bash",

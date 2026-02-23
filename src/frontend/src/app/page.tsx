@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * 根頁面：依認證狀態導向 tunnels 或 login。
+ * Root page: redirect to tunnels or login based on auth state.
+ */
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
