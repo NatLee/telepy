@@ -248,11 +248,12 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     }, [serverId, username, currentPath, performActualUpload]);
 
     const handleDownload = useCallback((item: FileItem) => {
+        showSuccess("Downloading...");
         const separator = shellType === "powershell" ? "\\" : "/";
         const path = currentPath.endsWith(separator) ? currentPath + item.name : currentPath + separator + item.name;
         const url = `/api/sftp/download/${serverId}/${encodeURIComponent(username)}?path=${encodeURIComponent(path)}`;
         downloadUrl(url, path);
-    }, [serverId, username, currentPath, shellType, downloadUrl]);
+    }, [serverId, username, currentPath, shellType, downloadUrl, showSuccess]);
 
     return {
         refs: {
