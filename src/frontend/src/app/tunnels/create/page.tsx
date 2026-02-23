@@ -131,7 +131,7 @@ export default function CreateTunnelWizard() {
                         autosshScriptContent={autosshScriptContent}
                         status={status}
                         createdHostName={createdHostName}
-                        sshPort={sshPort}
+                        sshPort={sshPort ?? 22}
                         onBack={() => setCurrentStep(3)}
                         onNext={() => setCurrentStep(5)}
                     />
@@ -139,7 +139,7 @@ export default function CreateTunnelWizard() {
                 {currentStep === 5 && (
                     <Step5Completion
                         createdHostName={createdHostName}
-                        sshPort={sshPort}
+                        sshPort={sshPort ?? 22}
                         configContent={configContent}
                         configLoading={configLoading}
                     />
