@@ -656,10 +656,6 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
 
             if action == 'list_files':
                 await self.handle_list_files(payload)
-            elif action == 'upload_file':
-                await self.handle_upload_file(payload)
-            elif action == 'download_file':
-                await self.handle_download_file(payload)
             elif action == 'shell_detect':
                 await self.handle_shell_detect()
             else:
@@ -723,49 +719,6 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error detecting shell: {e}")
             await self.send_error(f"Failed to detect shell: {str(e)}")
-
-    async def handle_upload_file(self, payload):
-        """Handle file upload requests - returns upload instructions"""
-        try:
-            destination_path = payload.get('destination_path')
-            if not destination_path:
-                await self.send_error("Destination path required for upload")
-                return
-
-            # For WebSocket, we'll provide upload instructions rather than handling the actual file
-            # The frontend will use a traditional form upload but with WebSocket feedback
-            upload_url = f"/api/sftp/upload/{self.server_id}/{self.username}?destination_path={destination_path}"
-            
-            await self.send_response('upload_file', {
-                'status': 'success',
-                'upload_url': upload_url,
-                'message': 'Use the provided URL for file upload'
-            })
-
-        except Exception as e:
-            logger.error(f"Error preparing upload: {e}")
-            await self.send_error(f"Failed to prepare upload: {str(e)}")
-
-    async def handle_download_file(self, payload):
-        """Handle file download requests - returns download URL"""
-        try:
-            path = payload.get('path')
-            if not path:
-                await self.send_error("File path required for download")
-                return
-
-            # Provide download URL for the frontend to use
-            download_url = f"/api/sftp/download/{self.server_id}/{self.username}?path={path}"
-            
-            await self.send_response('download_file', {
-                'status': 'success',
-                'download_url': download_url,
-                'message': 'Use the provided URL for file download'
-            })
-
-        except Exception as e:
-            logger.error(f"Error preparing download: {e}")
-            await self.send_error(f"Failed to prepare download: {str(e)}")
 
     async def send_response(self, action, data):
         """Send successful response to client"""
