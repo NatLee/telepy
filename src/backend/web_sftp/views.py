@@ -6,7 +6,6 @@ import tempfile
 import subprocess
 from subprocess import Popen, PIPE
 
-from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -18,6 +17,8 @@ from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
+from tunnels.models import TunnelPermissionManager, TunnelPermission
+from services.tunnel_permissions import TunnelPermissionService
 
 def parse_permissions(permission_string:str) -> Dict[str, Any]:
     permissions = {
@@ -85,6 +86,27 @@ def is_unix(server:str, port:int) -> bool:
     stdout, stderr, returncode = execute_ssh_command(server, port, command)
     return "Linux" in stdout
 
+
+def get_tunnel_with_access(request, server_id):
+    """
+    Return the tunnel (ReverseServerAuthorizedKeys) if the current user has at least VIEW access.
+    Returns None if tunnel does not exist or user has no access (owner or shared).
+    """
+    try:
+        tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+        if TunnelPermissionManager.check_access(request.user, tunnel, TunnelPermission.VIEW):
+            return tunnel
+    except ReverseServerAuthorizedKeys.DoesNotExist:
+        pass
+    return None
+
+
+def check_username_allowed(user, reverse_server, username):
+    """Return True if the user is allowed to use this username on this tunnel."""
+    allowed = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
+    return allowed.filter(username=username).exists()
+
+
 class ShellDetect(APIView):
     permission_classes = (IsAuthenticated,)
     @swagger_auto_schema(
@@ -94,15 +116,10 @@ class ShellDetect(APIView):
     )
     def get(self, request, server_id, username, format=None):
         user = request.user
-        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
-        try:
-            # Check username exists
-            ReverseServerUsernames.objects.get(
-                reverse_server=reverse_server,
-                username=username,
-                user=user
-            )
-        except ReverseServerUsernames.DoesNotExist:
+        reverse_server = get_tunnel_with_access(request, server_id)
+        if not reverse_server:
+            return Response({"error": "Reverse server keys not found"}, status=404)
+        if not check_username_allowed(user, reverse_server, username):
             return Response({"error": "Username not found"}, status=400)
 
         port = reverse_server.reverse_port
@@ -135,15 +152,10 @@ class ListPath(APIView):
     )
     def get(self, request, server_id, username, format=None):
         user = request.user
-        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
-        try:
-            # Check username exists
-            ReverseServerUsernames.objects.get(
-                reverse_server=reverse_server,
-                username=username,
-                user=user
-            )
-        except ReverseServerUsernames.DoesNotExist:
+        reverse_server = get_tunnel_with_access(request, server_id)
+        if not reverse_server:
+            return Response({"error": "Reverse server keys not found"}, status=404)
+        if not check_username_allowed(user, reverse_server, username):
             return Response({"error": "Username not found"}, status=400)
 
         port = reverse_server.reverse_port
@@ -237,15 +249,10 @@ class Download(APIView):
     )
     def get(self, request, server_id, username, format=None):
         user = request.user
-        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
-        try:
-            # Check username exists
-            ReverseServerUsernames.objects.get(
-                reverse_server=reverse_server,
-                username=username,
-                user=user
-            )
-        except ReverseServerUsernames.DoesNotExist:
+        reverse_server = get_tunnel_with_access(request, server_id)
+        if not reverse_server:
+            return Response({"error": "Reverse server keys not found"}, status=404)
+        if not check_username_allowed(user, reverse_server, username):
             return Response({"error": "Username not found"}, status=400)
 
         reverse_port = reverse_server.reverse_port    
@@ -317,15 +324,10 @@ class UploadFiles(APIView):
     )
     def post(self, request, server_id, username, format=None):
         user = request.user
-        reverse_server = get_object_or_404(ReverseServerAuthorizedKeys, id=server_id, user=user)
-        try:
-            # Check username exists
-            ReverseServerUsernames.objects.get(
-                reverse_server=reverse_server,
-                username=username,
-                user=user
-            )
-        except ReverseServerUsernames.DoesNotExist:
+        reverse_server = get_tunnel_with_access(request, server_id)
+        if not reverse_server:
+            return Response({"error": "Reverse server keys not found"}, status=404)
+        if not check_username_allowed(user, reverse_server, username):
             return Response({"error": "Username not found"}, status=400)
 
         reverse_port = reverse_server.reverse_port
