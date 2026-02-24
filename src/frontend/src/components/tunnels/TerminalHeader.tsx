@@ -6,7 +6,7 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, RefreshCw } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { useRouter } from "next/navigation";
 
@@ -27,6 +27,7 @@ interface TerminalHeaderProps {
     setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
     onLoadServiceKeys: () => void | Promise<void>;
+    onReconnect?: () => void;
 }
 
 export function TerminalHeader({
@@ -46,6 +47,7 @@ export function TerminalHeader({
     setShowFiles,
     isBrowserActive,
     onLoadServiceKeys,
+    onReconnect,
 }: TerminalHeaderProps) {
     const router = useRouter();
 
@@ -129,9 +131,8 @@ export function TerminalHeader({
                             </button>
                             <button
                                 type="button"
-                                onClick={() => { if (connected) setMainView("browser"); }}
-                                disabled={!connected}
-                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                                onClick={() => setMainView("browser")}
+                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                             >
                                 <MonitorPlay size={13} /> Browser
                                 {isBrowserActive && mainView !== "browser" && (
@@ -160,7 +161,6 @@ export function TerminalHeader({
                             variant="outline"
                             size="sm"
                             onClick={() => setShowFiles(!showFiles)}
-                            disabled={!connected}
                             title={showFiles ? "Hide Files" : "Show Files"}
                             className={`h-8 w-8 p-0 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
