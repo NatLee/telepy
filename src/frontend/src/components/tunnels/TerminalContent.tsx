@@ -2,7 +2,7 @@
  * 終端機頁主內容區：主視圖 tab（Terminal / Browser）+ 可選 File Manager 側欄 + 虛擬鍵盤 + Service Keys 彈窗。
  * Terminal page main content: main view tabs (Terminal / Browser) + optional File Manager side panel + virtual keyboard + service keys modal.
  */
-import React, { RefObject, useEffect, useCallback } from "react";
+import React, { RefObject, useEffect, useCallback, useRef } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
@@ -60,16 +60,27 @@ export function TerminalContent({
     serviceKeys,
 }: TerminalContentProps) {
     const filesPanelRef = usePanelRef();
+    // Guard: skip onResize callbacks during programmatic resize/collapse
+    const isProgrammaticResize = useRef(false);
 
     // Sync imperative panel collapse/expand with showFiles state
     useEffect(() => {
         if (filesPanelRef.current) {
-            if (showFiles) filesPanelRef.current.resize(30);
-            else filesPanelRef.current.collapse();
+            isProgrammaticResize.current = true;
+            if (showFiles) {
+                filesPanelRef.current.resize(30);
+            } else {
+                filesPanelRef.current.collapse();
+            }
+            // Allow onResize to react to user-drag again after panel settles
+            const timer = setTimeout(() => { isProgrammaticResize.current = false; }, 100);
+            return () => clearTimeout(timer);
         }
     }, [showFiles]);
 
+    // Only sync state from user-drag, NOT from programmatic resize
     const handleFilesResize = useCallback((panelSize: { asPercentage: number }) => {
+        if (isProgrammaticResize.current) return;
         if (panelSize.asPercentage <= 3 && showFiles) setShowFiles(false);
         else if (panelSize.asPercentage > 3 && !showFiles) setShowFiles(true);
     }, [showFiles, setShowFiles]);
