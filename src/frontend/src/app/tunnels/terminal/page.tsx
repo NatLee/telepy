@@ -28,6 +28,7 @@ export default function TerminalPage() {
     const {
         connected, connecting, permissionDenied, noUsers,
         showFileManager, setShowFileManager,
+        showRemoteBrowser, setShowRemoteBrowser,
         keyboardExpanded, setKeyboardExpanded,
         headerExpanded, setHeaderExpanded,
         activeTab, setActiveTab,
@@ -96,6 +97,10 @@ export default function TerminalPage() {
                     syncedPath={syncedPath ?? null}
                     showFileManager={showFileManager}
                     setShowFileManager={setShowFileManager}
+                    showRemoteBrowser={showRemoteBrowser}
+                    setShowRemoteBrowser={setShowRemoteBrowser}
+                    activeTab={activeTab}
+                    setActiveTab={setActiveTab}
                     onLoadServiceKeys={fetchServiceKeys}
                 />
 
@@ -106,6 +111,8 @@ export default function TerminalPage() {
                     connecting={connecting}
                     showFileManager={showFileManager}
                     setShowFileManager={setShowFileManager}
+                    showRemoteBrowser={showRemoteBrowser}
+                    setShowRemoteBrowser={setShowRemoteBrowser}
                     keyboardExpanded={keyboardExpanded}
                     setKeyboardExpanded={setKeyboardExpanded}
                     terminalRef={terminalRef}
