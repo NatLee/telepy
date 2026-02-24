@@ -7,6 +7,7 @@ export interface RemoteBrowserPanelProps {
     username: string;
     accessToken: string | null;
     onClose?: () => void;
+    onActiveChange?: (isActive: boolean) => void;
 }
 
 export function RemoteBrowserPanel({
@@ -14,6 +15,7 @@ export function RemoteBrowserPanel({
     username,
     accessToken,
     onClose,
+    onActiveChange,
 }: RemoteBrowserPanelProps) {
     const [isLoading, setIsLoading] = useState(false);
     const [vncUrl, setVncUrl] = useState<string | null>(null);
@@ -49,6 +51,7 @@ export function RemoteBrowserPanel({
                 vncAbsolute = `${apiBase}${vncAbsolute}`;
             }
             setVncUrl(vncAbsolute);
+            onActiveChange?.(true);
         } catch (err: any) {
             setError(err.message || "An unknown error occurred");
         } finally {
@@ -73,14 +76,14 @@ export function RemoteBrowserPanel({
             setSessionId(null);
             setVncUrl(null);
             setIsLoading(false);
+            onActiveChange?.(false);
         }
     };
 
-    // Cleanup session on unmount
+    // Cleanup session only when window unloads to persist across tab switches
     useEffect(() => {
-        return () => {
+        const handleBeforeUnload = () => {
             if (sessionId) {
-                // Background unmount stop
                 const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
                 fetch(`${apiBase}/api/reverse/server/remote-browser/${sessionId}/stop`, {
                     method: "POST",
@@ -90,6 +93,13 @@ export function RemoteBrowserPanel({
                     keepalive: true
                 }).catch(() => { });
             }
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            // We NO LONGER stop the session when the component unmounts! 
+            // Because the user might just be toggling the tab.
         };
     }, [sessionId, accessToken]);
 

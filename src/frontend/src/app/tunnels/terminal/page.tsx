@@ -29,6 +29,7 @@ export default function TerminalPage() {
         connected, connecting, permissionDenied, noUsers,
         showFileManager, setShowFileManager,
         showRemoteBrowser, setShowRemoteBrowser,
+        isBrowserActive, setIsBrowserActive,
         keyboardExpanded, setKeyboardExpanded,
         headerExpanded, setHeaderExpanded,
         activeTab, setActiveTab,
@@ -99,6 +100,7 @@ export default function TerminalPage() {
                     setShowFileManager={setShowFileManager}
                     showRemoteBrowser={showRemoteBrowser}
                     setShowRemoteBrowser={setShowRemoteBrowser}
+                    isBrowserActive={isBrowserActive}
                     activeTab={activeTab}
                     setActiveTab={setActiveTab}
                     onLoadServiceKeys={fetchServiceKeys}
@@ -113,6 +115,7 @@ export default function TerminalPage() {
                     setShowFileManager={setShowFileManager}
                     showRemoteBrowser={showRemoteBrowser}
                     setShowRemoteBrowser={setShowRemoteBrowser}
+                    setIsBrowserActive={setIsBrowserActive}
                     keyboardExpanded={keyboardExpanded}
                     setKeyboardExpanded={setKeyboardExpanded}
                     terminalRef={terminalRef}

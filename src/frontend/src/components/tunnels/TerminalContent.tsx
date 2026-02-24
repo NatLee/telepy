@@ -19,6 +19,7 @@ export interface TerminalContentProps {
     setShowFileManager: (show: boolean) => void;
     showRemoteBrowser: boolean;
     setShowRemoteBrowser: (show: boolean) => void;
+    setIsBrowserActive: (isActive: boolean) => void;
     keyboardExpanded: boolean;
     setKeyboardExpanded: (v: boolean) => void;
     terminalRef: RefObject<HTMLDivElement | null>;
@@ -43,6 +44,7 @@ export function TerminalContent({
     setShowFileManager,
     showRemoteBrowser,
     setShowRemoteBrowser,
+    setIsBrowserActive,
     keyboardExpanded,
     setKeyboardExpanded,
     terminalRef,
@@ -146,21 +148,22 @@ export function TerminalContent({
                     </div>
                 )}
 
-                {showRemoteBrowser && username && (
-                    <div
-                        className={`absolute inset-0 w-full h-full bg-card rounded-lg border border-border flex flex-col transition-all duration-300 ease-in-out z-20 ${activeTab === "remote" ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"}`}
-                    >
+                <div
+                    className={`absolute inset-0 w-full h-full bg-card rounded-lg border border-border flex flex-col transition-all duration-300 ease-in-out z-20 ${showRemoteBrowser && activeTab === "remote" ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"}`}
+                >
+                    {showRemoteBrowser && username && (
                         <RemoteBrowserPanel
                             serverId={serverId}
                             username={username}
                             accessToken={accessToken}
+                            onActiveChange={setIsBrowserActive}
                             onClose={() => {
                                 setShowRemoteBrowser(false);
                                 setActiveTab("terminal");
                             }}
                         />
-                    </div>
-                )}
+                    )}
+                </div>
             </div>
 
             <VirtualKeyboard
