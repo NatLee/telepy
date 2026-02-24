@@ -6,7 +6,7 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { useRouter } from "next/navigation";
 
@@ -23,6 +23,10 @@ interface TerminalHeaderProps {
     syncedPath: string | null;
     showFileManager: boolean;
     setShowFileManager: (show: boolean) => void;
+    showRemoteBrowser: boolean;
+    setShowRemoteBrowser: (show: boolean) => void;
+    activeTab: "terminal" | "files" | "remote";
+    setActiveTab: (tab: "terminal" | "files" | "remote") => void;
     /** 由 hook 提供，載入並顯示 Service Keys。 Provided by hook to load and show service keys. */
     onLoadServiceKeys: () => void | Promise<void>;
 }
@@ -40,6 +44,10 @@ export function TerminalHeader({
     syncedPath,
     showFileManager,
     setShowFileManager,
+    showRemoteBrowser,
+    setShowRemoteBrowser,
+    activeTab,
+    setActiveTab,
     onLoadServiceKeys
 }: TerminalHeaderProps) {
     const router = useRouter();
@@ -129,6 +137,24 @@ export function TerminalHeader({
                             className={`h-8 text-xs gap-1.5 ${showFileManager ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
                             <FolderSync size={14} /> {showFileManager ? "Hide Files" : "Files"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                                const nextState = !showRemoteBrowser;
+                                setShowRemoteBrowser(nextState);
+                                if (nextState) {
+                                    setActiveTab("remote");
+                                    setShowFileManager(false); // Hide files when entering remote full-tab
+                                } else {
+                                    setActiveTab("terminal");
+                                }
+                            }}
+                            disabled={!connected}
+                            className={`h-8 text-xs gap-1.5 ${showRemoteBrowser || activeTab === "remote" ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                        >
+                            <MonitorPlay size={14} /> {showRemoteBrowser ? "Hide Browser" : "Proxy Browser"}
                         </Button>
                         <Button
                             variant="secondary"

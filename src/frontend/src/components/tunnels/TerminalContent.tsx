@@ -7,15 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
+import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { Copy } from "lucide-react";
 
 export interface TerminalContentProps {
-    activeTab: "terminal" | "files";
-    setActiveTab: (tab: "terminal" | "files") => void;
+    activeTab: "terminal" | "files" | "remote";
+    setActiveTab: (tab: "terminal" | "files" | "remote") => void;
     connected: boolean;
     connecting: boolean;
     showFileManager: boolean;
     setShowFileManager: (show: boolean) => void;
+    showRemoteBrowser: boolean;
+    setShowRemoteBrowser: (show: boolean) => void;
     keyboardExpanded: boolean;
     setKeyboardExpanded: (v: boolean) => void;
     terminalRef: RefObject<HTMLDivElement | null>;
@@ -38,6 +41,8 @@ export function TerminalContent({
     connecting,
     showFileManager,
     setShowFileManager,
+    showRemoteBrowser,
+    setShowRemoteBrowser,
     keyboardExpanded,
     setKeyboardExpanded,
     terminalRef,
@@ -70,7 +75,7 @@ export function TerminalContent({
             <div className="md:hidden flex p-1 bg-muted/50 rounded-lg mb-2 border border-border/40 w-full shrink-0 relative">
                 <div
                     className="absolute inset-y-1 bg-background shadow rounded-md transition-all duration-300 ease-out"
-                    style={{ width: "calc(50% - 4px)", left: activeTab === "terminal" ? "4px" : "calc(50%)" }}
+                    style={{ width: "calc(33.33% - 4px)", left: activeTab === "terminal" ? "4px" : activeTab === "files" ? "calc(33.33%)" : "calc(66.66% - 4px)" }}
                 />
                 <button
                     type="button"
@@ -91,11 +96,23 @@ export function TerminalContent({
                 >
                     Files
                 </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        if (!connected) return;
+                        setShowRemoteBrowser(true);
+                        setActiveTab("remote");
+                    }}
+                    disabled={!connected}
+                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : activeTab === "remote" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                    Remote
+                </button>
             </div>
 
             <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col md:flex-row gap-2 md:gap-4 transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === "terminal" ? "mb-[320px]" : activeTab === "terminal" ? "mb-[70px]" : "mb-0"}`}>
                 <div
-                    className={`flex-[2] min-h-0 min-w-0 bg-black rounded-lg shadow-inner border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 ${activeTab === "terminal" ? "translate-x-0 z-10" : "-translate-x-full z-0"}`}
+                    className={`flex-[2] min-h-0 min-w-0 bg-black rounded-lg shadow-inner border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out ${activeTab === "remote" ? "md:-translate-x-full md:opacity-0 md:pointer-events-none -translate-x-full z-0" : "md:translate-x-0 translate-x-0 opacity-100 z-10"} ${activeTab === "files" ? "hidden md:flex" : ""}`}
                 >
                     <style
                         dangerouslySetInnerHTML={{
@@ -126,6 +143,22 @@ export function TerminalContent({
                         className={`flex-1 min-h-0 min-w-0 md:max-w-md w-full bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 ${activeTab === "files" ? "translate-x-0 z-10" : "translate-x-full z-0"}`}
                     >
                         <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                    </div>
+                )}
+
+                {showRemoteBrowser && username && (
+                    <div
+                        className={`absolute inset-0 w-full h-full bg-card rounded-lg border border-border flex flex-col transition-all duration-300 ease-in-out z-20 ${activeTab === "remote" ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"}`}
+                    >
+                        <RemoteBrowserPanel
+                            serverId={serverId}
+                            username={username}
+                            accessToken={accessToken}
+                            onClose={() => {
+                                setShowRemoteBrowser(false);
+                                setActiveTab("terminal");
+                            }}
+                        />
                     </div>
                 )}
             </div>
