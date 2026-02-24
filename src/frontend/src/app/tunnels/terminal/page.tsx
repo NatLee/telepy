@@ -38,7 +38,8 @@ export default function TerminalPage() {
         serviceKeys, setServiceKeys,
         loadingServiceKeys, setLoadingServiceKeys,
         username, setUsername,
-        availableUsernames, setAvailableUsernames
+        availableUsernames, setAvailableUsernames,
+        layoutMode, setLayoutMode
     } = state;
     const { fetchServiceKeys } = actions;
     if (!serverId || !accessToken) {
@@ -104,6 +105,8 @@ export default function TerminalPage() {
                     activeTab={activeTab}
                     setActiveTab={setActiveTab}
                     onLoadServiceKeys={fetchServiceKeys}
+                    layoutMode={layoutMode}
+                    setLayoutMode={setLayoutMode}
                 />
 
                 <TerminalContent
@@ -118,6 +121,7 @@ export default function TerminalPage() {
                     setIsBrowserActive={setIsBrowserActive}
                     keyboardExpanded={keyboardExpanded}
                     setKeyboardExpanded={setKeyboardExpanded}
+                    layoutMode={layoutMode}
                     terminalRef={terminalRef}
                     xtermRef={xtermRef}
                     wsRef={wsRef}

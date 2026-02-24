@@ -6,7 +6,7 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Columns3, PanelRight, PanelBottom } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { useRouter } from "next/navigation";
 
@@ -30,6 +30,8 @@ interface TerminalHeaderProps {
     setActiveTab: (tab: "terminal" | "files" | "remote") => void;
     /** 由 hook 提供，載入並顯示 Service Keys。 Provided by hook to load and show service keys. */
     onLoadServiceKeys: () => void | Promise<void>;
+    layoutMode: "right_split" | "right_tab" | "bottom_tab";
+    setLayoutMode: (mode: "right_split" | "right_tab" | "bottom_tab") => void;
 }
 
 export function TerminalHeader({
@@ -50,9 +52,19 @@ export function TerminalHeader({
     isBrowserActive,
     activeTab,
     setActiveTab,
-    onLoadServiceKeys
+    onLoadServiceKeys,
+    layoutMode,
+    setLayoutMode,
 }: TerminalHeaderProps) {
     const router = useRouter();
+
+    const layoutOptions = [
+        { mode: "right_split" as const, icon: Columns3, label: "Split" },
+        { mode: "right_tab" as const, icon: PanelRight, label: "Side Tabs" },
+        { mode: "bottom_tab" as const, icon: PanelBottom, label: "Bottom" },
+    ];
+    const currentIdx = layoutOptions.findIndex(o => o.mode === layoutMode);
+    const CurrentIcon = layoutOptions[currentIdx]?.icon ?? Columns3;
 
     return (
         <Card className="shrink-0 mb-2 md:mb-4 rounded-lg overflow-hidden border-border/50">
@@ -123,6 +135,17 @@ export function TerminalHeader({
 
                         <div className="h-6 w-px bg-border mx-1"></div>
 
+                        {/* Layout Mode Cycle */}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            title={`Layout: ${layoutOptions[currentIdx]?.label}`}
+                            onClick={() => setLayoutMode(layoutOptions[(currentIdx + 1) % layoutOptions.length].mode)}
+                            className="h-8 w-8 p-0"
+                        >
+                            <CurrentIcon size={14} />
+                        </Button>
+
                         <Button
                             variant="outline"
                             size="sm"
@@ -134,7 +157,11 @@ export function TerminalHeader({
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setShowFileManager(!showFileManager)}
+                            onClick={() => {
+                                const next = !showFileManager;
+                                setShowFileManager(next);
+                                if (next) setActiveTab("files");
+                            }}
                             disabled={!connected}
                             className={`h-8 text-xs gap-1.5 ${showFileManager ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
