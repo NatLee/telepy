@@ -114,7 +114,7 @@ export function TerminalContent({
 
             <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col md:flex-row gap-2 md:gap-4 transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === "terminal" ? "mb-[320px]" : activeTab === "terminal" ? "mb-[70px]" : "mb-0"}`}>
                 <div
-                    className={`flex-[2] min-h-0 min-w-0 bg-black rounded-lg shadow-inner border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out ${activeTab === "remote" ? "md:-translate-x-full md:opacity-0 md:pointer-events-none -translate-x-full z-0" : "md:translate-x-0 translate-x-0 opacity-100 z-10"} ${activeTab === "files" ? "hidden md:flex" : ""}`}
+                    className={`flex-[2] min-h-0 min-w-0 bg-black rounded-lg shadow-inner border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${activeTab === "terminal" ? "translate-x-0 opacity-100 z-10" : "-translate-x-full opacity-0 pointer-events-none z-0"}`}
                 >
                     <style
                         dangerouslySetInnerHTML={{
@@ -142,14 +142,14 @@ export function TerminalContent({
 
                 {showFileManager && username && accessToken && (
                     <div
-                        className={`flex-1 min-h-0 min-w-0 md:max-w-md w-full bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 ${activeTab === "files" ? "translate-x-0 z-10" : "translate-x-full z-0"}`}
+                        className={`flex-1 min-h-0 min-w-0 md:max-w-md w-full bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${activeTab === "files" ? "translate-x-0 opacity-100 z-20 pointer-events-auto" : "translate-x-full opacity-0 pointer-events-none z-0"}`}
                     >
                         <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                     </div>
                 )}
 
                 <div
-                    className={`absolute inset-0 w-full h-full bg-card rounded-lg border border-border flex flex-col transition-all duration-300 ease-in-out z-20 ${activeTab === "remote" ? "translate-x-0 opacity-100" : "translate-x-full opacity-0 pointer-events-none"}`}
+                    className={`flex-[3] min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col absolute inset-0 md:inset-auto h-full transition-all duration-300 ease-in-out z-20 ${showRemoteBrowser ? "md:relative md:translate-x-0 md:opacity-100 md:pointer-events-auto md:flex" : "md:hidden md:opacity-0 md:pointer-events-none"} ${activeTab === "remote" ? "translate-x-0 opacity-100 pointer-events-auto z-30" : "translate-x-full opacity-0 pointer-events-none z-0"}`}
                 >
                     {username && (
                         <RemoteBrowserPanel
