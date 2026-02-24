@@ -170,12 +170,12 @@ export function useCreateTunnelWizard() {
 
     // --- Step 4 Script Fetch ---
     useEffect(() => {
-        if (currentStep === 4 && tunnelId && sshPort) {
+        if (currentStep === 4 && tunnelId && endpointSshPort) {
             const fetchScripts = async () => {
                 try {
                     const [sshRes, autosshRes] = await Promise.all([
-                        apiFetch(`/tunnels/server/script/ssh/${tunnelId}/${sshPort}`),
-                        apiFetch(`/tunnels/server/script/autossh/${tunnelId}/${sshPort}`),
+                        apiFetch(`/tunnels/server/script/ssh/${tunnelId}/${endpointSshPort}`),
+                        apiFetch(`/tunnels/server/script/autossh/${tunnelId}/${endpointSshPort}`),
                     ]);
                     if (sshRes.ok) {
                         const data = await sshRes.json();
@@ -189,7 +189,7 @@ export function useCreateTunnelWizard() {
             };
             fetchScripts();
         }
-    }, [currentStep, tunnelId, sshPort]);
+    }, [currentStep, tunnelId, endpointSshPort]);
 
     // --- Step 5 Config Fetch ---
     useEffect(() => {
