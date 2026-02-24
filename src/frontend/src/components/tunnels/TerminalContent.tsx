@@ -2,7 +2,7 @@
  * 終端機頁主內容區：主視圖 tab（Terminal / Browser）+ 可選 File Manager 側欄 + 虛擬鍵盤 + Service Keys 彈窗。
  * Terminal page main content: main view tabs (Terminal / Browser) + optional File Manager side panel + virtual keyboard + service keys modal.
  */
-import React, { RefObject, useEffect, useCallback, useRef } from "react";
+import React, { RefObject, useEffect, useCallback } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
@@ -60,29 +60,21 @@ export function TerminalContent({
     serviceKeys,
 }: TerminalContentProps) {
     const filesPanelRef = usePanelRef();
-    // Guard: skip onResize callbacks during programmatic resize/collapse
-    const isProgrammaticResize = useRef(false);
 
     // Sync imperative panel collapse/expand with showFiles state
     useEffect(() => {
         if (filesPanelRef.current) {
-            isProgrammaticResize.current = true;
-            if (showFiles) {
-                filesPanelRef.current.resize(30);
-            } else {
-                filesPanelRef.current.collapse();
-            }
-            // Allow onResize to react to user-drag again after panel settles
-            const timer = setTimeout(() => { isProgrammaticResize.current = false; }, 100);
-            return () => clearTimeout(timer);
+            if (showFiles) filesPanelRef.current.resize(30);
+            else filesPanelRef.current.collapse();
         }
     }, [showFiles]);
 
-    // Only sync state from user-drag, NOT from programmatic resize
-    const handleFilesResize = useCallback((panelSize: { asPercentage: number }) => {
-        if (isProgrammaticResize.current) return;
-        if (panelSize.asPercentage <= 3 && showFiles) setShowFiles(false);
-        else if (panelSize.asPercentage > 3 && !showFiles) setShowFiles(true);
+    // Sync showFiles when user finishes dragging (fires only after pointer release)
+    const handleLayoutChanged = useCallback(() => {
+        if (!filesPanelRef.current) return;
+        const collapsed = filesPanelRef.current.isCollapsed();
+        if (collapsed && showFiles) setShowFiles(false);
+        else if (!collapsed && !showFiles) setShowFiles(true);
     }, [showFiles, setShowFiles]);
 
     const sendInput = (input: string) => {
@@ -134,7 +126,7 @@ export function TerminalContent({
 
             {/* Main Layout: Main View + Optional Files Side Panel */}
             <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && mainView === "terminal" ? "mb-[320px]" : mainView === "terminal" ? "mb-[70px]" : "mb-0"}`}>
-                <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden">
+                <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden" onLayoutChanged={handleLayoutChanged}>
                     {/* ═══ Main View Panel ═══ */}
                     <ResizablePanel
                         defaultSize={100}
@@ -185,7 +177,6 @@ export function TerminalContent({
                         minSize={12}
                         collapsible
                         collapsedSize={0}
-                        onResize={handleFilesResize}
                         className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${showFiles ? "translate-x-0 opacity-100 z-30 pointer-events-auto" : "md:translate-x-0 translate-x-full opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto z-0"}`}
                     >
                         {username && accessToken && (
