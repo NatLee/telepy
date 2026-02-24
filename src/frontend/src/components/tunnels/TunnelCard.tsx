@@ -14,7 +14,7 @@ interface TunnelCardProps {
     getStatus: (port: number) => React.ReactNode;
     onDetails: (tunnelId: number) => void;
     onConfig: (tunnelId: number) => void;
-    onScript: (tunnelId: number, sshPort: number) => void;
+    onScript: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;

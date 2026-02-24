@@ -24,7 +24,7 @@ interface TunnelActionsProps {
     tunnel: Tunnel;
     onDetails: (tunnelId: number) => void;
     onConfig: (tunnelId: number) => void;
-    onScript: (tunnelId: number, sshPort: number) => void;
+    onScript: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
@@ -50,7 +50,7 @@ export function TunnelActions({
                 <Settings size={15} />
             </Button>
             {tunnel.is_owner && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onScript(tunnel.id, tunnel.reverse_port)} title="Scripts">
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onScript(tunnel.id)} title="Scripts">
                     <Terminal size={15} />
                 </Button>
             )}
