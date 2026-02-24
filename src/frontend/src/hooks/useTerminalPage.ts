@@ -33,6 +33,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [noUsers, setNoUsers] = useState(false);
     const [showFileManager, setShowFileManager] = useState(false);
     const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
+    const [isBrowserActive, setIsBrowserActive] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
     const [activeTab, setActiveTab] = useState<"terminal" | "files" | "remote">("terminal");
@@ -366,6 +367,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             noUsers, setNoUsers,
             showFileManager, setShowFileManager,
             showRemoteBrowser, setShowRemoteBrowser,
+            isBrowserActive, setIsBrowserActive,
             keyboardExpanded, setKeyboardExpanded,
             headerExpanded, setHeaderExpanded,
             activeTab, setActiveTab,

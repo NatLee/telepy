@@ -25,6 +25,7 @@ interface TerminalHeaderProps {
     setShowFileManager: (show: boolean) => void;
     showRemoteBrowser: boolean;
     setShowRemoteBrowser: (show: boolean) => void;
+    isBrowserActive: boolean;
     activeTab: "terminal" | "files" | "remote";
     setActiveTab: (tab: "terminal" | "files" | "remote") => void;
     /** 由 hook 提供，載入並顯示 Service Keys。 Provided by hook to load and show service keys. */
@@ -46,6 +47,7 @@ export function TerminalHeader({
     setShowFileManager,
     showRemoteBrowser,
     setShowRemoteBrowser,
+    isBrowserActive,
     activeTab,
     setActiveTab,
     onLoadServiceKeys
@@ -152,9 +154,20 @@ export function TerminalHeader({
                                 }
                             }}
                             disabled={!connected}
-                            className={`h-8 text-xs gap-1.5 ${showRemoteBrowser || activeTab === "remote" ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            className={`h-8 text-xs gap-1.5 relative ${showRemoteBrowser || activeTab === "remote" ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
                             <MonitorPlay size={14} /> {showRemoteBrowser ? "Hide Browser" : "Proxy Browser"}
+                            {isBrowserActive && !showRemoteBrowser && (
+                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]"></span>
+                                </span>
+                            )}
+                            {isBrowserActive && showRemoteBrowser && (
+                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]"></span>
+                                </span>
+                            )}
                         </Button>
                         <Button
                             variant="secondary"
