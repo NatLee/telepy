@@ -1,12 +1,12 @@
 /**
- * 終端機頁面標題列：連線狀態、使用者切換、路徑、Service Keys 與檔案管理按鈕。
- * Terminal page header: connection status, username switcher, path, service keys and file manager.
+ * 終端機頁面標題列：連線狀態、使用者切換、路徑、Terminal/Browser tabs、Files toggle、Service Keys。
+ * Terminal page header: connection status, username switcher, path, Terminal/Browser tabs, Files toggle, service keys.
  */
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Columns3, PanelRight, PanelBottom } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { useRouter } from "next/navigation";
 
@@ -21,17 +21,12 @@ interface TerminalHeaderProps {
     username: string | null;
     setUsername: (username: string) => void;
     syncedPath: string | null;
-    showFileManager: boolean;
-    setShowFileManager: (show: boolean) => void;
-    showRemoteBrowser: boolean;
-    setShowRemoteBrowser: (show: boolean) => void;
+    mainView: "terminal" | "browser";
+    setMainView: (view: "terminal" | "browser") => void;
+    showFiles: boolean;
+    setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
-    activeTab: "terminal" | "files" | "remote";
-    setActiveTab: (tab: "terminal" | "files" | "remote") => void;
-    /** 由 hook 提供，載入並顯示 Service Keys。 Provided by hook to load and show service keys. */
     onLoadServiceKeys: () => void | Promise<void>;
-    layoutMode: "right_split" | "right_tab" | "bottom_tab";
-    setLayoutMode: (mode: "right_split" | "right_tab" | "bottom_tab") => void;
 }
 
 export function TerminalHeader({
@@ -45,26 +40,14 @@ export function TerminalHeader({
     username,
     setUsername,
     syncedPath,
-    showFileManager,
-    setShowFileManager,
-    showRemoteBrowser,
-    setShowRemoteBrowser,
+    mainView,
+    setMainView,
+    showFiles,
+    setShowFiles,
     isBrowserActive,
-    activeTab,
-    setActiveTab,
     onLoadServiceKeys,
-    layoutMode,
-    setLayoutMode,
 }: TerminalHeaderProps) {
     const router = useRouter();
-
-    const layoutOptions = [
-        { mode: "right_split" as const, icon: Columns3, label: "Split" },
-        { mode: "right_tab" as const, icon: PanelRight, label: "Side Tabs" },
-        { mode: "bottom_tab" as const, icon: PanelBottom, label: "Bottom" },
-    ];
-    const currentIdx = layoutOptions.findIndex(o => o.mode === layoutMode);
-    const CurrentIcon = layoutOptions[currentIdx]?.icon ?? Columns3;
 
     return (
         <Card className="shrink-0 mb-2 md:mb-4 rounded-lg overflow-hidden border-border/50">
@@ -135,16 +118,35 @@ export function TerminalHeader({
 
                         <div className="h-6 w-px bg-border mx-1"></div>
 
-                        {/* Layout Mode Cycle */}
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            title={`Layout: ${layoutOptions[currentIdx]?.label}`}
-                            onClick={() => setLayoutMode(layoutOptions[(currentIdx + 1) % layoutOptions.length].mode)}
-                            className="h-8 w-8 p-0"
-                        >
-                            <CurrentIcon size={14} />
-                        </Button>
+                        {/* ═══ Terminal / Browser Tabs ═══ */}
+                        <div className="flex items-center bg-muted/50 border border-border rounded-lg p-0.5 gap-0.5">
+                            <button
+                                type="button"
+                                onClick={() => setMainView("terminal")}
+                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${mainView === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                            >
+                                <TerminalIcon size={13} /> Terminal
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { if (connected) setMainView("browser"); }}
+                                disabled={!connected}
+                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                            >
+                                <MonitorPlay size={13} /> Browser
+                                {isBrowserActive && mainView !== "browser" && (
+                                    <span className="flex h-2 w-2 ml-0.5">
+                                        <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                                    </span>
+                                )}
+                                {isBrowserActive && mainView === "browser" && (
+                                    <span className="flex h-2 w-2 ml-0.5">
+                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                                    </span>
+                                )}
+                            </button>
+                        </div>
 
                         <Button
                             variant="outline"
@@ -157,43 +159,11 @@ export function TerminalHeader({
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => {
-                                const next = !showFileManager;
-                                setShowFileManager(next);
-                                if (next) setActiveTab("files");
-                            }}
+                            onClick={() => setShowFiles(!showFiles)}
                             disabled={!connected}
-                            className={`h-8 text-xs gap-1.5 ${showFileManager ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            className={`h-8 text-xs gap-1.5 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
-                            <FolderSync size={14} /> {showFileManager ? "Hide Files" : "Files"}
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                                const nextState = !showRemoteBrowser;
-                                setShowRemoteBrowser(nextState);
-                                if (nextState) {
-                                    setActiveTab("remote");
-                                } else {
-                                    setActiveTab("terminal");
-                                }
-                            }}
-                            disabled={!connected}
-                            className={`h-8 text-xs gap-1.5 relative ${showRemoteBrowser || activeTab === "remote" ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
-                        >
-                            <MonitorPlay size={14} /> {showRemoteBrowser ? "Hide Browser" : "Proxy Browser"}
-                            {isBrowserActive && !showRemoteBrowser && (
-                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]"></span>
-                                </span>
-                            )}
-                            {isBrowserActive && showRemoteBrowser && (
-                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]"></span>
-                                </span>
-                            )}
+                            <FolderSync size={14} /> {showFiles ? "Hide Files" : "Files"}
                         </Button>
                         <Button
                             variant="secondary"
@@ -250,7 +220,7 @@ export function TerminalHeader({
                             </button>
                         )}
 
-                        <div className="grid grid-cols-2 gap-2 mt-1">
+                        <div className="grid grid-cols-3 gap-2 mt-1">
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -259,7 +229,15 @@ export function TerminalHeader({
                             >
                                 <KeyRound size={14} /> Keys
                             </Button>
-
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowFiles(!showFiles)}
+                                disabled={!connected}
+                                className={`h-10 text-xs gap-1.5 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            >
+                                <FolderSync size={14} /> Files
+                            </Button>
                             <Button
                                 variant="secondary"
                                 size="sm"
