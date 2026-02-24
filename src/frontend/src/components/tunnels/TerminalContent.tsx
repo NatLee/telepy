@@ -2,8 +2,8 @@
  * 終端機頁主內容區：主視圖 tab（Terminal / Browser）+ 可選 File Manager 側欄 + 虛擬鍵盤 + Service Keys 彈窗。
  * Terminal page main content: main view tabs (Terminal / Browser) + optional File Manager side panel + virtual keyboard + service keys modal.
  */
-import React, { RefObject, useEffect, useCallback } from "react";
-import { usePanelRef } from "react-resizable-panels";
+import React, { RefObject, useEffect, useCallback, useRef } from "react";
+import { usePanelRef, type GroupImperativeHandle } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
 import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
@@ -59,13 +59,14 @@ export function TerminalContent({
     loadingServiceKeys,
     serviceKeys,
 }: TerminalContentProps) {
+    const groupRef = useRef<GroupImperativeHandle>(null);
     const filesPanelRef = usePanelRef();
 
-    // Sync imperative panel collapse/expand with showFiles state
+    // Open/close Files panel via group-level setLayout for authoritative control
     useEffect(() => {
-        if (filesPanelRef.current) {
-            if (showFiles) filesPanelRef.current.resize(30);
-            else filesPanelRef.current.collapse();
+        if (groupRef.current) {
+            if (showFiles) groupRef.current.setLayout({ main: 70, files: 30 });
+            else groupRef.current.setLayout({ main: 100, files: 0 });
         }
     }, [showFiles]);
 
@@ -126,9 +127,10 @@ export function TerminalContent({
 
             {/* Main Layout: Main View + Optional Files Side Panel */}
             <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && mainView === "terminal" ? "mb-[320px]" : mainView === "terminal" ? "mb-[70px]" : "mb-0"}`}>
-                <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden" onLayoutChanged={handleLayoutChanged}>
+                <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden" groupRef={groupRef} onLayoutChanged={handleLayoutChanged}>
                     {/* ═══ Main View Panel ═══ */}
                     <ResizablePanel
+                        id="main"
                         defaultSize={100}
                         minSize={30}
                         className="min-h-0 flex flex-col relative"
@@ -172,9 +174,10 @@ export function TerminalContent({
                     {/* ═══ Files Side Panel (collapsible, desktop only) ═══ */}
                     <ResizableHandle className="hidden md:flex mx-1 bg-transparent" withHandle />
                     <ResizablePanel
+                        id="files"
                         panelRef={filesPanelRef}
                         defaultSize={0}
-                        minSize={12}
+                        minSize={20}
                         collapsible
                         collapsedSize={0}
                         className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${showFiles ? "translate-x-0 opacity-100 z-30 pointer-events-auto" : "md:translate-x-0 translate-x-full opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto z-0"}`}
