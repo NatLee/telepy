@@ -135,7 +135,7 @@ export default function TunnelsPage() {
                                 getStatus={getStatus}
                                 onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}
                                 onConfig={(tunnelId: number) => setConfigModal({ isOpen: true, tunnelId })}
-                                onScript={(tunnelId: number, sshPort: number) => setScriptModal({ isOpen: true, tunnelId, sshPort })}
+                                onScript={(tunnelId: number) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 })}
                                 onUsers={(tunnelId: number, readOnly: boolean) => setUsersModal({ isOpen: true, tunnelId, readOnly })}
                                 onShare={(tunnelId: number) => setShareModal({ isOpen: true, tunnelId })}
                                 onLeave={(tunnelId: number, name: string) => setLeaveConfirm({ isOpen: true, tunnelId, name })}
@@ -169,7 +169,7 @@ export default function TunnelsPage() {
                                         getStatus={getStatus}
                                         onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}
                                         onConfig={(tunnelId: number) => setConfigModal({ isOpen: true, tunnelId })}
-                                        onScript={(tunnelId: number, sshPort: number) => setScriptModal({ isOpen: true, tunnelId, sshPort })}
+                                        onScript={(tunnelId: number) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 })}
                                         onUsers={(tunnelId: number, readOnly: boolean) => setUsersModal({ isOpen: true, tunnelId, readOnly })}
                                         onShare={(tunnelId: number) => setShareModal({ isOpen: true, tunnelId })}
                                         onLeave={(tunnelId: number, name: string) => setLeaveConfirm({ isOpen: true, tunnelId, name })}
