@@ -37,6 +37,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
     const [activeTab, setActiveTab] = useState<"terminal" | "files" | "remote">("terminal");
+    const [layoutMode, setLayoutMode] = useState<"right_split" | "right_tab" | "bottom_tab">("right_split");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
 
     const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
@@ -279,7 +280,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             }, 200);
             return () => clearTimeout(timer);
         }
-    }, [showFileManager]);
+    }, [showFileManager, showRemoteBrowser]);
 
     useEffect(() => {
         const manageNativeKeyboard = () => {
@@ -371,6 +372,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             keyboardExpanded, setKeyboardExpanded,
             headerExpanded, setHeaderExpanded,
             activeTab, setActiveTab,
+            layoutMode, setLayoutMode,
             syncedPath, setSyncedPath,
             serviceKeyModalOpen, setServiceKeyModalOpen,
             serviceKeys, setServiceKeys,

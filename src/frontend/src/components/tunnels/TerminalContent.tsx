@@ -1,15 +1,14 @@
 /**
- * 終端機頁主內容區：行動版分頁、xterm 區、檔案管理、虛擬鍵盤、Service Keys 彈窗。
- * Terminal page main content: mobile tabs, xterm area, file manager, virtual keyboard, service keys modal.
+ * 終端機頁主內容區：行動版分頁、layout 模式切換、虛擬鍵盤、Service Keys 彈窗。
+ * Terminal page main content: mobile tabs, layout mode dispatch, virtual keyboard, service keys modal.
  */
-import React, { RefObject, useEffect, useCallback } from "react";
-import { usePanelRef } from "react-resizable-panels";
+import React, { RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
-import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
-import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
-import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { RightSplitLayout } from "@/components/tunnels/layouts/RightSplitLayout";
+import { RightTabLayout } from "@/components/tunnels/layouts/RightTabLayout";
+import { BottomTabLayout } from "@/components/tunnels/layouts/BottomTabLayout";
 import { Copy } from "lucide-react";
 
 export interface TerminalContentProps {
@@ -24,6 +23,7 @@ export interface TerminalContentProps {
     setIsBrowserActive: (isActive: boolean) => void;
     keyboardExpanded: boolean;
     setKeyboardExpanded: (v: boolean) => void;
+    layoutMode: "right_split" | "right_tab" | "bottom_tab";
     terminalRef: RefObject<HTMLDivElement | null>;
     xtermRef: RefObject<unknown>;
     wsRef: RefObject<WebSocket | null>;
@@ -49,6 +49,7 @@ export function TerminalContent({
     setIsBrowserActive,
     keyboardExpanded,
     setKeyboardExpanded,
+    layoutMode,
     terminalRef,
     xtermRef,
     wsRef,
@@ -61,48 +62,6 @@ export function TerminalContent({
     loadingServiceKeys,
     serviceKeys,
 }: TerminalContentProps) {
-    const filesPanelRef = usePanelRef();
-    const browserPanelRef = usePanelRef();
-
-    // Sync imperative panel collapse/expand with state
-    useEffect(() => {
-        if (filesPanelRef.current) {
-            if (showFileManager) {
-                filesPanelRef.current.expand();
-            } else {
-                filesPanelRef.current.collapse();
-            }
-        }
-    }, [showFileManager]);
-
-    useEffect(() => {
-        if (browserPanelRef.current) {
-            if (showRemoteBrowser) {
-                browserPanelRef.current.expand();
-            } else {
-                browserPanelRef.current.collapse();
-            }
-        }
-    }, [showRemoteBrowser]);
-
-    // Keep state in sync when user collapses panels via drag handle
-    const handleFilesResize = useCallback((panelSize: { asPercentage: number }) => {
-        if (panelSize.asPercentage <= 0 && showFileManager) {
-            setShowFileManager(false);
-        } else if (panelSize.asPercentage > 0 && !showFileManager) {
-            setShowFileManager(true);
-        }
-    }, [showFileManager, setShowFileManager]);
-
-    const handleBrowserResize = useCallback((panelSize: { asPercentage: number }) => {
-        if (panelSize.asPercentage <= 0 && showRemoteBrowser) {
-            setShowRemoteBrowser(false);
-            if (activeTab === "remote") setActiveTab("terminal");
-        } else if (panelSize.asPercentage > 0 && !showRemoteBrowser) {
-            setShowRemoteBrowser(true);
-        }
-    }, [showRemoteBrowser, setShowRemoteBrowser, activeTab, setActiveTab]);
-
     const sendInput = (input: string) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ action: "pty_input", payload: { input } }));
@@ -114,6 +73,24 @@ export function TerminalContent({
                 } catch { /* noop */ }
             }, 80);
         }
+    };
+
+    // Shared layout props for all layout components
+    const layoutProps = {
+        activeTab,
+        setActiveTab,
+        connected,
+        connecting,
+        showFileManager,
+        setShowFileManager,
+        showRemoteBrowser,
+        setShowRemoteBrowser,
+        setIsBrowserActive,
+        terminalRef,
+        serverId,
+        username,
+        accessToken,
+        syncedPath,
     };
 
     return (
@@ -157,80 +134,12 @@ export function TerminalContent({
                 </button>
             </div>
 
-            {/* Desktop: Resizable Side-by-Side Layout / Mobile: Stacked absolute panels */}
-            <ResizablePanelGroup className={`flex-1 min-h-0 w-full relative overflow-hidden transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === "terminal" ? "mb-[320px]" : activeTab === "terminal" ? "mb-[70px]" : "mb-0"}`}>
-
-                {/* ═══ Terminal Panel ═══ */}
-                <ResizablePanel
-                    defaultSize={60}
-                    minSize={20}
-                    className={`bg-black rounded-lg shadow-inner border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${activeTab === "terminal" ? "translate-x-0 opacity-100 z-10" : "-translate-x-full opacity-0 pointer-events-none z-0"}`}
-                >
-                    <style
-                        dangerouslySetInnerHTML={{
-                            __html: `
-.terminal-container .xterm-viewport::-webkit-scrollbar { width: 14px; background: transparent; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); border: 4px solid #000; border-radius: 8px; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.4); }
-.terminal-container .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
-`,
-                        }}
-                    />
-                    <div className="flex-1 relative min-h-0 bg-black terminal-container">
-                        <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
-                        {!connected && !connecting && (
-                            <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center rounded-lg">
-                                <div className="text-center">
-                                    <div className="w-3 h-3 rounded-full bg-destructive mx-auto mb-2" />
-                                    <p className="text-sm text-muted-foreground">Disconnected</p>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </ResizablePanel>
-
-                {/* ═══ Files Panel (collapsible) ═══ */}
-                <ResizableHandle className="hidden md:flex mx-1 bg-transparent" withHandle />
-                <ResizablePanel
-                    panelRef={filesPanelRef}
-                    defaultSize={0}
-                    minSize={15}
-                    collapsible
-                    collapsedSize={0}
-                    onResize={handleFilesResize}
-                    className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-transform duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${activeTab === "files" ? "translate-x-0 opacity-100 z-20 pointer-events-auto" : "translate-x-full opacity-0 pointer-events-none z-0"}`}
-                >
-                    {username && accessToken && (
-                        <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
-                    )}
-                </ResizablePanel>
-
-                {/* ═══ Remote Browser Panel (collapsible) ═══ */}
-                <ResizableHandle className="hidden md:flex mx-1 bg-transparent" withHandle />
-                <ResizablePanel
-                    panelRef={browserPanelRef}
-                    defaultSize={0}
-                    minSize={20}
-                    collapsible
-                    collapsedSize={0}
-                    onResize={handleBrowserResize}
-                    className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col absolute inset-0 md:inset-auto h-full transition-all duration-300 ease-in-out z-20 md:relative md:translate-x-0 md:opacity-100 md:pointer-events-auto ${activeTab === "remote" ? "translate-x-0 opacity-100 pointer-events-auto z-30" : "translate-x-full opacity-0 pointer-events-none z-0"}`}
-                >
-                    {username && (
-                        <RemoteBrowserPanel
-                            serverId={serverId}
-                            username={username}
-                            accessToken={accessToken}
-                            onActiveChange={setIsBrowserActive}
-                            onClose={() => {
-                                setShowRemoteBrowser(false);
-                                setActiveTab("terminal");
-                            }}
-                        />
-                    )}
-                </ResizablePanel>
-            </ResizablePanelGroup>
+            {/* Layout Mode Dispatch */}
+            <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === "terminal" ? "mb-[320px]" : activeTab === "terminal" ? "mb-[70px]" : "mb-0"}`}>
+                {layoutMode === "right_split" && <RightSplitLayout {...layoutProps} />}
+                {layoutMode === "right_tab" && <RightTabLayout {...layoutProps} />}
+                {layoutMode === "bottom_tab" && <BottomTabLayout {...layoutProps} />}
+            </div>
 
             <VirtualKeyboard
                 isVisible={activeTab === "terminal"}
