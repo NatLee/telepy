@@ -37,6 +37,19 @@ http:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/ws`)"
 
+    selenium-novnc:
+      <<: *commonRouterSettings
+      rule: "PathPrefix(`/novnc`)"
+      service: selenium-service
+      middlewares:
+        - strip-novnc
+
+  middlewares:
+    strip-novnc:
+      stripPrefix:
+        prefixes:
+          - "/novnc"
+          
   services:
     frontend-service:
       <<: *frontendServiceSettings
@@ -44,3 +57,7 @@ http:
     backend-service:
       <<: *backendServiceSettings
 
+    selenium-service:
+      loadBalancer:
+        servers:
+          - url: "http://selenium-standalone:7900"
