@@ -27,21 +27,20 @@ export default function TerminalPage() {
     const { terminalRef, xtermRef, wsRef } = refs;
     const {
         connected, connecting, permissionDenied, noUsers,
-        showFileManager, setShowFileManager,
-        showRemoteBrowser, setShowRemoteBrowser,
+        showFiles, setShowFiles,
         isBrowserActive, setIsBrowserActive,
         keyboardExpanded, setKeyboardExpanded,
         headerExpanded, setHeaderExpanded,
-        activeTab, setActiveTab,
-        syncedPath, setSyncedPath,
+        mainView, setMainView,
+        syncedPath,
         serviceKeyModalOpen, setServiceKeyModalOpen,
-        serviceKeys, setServiceKeys,
-        loadingServiceKeys, setLoadingServiceKeys,
+        serviceKeys,
+        loadingServiceKeys,
         username, setUsername,
-        availableUsernames, setAvailableUsernames,
-        layoutMode, setLayoutMode
+        availableUsernames,
     } = state;
     const { fetchServiceKeys } = actions;
+
     if (!serverId || !accessToken) {
         return (
             <StatusCard
@@ -97,31 +96,25 @@ export default function TerminalPage() {
                     username={username}
                     setUsername={setUsername}
                     syncedPath={syncedPath ?? null}
-                    showFileManager={showFileManager}
-                    setShowFileManager={setShowFileManager}
-                    showRemoteBrowser={showRemoteBrowser}
-                    setShowRemoteBrowser={setShowRemoteBrowser}
+                    mainView={mainView}
+                    setMainView={setMainView}
+                    showFiles={showFiles}
+                    setShowFiles={setShowFiles}
                     isBrowserActive={isBrowserActive}
-                    activeTab={activeTab}
-                    setActiveTab={setActiveTab}
                     onLoadServiceKeys={fetchServiceKeys}
-                    layoutMode={layoutMode}
-                    setLayoutMode={setLayoutMode}
                 />
 
                 <TerminalContent
-                    activeTab={activeTab}
-                    setActiveTab={setActiveTab}
+                    mainView={mainView}
+                    setMainView={setMainView}
                     connected={connected}
                     connecting={connecting}
-                    showFileManager={showFileManager}
-                    setShowFileManager={setShowFileManager}
-                    showRemoteBrowser={showRemoteBrowser}
-                    setShowRemoteBrowser={setShowRemoteBrowser}
+                    showFiles={showFiles}
+                    setShowFiles={setShowFiles}
+                    isBrowserActive={isBrowserActive}
                     setIsBrowserActive={setIsBrowserActive}
                     keyboardExpanded={keyboardExpanded}
                     setKeyboardExpanded={setKeyboardExpanded}
-                    layoutMode={layoutMode}
                     terminalRef={terminalRef}
                     xtermRef={xtermRef}
                     wsRef={wsRef}

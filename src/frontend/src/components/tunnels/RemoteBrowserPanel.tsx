@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Loader2, ArrowLeft } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Loader2 } from "lucide-react";
 
 export interface RemoteBrowserPanelProps {
     serverId: string;
     username: string;
     accessToken: string | null;
-    onClose?: () => void;
     onActiveChange?: (isActive: boolean) => void;
 }
 
@@ -14,7 +13,6 @@ export function RemoteBrowserPanel({
     serverId,
     username,
     accessToken,
-    onClose,
     onActiveChange,
 }: RemoteBrowserPanelProps) {
     const [isLoading, setIsLoading] = useState(false);
@@ -126,11 +124,6 @@ export function RemoteBrowserPanel({
         <div className="flex flex-col h-full w-full bg-card overflow-hidden relative shadow-xl">
             {/* Header / Actions */}
             <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
-                {onClose && (
-                    <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 text-muted-foreground mr-1">
-                        <ArrowLeft size={16} />
-                    </Button>
-                )}
                 <MonitorPlay size={18} className="text-muted-foreground shrink-0" />
                 <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">Proxy Browser (noVNC)</span>
 

@@ -1,29 +1,28 @@
 /**
- * 終端機頁主內容區：行動版分頁、layout 模式切換、虛擬鍵盤、Service Keys 彈窗。
- * Terminal page main content: mobile tabs, layout mode dispatch, virtual keyboard, service keys modal.
+ * 終端機頁主內容區：主視圖 tab（Terminal / Browser）+ 可選 File Manager 側欄 + 虛擬鍵盤 + Service Keys 彈窗。
+ * Terminal page main content: main view tabs (Terminal / Browser) + optional File Manager side panel + virtual keyboard + service keys modal.
  */
-import React, { RefObject } from "react";
+import React, { RefObject, useEffect, useCallback } from "react";
+import { usePanelRef } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
 import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
-import { RightSplitLayout } from "@/components/tunnels/layouts/RightSplitLayout";
-import { RightTabLayout } from "@/components/tunnels/layouts/RightTabLayout";
-import { BottomTabLayout } from "@/components/tunnels/layouts/BottomTabLayout";
-import { Copy } from "lucide-react";
+import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
+import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { Copy, Terminal as TerminalIcon, MonitorPlay } from "lucide-react";
 
 export interface TerminalContentProps {
-    activeTab: "terminal" | "files" | "remote";
-    setActiveTab: (tab: "terminal" | "files" | "remote") => void;
+    mainView: "terminal" | "browser";
+    setMainView: (view: "terminal" | "browser") => void;
     connected: boolean;
     connecting: boolean;
-    showFileManager: boolean;
-    setShowFileManager: (show: boolean) => void;
-    showRemoteBrowser: boolean;
-    setShowRemoteBrowser: (show: boolean) => void;
+    showFiles: boolean;
+    setShowFiles: (show: boolean) => void;
+    isBrowserActive: boolean;
     setIsBrowserActive: (isActive: boolean) => void;
     keyboardExpanded: boolean;
     setKeyboardExpanded: (v: boolean) => void;
-    layoutMode: "right_split" | "right_tab" | "bottom_tab";
     terminalRef: RefObject<HTMLDivElement | null>;
     xtermRef: RefObject<unknown>;
     wsRef: RefObject<WebSocket | null>;
@@ -38,18 +37,16 @@ export interface TerminalContentProps {
 }
 
 export function TerminalContent({
-    activeTab,
-    setActiveTab,
+    mainView,
+    setMainView,
     connected,
     connecting,
-    showFileManager,
-    setShowFileManager,
-    showRemoteBrowser,
-    setShowRemoteBrowser,
+    showFiles,
+    setShowFiles,
+    isBrowserActive,
     setIsBrowserActive,
     keyboardExpanded,
     setKeyboardExpanded,
-    layoutMode,
     terminalRef,
     xtermRef,
     wsRef,
@@ -62,6 +59,21 @@ export function TerminalContent({
     loadingServiceKeys,
     serviceKeys,
 }: TerminalContentProps) {
+    const filesPanelRef = usePanelRef();
+
+    // Sync imperative panel collapse/expand with showFiles state
+    useEffect(() => {
+        if (filesPanelRef.current) {
+            if (showFiles) filesPanelRef.current.expand();
+            else filesPanelRef.current.collapse();
+        }
+    }, [showFiles]);
+
+    const handleFilesResize = useCallback((panelSize: { asPercentage: number }) => {
+        if (panelSize.asPercentage <= 3 && showFiles) setShowFiles(false);
+        else if (panelSize.asPercentage > 3 && !showFiles) setShowFiles(true);
+    }, [showFiles, setShowFiles]);
+
     const sendInput = (input: string) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ action: "pty_input", payload: { input } }));
@@ -75,74 +87,105 @@ export function TerminalContent({
         }
     };
 
-    // Shared layout props for all layout components
-    const layoutProps = {
-        activeTab,
-        setActiveTab,
-        connected,
-        connecting,
-        showFileManager,
-        setShowFileManager,
-        showRemoteBrowser,
-        setShowRemoteBrowser,
-        setIsBrowserActive,
-        terminalRef,
-        serverId,
-        username,
-        accessToken,
-        syncedPath,
-    };
-
     return (
         <>
-            {/* Mobile Tab Bar */}
+            {/* Mobile Tab Bar — 2 tabs: Terminal / Browser */}
             <div className="md:hidden flex p-1 bg-muted/50 rounded-lg mb-2 border border-border/40 w-full shrink-0 relative">
                 <div
                     className="absolute inset-y-1 bg-background shadow rounded-md transition-all duration-300 ease-out"
-                    style={{ width: "calc(33.33% - 4px)", left: activeTab === "terminal" ? "4px" : activeTab === "files" ? "calc(33.33%)" : "calc(66.66% - 4px)" }}
+                    style={{ width: "calc(50% - 4px)", left: mainView === "terminal" ? "4px" : "calc(50%)" }}
                 />
                 <button
                     type="button"
-                    onClick={() => setActiveTab("terminal")}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${activeTab === "terminal" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setMainView("terminal")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "terminal" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                    Terminal
+                    <TerminalIcon size={13} /> Terminal
                 </button>
                 <button
                     type="button"
                     onClick={() => {
                         if (!connected) return;
-                        setShowFileManager(true);
-                        setActiveTab("files");
+                        setMainView("browser");
                     }}
                     disabled={!connected}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : activeTab === "files" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "browser" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                    Files
-                </button>
-                <button
-                    type="button"
-                    onClick={() => {
-                        if (!connected) return;
-                        setShowRemoteBrowser(true);
-                        setActiveTab("remote");
-                    }}
-                    disabled={!connected}
-                    className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : activeTab === "remote" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                >
-                    Remote
+                    <MonitorPlay size={13} /> Browser
+                    {isBrowserActive && mainView !== "browser" && (
+                        <span className="flex h-2 w-2 ml-0.5">
+                            <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                        </span>
+                    )}
                 </button>
             </div>
 
-            {/* Layout Mode Dispatch */}
-            <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && activeTab === "terminal" ? "mb-[320px]" : activeTab === "terminal" ? "mb-[70px]" : "mb-0"}`}>
-                {layoutMode === "right_split" && <RightSplitLayout {...layoutProps} />}
-                {layoutMode === "right_tab" && <RightTabLayout {...layoutProps} />}
-                {layoutMode === "bottom_tab" && <BottomTabLayout {...layoutProps} />}
+            {/* Main Layout: Main View + Optional Files Side Panel */}
+            <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && mainView === "terminal" ? "mb-[320px]" : mainView === "terminal" ? "mb-[70px]" : "mb-0"}`}>
+                <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden">
+                    {/* ═══ Main View Panel ═══ */}
+                    <ResizablePanel
+                        defaultSize={100}
+                        minSize={30}
+                        className="min-h-0 flex flex-col relative"
+                    >
+                        {/* Terminal — always mounted */}
+                        <div className={`absolute inset-0 flex flex-col bg-black rounded-lg shadow-inner border border-border transition-opacity duration-200 ${mainView === "terminal" ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"}`}>
+                            <style dangerouslySetInnerHTML={{
+                                __html: `
+.terminal-container .xterm-viewport::-webkit-scrollbar { width: 14px; background: transparent; }
+.terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); border: 4px solid #000; border-radius: 8px; }
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.4); }
+.terminal-container .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
+` }} />
+                            <div className="flex-1 relative min-h-0 bg-black terminal-container">
+                                <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
+                                {!connected && !connecting && (
+                                    <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center rounded-lg">
+                                        <div className="text-center">
+                                            <div className="w-3 h-3 rounded-full bg-destructive mx-auto mb-2" />
+                                            <p className="text-sm text-muted-foreground">Disconnected</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Browser — always mounted, hidden when not active */}
+                        <div className={`absolute inset-0 flex flex-col bg-card rounded-lg border border-border transition-opacity duration-200 ${mainView === "browser" ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"}`}>
+                            {username && (
+                                <RemoteBrowserPanel
+                                    serverId={serverId}
+                                    username={username}
+                                    accessToken={accessToken}
+                                    onActiveChange={setIsBrowserActive}
+                                />
+                            )}
+                        </div>
+                    </ResizablePanel>
+
+                    {/* ═══ Files Side Panel (collapsible, desktop only) ═══ */}
+                    <ResizableHandle className="hidden md:flex mx-1 bg-transparent" withHandle />
+                    <ResizablePanel
+                        panelRef={filesPanelRef}
+                        defaultSize={0}
+                        minSize={12}
+                        collapsible
+                        collapsedSize={0}
+                        onResize={handleFilesResize}
+                        className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${showFiles ? "translate-x-0 opacity-100 z-30 pointer-events-auto" : "md:translate-x-0 translate-x-full opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto z-0"}`}
+                    >
+                        {username && accessToken && (
+                            <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                        )}
+                    </ResizablePanel>
+                </ResizablePanelGroup>
             </div>
 
             <VirtualKeyboard
-                isVisible={activeTab === "terminal"}
+                isVisible={mainView === "terminal"}
                 isExpanded={keyboardExpanded}
                 onToggle={() => setKeyboardExpanded(!keyboardExpanded)}
                 onInput={sendInput}

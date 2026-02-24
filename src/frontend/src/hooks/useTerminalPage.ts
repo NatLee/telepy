@@ -31,13 +31,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [connecting, setConnecting] = useState(true);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [noUsers, setNoUsers] = useState(false);
-    const [showFileManager, setShowFileManager] = useState(false);
-    const [showRemoteBrowser, setShowRemoteBrowser] = useState(false);
+    const [showFiles, setShowFiles] = useState(false);
     const [isBrowserActive, setIsBrowserActive] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
-    const [activeTab, setActiveTab] = useState<"terminal" | "files" | "remote">("terminal");
-    const [layoutMode, setLayoutMode] = useState<"right_split" | "right_tab" | "bottom_tab">("right_split");
+    const [mainView, setMainView] = useState<"terminal" | "browser">("terminal");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
 
     const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
@@ -280,7 +278,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             }, 200);
             return () => clearTimeout(timer);
         }
-    }, [showFileManager, showRemoteBrowser]);
+    }, [showFiles, mainView]);
 
     useEffect(() => {
         const manageNativeKeyboard = () => {
@@ -366,13 +364,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             connecting, setConnecting,
             permissionDenied, setPermissionDenied,
             noUsers, setNoUsers,
-            showFileManager, setShowFileManager,
-            showRemoteBrowser, setShowRemoteBrowser,
+            showFiles, setShowFiles,
             isBrowserActive, setIsBrowserActive,
             keyboardExpanded, setKeyboardExpanded,
             headerExpanded, setHeaderExpanded,
-            activeTab, setActiveTab,
-            layoutMode, setLayoutMode,
+            mainView, setMainView,
             syncedPath, setSyncedPath,
             serviceKeyModalOpen, setServiceKeyModalOpen,
             serviceKeys, setServiceKeys,
