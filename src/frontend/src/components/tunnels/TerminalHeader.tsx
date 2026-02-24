@@ -148,7 +148,6 @@ export function TerminalHeader({
                                 setShowRemoteBrowser(nextState);
                                 if (nextState) {
                                     setActiveTab("remote");
-                                    setShowFileManager(false); // Hide files when entering remote full-tab
                                 } else {
                                     setActiveTab("terminal");
                                 }
