@@ -80,9 +80,9 @@ export function RemoteBrowserPanel({
         }
     };
 
-    // Cleanup session only when window unloads to persist across tab switches
+    // Cleanup session when window unloads or component unmounts (leaving Terminal)
     useEffect(() => {
-        const handleBeforeUnload = () => {
+        const stopBackendSession = () => {
             if (sessionId) {
                 const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
                 fetch(`${apiBase}/api/reverse/server/remote-browser/${sessionId}/stop`, {
@@ -95,11 +95,10 @@ export function RemoteBrowserPanel({
             }
         };
 
-        window.addEventListener('beforeunload', handleBeforeUnload);
+        window.addEventListener('beforeunload', stopBackendSession);
         return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-            // We NO LONGER stop the session when the component unmounts! 
-            // Because the user might just be toggling the tab.
+            window.removeEventListener('beforeunload', stopBackendSession);
+            stopBackendSession(); // Clean up immediately when leaving Terminal page!
         };
     }, [sessionId, accessToken]);
 
