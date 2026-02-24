@@ -105,6 +105,19 @@ services:
     depends_on:
       - redis
 
+  selenium-standalone:
+    <<: [ *common-networks, *common-restart ]
+    image: selenium/standalone-chromium:latest
+    container_name: telepy-selenium-${PROJECT_NAME}
+    shm_size: 2gb
+    environment:
+      # Max concurrent sessions
+      - SE_NODE_MAX_SESSIONS=10
+      # Session timeout in seconds
+      - SE_NODE_SESSION_TIMEOUT=300
+      # Disable VNC password
+      - SE_VNC_NO_PASSWORD=1
+
 networks:
   telepy-network:
     name: telepy-network-${PROJECT_NAME}
