@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { MonitorPlay, MonitorX, AlertCircle, Loader2, ArrowLeft } from "lucide-react";
 
@@ -80,12 +80,17 @@ export function RemoteBrowserPanel({
         }
     };
 
+    // Track sessionId in a ref to avoid stale closures in cleanup
+    const sessionIdRef = useRef(sessionId);
+    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
     // Cleanup session when window unloads or component unmounts (leaving Terminal)
     useEffect(() => {
         const stopBackendSession = () => {
-            if (sessionId) {
+            const currentSessionId = sessionIdRef.current;
+            if (currentSessionId) {
                 const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
-                fetch(`${apiBase}/api/reverse/server/remote-browser/${sessionId}/stop`, {
+                fetch(`${apiBase}/api/reverse/server/remote-browser/${currentSessionId}/stop`, {
                     method: "POST",
                     headers: {
                         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
@@ -98,9 +103,9 @@ export function RemoteBrowserPanel({
         window.addEventListener('beforeunload', stopBackendSession);
         return () => {
             window.removeEventListener('beforeunload', stopBackendSession);
-            stopBackendSession(); // Clean up immediately when leaving Terminal page!
+            stopBackendSession();
         };
-    }, [sessionId, accessToken]);
+    }, [accessToken]); // Only depend on accessToken, sessionId is tracked via ref
 
     // Heartbeat ping so backend can GC disconnected sessions
     useEffect(() => {
