@@ -64,7 +64,7 @@ export function TerminalContent({
     // Sync imperative panel collapse/expand with showFiles state
     useEffect(() => {
         if (filesPanelRef.current) {
-            if (showFiles) filesPanelRef.current.expand();
+            if (showFiles) filesPanelRef.current.resize(30);
             else filesPanelRef.current.collapse();
         }
     }, [showFiles]);
