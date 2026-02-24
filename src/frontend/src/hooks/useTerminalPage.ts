@@ -37,6 +37,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [headerExpanded, setHeaderExpanded] = useState(false);
     const [mainView, setMainView] = useState<"terminal" | "browser" | "files">("terminal");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
+    const [reconnectTrigger, setReconnectTrigger] = useState(0);
 
     const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -254,7 +255,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         return () => {
             cleanupFn?.();
         };
-    }, [serverId, accessToken, username]);
+    }, [serverId, accessToken, username, reconnectTrigger]);
 
     useEffect(() => {
         if (fitAddonRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -377,7 +378,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             availableUsernames, setAvailableUsernames
         },
         actions: {
-            fetchServiceKeys
+            fetchServiceKeys,
+            reconnect: () => setReconnectTrigger(t => t + 1),
         }
     };
 }

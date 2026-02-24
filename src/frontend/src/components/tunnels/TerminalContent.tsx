@@ -10,7 +10,7 @@ import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync } from "lucide-react";
+import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw } from "lucide-react";
 
 export interface TerminalContentProps {
     mainView: "terminal" | "browser" | "files";
@@ -34,6 +34,7 @@ export interface TerminalContentProps {
     setServiceKeyModalOpen: (v: boolean) => void;
     loadingServiceKeys: boolean;
     serviceKeys: unknown[];
+    onReconnect?: () => void;
 }
 
 export function TerminalContent({
@@ -58,6 +59,7 @@ export function TerminalContent({
     setServiceKeyModalOpen,
     loadingServiceKeys,
     serviceKeys,
+    onReconnect,
 }: TerminalContentProps) {
     const groupRef = useRef<GroupImperativeHandle>(null);
     const filesPanelRef = usePanelRef();
@@ -111,23 +113,15 @@ export function TerminalContent({
                 </button>
                 <button
                     type="button"
-                    onClick={() => {
-                        if (!connected) return;
-                        setMainView("files");
-                    }}
-                    disabled={!connected}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "files" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setMainView("files")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "files" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                     <FolderSync size={13} /> Files
                 </button>
                 <button
                     type="button"
-                    onClick={() => {
-                        if (!connected) return;
-                        setMainView("browser");
-                    }}
-                    disabled={!connected}
-                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "browser" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setMainView("browser")}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "browser" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                     <MonitorPlay size={13} /> Browser
                     {isBrowserActive && mainView !== "browser" && (
@@ -162,10 +156,20 @@ export function TerminalContent({
                             <div className="flex-1 relative min-h-0 bg-black terminal-container">
                                 <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
                                 {!connected && !connecting && (
-                                    <div className="absolute inset-0 bg-black/60 z-20 flex items-center justify-center rounded-lg">
-                                        <div className="text-center">
-                                            <div className="w-3 h-3 rounded-full bg-destructive mx-auto mb-2" />
+                                    <div className="absolute inset-0 bg-black/70 z-20 flex items-center justify-center rounded-lg">
+                                        <div className="text-center space-y-3">
+                                            <div className="w-3 h-3 rounded-full bg-destructive mx-auto" />
                                             <p className="text-sm text-muted-foreground">Disconnected</p>
+                                            {onReconnect && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={onReconnect}
+                                                    className="gap-1.5 text-xs"
+                                                >
+                                                    <RefreshCw size={13} /> Reconnect
+                                                </Button>
+                                            )}
                                         </div>
                                     </div>
                                 )}

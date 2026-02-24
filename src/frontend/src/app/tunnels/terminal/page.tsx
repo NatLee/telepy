@@ -39,7 +39,7 @@ export default function TerminalPage() {
         username, setUsername,
         availableUsernames,
     } = state;
-    const { fetchServiceKeys } = actions;
+    const { fetchServiceKeys, reconnect } = actions;
 
     if (!serverId || !accessToken) {
         return (
@@ -102,6 +102,7 @@ export default function TerminalPage() {
                     setShowFiles={setShowFiles}
                     isBrowserActive={isBrowserActive}
                     onLoadServiceKeys={fetchServiceKeys}
+                    onReconnect={reconnect}
                 />
 
                 <TerminalContent
@@ -126,6 +127,7 @@ export default function TerminalPage() {
                     setServiceKeyModalOpen={setServiceKeyModalOpen}
                     loadingServiceKeys={loadingServiceKeys}
                     serviceKeys={serviceKeys}
+                    onReconnect={reconnect}
                 />
             </div>
         </div>
