@@ -30,8 +30,6 @@ def start_remote_browser(target_username: str, target_reverse_port: int, server_
     proxy_port = get_free_port()
     # Execute SSH -D. We are inside the backend container. It needs to hit the ssh reverse tunnel gateway.
     # The gateway is `reverse` container, but we use the ssh domain or `telepy-ssh` in the compose network.
-    # Wait, in other views, `execute_ssh_command` uses `username@reverse`. 
-    # Let's check what hostname the reverse tunnel uses.
     
     ssh_host = "reverse"
     ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{ssh_host}"
@@ -47,47 +45,134 @@ def start_remote_browser(target_username: str, target_reverse_port: int, server_
     # Now request Selenium session
     # Standalone is at http://selenium-standalone:4444/wd/hub
     backend_hostname = os.getenv("HOSTNAME", "backend") # the backend container's hostname
-    
+
     capabilities = {
         "capabilities": {
             "alwaysMatch": {
                 "browserName": "chrome",
                 "goog:chromeOptions": {
+                    "excludeSwitches": ["enable-automation", "enable-logging"],
+                    "useAutomationExtension": False,
                     "args": [
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
                         "--start-maximized",
                         f"--proxy-server=socks5://{backend_hostname}:{proxy_port}",
-                        "--proxy-bypass-list=<-loopback>"
+                        "--proxy-bypass-list=<-loopback>",
+                        # Anti-bot-detection
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--lang=en-US,en",
                     ],
                     "prefs": {
+                        "credentials_enable_service": False,
+                        "profile.password_manager_enabled": False,
+                        "profile.default_content_setting_values.notifications": 2,
                         "default_search_provider_data.template_url_data": {
-                            "keyword": "duckduckgo.com",
-                            "short_name": "DuckDuckGo",
-                            "url": "https://duckduckgo.com/?q={searchTerms}"
+                            "keyword": "google.com",
+                            "short_name": "Google",
+                            "url": "https://www.google.com/search?q={searchTerms}"
                         }
                     }
                 }
             }
         }
     }
-    
+
     selenium_url = "http://selenium-standalone:4444/wd/hub/session"
     try:
         res = requests.post(selenium_url, json=capabilities, timeout=10)
         res.raise_for_status()
         data = res.json()
         selenium_session_id = data.get("value", {}).get("sessionId")
-        # Navigate to DuckDuckGo as initial page
         if selenium_session_id:
+            session_base = f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}"
+            # Comprehensive anti-bot stealth via CDP injection
+            stealth_js = """
+                // 1. Remove navigator.webdriver
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+                // 2. Fake plugins array (normal Chrome has 5 default plugins)
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => {
+                        const plugins = [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+                        ];
+                        plugins.length = 3;
+                        return plugins;
+                    }
+                });
+
+                // 3. Fake languages
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+                // 4. Fix chrome.runtime (Selenium leaves it empty)
+                window.chrome = window.chrome || {};
+                window.chrome.runtime = window.chrome.runtime || {
+                    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+                    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
+                    PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
+                    RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
+                    OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+                    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
+                    connect: function() { return { onDisconnect: { addListener: function() {} } }; },
+                    sendMessage: function() {}
+                };
+
+                // 5. Fix permissions query (Selenium exposes 'denied' for notifications)
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(parameters)
+                );
+
+                // 6. Realistic WebGL vendor & renderer
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) return 'Google Inc. (Intel)';
+                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
+                    return getParameter.call(this, parameter);
+                };
+                const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
+                WebGL2RenderingContext.prototype.getParameter = function(parameter) {
+                    if (parameter === 37445) return 'Google Inc. (Intel)';
+                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
+                    return getParameter2.call(this, parameter);
+                };
+
+                // 7. Spoof hardwareConcurrency & deviceMemory
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+                // 8. Prevent iframe contentWindow detection
+                const originalAttachShadow = Element.prototype.attachShadow;
+                Element.prototype.attachShadow = function() {
+                    return originalAttachShadow.apply(this, [{ mode: 'open' }]);
+                };
+            """
             try:
                 requests.post(
-                    f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}/url",
-                    json={"url": "https://duckduckgo.com/"},
+                    f"{session_base}/chromium/send_command_and_get_result",
+                    json={
+                        "cmd": "Page.addScriptToEvaluateOnNewDocument",
+                        "params": { "source": stealth_js }
+                    },
+                    timeout=5
+                )
+            except Exception:
+                logger.debug(f"CDP injection skipped for session {selenium_session_id}")
+            # Navigate to Google as initial page
+            try:
+                requests.post(
+                    f"{session_base}/url",
+                    json={"url": "https://www.google.com/"},
                     timeout=10
                 )
             except Exception:
-                logger.warning(f"Failed to navigate to DuckDuckGo for session {selenium_session_id}")
+                logger.warning(f"Failed to navigate to Google for session {selenium_session_id}")
     except requests.exceptions.HTTPError as e:
         ssh_process.terminate()
         error_msg = str(e)
