@@ -35,7 +35,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [isBrowserActive, setIsBrowserActive] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
-    const [mainView, setMainView] = useState<"terminal" | "browser">("terminal");
+    const [mainView, setMainView] = useState<"terminal" | "browser" | "files">("terminal");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
 
     const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);

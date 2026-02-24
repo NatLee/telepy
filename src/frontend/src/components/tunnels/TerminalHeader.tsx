@@ -21,8 +21,8 @@ interface TerminalHeaderProps {
     username: string | null;
     setUsername: (username: string) => void;
     syncedPath: string | null;
-    mainView: "terminal" | "browser";
-    setMainView: (view: "terminal" | "browser") => void;
+    mainView: "terminal" | "browser" | "files";
+    setMainView: (view: "terminal" | "browser" | "files") => void;
     showFiles: boolean;
     setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
@@ -161,9 +161,10 @@ export function TerminalHeader({
                             size="sm"
                             onClick={() => setShowFiles(!showFiles)}
                             disabled={!connected}
-                            className={`h-8 text-xs gap-1.5 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            title={showFiles ? "Hide Files" : "Show Files"}
+                            className={`h-8 w-8 p-0 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
-                            <FolderSync size={14} /> {showFiles ? "Hide Files" : "Files"}
+                            <FolderSync size={14} />
                         </Button>
                         <Button
                             variant="secondary"
@@ -220,7 +221,7 @@ export function TerminalHeader({
                             </button>
                         )}
 
-                        <div className="grid grid-cols-3 gap-2 mt-1">
+                        <div className="grid grid-cols-2 gap-2 mt-1">
                             <Button
                                 variant="outline"
                                 size="sm"
@@ -228,15 +229,6 @@ export function TerminalHeader({
                                 className="h-10 text-xs gap-1.5"
                             >
                                 <KeyRound size={14} /> Keys
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setShowFiles(!showFiles)}
-                                disabled={!connected}
-                                className={`h-10 text-xs gap-1.5 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
-                            >
-                                <FolderSync size={14} /> Files
                             </Button>
                             <Button
                                 variant="secondary"
