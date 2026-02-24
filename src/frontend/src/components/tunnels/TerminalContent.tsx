@@ -10,11 +10,11 @@ import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Copy, Terminal as TerminalIcon, MonitorPlay } from "lucide-react";
+import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync } from "lucide-react";
 
 export interface TerminalContentProps {
-    mainView: "terminal" | "browser";
-    setMainView: (view: "terminal" | "browser") => void;
+    mainView: "terminal" | "browser" | "files";
+    setMainView: (view: "terminal" | "browser" | "files") => void;
     connected: boolean;
     connecting: boolean;
     showFiles: boolean;
@@ -93,11 +93,14 @@ export function TerminalContent({
 
     return (
         <>
-            {/* Mobile Tab Bar — 2 tabs: Terminal / Browser */}
+            {/* Mobile Tab Bar — 3 tabs: Terminal / Files / Browser */}
             <div className="md:hidden flex p-1 bg-muted/50 rounded-lg mb-2 border border-border/40 w-full shrink-0 relative">
                 <div
                     className="absolute inset-y-1 bg-background shadow rounded-md transition-all duration-300 ease-out"
-                    style={{ width: "calc(50% - 4px)", left: mainView === "terminal" ? "4px" : "calc(50%)" }}
+                    style={{
+                        width: "calc(33.33% - 4px)",
+                        left: mainView === "terminal" ? "4px" : mainView === "files" ? "calc(33.33%)" : "calc(66.66% - 4px)"
+                    }}
                 />
                 <button
                     type="button"
@@ -105,6 +108,17 @@ export function TerminalContent({
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "terminal" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                     <TerminalIcon size={13} /> Terminal
+                </button>
+                <button
+                    type="button"
+                    onClick={() => {
+                        if (!connected) return;
+                        setMainView("files");
+                    }}
+                    disabled={!connected}
+                    className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${!connected ? "text-muted-foreground/40 cursor-not-allowed" : mainView === "files" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                    <FolderSync size={13} /> Files
                 </button>
                 <button
                     type="button"
@@ -180,13 +194,20 @@ export function TerminalContent({
                         minSize={20}
                         collapsible
                         collapsedSize={0}
-                        className={`min-h-0 min-w-0 bg-card rounded-lg border border-border flex flex-col md:relative absolute inset-0 md:inset-auto md:w-auto h-full transition-all duration-300 ease-in-out md:translate-x-0 md:opacity-100 md:pointer-events-auto ${showFiles ? "translate-x-0 opacity-100 z-30 pointer-events-auto" : "md:translate-x-0 translate-x-full opacity-0 pointer-events-none md:opacity-100 md:pointer-events-auto z-0"}`}
+                        className="hidden md:flex min-h-0 min-w-0 bg-card rounded-lg border border-border flex-col"
                     >
                         {username && accessToken && (
                             <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                         )}
                     </ResizablePanel>
                 </ResizablePanelGroup>
+
+                {/* Mobile-only full-screen Files view */}
+                <div className={`md:hidden absolute inset-0 bg-card rounded-lg border border-border flex flex-col transition-opacity duration-200 ${mainView === "files" ? "opacity-100 z-30 pointer-events-auto" : "opacity-0 pointer-events-none z-0"}`}>
+                    {username && accessToken && (
+                        <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                    )}
+                </div>
             </div>
 
             <VirtualKeyboard
