@@ -59,7 +59,14 @@ def start_remote_browser(target_username: str, target_reverse_port: int, server_
                         "--start-maximized",
                         f"--proxy-server=socks5://{backend_hostname}:{proxy_port}",
                         "--proxy-bypass-list=<-loopback>"
-                    ]
+                    ],
+                    "prefs": {
+                        "default_search_provider_data.template_url_data": {
+                            "keyword": "duckduckgo.com",
+                            "short_name": "DuckDuckGo",
+                            "url": "https://duckduckgo.com/?q={searchTerms}"
+                        }
+                    }
                 }
             }
         }
@@ -71,6 +78,16 @@ def start_remote_browser(target_username: str, target_reverse_port: int, server_
         res.raise_for_status()
         data = res.json()
         selenium_session_id = data.get("value", {}).get("sessionId")
+        # Navigate to DuckDuckGo as initial page
+        if selenium_session_id:
+            try:
+                requests.post(
+                    f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}/url",
+                    json={"url": "https://duckduckgo.com/"},
+                    timeout=10
+                )
+            except Exception:
+                logger.warning(f"Failed to navigate to DuckDuckGo for session {selenium_session_id}")
     except requests.exceptions.HTTPError as e:
         ssh_process.terminate()
         error_msg = str(e)
