@@ -6,8 +6,9 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, RefreshCw } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
+import { TerminalMainView } from "@/lib/tunnelUrls";
 import { useRouter } from "next/navigation";
 
 interface TerminalHeaderProps {
@@ -21,13 +22,12 @@ interface TerminalHeaderProps {
     username: string | null;
     setUsername: (username: string) => void;
     syncedPath: string | null;
-    mainView: "terminal" | "browser" | "files";
-    setMainView: (view: "terminal" | "browser" | "files") => void;
+    mainView: TerminalMainView;
+    setMainView: (view: TerminalMainView) => void;
     showFiles: boolean;
     setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
     onLoadServiceKeys: () => void | Promise<void>;
-    onReconnect?: () => void;
 }
 
 export function TerminalHeader({
@@ -47,7 +47,6 @@ export function TerminalHeader({
     setShowFiles,
     isBrowserActive,
     onLoadServiceKeys,
-    onReconnect,
 }: TerminalHeaderProps) {
     const router = useRouter();
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, ReactNode } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, ReactNode } from "react";
 import { cn, uniqueID } from "@/lib/utils";
 import { X } from "lucide-react";
 
@@ -22,27 +22,46 @@ const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
     const [toasts, setToasts] = useState<ToastProps[]>([]);
+    const toastsRef = useRef<ToastProps[]>([]);
 
-    const addToast = (message: string, type: ToastType = "info") => {
+    // Keep ref in sync so addToast can read current toasts without being a dependency
+    const updateToasts = useCallback((updater: (prev: ToastProps[]) => ToastProps[]) => {
+        setToasts((prev) => {
+            const next = updater(prev);
+            toastsRef.current = next;
+            return next;
+        });
+    }, []);
+
+    const addToast = useCallback((message: string, type: ToastType = "info") => {
+        // Deduplicate error toasts: skip if an identical error message is already visible
+        if (type === "error") {
+            const isDuplicate = toastsRef.current.some(
+                (t: ToastProps) => t.type === "error" && t.message === message
+            );
+            if (isDuplicate) return;
+        }
+
         const id = uniqueID();
-        setToasts((prev) => [...prev, { id, message, type }]);
+        updateToasts((prev) => [...prev, { id, message, type }]);
 
         setTimeout(() => {
-            setToasts((prev) => prev.filter((t) => t.id !== id));
+            updateToasts((prev) => prev.filter((t) => t.id !== id));
         }, 3000);
-    };
+    }, [updateToasts]);
 
     const removeToast = (id: string) => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
+        updateToasts((prev) => prev.filter((t) => t.id !== id));
     };
 
+    const contextValue = useMemo<ToastContextType>(() => ({
+        showToast: addToast,
+        showError: (msg: string) => addToast(msg, "error"),
+        showSuccess: (msg: string) => addToast(msg, "success"),
+    }), [addToast]);
+
     return (
-        <ToastContext.Provider
-            value={{
-                showToast: addToast,
-                showError: (msg) => addToast(msg, "error"),
-                showSuccess: (msg) => addToast(msg, "success"),
-            }}
+        <ToastContext.Provider value={contextValue}
         >
             {children}
             <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2">

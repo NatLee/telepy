@@ -11,10 +11,11 @@ import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw } from "lucide-react";
+import { TerminalMainView } from "@/lib/tunnelUrls";
 
 export interface TerminalContentProps {
-    mainView: "terminal" | "browser" | "files";
-    setMainView: (view: "terminal" | "browser" | "files") => void;
+    mainView: TerminalMainView;
+    setMainView: (view: TerminalMainView) => void;
     connected: boolean;
     connecting: boolean;
     showFiles: boolean;

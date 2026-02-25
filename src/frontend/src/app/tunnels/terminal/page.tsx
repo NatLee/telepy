@@ -4,7 +4,7 @@
  * 終端機頁面：連線、xterm 與檔案管理。
  * Terminal page: connection, xterm and file manager.
  */
-import React from "react";
+import React, { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Terminal as TerminalIcon, X, Server } from "lucide-react";
@@ -40,6 +40,15 @@ export default function TerminalPage() {
         availableUsernames,
     } = state;
     const { fetchServiceKeys, reconnect } = actions;
+
+    // Set initial tab from URL param (mount only)
+    useEffect(() => {
+        const mv = searchParams.get("mainView");
+        if (mv === "browser" || mv === "terminal" || mv === "files") {
+            setMainView(mv);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     if (!serverId || !accessToken) {
         return (
@@ -102,7 +111,6 @@ export default function TerminalPage() {
                     setShowFiles={setShowFiles}
                     isBrowserActive={isBrowserActive}
                     onLoadServiceKeys={fetchServiceKeys}
-                    onReconnect={reconnect}
                 />
 
                 <TerminalContent

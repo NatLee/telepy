@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
+import { TerminalMainView } from "@/lib/tunnelUrls";
 
 export interface TerminalUsername {
     id: number;
@@ -35,7 +36,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [isBrowserActive, setIsBrowserActive] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [headerExpanded, setHeaderExpanded] = useState(false);
-    const [mainView, setMainView] = useState<"terminal" | "browser" | "files">("terminal");
+    const [mainView, setMainView] = useState<TerminalMainView>("terminal");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
 
@@ -359,7 +360,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     };
 
     return {
-        refs: { terminalRef, xtermRef, fitAddonRef, wsRef },
+        refs: { terminalRef, xtermRef, wsRef },
         state: {
             connected, setConnected,
             connecting, setConnecting,
