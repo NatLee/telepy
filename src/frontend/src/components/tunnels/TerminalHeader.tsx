@@ -62,9 +62,7 @@ export function TerminalHeader({
                             <h1 className="text-sm md:text-base font-bold text-foreground flex items-center">
                                 Terminal <Badge variant="secondary" className="ml-2 font-mono text-[10px] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
                             </h1>
-                            <div className="md:hidden flex items-center gap-1 ml-1">
-                                <div className={`w-2 h-2 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]' : 'bg-destructive'}`}></div>
-                            </div>
+
                         </div>
                         <Button
                             variant="ghost"
@@ -78,10 +76,6 @@ export function TerminalHeader({
 
                     {/* Desktop Actions */}
                     <div className="hidden md:flex items-center justify-end gap-3 flex-wrap">
-                        <Badge variant="outline" className="gap-1.5 px-2 py-0.5 pointer-events-none">
-                            <div className={`w-2 h-2 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]' : 'bg-destructive'}`}></div>
-                            {connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
-                        </Badge>
 
                         {/* Username Switcher */}
                         {availableUsernames.length > 1 && (
@@ -125,13 +119,18 @@ export function TerminalHeader({
                                 type="button"
                                 onClick={() => setMainView("terminal")}
                                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${mainView === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                                title={connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
                             >
                                 <TerminalIcon size={13} /> Terminal
+                                <span className="flex h-2 w-2 ml-0.5">
+                                    <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
+                                </span>
                             </button>
                             <button
                                 type="button"
                                 onClick={() => setMainView("browser")}
                                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                                title={isBrowserActive ? 'Session active' : 'No session — open to start'}
                             >
                                 <MonitorPlay size={13} /> Browser
                                 {isBrowserActive && mainView !== "browser" && (
@@ -145,17 +144,14 @@ export function TerminalHeader({
                                         <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
                                     </span>
                                 )}
+                                {!isBrowserActive && (
+                                    <span className="flex h-2 w-2 ml-0.5">
+                                        <span className="relative inline-flex rounded-full h-2 w-2 border-2 border-muted-foreground/50"></span>
+                                    </span>
+                                )}
                             </button>
                         </div>
 
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onLoadServiceKeys()}
-                            className="h-8 text-xs gap-1.5"
-                        >
-                            <KeyRound size={14} /> Service Keys
-                        </Button>
                         <Button
                             variant="outline"
                             size="sm"
@@ -164,6 +160,14 @@ export function TerminalHeader({
                             className={`h-8 w-8 p-0 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
                             <FolderSync size={14} />
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => onLoadServiceKeys()}
+                            className="h-8 text-xs gap-1.5"
+                        >
+                            <KeyRound size={14} /> Service Keys
                         </Button>
                         <Button
                             variant="secondary"
@@ -179,17 +183,13 @@ export function TerminalHeader({
                 {/* Mobile Expanded Content */}
                 <div className={`md:hidden grid transition-all duration-300 ease-in-out border-t ${headerExpanded ? 'grid-rows-[1fr] opacity-100 mt-3 pt-3 border-border' : 'grid-rows-[0fr] opacity-0 mt-0 pt-0 border-transparent pointer-events-none'}`}>
                     <div className="overflow-hidden flex flex-col gap-3">
-                        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                        <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground">
                             <div className="flex items-center gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
                                 <Server size={12} className="shrink-0" />
                                 <span className="truncate">Port: {port || 'N/A'}</span>
                             </div>
-                            <div className="flex items-center gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
-                                <div className={`w-2 h-2 shrink-0 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success shadow-[0_0_4px_rgba(var(--color-success),0.6)]' : 'bg-destructive'}`}></div>
-                                <span className="truncate">{connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}</span>
-                            </div>
                             {username && (
-                                <div className="col-span-2 flex justify-between items-center bg-muted/50 p-1.5 rounded border border-border/50">
+                                <div className="flex justify-between items-center bg-muted/50 p-1.5 rounded border border-border/50">
                                     <span>User</span>
                                     {availableUsernames.length > 1 ? (
                                         <select

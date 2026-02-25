@@ -109,8 +109,12 @@ export function TerminalContent({
                     type="button"
                     onClick={() => setMainView("terminal")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "terminal" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    title={connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
                 >
                     <TerminalIcon size={13} /> Terminal
+                    <span className="flex h-2 w-2 ml-0.5">
+                        <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
+                    </span>
                 </button>
                 <button
                     type="button"
@@ -123,12 +127,23 @@ export function TerminalContent({
                     type="button"
                     onClick={() => setMainView("browser")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "browser" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    title={isBrowserActive ? 'Session active' : 'No session — open to start'}
                 >
                     <MonitorPlay size={13} /> Browser
                     {isBrowserActive && mainView !== "browser" && (
                         <span className="flex h-2 w-2 ml-0.5">
                             <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                        </span>
+                    )}
+                    {isBrowserActive && mainView === "browser" && (
+                        <span className="flex h-2 w-2 ml-0.5">
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                        </span>
+                    )}
+                    {!isBrowserActive && (
+                        <span className="flex h-2 w-2 ml-0.5">
+                            <span className="relative inline-flex rounded-full h-2 w-2 border-2 border-muted-foreground/50"></span>
                         </span>
                     )}
                 </button>

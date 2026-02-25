@@ -84,31 +84,28 @@ export function TunnelCard({
                     )}
                 </div>
             </CardContent>
-            <CardFooter className="p-3 border-t border-border flex flex-col gap-2 bg-muted/10 rounded-b-xl">
-                <div className="flex w-full gap-1.5">
-                    <Button asChild variant={isActive ? "default" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
-                        <Link href={getTerminalPageUrl(tunnel)}>
-                            <TerminalSquare size={14} className="mr-1.5 shrink-0" /> Terminal
-                        </Link>
-                    </Button>
-                    <Button asChild variant={isActive ? "outline" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
-                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
-                            <MonitorPlay size={14} className="mr-1.5 shrink-0" /> Browser
-                        </Link>
-                    </Button>
-                </div>
-                <div className="flex w-full justify-center">
-                    <TunnelActions
-                        tunnel={tunnel}
-                        onDetails={onDetails}
-                        onConfig={onConfig}
-                        onScript={onScript}
-                        onUsers={onUsers}
-                        onShare={onShare}
-                        onLeave={onLeave}
-                        onDelete={onDelete}
-                    />
-                </div>
+            <CardFooter className="p-3 border-t border-border flex items-center gap-1.5 bg-muted/10 rounded-b-xl">
+                <Button asChild variant={isActive ? "default" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
+                    <Link href={getTerminalPageUrl(tunnel)}>
+                        <TerminalSquare size={14} className="mr-1.5 shrink-0" /> Terminal
+                    </Link>
+                </Button>
+                <Button asChild variant={isActive ? "outline" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
+                    <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
+                        <MonitorPlay size={14} className="mr-1.5 shrink-0" /> Browser
+                    </Link>
+                </Button>
+                <TunnelActions
+                    tunnel={tunnel}
+                    variant="card"
+                    onDetails={onDetails}
+                    onConfig={onConfig}
+                    onScript={onScript}
+                    onUsers={onUsers}
+                    onShare={onShare}
+                    onLeave={onLeave}
+                    onDelete={onDelete}
+                />
             </CardFooter>
         </Card>
     );
