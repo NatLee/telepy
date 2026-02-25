@@ -9,7 +9,9 @@ import {
     FileCode2,
     Archive,
     Home,
-    Image as ImageIcon
+    Image as ImageIcon,
+    WifiOff,
+    X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +28,7 @@ interface FileManagerPanelProps {
 import { useFileManager } from "@/hooks/useFileManager";
 
 export function FileManagerPanel({ serverId, username, accessToken, initialPath }: FileManagerPanelProps) {
-    const { refs, state, actions } = useFileManager(serverId, username, accessToken, initialPath);
+    const { refs, state, actions, reconnect } = useFileManager(serverId, username, accessToken, initialPath);
 
     const { fileInputRef } = refs;
     const {
@@ -35,7 +37,8 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
         currentPath, setCurrentPath,
         items,
         loading,
-        uploading
+        uploading,
+        error
     } = state;
 
     const {
@@ -133,6 +136,34 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                 {loading && items.length === 0 ? (
                     <div className="flex justify-center p-8">
                         <RefreshCw className="animate-spin text-muted-foreground" size={24} />
+                    </div>
+                ) : !connected && !connecting ? (
+                    <div className="flex flex-col items-center justify-center p-8 gap-3">
+                        <div className="p-3 rounded-full bg-destructive/10">
+                            <WifiOff size={24} className="text-destructive" />
+                        </div>
+                        <p className="text-sm font-medium text-foreground">Connection Lost</p>
+                        <p className="text-xs text-muted-foreground text-center">Unable to connect to the file manager service.</p>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={reconnect}
+                            className="gap-1.5 text-xs mt-1"
+                        >
+                            <RefreshCw size={13} /> Reconnect
+                        </Button>
+                    </div>
+                ) : error ? (
+                    <div className="p-3">
+                        <div className="flex items-start gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-sm">
+                            <WifiOff size={14} className="text-destructive shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-destructive">{error}</p>
+                            </div>
+                            <button onClick={() => { }} className="text-destructive/60 hover:text-destructive shrink-0" title="Dismiss">
+                                <X size={14} />
+                            </button>
+                        </div>
                     </div>
                 ) : items.length === 0 ? (
                     <div className="p-8 text-center text-muted-foreground text-sm">

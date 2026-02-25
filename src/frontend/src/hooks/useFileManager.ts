@@ -21,6 +21,8 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     const [loading, setLoading] = useState(false);
     const [shellType, setShellType] = useState<"unix" | "powershell">("unix");
     const [uploading, setUploading] = useState(false);
+    const [reconnectTrigger, setReconnectTrigger] = useState(0);
+    const [error, setError] = useState<string | null>(null);
 
     const wsRef = useRef<WebSocket | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -30,6 +32,9 @@ export function useFileManager(serverId: string, username: string, accessToken: 
         setLoading(true);
         wsInstance.send(JSON.stringify({ action: "list_files", payload: { path: path || currentPath } }));
     }, [currentPath]);
+
+    const loadDirectoryRef = useRef(loadDirectory);
+    useEffect(() => { loadDirectoryRef.current = loadDirectory; }, [loadDirectory]);
 
     const performActualUpload = useCallback(async (uploadUrl: string, file: File) => {
         try {
@@ -122,6 +127,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             ws.onopen = () => {
                 setConnected(true);
                 setConnecting(false);
+                setError(null);
                 ws.send(JSON.stringify({ action: "shell_detect" }));
             };
 
@@ -135,17 +141,18 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                         setShellType(data.shell);
                         const defaultPath = data.shell === "powershell" ? "C:\\" : "~/";
                         setCurrentPath(defaultPath);
-                        loadDirectory(defaultPath, ws);
+                        loadDirectoryRef.current(defaultPath, ws);
                     } else if (action === "list_files") {
                         if (data.status === "success") {
                             setItems(data.files || []);
                             setCurrentPath(data.path);
+                            setError(null);
                         } else {
-                            showError(data.error || "Failed to list directory");
+                            setError(data.error || "Failed to list directory");
                         }
                         setLoading(false);
                     } else if (action === "error") {
-                        showError(data.message || "An error occurred");
+                        setError(data.message || "An error occurred");
                         setLoading(false);
                         setUploading(false);
                     }
@@ -155,7 +162,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             };
 
             ws.onerror = () => {
-                showError("FileManager WebSocket connection failed");
+                setError("FileManager connection failed");
                 setConnecting(false);
                 setLoading(false);
             };
@@ -177,7 +184,8 @@ export function useFileManager(serverId: string, username: string, accessToken: 
         return () => {
             cleanupFn?.();
         };
-    }, [serverId, username, accessToken, loadDirectory, showError]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [serverId, username, accessToken, reconnectTrigger]);
 
     useEffect(() => {
         if (connected && initialPath && initialPath !== currentPath) {
@@ -267,7 +275,8 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             items,
             loading,
             shellType,
-            uploading
+            uploading,
+            error
         },
         actions: {
             loadDirectory,
@@ -278,6 +287,11 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             handleUploadClick,
             handleFileChange,
             handleDownload
+        },
+        reconnect: () => {
+            setError(null);
+            setConnecting(true);
+            setReconnectTrigger(t => t + 1);
         }
     };
 }

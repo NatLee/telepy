@@ -1,10 +1,11 @@
 import React from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Share2, TerminalSquare } from "lucide-react";
+import { MonitorPlay, Share2, TerminalSquare } from "lucide-react";
 import { Tunnel } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { Button } from "@/components/ui/button";
+import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 
 interface TunnelTableRowProps {
     tunnel: Tunnel;
@@ -73,17 +74,16 @@ export function TunnelTableRow({
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
                 <div className="flex items-center justify-end gap-0.5">
-                    {isActive ? (
-                        <Button asChild variant="ghost" size="sm" className="h-8 px-2 text-xs text-primary hover:text-primary transition-colors hover:bg-primary/10 mr-1">
-                            <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`}>
-                                <TerminalSquare size={14} className="mr-1.5" /> Terminal
-                            </Link>
-                        </Button>
-                    ) : (
-                        <Button variant="ghost" size="sm" disabled className="h-8 px-2 text-xs opacity-50 cursor-not-allowed mr-1">
+                    <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
+                        <Link href={getTerminalPageUrl(tunnel)}>
                             <TerminalSquare size={14} className="mr-1.5" /> Terminal
-                        </Button>
-                    )}
+                        </Link>
+                    </Button>
+                    <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
+                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
+                            <MonitorPlay size={14} className="mr-1.5" /> Browser
+                        </Link>
+                    </Button>
 
                     <TunnelActions
                         tunnel={tunnel}

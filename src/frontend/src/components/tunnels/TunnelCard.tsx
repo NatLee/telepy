@@ -3,9 +3,10 @@ import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Activity, Share2, TerminalSquare } from "lucide-react";
+import { Activity, MonitorPlay, Share2, TerminalSquare } from "lucide-react";
 import { Tunnel } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
+import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 
 interface TunnelCardProps {
     tunnel: Tunnel;
@@ -83,29 +84,31 @@ export function TunnelCard({
                     )}
                 </div>
             </CardContent>
-            <CardFooter className="p-3 border-t border-border flex justify-between items-center gap-1.5 bg-muted/10 rounded-b-xl">
-                {isActive ? (
-                    <Button asChild variant="default" size="sm" className="flex-1 h-8 text-xs shrink-0 min-w-0">
-                        <Link href={`/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`} className="truncate">
-                            <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
+            <CardFooter className="p-3 border-t border-border flex flex-col gap-2 bg-muted/10 rounded-b-xl">
+                <div className="flex w-full gap-1.5">
+                    <Button asChild variant={isActive ? "default" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
+                        <Link href={getTerminalPageUrl(tunnel)}>
+                            <TerminalSquare size={14} className="mr-1.5 shrink-0" /> Terminal
                         </Link>
                     </Button>
-                ) : (
-                    <Button variant="secondary" size="sm" disabled className="flex-1 h-8 text-xs shrink-0 min-w-0 opacity-60 cursor-not-allowed">
-                        <TerminalSquare size={14} className="mr-1.5 shrink-0" /> <span className="truncate">Terminal</span>
+                    <Button asChild variant={isActive ? "outline" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
+                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
+                            <MonitorPlay size={14} className="mr-1.5 shrink-0" /> Browser
+                        </Link>
                     </Button>
-                )}
-
-                <TunnelActions
-                    tunnel={tunnel}
-                    onDetails={onDetails}
-                    onConfig={onConfig}
-                    onScript={onScript}
-                    onUsers={onUsers}
-                    onShare={onShare}
-                    onLeave={onLeave}
-                    onDelete={onDelete}
-                />
+                </div>
+                <div className="flex w-full justify-center">
+                    <TunnelActions
+                        tunnel={tunnel}
+                        onDetails={onDetails}
+                        onConfig={onConfig}
+                        onScript={onScript}
+                        onUsers={onUsers}
+                        onShare={onShare}
+                        onLeave={onLeave}
+                        onDelete={onDelete}
+                    />
+                </div>
             </CardFooter>
         </Card>
     );
