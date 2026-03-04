@@ -1,5 +1,7 @@
 #!/bin/bash
 
+command -v autossh >/dev/null 2>&1 || { echo 'autossh not found. Please install autossh (e.g. apt/yum) before running this script.'; exit 1; }
+
 echo "[+] AutoSSH Script start"
 
 autossh \
