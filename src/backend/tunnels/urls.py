@@ -12,6 +12,8 @@ from tunnels.views import AutoSSHTunnelScript
 from tunnels.views import AutoSSHServiceTunnelScript
 from tunnels.views import DockerRunTunnelScript
 from tunnels.views import DockerComposeTunnelScript
+from tunnels.views import OneTimeScriptTokenView
+from tunnels.views import OneTimeScriptView
 from tunnels.views import ShareTunnelView
 from tunnels.views import UnshareTunnelView
 from tunnels.views import ListSharedUsersView
@@ -34,6 +36,9 @@ urlpatterns = [
     path('server/script/autossh-service/<int:server_id>/<int:ssh_port>', AutoSSHServiceTunnelScript.as_view(), name='auto-ssh-service-tunnel-script'),
     path('server/script/docker-run/<int:server_id>/<int:ssh_port>', DockerRunTunnelScript.as_view(), name='docker-run-tunnel-script'),
     path('server/script/docker-compose/<int:server_id>/<int:ssh_port>', DockerComposeTunnelScript.as_view(), name='docker-compose-tunnel-script'),
+
+    path('server/script/one-time/token', OneTimeScriptTokenView.as_view(), name='one-time-script-token'),
+    path('server/script/one-time/<str:token>', OneTimeScriptView.as_view(), name='one-time-script'),
 
     # Tunnel sharing endpoints
     path('share/<int:tunnel_id>', ShareTunnelView.as_view(), name='share-tunnel'),
