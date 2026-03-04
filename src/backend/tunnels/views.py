@@ -1,4 +1,5 @@
 import re
+import json
 from enum import Enum
 
 from django.conf import settings
@@ -7,6 +8,7 @@ from django.contrib.auth.models import User
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 
 from drf_yasg.utils import swagger_auto_schema
@@ -407,9 +409,20 @@ class AutoSSHServiceTunnelScript(ReverseServerScriptBase):
         ssh_port: int
     ):
         reverse_port = server_auth_key.reverse_port
-        try:
-            username = server_auth_key.username_set.first().username
-        except AttributeError:
+
+        # Use permission-aware username lookup
+        allowed_qs = TunnelPermissionService.get_allowed_usernames(self.request.user, server_auth_key)
+
+        # Support username_id query param for frontend selection
+        username_id = self.request.GET.get('username_id')
+        if username_id:
+            try:
+                allowed_qs = allowed_qs.filter(id=int(username_id))
+            except (ValueError, TypeError):
+                pass
+
+        selected = allowed_qs.first()
+        if not selected:
             return Response({'error': 'No username found for this server'}, status=404)
 
         # Get optional key_path from query parameters
@@ -425,7 +438,7 @@ class AutoSSHServiceTunnelScript(ReverseServerScriptBase):
           reverse_port=reverse_port, 
           ssh_port=ssh_port, 
           reverse_server_ssh_port=self.reverse_server_ssh_port,
-          username=username,
+          username=selected.username,
           key_path=key_path
         ).render()
 
@@ -505,6 +518,159 @@ class DockerComposeTunnelScript(ReverseServerScriptBase):
             "script": config_string,
             "language": "yaml",
         })
+
+
+# ========================================
+# One-Time Script Token APIs
+# ========================================
+
+ALLOWED_SCRIPT_TYPES = {"ssh", "powershell", "autossh", "autossh-service", "docker-run", "docker-compose"}
+
+class OneTimeScriptTokenView(APIView):
+    """Issue a one-time token that can be used to retrieve a script via curl."""
+    permission_classes = (IsAuthenticated,)
+
+    @swagger_auto_schema(
+        operation_summary="Issue One-Time Script Token",
+        operation_description="Generate a one-time token / URL to retrieve a tunnel script without authentication.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'server_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Tunnel ID'),
+                'ssh_port': openapi.Schema(type=openapi.TYPE_INTEGER, description='Target SSH port'),
+                'script_type': openapi.Schema(type=openapi.TYPE_STRING, description='Script type',
+                    enum=list(ALLOWED_SCRIPT_TYPES)),
+                'key_path': openapi.Schema(type=openapi.TYPE_STRING, description='Optional key path'),
+                'username_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Optional username ID for autossh-service'),
+            },
+            required=['server_id', 'ssh_port', 'script_type']
+        ),
+        tags=['Script']
+    )
+    def post(self, request):
+        from tunnels.utils import issue_script_token
+
+        server_id = request.data.get('server_id')
+        ssh_port = request.data.get('ssh_port')
+        script_type = request.data.get('script_type')
+        key_path = request.data.get('key_path', None)
+        username_id = request.data.get('username_id', None)
+
+        if not server_id or not ssh_port or not script_type:
+            return Response({'error': 'server_id, ssh_port, and script_type are required'}, status=400)
+
+        if script_type not in ALLOWED_SCRIPT_TYPES:
+            return Response({'error': f'Invalid script_type. Allowed: {sorted(ALLOWED_SCRIPT_TYPES)}'}, status=400)
+
+        # Validate tunnel access
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+            if not TunnelPermissionManager.check_access(request.user, tunnel, TunnelPermission.VIEW):
+                return Response({'error': 'Access denied'}, status=403)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return Response({'error': 'Tunnel not found'}, status=404)
+
+        # For autossh-service, validate username_id if provided
+        if script_type == 'autossh-service' and username_id:
+            allowed = TunnelPermissionService.get_allowed_usernames(request.user, tunnel)
+            if not allowed.filter(id=username_id).exists():
+                return Response({'error': 'Username not allowed or not found'}, status=400)
+
+        payload = {
+            'user_id': request.user.id,
+            'server_id': int(server_id),
+            'ssh_port': int(ssh_port),
+            'script_type': script_type,
+            'key_path': key_path,
+            'username_id': int(username_id) if username_id else None,
+        }
+
+        token = issue_script_token(payload)
+        url = f"{request.scheme}://{request.get_host()}/tunnels/server/script/one-time/{token}"
+
+        return Response({'token': token, 'url': url})
+
+
+class OneTimeScriptView(APIView):
+    """Serve a plain-text script for a one-time token (no auth required)."""
+    permission_classes = (AllowAny,)
+
+    @swagger_auto_schema(
+        operation_summary="Retrieve One-Time Script",
+        operation_description="Retrieve and consume a one-time script token, returning the script as plain text.",
+        tags=['Script']
+    )
+    def get(self, request, token):
+        from tunnels.utils import pop_script_payload
+
+        payload = pop_script_payload(token)
+        if payload is None:
+            return HttpResponse("Token invalid or already used", status=404, content_type="text/plain")
+
+        # Resolve user
+        try:
+            user = User.objects.get(id=payload['user_id'])
+        except User.DoesNotExist:
+            return HttpResponse("User not found", status=404, content_type="text/plain")
+
+        # Resolve tunnel and verify permission
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=payload['server_id'])
+            if not TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW):
+                return HttpResponse("Access denied", status=403, content_type="text/plain")
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return HttpResponse("Tunnel not found", status=404, content_type="text/plain")
+
+        script_type = payload['script_type']
+        ssh_port = payload['ssh_port']
+        key_path = payload.get('key_path')
+        if key_path:
+            key_path = key_path.strip() or None
+
+        reverse_port = tunnel.reverse_port
+
+        # Resolve server domain
+        server_domain = request.META.get('HTTP_HOST', settings.SERVER_DOMAIN)
+        if server_domain:
+            match_ipv6 = re.match(r'^\[(?P<host>[0-9a-fA-F:]+)\]:?(?P<port>\d+)?$', server_domain)
+            match_ipv4 = re.match(r'^(?P<host>[^:]+):(?P<port>\d+)$', server_domain)
+            match_hostname = re.match(r'^(?P<host>[^:]+):?(?P<port>\d+)?$', server_domain)
+            if match_ipv6:
+                server_domain = match_ipv6.group('host')
+            elif match_ipv4:
+                server_domain = match_ipv4.group('host')
+            elif match_hostname:
+                server_domain = match_hostname.group('host')
+
+        reverse_server_ssh_port = settings.REVERSE_SERVER_SSH_PORT
+
+        # Handle autossh-service username resolution
+        if script_type == 'autossh-service':
+            allowed_qs = TunnelPermissionService.get_allowed_usernames(user, tunnel)
+            username_id = payload.get('username_id')
+            if username_id:
+                allowed_qs = allowed_qs.filter(id=username_id)
+            selected = allowed_qs.first()
+            if not selected:
+                return HttpResponse("No username found for this server", status=404, content_type="text/plain")
+            username = selected.username
+        else:
+            username = "root"
+
+        try:
+            script_string = ssh_tunnel_script_factory(
+                script_type,
+                server_domain=server_domain,
+                reverse_port=reverse_port,
+                ssh_port=ssh_port,
+                reverse_server_ssh_port=reverse_server_ssh_port,
+                username=username,
+                key_path=key_path
+            ).render()
+        except ValueError as e:
+            return HttpResponse(str(e), status=400, content_type="text/plain")
+
+        return HttpResponse(script_string, content_type="text/plain")
 
 
 # ========================================

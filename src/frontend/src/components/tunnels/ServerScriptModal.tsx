@@ -6,7 +6,7 @@ import { CodeBlock } from "@/components/ui/CodeBlock";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Info } from "lucide-react";
+import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Info, Link2, Loader2 } from "lucide-react";
 
 import { TunnelModalProps } from "@/types/tunnel";
 
@@ -51,7 +51,12 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
         scriptContent,
         keyPath, setKeyPath,
         targetSshPort, setTargetSshPort,
-        loading
+        loading,
+        usernames,
+        selectedUsernameId, setSelectedUsernameId,
+        curlCommand,
+        generatingCurl,
+        generateOneTimeUrl
     } = state;
 
     const langMap: Record<string, string> = {
@@ -100,6 +105,36 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                         </p>
                     </div>
                 </div>
+
+                {/* Username selector for autossh-service */}
+                {activeTab === "autossh-service" && (
+                    <div className="space-y-1.5">
+                        {usernames.length > 0 ? (
+                            <>
+                                <Label className="text-sm font-medium">Target Server Username</Label>
+                                <select
+                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                    value={selectedUsernameId ?? ""}
+                                    onChange={(e) => setSelectedUsernameId(Number(e.target.value))}
+                                >
+                                    {usernames.map((u) => (
+                                        <option key={u.id} value={u.id}>
+                                            {u.username}{u.created_by ? ` (by ${u.created_by})` : ""}
+                                        </option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-muted-foreground">
+                                    Select the tunnel username to use for the systemd service.
+                                </p>
+                            </>
+                        ) : (
+                            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
+                                <span className="mt-0.5 shrink-0 text-lg">⚠️</span>
+                                <span>No usernames available for this tunnel. Please create a <strong>Target Server Username</strong> first (via the Create Wizard Step 3 or Tunnel management).</span>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Tabs */}
                 <div className="border-b border-border">
@@ -152,6 +187,34 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                             )}
                             <div className="flex-1 min-h-0 max-h-full overflow-auto">
                                 <CodeBlock language={langMap[activeTab] || "txt"} value={scriptContent} />
+                            </div>
+
+                            {/* One-time curl URL section */}
+                            <div className="mt-4 pt-4 border-t border-border space-y-3">
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={generateOneTimeUrl}
+                                        disabled={generatingCurl || !scriptContent}
+                                        className={cn(
+                                            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
+                                            "bg-primary text-primary-foreground hover:bg-primary/90",
+                                            "disabled:opacity-50 disabled:cursor-not-allowed"
+                                        )}
+                                    >
+                                        {generatingCurl ? (
+                                            <Loader2 size={14} className="animate-spin" />
+                                        ) : (
+                                            <Link2 size={14} />
+                                        )}
+                                        Generate one-time curl URL
+                                    </button>
+                                    <span className="text-xs text-muted-foreground">
+                                        Generates a single-use URL valid for 10 minutes.
+                                    </span>
+                                </div>
+                                {curlCommand && (
+                                    <CodeBlock language="bash" value={curlCommand} />
+                                )}
                             </div>
                         </>
                     )}
