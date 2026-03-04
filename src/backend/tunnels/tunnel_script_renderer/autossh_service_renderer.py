@@ -51,7 +51,7 @@ class AutoSshServiceTemplate(BaseTemplateRenderer):
         mapping = self.mapping_factory()
 
         # Load template file.
-        template_file = TEMPLATE_DIR / Path("autossh_template.service")
+        template_file = TEMPLATE_DIR / Path("autossh_service_template.sh")
 
         # Render template.
         template = Template(template_file.read_text())

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+command -v docker >/dev/null 2>&1 || { echo 'docker not found. Please install Docker first.'; exit 1; }
+
 echo "[+] Docker AutoSSH Script start"
 
 # Create authorized_keys file with Telepy public key

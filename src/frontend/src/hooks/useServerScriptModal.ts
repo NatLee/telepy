@@ -14,7 +14,9 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
     const [scriptContent, setScriptContent] = useState<string>("");
     const [keyPath, setKeyPath] = useState<string>("");
     const [targetSshPort, setTargetSshPort] = useState<string>("22");
-    const [loading, setLoading] = useState(false);
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
+    const [isFetchingScript, setIsFetchingScript] = useState(false);
+    const [scriptsByTab, setScriptsByTab] = useState<Record<string, string>>({});
     const { showError } = useToast();
 
     // Username state for autossh-service tab
@@ -50,11 +52,41 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
         }
     }, [isOpen, tunnelId, usernamesLoaded, selectedUsernameId]);
 
-    // Fetch script content
+    // Helper to compute cache key
+    const getCacheKey = useCallback(() => {
+        const port = targetSshPort || "22";
+        const parts = [activeTab, port, keyPath];
+        if (activeTab === "autossh-service" && selectedUsernameId !== null) {
+            parts.push(String(selectedUsernameId));
+        }
+        return parts.join("|");
+    }, [activeTab, targetSshPort, keyPath, selectedUsernameId]);
+
+    // Effect 1: Immediate UI response via cache
+    useEffect(() => {
+        if (!isOpen || !tunnelId) return;
+        const cacheKey = getCacheKey();
+        if (scriptsByTab[cacheKey]) {
+            setScriptContent(scriptsByTab[cacheKey]);
+        }
+    }, [isOpen, tunnelId, getCacheKey, scriptsByTab]);
+
+    // Effect 2: Debounced API call if cache miss
     useEffect(() => {
         if (isOpen && tunnelId && defaultSshPort) {
+            const cacheKey = getCacheKey();
+
+            // If we already have it in cache, just mark initial load as done
+            if (scriptsByTab[cacheKey]) {
+                setIsInitialLoading(false);
+                return;
+            }
+
             const fetchScript = async () => {
-                setLoading(true);
+                if (Object.keys(scriptsByTab).length === 0) {
+                    setIsInitialLoading(true);
+                }
+                setIsFetchingScript(true);
                 try {
                     const port = targetSshPort || "22";
                     const params = new URLSearchParams();
@@ -69,9 +101,10 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
                     const res = await apiFetch(url);
                     if (res.ok) {
                         const data = await res.json();
-                        setScriptContent(data.script ?? data.config ?? JSON.stringify(data, null, 2));
+                        const content = data.script ?? data.config ?? JSON.stringify(data, null, 2);
+                        setScriptContent(content);
+                        setScriptsByTab(prev => ({ ...prev, [cacheKey]: content }));
                     } else {
-                        // Try to parse error for specific messages
                         try {
                             const errData = await res.json();
                             if (errData.error === "No username found for this server") {
@@ -84,21 +117,21 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
                         }
                         setScriptContent("");
                     }
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 } catch (e: any) {
                     showError(e.message || "Failed to load script");
                 } finally {
-                    setLoading(false);
+                    setIsInitialLoading(false);
+                    setIsFetchingScript(false);
                 }
             };
 
             const timer = setTimeout(() => {
                 fetchScript();
-            }, 300); // debounce keyPath/port entry
+            }, 300);
 
             return () => clearTimeout(timer);
         }
-    }, [isOpen, tunnelId, defaultSshPort, activeTab, keyPath, targetSshPort, selectedUsernameId, showError]);
+    }, [isOpen, tunnelId, defaultSshPort, getCacheKey, scriptsByTab, targetSshPort, activeTab, keyPath, selectedUsernameId, showError]);
 
     // Clear curl command when relevant params change
     useEffect(() => {
@@ -111,12 +144,15 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
             setActiveTab("ssh");
             setKeyPath("");
             setTargetSshPort(defaultSshPort?.toString() || "22");
+            setIsInitialLoading(true);
         } else {
-            // Reset username state on close
+            // Reset state on close
             setUsernames([]);
             setSelectedUsernameId(null);
             setUsernamesLoaded(false);
             setCurlCommand("");
+            setScriptsByTab({});
+            setScriptContent("");
         }
     }, [isOpen, defaultSshPort]);
 
@@ -140,7 +176,21 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
             });
             if (res.ok) {
                 const data = await res.json();
-                setCurlCommand(`curl -fsSL '${data.url}' | bash`);
+
+                let cmd = "";
+                if (activeTab === "ssh" || activeTab === "autossh" || activeTab === "docker-run") {
+                    cmd = `curl -fsSL '${data.url}' | bash`;
+                } else if (activeTab === "docker-compose") {
+                    cmd = `curl -fsSL '${data.url}' -o telepy-docker-compose.yml && docker compose up -d`;
+                } else if (activeTab === "autossh-service") {
+                    cmd = `curl -fsSL '${data.url}' | bash`;
+                } else if (activeTab === "powershell") {
+                    cmd = `powershell -Command "Invoke-WebRequest -UseBasicParsing '${data.url}' -OutFile 'telepy-tunnel.ps1'; .\\telepy-tunnel.ps1"`;
+                } else {
+                    cmd = `curl -fsSL '${data.url}' | bash`;
+                }
+
+                setCurlCommand(cmd);
             } else {
                 const errData = await res.json().catch(() => null);
                 showError(errData?.error || "Failed to generate one-time URL");
@@ -159,7 +209,8 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
             scriptContent,
             keyPath, setKeyPath,
             targetSshPort, setTargetSshPort,
-            loading,
+            isInitialLoading,
+            isFetchingScript,
             usernames,
             selectedUsernameId, setSelectedUsernameId,
             curlCommand,
