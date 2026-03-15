@@ -54,8 +54,30 @@ export function useSettingsPage() {
         }
     };
 
+    const handleUpdate = async (keyName: string, newValue: unknown) => {
+        const previous = settingsObj[keyName];
+        setSettingsObj((prev) => ({ ...prev, [keyName]: newValue }));
+
+        try {
+            const res = await apiFetch("/api/site/settings", {
+                method: "POST",
+                body: JSON.stringify({ [keyName]: newValue }),
+            });
+            if (res.ok) {
+                showSuccess("Setting updated");
+            } else {
+                setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));
+                const err = await res.json();
+                showError((err as { error?: string }).error || "Failed to update setting");
+            }
+        } catch (e: unknown) {
+            setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));
+            showError(e instanceof Error ? e.message : "Failed to update setting");
+        }
+    };
+
     return {
         state: { settingsObj, loading },
-        actions: { fetchSettings, handleToggle },
+        actions: { fetchSettings, handleToggle, handleUpdate },
     };
 }
