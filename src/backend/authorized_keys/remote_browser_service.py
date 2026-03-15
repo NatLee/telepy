@@ -211,10 +211,24 @@ def start_remote_browser(target_username: str, target_reverse_port: int, server_
 
 def ping_remote_browser(session_id: str):
     session = ACTIVE_SESSIONS.get(session_id)
-    if session:
-        session["last_seen"] = time.time()
-        return True
-    return False
+    if not session:
+        return False
+
+    session["last_seen"] = time.time()
+
+    # 發送 no-op WebDriver 指令，重置 Selenium 的 SE_NODE_SESSION_TIMEOUT idle timer。
+    # VNC 的手動操作不算 WebDriver 指令，不發這個的話 300s 後 Selenium 會關掉 Chrome。
+    selenium_session_id = session.get("selenium_session_id")
+    if selenium_session_id:
+        try:
+            requests.get(
+                f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}",
+                timeout=3
+            )
+        except Exception:
+            logger.debug(f"Keep-alive ping to Selenium failed for session {session_id}")
+
+    return True
 
 def stop_remote_browser(session_id: str):
     session = ACTIVE_SESSIONS.get(session_id)

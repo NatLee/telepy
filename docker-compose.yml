@@ -114,7 +114,7 @@ services:
       # Max concurrent sessions
       - SE_NODE_MAX_SESSIONS=10
       # Session timeout in seconds
-      - SE_NODE_SESSION_TIMEOUT=300
+      - SE_NODE_SESSION_TIMEOUT=3600
       # Disable VNC password
       - SE_VNC_NO_PASSWORD=1
 
