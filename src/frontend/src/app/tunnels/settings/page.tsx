@@ -4,7 +4,7 @@
  * 設定頁：站台設定列表與開關，僅管理員可編輯。
  * Settings page: site settings list and toggles; only admins can edit.
  */
-import React from "react";
+import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { Settings, ShieldAlert, Info } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
@@ -12,13 +12,15 @@ import { useSettingsPage } from "@/hooks/useSettingsPage";
 
 const SETTING_LABELS: Record<string, string> = {
     allow_registration: "Allow User Registration",
+    remote_browser_session_idle_timeout: "Remote Browser Session Idle Timeout (seconds)",
 };
 
 export default function SettingsPage() {
     const { user } = useAuth();
     const { state, actions } = useSettingsPage();
     const { settingsObj, loading } = state;
-    const { handleToggle } = actions;
+    const { handleToggle, handleUpdate } = actions;
+    const [editValues, setEditValues] = useState<Record<string, string>>({});
     const entries = Object.entries(settingsObj);
 
     return (
@@ -91,6 +93,35 @@ export default function SettingsPage() {
                                                             } pointer-events-none inline-block h-5 w-5 transform rounded-full bg-primary-foreground shadow ring-0 transition duration-200 ease-in-out`}
                                                     />
                                                 </button>
+                                            ) : typeof value === "number" ? (
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="number"
+                                                        className="w-24 text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                                                        value={editValues[key] ?? String(value)}
+                                                        onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === "Enter") {
+                                                                const num = parseInt(editValues[key] ?? String(value), 10);
+                                                                if (!isNaN(num) && num > 0) handleUpdate(key, num);
+                                                            }
+                                                        }}
+                                                        min={1}
+                                                        disabled={!user?.is_superuser}
+                                                    />
+                                                    {user?.is_superuser && (
+                                                        <button
+                                                            type="button"
+                                                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+                                                            onClick={() => {
+                                                                const num = parseInt(editValues[key] ?? String(value), 10);
+                                                                if (!isNaN(num) && num > 0) handleUpdate(key, num);
+                                                            }}
+                                                        >
+                                                            Save
+                                                        </button>
+                                                    )}
+                                                </div>
                                             ) : (
                                                 <div className="text-sm font-medium text-foreground bg-muted px-3 py-1 rounded border border-border">
                                                     {String(value)}

@@ -8,6 +8,8 @@ import uuid
 import threading
 from typing import Dict, Any
 
+from site_settings.models import SiteSettings
+
 logger = logging.getLogger(__name__)
 
 # Keep track of active remote browser sessions
@@ -259,11 +261,12 @@ def stop_remote_browser(session_id: str):
 def cleanup_dead_sessions():
     while True:
         try:
+            idle_timeout = SiteSettings.get_solo().remote_browser_session_idle_timeout
             dead_sessions = []
             now = time.time()
             for sid, sess in list(ACTIVE_SESSIONS.items()):
-                # Clean up if SSH process died naturally OR if it hasn't been pinged in 60 seconds
-                if sess["ssh_process"].poll() is not None or (now - sess.get("last_seen", now)) > 60:
+                # Clean up if SSH process died naturally OR if it hasn't been pinged within idle_timeout seconds
+                if sess["ssh_process"].poll() is not None or (now - sess.get("last_seen", now)) > idle_timeout:
                     dead_sessions.append(sid)
             for sid in dead_sessions:
                 stop_remote_browser(sid)
