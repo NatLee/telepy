@@ -25,7 +25,13 @@ After=network-online.target
 
 [Service]
 User=${username}
-ExecStart=/usr/bin/autossh -M 0 -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" ${key_option}-p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
+
+LogsDirectory=/var/log/autossh
+Environment="AUTOSSH_DEBUG=1"
+Environment="AUTOSSH_LOGFILE=/var/log/autossh/autossh.log"
+Environment="AUTOSSH_GATETIME=0"
+
+ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" ${key_option}-p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
 
 # Restart service after it exits
 Restart=always
