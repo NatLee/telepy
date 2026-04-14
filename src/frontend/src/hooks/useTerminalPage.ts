@@ -84,7 +84,17 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             const { Terminal } = await import("xterm");
             const { FitAddon } = await import("xterm-addon-fit");
 
+            // 等待字體載入完成，確保 xterm 正確計算字元寬度
+            await document.fonts.ready;
+
             if (!terminalRef.current) return;
+
+            // 從 CSS 變數取得 next/font/local 產生的實際字體名稱（變數設在 <body> 上）
+            const computedMono = getComputedStyle(document.body)
+                .getPropertyValue('--font-0xproto').trim();
+            const termFontFamily = computedMono
+                ? `${computedMono}, 'Courier New', monospace`
+                : "'Menlo', 'Consolas', 'Courier New', monospace";
 
             const term = new Terminal({
                 cursorBlink: true,
@@ -110,7 +120,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                     brightCyan: "#4ec9b0",
                     brightWhite: "#ffffff",
                 },
-                fontFamily: "'Fira Code', 'Courier New', monospace",
+                fontFamily: termFontFamily,
                 fontSize: 14,
                 lineHeight: 1.2,
             });
