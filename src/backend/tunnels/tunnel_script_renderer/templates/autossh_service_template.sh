@@ -26,7 +26,7 @@ After=network-online.target
 [Service]
 User=${username}
 
-LogsDirectory=/var/log/autossh
+LogsDirectory=autossh
 Environment="AUTOSSH_DEBUG=1"
 Environment="AUTOSSH_LOGFILE=/var/log/autossh/autossh.log"
 Environment="AUTOSSH_GATETIME=0"
