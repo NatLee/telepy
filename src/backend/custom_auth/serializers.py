@@ -24,40 +24,79 @@ class GoogleLoginSerializer(serializers.Serializer):
         check id_token
         token: JWT
         """
-        logger.debug(f"Verify {credential[:50]}...")
-        idinfo = id_token.verify_oauth2_token(
-            credential, requests.Request(), settings.SOCIAL_GOOGLE_CLIENT_ID
-        )
-        if idinfo["iss"] not in [
+        logger.debug(f"[AUTH][GOOGLE] Verifying credential: {credential[:50]}...")
+
+        client_id = settings.SOCIAL_GOOGLE_CLIENT_ID
+        if not client_id:
+            # 後端未設定 SOCIAL_GOOGLE_CLIENT_ID，無法驗證 token，直接中止並記錄明確錯誤
+            # Backend SOCIAL_GOOGLE_CLIENT_ID is missing; abort early with a clear error.
+            logger.error(
+                "[AUTH][GOOGLE] SOCIAL_GOOGLE_CLIENT_ID is not configured on the backend. "
+                "Set the SOCIAL_GOOGLE_CLIENT_ID environment variable."
+            )
+            raise ValueError("Backend SOCIAL_GOOGLE_CLIENT_ID is not configured")
+
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                credential, requests.Request(), client_id
+            )
+        except ValueError as exception:
+            # google-auth 在 token 過期 / 簽章錯誤 / audience 不符時會丟出 ValueError
+            # google-auth raises ValueError on expired / bad-signature / wrong-audience tokens.
+            logger.error(f"[AUTH][GOOGLE] id_token verification failed: {exception}")
+            raise
+
+        logger.debug(f"[AUTH][GOOGLE] Token decoded. Claims present: {sorted(idinfo.keys())}")
+
+        if idinfo.get("iss") not in [
             "accounts.google.com",
             "https://accounts.google.com",
         ]:
-            logger.error("Wrong issuer")
+            logger.error(f"[AUTH][GOOGLE] Wrong issuer: `{idinfo.get('iss')}`")
             raise ValueError("Wrong issuer.")
-        if idinfo["aud"] not in [settings.SOCIAL_GOOGLE_CLIENT_ID]:
-            logger.error("Could not verify audience")
+        if idinfo.get("aud") not in [client_id]:
+            logger.error(
+                f"[AUTH][GOOGLE] Audience mismatch. token aud=`{idinfo.get('aud')}`, "
+                f"expected client_id=`{client_id}`"
+            )
             raise ValueError("Could not verify audience.")
         # Success
-        logger.info("successfully verified")
+        logger.info(f"[AUTH][GOOGLE] Token successfully verified for `{idinfo.get('email')}`")
         return idinfo
 
     def create(self, validated_data):
         idinfo = self.verify_token(validated_data.get("credential"))
         if not idinfo:
+            logger.error("[AUTH][GOOGLE] verify_token returned empty idinfo")
             raise ValueError("Incorrect Credentials")
 
-        # 抽取資料
-        email = idinfo["email"]
+        # 抽取資料 / Extract email
+        email = idinfo.get("email")
+        if not email:
+            logger.error(f"[AUTH][GOOGLE] Token has no `email` claim. Claims present: {sorted(idinfo.keys())}")
+            raise ValueError("Google token has no email claim")
         account, domain = email.split("@")
 
         # 檢查是否為註冊的 domain
         if domain not in settings.VALID_REGISTER_DOMAINS:
-            logger.warning(f"[AUTH][GOOGLE] `{email}` attempts to register!!")
+            logger.warning(
+                f"[AUTH][GOOGLE] `{email}` attempts to register with disallowed domain "
+                f"`{domain}` (allowed: {settings.VALID_REGISTER_DOMAINS})"
+            )
             raise InvalidEmailError
 
-        # 抽取使用者名稱
-        first_name = idinfo["given_name"]
-        last_name = idinfo["family_name"]
+        # 抽取使用者名稱 / Extract names.
+        # 注意：部分 Google 帳號的 token 可能缺少 given_name / family_name。
+        # Note: some Google accounts' tokens may be missing given_name / family_name.
+        if "given_name" not in idinfo or "family_name" not in idinfo:
+            logger.warning(
+                f"[AUTH][GOOGLE] Token for `{email}` is missing name claims; "
+                f"defaulting to empty. Claims present: {sorted(idinfo.keys())}"
+            )
+        # 部分帳號的 token 缺少 given_name / family_name，預設空字串避免 KeyError
+        # Some accounts' tokens lack given_name / family_name; default to "" to avoid KeyError.
+        first_name = idinfo.get("given_name", "")
+        last_name = idinfo.get("family_name", "")
 
         # 查找是否有同樣的使用者名稱
         try:

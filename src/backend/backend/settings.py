@@ -2,7 +2,6 @@
 Django settings for backend project.
 """
 import os
-import sys
 from datetime import timedelta
 import logging
 from pathlib import Path
@@ -230,72 +229,63 @@ CHANNEL_LAYERS = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # -------------- START - Log setting --------------
-LOG_ROOT = Path('/logs')
-LOG_ROOT.mkdir(exist_ok=True)
+# 統一日誌：所有 logger 都經由 root 的 InterceptHandler 轉送到 loguru，
+# 輸出到 console + telepy.log（全部等級）+ error.log（WARNING 以上）。
+# Unified logging: every logger flows through a single root InterceptHandler into
+# loguru, written to console + telepy.log (all levels) + error.log (WARNING+).
+import common.log  # loguru 僅在 common.log 內使用 / loguru is used only inside common.log
 
-LOG_TYPES = ['file', 'database']
-for log_type in LOG_TYPES:
-    log_type_path = LOG_ROOT / log_type
-    log_type_path.mkdir(exist_ok=True)
+LOG_ROOT = Path("/logs")
+LOG_ROOT.mkdir(parents=True, exist_ok=True)
 
-HANDLERS = {}
-
-# Add file handlers for each log type
-for log_type in LOG_TYPES:
-    HANDLERS[log_type] = {
-        'class': 'common.log.InterceptTimedRotatingFileHandler',
-        'filename': f"{LOG_ROOT / log_type / f'{log_type}.log'}",
-        'when': "H",
-        'interval': 1,
-        'backupCount': 1,
-        'formatter': 'standard',
-        'encoding': 'utf-8',
-    }
-
-# Add stream handlers for each log type
-HANDLERS.update({
-    'tunnels': {
-        'class': 'logging.StreamHandler',
-        'stream': sys.stdout
-    },
-    'internal_keys_api': {
-        'class': 'logging.StreamHandler',
-        'stream': sys.stdout
-    },
-})
+# DEBUG 模式輸出 DEBUG，否則 INFO；可用 LOG_LEVEL 覆寫。
+# DEBUG mode -> DEBUG level, otherwise INFO; override with the LOG_LEVEL env var.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG" if DEBUG else "INFO").upper()
+LOG_RETENTION = os.getenv("LOG_RETENTION", "14 days")
+LOG_ROTATION = os.getenv("LOG_ROTATION", "00:00")  # 每日午夜輪替 / daily at midnight
 
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': True,
-    'formatters': {
-        # LOG格式
-        'standard': {
-            'format': '[%(asctime)s] [%(filename)s:%(lineno)d] [%(module)s:%(funcName)s] [%(levelname)s] - %(message)s'},
-        'simple': {  # 簡單格式
-            'format': '%(levelname)s %(message)s'
-        }
-    },
-    'filters': {
-    },
-    'handlers': HANDLERS,
-    'loggers': {
-        'django': {
-            'handlers': ['file'],
-            'propagate': True,
-            'level': "INFO"
+    "version": 1,
+    # 必須為 False，否則在 dictConfig 之前就建立的 getLogger(__name__) 會被停用。
+    # Must be False, otherwise loggers created at import time (before dictConfig) are disabled.
+    "disable_existing_loggers": False,
+    "handlers": {
+        # 唯一的 handler：把標準 logging 轉送到 loguru
+        # The only handler: forwards stdlib logging into loguru.
+        "intercept": {
+            "class": "common.log.InterceptHandler",
         },
-        'tunnels': {
-            'handlers': ['tunnels'],
-            'propagate': False,
-            'level': "DEBUG"
-        },
-        'authorized_keys.internal': {
-            'handlers': ['internal_keys_api'],
-            'propagate': False,
-            'level': 'INFO',
-        }
-    }
+    },
+    # root 捕捉所有紀錄（單一轉送點）/ root catches everything via the single intercept.
+    "root": {
+        "handlers": ["intercept"],
+        "level": LOG_LEVEL,
+    },
+    # 以下僅覆寫「等級」，不掛 handler 且 propagate=True，避免重複輸出。
+    # Below: LEVEL-only overrides, no handlers, propagate=True, to avoid double emits.
+    "loggers": {
+        # 本專案各 app / our apps
+        "custom_auth": {"level": "DEBUG", "propagate": True},
+        "tunnels": {"level": "DEBUG", "propagate": True},
+        "authorized_keys": {"level": "INFO", "propagate": True},
+        # 壓低第三方雜訊 / tame noisy third parties
+        "django": {"level": "INFO", "propagate": True},
+        "django.server": {"level": "INFO", "propagate": True},
+        "django.utils.autoreload": {"level": "WARNING", "propagate": True},
+        "django.db.backends": {"level": "WARNING", "propagate": True},
+        "daphne": {"level": "INFO", "propagate": True},
+        "asyncio": {"level": "WARNING", "propagate": True},
+    },
 }
+
+# 安裝 loguru sink（須在第一筆紀錄之前；此函式為冪等，可重複呼叫）。
+# Install loguru sinks (before the first record; the function is idempotent).
+common.log.configure_logging(
+    LOG_ROOT,
+    retention=LOG_RETENTION,
+    rotation=LOG_ROTATION,
+    debug=DEBUG,
+)
 
 # --------------- END - Log setting ---------------
 
