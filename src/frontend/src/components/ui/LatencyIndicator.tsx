@@ -119,10 +119,10 @@ export function LatencyIndicator({
                     {tooltipContent ?? (
                         <span>
                             {known
-                                ? `連線延遲 ${Math.round(rttMs as number)}ms · ${tier!.label}`
+                                ? `Latency ${Math.round(rttMs as number)}ms · ${tier!.label}`
                                 : online
-                                    ? "延遲量測中…"
-                                    : "離線"}
+                                    ? "Measuring…"
+                                    : "Offline"}
                         </span>
                     )}
                 </TooltipContent>

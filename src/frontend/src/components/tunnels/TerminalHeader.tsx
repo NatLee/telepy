@@ -213,7 +213,7 @@ export function TerminalHeader({
                             </div>
                             {(connected || connecting) && (
                                 <div className="flex items-center justify-between gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
-                                    <span>延遲</span>
+                                    <span>Latency</span>
                                     <TerminalLatencyBadge
                                         youToServerMs={youToServerMs}
                                         serverToDeviceMs={serverToDeviceMs}

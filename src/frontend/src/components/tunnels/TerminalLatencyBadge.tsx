@@ -43,15 +43,15 @@ export function TerminalLatencyBadge({
     const tooltip = (
         <div className="space-y-0.5 text-left">
             <div className="flex items-center justify-between gap-3">
-                <span className="opacity-80">你 → 伺服器</span>
+                <span className="opacity-80">You → Server</span>
                 <span className="font-medium tabular-nums">{fmt(youToServerMs)}ms</span>
             </div>
             <div className="flex items-center justify-between gap-3">
-                <span className="opacity-80">伺服器 → 裝置</span>
+                <span className="opacity-80">Server → Device</span>
                 <span className="font-medium tabular-nums">{fmt(serverToDeviceMs)}ms</span>
             </div>
             <div className="flex items-center justify-between gap-3 pt-0.5 border-t border-background/20">
-                <span className="opacity-60">總延遲</span>
+                <span className="opacity-60">Total</span>
                 <span className="font-semibold tabular-nums">{fmt(total)}ms</span>
             </div>
         </div>
@@ -83,9 +83,9 @@ export function TerminalLatencyBadge({
                 tooltipContent={tooltip}
             />
             <span className="text-xs tabular-nums text-muted-foreground whitespace-nowrap">
-                <span className="opacity-70">你</span> {fmt(youToServerMs)}
+                <span className="opacity-70">You</span> {fmt(youToServerMs)}
                 <span className="opacity-40 mx-1">·</span>
-                <span className="opacity-70">裝置</span> {fmt(serverToDeviceMs)}
+                <span className="opacity-70">Dev</span> {fmt(serverToDeviceMs)}
                 <span className="ml-0.5">ms</span>
             </span>
         </div>
