@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
@@ -87,8 +87,8 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 setSelectedAllowedIds([]);
                 fetchUsers();
             } else {
-                const data = await res.json();
-                showError(data.error || "Failed to share tunnel");
+                const data = await readJson(res);
+                showError(responseError(res, data, "Failed to share tunnel"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
@@ -107,8 +107,8 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 // Success toast is handled by WebSocket notification
                 fetchUsers();
             } else {
-                const data = await res.json();
-                showError(data.error || "Failed to update permission");
+                const data = await readJson(res);
+                showError(responseError(res, data, "Failed to update permission"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {

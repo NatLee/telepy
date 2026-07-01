@@ -7,7 +7,7 @@
  * - 上傳／下載：直接呼叫 REST API（POST /api/sftp/upload、GET /api/sftp/download）。
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { ReconnectingSocket } from "@/lib/reconnectingSocket";
 import { FileItem } from "@/types/tunnel";
@@ -50,8 +50,8 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                 showSuccess("File uploaded successfully");
                 loadDirectory(currentPath);
             } else {
-                const data = await res.json();
-                showError(data.error || "Upload failed");
+                const data = await readJson(res);
+                showError(responseError(res, data, "Upload failed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {

@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
 
@@ -27,9 +27,9 @@ export function useLoginPage() {
         }
         const base = process.env.NEXT_PUBLIC_API_BASE || "";
         fetch(`${base}/api/auth/setup-status`)
-            .then((res) => res.json())
+            .then((res) => readJson<{ first_time_setup?: boolean }>(res))
             .then((data) => {
-                if (data.first_time_setup === true) {
+                if (data?.first_time_setup === true) {
                     router.replace("/first-login");
                 }
             })
@@ -45,13 +45,13 @@ export function useLoginPage() {
                     method: "POST",
                     body: JSON.stringify({ credential: response.credential }),
                 });
-                const data = await res.json();
-                if (res.ok) {
-                    login(data.access_token, data.refresh_token);
+                const data = await readJson<{ access_token?: string; refresh_token?: string }>(res);
+                if (res.ok && data?.access_token) {
+                    login(data.access_token, data.refresh_token!);
                     showSuccess("Google Login successful");
                     router.push("/tunnels");
                 } else {
-                    showError(data.error || data.detail || "Google Login failed");
+                    showError(responseError(res, data, "Google Login failed"));
                 }
             } catch (err: unknown) {
                 showError(err instanceof Error ? err.message : "Google Login failed");
@@ -67,13 +67,13 @@ export function useLoginPage() {
                 method: "POST",
                 body: JSON.stringify({ username, password }),
             });
-            const data = await res.json();
-            if (res.ok && data.access_token) {
-                login(data.access_token, data.refresh_token);
+            const data = await readJson<{ access_token?: string; refresh_token?: string }>(res);
+            if (res.ok && data?.access_token) {
+                login(data.access_token, data.refresh_token!);
                 showSuccess("Login successful");
                 router.push("/tunnels");
             } else {
-                showError(data.detail || data.error || "Login failed");
+                showError(responseError(res, data, "Login failed"));
             }
         } catch (err: unknown) {
             showError(err instanceof Error ? err.message : "Login failed");

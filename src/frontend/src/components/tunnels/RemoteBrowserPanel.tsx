@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { MonitorPlay, MonitorX, AlertCircle, Loader2 } from "lucide-react";
+import { readJson, responseError } from "@/lib/api";
 
 export interface RemoteBrowserPanelProps {
     serverId: string;
@@ -35,8 +36,8 @@ export function RemoteBrowserPanel({
             });
 
             if (!response.ok) {
-                const data = await response.json();
-                throw new Error(data.error || "Failed to start remote browser");
+                const data = await readJson(response);
+                throw new Error(responseError(response, data, "Failed to start remote browser"));
             }
 
             const data = await response.json();

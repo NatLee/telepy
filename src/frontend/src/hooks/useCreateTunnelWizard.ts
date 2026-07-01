@@ -5,11 +5,10 @@
  *   Step order: Step1 submit yields tunnelId/port; Step2 fetch keys; Step3 users; Step4 scripts + WS status; Step5 fetch config.
  */
 import { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
-import { formatApiError } from "@/lib/formatApiError";
 
 export function useCreateTunnelWizard() {
     const { showSuccess, showError } = useToast();
@@ -100,17 +99,17 @@ export function useCreateTunnelWizard() {
                 body: JSON.stringify(payload),
             });
 
-            const createData = await createRes.json();
-            if (createRes.ok) {
+            const createData = await readJson<{ id?: number; reverse_port?: number }>(createRes);
+            if (createRes.ok && createData) {
                 showSuccess("Tunnel key created successfully.");
-                setTunnelId(createData.id);
-                setSshPort(createData.reverse_port);
+                setTunnelId(createData.id ?? null);
+                setSshPort(createData.reverse_port ?? null);
                 setCreatedHostName(payload.host_friendly_name);
 
                 fetchServerKeys();
                 setCurrentStep(2);
             } else {
-                showError(formatApiError(createData, "Failed to create tunnel."));
+                showError(responseError(createRes, createData, "Failed to create tunnel."));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
@@ -147,8 +146,8 @@ export function useCreateTunnelWizard() {
                 setNewUsername("");
                 fetchUsers();
             } else {
-                const data = await res.json();
-                showError(formatApiError(data, "Failed to add user"));
+                const data = await readJson(res);
+                showError(responseError(res, data, "Failed to add user"));
             }
         } finally { setIsProcessing(false); }
     };

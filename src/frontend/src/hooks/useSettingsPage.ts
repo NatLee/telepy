@@ -3,7 +3,7 @@
  * Settings page logic: load/save site settings, toggle and error handling.
  */
 import { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 
 export function useSettingsPage() {
@@ -45,8 +45,8 @@ export function useSettingsPage() {
                 showSuccess("Setting updated");
             } else {
                 setSettingsObj((prev) => ({ ...prev, [keyName]: currentValue }));
-                const err = await res.json();
-                showError((err as { error?: string }).error || "Failed to update setting");
+                const err = await readJson(res);
+                showError(responseError(res, err, "Failed to update setting"));
             }
         } catch (e: unknown) {
             setSettingsObj((prev) => ({ ...prev, [keyName]: currentValue }));
@@ -67,8 +67,8 @@ export function useSettingsPage() {
                 showSuccess("Setting updated");
             } else {
                 setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));
-                const err = await res.json();
-                showError((err as { error?: string }).error || "Failed to update setting");
+                const err = await readJson(res);
+                showError(responseError(res, err, "Failed to update setting"));
             }
         } catch (e: unknown) {
             setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));

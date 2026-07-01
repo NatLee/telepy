@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { useViewMode } from "@/hooks/useViewMode";
@@ -89,8 +89,8 @@ export function useKeysPage() {
                 setNewKeyDescription("");
                 fetchKeys();
             } else {
-                const err = await createRes.json();
-                showError(err.error || "Failed to add key");
+                const err = await readJson(createRes);
+                showError(responseError(createRes, err, "Failed to add key"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {

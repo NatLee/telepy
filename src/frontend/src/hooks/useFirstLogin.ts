@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 
 export function useFirstLogin() {
     const [username, setUsername] = useState("");
@@ -30,13 +30,13 @@ export function useFirstLogin() {
                     method: "POST",
                     body: JSON.stringify({ credential: response.credential }),
                 });
-                const data = await res.json();
-                if (res.ok) {
-                    login(data.access_token, data.refresh_token);
+                const data = await readJson<{ access_token?: string; refresh_token?: string }>(res);
+                if (res.ok && data?.access_token) {
+                    login(data.access_token, data.refresh_token!);
                     showSuccess("Google Login successful");
                     router.push("/tunnels");
                 } else {
-                    showError(data.error || data.detail || "Google Login failed");
+                    showError(responseError(res, data, "Google Login failed"));
                 }
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
             } catch (err: any) {
@@ -71,10 +71,10 @@ export function useFirstLogin() {
                 method: "POST",
                 body: JSON.stringify({ username, password }),
             });
-            const regData = await regRes.json();
+            const regData = await readJson<{ status?: string }>(regRes);
 
-            if (!regRes.ok || regData.status !== "success") {
-                showError(regData.error || regData.detail || "Registration failed");
+            if (!regRes.ok || regData?.status !== "success") {
+                showError(responseError(regRes, regData, "Registration failed"));
                 setIsSubmitting(false);
                 return;
             }
@@ -86,10 +86,10 @@ export function useFirstLogin() {
                 method: "POST",
                 body: JSON.stringify({ username, password }),
             });
-            const loginData = await loginRes.json();
+            const loginData = await readJson<{ access_token?: string; refresh_token?: string }>(loginRes);
 
-            if (loginRes.ok && loginData.access_token) {
-                login(loginData.access_token, loginData.refresh_token);
+            if (loginRes.ok && loginData?.access_token) {
+                login(loginData.access_token, loginData.refresh_token!);
                 router.push("/tunnels");
             } else {
                 showError("Automatic login failed. Please sign in.");
