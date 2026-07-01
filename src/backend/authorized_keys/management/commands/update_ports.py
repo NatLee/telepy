@@ -1,10 +1,17 @@
+import time
 from ast import literal_eval
 
 from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
 from authorized_keys.utils import get_ss_output_from_redis, get_ss_latency_from_redis
 
-from tunnels.consumers import send_tunnel_connection_update, send_notification_to_users
+from tunnels.consumers import (
+    send_tunnel_connection_update,
+    send_notification_to_users,
+    send_group_messages_batch,
+    user_notification_event,
+    tunnel_connection_event,
+)
 
 class Command(BaseCommand):
     help = "Get and update the SSH server usage ports from the ss command output."
@@ -16,7 +23,49 @@ class Command(BaseCommand):
     # full notification cascade every 5s cycle.
     FLAP_THRESHOLD = 2
 
+    # 延遲廣播節流：RTT 每輪天然會抖動幾毫秒，若每次都廣播會產生無謂的 Redis 來回與前端 re-render。
+    # 僅在有 port 的 RTT 變化 >= 門檻、或有 port 新增/消失時才廣播；並且最多每 KEEPALIVE 輪強制廣播
+    # 一次以自我修復（例如前端剛連上）。/ Latency broadcast throttle: only fan out when some port's RTT
+    # changes by >= threshold (or a port appears/disappears), with a periodic keep-alive to self-heal.
+    LATENCY_BROADCAST_THRESHOLD_MS = 5.0
+    LATENCY_BROADCAST_KEEPALIVE_CYCLES = 6
+
+    def add_arguments(self, parser):
+        # --loop：常駐執行，Django 只 import 一次，避免每輪冷啟動整個框架造成 CPU 週期性尖峰。
+        # 舊做法是由 shell 每 5s 呼叫一次本指令（每次都重新 import Django/DRF/channels…），會週期性
+        # 拖慢同容器內的 gunicorn worker。改用 --loop 讓程序常駐、只在迴圈內重跑取樣邏輯。
+        # --loop keeps the process resident (Django imported once) instead of the shell cold-starting
+        # a fresh Django on every cycle, which periodically pegged a CPU core and janked the workers.
+        parser.add_argument(
+            "--loop",
+            action="store_true",
+            help="Run continuously in-process instead of exiting after one cycle.",
+        )
+        parser.add_argument(
+            "--interval",
+            type=float,
+            default=5.0,
+            help="Seconds to sleep between cycles when --loop is set (default: 5).",
+        )
+
     def handle(self, *args, **options):
+        if options.get("loop"):
+            interval = options.get("interval", 5.0)
+            self.stdout.write(self.style.SUCCESS(
+                f"Starting update_ports in resident loop (interval={interval}s)"
+            ))
+            while True:
+                try:
+                    self.run_once()
+                except Exception as e:
+                    # 單輪失敗不可讓常駐程序退出（supervisor 會重啟但又要付冷啟動成本）。
+                    # One cycle failing must not kill the resident loop.
+                    self.stdout.write(self.style.ERROR(f"update_ports cycle error: {e}"))
+                time.sleep(interval)
+        else:
+            self.run_once()
+
+    def run_once(self):
         raw_ports = get_ss_output_from_redis()
         # 取樣不可用（Redis 暫時無法連線 / ss_output 為空）：本輪視為 no-op，不發通知也不覆寫狀態，
         # 避免把所有隧道誤判為離線。/ Sample unavailable: skip this cycle so we don't emit false
@@ -148,12 +197,18 @@ class Command(BaseCommand):
         """
         if not latency_map:
             return
+        # 節流：與上次已廣播的 latency 比對，變化不顯著且未到 keep-alive 週期就整輪跳過。
+        if not self._latency_should_broadcast(latency_map):
+            return
         try:
             from authorized_keys.models import ReverseServerAuthorizedKeys
-            from tunnels.consumers import send_notification_to_user
 
             # prefetch_related('shared_with') 一次載入所有 TunnelSharing，避免 N+1。
             tunnels = ReverseServerAuthorizedKeys.objects.prefetch_related('shared_with')
+
+            # 收集所有要送的訊息，最後以「單一 event loop」一次批次送出（見 send_group_messages_batch），
+            # 而非每則各做一次 async_to_sync（每次都建/拆一個 event loop）。
+            batch = []  # list of (group_name, event_dict)
 
             user_latency = {}  # user_id -> {port: rtt_ms}
             for tunnel in tunnels:
@@ -163,12 +218,15 @@ class Command(BaseCommand):
                     continue
 
                 # Terminal 頁：per-tunnel 即時延遲（不觸碰 is_connected，避免與去彈跳狀態衝突）。
-                send_tunnel_connection_update(tunnel.id, {
-                    'type': 'latency_update',
-                    'tunnel_id': tunnel.id,
-                    'reverse_port': port,
-                    'rtt_ms': rtt,
-                })
+                batch.append((
+                    f'tunnel_connection_{tunnel.id}',
+                    tunnel_connection_event({
+                        'type': 'latency_update',
+                        'tunnel_id': tunnel.id,
+                        'reverse_port': port,
+                        'rtt_ms': rtt,
+                    }),
+                ))
 
                 # 主頁面：彙整每位可存取使用者的 port→rtt（owner + 被分享者）。
                 user_latency.setdefault(tunnel.user_id, {})[port] = rtt
@@ -176,14 +234,47 @@ class Command(BaseCommand):
                     user_latency.setdefault(sharing.shared_with_id, {})[port] = rtt
 
             for user_id, latency in user_latency.items():
-                send_notification_to_user(user_id, {
-                    "action": "UPDATE-TUNNEL-LATENCY",
-                    "latency": latency,
-                    "details": "Tunnel latency updated",
-                })
+                batch.append((
+                    f'user_{user_id}_notifications',
+                    user_notification_event({
+                        "action": "UPDATE-TUNNEL-LATENCY",
+                        "latency": latency,
+                        "details": "Tunnel latency updated",
+                    }),
+                ))
+
+            send_group_messages_batch(batch)
 
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"Error broadcasting latency: {e}"))
+
+    def _latency_should_broadcast(self, latency_map):
+        """
+        決定本輪是否需要廣播延遲。/ Decide whether to broadcast latency this cycle.
+
+        規則：任一 port 的 RTT 相較上次廣播變化 >= LATENCY_BROADCAST_THRESHOLD_MS，或有 port 新增/消失，
+        則廣播；否則累計 keep-alive 計數，達到 LATENCY_BROADCAST_KEEPALIVE_CYCLES 時強制廣播一次（自我修復）。
+        會廣播時把本次 latency 與計數狀態寫回 cache。
+        """
+        last = cache.get("ports_latency_last", {})
+        counter = cache.get("ports_latency_bcast_counter", 0)
+
+        changed = set(latency_map.keys()) != set(last.keys())
+        if not changed:
+            for port, rtt in latency_map.items():
+                prev = last.get(port)
+                if prev is None or abs(rtt - prev) >= self.LATENCY_BROADCAST_THRESHOLD_MS:
+                    changed = True
+                    break
+
+        force = counter + 1 >= self.LATENCY_BROADCAST_KEEPALIVE_CYCLES
+        if changed or force:
+            cache.set("ports_latency_last", latency_map, None)
+            cache.set("ports_latency_bcast_counter", 0, None)
+            return True
+
+        cache.set("ports_latency_bcast_counter", counter + 1, None)
+        return False
 
     def _send_tunnel_connection_updates(self, port, is_connected):
         """Send tunnel connection status updates for a specific port"""

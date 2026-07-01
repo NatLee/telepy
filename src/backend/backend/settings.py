@@ -117,8 +117,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "pyinstrument.middleware.ProfilerMiddleware",
 ]
+
+# pyinstrument 分析中介層僅供除錯，正式環境不掛（避免對每個請求多包一層開銷）。
+# The pyinstrument profiler middleware is a debug-only tool; don't load it in production.
+if DEBUG:
+    MIDDLEWARE.append("pyinstrument.middleware.ProfilerMiddleware")
 
 ROOT_URLCONF = 'backend.urls'
 

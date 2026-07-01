@@ -278,6 +278,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             ws.onopen = () => {
                 setConnected(true);
                 setConnecting(false);
+                // WebSocket 已開，但後端仍在建立到裝置的 SSH 連線（雙跳）；先給使用者回饋，
+                // 避免「連上了卻空白等待」的錯覺。首個 PTY 輸出（shell prompt）到達即覆蓋此行。
+                // WS is open but the backend is still opening the SSH connection; show feedback so the
+                // wait doesn't look like a hang. The first PTY output overwrites this line.
+                term.write("\x1b[90mConnecting to server...\x1b[0m\r\n");
                 sendResize(ws);
                 sendPing();
                 stopPing();

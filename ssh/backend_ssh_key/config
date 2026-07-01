@@ -4,17 +4,29 @@ Host telepy-ssh
     UserKnownHostsFile /dev/null
     User telepy
     Port 2222
+    # 連線多工重用：ProxyCommand（reverse 的第一跳）走既有 socket，省掉重複的 SSH handshake。
+    # Multiplex the proxy hop so repeat connects reuse one socket instead of re-handshaking.
+    ControlMaster auto
+    ControlPersist 600
+    ControlPath /tmp/cm-%r@%h:%p
+    GSSAPIAuthentication no
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
 
 Host reverse
     HostName localhost
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
     ProxyCommand ssh -q -W %h:%p telepy-ssh
+    # 第二跳（穿過反向隧道到裝置）同樣重用連線並關掉 GSSAPI，縮短終端機開啟等待。
+    ControlMaster auto
+    ControlPersist 600
+    ControlPath /tmp/cm-reverse-%r@%h:%p
+    GSSAPIAuthentication no
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
 
 Host *
    StrictHostKeyChecking no
    UserKnownHostsFile /dev/null
    LogLevel ERROR
-
-
-

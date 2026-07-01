@@ -126,33 +126,13 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
         logger.info(f"User authenticated: {user}")
 
-        # Check if user has access to the server
-        has_permissions = await self.check_permissions(user, server_id)
-        if not has_permissions:
-            logger.error(f"User [{user}] does not have access to server [{server_id}]")
-            await self.close(code=4004)
-            return
-
-        # Get reverse server port
-        reverse_port = await self.get_reverse_server_port(server_id)
-
-        # Check if reverse_port is valid
-        if not reverse_port:
-            logger.error(f"Invalid server ID: {server_id}")
-            await self.close(code=4002)
-            return
-
-        # Check if any target server usernames exist (4006 = none configured)
-        has_usernames = await self.has_target_server_usernames(server_id)
-        if not has_usernames:
-            logger.error(f"No target server usernames configured for server [{server_id}]")
-            await self.close(code=4006)
-            return
-
-        # Check if username is valid
-        if not await self.check_username(server_id, username, user):
-            logger.error(f"Invalid username: {username}")
-            await self.close(code=4003)
+        # 一次完成所有連線前的 DB 檢查（權限 / port / 是否有目標使用者 / username 是否允許），
+        # 取代原本 4 次分開的 sync_to_async round-trip，減少 thread-pool 切換與 SQLite 讀取次數。
+        # Single DB round-trip for all pre-connect checks (was 4 separate sync_to_async hops).
+        reverse_port, access_error = await self._resolve_terminal_access(user, server_id, username)
+        if access_error is not None:
+            logger.error(f"Terminal access denied for user [{user}] server [{server_id}] (code={access_error})")
+            await self.close(code=access_error)
             return
 
         # Accept the WebSocket connection with the subprotocol token
@@ -167,8 +147,22 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 if self.child_pid == 0:  # Child process
                     # Set TERM environment variable to xterm
                     os.environ['TERM'] = 'xterm'
-                    # Execute the SSH command
-                    os.execlp('bash', 'bash', '-c', f'ssh {username}@reverse -p {reverse_port}')
+                    # Execute the SSH command.
+                    # 快連參數：關掉 GSSAPI（避免無謂的 GSSAPI 協商等待數秒）、只用公鑰認證、開壓縮，
+                    # 並以 ControlMaster 連線多工重用（同一 user@port 的後續連線走既有 socket，省掉重複
+                    # 的雙跳 handshake），大幅縮短「WebSocket 連上後才出現 shell」的等待。
+                    # Fast-connect opts: disable GSSAPI, pubkey-only, compression, and ControlMaster
+                    # multiplexing so repeat connects reuse the existing double-hop socket.
+                    ssh_opts = (
+                        "-o GSSAPIAuthentication=no "
+                        "-o PreferredAuthentications=publickey "
+                        "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 "
+                        "-o Compression=yes "
+                        "-o ControlMaster=auto "
+                        "-o ControlPersist=600 "
+                        "-o ControlPath=/tmp/ssh_term_%r@%h:%p"
+                    )
+                    os.execlp('bash', 'bash', '-c', f'ssh {ssh_opts} {username}@reverse -p {reverse_port}')
                 else:  # Parent process
                     asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
                 logger.info("SSH connection started")
@@ -178,49 +172,37 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 return
 
     @sync_to_async
-    def check_permissions(self, user, server_id) -> bool:
-        """Check if user has access to the tunnel"""
+    def _resolve_terminal_access(self, user, server_id, username):
+        """
+        單一 DB round-trip 完成終端機連線的所有前置檢查。/ All pre-connect checks in one DB round-trip.
+
+        回傳 (reverse_port, error_code)；error_code 為 None 代表通過，否則為對應的 WS 關閉碼：
+          4004 隧道不存在或無存取權 / 4002 無有效 reverse_port
+          4006 未設定任何目標使用者 / 4003 username 不在允許清單
+        關閉碼刻意沿用原本 4 個分開方法的語意，前端錯誤訊息不受影響。
+        """
+        from services.tunnel_permissions import TunnelPermissionService
+
         try:
             tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-            return TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW)
         except ReverseServerAuthorizedKeys.DoesNotExist:
-            return False
+            return None, 4004  # 沿用原 check_permissions 找不到即 False -> 4004
 
-    @sync_to_async
-    def check_username(self, server_id, username, user) -> bool:
-        try:
-            reverse_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            print(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
-            return False
+        if not TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW):
+            return None, 4004
 
-        from services.tunnel_permissions import TunnelPermissionService
-        allowed_usernames = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
-        
+        reverse_port = tunnel.reverse_port
+        if not reverse_port:
+            return None, 4002
+
+        if not ReverseServerUsernames.objects.filter(reverse_server=tunnel).exists():
+            return None, 4006
+
+        allowed_usernames = TunnelPermissionService.get_allowed_usernames(user, tunnel)
         if not allowed_usernames.filter(username=username).exists():
-            print(f"Username [{username}] not in allowed list for user [{user}]")
-            return False
-            
-        return True
+            return None, 4003
 
-    @sync_to_async
-    def has_target_server_usernames(self, server_id) -> bool:
-        """Check if the server has any configured target server usernames"""
-        try:
-            reverser_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            return False
-        return ReverseServerUsernames.objects.filter(reverse_server=reverser_server).exists()
-
-    @sync_to_async
-    def get_reverse_server_port(self, server_id) -> int:
-        # Check if the server_id is valid
-        try:
-            reverser_server = ReverseServerAuthorizedKeys.objects.get(id=server_id)
-        except ReverseServerAuthorizedKeys.DoesNotExist:
-            print(f"ReverseServerAuthorizedKeys with id {server_id} does not exist")
-            return None
-        return reverser_server.reverse_port
+        return reverse_port, None
 
 
     async def disconnect(self, close_code):
@@ -365,20 +347,20 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         message = event['message']
         action = message.get('action')
 
-        logger.info(f"Sending notification to user {self.user}: {action}")
+        logger.debug(f"Sending notification to user {self.user}: {action}")
 
         # Send message to WebSocket (no permission check needed since notifications are targeted)
         await self.send(text_data=json.dumps({
             'message': message
         }))
-        logger.info(f"Notification sent to user {self.user}: {action}")
+        logger.debug(f"Notification sent to user {self.user}: {action}")
 
 
 def send_notification_to_user(user_id: int, message: dict):
     """
     Send notification to a specific user.
     """
-    logger.info(f"Sending notification to user {user_id}: {message.get('action')}")
+    logger.debug(f"Sending notification to user {user_id}: {message.get('action')}")
     try:
         channel_layer = get_channel_layer()
         group_name = f'user_{user_id}_notifications'
@@ -389,7 +371,7 @@ def send_notification_to_user(user_id: int, message: dict):
                 'message': message
             }
         )
-        logger.info(f"Notification sent to user {user_id}: {message.get('action')}")
+        logger.debug(f"Notification sent to user {user_id}: {message.get('action')}")
     except Exception as e:
         logger.error(f"Failed to send notification to user {user_id}: {e}")
 
@@ -400,6 +382,47 @@ def send_notification_to_users(user_ids: list[int], message: dict):
     """
     for user_id in user_ids:
         send_notification_to_user(user_id, message)
+
+
+async def _async_group_send_many(items):
+    """
+    在「單一 event loop」內連續送出多則 group_send。/ Fan out many group_sends within ONE event loop.
+
+    items：iterable of (group_name, event_dict)。相較於對每則訊息各呼叫一次 async_to_sync
+    （每次都會新建/拆除一個 event loop 並可能新開 Redis 連線），本函式共用同一個 channel_layer
+    與 event loop，把每 5s 的延遲/狀態廣播從 O(N) 次 loop 建立降為 1 次。
+    """
+    channel_layer = get_channel_layer()
+    if channel_layer is None:
+        return
+    for group_name, event in items:
+        try:
+            await channel_layer.group_send(group_name, event)
+        except Exception as e:
+            logger.error(f"batch group_send failed for {group_name}: {e}")
+
+
+def send_group_messages_batch(items):
+    """
+    批次 group_send 的同步進入點：整批只做「一次」async_to_sync（而非每則一次）。
+    Sync entrypoint for batched group_send: a single async_to_sync for the whole batch.
+
+    items：list of (group_name, event_dict)，event_dict 需自帶 consumer handler 的 'type'。
+    """
+    items = list(items)
+    if not items:
+        return
+    async_to_sync(_async_group_send_many)(items)
+
+
+def user_notification_event(message: dict):
+    """建立 NotificationConsumer.send_notification 可處理的事件。/ Build a NotificationConsumer event."""
+    return {'type': 'send_notification', 'message': message}
+
+
+def tunnel_connection_event(message: dict):
+    """建立 TunnelConnectionConsumer.tunnel_connection_update 可處理的事件。/ Build a TunnelConnection event."""
+    return {'type': 'tunnel_connection_update', 'message': message}
 
 
 

@@ -3,6 +3,25 @@ import re
 import subprocess
 import base64
 
+import redis as _redis_lib
+
+# 讀取 SSH 容器寫入 Redis 的原始字串鍵（ss_output / ss_estab）。
+# 這些鍵由 ssh 容器以 `redis-cli -x SET` 直接寫入，未經 Django cache 的 key 前綴/版本包裝，
+# 因此無法用 Django cache.get 讀取；改用 redis-py 直連（取代每輪 spawn redis-cli subprocess）。
+# Read the raw string keys the SSH container writes with `redis-cli -x SET`; these bypass Django
+# cache's key prefixing, so we use a direct redis-py client instead of spawning redis-cli each cycle.
+_redis_client = None
+
+
+def _get_redis_client():
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = _redis_lib.Redis(
+            host="redis", port=6379,
+            socket_timeout=5, socket_connect_timeout=5,
+        )
+    return _redis_client
+
 def is_valid_ssh_public_key(key: str) -> bool:
     """
     Check if the provided string is a valid SSH public key format.
@@ -84,19 +103,16 @@ SSHD_LISTEN_PORT = 2222
 
 
 def _redis_get_raw(key: str) -> Optional[str]:
-    """讀取 Redis 字串鍵的原始內容（保留換行）。逾時 / redis-cli 非零返回回傳 None。"""
+    """讀取 Redis 字串鍵的原始內容（保留換行）。連線/逾時錯誤回傳 None。"""
     try:
-        result = subprocess.run(
-            f"redis-cli -h redis GET {key}",
-            shell=True, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired:
+        val = _get_redis_client().get(key)
+    except Exception:
         return None
-    if result.returncode != 0:
+    if val is None:
         return None
-    return result.stdout
+    if isinstance(val, (bytes, bytearray)):
+        return val.decode("utf-8", errors="replace")
+    return val
 
 
 def _parse_listen_port_pids(ss_output: str) -> Dict[int, List[int]]:
@@ -205,15 +221,7 @@ def get_ss_output_from_redis(filter=True) -> Optional[Dict[int, bool]]:
     Returns None when the ss_output read fails or is empty, signalling 'sample unavailable' so callers
     don't mistake a transient Redis hiccup for every tunnel going offline.
     """
-    try:
-        result = subprocess.run(
-            "redis-cli -h redis GET ss_output",
-            shell=True, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=5,
-        )
-    except subprocess.TimeoutExpired:
+    raw = _redis_get_raw("ss_output")
+    if raw is None or not raw.strip():
         return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return parse_ss_ports_from_redis(result.stdout, filter=filter)
+    return parse_ss_ports_from_redis(raw, filter=filter)
