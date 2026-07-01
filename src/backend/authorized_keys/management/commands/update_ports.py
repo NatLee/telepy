@@ -2,7 +2,7 @@ from ast import literal_eval
 
 from django.core.cache import cache
 from django.core.management.base import BaseCommand, CommandError
-from authorized_keys.utils import get_ss_output_from_redis
+from authorized_keys.utils import get_ss_output_from_redis, get_ss_latency_from_redis
 
 from tunnels.consumers import send_tunnel_connection_update, send_notification_to_users
 
@@ -24,6 +24,17 @@ class Command(BaseCommand):
         if raw_ports is None:
             self.stdout.write(self.style.WARNING("ss_output unavailable; skipping this update cycle"))
             return
+
+        # 延遲監控：計算每條隧道的「裝置↔伺服器」RTT 並推播。刻意放在下方狀態早退
+        # （now_ports == previous_ports）之前，這樣即使 online/offline 沒變，延遲仍會每個 cycle 更新。
+        # 延遲為加法式、null-safe：完全不介入 ports_status / 去彈跳 / 既有通知。
+        # Latency monitoring runs BEFORE the no-change early-return below, so a stably-connected
+        # tunnel's latency keeps refreshing. It's additive/null-safe and never touches the status flow.
+        latency_map = get_ss_latency_from_redis()
+        if latency_map is not None:
+            cache.set("ports_latency", latency_map, None)
+            self._broadcast_latency(latency_map)
+
         previous_ports = cache.get("ports_status", {})
         # 先對原始取樣做去彈跳，再進入後續的狀態比對與通知。
         # Debounce the raw sample before the transition detection / notifications below.
@@ -124,6 +135,55 @@ class Command(BaseCommand):
                     new_counters[port] = count
         cache.set("ports_flap_counter", new_counters, None)
         return now_ports
+
+    def _broadcast_latency(self, latency_map):
+        """
+        把每條隧道的「裝置↔伺服器」RTT 推給前端（每個 cycle 都跑，與 online/offline 是否變動無關）。
+
+        - 主頁面：對每位使用者的 user_{id}_notifications 群組推 UPDATE-TUNNEL-LATENCY，
+          payload 只含該使用者可存取、且量得到 rtt 的 port（{port: rtt_ms}）。
+        - Terminal：對每條有 rtt 的隧道，往 tunnel_connection_{id} 群組推 latency_update。
+
+        latency_map = {reverse_port: rtt_ms}。此方法為加法式、null-safe，不動任何既有狀態邏輯。
+        """
+        if not latency_map:
+            return
+        try:
+            from authorized_keys.models import ReverseServerAuthorizedKeys
+            from tunnels.consumers import send_notification_to_user
+
+            # prefetch_related('shared_with') 一次載入所有 TunnelSharing，避免 N+1。
+            tunnels = ReverseServerAuthorizedKeys.objects.prefetch_related('shared_with')
+
+            user_latency = {}  # user_id -> {port: rtt_ms}
+            for tunnel in tunnels:
+                port = tunnel.reverse_port
+                rtt = latency_map.get(port)
+                if rtt is None:
+                    continue
+
+                # Terminal 頁：per-tunnel 即時延遲（不觸碰 is_connected，避免與去彈跳狀態衝突）。
+                send_tunnel_connection_update(tunnel.id, {
+                    'type': 'latency_update',
+                    'tunnel_id': tunnel.id,
+                    'reverse_port': port,
+                    'rtt_ms': rtt,
+                })
+
+                # 主頁面：彙整每位可存取使用者的 port→rtt（owner + 被分享者）。
+                user_latency.setdefault(tunnel.user_id, {})[port] = rtt
+                for sharing in tunnel.shared_with.all():
+                    user_latency.setdefault(sharing.shared_with_id, {})[port] = rtt
+
+            for user_id, latency in user_latency.items():
+                send_notification_to_user(user_id, {
+                    "action": "UPDATE-TUNNEL-LATENCY",
+                    "latency": latency,
+                    "details": "Tunnel latency updated",
+                })
+
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"Error broadcasting latency: {e}"))
 
     def _send_tunnel_connection_updates(self, port, is_connected):
         """Send tunnel connection status updates for a specific port"""

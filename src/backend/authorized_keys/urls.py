@@ -1,5 +1,6 @@
 from django.urls import path, include
 from authorized_keys.views import CheckReverseServerPortStatus
+from authorized_keys.views import CheckReverseServerLatency
 from authorized_keys.views import ReverseServerUsernamesMapServerId
 from authorized_keys.views import SetDefaultUsernameView
 from authorized_keys.views import ServiceAuthorizedKeysListView
@@ -7,6 +8,7 @@ from authorized_keys.views import InternalKeysView
 from authorized_keys.browse_views import RemoteBrowserStartView, RemoteBrowserStopView, RemoteBrowserPingView
 urlpatterns = [
     path('server/status/ports', CheckReverseServerPortStatus.as_view(), name='reverse-server-ports-status'),
+    path('server/status/latency', CheckReverseServerLatency.as_view(), name='reverse-server-latency'),
     path('server/<int:server_id>/usernames', ReverseServerUsernamesMapServerId.as_view(), name='reverse-server-usernames'),
     path('server/<int:server_id>/default-username', SetDefaultUsernameView.as_view(), name='set-default-username'),
     path('server/<int:server_id>/remote-browser/start', RemoteBrowserStartView.as_view(), name='remote-browser-start'),

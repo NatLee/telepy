@@ -34,6 +34,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
+    // 「你↔伺服器」的 WebSocket RTT（毫秒）：由終端機 socket 自帶的 ping/pong 量測（見下）。
+    const [latencyMs, setLatencyMs] = useState<number | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [noUsers, setNoUsers] = useState(false);
     const [showFiles, setShowFiles] = useState(false);
@@ -101,20 +103,42 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         let cleanupFn: (() => void) | undefined;
 
         const initTerminal = async () => {
-            const { Terminal } = await import("xterm");
-            const { FitAddon } = await import("xterm-addon-fit");
+            // 連線關鍵路徑的兩個優化（原本是序列：import → 等所有字體 → 抓 ticket → 才連線）：
+            // 1) 立刻開抓一次性 ticket，讓它的 HTTP round-trip 與 xterm 動態載入、字體載入「並行」。
+            // 2) 只等終端要用的「等寬字體」，而非 document.fonts.ready —— 後者會連大型 CJK 字體
+            //    一起等，慢網路/首次載入時可能拖慢連線好幾秒；等寬字沒載到也用 1.5s 逾時保底。
+            // Two fixes on the connect critical path (was serial: import → wait ALL fonts → fetch
+            // ticket → connect): (1) start the ticket fetch now so its round-trip overlaps the xterm
+            // import + font load; (2) wait only for the terminal's monospace font instead of
+            // document.fonts.ready (which also blocks on the large CJK font), with a 1.5s timeout guard.
+            const ticketPromise = fetchWsTicket();
 
-            // 等待字體載入完成，確保 xterm 正確計算字元寬度
-            await document.fonts.ready;
-
-            if (!terminalRef.current) return;
-
-            // 從 CSS 變數取得 next/font/local 產生的實際字體名稱（變數設在 <body> 上）
+            // CSS 變數同步可得，不必等 fonts.ready。/ The CSS var is available synchronously.
             const computedMono = getComputedStyle(document.body)
                 .getPropertyValue('--font-0xproto').trim();
             const termFontFamily = computedMono
                 ? `${computedMono}, 'Courier New', monospace`
                 : "'Menlo', 'Consolas', 'Courier New', monospace";
+
+            const monoFontReady = (async () => {
+                if (!computedMono) return;
+                try {
+                    // Promise.race：字體載入 vs 1.5s 逾時。document.fonts.load 遇到無法解析的字體字串
+                    // 會「同步」丟 SyntaxError，故整段以 try 包住，任何失敗都直接繼續初始化。
+                    await Promise.race([
+                        document.fonts.load(`14px ${computedMono}`),
+                        new Promise((resolve) => setTimeout(resolve, 1500)),
+                    ]);
+                } catch { /* 字體字串無法解析或載入失敗 → 照常初始化 */ }
+            })();
+
+            const [{ Terminal }, { FitAddon }] = await Promise.all([
+                import("xterm"),
+                import("xterm-addon-fit"),
+                monoFontReady,
+            ]);
+
+            if (!terminalRef.current) return;
 
             const term = new Terminal({
                 cursorBlink: true,
@@ -193,11 +217,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             const base = getWsOrigin();
             const wsUrl = `${base}/ws/terminal/`;
 
-            // 一次性 ticket 認證：JWT 只走 Authorization header，不進 WS subprotocol。
-            // One-time ticket auth: the JWT stays in the Authorization header, never in the WS subprotocol.
+            // 一次性 ticket：已於函式開頭並行開抓，這裡多半即刻取得（JWT 只走 Authorization header）。
+            // The one-time ticket was started at the top of this function in parallel, so it's usually ready.
             let ticket: string;
             try {
-                ticket = await fetchWsTicket();
+                ticket = await ticketPromise;
             } catch (e) {
                 console.error("Terminal ws-ticket error", e);
                 setConnecting(false);
@@ -211,7 +235,23 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             ];
 
             const ws = new WebSocket(wsUrl, protocols);
+            // 後端對 ping 的 pong 以「二進位」frame 回傳，好和 PTY 文字輸出區分（見 TerminalConsumer）；
+            // 設為 arraybuffer 讓控制訊息以 ArrayBuffer 進來，一般 PTY 輸出仍是字串、照常寫入 xterm。
+            ws.binaryType = "arraybuffer";
             wsRef.current = ws;
+
+            // 應用層心跳：量測「你↔伺服器」RTT。onopen 立即送一次、之後每 5s 一次；記錄送出時間，
+            // 收到 pong（二進位）時算差值。cleanup / onclose 會清掉 interval，避免重連時洩漏。
+            let pingSentAt = 0;
+            let pingInterval: ReturnType<typeof setInterval> | null = null;
+            const sendPing = () => {
+                if (ws.readyState !== WebSocket.OPEN) return;
+                pingSentAt = Date.now();
+                ws.send(JSON.stringify({ action: "ping" }));
+            };
+            const stopPing = () => {
+                if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+            };
 
             const handleWindowResize = () => sendResize(ws);
             window.addEventListener("resize", handleWindowResize);
@@ -239,9 +279,18 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 setConnected(true);
                 setConnecting(false);
                 sendResize(ws);
+                sendPing();
+                stopPing();
+                pingInterval = setInterval(sendPing, 5000);
             };
 
             ws.onmessage = (event) => {
+                // 二進位 frame = 後端對 ping 的 pong 控制訊息，用來量測 RTT，「不可」寫進 xterm 畫面。
+                // 一般 PTY 輸出一律是字串（TerminalConsumer.forward_output 只送 text_data）。
+                if (typeof event.data !== "string") {
+                    setLatencyMs(Math.max(0, Date.now() - pingSentAt));
+                    return;
+                }
                 term.write(event.data);
             };
 
@@ -252,6 +301,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             ws.onclose = (event) => {
                 setConnected(false);
                 setConnecting(false);
+                setLatencyMs(null);
+                stopPing();
                 const code = event.code;
                 if (code === 4004) {
                     setPermissionDenied("You do not have permission to access this tunnel.");
@@ -280,6 +331,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             });
 
             cleanupFn = () => {
+                stopPing();
                 if (resizeObserver) resizeObserver.disconnect();
                 window.removeEventListener("resize", handleWindowResize);
                 ws.close();
@@ -402,6 +454,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         state: {
             connected, setConnected,
             connecting, setConnecting,
+            latencyMs,
             permissionDenied, setPermissionDenied,
             noUsers, setNoUsers,
             showFiles, setShowFiles,

@@ -23,7 +23,7 @@ from authorized_keys.serializers import ReverseServerUsernamesSerializer
 from authorized_keys.models import ServiceAuthorizedKeys
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
-from authorized_keys.utils import get_ss_output_from_redis
+from authorized_keys.utils import get_ss_output_from_redis, get_ss_latency_from_redis
 from tunnels.consumers import send_notification_to_user, send_notification_to_users
 
 class CheckReverseServerPortStatus(APIView):
@@ -34,6 +34,15 @@ class CheckReverseServerPortStatus(APIView):
         # 取樣不可用時回傳空字典（None -> {}），避免前端拿到 null。
         # Return {} when the sample is unavailable so the client never receives null.
         return Response(get_ss_output_from_redis() or {})
+
+class CheckReverseServerLatency(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(tags=['Reverse Server Keys'])
+    def get(self, request):
+        # 回傳 {reverse_port: rtt_ms}（裝置↔伺服器 RTT，毫秒）。首屏用；後續由 WebSocket 持續更新。
+        # 取樣不可用時回傳 {}，避免前端拿到 null。刻意「不」改動 /status/ports 的 {port: bool} 形狀。
+        return Response(get_ss_latency_from_redis() or {})
 
 class BaseKeyViewSet(viewsets.ModelViewSet):
     """

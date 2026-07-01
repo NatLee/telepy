@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, readJson } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
@@ -9,6 +9,8 @@ import { Tunnel } from "@/types/tunnel";
 export function useTunnelsPage() {
     const [tunnels, setTunnels] = useState<Tunnel[]>([]);
     const [portsMap, setPortsMap] = useState<Record<string, boolean>>({});
+    // 每個 reverse_port 的「裝置↔伺服器」延遲（毫秒）；量不到的 port 缺席，前端一律視為 null。
+    const [latencyMap, setLatencyMap] = useState<Record<string, number>>({});
     const [loading, setLoading] = useState(true);
 
     const [configModal, setConfigModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
@@ -25,9 +27,11 @@ export function useTunnelsPage() {
     const fetchData = useCallback(async () => {
         try {
             setLoading(true);
-            const [keysRes, portsRes] = await Promise.all([
+            const [keysRes, portsRes, latencyRes] = await Promise.all([
                 apiFetch("/api/reverse/server/keys"),
-                apiFetch("/api/reverse/server/status/ports")
+                apiFetch("/api/reverse/server/status/ports"),
+                // 延遲僅供首屏；獨立容錯（不併入下方 keys/ports 的成敗判斷），此端點掛掉不能讓整個列表空白。
+                apiFetch("/api/reverse/server/status/latency").catch(() => null),
             ]);
 
             if (keysRes.ok && portsRes.ok) {
@@ -38,6 +42,12 @@ export function useTunnelsPage() {
                 setPortsMap(typeof ports === 'object' && ports !== null ? ports : {});
             } else {
                 showError("Failed to fetch tunnel data");
+            }
+
+            // 延遲首屏：成功才套用，失敗靜默略過（後續由 WebSocket UPDATE-TUNNEL-LATENCY 持續更新）。
+            if (latencyRes && latencyRes.ok) {
+                const latency = await readJson<Record<string, number>>(latencyRes);
+                if (latency && typeof latency === "object") setLatencyMap(latency);
             }
         } catch (e: any) {
             showError(e.message || "Failed to fetch tunnel data");
@@ -64,6 +74,13 @@ export function useTunnelsPage() {
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg) => {
             if (msg.port !== undefined) {
                 setPortsMap(prev => ({ ...prev, [String(msg.port)]: msg.status === "connected" }));
+            }
+        },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_LATENCY]: (msg) => {
+            // payload: { latency: { [port]: rtt_ms } } —— 每 ~5s 一次，含使用者可存取且量得到的 port。
+            const latency = (msg as { latency?: Record<string, number> }).latency;
+            if (latency && typeof latency === "object") {
+                setLatencyMap(prev => ({ ...prev, ...latency }));
             }
         },
         [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg) => {
@@ -124,6 +141,7 @@ export function useTunnelsPage() {
     return {
         tunnels,
         portsMap,
+        latencyMap,
         loading,
         fetchData,
         handleDelete,

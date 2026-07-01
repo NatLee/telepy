@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
 import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
+import { TerminalLatencyBadge } from "@/components/tunnels/TerminalLatencyBadge";
 import { useRouter } from "next/navigation";
 
 interface TerminalHeaderProps {
@@ -18,6 +19,8 @@ interface TerminalHeaderProps {
     setHeaderExpanded: (expanded: boolean) => void;
     connecting: boolean;
     connected: boolean;
+    youToServerMs: number | null;
+    serverToDeviceMs: number | null;
     availableUsernames: TerminalUsername[];
     username: string | null;
     setUsername: (username: string) => void;
@@ -37,6 +40,8 @@ export function TerminalHeader({
     setHeaderExpanded,
     connecting,
     connected,
+    youToServerMs,
+    serverToDeviceMs,
     availableUsernames,
     username,
     setUsername,
@@ -63,6 +68,16 @@ export function TerminalHeader({
                                 Terminal <Badge variant="secondary" className="ml-2 font-mono text-[10px] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
                             </h1>
 
+                            {/* Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見 */}
+                            <div className="md:hidden">
+                                <TerminalLatencyBadge
+                                    youToServerMs={youToServerMs}
+                                    serverToDeviceMs={serverToDeviceMs}
+                                    connected={connected}
+                                    connecting={connecting}
+                                    compact
+                                />
+                            </div>
                         </div>
                         <Button
                             variant="ghost"
@@ -76,6 +91,14 @@ export function TerminalHeader({
 
                     {/* Desktop Actions */}
                     <div className="hidden md:flex items-center justify-end gap-3 flex-wrap">
+
+                        {/* 雙段延遲：你→伺服器 / 伺服器→裝置 */}
+                        <TerminalLatencyBadge
+                            youToServerMs={youToServerMs}
+                            serverToDeviceMs={serverToDeviceMs}
+                            connected={connected}
+                            connecting={connecting}
+                        />
 
                         {/* Username Switcher */}
                         {availableUsernames.length > 1 && (
@@ -188,6 +211,17 @@ export function TerminalHeader({
                                 <Server size={12} className="shrink-0" />
                                 <span className="truncate">Port: {port || 'N/A'}</span>
                             </div>
+                            {(connected || connecting) && (
+                                <div className="flex items-center justify-between gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
+                                    <span>延遲</span>
+                                    <TerminalLatencyBadge
+                                        youToServerMs={youToServerMs}
+                                        serverToDeviceMs={serverToDeviceMs}
+                                        connected={connected}
+                                        connecting={connecting}
+                                    />
+                                </div>
+                            )}
                             {username && (
                                 <div className="flex justify-between items-center bg-muted/50 p-1.5 rounded border border-border/50">
                                     <span>User</span>

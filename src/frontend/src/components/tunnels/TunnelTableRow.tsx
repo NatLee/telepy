@@ -5,11 +5,13 @@ import { MonitorPlay, Share2, TerminalSquare } from "lucide-react";
 import { Tunnel } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { Button } from "@/components/ui/button";
+import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 
 interface TunnelTableRowProps {
     tunnel: Tunnel;
     isActive: boolean;
+    latencyMs: number | null;
     sharedCount: number;
     getStatus: (port: number) => React.ReactNode;
     onDetails: (tunnelId: number) => void;
@@ -24,6 +26,7 @@ interface TunnelTableRowProps {
 export function TunnelTableRow({
     tunnel,
     isActive,
+    latencyMs,
     sharedCount,
     getStatus,
     onDetails,
@@ -43,6 +46,7 @@ export function TunnelTableRow({
                 <div className="flex items-center gap-2 text-sm">
                     <span className="font-mono">{tunnel.reverse_port}</span>
                     {getStatus(tunnel.reverse_port)}
+                    {isActive && <LatencyIndicator rttMs={latencyMs} online={isActive} size="xs" />}
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">

@@ -6,11 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Activity, MonitorPlay, Share2, TerminalSquare } from "lucide-react";
 import { Tunnel } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
+import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 
 interface TunnelCardProps {
     tunnel: Tunnel;
     isActive: boolean;
+    latencyMs: number | null;
     sharedCount: number;
     getStatus: (port: number) => React.ReactNode;
     onDetails: (tunnelId: number) => void;
@@ -25,6 +27,7 @@ interface TunnelCardProps {
 export function TunnelCard({
     tunnel,
     isActive,
+    latencyMs,
     sharedCount,
     getStatus,
     onDetails,
@@ -64,7 +67,10 @@ export function TunnelCard({
                         )}
                     </div>
                 </div>
-                <div className="shrink-0">{getStatus(tunnel.reverse_port)}</div>
+                <div className="shrink-0 flex flex-col items-end gap-1.5">
+                    {getStatus(tunnel.reverse_port)}
+                    {isActive && <LatencyIndicator rttMs={latencyMs} online={isActive} size="sm" />}
+                </div>
             </CardHeader>
             <CardContent className="flex-1 p-4 pt-1">
                 <div className="space-y-3">

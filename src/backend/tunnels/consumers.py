@@ -256,6 +256,17 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             return
 
         action = data.get('action')
+
+        # 應用層心跳：前端用來量測「你↔伺服器」的 WebSocket RTT。
+        # 關鍵：pong 以 bytes_data 回傳，而非 text_data——因為終端機 onmessage 會把所有 text 直接
+        # 寫進 xterm 畫面（term.write），用 binary 才能讓前端辨識為控制訊息而不污染畫面。
+        # App-level heartbeat for the client to measure the "you↔server" WebSocket RTT. The pong MUST
+        # be sent as bytes_data (not text): the terminal writes every text frame straight into xterm,
+        # so a binary frame is what lets the client treat it as a control message without corrupting output.
+        if action == 'ping':
+            await self.send(bytes_data=b'pong')
+            return
+
         payload = data.get('payload')
         if not isinstance(payload, dict):
             return
@@ -466,13 +477,17 @@ class TunnelConnectionConsumer(AsyncWebsocketConsumer):
 
             ports_status = cache.get("ports_status", {})
             is_connected = ports_status.get(reverse_port, False)
+            # 首屏就帶入「裝置↔伺服器」RTT（由 update_ports 週期性寫入 ports_latency；量不到則為 None）。
+            ports_latency = cache.get("ports_latency", {})
+            rtt_ms = ports_latency.get(reverse_port)
 
             await self.send(text_data=json.dumps({
                 'type': 'connection_status',
                 'tunnel_id': int(self.tunnel_id),
                 'reverse_port': reverse_port,
                 'is_connected': is_connected,
-                'host_friendly_name': reverse_server.host_friendly_name
+                'host_friendly_name': reverse_server.host_friendly_name,
+                'rtt_ms': rtt_ms,
             }))
 
         except Exception as e:

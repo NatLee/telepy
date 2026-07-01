@@ -28,6 +28,7 @@ export default function TunnelsPage() {
     const {
         tunnels,
         portsMap,
+        latencyMap,
         loading,
         fetchData,
         handleDelete,
@@ -125,12 +126,14 @@ export default function TunnelsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {tunnels.map((tunnel) => {
                         const isActive = portsMap[String(tunnel.reverse_port)] === true;
+                        const latencyMs = latencyMap[String(tunnel.reverse_port)] ?? null;
                         const sharedCount = tunnel.shared_with_count ?? 0;
                         return (
                             <TunnelCard
                                 key={tunnel.id}
                                 tunnel={tunnel}
                                 isActive={isActive}
+                                latencyMs={latencyMs}
                                 sharedCount={sharedCount}
                                 getStatus={getStatus}
                                 onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}
@@ -159,12 +162,14 @@ export default function TunnelsPage() {
                         <tbody className="divide-y divide-border">
                             {tunnels.map((tunnel) => {
                                 const isActive = portsMap[String(tunnel.reverse_port)] === true;
+                                const latencyMs = latencyMap[String(tunnel.reverse_port)] ?? null;
                                 const sharedCount = tunnel.shared_with_count ?? 0;
                                 return (
                                     <TunnelTableRow
                                         key={tunnel.id}
                                         tunnel={tunnel}
                                         isActive={isActive}
+                                        latencyMs={latencyMs}
                                         sharedCount={sharedCount}
                                         getStatus={getStatus}
                                         onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}

@@ -14,6 +14,7 @@ import { StatusCard } from "@/components/ui/StatusCard";
 import "xterm/css/xterm.css";
 
 import { useTerminalPage } from "@/hooks/useTerminalPage";
+import { useTunnelConnectionWebSocket } from "@/lib/websocket";
 
 export default function TerminalPage() {
     const searchParams = useSearchParams();
@@ -24,9 +25,14 @@ export default function TerminalPage() {
 
     const { refs, state, actions } = useTerminalPage(serverId, accessToken);
 
+    // 「伺服器→裝置」的 kernel RTT：訂閱該隧道的 tunnel_connection socket（首屏帶入 + 每 ~5s 更新）。
+    const { status: connStatus } = useTunnelConnectionWebSocket(serverId);
+    const serverToDeviceMs = (connStatus?.rtt_ms ?? null) as number | null;
+
     const { terminalRef, xtermRef, wsRef } = refs;
     const {
         connected, connecting, permissionDenied, noUsers,
+        latencyMs,
         showFiles, setShowFiles,
         isBrowserActive, setIsBrowserActive,
         keyboardExpanded, setKeyboardExpanded,
@@ -102,6 +108,8 @@ export default function TerminalPage() {
                     setHeaderExpanded={setHeaderExpanded}
                     connecting={connecting}
                     connected={connected}
+                    youToServerMs={latencyMs}
+                    serverToDeviceMs={serverToDeviceMs}
                     availableUsernames={availableUsernames}
                     username={username}
                     setUsername={setUsername}

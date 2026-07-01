@@ -143,7 +143,17 @@ export function useTunnelConnectionWebSocket(tunnelId: string | null) {
             protocols: () => [`tunnel.${tunnelId}`],
             heartbeat: true,
             onMessage: (data) => {
-                try { setStatus(JSON.parse(data)); } catch { /* ignore parse errors */ }
+                try {
+                    const msg = JSON.parse(data);
+                    // latency_update 只帶 rtt_ms（延遲監控每 ~5s 一次）：僅併入 rtt_ms，不可覆蓋 is_connected
+                    // 等既有欄位（否則會誤把連線狀態清成 undefined，破壞建立精靈的 Step4 顯示）。
+                    // connection_status 則以合併方式套用，保留先前欄位並帶入最新的 rtt_ms。
+                    if (msg && msg.type === "latency_update") {
+                        setStatus((prev: Record<string, unknown> | null) => ({ ...(prev ?? {}), rtt_ms: msg.rtt_ms }));
+                    } else {
+                        setStatus((prev: Record<string, unknown> | null) => ({ ...(prev ?? {}), ...msg }));
+                    }
+                } catch { /* ignore parse errors */ }
             },
         });
         socket.start();
