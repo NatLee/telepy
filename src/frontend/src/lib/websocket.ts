@@ -1,126 +1,98 @@
 "use client";
 
 /**
- * WebSocket 連線與通知：取得 WS 來源、通知訂閱、通道連線狀態。
- * WebSocket connection and notifications: get WS origin, notification subscription, tunnel connection status.
- * - 連線建立：token + auth ticket 子協定；建立 / Connection: token + auth ticket subprotocols.
- * - 重連：onclose 時延遲 RECONNECT_DELAY_MS 重試，最多 MAX_RECONNECT_ATTEMPTS 次。
- *   Reconnect: on close, retry after RECONNECT_DELAY_MS up to MAX_RECONNECT_ATTEMPTS.
- * - 訊息路由：useNotificationHandlers 依 action 分發給對應 handler。
- *   Message routing: useNotificationHandlers dispatches by action to handlers.
+ * WebSocket 連線與通知 hooks。/ WebSocket connection & notification hooks.
+ * - 認證：一次性 ticket（見 reconnectingSocket.ts / common/ws_ticket.py）；JWT 不進 WS。
+ *   Auth: one-time ticket; the JWT never enters the WebSocket.
+ * - 連線生命週期（ticket 取得、退避重連、心跳）統一由 ReconnectingSocket 處理。
+ *   Connection lifecycle (ticket fetch, backoff reconnect, heartbeat) is handled by ReconnectingSocket.
+ * - 通知 socket 為模組層單例：整頁所有 useNotificationWebSocket/useNotificationHandlers 共用一條連線。
+ *   The notification socket is a module-level singleton shared by all callers on the page.
  */
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth";
 import { NotificationPayload } from "./notificationActions";
+import { ReconnectingSocket } from "./reconnectingSocket";
 
-// Re-export getWsOrigin for use elsewhere (e.g. terminal page)
-export function getWsOrigin(): string {
-    if (typeof window === "undefined") {
-        return "ws://localhost:8787";
+// 為相容既有 import（如 useTerminalPage 由此取 getWsOrigin），自 wsCommon 再匯出。
+// Re-export from wsCommon for existing imports (e.g. useTerminalPage imports getWsOrigin from here).
+export { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CODES } from "./wsCommon";
+
+// ────────────────────────────────────────────────────────────────────────────
+// 通知 socket 單例 / Notification socket singleton
+// ────────────────────────────────────────────────────────────────────────────
+
+type NotificationListener = {
+    onMessage: (msg: unknown) => void;
+    onStatus: (connected: boolean) => void;
+};
+
+class NotificationHub {
+    private socket: ReconnectingSocket | null = null;
+    private listeners = new Set<NotificationListener>();
+    private connected = false;
+    private teardownTimer: ReturnType<typeof setTimeout> | null = null;
+
+    subscribe(listener: NotificationListener): () => void {
+        // 取消待處理的關閉，讓 StrictMode/換頁的瞬間 remount 重用同一條連線。
+        if (this.teardownTimer) { clearTimeout(this.teardownTimer); this.teardownTimer = null; }
+
+        this.listeners.add(listener);
+        listener.onStatus(this.connected);
+
+        if (!this.socket) {
+            this.socket = new ReconnectingSocket({
+                path: "/ws/notifications/",
+                heartbeat: true,
+                onStatus: (c) => {
+                    this.connected = c;
+                    this.listeners.forEach((l) => l.onStatus(c));
+                },
+                onMessage: (data) => {
+                    let parsed: unknown;
+                    try { parsed = JSON.parse(data); } catch { parsed = data; }
+                    this.listeners.forEach((l) => l.onMessage(parsed));
+                },
+            });
+            this.socket.start();
+        }
+
+        return () => this.unsubscribe(listener);
     }
-    // In dev, NEXT_PUBLIC_WS_HOST is set to e.g. "localhost:8787"
-    // In prod, WS goes through Traefik on the same origin
-    const wsHost = process.env.NEXT_PUBLIC_WS_HOST;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    if (wsHost) {
-        return `${protocol}//${wsHost}`;
+
+    private unsubscribe(listener: NotificationListener) {
+        this.listeners.delete(listener);
+        if (this.listeners.size === 0) {
+            // 延遲關閉，避免 StrictMode/換頁瞬間 unmount→remount 把連線關掉又重開。
+            if (this.teardownTimer) clearTimeout(this.teardownTimer);
+            this.teardownTimer = setTimeout(() => {
+                this.socket?.close();
+                this.socket = null;
+                this.connected = false;
+            }, 500);
+        }
     }
-    return `${protocol}//${window.location.host}`;
 }
 
-/**
- * Build the two auth subprotocols expected by Django Channels consumers:
- *   - token.<base64(jwt)>
- *   - auth.<sha256 ticket>
- */
-async function buildAuthProtocols(accessToken: string, ticketContext: string): Promise<[string, string]> {
-    const tokenProtocol = `token.${btoa(accessToken)}`;
-    const jsSha256 = (await import("js-sha256")).sha256;
-    const ticket = `auth.${jsSha256(`${ticketContext}.${Date.now()}`)}`;
-    return [tokenProtocol, ticket];
-}
-
-const RECONNECT_DELAY_MS = 3000;
-const MAX_RECONNECT_ATTEMPTS = 10;
+const notificationHub = new NotificationHub();
 
 /**
  * Hook for general notifications WebSocket.
  * Backend: NotificationConsumer at /ws/notifications/
- * Required subprotocols: token.<base64(jwt)>, auth.<ticket>
+ * 所有呼叫者共用同一條底層連線（單例）。/ All callers share one underlying connection (singleton).
  */
 export function useNotificationWebSocket() {
     const { accessToken } = useAuth();
     const [isConnected, setIsConnected] = useState(false);
-    const [lastMessage, setLastMessage] = useState<any>(null);
-    const wsRef = useRef<WebSocket | null>(null);
-    const reconnectAttemptRef = useRef(0);
-    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const mountedRef = useRef(true);
+    const [lastMessage, setLastMessage] = useState<unknown>(null);
 
     useEffect(() => {
-        if (!accessToken) return;
-        mountedRef.current = true;
-        reconnectAttemptRef.current = 0;
-
-        async function connect() {
-            if (!accessToken || !mountedRef.current) return;
-
-            try {
-                const base = getWsOrigin();
-                const url = `${base}/ws/notifications/`;
-                const [tokenProtocol, authTicket] = await buildAuthProtocols(accessToken, "notification");
-
-                const ws = new WebSocket(url, [tokenProtocol, authTicket]);
-                wsRef.current = ws;
-
-                ws.onopen = () => {
-                    if (mountedRef.current) {
-                        setIsConnected(true);
-                        reconnectAttemptRef.current = 0;
-                    }
-                };
-
-                ws.onmessage = (e) => {
-                    try {
-                        setLastMessage(JSON.parse(e.data));
-                    } catch {
-                        setLastMessage(e.data);
-                    }
-                };
-
-                ws.onclose = () => {
-                    wsRef.current = null;
-                    if (mountedRef.current) {
-                        setIsConnected(false);
-                        if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
-                            reconnectAttemptRef.current += 1;
-                            timeoutRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
-                        }
-                    }
-                };
-
-                ws.onerror = () => {
-                    // onclose will fire after onerror and handle reconnect
-                };
-            } catch (e) {
-                console.error("Notification WS connect error", e);
-            }
-        }
-
-        connect();
-
-        return () => {
-            mountedRef.current = false;
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-                timeoutRef.current = null;
-            }
-            if (wsRef.current) {
-                wsRef.current.onclose = null; // prevent reconnect on explicit unmount
-                wsRef.current.close();
-                wsRef.current = null;
-            }
+        if (!accessToken) return; // 未登入不連 / don't connect when logged out
+        const listener: NotificationListener = {
+            onMessage: setLastMessage,
+            onStatus: setIsConnected,
         };
+        return notificationHub.subscribe(listener);
     }, [accessToken]);
 
     return { isConnected, lastMessage };
@@ -142,8 +114,9 @@ export function useNotificationHandlers(
     }, [handlers]);
 
     useEffect(() => {
-        if (!lastMessage?.message) return;
-        const msg = lastMessage.message as NotificationPayload;
+        const lm = lastMessage as { message?: NotificationPayload } | null;
+        if (!lm?.message) return;
+        const msg = lm.message as NotificationPayload;
         const action = msg.action as string;
 
         if (action && handlersRef.current[action]) {
@@ -157,82 +130,24 @@ export function useNotificationHandlers(
 /**
  * Hook for tunnel connection status WebSocket.
  * Backend: TunnelConnectionConsumer at /ws/tunnel_connection/<id>/
- * Required subprotocols: token.<base64(jwt)>, tunnel.<id>, auth.<ticket>
  */
 export function useTunnelConnectionWebSocket(tunnelId: string | null) {
     const { accessToken } = useAuth();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [status, setStatus] = useState<any>(null);
-    const wsRef = useRef<WebSocket | null>(null);
-    const reconnectAttemptRef = useRef(0);
-    const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const mountedRef = useRef(true);
 
     useEffect(() => {
         if (!accessToken || !tunnelId) return;
-        mountedRef.current = true;
-        reconnectAttemptRef.current = 0;
-
-        async function connect() {
-            if (!accessToken || !tunnelId || !mountedRef.current) return;
-
-            try {
-                const base = getWsOrigin();
-                const url = `${base}/ws/tunnel_connection/${tunnelId}/`;
-                const [tokenProtocol, authTicket] = await buildAuthProtocols(accessToken, `tunnel_connection_${tunnelId}`);
-
-                // Backend TunnelConnectionConsumer also expects tunnel.<id>
-                const tunnelProtocol = `tunnel.${tunnelId}`;
-
-                const ws = new WebSocket(url, [tokenProtocol, tunnelProtocol, authTicket]);
-                wsRef.current = ws;
-
-                ws.onopen = () => {
-                    if (mountedRef.current) {
-                        reconnectAttemptRef.current = 0;
-                    }
-                };
-
-                ws.onmessage = (e) => {
-                    try {
-                        const data = JSON.parse(e.data);
-                        setStatus(data);
-                    } catch {
-                        // ignore parse errors
-                    }
-                };
-
-                ws.onclose = () => {
-                    wsRef.current = null;
-                    if (mountedRef.current) {
-                        if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
-                            reconnectAttemptRef.current += 1;
-                            timeoutRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
-                        }
-                    }
-                };
-
-                ws.onerror = () => {
-                    // onclose handles reconnect
-                };
-            } catch (e) {
-                console.error("Tunnel WS connect error", e);
-            }
-        }
-
-        connect();
-
-        return () => {
-            mountedRef.current = false;
-            if (timeoutRef.current) {
-                clearTimeout(timeoutRef.current);
-                timeoutRef.current = null;
-            }
-            if (wsRef.current) {
-                wsRef.current.onclose = null;
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-        };
+        const socket = new ReconnectingSocket({
+            path: `/ws/tunnel_connection/${tunnelId}/`,
+            protocols: () => [`tunnel.${tunnelId}`],
+            heartbeat: true,
+            onMessage: (data) => {
+                try { setStatus(JSON.parse(data)); } catch { /* ignore parse errors */ }
+            },
+        });
+        socket.start();
+        return () => socket.close();
     }, [accessToken, tunnelId]);
 
     return { status };

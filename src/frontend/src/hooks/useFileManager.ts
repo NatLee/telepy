@@ -1,15 +1,15 @@
 /**
  * 檔案管理面板邏輯：WebSocket 僅負責列表與 shell 偵測；上傳／下載皆走 REST。
  * File manager panel logic: WebSocket for listing and shell only; upload/download via REST.
+ * - 連線生命週期（ticket 認證、退避重連、心跳）由共用的 ReconnectingSocket 處理。
+ *   Connection lifecycle (ticket auth, backoff reconnect, heartbeat) handled by the shared ReconnectingSocket.
  * - WebSocket：連線後 shell_detect、list_files；伺服器回傳目錄內容與路徑。
- *   WebSocket: shell_detect, list_files after connect; server returns directory and path.
  * - 上傳／下載：直接呼叫 REST API（POST /api/sftp/upload、GET /api/sftp/download）。
- *   Upload/Download: direct REST (POST upload, GET download).
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
-import { getWsOrigin } from "@/lib/websocket";
+import { ReconnectingSocket } from "@/lib/reconnectingSocket";
 import { FileItem } from "@/types/tunnel";
 
 export function useFileManager(serverId: string, username: string, accessToken: string, initialPath?: string) {
@@ -21,16 +21,16 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     const [loading, setLoading] = useState(false);
     const [shellType, setShellType] = useState<"unix" | "powershell">("unix");
     const [uploading, setUploading] = useState(false);
-    const [reconnectTrigger, setReconnectTrigger] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
-    const wsRef = useRef<WebSocket | null>(null);
+    const socketRef = useRef<ReconnectingSocket | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const loadDirectory = useCallback((path: string, wsInstance: WebSocket | null = wsRef.current) => {
-        if (!wsInstance || wsInstance.readyState !== WebSocket.OPEN) return;
+    const loadDirectory = useCallback((path: string) => {
+        const s = socketRef.current;
+        if (!s || !s.isOpen) return;
         setLoading(true);
-        wsInstance.send(JSON.stringify({ action: "list_files", payload: { path: path || currentPath } }));
+        s.send(JSON.stringify({ action: "list_files", payload: { path: path || currentPath } }));
     }, [currentPath]);
 
     const loadDirectoryRef = useRef(loadDirectory);
@@ -102,90 +102,61 @@ export function useFileManager(serverId: string, username: string, accessToken: 
         }
     }, [showError]);
 
+    // WebSocket 連線：交由共用 ReconnectingSocket（ticket 認證 + 退避重連 + 心跳）。
     useEffect(() => {
-        let cleanupFn: (() => void) | undefined;
+        if (!serverId || !username || !accessToken) return;
+        setConnecting(true);
 
-        const initWs = async () => {
-            const base = getWsOrigin();
-            const wsUrl = `${base}/ws/filemanager/`;
-
-            const encodedToken = btoa(accessToken);
-            // Replace with standard crypto subtly for sha256 or ignore if we want to keep js-sha256 dependency
-            const jsSha256 = (await import("js-sha256")).sha256;
-            const ticket = `auth.${jsSha256(`filemanager_${serverId}.${Date.now()}`)}`;
-
-            const protocols = [
-                `token.${encodedToken}`,
-                `server.${serverId}`,
-                `username.${username}`,
-                ticket,
-            ];
-
-            const ws = new WebSocket(wsUrl, protocols);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                setConnected(true);
+        const socket = new ReconnectingSocket({
+            path: "/ws/filemanager/",
+            protocols: () => [`server.${serverId}`, `username.${username}`],
+            heartbeat: true,
+            onStatus: (c) => {
+                setConnected(c);
                 setConnecting(false);
-                setError(null);
-                ws.send(JSON.stringify({ action: "shell_detect" }));
-            };
-
-            ws.onmessage = async (event) => {
+                if (c) setError(null);
+            },
+            onOpen: (s) => {
+                s.send(JSON.stringify({ action: "shell_detect" }));
+            },
+            onMessage: (data) => {
                 try {
-                    const parsed = JSON.parse(event.data);
+                    const parsed = JSON.parse(data);
                     const action = parsed.action;
-                    const data = parsed.data || {};
+                    const d = parsed.data || {};
 
-                    if (action === "shell_detect" && data.status === "success") {
-                        setShellType(data.shell);
-                        const defaultPath = data.shell === "powershell" ? "C:\\" : "~/";
+                    if (action === "shell_detect" && d.status === "success") {
+                        setShellType(d.shell);
+                        const defaultPath = d.shell === "powershell" ? "C:\\" : "~/";
                         setCurrentPath(defaultPath);
-                        loadDirectoryRef.current(defaultPath, ws);
+                        loadDirectoryRef.current(defaultPath);
                     } else if (action === "list_files") {
-                        if (data.status === "success") {
-                            setItems(data.files || []);
-                            setCurrentPath(data.path);
+                        if (d.status === "success") {
+                            setItems(d.files || []);
+                            setCurrentPath(d.path);
                             setError(null);
                         } else {
-                            setError(data.error || "Failed to list directory");
+                            setError(d.error || "Failed to list directory");
                         }
                         setLoading(false);
                     } else if (action === "error") {
-                        setError(data.message || "An error occurred");
+                        setError(d.message || "An error occurred");
                         setLoading(false);
                         setUploading(false);
                     }
                 } catch (e) {
                     console.error("Error parsing WS message", e);
                 }
-            };
-
-            ws.onerror = () => {
-                setError("FileManager connection failed");
-                setConnecting(false);
-                setLoading(false);
-            };
-
-            ws.onclose = () => {
-                setConnected(false);
-                setConnecting(false);
-            };
-
-            cleanupFn = () => {
-                ws.close();
-            };
-        };
-
-        if (serverId && username && accessToken) {
-            initWs();
-        }
+            },
+        });
+        socketRef.current = socket;
+        socket.start();
 
         return () => {
-            cleanupFn?.();
+            socket.close();
+            socketRef.current = null;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [serverId, username, accessToken, reconnectTrigger]);
+    }, [serverId, username, accessToken]);
 
     useEffect(() => {
         if (connected && initialPath && initialPath !== currentPath) {
@@ -265,7 +236,6 @@ export function useFileManager(serverId: string, username: string, accessToken: 
 
     return {
         refs: {
-            wsRef,
             fileInputRef
         },
         state: {
@@ -291,7 +261,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
         reconnect: () => {
             setError(null);
             setConnecting(true);
-            setReconnectTrigger(t => t + 1);
+            socketRef.current?.reconnect();
         }
     };
 }

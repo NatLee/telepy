@@ -9,9 +9,25 @@ from tunnels.consumers import send_tunnel_connection_update, send_notification_t
 class Command(BaseCommand):
     help = "Get and update the SSH server usage ports from the ss command output."
 
+    # 抖動去彈跳：port 狀態需連續 FLAP_THRESHOLD 次與「已承認狀態」不同，才承認變更。
+    # Flap debounce: a port's raw state must disagree with the committed state for FLAP_THRESHOLD
+    # consecutive cycles before the change is accepted. This stops a genuinely flapping reverse
+    # tunnel (e.g. hd-dev) from defeating the now_ports==previous_ports early-return and firing the
+    # full notification cascade every 5s cycle.
+    FLAP_THRESHOLD = 2
+
     def handle(self, *args, **options):
-        now_ports = get_ss_output_from_redis()
+        raw_ports = get_ss_output_from_redis()
+        # 取樣不可用（Redis 暫時無法連線 / ss_output 為空）：本輪視為 no-op，不發通知也不覆寫狀態，
+        # 避免把所有隧道誤判為離線。/ Sample unavailable: skip this cycle so we don't emit false
+        # 'disconnected' notifications or overwrite the committed ports_status with all-False.
+        if raw_ports is None:
+            self.stdout.write(self.style.WARNING("ss_output unavailable; skipping this update cycle"))
+            return
         previous_ports = cache.get("ports_status", {})
+        # 先對原始取樣做去彈跳，再進入後續的狀態比對與通知。
+        # Debounce the raw sample before the transition detection / notifications below.
+        now_ports = self._debounce_ports(raw_ports, previous_ports)
 
         activated_ports = set()
         inactive_ports = set()
@@ -75,7 +91,40 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"New activated ports: {list(new_activated_ports)}"))
         self.stdout.write(self.style.SUCCESS(f"New inactivated ports: {list(new_inactive_ports)}"))
         self.stdout.write(self.style.SUCCESS("Successfully updated the ports status"))
-    
+
+    def _debounce_ports(self, raw_ports, previous_ports):
+        """
+        以 cache 中的每-port 計數器做遲滯（hysteresis）：
+        - 原始取樣與已承認狀態相同 -> 維持並清除該 port 的計數。
+        - 不同 -> 累加計數；累計達 FLAP_THRESHOLD 才承認新狀態，否則沿用舊狀態。
+        本命令每 5 秒以「全新程序」執行，計數器必須存放在 cache（Redis）以跨程序保存。
+
+        Hysteresis via a per-port counter kept in the cache:
+        - raw sample equals the committed state -> keep it, clear the port's counter.
+        - raw sample differs -> increment; only accept the new state after FLAP_THRESHOLD
+          consecutive differing cycles, otherwise hold the old state.
+        The counter lives in the cache because this command runs as a fresh process every 5s.
+        """
+        counters = cache.get("ports_flap_counter", {})
+        now_ports = {}
+        new_counters = {}
+        for port, raw_status in raw_ports.items():
+            committed = previous_ports.get(port, False)
+            if raw_status == committed:
+                # 穩定：維持已承認狀態，計數自然清零（不寫回 new_counters）。
+                now_ports[port] = committed
+            else:
+                count = counters.get(port, 0) + 1
+                if count >= self.FLAP_THRESHOLD:
+                    # 連續多次不同 -> 承認變更，計數清零。
+                    now_ports[port] = raw_status
+                else:
+                    # 尚未穩定 -> 沿用舊狀態並保留計數，等待下一輪。
+                    now_ports[port] = committed
+                    new_counters[port] = count
+        cache.set("ports_flap_counter", new_counters, None)
+        return now_ports
+
     def _send_tunnel_connection_updates(self, port, is_connected):
         """Send tunnel connection status updates for a specific port"""
         try:
@@ -104,17 +153,19 @@ class Command(BaseCommand):
 
             authorized_users = set()
 
-            # Find tunnels that use this port
-            tunnels = ReverseServerAuthorizedKeys.objects.filter(reverse_port=port)
+            # Find tunnels that use this port. prefetch_related('shared_with') 一次載入所有
+            # TunnelSharing，避免每個 tunnel 各查一次的 N+1。
+            tunnels = ReverseServerAuthorizedKeys.objects.filter(
+                reverse_port=port
+            ).prefetch_related('shared_with')
 
             for tunnel in tunnels:
-                # Owner always has access
-                authorized_users.add(tunnel.user.id)
+                # Owner always has access (tunnel.user_id 為 FK 欄位值，不觸發查詢 / no query)
+                authorized_users.add(tunnel.user_id)
 
-                # Find users who have been granted access via sharing
-                sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
-                for sharing in sharings:
-                    authorized_users.add(sharing.shared_with.id)
+                # Users granted access via sharing (sharing.shared_with_id -> no query)
+                for sharing in tunnel.shared_with.all():
+                    authorized_users.add(sharing.shared_with_id)
 
             return list(authorized_users)
 
@@ -131,17 +182,16 @@ class Command(BaseCommand):
 
             authorized_users = set()
 
-            # Get all tunnels
-            tunnels = ReverseServerAuthorizedKeys.objects.all()
+            # Get all tunnels (prefetch sharings to avoid an N+1 per tunnel)
+            tunnels = ReverseServerAuthorizedKeys.objects.prefetch_related('shared_with')
 
             for tunnel in tunnels:
-                # Owner always has access
-                authorized_users.add(tunnel.user.id)
+                # Owner always has access (tunnel.user_id -> no query)
+                authorized_users.add(tunnel.user_id)
 
-                # Find users who have been granted access via sharing
-                sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
-                for sharing in sharings:
-                    authorized_users.add(sharing.shared_with.id)
+                # Users granted access via sharing (sharing.shared_with_id -> no query)
+                for sharing in tunnel.shared_with.all():
+                    authorized_users.add(sharing.shared_with_id)
 
             return list(authorized_users)
 
@@ -158,24 +208,20 @@ class Command(BaseCommand):
             # Group users by their accessible ports
             user_ports_map = {}
 
-            # Get all tunnels and their authorized users
-            tunnels = ReverseServerAuthorizedKeys.objects.all().prefetch_related('shared_with')
+            # Get all tunnels and their authorized users. prefetch_related('shared_with') 已載入
+            # 每個 tunnel 的 TunnelSharing；用 *_id 取 FK 值避免額外查詢（原本每個 tunnel 各查
+            # 一次 TunnelSharing 是 N+1）。
+            tunnels = ReverseServerAuthorizedKeys.objects.prefetch_related('shared_with')
 
             for tunnel in tunnels:
                 port = tunnel.reverse_port
                 if port in activated_ports:
-                    # Add owner
-                    if tunnel.user.id not in user_ports_map:
-                        user_ports_map[tunnel.user.id] = set()
-                    user_ports_map[tunnel.user.id].add(port)
+                    # Add owner (tunnel.user_id -> no query)
+                    user_ports_map.setdefault(tunnel.user_id, set()).add(port)
 
-                    # Add shared users
-                    sharings = TunnelSharing.objects.filter(tunnel=tunnel).select_related('shared_with')
-                    for sharing in sharings:
-                        user_id = sharing.shared_with.id
-                        if user_id not in user_ports_map:
-                            user_ports_map[user_id] = set()
-                        user_ports_map[user_id].add(port)
+                    # Add shared users (使用已 prefetch 的 shared_with；sharing.shared_with_id -> no query)
+                    for sharing in tunnel.shared_with.all():
+                        user_ports_map.setdefault(sharing.shared_with_id, set()).add(port)
 
             # Send personalized notifications
             from tunnels.consumers import send_notification_to_user

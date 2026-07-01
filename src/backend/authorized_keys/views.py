@@ -31,7 +31,9 @@ class CheckReverseServerPortStatus(APIView):
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def get(self, request):
-        return Response(get_ss_output_from_redis())
+        # 取樣不可用時回傳空字典（None -> {}），避免前端拿到 null。
+        # Return {} when the sample is unavailable so the client never receives null.
+        return Response(get_ss_output_from_redis() or {})
 
 class BaseKeyViewSet(viewsets.ModelViewSet):
     """

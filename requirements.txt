@@ -19,8 +19,13 @@ ipython # for debugging
 ipdb # for debugging
 pyinstrument # debug
 
-django-redis
-redis
+# 鎖定版本：channels_redis 4.1.0 的接收迴圈用 brpop_timeout=5，若 redis-py 的 async 連線
+# socket_timeout 也是 5 會發生「5s vs 5s」讀取逾時對撞（見 backend/settings.py CHANNEL_LAYERS 註解）。
+# 鎖住目前實測可用的版本，避免未來 build 自動跳版再次觸發。
+# Pin versions: an unpinned redis auto-installed redis-py 8.x whose async socket_timeout default (5)
+# collided with channels_redis 4.1.0's brpop_timeout=5. Lock the known-good versions.
+django-redis==6.0.0
+redis==8.0.0
 
 # websocket
 channels==4.0.0

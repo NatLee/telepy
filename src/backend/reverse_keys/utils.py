@@ -31,6 +31,11 @@ def remove_token(token:str) -> None:
 def find_multiple_free_ports(count: int) -> List[int]:
     # Use SSH connection to the remote server to check for used ports
     ports = get_ss_output_from_redis(filter=False)
+    if ports is None:
+        # ss 取樣不可用時，仍以 DB 既有 reverse_port 作為已用埠，避免配到重複埠。
+        # ss sample unavailable: fall back to DB reverse_ports so we never hand out a colliding port.
+        from authorized_keys.models import ReverseServerAuthorizedKeys
+        ports = {p: True for p in ReverseServerAuthorizedKeys.objects.values_list("reverse_port", flat=True)}
     # Include off line ports
     used_ports = list(ports.keys())
     # Find the first `count` free ports

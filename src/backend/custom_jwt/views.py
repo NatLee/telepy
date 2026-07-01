@@ -110,3 +110,24 @@ class UserProfileView(APIView):
             'last_login': user.last_login,
         })
 
+
+class WsTicketView(APIView):
+    """
+    發放一次性 WebSocket 連線票（需已登入）。/ Issue a one-time WebSocket connection ticket (auth required).
+
+    前端在開 WebSocket 前呼叫本端點（JWT 走 Authorization header），改用回傳的短效單次 ticket 連線，
+    避免把 JWT 放進 WebSocket 的 subprotocol / URL。
+    The frontend calls this before opening a WebSocket and connects with the returned short-lived,
+    single-use ticket instead of putting the JWT into the WS subprotocol/URL.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Issue WebSocket ticket",
+        operation_description="Return a short-lived single-use ticket for authenticating a WebSocket connection.",
+        tags=['Authentication'],
+    )
+    def post(self, request):
+        from common.ws_ticket import issue_ticket
+        return Response({'ticket': issue_ticket(request.user.id)})
+

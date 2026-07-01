@@ -220,7 +220,21 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("redis", 6379)],
+            # 用 dict 形式的 host 才能傳入 socket_timeout。/ dict host form is required to pass socket_timeout.
+            #
+            # 根因 / Root cause: requirements.txt 未鎖定 redis 版本，實際裝到 redis-py 8.x，
+            # 其 async 連線預設 socket_timeout=5；而 channels_redis 4.1.0 的接收迴圈固定用
+            # brpop_timeout=5 發出「BZPOPMIN key 5」(伺服器端阻塞 5 秒)。兩個 5 秒計時器對撞：
+            # 伺服器阻塞滿 5 秒回 nil 的同時，用戶端 socket 讀取也在 5 秒逾時 → 觸發
+            # redis.exceptions.TimeoutError: Timeout reading from redis:6379（retry 關閉故為致命錯誤）
+            # → daphne 拆掉 consumer → 所有 WebSocket（terminal/filemanager/notifications）同時斷線。
+            #
+            # redis-py 8.x is auto-installed because `redis` is unpinned; its async default
+            # socket_timeout=5 collides with channels_redis' server-side BZPOPMIN 5s block. Setting
+            # socket_timeout=None removes the client read timer (matches redis-py 4.x, the env
+            # channels_redis 4.1.0 was validated against) so the blocking read can never lose the race.
+            # 有限值 > 5（例如 60）亦可。/ A finite value > 5 (e.g. 60) also works.
+            "hosts": [{"address": "redis://redis:6379", "socket_timeout": None}],
         },
     },
 }

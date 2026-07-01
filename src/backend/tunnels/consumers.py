@@ -7,6 +7,7 @@ import fcntl
 import termios
 import struct
 import base64
+import codecs
 import subprocess
 
 from asgiref.sync import sync_to_async
@@ -25,72 +26,111 @@ from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
+from common.ws_ticket import consume_ticket
+
 import logging
 logger = logging.getLogger(__name__)
+
+
+def _parse_ws_subprotocols(scope):
+    """
+    解析 WebSocket subprotocols。/ Parse WebSocket subprotocols.
+    - ticket：新版一次性身分票（首選）/ new one-time identity ticket (preferred)
+    - token ：舊版 JWT（過渡相容，之後移除）/ legacy JWT (temporary fallback, remove later)
+    - server_id / username / tunnel_id：非敏感的資源識別 / non-sensitive resource ids
+    - echo：交握時要回選的 subprotocol（非敏感值）/ subprotocol to echo on accept (non-sensitive)
+    """
+    result = {'ticket': None, 'token': None, 'server_id': None, 'username': None, 'tunnel_id': None, 'echo': None}
+    for protocol in scope.get('subprotocols') or []:
+        if protocol.startswith('ticket.'):
+            result['ticket'] = protocol.split('.', 1)[1]
+            result['echo'] = protocol  # 已用掉的 ticket，可安全 echo / already consumed, safe to echo
+        elif protocol.startswith('token.'):
+            try:
+                result['token'] = base64.b64decode(protocol.split('.', 1)[1]).decode()
+            except Exception:
+                pass
+        elif protocol.startswith('server.'):
+            result['server_id'] = protocol.split('.', 1)[1]
+        elif protocol.startswith('username.'):
+            result['username'] = protocol.split('.', 1)[1]
+        elif protocol.startswith('tunnel.'):
+            result['tunnel_id'] = protocol.split('.', 1)[1]
+        elif protocol.startswith('auth.'):
+            if result['echo'] is None:
+                result['echo'] = protocol  # legacy echo subprotocol
+    return result
+
+
+@sync_to_async
+def _consume_ticket_async(ticket):
+    return consume_ticket(ticket)
+
+
+async def _resolve_ws_user(ticket, token):
+    """
+    解析 WebSocket 身分：優先用一次性 ticket；為平滑升級，暫時仍相容舊的 JWT token。
+    Resolve the WS user: prefer the one-time ticket; still accept the legacy JWT for zero-downtime
+    migration. Returns (user, error_code); error_code is None on success, otherwise a WS close code.
+    TODO: 前端全面改用 ticket 後移除 token 後援。/ Remove the token fallback once the frontend uses tickets everywhere.
+    """
+    if ticket:
+        user_id = await _consume_ticket_async(ticket)
+        if user_id is None:
+            logger.error("WS ticket invalid or expired")
+            return None, 4001
+        try:
+            return await sync_to_async(User.objects.get)(id=user_id), None
+        except User.DoesNotExist:
+            return None, 4001
+    if token:
+        try:
+            access_token = AccessToken(token)
+            return await sync_to_async(User.objects.get)(id=access_token['user_id']), None
+        except (InvalidToken, TokenError) as e:
+            logger.error(f"Token invalid: {e}")
+            return None, 4001
+        except User.DoesNotExist:
+            return None, 4001
+    return None, 4000
+
 
 class TerminalConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.child_pid = None
         self.fd = None
+        # 增量 UTF-8 解碼器：os.read 以 1024 bytes 為界，可能把多位元組字元（如中日韓）切半；
+        # 增量解碼會把未完成的位元組保留到下一次，避免 UnicodeDecodeError 或亂碼。
+        # Incremental UTF-8 decoder: a 1024-byte read can split a multibyte char (e.g. CJK) at the
+        # boundary; the incremental decoder buffers the incomplete tail so we neither crash nor mojibake.
+        self._output_decoder = codecs.getincrementaldecoder('utf-8')('replace')
 
     async def connect(self):
         logger.info("WebSocket connection attempt")
-        subprotocol_auth = None
-        token = None
-        server_id = None
-        username = None
+        info = _parse_ws_subprotocols(self.scope)
+        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
+        server_id = info['server_id']
+        username = info['username']
 
-        # Check for subprotocols
-        if self.scope['subprotocols']:
-            try:
-                for protocol in self.scope['subprotocols']:
-                    if protocol.startswith('token.'):
-                        # Extract token from subprotocol
-                        base64_encoded_token = protocol.split('.', 1)[1]
-                        # Decode token
-                        token = base64.b64decode(base64_encoded_token).decode()
-                    elif protocol.startswith('server.'):
-                        # Extract server_id from subprotocol
-                        server_id = protocol.split('.', 1)[1]
-                    elif protocol.startswith('username.'):
-                        # Extract username from subprotocol
-                        username = protocol.split('.', 1)[1]
-                    elif protocol.startswith('auth.'):
-                        # Use the `auth` ticket as the subprotocol
-                        subprotocol_auth = protocol
-            except Exception as e:
-                logger.error(f"Error parsing subprotocols: {e}")
-                await self.close(code=4000)
-                return
-            if not token or not server_id or not username or not subprotocol_auth:
-                logger.error("Missing required subprotocols")
-                await self.close(code=4000)
-                return
-        else:
-            logger.error("No subprotocols provided")
+        # 必要 subprotocol：身分（ticket 或舊版 token）+ server + username
+        if not (info['ticket'] or info['token']) or not server_id or not username:
+            logger.error("Missing required subprotocols")
             await self.close(code=4000)
             return
 
-        # Verify JWT token
-        try:
-            access_token = AccessToken(token)
-            user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
-            logger.info(f"User authenticated: {user}")
-
-            # Check if user has access to the server
-            has_permissions = await self.check_permissions(user, server_id)
-            if not has_permissions:
-                logger.error(f"User [{user}] does not have access to server [{server_id}]")
-                await self.close(code=4004)
-                return
-        except (InvalidToken, TokenError) as e:
-            logger.error(f"Token invalid: {e}")
-            await self.close(code=4001)
+        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
+        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
+        if auth_error is not None:
+            await self.close(code=auth_error)
             return
-        except User.DoesNotExist:
-            logger.error("User not found")
-            await self.close(code=4001)
+        logger.info(f"User authenticated: {user}")
+
+        # Check if user has access to the server
+        has_permissions = await self.check_permissions(user, server_id)
+        if not has_permissions:
+            logger.error(f"User [{user}] does not have access to server [{server_id}]")
+            await self.close(code=4004)
             return
 
         # Get reverse server port
@@ -205,31 +245,49 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data=None, bytes_data=None):
         # Handle receiving input from the client (e.g., keyboard input)
-        if text_data:
+        if not text_data:
+            return
+        # 對格式錯誤的訊息做防呆：不讓一個壞掉的 frame（JSON 解析失敗 / 缺 key）直接關閉終端連線。
+        # Guard malformed frames so a single bad message (bad JSON / missing keys) can't drop the terminal.
+        try:
             data = json.loads(text_data)
-            action = data.get('action')
-            payload = data.get('payload')
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("Terminal received malformed JSON; ignoring frame")
+            return
 
+        action = data.get('action')
+        payload = data.get('payload')
+        if not isinstance(payload, dict):
+            return
+
+        try:
             # Handle pty_input action
-            if action == 'pty_input' and self.fd:
+            if action == 'pty_input' and self.fd and 'input' in payload:
                 os.write(self.fd, payload['input'].encode())
 
             # Handle resize action
-            if action == 'pty_resize' and self.fd:
-                # Resize the pty
-                pty_size = payload['size']
+            elif action == 'pty_resize' and self.fd and isinstance(payload.get('size'), dict):
                 # Frontend sends size as dict with keys: rows, cols, height, width
-                # Convert to struct with keys: rows, cols, x, y
-                pty_size_bytes = struct.pack('HHHH', pty_size['rows'], pty_size['cols'], pty_size['height'], pty_size['width'])
-                fcntl.ioctl(self.fd, termios.TIOCSWINSZ, pty_size_bytes)
+                pty_size = payload['size']
+                if all(k in pty_size for k in ('rows', 'cols', 'height', 'width')):
+                    pty_size_bytes = struct.pack('HHHH', pty_size['rows'], pty_size['cols'], pty_size['height'], pty_size['width'])
+                    fcntl.ioctl(self.fd, termios.TIOCSWINSZ, pty_size_bytes)
+        except (OSError, struct.error) as e:
+            logger.warning(f"Terminal input/resize failed: {e}")
 
     def forward_output(self):
         try:
-            output = os.read(self.fd, 1024).decode()
-            if len(output) == 0:
-                # EOF received, meaning the shell has been exited
+            data = os.read(self.fd, 1024)
+            if len(data) == 0:
+                # EOF received, meaning the shell has been exited.
+                # 注意：以「原始 bytes 長度」判斷 EOF，而非解碼後字串——因為多位元組字元被切半時
+                # 增量解碼器會回傳空字串，不能誤判為 EOF。
+                # Detect EOF from the raw byte count, not the decoded string: a split multibyte char
+                # yields an empty decode result that must NOT be mistaken for EOF.
                 asyncio.ensure_future(self.close())
-            else:
+                return
+            output = self._output_decoder.decode(data)
+            if output:
                 asyncio.ensure_future(self.send(text_data=output))
         except OSError:
             # OSError can occur if the fd has been closed due to the process exiting
@@ -238,57 +296,24 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 class NotificationConsumer(AsyncWebsocketConsumer):
     async def connect(self):
 
-        # Authenticate user via JWT token in subprotocols
+        # Authenticate user via one-time ticket (preferred) or legacy JWT in subprotocols
         self.user = None
-        subprotocol_auth = None
-        token = None
 
-        # Check for subprotocols
-        if self.scope['subprotocols']:
-            try:
-                for protocol in self.scope['subprotocols']:
-                    if protocol.startswith('token.'):
-                        # Extract token from subprotocol
-                        base64_encoded_token = protocol.split('.', 1)[1]
-                        # Decode token
-                        token = base64.b64decode(base64_encoded_token).decode()
-                    elif protocol.startswith('auth.'):
-                        # Use the `auth` ticket as the subprotocol
-                        subprotocol_auth = protocol
-            except Exception as e:
-                logger.error(f"Error parsing subprotocols: {e}")
-                await self.close(code=4000)
-                return
-            if not token:
-                logger.error("Missing required subprotocols")
-                await self.close(code=4000)
-                return
-        else:
-            logger.error("No subprotocols provided")
-            await self.close(code=4000)
-            return
+        info = _parse_ws_subprotocols(self.scope)
+        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
 
-        # Check if required subprotocols are present
-        if not token or not subprotocol_auth:
+        # 必要：身分（ticket 或舊版 token）
+        if not (info['ticket'] or info['token']):
             logger.error("Missing required subprotocols")
             await self.close(code=4000)
             return
 
-
-        # Verify JWT token
-        try:
-            access_token = AccessToken(token)
-            self.user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
-            logger.info(f"User authenticated: {self.user}")
-
-        except (InvalidToken, TokenError) as e:
-            logger.error(f"Token invalid: {e}")
-            await self.close(code=4001)
+        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
+        if auth_error is not None:
+            await self.close(code=auth_error)
             return
-        except User.DoesNotExist:
-            logger.error("User not found")
-            await self.close(code=4001)
-            return
+        self.user = user
+        logger.info(f"User authenticated: {self.user}")
 
 
         # Join user-specific notification group
@@ -301,12 +326,28 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         await self.accept(subprotocol_auth)
 
     async def disconnect(self, close_code):
-        # Leave room group
-        if hasattr(self, 'room_group_name'):
+        # Leave user notification group.
+        # 注意：connect() 加入的是 self.user_group_name（不是 room_group_name）。
+        # 舊碼誤判 hasattr(self, 'room_group_name') 這個從未設定的屬性，導致 group_discard
+        # 永遠不會執行，每次斷線就在 user_{id}_notifications 洩漏一個死 channel（最長存活 24h），
+        # 讓每次 group_send 廣播越來越重。/ Discard the group we actually joined (user_group_name);
+        # the old code guarded on the never-set 'room_group_name', so discard never ran and every
+        # disconnect leaked a dead channel into the notification group.
+        if hasattr(self, 'user_group_name'):
             await self.channel_layer.group_discard(
-                self.room_group_name,
+                self.user_group_name,
                 self.channel_name
             )
+
+    async def receive(self, text_data=None, bytes_data=None):
+        # 應用層心跳：回應前端 ping，用於偵測半開連線。/ App-level heartbeat: reply to the client's ping.
+        if not text_data:
+            return
+        try:
+            if json.loads(text_data).get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     # Receive message from room group
     async def send_notification(self, event):
@@ -358,61 +399,35 @@ class TunnelConnectionConsumer(AsyncWebsocketConsumer):
     """
     async def connect(self):
         logger.info("TunnelConnection WebSocket connection attempt")
-        subprotocol_auth = None
-        token = None
-        tunnel_id = None
-
-        # Parse subprotocols: token.<base64(jwt)>, tunnel.<id>, auth.<ticket>
-        if self.scope.get('subprotocols'):
-            try:
-                for protocol in self.scope['subprotocols']:
-                    if protocol.startswith('token.'):
-                        base64_encoded_token = protocol.split('.', 1)[1]
-                        token = base64.b64decode(base64_encoded_token).decode()
-                    elif protocol.startswith('tunnel.'):
-                        tunnel_id = protocol.split('.', 1)[1]
-                    elif protocol.startswith('auth.'):
-                        subprotocol_auth = protocol
-            except Exception as e:
-                logger.error(f"[TunnelConnection] Error parsing subprotocols: {e}")
-                await self.close(code=4000)
-                return
-        else:
-            logger.error("[TunnelConnection] No subprotocols provided")
-            await self.close(code=4000)
-            return
+        # Parse subprotocols: ticket.<ticket> (preferred) or token.<base64(jwt)> (legacy), tunnel.<id>
+        info = _parse_ws_subprotocols(self.scope)
+        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
+        tunnel_id = info['tunnel_id']
 
         # Fallback to URL param if not provided via subprotocol (shouldn't happen)
         if not tunnel_id:
             tunnel_id = self.scope['url_route']['kwargs'].get('tunnel_id')
 
-        if not token or not tunnel_id or not subprotocol_auth:
-            logger.error("[TunnelConnection] Missing required subprotocols (token/tunnel/auth)")
+        if not (info['ticket'] or info['token']) or not tunnel_id:
+            logger.error("[TunnelConnection] Missing required subprotocols (ticket/token + tunnel)")
             await self.close(code=4000)
             return
 
         self.tunnel_id = str(tunnel_id)
         self.room_group_name = f'tunnel_connection_{self.tunnel_id}'
 
-        # Verify JWT token and permission to access this tunnel
-        try:
-            access_token = AccessToken(token)
-            user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
-            logger.info(f"[TunnelConnection] User authenticated: {user}")
-
-            # Ensure the tunnel belongs to the user
-            has_permissions = await self._check_tunnel_permission(user, self.tunnel_id)
-            if not has_permissions:
-                logger.error(f"[TunnelConnection] User [{user}] has no access to tunnel [{self.tunnel_id}]")
-                await self.close(code=4004)
-                return
-        except (InvalidToken, TokenError) as e:
-            logger.error(f"[TunnelConnection] Token invalid: {e}")
-            await self.close(code=4001)
+        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
+        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
+        if auth_error is not None:
+            await self.close(code=auth_error)
             return
-        except User.DoesNotExist:
-            logger.error("[TunnelConnection] User not found")
-            await self.close(code=4001)
+        logger.info(f"[TunnelConnection] User authenticated: {user}")
+
+        # Ensure the tunnel belongs to the user
+        has_permissions = await self._check_tunnel_permission(user, self.tunnel_id)
+        if not has_permissions:
+            logger.error(f"[TunnelConnection] User [{user}] has no access to tunnel [{self.tunnel_id}]")
+            await self.close(code=4004)
             return
 
         # Join room and accept
@@ -429,6 +444,16 @@ class TunnelConnectionConsumer(AsyncWebsocketConsumer):
                 self.room_group_name,
                 self.channel_name
             )
+
+    async def receive(self, text_data=None, bytes_data=None):
+        # 應用層心跳：回應前端 ping。/ App-level heartbeat: reply to the client's ping.
+        if not text_data:
+            return
+        try:
+            if json.loads(text_data).get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     async def send_connection_status(self):
         """Check and send current tunnel connection status"""
@@ -519,57 +544,29 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         logger.info("FileManager WebSocket connection attempt")
-        subprotocol_auth = None
-        token = None
-        server_id = None
-        username = None
+        # Parse subprotocols: ticket.<ticket> (preferred) or token.<base64(jwt)> (legacy), server.<id>, username.<name>
+        info = _parse_ws_subprotocols(self.scope)
+        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
+        server_id = info['server_id']
+        username = info['username']
 
-        # Check for subprotocols (same authentication as TerminalConsumer)
-        if self.scope['subprotocols']:
-            try:
-                for protocol in self.scope['subprotocols']:
-                    if protocol.startswith('token.'):
-                        base64_encoded_token = protocol.split('.', 1)[1]
-                        token = base64.b64decode(base64_encoded_token).decode()
-                    elif protocol.startswith('server.'):
-                        server_id = protocol.split('.', 1)[1]
-                    elif protocol.startswith('username.'):
-                        username = protocol.split('.', 1)[1]
-                    elif protocol.startswith('auth.'):
-                        subprotocol_auth = protocol
-            except Exception as e:
-                logger.error(f"Error parsing subprotocols: {e}")
-                await self.close(code=4000)
-                return
-            
-            if not token or not server_id or not username or not subprotocol_auth:
-                logger.error("Missing required subprotocols")
-                await self.close(code=4000)
-                return
-        else:
-            logger.error("No subprotocols provided")
+        if not (info['ticket'] or info['token']) or not server_id or not username:
+            logger.error("Missing required subprotocols")
             await self.close(code=4000)
             return
 
-        # Verify JWT token
-        try:
-            access_token = AccessToken(token)
-            user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
-            logger.info(f"FileManager User authenticated: {user}")
-
-            # Check if user has access to the server
-            has_permissions = await self.check_permissions(user, server_id)
-            if not has_permissions:
-                logger.error(f"User [{user}] does not have access to server [{server_id}]")
-                await self.close(code=4004)
-                return
-        except (InvalidToken, TokenError) as e:
-            logger.error(f"Token invalid: {e}")
-            await self.close(code=4001)
+        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
+        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
+        if auth_error is not None:
+            await self.close(code=auth_error)
             return
-        except User.DoesNotExist:
-            logger.error("User not found")
-            await self.close(code=4001)
+        logger.info(f"FileManager User authenticated: {user}")
+
+        # Check if user has access to the server
+        has_permissions = await self.check_permissions(user, server_id)
+        if not has_permissions:
+            logger.error(f"User [{user}] does not have access to server [{server_id}]")
+            await self.close(code=4004)
             return
 
         # Get reverse server port (to validate server ID)
@@ -635,6 +632,10 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
             logger.info("FileManager WebSocket connection accepted with persistent SSH session")
         except Exception as e:
             logger.error(f"Failed to initialize SSH session: {e}")
+            # 清掉可能已 spawn 的 ControlMaster 'cat' 子程序，避免失敗連線累積殭屍 SSH。
+            # Clean up the ControlMaster 'cat' subprocess that may already be running so failed
+            # connects don't accumulate orphaned SSH processes.
+            await self.cleanup_ssh_session()
             await self.close(code=4005)
             return
 
@@ -651,6 +652,10 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
 
         try:
             data = json.loads(text_data)
+            # 應用層心跳 / app-level heartbeat
+            if data.get('type') == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+                return
             action = data.get('action')
             payload = data.get('payload', {})
 
@@ -904,11 +909,19 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
                 stderr=subprocess.PIPE
             )
             
-            stdout, stderr = await exec_process.communicate()
-            
+            # 加上逾時：遠端命令或網路卡住時，不讓這個 consumer 的 receive() 永久阻塞。
+            # Timeout so a hung remote command / stalled network can't block this consumer's receive() forever.
+            try:
+                stdout, stderr = await asyncio.wait_for(exec_process.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                exec_process.kill()
+                await exec_process.wait()
+                logger.error("SSH command timed out after 30s")
+                return ("", "Command timed out", 124)
+
             return (
-                stdout.decode('utf-8', errors='replace'), 
-                stderr.decode('utf-8', errors='replace'), 
+                stdout.decode('utf-8', errors='replace'),
+                stderr.decode('utf-8', errors='replace'),
                 exec_process.returncode
             )
             

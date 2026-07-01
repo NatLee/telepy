@@ -98,8 +98,14 @@ X11Forwarding yes
 #TCPKeepAlive yes
 #PermitUserEnvironment no
 #Compression delayed
-#ClientAliveInterval 0
-#ClientAliveCountMax 3
+# 伺服器端對反向隧道客戶端做心跳偵測：每 30s 探測、連續 3 次無回應（~90s）即斷線，
+# 讓「客戶端已死但 TCP 尚未逾時」的殭屍隧道與其佔用的 reverse_port 更快釋放，
+# 避免狀態長時間顯示為已連線。autossh 客戶端側已有 ServerAliveInterval，此為互補。
+# Server-side keepalive for reverse-tunnel clients: probe every 30s, drop after 3 misses (~90s) so a
+# silently-dead client's tunnel and its held reverse_port are freed promptly instead of lingering as
+# 'connected'. Complements autossh's client-side ServerAliveInterval.
+ClientAliveInterval 30
+ClientAliveCountMax 3
 #UseDNS no
 PidFile /config/sshd.pid
 #MaxStartups 10:30:100
