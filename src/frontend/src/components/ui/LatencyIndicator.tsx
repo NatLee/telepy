@@ -35,14 +35,15 @@ export interface LatencyIndicatorProps {
     className?: string;
 }
 
-type Tier = {
+export type LatencyTier = {
     bars: number; // number of filled bars 1..4
     barClass: string; // filled bar colour
     textClass: string; // value text colour
     label: string; // quality label
 };
 
-function qualityTier(rttMs: number): Tier {
+/** 依單程 RTT（毫秒）決定品質分級與配色。全站共用（訊號格、terminal 流程路徑）。 */
+export function latencyTier(rttMs: number): LatencyTier {
     if (rttMs < 60) return { bars: 4, barClass: "bg-emerald-500", textClass: "text-emerald-600 dark:text-emerald-400", label: "Excellent" };
     if (rttMs < 150) return { bars: 3, barClass: "bg-amber-500", textClass: "text-amber-600 dark:text-amber-400", label: "Good" };
     if (rttMs < 300) return { bars: 2, barClass: "bg-orange-500", textClass: "text-orange-600 dark:text-orange-400", label: "Fair" };
@@ -65,7 +66,7 @@ export function LatencyIndicator({
     className,
 }: LatencyIndicatorProps) {
     const known = online && rttMs != null && Number.isFinite(rttMs);
-    const tier = known ? qualityTier(rttMs as number) : null;
+    const tier = known ? latencyTier(rttMs as number) : null;
     const dims = SIZES[size];
 
     const bars = (
