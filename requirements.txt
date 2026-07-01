@@ -1,33 +1,47 @@
 supervisor # for handle two or more services
 
-django==5.0.6
-djangorestframework==3.14.0
+# Django 6.0 需 Python 3.12+（見 Dockerfile base image）。/ Django 6.0 requires Python 3.12+.
+django>=6.0,<6.1
+# DRF 3.17.0 起才支援 Django 6.0。/ DRF gained Django 6.0 support in 3.17.0.
+djangorestframework>=3.17.0
 
-django-cors-headers==3.11.0
-django-bootstrap3==21.2
-djangorestframework-simplejwt==5.3.1
+# django-cors-headers 4.x 才相容 Django 5+/6。/ cors-headers 4.x for Django 5+/6.
+django-cors-headers>=4.4.0
+djangorestframework-simplejwt>=5.4.0
 
-drf-yasg==1.21.4
-pyparsing==3.0.8
+# drf-yasg：最新版官方分類尚未列 Django 6.0，但無已知 blocker；若壞掉改用 drf-spectacular。
+# drf-yasg has no official Django 6.0 classifier yet but no known blocker; swap to drf-spectacular if it breaks.
+drf-yasg>=1.21.15
+pyparsing>=3.1
 
-whitenoise==6.5.0 # staticfiles
+whitenoise>=6.8.0 # staticfiles
 
 loguru
 google-auth
+# google.auth.transport.requests 需要 requests（先前由已移除的舊套件間接帶入，改為顯式相依）。
+# google.auth.transport.requests needs requests (was pulled in transitively before; now explicit).
+requests>=2.32.0
 
 ipython # for debugging
 ipdb # for debugging
 pyinstrument # debug
 
-# 鎖定版本：channels_redis 4.1.0 的接收迴圈用 brpop_timeout=5，若 redis-py 的 async 連線
-# socket_timeout 也是 5 會發生「5s vs 5s」讀取逾時對撞（見 backend/settings.py CHANNEL_LAYERS 註解）。
-# 鎖住目前實測可用的版本，避免未來 build 自動跳版再次觸發。
-# Pin versions: an unpinned redis auto-installed redis-py 8.x whose async socket_timeout default (5)
-# collided with channels_redis 4.1.0's brpop_timeout=5. Lock the known-good versions.
-django-redis==6.0.0
+# 快取後端：改用 Django 4.0+ 內建 RedisCache（django-redis 6.0.0 尚未支援 Django 6）。
+# 只用到標準 cache.get/set/delete，切換無痛，且少一個相依與相容風險。
+# Cache backend: Django's built-in RedisCache (django-redis 6.0.0 lacks Django 6 support).
 redis==8.0.0
 
-# websocket
-channels==4.0.0
-channels_redis==4.1.0
-daphne==4.0.0
+# WebSocket / ASGI
+# channels/channels_redis 需 4.3+ 才支援 Django 6。/ channels 4.3+ supports Django 6.
+channels>=4.3.0
+channels_redis>=4.3.0
+# daphne 僅供 dev 的 runserver 走 ASGI（提供 WebSocket）。prod 改用 gunicorn+uvicorn。
+# daphne is only used by dev `runserver` (ASGI/WebSocket). Prod uses gunicorn+uvicorn below.
+daphne>=4.1.0
+
+# Prod ASGI：gunicorn 管理多個 uvicorn worker（多 process = 真正併發 HTTP/WS）。
+# uvicorn_worker 是新的獨立套件（取代已棄用的 uvicorn.workers）。
+# Prod ASGI: gunicorn managing multiple uvicorn workers (multi-process = real HTTP/WS concurrency).
+gunicorn>=23.0.0
+uvicorn[standard]>=0.34.0
+uvicorn-worker>=0.3.0

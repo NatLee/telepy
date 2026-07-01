@@ -166,6 +166,19 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": SQLITE_DIR,
+        # 多 worker（gunicorn/uvicorn）會有多個 process 同時寫入同一個 sqlite 檔，預設會
+        # 頻繁出現「database is locked」。以下三項是單機 SQLite 的併發緩解（若日後量級再上升
+        # 建議改用 Postgres）：
+        #   - journal_mode=WAL：讀寫可並行（讀不擋寫、寫不擋讀），大幅降低鎖衝突。
+        #   - timeout=20：遇到寫鎖時最多等 20 秒再放棄，而非立刻丟 OperationalError。
+        #   - transaction_mode=IMMEDIATE：交易一開始（BEGIN）就取得寫鎖，避免「先讀後升級成寫」
+        #     時兩個 writer 撞在一起而 deadlock。（Django 5.1+ 支援此選項。）
+        # Multi-worker mitigations for a single SQLite file (move to Postgres when scaling further).
+        "OPTIONS": {
+            "timeout": 20,
+            "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 print(f"---------- SQLITE DIR: {SQLITE_DIR}")
@@ -192,8 +205,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Taipei"
+# USE_L10N 自 Django 4.0 起棄用、5.0 起無效（本地化恆為開啟），Django 6 已移除設定，故刪除。
+# USE_L10N was deprecated in 4.0, a no-op since 5.0, and dropped in Django 6 — removed here.
 USE_I18N = True
-USE_L10N = True
 USE_TZ = True
 APPEND_SLASH = False
 
@@ -211,7 +225,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CACHES = {
     'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
+        # Django 4.0+ 內建的 Redis 後端，取代 django-redis（其 6.0.0 尚未支援 Django 6）。
+        # 全專案只用到標準 cache.get/set/delete，切換無痛。ws_ticket 與 ports_status 皆存於此。
+        # Django's built-in Redis backend (replaces django-redis, which lacks Django 6 support).
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': 'redis://redis:6379',
     },
 }

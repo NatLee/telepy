@@ -1,4 +1,6 @@
-FROM python:3.11.8-slim-bullseye
+# Django 6.0 需 Python 3.12+（3.11 為 Django 5.2 LTS 最後支援版本）。
+# Django 6.0 requires Python 3.12+ (3.11 was last supported by Django 5.2 LTS).
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONUNBUFFERED 1
 
