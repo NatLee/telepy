@@ -11,7 +11,11 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
+import { fetchWsTicket } from "@/lib/reconnectingSocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
+import type { KeyboardMode } from "@/hooks/useKeyboardController";
+
+const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
 
 export interface TerminalUsername {
     id: number;
@@ -35,7 +39,23 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [showFiles, setShowFiles] = useState(false);
     const [isBrowserActive, setIsBrowserActive] = useState(false);
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
+    const [keyboardMode, setKeyboardModeState] = useState<KeyboardMode>("accessory");
     const [headerExpanded, setHeaderExpanded] = useState(false);
+
+    // 讀取上次選擇的鍵盤模式（SSR 安全：在 effect 內存取 localStorage）。
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem(KEYBOARD_MODE_KEY);
+            if (saved === "accessory" || saved === "full" || saved === "hidden") {
+                setKeyboardModeState(saved);
+            }
+        } catch { /* localStorage 不可用時忽略 */ }
+    }, []);
+
+    const setKeyboardMode = (m: KeyboardMode) => {
+        setKeyboardModeState(m);
+        try { localStorage.setItem(KEYBOARD_MODE_KEY, m); } catch { /* 忽略 */ }
+    };
     const [mainView, setMainView] = useState<TerminalMainView>("terminal");
     const [syncedPath, setSyncedPath] = useState<string | undefined>();
     const [reconnectTrigger, setReconnectTrigger] = useState(0);
@@ -173,15 +193,21 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             const base = getWsOrigin();
             const wsUrl = `${base}/ws/terminal/`;
 
-            const encodedToken = btoa(accessToken);
-            const jsSha256 = (await import("js-sha256")).sha256;
-            const ticket = `auth.${jsSha256(`terminal_${serverId}.${Date.now()}`)}`;
+            // 一次性 ticket 認證：JWT 只走 Authorization header，不進 WS subprotocol。
+            // One-time ticket auth: the JWT stays in the Authorization header, never in the WS subprotocol.
+            let ticket: string;
+            try {
+                ticket = await fetchWsTicket();
+            } catch (e) {
+                console.error("Terminal ws-ticket error", e);
+                setConnecting(false);
+                return;
+            }
 
             const protocols = [
-                `token.${encodedToken}`,
+                `ticket.${ticket}`,
                 `server.${serverId}`,
                 `username.${username}`,
-                ticket,
             ];
 
             const ws = new WebSocket(wsUrl, protocols);
@@ -292,12 +318,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         }
     }, [showFiles, mainView]);
 
+    // 僅在「完整虛擬鍵盤」模式抑制原生鍵盤；accessory / hidden 模式保留原生鍵盤以便打字（含中文）。
     useEffect(() => {
+        const suppressNative = keyboardMode === "full";
         const manageNativeKeyboard = () => {
             if (window.innerWidth < 768 && terminalRef.current) {
                 const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
                 if (textarea) {
-                    if (keyboardExpanded) {
+                    if (suppressNative) {
                         textarea.setAttribute('readonly', 'true');
                         textarea.blur();
                     } else {
@@ -310,7 +338,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         setTimeout(manageNativeKeyboard, 100);
 
         const handleFocus = () => {
-            if (window.innerWidth < 768 && keyboardExpanded && terminalRef.current) {
+            if (window.innerWidth < 768 && suppressNative && terminalRef.current) {
                 const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
                 if (textarea) {
                     textarea.blur();
@@ -337,7 +365,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 }
             }
         };
-    }, [keyboardExpanded, connected]);
+    }, [keyboardMode, connected]);
 
     useEffect(() => {
         if (keyboardExpanded && xtermRef.current) {
@@ -379,6 +407,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             showFiles, setShowFiles,
             isBrowserActive, setIsBrowserActive,
             keyboardExpanded, setKeyboardExpanded,
+            keyboardMode, setKeyboardMode,
             headerExpanded, setHeaderExpanded,
             mainView, setMainView,
             syncedPath, setSyncedPath,

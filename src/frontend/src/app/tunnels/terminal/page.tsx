@@ -30,6 +30,7 @@ export default function TerminalPage() {
         showFiles, setShowFiles,
         isBrowserActive, setIsBrowserActive,
         keyboardExpanded, setKeyboardExpanded,
+        keyboardMode, setKeyboardMode,
         headerExpanded, setHeaderExpanded,
         mainView, setMainView,
         syncedPath,
@@ -124,6 +125,8 @@ export default function TerminalPage() {
                     setIsBrowserActive={setIsBrowserActive}
                     keyboardExpanded={keyboardExpanded}
                     setKeyboardExpanded={setKeyboardExpanded}
+                    keyboardMode={keyboardMode}
+                    setKeyboardMode={setKeyboardMode}
                     terminalRef={terminalRef}
                     xtermRef={xtermRef}
                     wsRef={wsRef}

@@ -6,7 +6,9 @@ import React, { RefObject, useEffect, useCallback, useRef } from "react";
 import { usePanelRef, type GroupImperativeHandle } from "react-resizable-panels";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
-import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
+import { MobileKeyboard } from "@/components/tunnels/MobileKeyboard";
+import { useKeyboardController, type KeyboardMode } from "@/hooks/useKeyboardController";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
@@ -24,6 +26,8 @@ export interface TerminalContentProps {
     setIsBrowserActive: (isActive: boolean) => void;
     keyboardExpanded: boolean;
     setKeyboardExpanded: (v: boolean) => void;
+    keyboardMode: KeyboardMode;
+    setKeyboardMode: (m: KeyboardMode) => void;
     terminalRef: RefObject<HTMLDivElement | null>;
     xtermRef: RefObject<unknown>;
     wsRef: RefObject<WebSocket | null>;
@@ -49,6 +53,8 @@ export function TerminalContent({
     setIsBrowserActive,
     keyboardExpanded,
     setKeyboardExpanded,
+    keyboardMode,
+    setKeyboardMode,
     terminalRef,
     xtermRef,
     wsRef,
@@ -64,6 +70,12 @@ export function TerminalContent({
 }: TerminalContentProps) {
     const groupRef = useRef<GroupImperativeHandle>(null);
     const filesPanelRef = usePanelRef();
+
+    // 依斷點只掛載「桌面版」或「手機版」其中一邊的 File 面板，避免兩者同時掛載而各開一條
+    // filemanager WebSocket + 一個持久 SSH 連線。undefined（尚未量測）時兩邊都先不掛。
+    // Mount only one File panel (desktop OR mobile) per breakpoint so they don't each open a
+    // filemanager WebSocket + SSH session. While undefined (not yet measured), neither mounts.
+    const isDesktop = useMediaQuery("(min-width: 768px)");
 
     // Open/close Files panel via group-level setLayout for authoritative control
     useEffect(() => {
@@ -81,7 +93,7 @@ export function TerminalContent({
         else if (!collapsed && !showFiles) setShowFiles(true);
     }, [showFiles, setShowFiles]);
 
-    const sendInput = (input: string) => {
+    const sendInput = useCallback((input: string) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ action: "pty_input", payload: { input } }));
         }
@@ -92,7 +104,10 @@ export function TerminalContent({
                 } catch { /* noop */ }
             }, 80);
         }
-    };
+    }, [wsRef, xtermRef]);
+
+    // 手機虛擬鍵盤共用的修飾鍵狀態機與送出器（模式 A/B 共用）。
+    const keyboardController = useKeyboardController(sendInput);
 
     return (
         <>
@@ -149,8 +164,12 @@ export function TerminalContent({
                 </button>
             </div>
 
-            {/* Main Layout: Main View + Optional Files Side Panel */}
-            <div className={`flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300 md:mb-0 ${keyboardExpanded && mainView === "terminal" ? "mb-[320px]" : mainView === "terminal" ? "mb-[70px]" : "mb-0"}`}>
+            {/* Main Layout: Main View + Optional Files Side Panel.
+                底部保留手機鍵盤佔用的空間（--kb-offset 由 MobileKeyboard 依原生鍵盤高度+自身高度動態設定，桌機為 0）。 */}
+            <div
+                className="flex-1 min-h-0 w-full relative overflow-hidden flex flex-col transition-all duration-300"
+                style={{ paddingBottom: "var(--kb-offset, 0px)" }}
+            >
                 <ResizablePanelGroup className="flex-1 min-h-0 w-full relative overflow-hidden" groupRef={groupRef} onLayoutChanged={handleLayoutChanged}>
                     {/* ═══ Main View Panel ═══ */}
                     <ResizablePanel
@@ -216,7 +235,7 @@ export function TerminalContent({
                         collapsedSize={0}
                         className="hidden md:flex min-h-0 min-w-0 bg-card rounded-lg border border-border flex-col"
                     >
-                        {username && accessToken && (
+                        {isDesktop === true && username && accessToken && (
                             <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                         )}
                     </ResizablePanel>
@@ -224,17 +243,19 @@ export function TerminalContent({
 
                 {/* Mobile-only full-screen Files view */}
                 <div className={`md:hidden absolute inset-0 bg-card rounded-lg border border-border flex flex-col transition-opacity duration-200 ${mainView === "files" ? "opacity-100 z-30 pointer-events-auto" : "opacity-0 pointer-events-none z-0"}`}>
-                    {username && accessToken && (
+                    {isDesktop === false && username && accessToken && (
                         <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                     )}
                 </div>
             </div>
 
-            <VirtualKeyboard
+            <MobileKeyboard
+                controller={keyboardController}
+                mode={keyboardMode}
+                setMode={setKeyboardMode}
                 isVisible={mainView === "terminal"}
-                isExpanded={keyboardExpanded}
-                onToggle={() => setKeyboardExpanded(!keyboardExpanded)}
-                onInput={sendInput}
+                expanded={keyboardExpanded}
+                setExpanded={setKeyboardExpanded}
             />
 
             <Modal isOpen={serviceKeyModalOpen} onClose={() => setServiceKeyModalOpen(false)} title="Service Keys" size="lg">
