@@ -50,6 +50,7 @@ services:
       - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
+      - NEKO_ROOMS_API=http://neko-rooms:8080
 
     volumes:
       # Source code
@@ -109,18 +110,38 @@ services:
     depends_on:
       - redis
 
-  selenium-standalone:
+  # 建置自訂 neko chromium image 用(profiles 讓平時 up 不會啟動它):
+  # docker compose --profile images build neko-chromium-image
+  neko-chromium-image:
+    build:
+      context: ./docker/neko-chromium
+    image: telepy-neko-chromium:latest
+    profiles: [ "images" ]
+    command: [ "true" ]
+
+  neko-rooms:
     <<: [ *common-networks, *common-restart ]
-    image: selenium/standalone-chromium:latest
-    container_name: telepy-selenium-${PROJECT_NAME}
-    shm_size: 2gb
+    image: m1k1o/neko-rooms:latest
+    container_name: telepy-neko-rooms-${PROJECT_NAME}
     environment:
-      # Max concurrent sessions
-      - SE_NODE_MAX_SESSIONS=10
-      # Session timeout in seconds
-      - SE_NODE_SESSION_TIMEOUT=3600
-      # Disable VNC password
-      - SE_VNC_NO_PASSWORD=1
+      - TZ=Asia/Taipei
+      # mux 模式:一房只佔一個 UDP+TCP 埠(同號),範圍大小 = 最大同時房間數
+      - NEKO_ROOMS_MUX=true
+      - NEKO_ROOMS_EPR=${NEKO_EPR_RANGE:-59000-59049}
+      # client 端瀏覽器可達的伺服器 IP;空字串 = neko 自行偵測(本機開發 OK)
+      - NEKO_ROOMS_NAT1TO1=${NEKO_NAT1TO1_IP:-}
+      - NEKO_ROOMS_NEKO_IMAGES=telepy-neko-chromium:latest
+      # 房間容器名前綴 + 掛載網路(必須是實際網路名,房間才連得回 backend 的 SOCKS)
+      - NEKO_ROOMS_INSTANCE_NAME=telepy-${PROJECT_NAME}
+      - NEKO_ROOMS_INSTANCE_NETWORK=telepy-network-${PROJECT_NAME}
+      - NEKO_ROOMS_PATH_PREFIX=/neko
+      - NEKO_ROOMS_STORAGE_ENABLED=false
+      # Traefik v3 吃不下 neko-rooms 產生的 v2 HostRegexp 規則;
+      # 改用 neko-rooms 內建 reverse proxy,由 dynamic.yml 把 /neko 導過來
+      - NEKO_ROOMS_TRAEFIK_ENABLED=false
+      - NEKO_ROOMS_PROXY=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 networks:
   telepy-network:
