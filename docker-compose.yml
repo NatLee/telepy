@@ -50,7 +50,7 @@ services:
       - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
-      - NEKO_ROOMS_API=http://neko-rooms:8080
+      - CHROMIUM_CDP_URL=http://chromium:9222
 
     volumes:
       # Source code
@@ -70,7 +70,7 @@ services:
     depends_on:
       - redis
       - ssh
-      - neko-rooms
+      - chromium
 
   redis:
     <<: [ *common-networks, *common-restart ]
@@ -111,43 +111,33 @@ services:
     depends_on:
       - redis
 
-  # 一次性建置容器:build 出自訂 neko chromium image,entrypoint 覆寫成 true → 立即 exit 0。
-  # neko-rooms 以 depends_on: service_completed_successfully 等它先建好,故 image 一定
-  # 先於房間存在。這樣 `docker compose build` 與 `docker compose up -d --build` 都會自動
-  # 建它,不再需要 --profile。(restart:no 很重要:用 always 會在 exit 0 後無限重啟。)
-  neko-chromium-image:
-    build:
-      context: ./docker/neko-chromium
-    image: telepy-neko-chromium:latest
-    entrypoint: [ "true" ]
-    restart: "no"
-
-  neko-rooms:
+  # 共用 headless Chromium(CDP screencast 遠端瀏覽器的執行時)。一顆共用、每個 session
+  # 一個 browser context 各走各自的 SOCKS(backend 內的 ssh -D)。CDP endpoint 9222 只在
+  # telepy-network 內、絕不 publish 到 host。
+  # Shared headless Chromium (CDP screencast runtime). One shared browser; one context per
+  # session, each routed through its own SOCKS (ssh -D inside backend). Port 9222 stays on
+  # telepy-network and is NEVER published to the host.
+  chromium:
     <<: [ *common-networks, *common-restart ]
-    image: m1k1o/neko-rooms:latest
-    container_name: telepy-neko-rooms-${PROJECT_NAME}
-    environment:
-      - TZ=Asia/Taipei
-      # mux 模式:一房只佔一個 UDP+TCP 埠(同號),範圍大小 = 最大同時房間數
-      - NEKO_ROOMS_MUX=true
-      - NEKO_ROOMS_EPR=${NEKO_EPR_RANGE:-59000-59049}
-      # client 端瀏覽器可達的伺服器 IP;空字串 = neko 自行偵測(本機開發 OK)
-      - NEKO_ROOMS_NAT1TO1=${NEKO_NAT1TO1_IP:-}
-      - NEKO_ROOMS_NEKO_IMAGES=telepy-neko-chromium:latest
-      # 房間容器名前綴 + 掛載網路(必須是實際網路名,房間才連得回 backend 的 SOCKS)
-      - NEKO_ROOMS_INSTANCE_NAME=telepy-${PROJECT_NAME}
-      - NEKO_ROOMS_INSTANCE_NETWORK=telepy-network-${PROJECT_NAME}
-      - NEKO_ROOMS_PATH_PREFIX=/neko
-      - NEKO_ROOMS_STORAGE_ENABLED=false
-      # Traefik v3 吃不下 neko-rooms 產生的 v2 HostRegexp 規則;
-      # 改用 neko-rooms 內建 reverse proxy,由 dynamic.yml 把 /neko 導過來
-      - NEKO_ROOMS_TRAEFIK_ENABLED=false
-      - NEKO_ROOMS_PROXY=true
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      neko-chromium-image:
-        condition: service_completed_successfully
+    # 預設用官方 headless-shell;若中文顯示豆腐字,改建 ./docker/chromium(含 fonts-noto-cjk)
+    # 後把此行換成 image: telepy-chromium:latest。/ Swap to the CJK-font image if needed.
+    image: chromedp/headless-shell:latest
+    container_name: telepy-chromium-${PROJECT_NAME}
+    hostname: telepy-chromium-${PROJECT_NAME}
+    shm_size: "2gb"
+    # 由 entrypoint 直接吃這些旗標。--proxy-server 指向死埠 = fail-closed 預設:任何未經
+    # per-context proxy 覆寫的流量(含潛在 service worker / chrome 內部請求)一律連線失敗,
+    # 絕不以本容器自身 IP 出去而洩漏身分(Phase 0 G8 已驗證 per-context 仍可覆蓋)。
+    # --proxy-server points at a dead port = fail-closed default: any traffic NOT overridden by
+    # a per-context proxy fails instead of leaking via this container's own egress (Phase 0 G8
+    # confirmed per-context proxyServer still overrides this).
+    command:
+      - "--remote-debugging-address=0.0.0.0"
+      - "--remote-debugging-port=9222"
+      - "--no-sandbox"
+      - "--disable-dev-shm-usage"
+      - "--proxy-server=socks5://127.0.0.1:1"
+    # 不 publish 9222:只在 telepy-network 內 / never published to host
 
 networks:
   telepy-network:

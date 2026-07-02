@@ -1195,3 +1195,316 @@ class FileManagerConsumer(FirstMessageAuthConsumer):
         logger.error(f"ReverseServerAuthorizedKeys with id {server_id} does not exist for user {user}")
         return None
 
+
+# 允許的 CDP 輸入事件白名單:只轉發這些,擋掉任意 method 注入。
+# Whitelists so a client can only trigger these exact CDP input events, not arbitrary methods.
+_ALLOWED_MOUSE_EVENTS = {"mousePressed", "mouseReleased", "mouseMoved", "mouseWheel"}
+_ALLOWED_KEY_EVENTS = {"keyDown", "keyUp", "rawKeyDown", "char"}
+_KEY_PASSTHROUGH_FIELDS = (
+    "windowsVirtualKeyCode", "nativeVirtualKeyCode", "code", "key", "text",
+    "unmodifiedText", "modifiers", "autoRepeat", "location", "isKeypad",
+)
+
+
+class RemoteBrowserConsumer(FirstMessageAuthConsumer):
+    """
+    CDP screencast 遠端瀏覽器的雙向橋接 consumer(取代 Neko iframe)。
+
+    畫面:attach 到 session 的分頁 → Page.startScreencast(JPEG) → 每幀轉給 client → ack。
+    輸入:client 的滑鼠/鍵盤/文字/導覽/分頁/resize → 對應 CDP Input.* / Page.* / Target.*。
+
+    安全:
+      - 沿用 FirstMessageAuthConsumer(首則訊息帶 JWT);after_auth 內**再次**用 session 的
+        server_id 重驗 tunnel 權限(不只驗 JWT 身分)。
+      - 所有分頁操作只在本 session 的 browserContextId 內進行:client 給的 target_id 一律
+        先比對「是否屬於本 context」才 attach/close,擋掉跨 session 竊看他人分頁。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cdp = None
+        self.cdp_client = None
+        self.cdp_session_id = None     # attach 後對「該分頁」下指令用的 flat sessionId
+        self.rb_session_id = None      # 我們自己的 remote-browser session id(URL 帶入)
+        self.context_id = None
+        self.target_id = None
+        self.width = 1280
+        self.height = 720
+        self.quality = 60
+        self.every_nth = 1
+        self._frame_tasks = set()
+
+    # ---- 認證後:建立 CDP 串流 -------------------------------------------------
+    async def after_auth(self, user, message):
+        from authorized_keys.remote_browser_service import get_session
+        from services.cdp_client import CdpClient
+        from site_settings.models import SiteSettings
+
+        sid = self.scope.get("url_route", {}).get("kwargs", {}).get("session_id")
+        self.rb_session_id = sid
+        session = await sync_to_async(get_session)(sid)
+        if not session or not session.get("target_id"):
+            logger.warning(f"remote-browser: unknown/incomplete session {sid}")
+            return 4404
+        self.context_id = session.get("context_id")
+        self.target_id = session["target_id"]
+
+        # 重驗權限:憑 session 記的 server_id,再查一次 VIEW 權限(縱使 JWT 有效)。
+        if not await self._verify_access(user, session.get("server_id")):
+            logger.warning(f"remote-browser: access denied user={user} server={session.get('server_id')}")
+            return 4403
+
+        settings = await sync_to_async(SiteSettings.get_solo)()
+        self.quality = getattr(settings, "remote_browser_screencast_quality", 60) or 60
+        self.every_nth = getattr(settings, "remote_browser_screencast_every_nth_frame", 1) or 1
+        cdp_url = getattr(settings, "remote_browser_cdp_url", None)
+        self.cdp_client = CdpClient(base_url=cdp_url) if cdp_url else CdpClient()
+
+        try:
+            self.cdp = await self.cdp_client.connect(event_handler=self._on_cdp_event)
+            await self._attach_and_stream(self.target_id)
+            await self._send_tab_list()
+        except Exception:
+            logger.exception(f"remote-browser: CDP setup failed for {sid}")
+            return 4011
+        self._session_started = asyncio.get_event_loop().time()
+        logger.info(f"remote-browser: streaming session {sid} (target {self.target_id})")
+        return None
+
+    @sync_to_async
+    def _verify_access(self, user, server_id):
+        if server_id is None:
+            return False
+        try:
+            tunnel = ReverseServerAuthorizedKeys.objects.get(id=server_id)
+        except ReverseServerAuthorizedKeys.DoesNotExist:
+            return False
+        return bool(TunnelPermissionManager.check_access(user, tunnel, TunnelPermission.VIEW))
+
+    # ---- CDP 事件:screencast 幀 ---------------------------------------------
+    def _on_cdp_event(self, msg):
+        # 注意:此函式由 CDP reader loop 同步呼叫,**不可**在此 await CDP 回應(ack 的 Future
+        # 也由同一個 reader loop 解析 → 會 self-deadlock)。故一律 create_task 交給獨立協程。
+        # Called synchronously from the CDP reader loop — must NOT await a CDP response here
+        # (its Future is resolved by the same loop → deadlock). Offload to a task.
+        method = msg.get("method")
+        if method == "Page.screencastFrame":
+            t = asyncio.create_task(self._forward_frame(msg.get("params", {})))
+            self._frame_tasks.add(t)
+            t.add_done_callback(self._frame_tasks.discard)
+        elif method == "Inspector.targetCrashed":
+            asyncio.create_task(self._safe_close(code=4012))
+
+    async def _forward_frame(self, params):
+        data = params.get("data")
+        session_id = params.get("sessionId")
+        if data is None:
+            return
+        try:
+            await self.send(text_data=json.dumps({"type": "frame", "data": data}))
+        except Exception:
+            return  # client 已斷,交給 disconnect 收尾
+        # ack 讓 Chrome 送下一幀;client 送得慢 → 這裡慢 ack → 自然背壓,不塞爆記憶體。
+        try:
+            await self.cdp.call("Page.screencastFrameAck",
+                                {"sessionId": session_id},
+                                session_id=self.cdp_session_id, timeout=10)
+        except Exception:
+            pass
+
+    # ---- attach / screencast 控制 -------------------------------------------
+    async def _attach_and_stream(self, target_id):
+        if self.cdp_session_id:
+            for method, params in (("Page.stopScreencast", None),
+                                   ("Target.detachFromTarget", {"sessionId": self.cdp_session_id})):
+                try:
+                    await self.cdp.call(method, params, session_id=(
+                        self.cdp_session_id if method == "Page.stopScreencast" else None))
+                except Exception:
+                    pass
+        att = await self.cdp.call("Target.attachToTarget",
+                                  {"targetId": target_id, "flatten": True})
+        self.cdp_session_id = att["sessionId"]
+        self.target_id = target_id
+        await self.cdp.call("Page.enable", session_id=self.cdp_session_id)
+        await self.cdp.call("Emulation.setDeviceMetricsOverride", {
+            "width": self.width, "height": self.height,
+            "deviceScaleFactor": 1, "mobile": False,
+        }, session_id=self.cdp_session_id)
+        await self._start_screencast()
+
+    async def _start_screencast(self):
+        await self.cdp.call("Page.startScreencast", {
+            "format": "jpeg", "quality": self.quality,
+            "everyNthFrame": self.every_nth,
+            "maxWidth": self.width, "maxHeight": self.height,
+        }, session_id=self.cdp_session_id)
+
+    async def _restart_screencast(self):
+        try:
+            await self.cdp.call("Page.stopScreencast", session_id=self.cdp_session_id)
+        except Exception:
+            pass
+        await self._start_screencast()
+
+    # ---- 分頁(全部限定在本 session 的 context 內) ---------------------------
+    async def _context_targets(self):
+        res = await self.cdp.call("Target.getTargets")
+        return [t for t in res.get("targetInfos", [])
+                if t.get("browserContextId") == self.context_id and t.get("type") == "page"]
+
+    async def _context_target_ids(self):
+        return {t["targetId"] for t in await self._context_targets()}
+
+    async def _send_tab_list(self):
+        tabs = [{
+            "target_id": t["targetId"],
+            "title": t.get("title", ""),
+            "url": t.get("url", ""),
+            "active": t["targetId"] == self.target_id,
+        } for t in await self._context_targets()]
+        await self.send(text_data=json.dumps({"type": "tabs", "tabs": tabs}))
+
+    # ---- 訊息派送 -----------------------------------------------------------
+    async def on_message(self, text_data=None, bytes_data=None):
+        data = _parse_json(text_data)
+        if not isinstance(data, dict):
+            return
+        t = data.get("type")
+        if t == "mouse":
+            await self._handle_mouse(data)
+        elif t == "key":
+            await self._handle_key(data)
+        elif t == "text":
+            await self._handle_text(data)
+        elif t == "navigate":
+            await self._handle_navigate(data)
+        elif t == "tab":
+            await self._handle_tab(data)
+        elif t == "resize":
+            await self._handle_resize(data)
+        # 其餘型別一律忽略 / unknown types ignored
+
+    async def _handle_mouse(self, d):
+        event = d.get("event", "mouseMoved")
+        if event not in _ALLOWED_MOUSE_EVENTS:
+            return
+        params = {"type": event, "x": d.get("x", 0), "y": d.get("y", 0)}
+        for f in ("button", "clickCount", "modifiers"):
+            if f in d:
+                params[f] = d[f]
+        if event == "mouseWheel":
+            params["deltaX"] = d.get("deltaX", 0)
+            params["deltaY"] = d.get("deltaY", 0)
+        await self.cdp.call("Input.dispatchMouseEvent", params, session_id=self.cdp_session_id)
+
+    async def _handle_key(self, d):
+        event = d.get("event")
+        if event not in _ALLOWED_KEY_EVENTS:
+            return
+        params = {"type": event}
+        for f in _KEY_PASSTHROUGH_FIELDS:
+            if f in d:
+                params[f] = d[f]
+        await self.cdp.call("Input.dispatchKeyEvent", params, session_id=self.cdp_session_id)
+
+    async def _handle_text(self, d):
+        text = d.get("text")
+        if text:
+            await self.cdp.call("Input.insertText", {"text": text},
+                                session_id=self.cdp_session_id)
+
+    async def _handle_navigate(self, d):
+        action = d.get("action")
+        if action == "reload":
+            await self.cdp.call("Page.reload", {}, session_id=self.cdp_session_id)
+            return
+        if action in ("back", "forward"):
+            hist = await self.cdp.call("Page.getNavigationHistory",
+                                       session_id=self.cdp_session_id)
+            entries = hist.get("entries", [])
+            idx = hist.get("currentIndex", 0)
+            target = idx - 1 if action == "back" else idx + 1
+            if 0 <= target < len(entries):
+                await self.cdp.call("Page.navigateToHistoryEntry",
+                                    {"entryId": entries[target]["id"]},
+                                    session_id=self.cdp_session_id)
+            return
+        url = (d.get("url") or "").strip()
+        if not url:
+            return
+        low = url.lower()
+        if not (low.startswith("http://") or low.startswith("https://")):
+            if "://" in low:
+                return  # 擋掉 file:// chrome:// 等,避免讀本機資源
+            url = "https://" + url
+        await self.cdp.call("Page.navigate", {"url": url}, session_id=self.cdp_session_id)
+
+    async def _handle_tab(self, d):
+        action = d.get("action")
+        if action == "new":
+            res = await self.cdp.call("Target.createTarget",
+                                      {"url": "about:blank", "browserContextId": self.context_id})
+            new_id = res.get("targetId")
+            if new_id:
+                await self._attach_and_stream(new_id)
+                await self._send_tab_list()
+        elif action == "switch":
+            tid = d.get("target_id")
+            if tid and tid in await self._context_target_ids():
+                await self._attach_and_stream(tid)
+                await self._send_tab_list()
+        elif action == "close":
+            tid = d.get("target_id")
+            if tid and tid in await self._context_target_ids():
+                await self.cdp.call("Target.closeTarget", {"targetId": tid})
+                if tid == self.target_id:
+                    remaining = await self._context_target_ids()
+                    if remaining:
+                        await self._attach_and_stream(next(iter(remaining)))
+                await self._send_tab_list()
+        elif action == "list":
+            await self._send_tab_list()
+
+    async def _handle_resize(self, d):
+        try:
+            w = int(d.get("width") or self.width)
+            h = int(d.get("height") or self.height)
+        except (TypeError, ValueError):
+            return
+        # 夾在合理範圍,避免異常值把 Chrome 逼到怪狀態
+        self.width = max(200, min(w, 3840))
+        self.height = max(200, min(h, 2160))
+        await self.cdp.call("Emulation.setDeviceMetricsOverride", {
+            "width": self.width, "height": self.height,
+            "deviceScaleFactor": 1, "mobile": False,
+        }, session_id=self.cdp_session_id)
+        await self._restart_screencast()
+
+    # ---- 斷線收尾 -----------------------------------------------------------
+    async def disconnect(self, close_code):
+        await super().disconnect(close_code)   # 取消 auth 逾時計時器 / cancel auth timer
+        for t in list(self._frame_tasks):
+            t.cancel()
+        cdp = self.cdp
+        if cdp is not None:
+            self.cdp = None
+            try:
+                if self.cdp_session_id:
+                    await cdp.call("Page.stopScreencast",
+                                   session_id=self.cdp_session_id, timeout=3)
+            except Exception:
+                pass
+            try:
+                await cdp.close()
+            except Exception:
+                pass
+        # WS 一斷即結束整個 session(收 ssh + dispose context);idle GC 當後備。
+        sid = self.rb_session_id
+        self.rb_session_id = None
+        if sid:
+            try:
+                from authorized_keys.remote_browser_service import stop_remote_browser
+                await sync_to_async(stop_remote_browser)(sid)
+            except Exception:
+                logger.exception(f"remote-browser: stop_remote_browser failed for {sid}")

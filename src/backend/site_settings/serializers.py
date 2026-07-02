@@ -8,34 +8,20 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
             'allow_registration',
             'remote_browser_session_idle_timeout',
             'remote_browser_max_sessions',
-            'remote_browser_neko_image',
+            'remote_browser_cdp_url',
+            'remote_browser_screencast_quality',
+            'remote_browser_screencast_every_nth_frame',
         ]
 
-    def create(self, validated_data):
-        instance = SiteSettings.get_solo()
-        instance.allow_registration = validated_data.get('allow_registration', instance.allow_registration)
-        instance.remote_browser_session_idle_timeout = validated_data.get(
-            'remote_browser_session_idle_timeout', instance.remote_browser_session_idle_timeout
-        )
-        instance.remote_browser_max_sessions = validated_data.get(
-            'remote_browser_max_sessions', instance.remote_browser_max_sessions
-        )
-        instance.remote_browser_neko_image = validated_data.get(
-            'remote_browser_neko_image', instance.remote_browser_neko_image
-        )
+    def _apply(self, instance, validated_data):
+        for field in self.Meta.fields:
+            if field in validated_data:
+                setattr(instance, field, validated_data[field])
         instance.save()
         return instance
 
+    def create(self, validated_data):
+        return self._apply(SiteSettings.get_solo(), validated_data)
+
     def update(self, instance, validated_data):
-        instance.allow_registration = validated_data.get('allow_registration', instance.allow_registration)
-        instance.remote_browser_session_idle_timeout = validated_data.get(
-            'remote_browser_session_idle_timeout', instance.remote_browser_session_idle_timeout
-        )
-        instance.remote_browser_max_sessions = validated_data.get(
-            'remote_browser_max_sessions', instance.remote_browser_max_sessions
-        )
-        instance.remote_browser_neko_image = validated_data.get(
-            'remote_browser_neko_image', instance.remote_browser_neko_image
-        )
-        instance.save()
-        return instance
+        return self._apply(instance, validated_data)

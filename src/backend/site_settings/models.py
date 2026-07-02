@@ -21,11 +21,26 @@ class SiteSettings(models.Model):
         help_text="Maximum number of concurrent proxy-browser sessions (0 = unlimited).",
     )
 
-    remote_browser_neko_image = models.CharField(
+    remote_browser_cdp_url = models.CharField(
         max_length=255,
-        default="telepy-neko-chromium:latest",
-        verbose_name="Remote Browser Neko Image",
-        help_text="Docker image used for the Neko proxy-browser rooms (must be whitelisted in neko-rooms).",
+        default="http://chromium:9222",
+        verbose_name="Remote Browser CDP URL",
+        help_text="Chrome DevTools Protocol endpoint of the shared headless Chromium "
+                  "(internal to telepy-network; never published to the host).",
+    )
+
+    remote_browser_screencast_quality = models.IntegerField(
+        default=60,
+        verbose_name="Remote Browser Screencast JPEG Quality",
+        help_text="JPEG quality (1–100) for CDP Page.startScreencast frames. "
+                  "Lower = less bandwidth, softer image.",
+    )
+
+    remote_browser_screencast_every_nth_frame = models.IntegerField(
+        default=1,
+        verbose_name="Remote Browser Screencast Every Nth Frame",
+        help_text="Send only every Nth frame (1 = every frame). Raise to cut "
+                  "bandwidth/CPU on high-motion pages.",
     )
 
     @classmethod
