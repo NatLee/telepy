@@ -32,6 +32,11 @@ export interface LatencyIndicatorProps {
     tooltipContent?: React.ReactNode;
     /** Small muted prefix rendered before the value (e.g. "你→伺服器"). */
     label?: string;
+    /**
+     * 為數值保留固定欄寬（tabular-nums + min-width），位數變動時不推擠周圍版面。
+     * Reserve a fixed-width slot for the value so digit-count changes never shift the layout.
+     */
+    reserveWidth?: boolean;
     className?: string;
 }
 
@@ -63,6 +68,7 @@ export function LatencyIndicator({
     withTooltip = true,
     tooltipContent,
     label,
+    reserveWidth = false,
     className,
 }: LatencyIndicatorProps) {
     const known = online && rttMs != null && Number.isFinite(rttMs);
@@ -100,7 +106,13 @@ export function LatencyIndicator({
             {showValue && (
                 <span className="inline-flex items-center gap-0.5">
                     {label && <span className="text-muted-foreground/70">{label}</span>}
-                    <span className={cn("font-medium", tier ? tier.textClass : "text-muted-foreground")}>
+                    <span
+                        className={cn(
+                            "font-medium transition-colors",
+                            tier ? tier.textClass : "text-muted-foreground",
+                            reserveWidth && "inline-block min-w-[4.75ch] text-left"
+                        )}
+                    >
                         {known ? `${Math.round(rttMs as number)}ms` : "—"}
                     </span>
                 </span>

@@ -56,6 +56,7 @@
   --animate-pulse-glow: pulse-glow 2s infinite;
   --animate-pulse-step: pulse-step 2s infinite;
   --animate-progress-fill: progress-fill 0.5s ease-out forwards;
+  --animate-latency-flow: latency-flow 1.6s ease-in-out infinite;
   --animate-dialog-overlay-show: dialog-overlay-show 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-overlay-hide: dialog-overlay-hide 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-content-show: dialog-content-show 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
@@ -120,6 +121,28 @@
 
     to {
       transform: scaleX(1);
+    }
+  }
+
+  /* 延遲路徑上的資料流光點（TerminalLatencyBadge）：沿 hop 線左→右滑動。
+     Data-flow dot gliding along a latency hop line (TerminalLatencyBadge). */
+  @keyframes latency-flow {
+    0% {
+      left: 0%;
+      opacity: 0;
+    }
+
+    15% {
+      opacity: 1;
+    }
+
+    85% {
+      opacity: 1;
+    }
+
+    100% {
+      left: calc(100% - 5px);
+      opacity: 0;
     }
   }
 
