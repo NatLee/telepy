@@ -6,7 +6,6 @@ import signal
 import fcntl
 import termios
 import struct
-import base64
 import codecs
 import subprocess
 
@@ -26,76 +25,125 @@ from authorized_keys.models import ReverseServerAuthorizedKeys
 from authorized_keys.models import ReverseServerUsernames
 from tunnels.models import TunnelSharing, TunnelPermissionManager, TunnelPermission
 
-from common.ws_ticket import consume_ticket
-
 import logging
 logger = logging.getLogger(__name__)
 
 
-def _parse_ws_subprotocols(scope):
-    """
-    解析 WebSocket subprotocols。/ Parse WebSocket subprotocols.
-    - ticket：新版一次性身分票（首選）/ new one-time identity ticket (preferred)
-    - token ：舊版 JWT（過渡相容，之後移除）/ legacy JWT (temporary fallback, remove later)
-    - server_id / username / tunnel_id：非敏感的資源識別 / non-sensitive resource ids
-    - echo：交握時要回選的 subprotocol（非敏感值）/ subprotocol to echo on accept (non-sensitive)
-    """
-    result = {'ticket': None, 'token': None, 'server_id': None, 'username': None, 'tunnel_id': None, 'echo': None}
-    for protocol in scope.get('subprotocols') or []:
-        if protocol.startswith('ticket.'):
-            result['ticket'] = protocol.split('.', 1)[1]
-            result['echo'] = protocol  # 已用掉的 ticket，可安全 echo / already consumed, safe to echo
-        elif protocol.startswith('token.'):
-            try:
-                result['token'] = base64.b64decode(protocol.split('.', 1)[1]).decode()
-            except Exception:
-                pass
-        elif protocol.startswith('server.'):
-            result['server_id'] = protocol.split('.', 1)[1]
-        elif protocol.startswith('username.'):
-            result['username'] = protocol.split('.', 1)[1]
-        elif protocol.startswith('tunnel.'):
-            result['tunnel_id'] = protocol.split('.', 1)[1]
-        elif protocol.startswith('auth.'):
-            if result['echo'] is None:
-                result['echo'] = protocol  # legacy echo subprotocol
-    return result
+# 連線後多少秒內必須送出有效的 auth 訊息，否則關閉（避免未認證連線佔用資源）。
+# Seconds allowed to send a valid auth frame after connect (reaps unauthenticated sockets).
+WS_AUTH_TIMEOUT = 10
 
 
-@sync_to_async
-def _consume_ticket_async(ticket):
-    return consume_ticket(ticket)
+def _parse_json(text_data):
+    """安全解析 JSON 文字訊息；失敗回傳 None。/ Safely parse a JSON text frame; None on failure."""
+    if not text_data:
+        return None
+    try:
+        return json.loads(text_data)
+    except (json.JSONDecodeError, TypeError):
+        return None
 
 
-async def _resolve_ws_user(ticket, token):
+async def _authenticate_token(token):
     """
-    解析 WebSocket 身分：優先用一次性 ticket；為平滑升級，暫時仍相容舊的 JWT token。
-    Resolve the WS user: prefer the one-time ticket; still accept the legacy JWT for zero-downtime
-    migration. Returns (user, error_code); error_code is None on success, otherwise a WS close code.
-    TODO: 前端全面改用 ticket 後移除 token 後援。/ Remove the token fallback once the frontend uses tickets everywhere.
+    驗證「第一則 auth 訊息」帶來的 JWT，回傳 (user, error_code)。
+    error_code：None 代表通過；4000 缺 token；4001 token 無效/過期或使用者不存在。
+    Validate the JWT from the first auth frame. Returns (user, error_code).
     """
-    if ticket:
-        user_id = await _consume_ticket_async(ticket)
-        if user_id is None:
-            logger.error("WS ticket invalid or expired")
-            return None, 4001
+    if not token:
+        return None, 4000
+    try:
+        access_token = AccessToken(token)
+    except (InvalidToken, TokenError) as e:
+        logger.warning(f"WS token invalid: {e}")
+        return None, 4001
+    try:
+        user = await sync_to_async(User.objects.get)(id=access_token['user_id'])
+    except User.DoesNotExist:
+        return None, 4001
+    return user, None
+
+
+class FirstMessageAuthConsumer(AsyncWebsocketConsumer):
+    """
+    「連線後第一則訊息帶 token」認證的共用基底（取代 ws-ticket / subprotocol JWT）。
+
+    流程：
+      1. connect(): 立即 accept()，並啟動 auth 逾時計時器（WS_AUTH_TIMEOUT 秒）。
+      2. 第一則訊息必須是 {"type": "auth", "token": "<jwt>", ...}；先驗證 JWT，通過後呼叫
+         after_auth() 讓各 consumer 做自己的權限檢查與資源建立；成功後才把後續訊息交給 on_message()。
+      3. 逾時未認證、JWT 無效、或 after_auth 回傳關閉碼 -> 以對應碼關閉連線。
+
+    為什麼這樣做：JWT 只出現在 WebSocket 訊息 payload，不進 URL / subprotocol / 任何請求 header，
+    因此不會被反向代理或 access log 記錄下來（這是相較於「token 放 subprotocol」的安全優勢），
+    同時又省掉 ws-ticket 那一趟預先 HTTP round-trip（連線更快）。
+
+    First-message auth base: accept() immediately, then the first frame must be
+    {"type":"auth","token":...}. On a valid JWT, after_auth() runs the per-consumer permission/resource
+    setup; later frames go to on_message(). The JWT never leaves the WS payload (not in URL/subprotocol/
+    headers, so proxies/logs can't capture it) and there's no ws-ticket pre-flight round-trip.
+
+    子類別覆寫：
+      after_auth(user, message) -> Optional[int]：權限檢查與資源建立，成功回 None，失敗回 WS 關閉碼。
+      on_message(text_data, bytes_data)：認證後的一般訊息處理。
+    子類別若覆寫 disconnect()，請務必呼叫 super().disconnect() 以取消逾時計時器。
+    """
+
+    async def connect(self):
+        self._authed = False
+        self._auth_timeout_task = None
+        await self.accept()
+        self._auth_timeout_task = asyncio.create_task(self._await_auth_timeout())
+
+    async def _await_auth_timeout(self):
         try:
-            return await sync_to_async(User.objects.get)(id=user_id), None
-        except User.DoesNotExist:
-            return None, 4001
-    if token:
-        try:
-            access_token = AccessToken(token)
-            return await sync_to_async(User.objects.get)(id=access_token['user_id']), None
-        except (InvalidToken, TokenError) as e:
-            logger.error(f"Token invalid: {e}")
-            return None, 4001
-        except User.DoesNotExist:
-            return None, 4001
-    return None, 4000
+            await asyncio.sleep(WS_AUTH_TIMEOUT)
+        except asyncio.CancelledError:
+            return
+        if not self._authed:
+            logger.warning(f"{type(self).__name__}: no auth within {WS_AUTH_TIMEOUT}s, closing")
+            await self.close(code=4001)
+
+    async def receive(self, text_data=None, bytes_data=None):
+        # 尚未認證：只接受第一則 auth 訊息，其餘一律拒絕。
+        # Not yet authenticated: only the first auth frame is accepted; everything else is rejected.
+        if not getattr(self, '_authed', False):
+            await self._authenticate(text_data)
+            return
+        await self.on_message(text_data=text_data, bytes_data=bytes_data)
+
+    async def _authenticate(self, text_data):
+        data = _parse_json(text_data)
+        if not isinstance(data, dict) or data.get('type') != 'auth':
+            await self.close(code=4000)
+            return
+        user, err = await _authenticate_token(data.get('token'))
+        if err is not None:
+            await self.close(code=err)
+            return
+        err = await self.after_auth(user, data)
+        if err is not None:
+            await self.close(code=err)
+            return
+        self._authed = True
+        if self._auth_timeout_task is not None:
+            self._auth_timeout_task.cancel()
+
+    async def disconnect(self, close_code):
+        task = getattr(self, '_auth_timeout_task', None)
+        if task is not None:
+            task.cancel()
+
+    async def after_auth(self, user, message):
+        """驗證通過後的權限檢查與資源建立。成功回 None，否則回 WS 關閉碼。/ Override in subclass."""
+        return None
+
+    async def on_message(self, text_data=None, bytes_data=None):
+        """認證後的一般訊息處理。/ Handle post-auth messages. Override in subclass."""
+        return
 
 
-class TerminalConsumer(AsyncWebsocketConsumer):
+class TerminalConsumer(FirstMessageAuthConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.child_pid = None
@@ -106,25 +154,15 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         # boundary; the incremental decoder buffers the incomplete tail so we neither crash nor mojibake.
         self._output_decoder = codecs.getincrementaldecoder('utf-8')('replace')
 
-    async def connect(self):
-        logger.info("WebSocket connection attempt")
-        info = _parse_ws_subprotocols(self.scope)
-        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
-        server_id = info['server_id']
-        username = info['username']
-
-        # 必要 subprotocol：身分（ticket 或舊版 token）+ server + username
-        if not (info['ticket'] or info['token']) or not server_id or not username:
-            logger.error("Missing required subprotocols")
-            await self.close(code=4000)
-            return
-
-        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
-        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
-        if auth_error is not None:
-            await self.close(code=auth_error)
-            return
-        logger.info(f"User authenticated: {user}")
+    async def after_auth(self, user, message):
+        # 認證後：從 auth 訊息取得資源識別（非敏感，隨 token 一起在 payload 內）。
+        # After auth: read the (non-sensitive) resource ids from the auth message payload.
+        server_id = str(message.get('server_id') or '')
+        username = message.get('username')
+        if not server_id or not username:
+            logger.error("Terminal auth message missing server_id/username")
+            return 4000
+        logger.info(f"Terminal user authenticated: {user}")
 
         # 一次完成所有連線前的 DB 檢查（權限 / port / 是否有目標使用者 / username 是否允許），
         # 取代原本 4 次分開的 sync_to_async round-trip，減少 thread-pool 切換與 SQLite 讀取次數。
@@ -132,12 +170,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         reverse_port, access_error = await self._resolve_terminal_access(user, server_id, username)
         if access_error is not None:
             logger.error(f"Terminal access denied for user [{user}] server [{server_id}] (code={access_error})")
-            await self.close(code=access_error)
-            return
-
-        # Accept the WebSocket connection with the subprotocol token
-        await self.accept(subprotocol_auth)
-        logger.info("WebSocket connection accepted")
+            return access_error
 
         # Start the SSH connection
         if self.child_pid is None:
@@ -168,8 +201,8 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 logger.info("SSH connection started")
             except Exception as e:
                 logger.error(f"Error starting SSH connection: {e}")
-                await self.close(code=4005)
-                return
+                return 4005
+        return None
 
     @sync_to_async
     def _resolve_terminal_access(self, user, server_id, username):
@@ -206,6 +239,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
 
 
     async def disconnect(self, close_code):
+        await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
         # Gracefully terminate the child process
         if self.child_pid:
             try:
@@ -225,7 +259,7 @@ class TerminalConsumer(AsyncWebsocketConsumer):
                 self.child_pid = None
                 self.fd = None
 
-    async def receive(self, text_data=None, bytes_data=None):
+    async def on_message(self, text_data=None, bytes_data=None):
         # Handle receiving input from the client (e.g., keyboard input)
         if not text_data:
             return
@@ -303,28 +337,10 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             self._stop_forwarding()
             asyncio.ensure_future(self.close())
 
-class NotificationConsumer(AsyncWebsocketConsumer):
-    async def connect(self):
-
-        # Authenticate user via one-time ticket (preferred) or legacy JWT in subprotocols
-        self.user = None
-
-        info = _parse_ws_subprotocols(self.scope)
-        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
-
-        # 必要：身分（ticket 或舊版 token）
-        if not (info['ticket'] or info['token']):
-            logger.error("Missing required subprotocols")
-            await self.close(code=4000)
-            return
-
-        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
-        if auth_error is not None:
-            await self.close(code=auth_error)
-            return
+class NotificationConsumer(FirstMessageAuthConsumer):
+    async def after_auth(self, user, message):
         self.user = user
-        logger.info(f"User authenticated: {self.user}")
-
+        logger.info(f"Notification user authenticated: {self.user}")
 
         # Join user-specific notification group
         self.user_group_name = f'user_{self.user.id}_notifications'
@@ -332,10 +348,10 @@ class NotificationConsumer(AsyncWebsocketConsumer):
             self.user_group_name,
             self.channel_name
         )
-
-        await self.accept(subprotocol_auth)
+        return None
 
     async def disconnect(self, close_code):
+        await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
         # Leave user notification group.
         # 注意：connect() 加入的是 self.user_group_name（不是 room_group_name）。
         # 舊碼誤判 hasattr(self, 'room_group_name') 這個從未設定的屬性，導致 group_discard
@@ -349,7 +365,7 @@ class NotificationConsumer(AsyncWebsocketConsumer):
                 self.channel_name
             )
 
-    async def receive(self, text_data=None, bytes_data=None):
+    async def on_message(self, text_data=None, bytes_data=None):
         # 應用層心跳：回應前端 ping，用於偵測半開連線。/ App-level heartbeat: reply to the client's ping.
         if not text_data:
             return
@@ -443,52 +459,36 @@ def tunnel_connection_event(message: dict):
 
 
 
-class TunnelConnectionConsumer(AsyncWebsocketConsumer):
+class TunnelConnectionConsumer(FirstMessageAuthConsumer):
     """
     WebSocket consumer for monitoring tunnel connection status during creation.
-    Requires JWT via subprotocols similar to TerminalConsumer.
+    Authenticates via the first {"type":"auth","token":...,"tunnel_id":...} message.
     """
-    async def connect(self):
-        logger.info("TunnelConnection WebSocket connection attempt")
-        # Parse subprotocols: ticket.<ticket> (preferred) or token.<base64(jwt)> (legacy), tunnel.<id>
-        info = _parse_ws_subprotocols(self.scope)
-        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
-        tunnel_id = info['tunnel_id']
-
-        # Fallback to URL param if not provided via subprotocol (shouldn't happen)
+    async def after_auth(self, user, message):
+        # tunnel_id 隨 auth 訊息帶入；若無則退回 URL route 參數。
+        # tunnel_id comes in the auth message; fall back to the URL route param.
+        tunnel_id = message.get('tunnel_id') or self.scope['url_route']['kwargs'].get('tunnel_id')
         if not tunnel_id:
-            tunnel_id = self.scope['url_route']['kwargs'].get('tunnel_id')
-
-        if not (info['ticket'] or info['token']) or not tunnel_id:
-            logger.error("[TunnelConnection] Missing required subprotocols (ticket/token + tunnel)")
-            await self.close(code=4000)
-            return
+            logger.error("[TunnelConnection] auth message missing tunnel_id")
+            return 4000
 
         self.tunnel_id = str(tunnel_id)
         self.room_group_name = f'tunnel_connection_{self.tunnel_id}'
-
-        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
-        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
-        if auth_error is not None:
-            await self.close(code=auth_error)
-            return
         logger.info(f"[TunnelConnection] User authenticated: {user}")
 
         # Ensure the tunnel belongs to the user
         has_permissions = await self._check_tunnel_permission(user, self.tunnel_id)
         if not has_permissions:
             logger.error(f"[TunnelConnection] User [{user}] has no access to tunnel [{self.tunnel_id}]")
-            await self.close(code=4004)
-            return
+            return 4004
 
-        # Join room and accept
+        # Join room (socket already accepted by the base) and send initial status.
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-        await self.accept(subprotocol_auth)
-
-        # Send initial connection status
         await self.send_connection_status()
+        return None
 
     async def disconnect(self, close_code):
+        await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
         # Leave room group
         if hasattr(self, 'room_group_name'):
             await self.channel_layer.group_discard(
@@ -496,7 +496,7 @@ class TunnelConnectionConsumer(AsyncWebsocketConsumer):
                 self.channel_name
             )
 
-    async def receive(self, text_data=None, bytes_data=None):
+    async def on_message(self, text_data=None, bytes_data=None):
         # 應用層心跳：回應前端 ping。/ App-level heartbeat: reply to the client's ping.
         if not text_data:
             return
@@ -579,10 +579,11 @@ def send_tunnel_connection_update(tunnel_id: int, message: dict):
             }
         )
 
-class FileManagerConsumer(AsyncWebsocketConsumer):
+class FileManagerConsumer(FirstMessageAuthConsumer):
     """
     WebSocket Consumer for file management operations
-    Handles file listing, upload, and download operations via WebSocket
+    Handles file listing, upload, and download operations via WebSocket.
+    Authenticates via the first {"type":"auth","token":...,"server_id":...,"username":...} message.
     """
     
     def __init__(self, *args, **kwargs):
@@ -597,39 +598,27 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         self.ssh_stdout = None
         self.ssh_stderr = None
 
-    async def connect(self):
-        logger.info("FileManager WebSocket connection attempt")
-        # Parse subprotocols: ticket.<ticket> (preferred) or token.<base64(jwt)> (legacy), server.<id>, username.<name>
-        info = _parse_ws_subprotocols(self.scope)
-        subprotocol_auth = info['echo']  # 交握時回選的 subprotocol（非敏感）/ non-sensitive echo
-        server_id = info['server_id']
-        username = info['username']
-
-        if not (info['ticket'] or info['token']) or not server_id or not username:
-            logger.error("Missing required subprotocols")
-            await self.close(code=4000)
-            return
-
-        # 解析身分：優先一次性 ticket，過渡期相容舊 JWT / prefer one-time ticket, legacy JWT fallback
-        user, auth_error = await _resolve_ws_user(info['ticket'], info['token'])
-        if auth_error is not None:
-            await self.close(code=auth_error)
-            return
-        logger.info(f"FileManager User authenticated: {user}")
+    async def after_auth(self, user, message):
+        # 認證後：從 auth 訊息取得資源識別（非敏感，隨 token 在 payload 內）。
+        # After auth: read the (non-sensitive) resource ids from the auth message payload.
+        server_id = str(message.get('server_id') or '')
+        username = message.get('username')
+        if not server_id or not username:
+            logger.error("FileManager auth message missing server_id/username")
+            return 4000
+        logger.info(f"FileManager user authenticated: {user}")
 
         # Check if user has access to the server
         has_permissions = await self.check_permissions(user, server_id)
         if not has_permissions:
             logger.error(f"User [{user}] does not have access to server [{server_id}]")
-            await self.close(code=4004)
-            return
+            return 4004
 
         # Get reverse server port (to validate server ID)
         reverse_port = await self.get_reverse_server_port(server_id, user)
         if not reverse_port:
             logger.error(f"Invalid server ID: {server_id}")
-            await self.close(code=4002)
-            return
+            return 4002
 
         # Check if any target server usernames exist (4006 = none configured)
         has_usernames = await sync_to_async(
@@ -637,14 +626,12 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
         )()
         if not has_usernames:
             logger.error(f"No target server usernames configured for server [{server_id}]")
-            await self.close(code=4006)
-            return
+            return 4006
 
         # Check if username is valid
         if not await self.check_username(server_id, username, user):
             logger.error(f"Invalid username: {username}")
-            await self.close(code=4003)
-            return
+            return 4003
 
         # Store connection details
         self.server_id = server_id
@@ -671,36 +658,32 @@ class FileManagerConsumer(AsyncWebsocketConsumer):
                 )()
                 if not sharing_exists:
                     logger.error(f"User [{user}] does not have access to server [{server_id}]")
-                    await self.close(code=4004)
-                    return
+                    return 4004
             except ReverseServerAuthorizedKeys.DoesNotExist:
                 logger.error(f"ReverseServerAuthorizedKeys with id [{server_id}] does not exist")
-                await self.close(code=4004)
-                return
+                return 4004
 
-        # Accept the WebSocket connection
-        await self.accept(subprotocol_auth)
-        
-        # Initialize persistent SSH session
+        # Socket already accepted by the base; initialize the persistent SSH session.
         try:
             await self.initialize_ssh_session()
-            logger.info("FileManager WebSocket connection accepted with persistent SSH session")
+            logger.info("FileManager authenticated with persistent SSH session")
         except Exception as e:
             logger.error(f"Failed to initialize SSH session: {e}")
             # 清掉可能已 spawn 的 ControlMaster 'cat' 子程序，避免失敗連線累積殭屍 SSH。
             # Clean up the ControlMaster 'cat' subprocess that may already be running so failed
             # connects don't accumulate orphaned SSH processes.
             await self.cleanup_ssh_session()
-            await self.close(code=4005)
-            return
+            return 4005
+        return None
 
     async def disconnect(self, close_code):
+        await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
         logger.info(f"FileManager WebSocket disconnected with code: {close_code}")
-        
+
         # Clean up SSH session
         await self.cleanup_ssh_session()
 
-    async def receive(self, text_data=None, bytes_data=None):
+    async def on_message(self, text_data=None, bytes_data=None):
         """Handle incoming WebSocket messages for file operations"""
         if not text_data:
             return
