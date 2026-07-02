@@ -75,7 +75,18 @@ Channels `/ws`。ssh `-D` SOCKS 段、REST 三 URL、`FirstMessageAuthConsumer`�
    **已用 socat 完整重現並驗證**（`dev-scripts/cdp_socat_repro.py`，5/5）：確認
    hostname Host→500、IP Host→200、client 經 socat 橋接建 session 並串流 26 幀成功。
 
-8. **附帶修復兩處環境健壯性**（非本功能、但不修就無法跑測試/CI）：
+9. **部署後回報的「方塊字 + 卡住」修正**：
+   - **方塊字（CJK tofu）**：`chromedp/headless-shell` 無 CJK 字型。compose 的 chromium 服務
+     改為 `build: ./docker/chromium`（`FROM chromedp/headless-shell + fonts-noto-cjk`），
+     保留原 image 的 `run.sh`/socat 拓撲。重建：`docker compose up -d --build chromium`。
+   - **卡住（效能）**：根因是「每個 mouse move 都 `await` 一個 CDP round-trip」，高頻輸入把
+     CDP 連線與 reader loop 塞爆,害 screencast 的 ack Future 遲遲無法解析 → 串流停住。修正：
+     (a) 新增 `CdpConnection.notify`(fire-and-forget,不等回應),滑鼠/鍵盤/文字輸入與
+     `screencastFrameAck` 全改用它；(b) 同一條 CDP 連線的並發送出以 `asyncio.Lock` 序列化，
+     避免訊框交錯；(c) 前端 mousemove 以 requestAnimationFrame 節流(一幀只送最新一筆)。
+     已用 socat 拓撲重跑驗證:fire-and-forget ack 下串流照常(25 幀),40 後端測試綠。
+
+10. **附帶修復兩處環境健壯性**（非本功能、但不修就無法跑測試/CI）：
    - `settings.py` `LOG_ROOT`：容器外退回 repo 相對路徑（原本硬寫 `/logs`，CI/本機直跑會崩）。
    - `authorized_keys/signals.py`：`post_migrate` 讀不到 `id_rsa.pub` 時記錄後略過，不再
      讓整個 migrate/test 崩（容器內該檔仍在，行為不變）。可用 `WEB_SERVICE_SSH_PUBKEY` 覆寫路徑。

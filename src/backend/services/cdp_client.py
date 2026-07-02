@@ -52,6 +52,10 @@ class CdpConnection:
         self._pending = {}
         self._next_id = 0
         self.closed = False
+        # 多個協程會對同一條 CDP 連線送訊令(輸入來自 on_message、ack 來自各幀轉發 task)。
+        # 用鎖序列化 ws.send,避免並發寫交錯毀損 WebSocket 訊框。
+        # Serialize ws.send: input (on_message) and acks (frame tasks) write concurrently.
+        self._send_lock = asyncio.Lock()
         self._reader_task = asyncio.ensure_future(self._read_loop())
 
     @classmethod
@@ -102,7 +106,8 @@ class CdpConnection:
         fut = asyncio.get_running_loop().create_future()
         self._pending[mid] = fut
         try:
-            await self._ws.send(json.dumps(msg))
+            async with self._send_lock:
+                await self._ws.send(json.dumps(msg))
             resp = await asyncio.wait_for(fut, timeout)
         except asyncio.TimeoutError:
             self._pending.pop(mid, None)
@@ -116,6 +121,28 @@ class CdpConnection:
             err = resp["error"]
             raise CdpError(f"{method}: {err.get('message')} (code {err.get('code')})")
         return resp.get("result", {})
+
+    async def notify(self, method, params=None, session_id=None):
+        """
+        送出 CDP 指令但**不等回應**(fire-and-forget)。用於高頻、不需要回傳值的訊令:
+        滑鼠/鍵盤/文字輸入,以及 screencastFrameAck。避免每個事件都吃一個 reader-loop
+        round-trip —— 那正是「滑鼠一動整個畫面就卡住」的元兇(輸入把 CDP 連線塞爆、
+        害 ack 的 Future 遲遲無法解析,screencast 因等不到 ack 而停住)。
+        Fire-and-forget for high-frequency, result-less commands (input + frame ack). Awaiting a
+        response per mouse-move congests the reader loop and stalls the ack-gated screencast.
+        """
+        if self.closed:
+            return
+        self._next_id += 1
+        msg = {"id": self._next_id, "method": method, "params": params or {}}
+        if session_id is not None:
+            msg["sessionId"] = session_id
+        # Chrome 仍會回一則帶此 id 的回應;reader 找不到對應 pending 就丟棄,不佔資源。
+        try:
+            async with self._send_lock:
+                await self._ws.send(json.dumps(msg))
+        except Exception:
+            pass
 
     async def close(self):
         self.closed = True

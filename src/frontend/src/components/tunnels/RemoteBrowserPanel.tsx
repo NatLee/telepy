@@ -204,9 +204,19 @@ export function RemoteBrowserPanel({
             modifiers: c.modifiers,
         });
     };
+    // mousemove 節流:一個 animation frame 只送最新一筆(否則每像素一則訊息會塞爆 WS → 卡頓)。
+    const pendingMove = useRef<{ x: number; y: number; modifiers: number } | null>(null);
+    const moveRaf = useRef<number | null>(null);
+    const flushMove = () => {
+        moveRaf.current = null;
+        const m = pendingMove.current;
+        pendingMove.current = null;
+        if (m) clientRef.current?.sendMouse("mouseMoved", m.x, m.y, { modifiers: m.modifiers });
+    };
     const onMouseMove = (e: React.MouseEvent) => {
         const c = mouseCommon(e);
-        clientRef.current?.sendMouse("mouseMoved", c.x, c.y, { modifiers: c.modifiers });
+        pendingMove.current = { x: c.x, y: c.y, modifiers: c.modifiers };
+        if (moveRaf.current == null) moveRaf.current = requestAnimationFrame(flushMove);
     };
     const onWheel = (e: React.WheelEvent) => {
         const canvas = canvasRef.current!;

@@ -58,8 +58,9 @@ async def run():
             p = m["params"]
             async def fwd():
                 frames.append(len(p["data"]))
-                await conn.call("Page.screencastFrameAck", {"sessionId": p["sessionId"]},
-                                session_id=sid, timeout=5)
+                # 用 notify(fire-and-forget)ack —— 與 consumer 現在的行為一致
+                await conn.notify("Page.screencastFrameAck", {"sessionId": p["sessionId"]},
+                                  session_id=sid)
             asyncio.create_task(fwd())
     conn = await client.connect(event_handler=on_ev)      # WS upgrade must pass Host+origin checks
     att = await conn.call("Target.attachToTarget", {"targetId": ids["target_id"], "flatten": True})

@@ -119,9 +119,13 @@ services:
   # telepy-network and is NEVER published to the host.
   chromium:
     <<: [ *common-networks, *common-restart ]
-    # 預設用官方 headless-shell;若中文顯示豆腐字,改建 ./docker/chromium(含 fonts-noto-cjk)
-    # 後把此行換成 image: telepy-chromium:latest。/ Swap to the CJK-font image if needed.
-    image: chromedp/headless-shell:latest
+    # 用自建 image(FROM chromedp/headless-shell + fonts-noto-cjk),否則中文/日韓網頁會顯示
+    # 豆腐方塊字。build 保留原 image 的 entrypoint(run.sh:headless-shell@9223 + socat 9222→9223)。
+    # 重建:docker compose up -d --build chromium
+    # Custom image = chromedp/headless-shell + CJK fonts (otherwise CJK pages render as tofu).
+    build:
+      context: ./docker/chromium
+    image: telepy-chromium:latest
     container_name: telepy-chromium-${PROJECT_NAME}
     hostname: telepy-chromium-${PROJECT_NAME}
     shm_size: "2gb"

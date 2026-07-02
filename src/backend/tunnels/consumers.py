@@ -1304,11 +1304,12 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
             await self.send(text_data=json.dumps({"type": "frame", "data": data}))
         except Exception:
             return  # client 已斷,交給 disconnect 收尾
-        # ack 讓 Chrome 送下一幀;client 送得慢 → 這裡慢 ack → 自然背壓,不塞爆記憶體。
+        # ack 讓 Chrome 送下一幀;client 送得慢 → 這裡的 send 慢 → 自然背壓。
+        # 用 notify(不等回應):ack 不需要回傳值,且避免和輸入事件搶 reader loop 導致串流卡住。
         try:
-            await self.cdp.call("Page.screencastFrameAck",
-                                {"sessionId": session_id},
-                                session_id=self.cdp_session_id, timeout=10)
+            await self.cdp.notify("Page.screencastFrameAck",
+                                  {"sessionId": session_id},
+                                  session_id=self.cdp_session_id)
         except Exception:
             pass
 
@@ -1396,7 +1397,8 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
         if event == "mouseWheel":
             params["deltaX"] = d.get("deltaX", 0)
             params["deltaY"] = d.get("deltaY", 0)
-        await self.cdp.call("Input.dispatchMouseEvent", params, session_id=self.cdp_session_id)
+        # 高頻輸入用 notify(不等回應):每個 mouse move 都等 RTT 會塞爆 CDP 連線、卡住串流。
+        await self.cdp.notify("Input.dispatchMouseEvent", params, session_id=self.cdp_session_id)
 
     async def _handle_key(self, d):
         event = d.get("event")
@@ -1406,13 +1408,13 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
         for f in _KEY_PASSTHROUGH_FIELDS:
             if f in d:
                 params[f] = d[f]
-        await self.cdp.call("Input.dispatchKeyEvent", params, session_id=self.cdp_session_id)
+        await self.cdp.notify("Input.dispatchKeyEvent", params, session_id=self.cdp_session_id)
 
     async def _handle_text(self, d):
         text = d.get("text")
         if text:
-            await self.cdp.call("Input.insertText", {"text": text},
-                                session_id=self.cdp_session_id)
+            await self.cdp.notify("Input.insertText", {"text": text},
+                                  session_id=self.cdp_session_id)
 
     async def _handle_navigate(self, d):
         action = d.get("action")

@@ -25,13 +25,15 @@ class RemoteBrowserInputDispatchTest(IsolatedAsyncioTestCase):
             "type": "mouse", "event": "mousePressed",
             "x": 100, "y": 200, "button": "left", "clickCount": 1,
         }))
-        c.cdp.call.assert_awaited_once()
-        method, params = c.cdp.call.await_args[0][0], c.cdp.call.await_args[0][1]
+        # 高頻輸入走 notify(不等回應),不佔 reader loop
+        c.cdp.notify.assert_awaited_once()
+        c.cdp.call.assert_not_awaited()
+        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
         self.assertEqual(method, "Input.dispatchMouseEvent")
         self.assertEqual(params["type"], "mousePressed")
         self.assertEqual((params["x"], params["y"]), (100, 200))
         self.assertEqual(params["button"], "left")
-        self.assertEqual(c.cdp.call.await_args[1]["session_id"], "SESS")
+        self.assertEqual(c.cdp.notify.await_args[1]["session_id"], "SESS")
 
     async def test_wheel_event_carries_deltas(self):
         c = _make_consumer()
@@ -39,7 +41,7 @@ class RemoteBrowserInputDispatchTest(IsolatedAsyncioTestCase):
             "type": "mouse", "event": "mouseWheel", "x": 5, "y": 6,
             "deltaX": 0, "deltaY": -120,
         }))
-        params = c.cdp.call.await_args[0][1]
+        params = c.cdp.notify.await_args[0][1]
         self.assertEqual(params["type"], "mouseWheel")
         self.assertEqual(params["deltaY"], -120)
 
@@ -49,7 +51,7 @@ class RemoteBrowserInputDispatchTest(IsolatedAsyncioTestCase):
             "type": "key", "event": "keyDown", "key": "a", "code": "KeyA",
             "windowsVirtualKeyCode": 65, "text": "a",
         }))
-        method, params = c.cdp.call.await_args[0][0], c.cdp.call.await_args[0][1]
+        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
         self.assertEqual(method, "Input.dispatchKeyEvent")
         self.assertEqual(params["windowsVirtualKeyCode"], 65)
         self.assertEqual(params["code"], "KeyA")
@@ -58,9 +60,21 @@ class RemoteBrowserInputDispatchTest(IsolatedAsyncioTestCase):
     async def test_text_event_uses_insert_text_for_cjk_and_paste(self):
         c = _make_consumer()
         await c.on_message(json.dumps({"type": "text", "text": "中文貼上"}))
-        method, params = c.cdp.call.await_args[0][0], c.cdp.call.await_args[0][1]
+        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
         self.assertEqual(method, "Input.insertText")
         self.assertEqual(params["text"], "中文貼上")
+
+    async def test_screencast_frame_is_forwarded_and_acked_via_notify(self):
+        """幀轉發後用 notify 送 ack(不等回應),避免和輸入搶 reader loop 造成串流卡住。"""
+        c = _make_consumer()
+        c.cdp_session_id = "SESS"
+        await c._forward_frame({"data": "AAAA", "sessionId": 7})
+        sent = json.loads(c.send.await_args[1]["text_data"])
+        self.assertEqual(sent["type"], "frame")
+        self.assertEqual(sent["data"], "AAAA")
+        self.assertEqual(c.cdp.notify.await_args[0][0], "Page.screencastFrameAck")
+        self.assertEqual(c.cdp.notify.await_args[0][1]["sessionId"], 7)
+        c.cdp.call.assert_not_awaited()   # ack 不走 call
 
     async def test_navigate_calls_page_navigate(self):
         c = _make_consumer()
