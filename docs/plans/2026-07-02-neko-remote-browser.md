@@ -802,7 +802,7 @@ git commit -m "feat(neko): add max_sessions and neko_image site settings"
       - NEKO_ROOMS_API=http://neko-rooms:8080
 ```
 
-- [ ] **Step 4: 新增 build-only 服務(讓 compose 能建自訂 image)**
+- [ ] **Step 4: 新增一次性建置服務(讓 compose 自動建自訂 image)**
 
 在 `services:` 下新增:
 
@@ -811,11 +811,19 @@ git commit -m "feat(neko): add max_sessions and neko_image site settings"
     build:
       context: ./docker/neko-chromium
     image: telepy-neko-chromium:latest
-    profiles: [ "images" ]
-    command: [ "true" ]
+    entrypoint: [ "true" ]
+    restart: "no"
 ```
 
-以 `docker compose --profile images build neko-chromium-image` 建立 image(等同 Task 1 的 `docker build`);平時 `up` 不會啟動它。
+並讓 `neko-rooms` 等它建好才啟動(在 neko-rooms service 加):
+
+```yaml
+    depends_on:
+      neko-chromium-image:
+        condition: service_completed_successfully
+```
+
+要點:這是「一次性建置容器」——`docker compose build` / `docker compose up -d --build` 會自動 build 此 image,容器啟動後 `entrypoint: true` 立即 exit 0,neko-rooms 以 `service_completed_successfully` 等它完成,故 image **必定先於房間存在**。`restart: "no"` 很重要(用 `always` 會在 exit 0 後無限重啟)。這取代了原本 `profiles: [images]` 的手動作法 —— profiled service 會被 `build` 一起略過,是先前「compose build 建不出 image」的根因。
 
 - [ ] **Step 5: 新增 neko-rooms 服務**
 
@@ -1022,11 +1030,10 @@ git commit -m "docs(neko): document NEKO_EPR_RANGE and NAT1TO1 env vars"
 
 Run:
 ```bash
-docker compose --profile images build neko-chromium-image
 docker compose up -d --build
 docker compose ps
 ```
-Expected: `traefik / frontend / backend / redis / ssh / neko-rooms` 都 Up;**沒有** selenium。
+Expected:`traefik / frontend / backend / redis / ssh / neko-rooms` 都 Up;`neko-chromium-image` 顯示 `Exited (0)`(一次性建置容器,正常);**沒有** selenium。自訂 image 由 `neko-chromium-image` service 自動 build,無需手動 `--profile`。若要單獨重建(neko 上游更新時):`docker compose build neko-chromium-image`。
 
 - [ ] **Step 2: 後端可連到 neko-rooms API**
 
