@@ -45,7 +45,7 @@ export function RemoteBrowserPanel({
 
             // In dev mode NextJS runs on 3000 but Traefik on 8787.
             // Absolute URL forces the iframe's WebSocket to hit Traefik directly.
-            let vncAbsolute = data.vnc_url as string;
+            let vncAbsolute = data.url as string;
             if (apiBase && vncAbsolute.startsWith('/')) {
                 vncAbsolute = `${apiBase}${vncAbsolute}`;
             }
@@ -126,7 +126,7 @@ export function RemoteBrowserPanel({
             {/* Header / Actions */}
             <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
                 <MonitorPlay size={18} className="text-muted-foreground shrink-0" />
-                <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">Proxy Browser (noVNC)</span>
+                <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">Proxy Browser (Neko)</span>
 
                 {vncUrl ? (
                     <Button
@@ -167,7 +167,7 @@ export function RemoteBrowserPanel({
                     <MonitorPlay size={48} className="mb-4 opacity-20" />
                     <h3 className="text-lg font-medium mb-2 text-foreground">Proxy Browser via SSH</h3>
                     <p className="text-sm max-w-sm mb-4">
-                        Starts a dedicated Selenium Chrome container. The traffic will be tunneled heavily through the target server ({username}@reverse), completely masquerading external requests as the target machine.
+                        Starts a dedicated Neko Chromium session. Traffic is tunneled through the target server ({username}@reverse), masquerading external requests as the target machine.
                     </p>
                     <Button onClick={startSession}>Click to Initialize</Button>
                 </div>
@@ -177,17 +177,18 @@ export function RemoteBrowserPanel({
             {isLoading && !vncUrl && (
                 <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-4 text-center">
                     <Loader2 size={48} className="mb-4 animate-spin text-primary" />
-                    <p className="text-sm">Spinning up Selenium Session and binding SSH proxy...</p>
+                    <p className="text-sm">Spinning up Neko browser and binding SSH proxy...</p>
                 </div>
             )}
 
-            {/* Browser Iframe (noVNC) */}
+            {/* Browser Iframe (Neko) */}
             {vncUrl && (
                 <div className="flex-1 min-h-0 bg-black relative">
                     <iframe
                         src={vncUrl}
                         className="w-full h-full border-0"
-                        title="Proxy Browser noVNC"
+                        title="Proxy Browser (Neko)"
+                        allow="clipboard-read; clipboard-write; autoplay; fullscreen"
                     />
                 </div>
             )}
