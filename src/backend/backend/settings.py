@@ -50,10 +50,14 @@ CSRF_TRUSTED_ORIGINS = [
 SERVER_DOMAIN = os.getenv("SERVER_DOMAIN", None)
 print(f"---------- Server Domain: {SERVER_DOMAIN}")
 if SERVER_DOMAIN:
+    # 容錯：env 若含 scheme（如 SERVER_DOMAIN=http://localhost:7575），先剝掉再組 origin，
+    # 避免產生 "https://http://localhost:7575" 這種無效項目。
+    # Tolerate a scheme in the env value; strip it so we don't emit "https://http://..." origins.
+    _server_host = SERVER_DOMAIN.split("://", 1)[-1].rstrip("/")
     CSRF_TRUSTED_ORIGINS.extend(
         [
-            f"https://{SERVER_DOMAIN}",
-            f"http://{SERVER_DOMAIN}",
+            f"https://{_server_host}",
+            f"http://{_server_host}",
         ]
     )
 
