@@ -240,24 +240,61 @@ class TerminalConsumer(FirstMessageAuthConsumer):
 
     async def disconnect(self, close_code):
         await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
-        # Gracefully terminate the child process
-        if self.child_pid:
+        # 「每次連線都是全新 shell」的另一半保證：WebSocket 一斷，就確實終結這條連線的 ssh 客戶端，
+        # 讓遠端 sshd 收到 channel 關閉並對該 shell 送 SIGHUP —— 舊 shell 不會殘留到下次連線。
+        # （ControlMaster 重用的只是加密連線；shell/session 一律隨本 consumer 的 ssh process 生滅。）
+        # The other half of the "fresh shell every time" guarantee: when the WS drops, terminate this
+        # connection's ssh client so the remote sshd closes the channel and SIGHUPs that shell.
+        pid, fd = self.child_pid, self.fd
+        self.child_pid = None
+        self.fd = None
+
+        # 先移除 reader，避免清理期間 fd EOF 反覆觸發 forward_output。/ Remove the reader first.
+        if fd is not None:
             try:
-                # First, try to terminate the process gently
-                os.kill(self.child_pid, signal.SIGTERM)
-                # Wait a brief period to allow for graceful shutdown
-                await asyncio.sleep(0.5)
-                # Forcefully kill if still alive
-                os.kill(self.child_pid, signal.SIGKILL)
-                os.waitpid(self.child_pid, 0)
-            except ProcessLookupError:
+                asyncio.get_event_loop().remove_reader(fd)
+            except Exception:
                 pass
-            finally:
-                # Ensure removal of reader happens before clearing fd
-                if self.fd is not None:
-                    asyncio.get_event_loop().remove_reader(self.fd)
-                self.child_pid = None
-                self.fd = None
+
+        if pid:
+            try:
+                # pty.fork 的子行程是 session leader（pgid == pid）：用 killpg 連同 ssh 可能衍生的
+                # 子行程（如 ProxyCommand）一起收掉。/ The child is a session leader; killpg reaps helpers too.
+                try:
+                    os.killpg(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    os.kill(pid, signal.SIGTERM)
+
+                # 輪詢等待（最長 ~0.5s）而非固定 sleep：ssh 幾乎都在數十 ms 內結束，斷線清理不用每次
+                # 卡滿 0.5 秒。/ Poll with WNOHANG instead of a fixed 0.5s sleep; ssh usually exits in ms.
+                reaped = False
+                for _ in range(10):
+                    wpid, _status = os.waitpid(pid, os.WNOHANG)
+                    if wpid == pid:
+                        reaped = True
+                        break
+                    await asyncio.sleep(0.05)
+
+                if not reaped:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        os.kill(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)  # SIGKILL 後必定可回收 / reap is immediate after SIGKILL
+            except (ProcessLookupError, ChildProcessError):
+                pass  # 行程已結束且已被回收 / already gone and reaped
+            except OSError as e:
+                logger.warning(f"Terminal child cleanup failed for pid {pid}: {e}")
+
+        # 關閉 PTY master fd。舊版從未 close，導致每開一次終端就洩漏一個 fd，
+        # 長時間運行後 worker 會 fd 耗盡（開新終端變慢/失敗）。/ Close the PTY master fd.
+        # The old code never closed it, leaking one fd per terminal session until the worker
+        # ran out of descriptors.
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     async def on_message(self, text_data=None, bytes_data=None):
         # Handle receiving input from the client (e.g., keyboard input)
