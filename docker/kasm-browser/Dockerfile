@@ -1,52 +1,45 @@
-# kasm-browser —— 共用的 KasmVNC 瀏覽器容器(取代 CDP 的 chromium 容器)。
+# vnc-browser(歷史目錄名 kasm-browser)—— 共用的 VNC 瀏覽器容器(取代 CDP 的 chromium 容器)。
 #
-# 一顆長命容器,內含 KasmVNC(提供 Xvnc:RFB + 現代化編碼)+ Chromium + openbox +
+# 一顆長命容器,內含 TigerVNC(提供 Xvnc:傳統 raw-RFB TCP 埠)+ Chromium + openbox +
 # CJK 字型 + 一支 session-manager HTTP API(session_manager.py)。backend 呼叫該 API,
 # 每個 remote-browser session 就起一組「Xvnc 顯示 + 綁定該 session SOCKS 的 chromium」,
 # 回傳 RFB 埠;Django consumer 再把該 RFB 埠橋接到既有 /ws,前端用 noVNC 呈現。
 #
-# 為何這樣:VNC 送的是「增量式 tile 更新」而非 CDP 的整幀 JPEG,對以文字為主的瀏覽延遲更低;
-# 且真桌面讓 CJK 顯示/剪貼簿近乎免費。KasmVNC 是 web-native 的現代 VNC(TigerVNC fork)。
+# 為何用 TigerVNC 而非 KasmVNC:KasmVNC 是「web-native」,其 Xkasmvnc **只開 WebSocket**
+# (不開傳統 raw-RFB TCP 埠),與本專案「Django consumer 直接 TCP 橋接 RFB 到既有 /ws」的
+# 乾淨設計不相容(要接 KasmVNC 得再寫 WS-to-WS proxy 並關掉它自己的 web 驗證)。TigerVNC 的
+# Xvnc 會在 -rfbport 開真正的 raw-RFB TCP 埠,直接吻合本設計;Tight 編碼對瀏覽已遠優於 CDP 整幀
+# JPEG,且真桌面讓 CJK 顯示/剪貼簿近乎免費。session-manager 對 VNC server 無耦合(VNC_CMD /
+# VNC_SERVER_BIN 皆可 env 覆寫),日後要換回 KasmVNC(需自行加 WS-proxy)也不必改這裡的骨架。
 #
 # 不需 docker.sock:所有 per-session 生命週期都是「在這一顆容器內起/停行程」,不做容器編排。
 FROM debian:bookworm-slim
 
-# KasmVNC 版本(如需更新改這個;.deb 檔名依架構於下方 RUN 內組出)。
-ARG KASMVNC_VERSION=1.3.4
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 桌面 + 瀏覽器 + 字型 + Xvnc runtime deps + python(跑 session-manager)
+# 桌面 + 瀏覽器 + 字型 + TigerVNC(standalone Xvnc)+ python(跑 session-manager)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl \
+      ca-certificates \
       chromium \
       openbox \
-      fonts-noto-cjk fonts-noto-color-emoji \
+      fonts-noto-cjk fonts-noto-color-emoji xfonts-base \
       python3 \
       procps \
       dbus-x11 xauth x11-xkb-utils xkb-data \
-      libxfont2 libgl1-mesa-dri libgles2 \
+      libgl1-mesa-dri libgles2 \
+      tigervnc-standalone-server \
  && rm -rf /var/lib/apt/lists/*
 
-# KasmVNC。注意:KasmVNC 的 X server 二進位名為 **Xkasmvnc**(不是 Xvnc)。
-# 依容器實際架構(dpkg --print-architecture → amd64/arm64)抓對應的 bookworm .deb,
-# 安裝後把 Xkasmvnc 連結成 Xvnc(相容),並在 build 階段就驗證二進位存在——若 KasmVNC 沒裝好,
-# build 直接失敗(附 dpkg 內容),而不是等到 runtime 才噴 FileNotFoundError。
-RUN ARCH="$(dpkg --print-architecture)" \
- && echo "KasmVNC deb arch: ${ARCH}" \
- && curl -fsSL -o /tmp/kasmvnc.deb \
-      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_bookworm_${KASMVNC_VERSION}_${ARCH}.deb" \
- && apt-get update \
- && (apt-get install -y --no-install-recommends /tmp/kasmvnc.deb \
-     || (dpkg -i /tmp/kasmvnc.deb; apt-get install -y -f --no-install-recommends)) \
- && rm -rf /tmp/kasmvnc.deb /var/lib/apt/lists/* \
- && KVNC="$(command -v Xkasmvnc || true)" \
- && if [ -n "$KVNC" ]; then ln -sf "$KVNC" /usr/bin/Xvnc; fi \
- && if ! command -v Xkasmvnc >/dev/null && ! command -v Xvnc >/dev/null; then \
-        echo "FATAL: KasmVNC X server (Xkasmvnc/Xvnc) not found after install."; \
-        echo "kasmvncserver package binaries:"; dpkg -L kasmvncserver 2>/dev/null | grep -iE '/(X|bin/)' || true; \
-        exit 1; \
+# 確保 /usr/bin/Xvnc 可用(TigerVNC 有時只裝 Xtigervnc,靠 alternatives 提供 Xvnc);
+# 在 build 階段就驗證,沒裝好直接讓 build 失敗,而不是等 runtime 才噴 FileNotFoundError。
+RUN if ! command -v Xvnc >/dev/null 2>&1; then \
+        T="$(command -v Xtigervnc || true)"; \
+        [ -n "$T" ] && ln -sf "$T" /usr/bin/Xvnc; \
     fi \
- && echo "VNC server resolved to: $(command -v Xkasmvnc || command -v Xvnc)"
+ && if ! command -v Xvnc >/dev/null && ! command -v Xtigervnc >/dev/null; then \
+        echo "FATAL: TigerVNC X server (Xvnc/Xtigervnc) not installed."; exit 1; \
+    fi \
+ && echo "VNC server resolved to: $(command -v Xvnc || command -v Xtigervnc)"
 
 COPY session_manager.py /app/session_manager.py
 

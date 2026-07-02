@@ -39,17 +39,17 @@ class SessionManagerTest(unittest.TestCase):
         envs = [c[1].get("env", {}).get("DISPLAY") for c in popen.call_args_list]
         self.assertIn(":10", envs)
 
-    def test_resolve_vnc_bin_prefers_env_then_kasmvnc(self):
+    def test_resolve_vnc_bin_prefers_env_then_xvnc(self):
         with mock.patch.dict("os.environ", {"VNC_SERVER_BIN": "/custom/Xthing"}), \
              mock.patch("session_manager.shutil.which", return_value=None), \
              mock.patch("session_manager.os.path.exists", return_value=True):
             self.assertEqual(sm._resolve_vnc_bin(), "/custom/Xthing")
-        # 無 env、Xkasmvnc 存在 → 選 Xkasmvnc(KasmVNC 的實際二進位名)
-        with mock.patch.dict("os.environ", {}, clear=False) as _e:
+        # 無 env、Xvnc 存在 → 選 Xvnc(TigerVNC 的二進位名)
+        with mock.patch.dict("os.environ", {}, clear=False):
             os.environ.pop("VNC_SERVER_BIN", None)
             with mock.patch("session_manager.shutil.which",
-                            side_effect=lambda b: b if b == "Xkasmvnc" else None):
-                self.assertEqual(sm._resolve_vnc_bin(), "Xkasmvnc")
+                            side_effect=lambda b: b if b == "Xvnc" else None):
+                self.assertEqual(sm._resolve_vnc_bin(), "Xvnc")
 
     @mock.patch.object(sm.SessionManager, "_wait_for_rfb", return_value=False)
     @mock.patch("session_manager.subprocess.Popen")

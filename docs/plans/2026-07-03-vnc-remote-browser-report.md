@@ -133,14 +133,19 @@ UI 按「Start Browser」→ 數秒內看到真桌面 Chromium;在其中開 IP �
 - **前端 `Module not found: @novnc/novnc/lib/rfb`**:Docker build 的 `npm install` 以現有
   `package-lock.json` 為準,而 novnc 只加進 package.json、沒進 lock → 被略過。已重生 lockfile
   (novnc 鎖 1.6.0)。重建:`docker compose up -d --build frontend`。
-- **`FileNotFoundError: 'Xvnc'`**:KasmVNC 的 X server 二進位其實叫 **`Xkasmvnc`**(不是 Xvnc)。
-  已修:(a) session-manager 啟動時自動偵測二進位(`VNC_SERVER_BIN` env 可覆寫,優先 Xkasmvnc);
-  (b) Dockerfile 依架構(amd64/arm64)抓 deb、把 Xkasmvnc symlink 成 Xvnc、並在 **build 階段就
-  驗證二進位存在**(沒裝好就讓 build 失敗、附 dpkg 內容,不再等 runtime);(c) VNC server 的
-  stderr 導到 per-session log,RFB 若起不來,API 錯誤會**帶出 KasmVNC 自己的錯誤訊息**以便診斷。
-  重建:`docker compose up -d --build kasm-browser`。
-  > 若 KasmVNC 的 raw-RFB 啟動還有版本相關的旗標問題,診斷 log 會直接顯示原因;可用 `VNC_CMD`
-  > env 微調旗標,或把 `VNC_SERVER_BIN` 指到 TigerVNC 的 `Xvnc`(需在 image 裝 tigervnc)當 fallback。
+- **`FileNotFoundError: 'Xvnc'` → 改用 TigerVNC**:先發現 KasmVNC 的二進位叫 `Xkasmvnc`;修正名稱後
+  再發現**更根本的問題**——KasmVNC 是 web-native,`Xkasmvnc` **只開 WebSocket(log 顯示 port 6800)、
+  不開傳統 raw-RFB TCP 埠**,所以 `-rfbport 5910` 沒有 listener,`_wait_for_rfb` 一定失敗。這與本專案
+  「Django consumer 直接 TCP 橋接 RFB → 既有 /ws」的乾淨設計不相容(要接 KasmVNC 得再寫 WS-to-WS
+  proxy 並關掉它自己的 web 驗證,且無法在沙箱驗證)。
+  **決定改用 TigerVNC**:它的 `Xvnc` 會在 `-rfbport` 開真正的 raw-RFB TCP 埠,**完全吻合已建好、已測過
+  的橋接與 noVNC 前端**(除了容器與旗標,其餘一行不改)。TigerVNC 的 Tight 編碼對瀏覽已遠優於 CDP 整幀
+  JPEG,真桌面同樣讓 CJK/剪貼簿近乎免費。架構(共用容器 + session API + noVNC over /ws)完全不變。
+  已改:Dockerfile 裝 `tigervnc-standalone-server`(build 階段驗證 Xvnc 存在);session-manager 的
+  `VNC_CMD` 用 TigerVNC 旗標(`-localhost no` 讓 RFB 聽所有介面)、binary 偵測優先 `Xvnc`;VNC server 的
+  stderr 仍導到 per-session log 以便診斷。重建:`docker compose up -d --build kasm-browser`。
+  > 服務/目錄仍沿用 `kasm-browser`/`KASM_BROWSER_*` 名稱(只是識別字,避免大改動引入新錯);要接真正的
+  > KasmVNC(需自行加 WS-proxy + 關其 web 驗證)日後可做,session-manager 對 VNC server 無耦合。
 
 ## Rollback
 - 回 CDP:`git checkout feat/cdp-remote-browser`。

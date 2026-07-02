@@ -36,12 +36,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [session-manager] %(message)s")
 logger = logging.getLogger("session_manager")
 
-# KasmVNC 的 X server 二進位叫 Xkasmvnc(不是 Xvnc);TigerVNC 才叫 Xvnc。用 {vnc_bin}
-# 佔位,實際名稱由 _resolve_vnc_bin() 於啟動時偵測(可用 VNC_SERVER_BIN 覆寫)。
-# KasmVNC's X server binary is Xkasmvnc (TigerVNC's is Xvnc); resolved at startup.
+# TigerVNC 的 X server 是 Xvnc(部分安裝為 Xtigervnc);用 {vnc_bin} 佔位,實際名稱由
+# _resolve_vnc_bin() 於啟動時偵測(可用 VNC_SERVER_BIN 覆寫)。
+# TigerVNC:用 `-localhost no` 讓 RFB 埠聽在所有介面(否則預設只聽 127.0.0.1,backend 連不到);
+# `-SecurityTypes None` 免驗證(改由 Django 層驗 JWT+權限)。
 DEFAULT_VNC_CMD = (
     "{vnc_bin} :{display} -geometry {geometry} -depth 24 -SecurityTypes None "
-    "-rfbport {rfbport} -interface 0.0.0.0 -AlwaysShared -desktop telepy"
+    "-rfbport {rfbport} -localhost no -AlwaysShared -desktop telepy"
 )
 DEFAULT_WM_CMD = "openbox"
 DEFAULT_BROWSER_CMD = (
@@ -53,16 +54,17 @@ DEFAULT_BROWSER_CMD = (
 
 def _resolve_vnc_bin():
     """
-    找出可用的 VNC X server 二進位。KasmVNC 裝的是 Xkasmvnc;TigerVNC 是 Xvnc。
-    優先序:VNC_SERVER_BIN(env)→ Xkasmvnc → Xvnc → 常見絕對路徑。找不到就回預設,讓
-    後續 spawn 丟出明確的 FileNotFoundError。
+    找出可用的 VNC X server 二進位。TigerVNC 是 Xvnc/Xtigervnc(本專案採用)。
+    優先序:VNC_SERVER_BIN(env)→ Xvnc → Xtigervnc → 常見絕對路徑。找不到就回預設,讓
+    後續 spawn 丟出明確的 FileNotFoundError。(Xkasmvnc 列在最後僅供相容;KasmVNC 只開
+    websocket、不開 raw RFB,與本 TCP 橋接設計不相容。)
     """
-    candidates = [os.getenv("VNC_SERVER_BIN"), "Xkasmvnc", "Xvnc",
-                  "/usr/bin/Xkasmvnc", "/usr/bin/Xvnc"]
+    candidates = [os.getenv("VNC_SERVER_BIN"), "Xvnc", "Xtigervnc",
+                  "/usr/bin/Xvnc", "/usr/bin/Xtigervnc", "Xkasmvnc"]
     for cand in candidates:
         if cand and (shutil.which(cand) or os.path.exists(cand)):
             return cand
-    return os.getenv("VNC_SERVER_BIN") or "Xkasmvnc"
+    return os.getenv("VNC_SERVER_BIN") or "Xvnc"
 
 
 class SessionManager:

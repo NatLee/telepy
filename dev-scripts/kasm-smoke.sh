@@ -21,8 +21,8 @@ print("healthz:", r.status_code, r.text)
 assert r.status_code == 200
 PY
 
-echo "== 2) KasmVNC / Chromium present in image (KasmVNC binary is Xkasmvnc) =="
-docker exec "$KASM" sh -c 'command -v Xkasmvnc; command -v Xvnc; command -v chromium; command -v openbox' || true
+echo "== 2) TigerVNC (Xvnc) / Chromium present in image =="
+docker exec "$KASM" sh -c 'command -v Xvnc || command -v Xtigervnc; command -v chromium; command -v openbox' || true
 
 echo "== 3) start a session via session-manager (proxy points at a dummy; browser will just fail to load pages, but Xvnc/RFB must come up) =="
 docker compose exec -T backend python - <<PY
