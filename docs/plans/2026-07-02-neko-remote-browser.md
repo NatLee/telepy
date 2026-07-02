@@ -1112,7 +1112,7 @@ git checkout main && git merge --no-ff feat/neko-remote-browser
 - **自動登入參數**:iframe URL 用 `?usr=telepy&pwd=<pass>` 自動登入;若你的 neko 版本參數不同,Step 3 會看到一個小登入框(輸入一次密碼即可),屆時調整 `remote_browser_service.py` 的 `room_url` 組法即可,不影響其他部分。
 - **上游 proxy 模式為非預設路徑**:neko-rooms 官方文件主推 Traefik 整合;內建 proxy 模式(`m1k1o.neko_rooms.proxy.*` + `/*` fallback handler)已對 master 源碼確認存在且支援 wait page/WebSocket,但升級 neko-rooms 版本時應重新確認此行為未變。
 - **`is_ready` 依賴 healthcheck**:`wait_ready` 輪詢的 `is_ready` = 房間事件 ready 或 container `healthy`;若自訂 image 意外失去 HEALTHCHECK,`wait_ready` 會等滿 timeout 後照樣回傳(neko-rooms 等待頁會接手),功能不壞、只是 API 回應多等幾秒。
-- **image 更新**:neko 上游更新時,重建 `telepy-neko-chromium`(`docker compose --profile images build neko-chromium-image`);因為只覆寫一個 supervisord 檔,衝突面很小。
+- **image 更新**:neko 上游更新時,重建 `telepy-neko-chromium`(`docker compose build neko-chromium-image`,或直接 `docker compose up -d --build`);因為只覆寫一個 supervisord 檔,衝突面很小。
 - **資源**:一 session 一容器,記憶體/磁碟成本高於舊的「單一 Selenium node 多 session」,但換得真正隔離與更順的 WebRTC 體感;用 `remote_browser_max_sessions` 控上限。
 
 ## Self-Review 結果
