@@ -9,7 +9,11 @@ services:
 
   traefik:
     <<: [ *common-networks, *common-restart ]
-    image: traefik:v3.0.1
+    # v3.0.x 世代有多個 WebSocket 相關修正（rc 期間曾有 60s 斷線 bug）；升到目前穩定版，
+    # 並搭配 traefik.yml 的 readTimeout: 0（v3 預設 60s 會切長連線）。
+    # The v3.0.x era shipped several WebSocket fixes; pin current stable and pair with
+    # readTimeout: 0 in traefik.yml (the v3 default of 60s kills long-lived connections).
+    image: traefik:v3.7.6
     container_name: telepy-traefik-${PROJECT_NAME}
     command:
       - "--configFile=/etc/traefik/traefik.yml"

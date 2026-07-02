@@ -4,6 +4,17 @@ log:
 entryPoints:
   web:
     address: ":80"
+    # WebSocket 長連線保護：Traefik v3 起 readTimeout 預設 60s（v2 為無限制），會把「單一
+    # request 讀取超過 60 秒」的連線切斷——長壽命的 WS（terminal / notifications）與大檔上傳
+    # 都可能中招，表現為「用一用不明斷線」。設為 0 還原 v2 行為；idleTimeout 維持預設 180s
+    # 即可（前端各 WS 均有 ≤25s 的應用層心跳，不會閒置到被回收）。
+    # WebSocket keep-alive: Traefik v3 changed the default readTimeout from unlimited to 60s,
+    # which can kill long-lived connections (WS, large uploads) mid-flight. 0 restores the v2
+    # behaviour; idleTimeout stays at its 180s default (all our sockets heartbeat every ≤25s).
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+        writeTimeout: 0s
 
 providers:
   file:
