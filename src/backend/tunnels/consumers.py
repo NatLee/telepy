@@ -91,18 +91,52 @@ class FirstMessageAuthConsumer(AsyncWebsocketConsumer):
 
     async def connect(self):
         self._authed = False
+        self._auth_in_progress = False
+        # 是否已對底層送過 websocket.close（或對方已斷）。所有關閉一律走 _safe_close()，
+        # 避免「close 之後再 close/send」造成 uvicorn RuntimeError（Unexpected ASGI message）。
+        # Whether websocket.close was already sent (or the peer is gone). All closes go through
+        # _safe_close() so a second close/send can't raise uvicorn's "Unexpected ASGI message".
+        self._ws_closed = False
         self._auth_timeout_task = None
         await self.accept()
         self._auth_timeout_task = asyncio.create_task(self._await_auth_timeout())
 
+    async def _safe_close(self, code=None):
+        """冪等關閉：重複呼叫或對已死 socket 關閉都不再丟例外。/ Idempotent, race-safe close."""
+        if self._ws_closed:
+            return
+        self._ws_closed = True
+        try:
+            if code is not None:
+                await self.close(code=code)
+            else:
+                await self.close()
+        except RuntimeError:
+            # 對方已斷 / 已送過 close（例如逾時計時器和使用者關閉互相競速）。
+            # Peer already gone / close already sent (e.g. timer racing a client-initiated close).
+            pass
+
+    def _cancel_auth_timer(self):
+        if self._auth_timeout_task is not None:
+            self._auth_timeout_task.cancel()
+            self._auth_timeout_task = None
+
     async def _await_auth_timeout(self):
         try:
             await asyncio.sleep(WS_AUTH_TIMEOUT)
+            if self._authed or self._ws_closed:
+                return
+            # auth 訊息已到、正在做 DB 權限檢查（可能因負載暫時變慢）：再寬限一輪，不要
+            # 誤殺「正常但較慢」的認證中連線。/ If an auth frame IS being processed (e.g. DB
+            # briefly slow under load), grant one grace period instead of killing a valid login.
+            if self._auth_in_progress:
+                await asyncio.sleep(WS_AUTH_TIMEOUT)
+                if self._authed or self._ws_closed:
+                    return
         except asyncio.CancelledError:
             return
-        if not self._authed:
-            logger.warning(f"{type(self).__name__}: no auth within {WS_AUTH_TIMEOUT}s, closing")
-            await self.close(code=4001)
+        logger.warning(f"{type(self).__name__}: no auth within timeout, closing")
+        await self._safe_close(code=4001)
 
     async def receive(self, text_data=None, bytes_data=None):
         # 尚未認證：只接受第一則 auth 訊息，其餘一律拒絕。
@@ -113,26 +147,35 @@ class FirstMessageAuthConsumer(AsyncWebsocketConsumer):
         await self.on_message(text_data=text_data, bytes_data=bytes_data)
 
     async def _authenticate(self, text_data):
-        data = _parse_json(text_data)
-        if not isinstance(data, dict) or data.get('type') != 'auth':
-            await self.close(code=4000)
-            return
-        user, err = await _authenticate_token(data.get('token'))
-        if err is not None:
-            await self.close(code=err)
-            return
-        err = await self.after_auth(user, data)
-        if err is not None:
-            await self.close(code=err)
-            return
-        self._authed = True
-        if self._auth_timeout_task is not None:
-            self._auth_timeout_task.cancel()
+        self._auth_in_progress = True
+        try:
+            data = _parse_json(text_data)
+            if not isinstance(data, dict) or data.get('type') != 'auth':
+                self._cancel_auth_timer()
+                await self._safe_close(code=4000)
+                return
+            user, err = await _authenticate_token(data.get('token'))
+            if err is not None:
+                self._cancel_auth_timer()
+                await self._safe_close(code=err)
+                return
+            err = await self.after_auth(user, data)
+            if err is not None:
+                self._cancel_auth_timer()
+                await self._safe_close(code=err)
+                return
+            self._authed = True
+            self._cancel_auth_timer()
+        finally:
+            # 任一路徑（含拒絕）都要取消計時器與清旗標——舊版失敗時不取消，計時器 10 秒後
+            # 對「已關閉」的 socket 再補一刀 close(4001)，噴出 Task exception was never retrieved。
+            # Every path must cancel the timer: the old code left it running after a failed auth,
+            # so it fired close(4001) on an already-closed socket 10s later (the logged RuntimeError).
+            self._auth_in_progress = False
 
     async def disconnect(self, close_code):
-        task = getattr(self, '_auth_timeout_task', None)
-        if task is not None:
-            task.cancel()
+        self._ws_closed = True  # 底層已斷，之後任何 close/send 都不得再送 / transport is gone
+        self._cancel_auth_timer()
 
     async def after_auth(self, user, message):
         """驗證通過後的權限檢查與資源建立。成功回 None，否則回 WS 關閉碼。/ Override in subclass."""
@@ -197,6 +240,15 @@ class TerminalConsumer(FirstMessageAuthConsumer):
                     )
                     os.execlp('bash', 'bash', '-c', f'ssh {ssh_opts} {username}@reverse -p {reverse_port}')
                 else:  # Parent process
+                    # PTY master 設為 non-blocking：os.write 在緩衝區滿時（遠端停止讀取，如網路
+                    # 卡住）會丟 BlockingIOError 而非「阻塞整個 event loop」。若 loop 被 blocking
+                    # write 卡住 >20s，uvicorn 的 WS keepalive 全數逾時，該 worker 上所有連線會
+                    # 一起被斷 —— 這是「不明斷線」的典型來源之一。
+                    # Make the PTY master non-blocking: a full buffer (remote stopped reading)
+                    # raises BlockingIOError instead of blocking the event loop. A loop blocked
+                    # >20s makes uvicorn's WS keepalives time out and drops EVERY socket on the
+                    # worker — a classic source of "random" disconnects.
+                    os.set_blocking(self.fd, False)
                     asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
                 logger.info("SSH connection started")
             except Exception as e:
@@ -317,7 +369,10 @@ class TerminalConsumer(FirstMessageAuthConsumer):
         # be sent as bytes_data (not text): the terminal writes every text frame straight into xterm,
         # so a binary frame is what lets the client treat it as a control message without corrupting output.
         if action == 'ping':
-            await self.send(bytes_data=b'pong')
+            try:
+                await self.send(bytes_data=b'pong')
+            except RuntimeError:
+                pass  # socket 剛好關閉 / socket just closed
             return
 
         payload = data.get('payload')
@@ -327,7 +382,16 @@ class TerminalConsumer(FirstMessageAuthConsumer):
         try:
             # Handle pty_input action
             if action == 'pty_input' and self.fd and 'input' in payload:
-                os.write(self.fd, payload['input'].encode())
+                # non-blocking 寫入：緩衝區滿就丟棄剩餘輸入並記錄，絕不阻塞 event loop。
+                # Non-blocking write: drop the remainder (and log) if the buffer is full.
+                buf = payload['input'].encode()
+                while buf:
+                    try:
+                        written = os.write(self.fd, buf)
+                        buf = buf[written:]
+                    except BlockingIOError:
+                        logger.warning("PTY buffer full; dropping remaining terminal input")
+                        break
 
             # Handle resize action
             elif action == 'pty_resize' and self.fd and isinstance(payload.get('size'), dict):
@@ -353,6 +417,20 @@ class TerminalConsumer(FirstMessageAuthConsumer):
             except Exception:
                 pass
 
+    async def _send_pty_output(self, output: str):
+        """
+        送 PTY 輸出到 WS；socket 已關閉就靜默丟棄。/ Send PTY output; drop silently if the socket died.
+        PTY 輸出與關閉本質上是並行事件：使用者關頁的瞬間，剛排程好的輸出 task 仍會執行，
+        舊版直接 self.send 會噴 RuntimeError: Unexpected ASGI message 'websocket.send'。
+        Output and close race by nature: a scheduled send may run right after the client left.
+        """
+        if self._ws_closed:
+            return
+        try:
+            await self.send(text_data=output)
+        except RuntimeError:
+            self._stop_forwarding()
+
     def forward_output(self):
         try:
             data = os.read(self.fd, 1024)
@@ -363,16 +441,19 @@ class TerminalConsumer(FirstMessageAuthConsumer):
                 # 增量解碼器會回傳空字串，不能誤判為 EOF。
                 # Detect EOF from the raw byte count, not the decoded string: a split multibyte char
                 # yields an empty decode result that must NOT be mistaken for EOF.
-                asyncio.ensure_future(self.close())
+                asyncio.ensure_future(self._safe_close())
                 return
             output = self._output_decoder.decode(data)
             if output:
-                asyncio.ensure_future(self.send(text_data=output))
+                asyncio.ensure_future(self._send_pty_output(output))
+        except BlockingIOError:
+            # non-blocking fd：偶發的「可讀通知但無資料」，下次再讀。/ Spurious readability; retry later.
+            return
         except OSError:
             # OSError can occur if the fd has been closed due to the process exiting.
             # 立即移除 reader 再排程 close，阻止忙迴圈（見 _stop_forwarding）。
             self._stop_forwarding()
-            asyncio.ensure_future(self.close())
+            asyncio.ensure_future(self._safe_close())
 
 class NotificationConsumer(FirstMessageAuthConsumer):
     async def after_auth(self, user, message):
@@ -420,9 +501,16 @@ class NotificationConsumer(FirstMessageAuthConsumer):
         logger.debug(f"Sending notification to user {self.user}: {action}")
 
         # Send message to WebSocket (no permission check needed since notifications are targeted)
-        await self.send(text_data=json.dumps({
-            'message': message
-        }))
+        # group_send 與斷線天生會競速：斷線後 group_discard 前的廣播仍可能派到本 consumer。
+        # A group broadcast can race the disconnect (before group_discard lands); drop it quietly.
+        if getattr(self, '_ws_closed', False):
+            return
+        try:
+            await self.send(text_data=json.dumps({
+                'message': message
+            }))
+        except RuntimeError:
+            return
         logger.debug(f"Notification sent to user {self.user}: {action}")
 
 
