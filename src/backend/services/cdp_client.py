@@ -22,6 +22,8 @@ import asyncio
 import json
 import logging
 import os
+import socket
+from urllib.parse import urlparse, urlunparse
 
 import requests
 import websockets
@@ -135,10 +137,31 @@ class CdpClient:
         ).rstrip("/")
 
     def _browser_ws(self) -> str:
-        """同步取得 browser-level WebSocket URL(呼叫端負責丟進 thread)。"""
-        r = requests.get(f"{self.base_url}/json/version", timeout=5)
+        """
+        同步取得 browser-level WebSocket URL(呼叫端負責丟進 thread)。
+
+        Chrome 的 DevTools HTTP/WS endpoint 有 DNS-rebinding 防護:Host header 必須是 IP
+        字面值或 localhost,否則回 500(「Host header is not an IP address or localhost」)。
+        用服務名(如 chromium:9222)去打會被拒。chromedp 這顆 image 又用 socat 把對外 9222
+        轉到內部 9223。因此:
+          1) 先把主機名解析成 IP,改用 http://<ip>:<port> 去問 /json/version(Host=IP → 通過)。
+          2) 把回傳的 webSocketDebuggerUrl 的 host:port 一律改寫成同一個 <ip>:<port>
+             (Chrome 有時回綁定位址;統一成可達且 IP 形式的 host,讓 WS 升級也過 Host 檢查)。
+        Chrome DevTools rejects Host headers that aren't an IP/localhost, so resolve to an IP
+        and pin both the HTTP fetch and the returned ws:// URL to <ip>:<port>.
+        """
+        parsed = urlparse(self.base_url)
+        host = parsed.hostname or "chromium"
+        port = parsed.port or 9222
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            ip = host  # 解析失敗就用原字串(可能本來就是 IP/localhost)
+        r = requests.get(f"http://{ip}:{port}/json/version", timeout=5)
         r.raise_for_status()
-        return r.json()["webSocketDebuggerUrl"]
+        ws_url = r.json()["webSocketDebuggerUrl"]
+        u = urlparse(ws_url)
+        return urlunparse(u._replace(netloc=f"{ip}:{port}"))
 
     async def connect(self, event_handler=None) -> CdpConnection:
         """開長命連線(consumer 串流用)。requests 走 to_thread 不卡 event loop。"""

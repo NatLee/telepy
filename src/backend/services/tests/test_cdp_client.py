@@ -136,6 +136,27 @@ class CdpClientSessionTest(IsolatedAsyncioTestCase):
         with mock.patch.dict("os.environ", {"CHROMIUM_CDP_URL": "http://elsewhere:9333/"}):
             self.assertEqual(CdpClient().base_url, "http://elsewhere:9333")
 
+    def test_browser_ws_uses_resolved_ip_for_host_header_and_ws_url(self):
+        """
+        Chrome DevTools 拒絕非 IP/localhost 的 Host header,且 chromedp image 用 socat 轉 9222→9223。
+        _browser_ws 必須:用解析後的 IP 去打 /json/version,並把回傳 ws URL 的 host 改寫成該 IP:port。
+        """
+        client = CdpClient(base_url="http://chromium:9222")
+        fake_resp = mock.Mock()
+        fake_resp.json.return_value = {
+            # Chrome 常回綁定位址;不論它回什麼,我們都要改寫成可達的 <ip>:<port>
+            "webSocketDebuggerUrl": "ws://127.0.0.1:9223/devtools/browser/abc-123",
+        }
+        fake_resp.raise_for_status = lambda: None
+        with mock.patch("services.cdp_client.socket.gethostbyname", return_value="10.1.2.3") as gh, \
+             mock.patch("services.cdp_client.requests.get", return_value=fake_resp) as rg:
+            ws = client._browser_ws()
+        gh.assert_called_once_with("chromium")
+        # HTTP 用 IP 去問(Host=IP → 通過 Chrome 檢查)
+        self.assertEqual(rg.call_args[0][0], "http://10.1.2.3:9222/json/version")
+        # ws URL 的 host 被改寫為 10.1.2.3:9222(可達 + IP 形式),但保留 devtools 路徑
+        self.assertEqual(ws, "ws://10.1.2.3:9222/devtools/browser/abc-123")
+
 
 class CdpConnectionTest(IsolatedAsyncioTestCase):
     async def test_concurrent_calls_resolve_out_of_order_responses(self):

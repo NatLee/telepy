@@ -125,18 +125,22 @@ services:
     container_name: telepy-chromium-${PROJECT_NAME}
     hostname: telepy-chromium-${PROJECT_NAME}
     shm_size: "2gb"
-    # 由 entrypoint 直接吃這些旗標。--proxy-server 指向死埠 = fail-closed 預設:任何未經
-    # per-context proxy 覆寫的流量(含潛在 service worker / chrome 內部請求)一律連線失敗,
-    # 絕不以本容器自身 IP 出去而洩漏身分(Phase 0 G8 已驗證 per-context 仍可覆蓋)。
-    # --proxy-server points at a dead port = fail-closed default: any traffic NOT overridden by
-    # a per-context proxy fails instead of leaking via this container's own egress (Phase 0 G8
-    # confirmed per-context proxyServer still overrides this).
+    # 重要:此 image 的 entrypoint(run.sh)「已」在 9223 起 headless-shell,並以
+    #   socat TCP-LISTEN:9222,fork TCP:127.0.0.1:9223  橋接對外 9222 → 內部 9223
+    # (近代 Chrome 不再允許把 DevTools 綁到非 loopback 位址,故用 socat 轉)。
+    # 所以這裡「絕對不要」再設 --remote-debugging-port/address —— 那會把 Chrome 逼到 9222,
+    # 與 socat 的 9222 監聽打架、且 9223 沒人聽 → socat 一直噴 "connection refused"。
+    # command 只放「額外」旗標,run.sh 會用 $@ 把它們接到 headless-shell 後面。
+    # This image's run.sh already runs headless-shell on 9223 and bridges 9222->9223 via socat.
+    # Do NOT set --remote-debugging-port/address here (it forces Chrome onto 9222, fighting socat
+    # and leaving 9223 empty -> the "connection refused" spam). Only append EXTRA flags below.
     command:
-      - "--remote-debugging-address=0.0.0.0"
-      - "--remote-debugging-port=9222"
-      - "--no-sandbox"
-      - "--disable-dev-shm-usage"
+      # fail-closed 預設 proxy(死埠):未經 per-context 覆蓋的流量一律失敗,不以本容器 IP 洩漏身分
+      # (Phase 0 G8 已驗證 per-context proxyServer 仍可覆蓋)。
       - "--proxy-server=socks5://127.0.0.1:1"
+      # 允許非瀏覽器 CDP client(後端 websockets)連 DevTools WS(Chrome 111+ 的 origin 檢查)。
+      - "--remote-allow-origins=*"
+      - "--disable-dev-shm-usage"
     # 不 publish 9222:只在 telepy-network 內 / never published to host
 
 networks:

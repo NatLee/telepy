@@ -61,7 +61,21 @@ Channels `/ws`。ssh `-D` SOCKS 段、REST 三 URL、`FirstMessageAuthConsumer`�
 
 5. **不做 `SESSION_MODE`**（見 §3-B）、**基本 IME**（§3-C）。
 
-6. **附帶修復兩處環境健壯性**（非本功能、但不修就無法跑測試/CI）：
+7. **`chromedp/headless-shell` 容器整合修正（部署後回報的實際問題）**：
+   該 image 的 entrypoint（`run.sh`）**已**在 `127.0.0.1:9223` 起 headless-shell，並用
+   `socat TCP-LISTEN:9222,fork TCP:127.0.0.1:9223` 橋接對外 9222→內部 9223（近代 Chrome
+   不再允許把 DevTools 綁到非 loopback）。原本 compose 的 `command:` 又設了
+   `--remote-debugging-port=9222`，把 Chrome 逼到 9222、與 socat 打架、9223 沒人聽 →
+   `socat ... connection refused` 連噴。**修正**：`command:` 不再設 debug port/address，
+   只追加額外旗標（`--proxy-server` fail-closed、`--remote-allow-origins=*`、
+   `--disable-dev-shm-usage`），交給 `run.sh` 的 `$@`。
+   另外 Chrome DevTools 有 DNS-rebinding 防護:Host header 必須是 IP/localhost，用服務名
+   `chromium:9222` 會回 500。故 `cdp_client._browser_ws` 改為先把主機名解析成 IP、以
+   `http://<ip>:9222` 問 `/json/version`，並把回傳 ws URL 的 host 改寫為該 `<ip>:9222`。
+   **已用 socat 完整重現並驗證**（`dev-scripts/cdp_socat_repro.py`，5/5）：確認
+   hostname Host→500、IP Host→200、client 經 socat 橋接建 session 並串流 26 幀成功。
+
+8. **附帶修復兩處環境健壯性**（非本功能、但不修就無法跑測試/CI）：
    - `settings.py` `LOG_ROOT`：容器外退回 repo 相對路徑（原本硬寫 `/logs`，CI/本機直跑會崩）。
    - `authorized_keys/signals.py`：`post_migrate` 讀不到 `id_rsa.pub` 時記錄後略過，不再
      讓整個 migrate/test 崩（容器內該檔仍在，行為不變）。可用 `WEB_SERVICE_SSH_PUBKEY` 覆寫路徑。
@@ -75,6 +89,9 @@ Channels `/ws`。ssh `-D` SOCKS 段、REST 三 URL、`FirstMessageAuthConsumer`�
 - **真實 Chromium 整合測試**（`dev-scripts/cdp_integration_check.py`，跑既有 `cdp_client.py`）：
   create_session、**串流 28 幀無 ack deadlock**、`insertText` 中文落字、context 隔離
   （tab list 排除他人 target）、`dispose_context` 真的移除 context —— 5/5 全過。
+- **socat 拓撲重現測試**（`dev-scripts/cdp_socat_repro.py`，重現 chromedp image 的 run.sh）：
+  Chrome 拒絕 hostname Host（500）、接受 IP Host（200）、client 經 socat 9222→9223 建 session
+  並串流 26 幀 —— 5/5 全過（見修訂 7）。
 - **前端**：`tsc --noEmit` 對 `remoteBrowser.ts` / `RemoteBrowserPanel.tsx` 無錯；
   `next build` 首次完整成功（TypeScript 通過、12/12 頁生成）。※ 沙箱掛載檔案系統後續
   出現 Turbopack workspace-root/next 解析抖動（`node_modules/next/package.json` 間歇讀不到），
@@ -83,7 +100,7 @@ Channels `/ws`。ssh `-D` SOCKS 段、REST 三 URL、`FirstMessageAuthConsumer`�
 ## Task 9 端到端驗收清單（於正式 stack 執行）
 
 - [ ] stack 起：`traefik/frontend/backend/redis/ssh/chromium` 皆 Up，無 neko-rooms/neko-chromium-image。
-- [ ] 後端連得到 CDP：`docker compose exec backend python -c "import requests;print(requests.get('http://chromium:9222/json/version').status_code)"` → `200`。
+- [ ] 後端連得到 CDP（**注意用 IP**，見下方修訂 7）：`docker compose exec backend python -c "import socket,requests; ip=socket.gethostbyname('chromium'); print(requests.get(f'http://{ip}:9222/json/version').status_code)"` → `200`。（直接用 `http://chromium:9222` 會回 500，因 Chrome 拒絕非 IP/localhost 的 Host header——這正是 `cdp_client` 已處理的。）
 - [ ] 前端「Start Browser」→ 數秒內 canvas 出現網頁；滑鼠可點、鍵盤可打字、中文可用注音/拼音輸入。
 - [ ] 可切分頁：工具列 `+` 開新分頁、URL 列 Enter 導覽、點分頁切換、`x` 關分頁。
 - [ ] proxy 走目標出口：瀏覽器內開 IP 查詢頁，公網 IP == 目標機器 IP。
