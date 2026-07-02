@@ -4,9 +4,9 @@
 
 **Goal:** 把 `remote-browser` 功能的傳輸與執行層,從 `selenium/standalone-chromium` + x11vnc + noVNC,換成 m1k1o/**Neko**(WebRTC 串流)+ **neko-rooms**(每個 target 一個獨立容器),在保留現有 SSH `-D` SOCKS proxy 的前提下,取得更順的畫面、原生分頁與真正的 per-target 隔離。
 
-**Architecture:** 後端維持「一個 session = 一條 `ssh -D` SOCKS proxy」,但把「開一顆 Chrome」從 Selenium 改成呼叫 neko-rooms REST API 動態建立/銷毀一個 neko 房間;每個房間跑我們自訂的 `telepy-neko-chromium` image(把 `--proxy-server` 改成由環境變數注入),房間容器掛在既有的 `telepy-network`,透過 `$HOSTNAME:<proxy_port>` 連回後端的 SSH SOCKS。房間網頁與 WebRTC 訊令走 Traefik(改用 Docker provider 自動路由 `/neko/<room>`),WebRTC 媒體走 mux 模式的單一 UDP/TCP 埠段。前端只是把 iframe 從 noVNC 換成房間 URL。
+**Architecture:** 後端維持「一個 session = 一條 `ssh -D` SOCKS proxy」,但把「開一顆 Chrome」從 Selenium 改成呼叫 neko-rooms REST API 動態建立/銷毀一個 neko 房間;每個房間跑我們自訂的 `telepy-neko-chromium` image(把 `--proxy-server` 改成由環境變數注入),房間容器掛在既有的 `telepy-network`,透過 `$HOSTNAME:<proxy_port>` 連回後端的 SSH SOCKS。房間網頁與 WebRTC 訊令走 **neko-rooms 內建 reverse proxy**(`TRAEFIK_ENABLED=false` 時 neko-rooms 會以 `m1k1o.neko_rooms.proxy.*` label 自行反代 `/neko/<room>/` 到房間容器,含 WebSocket 與「房間啟動中」等待頁);Traefik 只需在 file provider(`dynamic.yml`)加一條 `PathPrefix(/neko)` → `neko-rooms:8080` 的 router,一比一取代原本的 `selenium-novnc` router。WebRTC 媒體走 mux 模式的單一 UDP/TCP 埠段(由房間容器直接發佈到 host,與 Traefik 無關)。前端只是把 iframe 從 noVNC 換成房間 URL。
 
-**Tech Stack:** Django 5 / DRF、Python `requests`、Docker Compose、Traefik v3(file + docker provider)、m1k1o/neko(v3, chromium image)、m1k1o/neko-rooms、Next.js(iframe)。
+**Tech Stack:** Django 5 / DRF、Python `requests`、Docker Compose、Traefik v3(僅 file provider,不需 docker provider)、m1k1o/neko(v3, chromium image)、m1k1o/neko-rooms(rooms API + 內建 proxy)、Next.js(iframe)。
 
 ---
 
@@ -15,7 +15,7 @@
 現有實作(要被取代或改寫的部分):
 
 - `src/backend/authorized_keys/remote_browser_service.py` — 目前:`ssh -D` + 呼叫 `selenium-standalone:4444` 建 session + CDP 注入 stealth JS + `ACTIVE_SESSIONS` 記憶體登記 + 背景 GC thread。
-- `src/backend/authorized_keys/browse_views.py` — `RemoteBrowserStartView / StopView / PingView`(權限檢查後呼叫 service)。**權限與 URL 路徑保持不變。**
+- `src/backend/authorized_keys/browse_views.py` — `RemoteBrowserStartView / StopView / PingView`(權限檢查後呼叫 service)。**權限與 URL 路徑保持不變;views 直接把 service 回傳值 pass-through 成 JSON,因此本檔完全不需修改。**
 - `src/configs/traefik/dynamic.yml` — `selenium-novnc` router 把 `/novnc` 導到 `selenium-standalone:7900`。
 - `docker-compose.yml` — `selenium-standalone` service。
 - `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` — 用 iframe 載 `vnc_url`。
@@ -30,13 +30,15 @@
 
 1. **為什麼要自訂 image 注入 proxy?** neko chromium image 的啟動指令寫死在 `/etc/neko/supervisord/chromium.conf`,沒有「額外 flags」環境變數;而 neko-rooms 的 `BrowserPolicy` 只支援 extensions / devtools / persistent_data,**不含 proxy**。所以最可靠的做法是做一顆薄薄的自訂 image,把 chromium 指令改成「當 `PROXY_SERVER` 有值時才加上 `--proxy-server`」,再用 neko-rooms 的 `envs` 逐房間注入。這條路不依賴 mounts/whitelist/storage,最穩、最好測。
 
-2. **為什麼用 neko-rooms 而不是後端自刻 Docker spawner?** 已依你的選擇採用 neko-rooms:它把「建/刪/列房間、Traefik 標籤、埠配置、idle 等待頁」都做好了,後端只要呼叫 REST API。後端仍保有自己的 `ACTIVE_SESSIONS` 生命週期與權限層,neko-rooms 只當「容器工廠」。
+2. **為什麼用 neko-rooms 而不是後端自刻 Docker spawner?** 已依你的選擇採用 neko-rooms:它把「建/刪/列房間、房間路由(內建 proxy)、埠配置、idle 等待頁」都做好了,後端只要呼叫 REST API。後端仍保有自己的 `ACTIVE_SESSIONS` 生命週期與權限層,neko-rooms 只當「容器工廠」。
 
-3. **WebRTC 網路成本(無法迴避,已知)。** WebRTC 媒體走 UDP,不能穿過 Traefik 的 HTTP entrypoint。採 **mux 模式**:每個房間只需 epr 埠段裡的「一個 UDP + 一個 TCP」。因此要在 host 上發佈一段 epr 埠(預設 59000–59999,本計畫收斂成可控範圍)並設 `NEKO_ROOMS_NAT1TO1` 為伺服器對外可達 IP。房間的 HTTP/訊令(wss)則交給 Traefik Docker provider 自動路由。
+3. **WebRTC 網路成本(無法迴避,已知)。** WebRTC 媒體走 UDP,不能穿過 Traefik 的 HTTP entrypoint。採 **mux 模式**:每個房間只需 epr 埠段裡的「一個 UDP + 一個 TCP」(源碼確認:mux 時 `portsNeeded=1`,UDP/TCP 同號,`max_connections` 被忽略)。因此要在 host 上發佈一段 epr 埠(預設 59000–59999,本計畫收斂成可控範圍)並設 `NEKO_ROOMS_NAT1TO1` 為伺服器對外可達 IP(留空時 viper 解析為空 slice,neko 自行偵測,安全)。房間的 HTTP/訊令(wss)由 neko-rooms 內建 proxy 反代(見決策 6)。
 
 4. **stealth JS 可以整段拿掉。** Neko 跑的是「真人瀏覽器」,沒有 `navigator.webdriver`、沒有 automation extension,反偵測體質天生就比 Selenium 好。原本的 CDP 注入不再需要。
 
-5. **neko-rooms API 只走內網。** 後端以 `http://neko-rooms:8080/api/rooms` 直接呼叫(繞過 Traefik 的 basic-auth),neko-rooms 不對外開埠、不加公開路由,降低攻擊面。
+5. **neko-rooms API 只走內網。** 後端以 `http://neko-rooms:8080/api/rooms` 直接呼叫,neko-rooms 不對外開埠;對外只透過 Traefik 的 `PathPrefix(/neko)` router 曝露房間 proxy 路徑 —— `/api/*` 由 Traefik 導去 Django backend,neko-rooms 自己的 `/api` 與 admin SPA 皆不可從外部觸及(源碼確認:其 HTTP server 以 `/*` fallback 服務房間 proxy,`/api` 與靜態檔是另外的路由)。
+
+6. **為什麼用 neko-rooms 內建 proxy 而不是 Traefik docker provider?** neko-rooms 在 `TRAEFIK_DOMAIN` 為空或 `*` 時,產生的 router rule 是 ``PathPrefix(...) && HostRegexp(`{host:.+}`)`` —— 這是 Traefik **v2** 的具名群組語法,本專案用的 **v3**(v3.7.6)無法解析,房間會直接 404。改用內建 proxy 模式(`NEKO_ROOMS_TRAEFIK_ENABLED=false`)後:(a) 完全繞開 v2/v3 語法問題;(b) Traefik 不需啟用 docker provider、不需掛 `docker.sock`(只有 neko-rooms 需要);(c) `traefik.yml` 完全不用動;(d) 免費獲得 neko-rooms 的「房間啟動中」等待頁(`wait_enabled` 預設 true)。Go 的 `httputil.ReverseProxy` 原生支援 WebSocket upgrade,訊令 wss 無虞。
 
 ## 檔案結構(先鎖定切分)
 
@@ -50,16 +52,18 @@
 
 **修改**
 
-- `src/backend/authorized_keys/remote_browser_service.py` — 換掉 Selenium,改用 neko-rooms;房間打 label;GC 加對帳。
-- `src/backend/authorized_keys/browse_views.py` — 回傳 `url`(取代 `vnc_url`);加最大 session 數保護。
+- `src/backend/authorized_keys/remote_browser_service.py` — 換掉 Selenium,改用 neko-rooms;房間打 label;GC 加對帳;最大 session 數保護(views 不用動,回傳 key 由 `vnc_url` 改為 `url` 會自動 pass-through)。
 - `src/backend/site_settings/models.py` `serializers.py` `admin.py`(+ migration)— 新增 `remote_browser_max_sessions`、`remote_browser_neko_image` 設定。
-- `docker-compose.yml` — 移除 `selenium-standalone`;新增 `neko-rooms`;build 自訂 image;Traefik 掛 docker.sock;後端加 Neko 相關 env。
-- `src/configs/traefik/traefik.yml` — 啟用 docker provider。
-- `src/configs/traefik/dynamic.yml` — 移除 `selenium-novnc` router/service/middleware。
+- `docker-compose.yml` — 移除 `selenium-standalone`;新增 `neko-rooms`(掛 docker.sock);build 自訂 image;後端加 Neko 相關 env。Traefik 服務**不變**。
+- `src/configs/traefik/dynamic.yml` — 移除 `selenium-novnc` router/service/middleware,新增 `neko-rooms` router(`/neko` → `neko-rooms:8080`,不 strip prefix)。
 - `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` — iframe `allow` 屬性、標籤文字、改用 `url`。
 - `.env.example` — 新增 Neko/EPR/NAT1TO1 變數。
 
-**依賴關係**:Task 1(image)→ Task 6(compose 會 build 它);Task 2(client)→ Task 3(service 用它);Task 5(settings)→ Task 3/4 讀設定。建議依序執行。
+**刪除**
+
+- `src/backend/authorized_keys/tests.py` — 空 stub,必須刪除,否則與新建的 `tests/` package 衝突(Python 不允許 `tests.py` 與 `tests/` 並存)。
+
+**依賴關係**:Task 1(image)→ Task 6(compose 會 build 它);Task 2(client)→ Task 3(service 用它);Task 5(settings)→ Task 3 讀設定(以 `getattr` 預設值解耦,順序可對調)。建議依序執行。
 
 ---
 
@@ -87,7 +91,7 @@ Run:
 ```bash
 test -S /var/run/docker.sock && echo "docker.sock ok"
 ```
-Expected: 印出 `docker.sock ok`(Traefik 與 neko-rooms 都需要它)。
+Expected: 印出 `docker.sock ok`(neko-rooms 需要它;Traefik 不需要)。
 
 ---
 
@@ -99,7 +103,7 @@ Expected: 印出 `docker.sock ok`(Traefik 與 neko-rooms 都需要它)。
 
 - [ ] **Step 1: 寫 supervisord 覆寫檔**
 
-Create `docker/neko-chromium/chromium.conf`(以官方 `apps/chromium/supervisord.conf` 為基底,只把 `command` 換成 bash 包裝、加入條件式 proxy;其餘 flags 與官方一致):
+Create `docker/neko-chromium/chromium.conf`(以官方 `apps/chromium/supervisord.conf` 為基底,把 chromium 的 `command` 換成 bash 包裝、加入條件式 proxy;**官方檔案同時含 `[program:chromium]` 與 `[program:openbox]` 兩段,openbox(window manager)必須原樣保留**,否則視窗不會 maximize):
 
 ```ini
 [program:chromium]
@@ -127,9 +131,20 @@ stdout_logfile=/var/log/neko/chromium.log
 stdout_logfile_maxbytes=100MB
 stdout_logfile_backups=10
 redirect_stderr=true
+
+[program:openbox]
+environment=HOME="/home/%(ENV_USER)s",USER="%(ENV_USER)s",DISPLAY="%(ENV_DISPLAY)s"
+command=/usr/bin/openbox --config-file /etc/neko/openbox.xml
+autorestart=true
+priority=300
+user=%(ENV_USER)s
+stdout_logfile=/var/log/neko/openbox.log
+stdout_logfile_maxbytes=100MB
+stdout_logfile_backups=10
+redirect_stderr=true
 ```
 
-說明:supervisord 會先展開 `%(ENV_DISPLAY)s`,`${PROXY_SERVER:+...}` 則於執行期由 shell 判斷 —— `PROXY_SERVER` 為空就完全不加 proxy flag(image 可獨立運作),有值才走 SOCKS。與舊 Selenium 設定一致地保留 `--proxy-bypass-list=<-loopback>`(連 loopback 也走 proxy)。
+說明:supervisord 會先展開 `%(ENV_DISPLAY)s` / `%(ENV_PROXY_SERVER)s`(後者要求 env 一定存在,由 Dockerfile 的 `ENV PROXY_SERVER=""` 保證),`${PROXY_SERVER:+...}` 則於執行期由 shell 判斷 —— `PROXY_SERVER` 為空就完全不加 proxy flag(image 可獨立運作),有值才走 SOCKS。與舊 Selenium 設定一致地保留 `--proxy-bypass-list=<-loopback>`(連 loopback 也走 proxy)。
 
 - [ ] **Step 2: 寫 Dockerfile**
 
@@ -138,10 +153,14 @@ Create `docker/neko-chromium/Dockerfile`:
 ```dockerfile
 FROM ghcr.io/m1k1o/neko/chromium:latest
 
+# 明確標注 neko API 版本,讓 neko-rooms 的自動偵測(ImageInspect)永遠正確;
+# service 端另會顯式送 api_version=3,雙保險。
+LABEL net.m1k1o.neko.api-version=3
+
 # proxy 由後端經 neko-rooms envs 注入;預設空字串 = 直連(image 可單獨啟動)
 ENV PROXY_SERVER=""
 
-# 覆寫官方 chromium 啟動設定,加入條件式 --proxy-server
+# 覆寫官方 chromium 啟動設定,加入條件式 --proxy-server(含 openbox 段,見 chromium.conf)
 COPY chromium.conf /etc/neko/supervisord/chromium.conf
 ```
 
@@ -360,12 +379,19 @@ git commit -m "feat(neko): add neko-rooms REST client"
 
 **Files:**
 - Modify: `src/backend/authorized_keys/remote_browser_service.py`(整檔重寫)
-- Create: `src/backend/authorized_keys/tests/__init__.py`(若不存在)
+- Delete: `src/backend/authorized_keys/tests.py`(空 stub;不刪會與 `tests/` package 衝突)
+- Create: `src/backend/authorized_keys/tests/__init__.py`
 - Test: `src/backend/authorized_keys/tests/test_remote_browser_service.py`
 
 設計要點:先把 session 登記進 `ACTIVE_SESSIONS`(帶 `session-id`),**再**建房間,避免對帳 thread 在建立空窗期把新房間當孤兒清掉;房間以 `telepy.session-id` label 對帳。
 
-- [ ] **Step 1: 先寫失敗測試**
+- [ ] **Step 1: 刪除舊 stub、先寫失敗測試**
+
+先刪除空 stub(否則 `tests.py` 與 `tests/` package 並存,import 會衝突):
+
+```bash
+git rm src/backend/authorized_keys/tests.py
+```
 
 Create `src/backend/authorized_keys/tests/test_remote_browser_service.py`:
 
@@ -531,14 +557,17 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
     user_pass = secrets.token_urlsafe(9)
     neko_image = getattr(settings, "remote_browser_neko_image", "telepy-neko-chromium:latest")
     room_settings = {
+        "api_version": 3,                   # 顯式指定,跳過 neko-rooms 的 image 偵測(偵測失敗會 fallback v2 → 房間壞掉)
         "name": room_name,
         "neko_image": neko_image,
-        "max_connections": 0,               # mux 模式:一房一埠
+        "max_connections": 0,               # mux 模式:一房一埠(源碼確認 mux 時此值被忽略)
         "control_protection": False,
         "implicit_control": True,
         "user_pass": user_pass,
         "admin_pass": secrets.token_urlsafe(9),
         "screen": "1280x720@30",
+        "video_codec": "VP8",               # 顯式送預設值 —— 不送會因 `"" != "VP8"` 產生空的 NEKO_CAPTURE_VIDEO_CODEC=
+        "audio_codec": "OPUS",              # 同上(NEKO_CAPTURE_AUDIO_CODEC)
         "envs": {
             "PROXY_SERVER": f"socks5://{proxy_host}:{proxy_port}",
         },
@@ -667,7 +696,8 @@ git commit -m "feat(neko): rewrite remote_browser_service to use neko-rooms inst
 - Modify: `src/backend/site_settings/admin.py`
 - Create(自動產生): `src/backend/site_settings/migrations/0002_*.py`
 
-> service 已用 `getattr(..., 預設)` 讀這兩個值,故本任務可在 Task 4 之後執行;完成後管理員就能在 admin 調整上限與 image。
+> service 已用 `getattr(..., 預設)` 讀這兩個值,故本任務與 Task 3 順序可對調;完成後管理員就能在 admin 調整上限與 image。
+> migration 可用 `makemigrations` 自動產生(需容器環境),或直接手寫等價的 `AddField` migration(欄位定義單純,兩者結果一致)。
 
 - [ ] **Step 1: models.py 加兩個欄位**
 
@@ -755,13 +785,9 @@ git commit -m "feat(neko): add max_sessions and neko_image site settings"
 **Files:**
 - Modify: `docker-compose.yml`
 
-- [ ] **Step 1: Traefik 掛上 docker.sock(唯讀)**
+- [ ] **Step 1: Traefik service 保持原樣**
 
-在 `traefik` service 的 `volumes:` 末尾加一行:
-
-```yaml
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-```
+採 neko-rooms 內建 proxy 模式,Traefik **不需要** docker provider、也**不掛** docker.sock(只有 neko-rooms 需要 socket)。本步驟無變更,僅確認。
 
 - [ ] **Step 2: 移除 selenium-standalone service**
 
@@ -800,28 +826,32 @@ git commit -m "feat(neko): add max_sessions and neko_image site settings"
     image: m1k1o/neko-rooms:latest
     container_name: telepy-neko-rooms-${PROJECT_NAME}
     environment:
+      - TZ=Asia/Taipei
       - NEKO_ROOMS_MUX=true
-      - NEKO_ROOMS_EPR=${NEKO_EPR_RANGE}
-      - NEKO_ROOMS_NAT1TO1=${NEKO_NAT1TO1_IP}
+      - NEKO_ROOMS_EPR=${NEKO_EPR_RANGE:-59000-59049}
+      - NEKO_ROOMS_NAT1TO1=${NEKO_NAT1TO1_IP:-}
       - NEKO_ROOMS_NEKO_IMAGES=telepy-neko-chromium:latest
+      - NEKO_ROOMS_INSTANCE_NAME=telepy-${PROJECT_NAME}
       - NEKO_ROOMS_INSTANCE_NETWORK=telepy-network-${PROJECT_NAME}
       - NEKO_ROOMS_PATH_PREFIX=/neko
       - NEKO_ROOMS_STORAGE_ENABLED=false
-      - NEKO_ROOMS_TRAEFIK_ENABLED=true
-      - NEKO_ROOMS_TRAEFIK_DOMAIN=*
-      - NEKO_ROOMS_TRAEFIK_ENTRYPOINT=web
+      - NEKO_ROOMS_TRAEFIK_ENABLED=false
+      - NEKO_ROOMS_PROXY=true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    depends_on:
-      - traefik
 ```
 
-要點:`neko-rooms` 這個 service 名就是後端呼叫用的 DNS(`http://neko-rooms:8080`);它用 docker.sock 建房間容器,並把房間掛到 `INSTANCE_NETWORK`(= telepy-network),房間才能用 `socks5://$HOSTNAME:<port>` 連回後端 SSH proxy;Traefik 標籤由 neko-rooms 自動注入,走 `web` entrypoint、`/neko` 前綴。
+要點:
+- `neko-rooms` 這個 service 名就是後端呼叫用的 DNS(`http://neko-rooms:8080`);它用 docker.sock 建房間容器,並把房間掛到 `INSTANCE_NETWORK`(= telepy-network),房間才能用 `socks5://$HOSTNAME:<port>` 連回後端 SSH proxy。
+- `NEKO_ROOMS_TRAEFIK_ENABLED=false` → 房間改掛 `m1k1o.neko_rooms.proxy.*` label,由 neko-rooms 自己的 HTTP server 反代 `/neko/<room>/`(Task 7 只需把 Traefik 的 `/neko` 指到它)。
+- `NEKO_ROOMS_INSTANCE_NAME=telepy-${PROJECT_NAME}`:房間容器名 = `<instance_name>-<room_name>`,避免多套部署(不同 `PROJECT_NAME`)在同一台 host 撞名。
+- `NEKO_ROOMS_PROXY=true`:server 信任 X-Forwarded-*(位於 Traefik 之後,log 記到真實 client IP)。
+- `${NEKO_EPR_RANGE:-59000-59049}` / `${NEKO_NAT1TO1_IP:-}` 帶預設值,`.env` 未設定時 compose 也不會壞;`NAT1TO1` 空字串經 viper 解析為空 slice(源碼確認),neko 會自行偵測 IP。
 
 - [ ] **Step 6: 驗證 compose 語法**
 
 Run: `docker compose config >/dev/null && echo "compose ok"`
-Expected: 印出 `compose ok`(先在 `.env` 補上 `NEKO_EPR_RANGE`、`NEKO_NAT1TO1_IP`,見 Task 9;未設會報變數缺失)。
+Expected: 印出 `compose ok`(`NEKO_EPR_RANGE` / `NEKO_NAT1TO1_IP` 已有 compose 預設值,`.env` 未設也不會失敗;正式環境仍應在 `.env` 明確設定,見 Task 9)。
 
 - [ ] **Step 7: Commit**
 
@@ -832,49 +862,50 @@ git commit -m "feat(neko): swap selenium-standalone for neko-rooms in compose"
 
 ---
 
-## Task 7: Traefik providers 與路由清理
+## Task 7: Traefik 路由替換(selenium-novnc → neko-rooms)
 
 **Files:**
-- Modify: `src/configs/traefik/traefik.yml`
-- Modify: `src/configs/traefik/dynamic.yml`
+- Modify: `src/configs/traefik/dynamic.yml`(`traefik.yml` **完全不動**)
 
-- [ ] **Step 1: 啟用 docker provider**
-
-把 `traefik.yml` 的 `providers:` 區塊改成:
-
-```yaml
-providers:
-  file:
-    filename: /etc/traefik/dynamic.yml
-  docker:
-    exposedByDefault: false
-```
-
-不指定 provider 層級的 `network` —— neko-rooms 會逐房間標上 `traefik.docker.network`,交由它決定即可(與 `PROJECT_NAME` 無關)。`exposedByDefault: false` 確保只有帶 label 的房間容器會被路由,frontend/backend 等不受影響。
-
-- [ ] **Step 2: 移除 selenium-novnc 路由**
+- [ ] **Step 1: 替換路由**
 
 在 `dynamic.yml`:
 - 刪除 `routers:` 內的 `selenium-novnc:` 整段。
 - 刪除 `middlewares:` 內的 `strip-novnc:` 整段(若 `middlewares:` 因此變空,一併刪除該 key)。
 - 刪除 `services:` 內的 `selenium-service:` 整段。
+- 新增 router 與 service(**不 strip prefix** —— neko-rooms 的 proxy 以 `/neko/<room>` 完整路徑做 prefix tree match,由它自己 StripPrefix 轉發給房間):
 
-保留 `frontend` / `backend-api` / `backend-tunnel-sharing` / `backend-websocket` 等其餘路由不動。
+```yaml
+    neko-rooms:
+      <<: *commonRouterSettings
+      rule: "PathPrefix(`/neko`)"
+      service: neko-rooms-service
+```
 
-- [ ] **Step 3: 驗證 Traefik 設定可被解析**
+```yaml
+    neko-rooms-service:
+      loadBalancer:
+        servers:
+          - url: "http://neko-rooms:8080"
+```
+
+保留 `frontend` / `backend-api` / `backend-tunnel-sharing` / `backend-websocket` 等其餘路由不動。安全性:`/api` 仍由 `backend-api` router 導向 Django,neko-rooms 自己的 `/api` 不會被外部觸及(只有 `/neko/*` 進得來,其 server 對該前綴只服務房間 proxy)。
+
+- [ ] **Step 2: 驗證 Traefik 設定可被解析**
 
 Run:
 ```bash
 docker compose up -d traefik
-docker compose logs traefik | grep -i -E "error|docker" | tail -20
+docker compose logs traefik | grep -i error | tail -20
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:${WEB_SERVER_PORT:-8787}/neko/nonexistent/
 ```
-Expected: 無 fatal error;可看到 docker provider 已啟用的訊息(例如 `Provider connection established` / `Starting provider *docker.Provider`)。
+Expected: 無 fatal error;curl 回 200(neko-rooms 的「room not found」等待頁)或 502(neko-rooms 尚未啟動),而**不是** Traefik 的 404(代表 router 沒生效)。
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/configs/traefik/traefik.yml src/configs/traefik/dynamic.yml
-git commit -m "feat(neko): enable traefik docker provider, drop selenium noVNC route"
+git add src/configs/traefik/dynamic.yml
+git commit -m "feat(neko): route /neko to neko-rooms built-in proxy, drop selenium noVNC route"
 ```
 
 ---
@@ -1048,7 +1079,7 @@ Expected: 下一輪對帳(≤10s)後,該房間被 `_reconcile_orphan_rooms` 清�
 - [ ] **Step 9: 後端測試全綠**
 
 Run: `docker compose run --rm backend python manage.py test -v 2`
-Expected: 全數 PASS(含 Task 3/4 新測試)。
+Expected: 全數 PASS(含 Task 2/3 新測試)。
 
 - [ ] **Step 10: 合併**
 
@@ -1063,7 +1094,7 @@ git checkout main && git merge --no-ff feat/neko-remote-browser
 若上線後出狀況,回退很單純(改動彼此獨立、且以 git 分段提交):
 
 - **只回前端**:`git revert` Task 8 的 commit,iframe 立即回到舊行為(但後端已改,不建議單獨回)。
-- **整體回退**:`git checkout main`(未合併前)或 `git revert` 合併 commit;`docker-compose.yml` 還原 `selenium-standalone`、`dynamic.yml` 還原 `selenium-novnc`、`traefik.yml` 移除 docker provider,`docker compose up -d --build`。
+- **整體回退**:`git checkout main`(未合併前)或 `git revert` 合併 commit;`docker-compose.yml` 還原 `selenium-standalone`、`dynamic.yml` 還原 `selenium-novnc`,`docker compose up -d --build`(`traefik.yml` 本來就沒動)。
 - neko-rooms 與房間容器可獨立清理:`docker rm -f $(docker ps -q --filter "label=telepy.managed=true")` 再停 `neko-rooms`。
 - 舊 `selenium/standalone-chromium` image 建議在完全驗收前先別刪,保留快速回退能力。
 
@@ -1071,6 +1102,8 @@ git checkout main && git merge --no-ff feat/neko-remote-browser
 
 - **WebRTC/NAT**:若遠端 client 位於受限網路(對稱 NAT / 只開 443),單靠 STUN 可能連不上,需再架 TURN(neko 支援 `NEKO_ICESERVERS`)。本計畫先用 mux + NAT1To1 涵蓋一般情境。
 - **自動登入參數**:iframe URL 用 `?usr=telepy&pwd=<pass>` 自動登入;若你的 neko 版本參數不同,Step 3 會看到一個小登入框(輸入一次密碼即可),屆時調整 `remote_browser_service.py` 的 `room_url` 組法即可,不影響其他部分。
+- **上游 proxy 模式為非預設路徑**:neko-rooms 官方文件主推 Traefik 整合;內建 proxy 模式(`m1k1o.neko_rooms.proxy.*` + `/*` fallback handler)已對 master 源碼確認存在且支援 wait page/WebSocket,但升級 neko-rooms 版本時應重新確認此行為未變。
+- **`is_ready` 依賴 healthcheck**:`wait_ready` 輪詢的 `is_ready` = 房間事件 ready 或 container `healthy`;若自訂 image 意外失去 HEALTHCHECK,`wait_ready` 會等滿 timeout 後照樣回傳(neko-rooms 等待頁會接手),功能不壞、只是 API 回應多等幾秒。
 - **image 更新**:neko 上游更新時,重建 `telepy-neko-chromium`(`docker compose --profile images build neko-chromium-image`);因為只覆寫一個 supervisord 檔,衝突面很小。
 - **資源**:一 session 一容器,記憶體/磁碟成本高於舊的「單一 Selenium node 多 session」,但換得真正隔離與更順的 WebRTC 體感;用 `remote_browser_max_sessions` 控上限。
 
@@ -1079,3 +1112,15 @@ git checkout main && git merge --no-ff feat/neko-remote-browser
 - **需求涵蓋**:可切分頁 → Task 10 Step 4;不同機器不共用 instance → Task 3(一 session 一房間 + label)、Task 10 Step 6;proxy 逐房間注入 → Task 1 + Task 3(`envs.PROXY_SERVER`);減肥/加速 → 移除 Selenium Grid(Task 6)、poll 取代 sleep(Task 3)、WebRTC 取代 noVNC(全案)。
 - **Placeholder 掃描**:無 TODO/待填;唯一「驗證後可能微調」處(自動登入參數)已於「已知風險」明確標註並給出對應調整點。
 - **型別一致**:service 回傳 `{session_id, url, room_id}` 與前端讀 `data.session_id`/`data.url` 一致;`_neko`、`NekoRoomsError`、`LABEL_MANAGED`、`LABEL_SESSION`、`_wait_for_port` 在 service 定義且測試以 `svc.*` 引用一致;client 方法 `create_room/get_room/delete_room/list_rooms/wait_ready` 與 service 呼叫一致。
+
+## 上游源碼驗證紀錄(2026-07-02 二次 review)
+
+對 `m1k1o/neko-rooms@master` 與 `m1k1o/neko@master` 逐檔確認:
+
+- `internal/api/rooms.go`:`POST /api/rooms`(`start` 預設即 true)回完整 RoomEntry;`DELETE` 回 204;`GET /api/rooms?<label>=<value>` 支援過濾,label key 限 `[a-z0-9.-]`(`telepy.managed` / `telepy.session-id` 合法)。
+- `internal/room/labels.go` + `containers.go`:user label 存到容器時加 `m1k1o.neko_rooms.x-` 前綴,list 過濾與回傳的 `labels` 都自動處理前綴 → 對帳設計可行;`is_ready` = ready 事件或 container healthy。
+- `internal/room/manager.go`:mux 時每房固定配 1 埠(UDP+TCP 同號);`api_version==0` 會走 image 偵測且可能 fallback v2(→ 顯式送 3);`TRAEFIK_DOMAIN=*` 產生 `HostRegexp(`{host:.+}`)` v2 語法(→ 棄用 docker provider 路線);`INSTANCE_NETWORK` 需為實際網路名。
+- `internal/types/room_api_v3.go`:user `envs` 原樣進容器(`PROXY_SERVER` 不在黑名單);`user_pass`/`admin_pass` → `NEKO_MEMBER_MULTIUSER_*`;mux → `NEKO_WEBRTC_UDPMUX/TCPMUX`;`video_codec` 不送會產生空 env(→ 顯式送 VP8/OPUS)。
+- `internal/server/manager.go` + `internal/proxy/manager.go`:traefik disabled 時房間掛 `m1k1o.neko_rooms.proxy.*` label,server 以 `/*` fallback 反代房間(StripPrefix 自理、`httputil.ReverseProxy` 支援 WS、含等待頁);`/api` 與 admin 靜態檔為獨立路由,不經 `/neko` 前綴無法觸及。
+- `neko/apps/chromium/supervisord.conf`:官方檔含 `[program:chromium]` + `[program:openbox]` 兩段(→ 覆寫檔補回 openbox)。
+- `internal/config/room.go`:`NEKO_ROOMS_NAT1TO1=""` 經 viper `GetStringSlice` 為空 slice,安全;env 命名 `NEKO_ROOMS_*` 對應 viper key 無誤。
