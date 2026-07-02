@@ -32,16 +32,26 @@ def get_free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_port(host: str, port: int, timeout: float = 8.0) -> bool:
+def _wait_for_port(host: str, port: int, timeout: float = 30.0, proc=None) -> bool:
+    """
+    等 SOCKS proxy listen。
+
+    `reverse` 是兩跳連線(backend → telepy-ssh 的 ProxyCommand → 裝置反向隧道),
+    兩跳都用 ControlMaster/ControlPersist。冷啟第一次要建立兩個 master socket 再對
+    裝置認證,可能比舊的 8s 久;故預設放寬到 30s。ControlPersist=600 會讓後續啟動
+    幾乎瞬間完成。若傳入 proc,ssh 進程一旦死掉就即刻失敗,不必空等到 timeout。
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False  # ssh 已退出(認證失敗/裝置離線)——真失敗,別再等
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
             try:
                 s.connect((host, port))
                 return True
             except OSError:
-                time.sleep(0.15)
+                time.sleep(0.2)
     return False
 
 
@@ -71,13 +81,17 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
     logger.info(f"Starting SSH proxy for target {server_id} on port {proxy_port}")
     ssh_process = subprocess.Popen(ssh_cmd, shell=True)
 
-    # 等 SOCKS proxy listen(取代舊的 time.sleep(2),更快也更可靠)
-    if not _wait_for_port("127.0.0.1", proxy_port, timeout=8.0) or ssh_process.poll() is not None:
+    # 等 SOCKS proxy listen;冷啟兩跳 ControlMaster 較慢,timeout 放寬(可經 SiteSettings 調)
+    ssh_timeout = getattr(settings, "remote_browser_ssh_timeout", 30)
+    if not _wait_for_port("127.0.0.1", proxy_port, timeout=ssh_timeout, proc=ssh_process):
         try:
             ssh_process.terminate()
         except Exception:
             pass
-        raise Exception(f"Failed to start SSH proxy for target {server_id}.")
+        raise Exception(
+            f"Failed to start SSH proxy for target {server_id} "
+            f"(no SOCKS listener within {ssh_timeout}s — is the device online?)."
+        )
 
     session_id = str(uuid.uuid4())
     room_name = f"telepy-{session_id.split('-')[0]}"
