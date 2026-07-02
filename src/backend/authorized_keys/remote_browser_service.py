@@ -3,275 +3,210 @@ import time
 import socket
 import logging
 import subprocess
-import requests
 import uuid
 import threading
+import secrets
 from typing import Dict, Any
 
 from site_settings.models import SiteSettings
+from services.neko_rooms_client import NekoRoomsClient, NekoRoomsError
 
 logger = logging.getLogger(__name__)
 
-# Keep track of active remote browser sessions
-# session_id -> { "ssh_process": Popen, "proxy_port": int, "target_target": str, "selenium_session_id": str }
+# session_id -> { ssh_process, proxy_port, server_id, room_id, room_name, last_seen }
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSIONS_LOCK = threading.Lock()
 
-def get_free_port():
+SSH_HOST = "reverse"                 # 既有 reverse gateway,保持不變
+LABEL_MANAGED = "telepy.managed"
+LABEL_SESSION = "telepy.session-id"
+
+_neko = NekoRoomsClient()
+
+
+def get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
-        PORT = s.getsockname()[1]
-    return PORT
+        return s.getsockname()[1]
 
-def start_remote_browser(target_username: str, target_reverse_port: int, server_id: int):
+
+def _wait_for_port(host: str, port: int, timeout: float = 8.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            try:
+                s.connect((host, port))
+                return True
+            except OSError:
+                time.sleep(0.15)
+    return False
+
+
+def _count_active() -> int:
+    with _SESSIONS_LOCK:
+        return len(ACTIVE_SESSIONS)
+
+
+def start_remote_browser(target_username, target_reverse_port, server_id):
     """
     Start a remote browser session.
-    1. Start a local ssh -D to the target.
-    2. Start a selenium session using the local proxy.
-    Returns: { "session_id": ..., "vnc_url": ... }
+    1. Start a local ssh -D SOCKS proxy to the target (unchanged behavior).
+    2. Create a dedicated Neko room via neko-rooms, injecting the proxy by env.
+    Returns: { "session_id": ..., "url": ..., "room_id": ... }
     """
+    settings = SiteSettings.get_solo()
+    # getattr 預設值:即使 SiteSettings 欄位尚未 migrate 也能運作(Task 5 加上可調欄位)
+    max_sessions = getattr(settings, "remote_browser_max_sessions", 10)
+    if max_sessions and _count_active() >= max_sessions:
+        raise Exception(
+            "The Proxy Browser has reached its maximum concurrent user limit. "
+            "Please wait for someone to disconnect and try again."
+        )
+
     proxy_port = get_free_port()
-    # Execute SSH -D. We are inside the backend container. It needs to hit the ssh reverse tunnel gateway.
-    # The gateway is `reverse` container, but we use the ssh domain or `telepy-ssh` in the compose network.
-    
-    ssh_host = "reverse"
-    ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{ssh_host}"
-    
+    ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{SSH_HOST}"
     logger.info(f"Starting SSH proxy for target {server_id} on port {proxy_port}")
     ssh_process = subprocess.Popen(ssh_cmd, shell=True)
-    
-    # Wait for proxy to listen
-    time.sleep(2)
-    if ssh_process.poll() is not None:
-        raise Exception(f"Failed to start SSH proxy for target {server_id}. Command exited.")
 
-    # Now request Selenium session
-    # Standalone is at http://selenium-standalone:4444/wd/hub
-    backend_hostname = os.getenv("HOSTNAME", "backend") # the backend container's hostname
+    # 等 SOCKS proxy listen(取代舊的 time.sleep(2),更快也更可靠)
+    if not _wait_for_port("127.0.0.1", proxy_port, timeout=8.0) or ssh_process.poll() is not None:
+        try:
+            ssh_process.terminate()
+        except Exception:
+            pass
+        raise Exception(f"Failed to start SSH proxy for target {server_id}.")
 
-    capabilities = {
-        "capabilities": {
-            "alwaysMatch": {
-                "browserName": "chrome",
-                "goog:chromeOptions": {
-                    "excludeSwitches": ["enable-automation", "enable-logging"],
-                    "useAutomationExtension": False,
-                    "args": [
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--start-maximized",
-                        f"--proxy-server=socks5://{backend_hostname}:{proxy_port}",
-                        "--proxy-bypass-list=<-loopback>",
-                        # Anti-bot-detection
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-infobars",
-                        "--lang=en-US,en",
-                    ],
-                    "prefs": {
-                        "credentials_enable_service": False,
-                        "profile.password_manager_enabled": False,
-                        "profile.default_content_setting_values.notifications": 2,
-                        "default_search_provider_data.template_url_data": {
-                            "keyword": "google.com",
-                            "short_name": "Google",
-                            "url": "https://www.google.com/search?q={searchTerms}"
-                        }
-                    }
-                }
-            }
+    session_id = str(uuid.uuid4())
+    room_name = f"telepy-{session_id.split('-')[0]}"
+
+    # 先登記(room_id=None),避免對帳 thread 在建立空窗期誤刪新房間
+    with _SESSIONS_LOCK:
+        ACTIVE_SESSIONS[session_id] = {
+            "ssh_process": ssh_process,
+            "proxy_port": proxy_port,
+            "server_id": server_id,
+            "room_id": None,
+            "room_name": room_name,
+            "last_seen": time.time(),
         }
+
+    proxy_host = os.getenv("HOSTNAME", "backend")   # 後端容器名,房間經 telepy-network 解析
+    user_pass = secrets.token_urlsafe(9)
+    neko_image = getattr(settings, "remote_browser_neko_image", "telepy-neko-chromium:latest")
+    room_settings = {
+        "api_version": 3,                   # 顯式指定,跳過 neko-rooms 的 image 偵測(fallback v2 會壞)
+        "name": room_name,
+        "neko_image": neko_image,
+        "max_connections": 0,               # mux 模式:一房一埠(此值於 mux 下被忽略)
+        "control_protection": False,
+        "implicit_control": True,
+        "user_pass": user_pass,
+        "admin_pass": secrets.token_urlsafe(9),
+        "screen": "1280x720@30",
+        "video_codec": "VP8",               # 顯式送預設值,避免產生空的 NEKO_CAPTURE_VIDEO_CODEC=
+        "audio_codec": "OPUS",              # 同上
+        "envs": {
+            "PROXY_SERVER": f"socks5://{proxy_host}:{proxy_port}",
+        },
+        "labels": {
+            LABEL_MANAGED: "true",
+            LABEL_SESSION: session_id,
+            "telepy.server-id": str(server_id),
+        },
     }
 
-    selenium_url = "http://selenium-standalone:4444/wd/hub/session"
     try:
-        res = requests.post(selenium_url, json=capabilities, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        selenium_session_id = data.get("value", {}).get("sessionId")
-        if selenium_session_id:
-            session_base = f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}"
-            # Comprehensive anti-bot stealth via CDP injection
-            stealth_js = """
-                // 1. Remove navigator.webdriver
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        room = _neko.create_room(room_settings)     # start=true
+    except NekoRoomsError as e:
+        stop_remote_browser(session_id)             # 收 ssh + 移除登記
+        raise Exception(f"Failed to create Neko room: {e}")
 
-                // 2. Fake plugins array (normal Chrome has 5 default plugins)
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => {
-                        const plugins = [
-                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
-                        ];
-                        plugins.length = 3;
-                        return plugins;
-                    }
-                });
+    room_id = room.get("id")
+    with _SESSIONS_LOCK:
+        if session_id in ACTIVE_SESSIONS:
+            ACTIVE_SESSIONS[session_id]["room_id"] = room_id
 
-                // 3. Fake languages
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    # 盡量等到 ready 再回,iframe 就不會停在開機畫面(逾時也照回,neko-rooms 有等待頁)
+    if room_id:
+        _neko.wait_ready(room_id, timeout=20.0)
 
-                // 4. Fix chrome.runtime (Selenium leaves it empty)
-                window.chrome = window.chrome || {};
-                window.chrome.runtime = window.chrome.runtime || {
-                    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
-                    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
-                    PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
-                    RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
-                    OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
-                    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
-                    connect: function() { return { onDisconnect: { addListener: function() {} } }; },
-                    sendMessage: function() {}
-                };
+    # 房間 URL 用 path_prefix + name(與 origin 無關,前端會補 apiBase);usr/pwd 自動登入
+    room_url = f"/neko/{room_name}/?usr=telepy&pwd={user_pass}"
+    return {"session_id": session_id, "url": room_url, "room_id": room_id}
 
-                // 5. Fix permissions query (Selenium exposes 'denied' for notifications)
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications'
-                        ? Promise.resolve({ state: Notification.permission })
-                        : originalQuery(parameters)
-                );
 
-                // 6. Realistic WebGL vendor & renderer
-                const getParameter = WebGLRenderingContext.prototype.getParameter;
-                WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Google Inc. (Intel)';
-                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
-                    return getParameter.call(this, parameter);
-                };
-                const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-                WebGL2RenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Google Inc. (Intel)';
-                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
-                    return getParameter2.call(this, parameter);
-                };
+def ping_remote_browser(session_id):
+    with _SESSIONS_LOCK:
+        session = ACTIVE_SESSIONS.get(session_id)
+        if not session:
+            return False
+        session["last_seen"] = time.time()
+    return True
 
-                // 7. Spoof hardwareConcurrency & deviceMemory
-                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
 
-                // 8. Prevent iframe contentWindow detection
-                const originalAttachShadow = Element.prototype.attachShadow;
-                Element.prototype.attachShadow = function() {
-                    return originalAttachShadow.apply(this, [{ mode: 'open' }]);
-                };
-            """
+def stop_remote_browser(session_id):
+    with _SESSIONS_LOCK:
+        session = ACTIVE_SESSIONS.pop(session_id, None)
+    if not session:
+        return False
+
+    room_id = session.get("room_id")
+    if room_id:
+        try:
+            _neko.delete_room(room_id)
+        except NekoRoomsError as e:
+            logger.warning(f"Failed to delete Neko room {room_id}: {e}")
+
+    ssh_process = session.get("ssh_process")
+    if ssh_process:
+        try:
+            ssh_process.terminate()
+            ssh_process.wait(timeout=5)
+        except Exception:
             try:
-                requests.post(
-                    f"{session_base}/chromium/send_command_and_get_result",
-                    json={
-                        "cmd": "Page.addScriptToEvaluateOnNewDocument",
-                        "params": { "source": stealth_js }
-                    },
-                    timeout=5
-                )
-            except Exception:
-                logger.debug(f"CDP injection skipped for session {selenium_session_id}")
-            # Navigate to Google as initial page
-            try:
-                requests.post(
-                    f"{session_base}/url",
-                    json={"url": "https://www.google.com/"},
-                    timeout=10
-                )
-            except Exception:
-                logger.warning(f"Failed to navigate to Google for session {selenium_session_id}")
-    except requests.exceptions.HTTPError as e:
-        ssh_process.terminate()
-        error_msg = str(e)
-        if res is not None:
-            try:
-                error_data = res.json()
-                # Selenium usually returns a 'value' object with a 'message'
-                if isinstance(error_data, dict) and "value" in error_data and "message" in error_data["value"]:
-                    err_message = error_data["value"]["message"]
-                    if "Could not start a new session" in err_message or "No available nodes" in err_message:
-                        raise Exception("The Proxy Browser has reached its maximum concurrent user limit. Please wait for someone to disconnect and try again.")
+                ssh_process.kill()
             except Exception:
                 pass
-        raise Exception(f"Failed to start Selenium session: {error_msg}")
-    except Exception as e:
-        ssh_process.terminate()
-        raise Exception(f"Failed to start Selenium session: {str(e)}")
-        
-    session_id = str(uuid.uuid4())
-    ACTIVE_SESSIONS[session_id] = {
-        "ssh_process": ssh_process,
-        "proxy_port": proxy_port,
-        "server_id": server_id,
-        "selenium_session_id": selenium_session_id,
-        "last_seen": time.time()
-    }
-    
-    # VNC URL via Traefik
-    vnc_url = f"/novnc/?autoconnect=true&resize=scale"
-    
-    return {
-        "session_id": session_id,
-        "vnc_url": vnc_url,
-        "selenium_session_id": selenium_session_id
-    }
-
-def ping_remote_browser(session_id: str):
-    session = ACTIVE_SESSIONS.get(session_id)
-    if not session:
-        return False
-
-    session["last_seen"] = time.time()
-
-    # 發送 no-op WebDriver 指令，重置 Selenium 的 SE_NODE_SESSION_TIMEOUT idle timer。
-    # VNC 的手動操作不算 WebDriver 指令，不發這個的話 300s 後 Selenium 會關掉 Chrome。
-    selenium_session_id = session.get("selenium_session_id")
-    if selenium_session_id:
-        try:
-            requests.get(
-                f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}",
-                timeout=3
-            )
-        except Exception:
-            logger.debug(f"Keep-alive ping to Selenium failed for session {session_id}")
-
     return True
 
-def stop_remote_browser(session_id: str):
-    session = ACTIVE_SESSIONS.get(session_id)
-    if not session:
-        return False
-        
-    ssh_process = session["ssh_process"]
-    selenium_session_id = session["selenium_session_id"]
-    
-    # Stop selenium session
-    try:
-        requests.delete(f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}", timeout=5)
-    except Exception as e:
-        logger.warning(f"Failed to delete selenium session {selenium_session_id}: {e}")
-        
-    # Stop ssh proxy
-    try:
-        ssh_process.terminate()
-        ssh_process.wait(timeout=5)
-    except Exception as e:
-        logger.warning(f"Failed to terminate SSH process: {e}")
-        ssh_process.kill()
-        
-    del ACTIVE_SESSIONS[session_id]
-    return True
 
-# Simple cleanup thread to check if SSH processes died or frontend stopped pinging
+def _reconcile_orphan_rooms():
+    """刪掉 neko-rooms 內帶 telepy label、但本行程已無對應 session 的孤兒房間。"""
+    try:
+        rooms = _neko.list_rooms({LABEL_MANAGED: "true"})
+    except NekoRoomsError:
+        return
+    with _SESSIONS_LOCK:
+        known = set(ACTIVE_SESSIONS.keys())
+    for room in rooms:
+        labels = room.get("labels") or {}
+        sid = labels.get(LABEL_SESSION)
+        if sid and sid not in known:
+            try:
+                _neko.delete_room(room["id"])
+                logger.info(f"Reaped orphan Neko room {room.get('id')} (session {sid})")
+            except NekoRoomsError:
+                pass
+
+
 def cleanup_dead_sessions():
     while True:
         try:
             idle_timeout = SiteSettings.get_solo().remote_browser_session_idle_timeout
-            dead_sessions = []
             now = time.time()
-            for sid, sess in list(ACTIVE_SESSIONS.items()):
-                # Clean up if SSH process died naturally OR if it hasn't been pinged within idle_timeout seconds
-                if sess["ssh_process"].poll() is not None or (now - sess.get("last_seen", now)) > idle_timeout:
-                    dead_sessions.append(sid)
-            for sid in dead_sessions:
+            dead = []
+            with _SESSIONS_LOCK:
+                for sid, sess in list(ACTIVE_SESSIONS.items()):
+                    proc = sess.get("ssh_process")
+                    if (proc and proc.poll() is not None) or (now - sess.get("last_seen", now)) > idle_timeout:
+                        dead.append(sid)
+            for sid in dead:
                 stop_remote_browser(sid)
+            _reconcile_orphan_rooms()
         except Exception:
             pass
         time.sleep(10)
+
 
 threading.Thread(target=cleanup_dead_sessions, daemon=True).start()
