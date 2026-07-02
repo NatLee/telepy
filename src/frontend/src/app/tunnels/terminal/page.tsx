@@ -31,6 +31,7 @@ export default function TerminalPage() {
 
     const { terminalRef, xtermRef, wsRef } = refs;
     const {
+        tabs, activeTabId,
         connected, connecting, permissionDenied, noUsers,
         latencyMs,
         showFiles, setShowFiles,
@@ -46,7 +47,7 @@ export default function TerminalPage() {
         username, setUsername,
         availableUsernames,
     } = state;
-    const { fetchServiceKeys, reconnect } = actions;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab } = actions;
 
     // Set initial tab from URL param (mount only)
     useEffect(() => {
@@ -138,6 +139,11 @@ export default function TerminalPage() {
                     terminalRef={terminalRef}
                     xtermRef={xtermRef}
                     wsRef={wsRef}
+                    shellTabs={tabs}
+                    activeShellTabId={activeTabId}
+                    onSelectShellTab={selectTab}
+                    onAddShellTab={addTab}
+                    onCloseShellTab={closeTab}
                     serverId={serverId!}
                     username={username}
                     accessToken={accessToken}

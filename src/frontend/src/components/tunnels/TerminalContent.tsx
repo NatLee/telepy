@@ -14,6 +14,8 @@ import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw } from "lucide-react";
 import { TerminalMainView } from "@/lib/tunnelUrls";
+import { ShellTabBar } from "@/components/tunnels/ShellTabBar";
+import type { ShellTab } from "@/hooks/useTerminalPage";
 
 export interface TerminalContentProps {
     mainView: TerminalMainView;
@@ -31,6 +33,11 @@ export interface TerminalContentProps {
     terminalRef: RefObject<HTMLDivElement | null>;
     xtermRef: RefObject<unknown>;
     wsRef: RefObject<WebSocket | null>;
+    shellTabs: ShellTab[];
+    activeShellTabId: number | null;
+    onSelectShellTab: (id: number) => void;
+    onAddShellTab: () => void;
+    onCloseShellTab: (id: number) => void;
     serverId: string;
     username: string | null;
     accessToken: string | null;
@@ -58,6 +65,11 @@ export function TerminalContent({
     terminalRef,
     xtermRef,
     wsRef,
+    shellTabs,
+    activeShellTabId,
+    onSelectShellTab,
+    onAddShellTab,
+    onCloseShellTab,
     serverId,
     username,
     accessToken,
@@ -188,6 +200,14 @@ export function TerminalContent({
 .terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.4); }
 .terminal-container .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
 ` }} />
+                            {/* Shell 分頁列：每個分頁 = 獨立 shell（各自的 WS + PTY）。/ One tab = one independent shell. */}
+                            <ShellTabBar
+                                tabs={shellTabs}
+                                activeTabId={activeShellTabId}
+                                onSelect={onSelectShellTab}
+                                onAdd={onAddShellTab}
+                                onClose={onCloseShellTab}
+                            />
                             <div className="flex-1 relative min-h-0 bg-black terminal-container">
                                 <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
                                 {!connected && !connecting && (

@@ -1,20 +1,35 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * 終端機頁邏輯：使用者列表、xterm 初始化、WebSocket PTY、Service Keys 載入。
- * Terminal page logic: usernames list, xterm init, WebSocket PTY, service keys loading.
- * - xterm 初始化：動態 import xterm + FitAddon，註冊 OSC 7 同步當前路徑。
- *   xterm init: dynamic import, register OSC 7 for path sync.
- * - WebSocket 與 PTY：連線建立後送 pty_resize；onmessage 寫入 term；onData 送 pty_input。
- *   WebSocket & PTY: send pty_resize on open; onmessage writes to term; onData sends pty_input.
- * - Service Keys：fetchServiceKeys 呼叫 /api/reverse/service/keys，供標題列與彈窗使用。
- *   Service keys: fetchServiceKeys calls /api/reverse/service/keys for header and modal.
+ * 終端機頁邏輯：多 shell 分頁、xterm 初始化、WebSocket PTY、Service Keys 載入。
+ * Terminal page logic: multi shell tabs, xterm init, WebSocket PTY, service keys loading.
+ *
+ * 多分頁架構 / Multi-tab architecture:
+ * - 每個分頁 = 一個獨立 session（自己的 xterm 實例 + 自己的 /ws/terminal/ WebSocket + 後端一個
+ *   全新 PTY/ssh shell）。後端無需任何協定變更；分頁互不影響，關分頁（或關頁面）即關 WS，
+ *   後端 disconnect 隨即殺掉該 shell —— 符合「每次都是新 shell、斷線就殺舊 shell」的語意。
+ *   Each tab = one session (own xterm + own WebSocket + a fresh PTY/ssh shell on the backend).
+ *   No backend protocol change; closing a tab closes its WS and the backend kills that shell.
+ * - session 物件存在 ref Map（xterm/WebSocket 不可序列化）；React state 只放渲染用的
+ *   tabs metadata（id/title/username/status）與 activeTabId。
+ *   Sessions live in a ref Map; React state holds only render metadata.
+ * - xtermRef / wsRef 永遠指向「作用中分頁」的 term/ws，讓 MobileKeyboard、AccessoryBar 等
+ *   既有元件無需改動。/ xtermRef & wsRef always track the ACTIVE tab so existing consumers work as-is.
+ * - 隱藏分頁以 display:none 保留完整終端狀態；切換分頁時 refit + 送 pty_resize。
+ *   Hidden tabs keep full terminal state via display:none; refit + pty_resize on activation.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
+
+// 分頁上限：每個分頁在後端是一條 mux session（共用 ControlMaster 連線），遠端 sshd 預設
+// MaxSessions=10，保守取 6 留餘裕給 File Manager / 其他工具的連線。
+// Tab cap: each tab is one mux session on the shared ControlMaster connection; remote sshd
+// defaults to MaxSessions=10, so 6 leaves headroom for the file manager etc.
+export const MAX_SHELL_TABS = 6;
 
 export interface TerminalUsername {
     id: number;
@@ -23,20 +38,111 @@ export interface TerminalUsername {
     created_by_id?: number;
 }
 
+export type ShellTabStatus = "connecting" | "connected" | "closed";
+
+export interface ShellTab {
+    id: number;
+    /** 顯示用序號（"1"、"2"…，頁面存續期間遞增不重用）。/ Display ordinal, never reused. */
+    title: string;
+    username: string;
+    status: ShellTabStatus;
+}
+
+type Session = {
+    id: number;
+    title: string;
+    username: string;
+    el: HTMLDivElement;
+    term: any;
+    fit: any;
+    ws: WebSocket | null;
+    pingInterval: ReturnType<typeof setInterval> | null;
+    pingSentAt: number;
+    lastLatency: number | null;
+    /** 4001 時每個 session 只 refresh 重連一次；收到真正 PTY 輸出即歸零。 */
+    authRetried: boolean;
+    disposed: boolean;
+};
+
+// xterm 動態載入（模組層快取，多分頁只 import 一次）。/ Module-level cache: import xterm once.
+let xtermDepsPromise: Promise<{ Terminal: any; FitAddon: any }> | null = null;
+function loadXtermDeps() {
+    if (!xtermDepsPromise) {
+        xtermDepsPromise = Promise.all([import("xterm"), import("xterm-addon-fit")]).then(
+            ([xtermMod, fitMod]) => ({ Terminal: xtermMod.Terminal, FitAddon: fitMod.FitAddon })
+        );
+    }
+    return xtermDepsPromise;
+}
+
+// 等寬字體就緒（1.5s 逾時保底；只等終端要用的字，不等大型 CJK 字體）。快取單一 promise。
+// Wait only for the terminal's monospace font (1.5s cap), cached as a single promise.
+let monoFontPromise: Promise<string> | null = null;
+function ensureMonoFont(): Promise<string> {
+    if (!monoFontPromise) {
+        monoFontPromise = (async () => {
+            const computedMono = getComputedStyle(document.body)
+                .getPropertyValue("--font-0xproto").trim();
+            const family = computedMono
+                ? `${computedMono}, 'Courier New', monospace`
+                : "'Menlo', 'Consolas', 'Courier New', monospace";
+            if (computedMono) {
+                try {
+                    await Promise.race([
+                        document.fonts.load(`14px ${computedMono}`),
+                        new Promise((resolve) => setTimeout(resolve, 1500)),
+                    ]);
+                } catch { /* 字體字串無法解析或載入失敗 → 照常初始化 */ }
+            }
+            return family;
+        })();
+    }
+    return monoFontPromise;
+}
+
+const TERMINAL_THEME = {
+    background: "#000000",
+    foreground: "#f0f0f0",
+    cursor: "#f0f0f0",
+    selectionBackground: "#3a3d41",
+    black: "#000000",
+    red: "#f44747",
+    green: "#608b4e",
+    yellow: "#d7ba7d",
+    blue: "#569cd6",
+    magenta: "#c586c0",
+    cyan: "#4dc9b0",
+    white: "#d4d4d4",
+    brightBlack: "#808080",
+    brightRed: "#f48771",
+    brightGreen: "#89d185",
+    brightYellow: "#d7ba7d",
+    brightBlue: "#9cdcfe",
+    brightMagenta: "#c586c0",
+    brightCyan: "#4ec9b0",
+    brightWhite: "#ffffff",
+};
+
 export function useTerminalPage(serverId: string | null, accessToken: string | null) {
     const terminalRef = useRef<HTMLDivElement>(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
     const xtermRef = useRef<any>(null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fitAddonRef = useRef<any>(null);
     const wsRef = useRef<WebSocket | null>(null);
-    // token 過期（4001）時只允許 refresh 重連一次；收到真正 PTY 輸出即歸零，避免無限迴圈。
-    // Allow one refresh-retry on 4001; reset once real PTY output arrives to avoid an infinite loop.
-    const authRetriedRef = useRef(false);
 
-    const [connected, setConnected] = useState(false);
-    const [connecting, setConnecting] = useState(true);
-    // 「你↔伺服器」的 WebSocket RTT（毫秒）：由終端機 socket 自帶的 ping/pong 量測（見下）。
+    const sessionsRef = useRef<Map<number, Session>>(new Map());
+    const activeIdRef = useRef<number | null>(null);
+    const nextIdRef = useRef(1);
+    // 世代計數：unmount / server 切換時 +1，讓仍在 await 的 createSession 自我作廢。
+    // Generation counter: bumped on unmount so in-flight async creates abort themselves.
+    const generationRef = useRef(0);
+    const usernameRef = useRef<string | null>(null);
+
+    const [tabs, setTabs] = useState<ShellTab[]>([]);
+    const tabsRef = useRef<ShellTab[]>([]);
+    useEffect(() => { tabsRef.current = tabs; }, [tabs]);
+    const [activeTabId, setActiveTabId] = useState<number | null>(null);
+
+    // 「你↔伺服器」RTT（毫秒）：作用中分頁的 ping/pong 量測。/ Active tab's WS RTT.
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [noUsers, setNoUsers] = useState(false);
@@ -45,6 +151,15 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [keyboardExpanded, setKeyboardExpanded] = useState(true);
     const [keyboardMode, setKeyboardModeState] = useState<KeyboardMode>("accessory");
     const [headerExpanded, setHeaderExpanded] = useState(false);
+    const [mainView, setMainView] = useState<TerminalMainView>("terminal");
+    const [syncedPath, setSyncedPath] = useState<string | undefined>();
+
+    const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
+    const [serviceKeys, setServiceKeys] = useState<any[]>([]);
+    const [loadingServiceKeys, setLoadingServiceKeys] = useState(false);
+
+    const [username, setUsername] = useState<string | null>(null);
+    const [availableUsernames, setAvailableUsernames] = useState<TerminalUsername[]>([]);
 
     // 讀取上次選擇的鍵盤模式（SSR 安全：在 effect 內存取 localStorage）。
     useEffect(() => {
@@ -60,391 +175,487 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         setKeyboardModeState(m);
         try { localStorage.setItem(KEYBOARD_MODE_KEY, m); } catch { /* 忽略 */ }
     };
-    const [mainView, setMainView] = useState<TerminalMainView>("terminal");
-    const [syncedPath, setSyncedPath] = useState<string | undefined>();
-    const [reconnectTrigger, setReconnectTrigger] = useState(0);
 
-    const [serviceKeyModalOpen, setServiceKeyModalOpen] = useState(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const [serviceKeys, setServiceKeys] = useState<any[]>([]);
-    const [loadingServiceKeys, setLoadingServiceKeys] = useState(false);
+    const updateTab = useCallback((id: number, patch: Partial<ShellTab>) => {
+        setTabs(prev => prev.map(t => (t.id === id ? { ...t, ...patch } : t)));
+    }, []);
 
-    const [username, setUsername] = useState<string | null>(null);
-    const [availableUsernames, setAvailableUsernames] = useState<TerminalUsername[]>([]);
+    // ────────────────────────────────────────────────────────────────────
+    // Session 基礎操作 / Session primitives
+    // ────────────────────────────────────────────────────────────────────
 
+    const stopPing = (s: Session) => {
+        if (s.pingInterval) { clearInterval(s.pingInterval); s.pingInterval = null; }
+    };
+
+    /** 靜默拆掉 ws（不觸發 onclose 的狀態更新）。/ Detach handlers and close the ws silently. */
+    const detachWs = (s: Session) => {
+        stopPing(s);
+        if (s.ws) {
+            s.ws.onopen = null;
+            s.ws.onmessage = null;
+            s.ws.onerror = null;
+            s.ws.onclose = null;
+            try { s.ws.close(); } catch { /* noop */ }
+            s.ws = null;
+        }
+    };
+
+    /** fit + 送 pty_resize（僅在該 session 可見時有效）。/ Fit and push pty_resize (visible only). */
+    const fitAndResize = useCallback((s: Session) => {
+        if (s.disposed || s.el.style.display === "none") return;
+        try {
+            s.fit.fit();
+            s.term.scrollToBottom();
+        } catch { /* noop */ }
+        if (s.ws && s.ws.readyState === WebSocket.OPEN) {
+            s.ws.send(JSON.stringify({
+                action: "pty_resize",
+                payload: {
+                    size: {
+                        rows: s.term.rows,
+                        cols: s.term.cols,
+                        height: s.term.rows * 20,
+                        width: s.term.cols * 9,
+                    },
+                },
+            }));
+        }
+    }, []);
+
+    /** 切換作用中分頁：顯示/隱藏容器、更新 refs、refit、聚焦。/ Activate a tab. */
+    const activateSession = useCallback((id: number) => {
+        const target = sessionsRef.current.get(id);
+        if (!target || target.disposed) return;
+        activeIdRef.current = id;
+        setActiveTabId(id);
+        sessionsRef.current.forEach((s) => {
+            s.el.style.display = s.id === id ? "" : "none";
+        });
+        xtermRef.current = target.term;
+        wsRef.current = target.ws;
+        setLatencyMs(target.lastLatency);
+        // 等 display 生效後再量尺寸；手機不自動聚焦（避免切分頁就彈出原生鍵盤）。
+        // Measure after the display change lands; skip autofocus on mobile (no surprise keyboard).
+        requestAnimationFrame(() => {
+            fitAndResize(target);
+            if (typeof window !== "undefined" && window.innerWidth >= 768) {
+                try { target.term.focus(); } catch { /* noop */ }
+            }
+        });
+    }, [fitAndResize]);
+
+    /** 為 session 建立（或重建）WebSocket 連線。/ (Re)connect a session's WebSocket. */
+    const connectSession = useCallback((s: Session) => {
+        if (s.disposed || !serverId) return;
+        detachWs(s);
+
+        const ws = new WebSocket(`${getWsOrigin()}/ws/terminal/`);
+        // pong 走二進位 frame（與 PTY 文字輸出區分）。/ Binary pongs, distinct from PTY text.
+        ws.binaryType = "arraybuffer";
+        s.ws = ws;
+        if (activeIdRef.current === s.id) wsRef.current = ws;
+
+        const sendPing = () => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            s.pingSentAt = Date.now();
+            ws.send(JSON.stringify({ action: "ping" }));
+        };
+
+        ws.onopen = () => {
+            if (s.disposed) return;
+            // 第一則訊息即認證：{type:'auth', token, server_id, username}。token 從 localStorage 取
+            // 「最新」值（若剛因 4001 refresh 過，外層 accessToken prop 可能還是舊值）。
+            ws.send(JSON.stringify({
+                type: "auth",
+                token: typeof window !== "undefined" ? localStorage.getItem("accessToken") : null,
+                server_id: serverId,
+                username: s.username,
+            }));
+            updateTab(s.id, { status: "connected" });
+            // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋，首個 PTY 輸出會覆蓋此行。
+            s.term.write("\x1b[90mConnecting to server...\x1b[0m\r\n");
+            if (activeIdRef.current === s.id) fitAndResize(s);
+            sendPing();
+            stopPing(s);
+            s.pingInterval = setInterval(sendPing, 5000);
+        };
+
+        ws.onmessage = (event) => {
+            if (s.disposed) return;
+            // 二進位 frame = pong 控制訊息（量 RTT），不可寫進畫面。/ Binary frame = pong (RTT only).
+            if (typeof event.data !== "string") {
+                s.lastLatency = Math.max(0, Date.now() - s.pingSentAt);
+                if (activeIdRef.current === s.id) setLatencyMs(s.lastLatency);
+                return;
+            }
+            // 收到真正的 PTY 輸出 = 認證成功，歸零 4001 refresh 重試旗標。
+            s.authRetried = false;
+            s.term.write(event.data);
+        };
+
+        ws.onerror = () => { /* onclose 隨後處理 / onclose follows */ };
+
+        ws.onclose = (event) => {
+            if (s.disposed) return;
+            stopPing(s);
+            if (s.ws === ws) s.ws = null;
+            if (activeIdRef.current === s.id) {
+                setLatencyMs(null);
+                if (wsRef.current === ws) wsRef.current = null;
+            }
+            updateTab(s.id, { status: "closed" });
+
+            const code = event.code;
+            if (code === 4004) {
+                setPermissionDenied("You do not have permission to access this tunnel.");
+                s.term.write("\r\n\x1b[31m[Permission Denied] You do not have access to this tunnel.\x1b[0m\r\n");
+            } else if (code === 4003) {
+                setPermissionDenied("The specified username is not authorized for this tunnel.");
+                s.term.write("\r\n\x1b[31m[Invalid Username] The username is not authorized for this tunnel.\x1b[0m\r\n");
+            } else if (code === 4001) {
+                // token 過期/無效：每個 session 只 refresh 重連一次。
+                if (!s.authRetried) {
+                    s.authRetried = true;
+                    refreshAccessToken().then((ok) => {
+                        if (s.disposed) return;
+                        if (ok) {
+                            updateTab(s.id, { status: "connecting" });
+                            connectSession(s);
+                        } else {
+                            setPermissionDenied("Authentication failed. Please log in again.");
+                            s.term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                        }
+                    });
+                } else {
+                    setPermissionDenied("Authentication failed. Please log in again.");
+                    s.term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                }
+            } else if (code === 4002) {
+                setPermissionDenied("Tunnel not found or server ID is invalid.");
+                s.term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
+            } else if (code === 4006) {
+                setNoUsers(true);
+                s.term.write("\r\n\x1b[31m[No Users] No target server users configured for this tunnel.\x1b[0m\r\n");
+            } else if (code === 1000) {
+                s.term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
+            } else {
+                // 非正常關閉：顯示 close code 以利排查（1006 = 網路/代理層異常斷線，非後端主動關閉）。
+                // Abnormal close: surface the code (1006 = network/proxy layer drop, not the backend).
+                s.term.write(`\r\n\x1b[31m[Disconnected from server (code ${code})]\x1b[0m\r\n`);
+            }
+        };
+    }, [serverId, updateTab, fitAndResize]);
+
+    /** 建立新分頁（含 xterm 實例與 WS 連線），並切換為作用中。/ Create + activate a new tab. */
+    const createSession = useCallback(async (sessionUsername: string) => {
+        if (!serverId || sessionsRef.current.size >= MAX_SHELL_TABS) return;
+        const generation = generationRef.current;
+
+        const [{ Terminal, FitAddon }, termFontFamily] = await Promise.all([
+            loadXtermDeps(),
+            ensureMonoFont(),
+        ]);
+
+        // async 期間可能已 unmount / 換 server。/ May have unmounted while awaiting.
+        if (generation !== generationRef.current) return;
+        const host = terminalRef.current;
+        if (!host) return;
+
+        const id = nextIdRef.current++;
+        const el = document.createElement("div");
+        el.className = "absolute inset-0";
+        host.appendChild(el);
+
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: TERMINAL_THEME,
+            fontFamily: termFontFamily,
+            fontSize: 14,
+            lineHeight: 1.2,
+        });
+        const fit = new FitAddon();
+        term.loadAddon(fit);
+        term.open(el);
+
+        const s: Session = {
+            id,
+            title: String(id),
+            username: sessionUsername,
+            el,
+            term,
+            fit,
+            ws: null,
+            pingInterval: null,
+            pingSentAt: 0,
+            lastLatency: null,
+            authRetried: false,
+            disposed: false,
+        };
+
+        // OSC 7 同步當前路徑（僅作用中分頁，避免背景分頁改動檔案面板路徑）。
+        // OSC 7 path sync (active tab only, so background shells don't steer the file panel).
+        term.parser.registerOscHandler(7, (data: string) => {
+            try {
+                const url = new URL(data);
+                if (url.protocol === "file:") {
+                    if (activeIdRef.current === s.id) {
+                        setSyncedPath(decodeURIComponent(url.pathname));
+                    }
+                    return true;
+                }
+            } catch { /* noop */ }
+            return false;
+        });
+
+        term.onData((data: string) => {
+            if (s.ws && s.ws.readyState === WebSocket.OPEN) {
+                s.ws.send(JSON.stringify({ action: "pty_input", payload: { input: data } }));
+            }
+        });
+
+        sessionsRef.current.set(id, s);
+        setTabs(prev => [...prev, { id, title: s.title, username: sessionUsername, status: "connecting" }]);
+        activateSession(id);
+        connectSession(s);
+    }, [serverId, activateSession, connectSession]);
+
+    /** 徹底銷毀 session（關 WS → 後端殺 shell；釋放 xterm 與 DOM）。/ Fully dispose a session. */
+    const destroySession = useCallback((id: number) => {
+        const s = sessionsRef.current.get(id);
+        if (!s) return;
+        s.disposed = true;
+        detachWs(s); // 關 WS → 後端 disconnect() 殺掉該 shell / closing the WS kills the shell server-side
+        try { s.term.dispose(); } catch { /* noop */ }
+        try { s.el.remove(); } catch { /* noop */ }
+        sessionsRef.current.delete(id);
+    }, []);
+
+    /** 同一分頁重新連線（全新 shell）：清空畫面、開新 WS。/ Reconnect a tab with a fresh shell. */
+    const respawnSession = useCallback((id: number, newUsername?: string) => {
+        const s = sessionsRef.current.get(id);
+        if (!s || s.disposed) return;
+        detachWs(s);
+        if (newUsername) s.username = newUsername;
+        s.authRetried = false;
+        try { s.term.reset(); } catch { /* noop */ }
+        updateTab(id, { status: "connecting", username: s.username });
+        connectSession(s);
+    }, [connectSession, updateTab]);
+
+    // ────────────────────────────────────────────────────────────────────
+    // 分頁對外操作 / Public tab actions
+    // ────────────────────────────────────────────────────────────────────
+
+    const addTab = useCallback(() => {
+        const u = usernameRef.current;
+        if (!u) return;
+        void createSession(u);
+    }, [createSession]);
+
+    const selectTab = useCallback((id: number) => {
+        if (id !== activeIdRef.current) activateSession(id);
+    }, [activateSession]);
+
+    const closeTab = useCallback((id: number) => {
+        if (!sessionsRef.current.has(id)) return; // 已關閉（防連點）/ already closed (double-click guard)
+        const order = tabsRef.current;
+        const idx = order.findIndex(t => t.id === id);
+        const wasActive = activeIdRef.current === id;
+
+        destroySession(id);
+        setTabs(prev => prev.filter(t => t.id !== id));
+
+        // 以 sessionsRef（真實存活狀態）為準挑選倖存分頁，避免 state 尚未 flush 時的過期清單。
+        // Pick survivors from sessionsRef (ground truth), not possibly-stale React state.
+        const survivors = order.filter(t => t.id !== id && sessionsRef.current.has(t.id));
+
+        if (sessionsRef.current.size === 0) {
+            // 關掉最後一個分頁 = 換一個全新 shell（頁面保持可用）。
+            // Closing the last tab spawns a fresh shell (the page stays usable).
+            activeIdRef.current = null;
+            setActiveTabId(null);
+            xtermRef.current = null;
+            wsRef.current = null;
+            const u = usernameRef.current;
+            if (u) void createSession(u);
+        } else if (wasActive && survivors.length > 0) {
+            const neighbor = survivors[Math.min(Math.max(idx, 0), survivors.length - 1)];
+            activateSession(neighbor.id);
+        }
+    }, [destroySession, createSession, activateSession]);
+
+    // ────────────────────────────────────────────────────────────────────
+    // 生命週期 / Lifecycle effects
+    // ────────────────────────────────────────────────────────────────────
+
+    // 使用者列表載入。/ Load available usernames.
     useEffect(() => {
         if (!serverId || !accessToken) return;
 
         apiFetch(`/api/reverse/server/${serverId}/usernames`)
-            .then(r => r.ok ? r.json() : null)
+            .then(r => (r.ok ? r.json() : null))
             .then(data => {
                 const list = data?.usernames ?? (Array.isArray(data) ? data : []);
                 const defaultId = data?.default_username_id;
                 setAvailableUsernames(list);
                 if (list.length > 0) {
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const defaultItem = defaultId ? list.find((u: any) => u.id === defaultId) : null;
                     setUsername(defaultItem ? defaultItem.username : (list[0].username ?? list[0]));
                     setNoUsers(false);
                 } else {
                     setNoUsers(true);
-                    setConnecting(false);
                 }
             })
             .catch(() => {
                 setNoUsers(true);
-                setConnecting(false);
             });
     }, [serverId, accessToken]);
 
-    // xterm 初始化與 WebSocket PTY 連線；依 serverId / accessToken / username 觸發。
-    // xterm init and WebSocket PTY connection; triggered by serverId, accessToken, username.
+    // 卸載 / 換 server：銷毀所有 session（所有 WS 關閉 → 後端殺掉所有 shell）。
+    // Unmount / server switch: destroy every session (all shells killed server-side).
+    useEffect(() => {
+        if (!serverId || !accessToken) return;
+        return () => {
+            generationRef.current += 1;
+            const ids = Array.from(sessionsRef.current.keys());
+            ids.forEach(id => {
+                const s = sessionsRef.current.get(id);
+                if (!s) return;
+                s.disposed = true;
+                detachWs(s);
+                try { s.term.dispose(); } catch { /* noop */ }
+                try { s.el.remove(); } catch { /* noop */ }
+            });
+            sessionsRef.current.clear();
+            activeIdRef.current = null;
+            xtermRef.current = null;
+            wsRef.current = null;
+            setTabs([]);
+            setActiveTabId(null);
+            setLatencyMs(null);
+        };
+    }, [serverId, accessToken]);
+
+    // username 就緒 → 開第一個分頁；之後切換 username → 只重連「作用中」分頁（其他分頁保留原 user）。
+    // Username ready → first tab; switching username later reconnects only the ACTIVE tab.
     useEffect(() => {
         if (!serverId || !accessToken || username === null) return;
+        usernameRef.current = username;
+        if (sessionsRef.current.size === 0) {
+            void createSession(username);
+            return;
+        }
+        const activeId = activeIdRef.current;
+        const active = activeId !== null ? sessionsRef.current.get(activeId) : undefined;
+        if (active && active.username !== username) {
+            respawnSession(active.id, username);
+        }
+    }, [serverId, accessToken, username, createSession, respawnSession]);
 
-        let cleanupFn: (() => void) | undefined;
-
-        const initTerminal = async () => {
-            // 連線關鍵路徑優化：只等終端要用的「等寬字體」，而非 document.fonts.ready —— 後者會連
-            // 大型 CJK 字體一起等，慢網路/首次載入時可能拖慢連線好幾秒；等寬字沒載到也用 1.5s 逾時保底。
-            // Connect-path fix: wait only for the terminal's monospace font instead of document.fonts.ready
-            // (which also blocks on the large CJK font), with a 1.5s timeout guard.
-
-            // CSS 變數同步可得，不必等 fonts.ready。/ The CSS var is available synchronously.
-            const computedMono = getComputedStyle(document.body)
-                .getPropertyValue('--font-0xproto').trim();
-            const termFontFamily = computedMono
-                ? `${computedMono}, 'Courier New', monospace`
-                : "'Menlo', 'Consolas', 'Courier New', monospace";
-
-            const monoFontReady = (async () => {
-                if (!computedMono) return;
-                try {
-                    // Promise.race：字體載入 vs 1.5s 逾時。document.fonts.load 遇到無法解析的字體字串
-                    // 會「同步」丟 SyntaxError，故整段以 try 包住，任何失敗都直接繼續初始化。
-                    await Promise.race([
-                        document.fonts.load(`14px ${computedMono}`),
-                        new Promise((resolve) => setTimeout(resolve, 1500)),
-                    ]);
-                } catch { /* 字體字串無法解析或載入失敗 → 照常初始化 */ }
-            })();
-
-            const [{ Terminal }, { FitAddon }] = await Promise.all([
-                import("xterm"),
-                import("xterm-addon-fit"),
-                monoFontReady,
-            ]);
-
-            if (!terminalRef.current) return;
-
-            const term = new Terminal({
-                cursorBlink: true,
-                theme: {
-                    background: "#000000",
-                    foreground: "#f0f0f0",
-                    cursor: "#f0f0f0",
-                    selectionBackground: "#3a3d41",
-                    black: "#000000",
-                    red: "#f44747",
-                    green: "#608b4e",
-                    yellow: "#d7ba7d",
-                    blue: "#569cd6",
-                    magenta: "#c586c0",
-                    cyan: "#4dc9b0",
-                    white: "#d4d4d4",
-                    brightBlack: "#808080",
-                    brightRed: "#f48771",
-                    brightGreen: "#89d185",
-                    brightYellow: "#d7ba7d",
-                    brightBlue: "#9cdcfe",
-                    brightMagenta: "#c586c0",
-                    brightCyan: "#4ec9b0",
-                    brightWhite: "#ffffff",
-                },
-                fontFamily: termFontFamily,
-                fontSize: 14,
-                lineHeight: 1.2,
-            });
-
-            const fitAddon = new FitAddon();
-            term.loadAddon(fitAddon);
-            term.open(terminalRef.current);
-            fitAddon.fit();
-
-            setTimeout(() => {
-                try {
-                    term.scrollToBottom();
-                } catch { } // empty catch
-            }, 300);
-
-            term.parser.registerOscHandler(7, (data) => {
-                try {
-                    const url = new URL(data);
-                    if (url.protocol === 'file:') {
-                        const newPath = decodeURIComponent(url.pathname);
-                        setSyncedPath(newPath);
-                        return true;
-                    }
-                } catch { } // empty catch
-                return false;
-            });
-
-            xtermRef.current = term;
-            fitAddonRef.current = fitAddon;
-
-            const sendResize = (ws: WebSocket) => {
-                if (ws.readyState !== WebSocket.OPEN) return;
-                fitAddon.fit();
-                try {
-                    term.scrollToBottom();
-                } catch { } // empty catch
-                ws.send(JSON.stringify({
-                    action: "pty_resize",
-                    payload: {
-                        size: {
-                            rows: term.rows,
-                            cols: term.cols,
-                            height: term.rows * 20,
-                            width: term.cols * 9,
-                        },
-                    },
-                }));
-            };
-
-            const base = getWsOrigin();
-            const wsUrl = `${base}/ws/terminal/`;
-
-            // 認證改為「連上後第一則訊息帶 token」（見 onopen）：JWT 只在 WS payload，不進 URL/subprotocol。
-            // Auth is sent as the first WS message after open (see onopen); the JWT never enters the URL/subprotocol.
-            const ws = new WebSocket(wsUrl);
-            // 後端對 ping 的 pong 以「二進位」frame 回傳，好和 PTY 文字輸出區分（見 TerminalConsumer）；
-            // 設為 arraybuffer 讓控制訊息以 ArrayBuffer 進來，一般 PTY 輸出仍是字串、照常寫入 xterm。
-            ws.binaryType = "arraybuffer";
-            wsRef.current = ws;
-
-            // 應用層心跳：量測「你↔伺服器」RTT。onopen 立即送一次、之後每 5s 一次；記錄送出時間，
-            // 收到 pong（二進位）時算差值。cleanup / onclose 會清掉 interval，避免重連時洩漏。
-            let pingSentAt = 0;
-            let pingInterval: ReturnType<typeof setInterval> | null = null;
-            const sendPing = () => {
-                if (ws.readyState !== WebSocket.OPEN) return;
-                pingSentAt = Date.now();
-                ws.send(JSON.stringify({ action: "ping" }));
-            };
-            const stopPing = () => {
-                if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
-            };
-
-            const handleWindowResize = () => sendResize(ws);
-            window.addEventListener("resize", handleWindowResize);
-
-            let resizeObserver: ResizeObserver | null = null;
-            if (terminalRef.current?.parentElement) {
-                let resizeTimeout: ReturnType<typeof setTimeout>;
-                resizeObserver = new ResizeObserver(() => {
-                    try {
-                        fitAddon.fit();
-                        term.scrollToBottom();
-                    } catch { } // empty catch
-
-                    clearTimeout(resizeTimeout);
-                    resizeTimeout = setTimeout(() => {
-                        if (ws.readyState === WebSocket.OPEN) {
-                            sendResize(ws);
-                        }
-                    }, 100);
-                });
-                resizeObserver.observe(terminalRef.current.parentElement);
-            }
-
-            ws.onopen = () => {
-                // 第一則訊息即認證：{type:'auth', token, server_id, username}。從 localStorage 取「最新」token
-                // （若剛因 4001 refresh 過，param accessToken 可能還是舊值）。
-                // First frame authenticates. Read the freshest token from localStorage (after a 4001 refresh
-                // the accessToken prop may still be stale).
-                ws.send(JSON.stringify({
-                    type: "auth",
-                    token: localStorage.getItem("accessToken"),
-                    server_id: serverId,
-                    username,
-                }));
-                setConnected(true);
-                setConnecting(false);
-                // WebSocket 已開，但後端仍在建立到裝置的 SSH 連線（雙跳）；先給使用者回饋，
-                // 避免「連上了卻空白等待」的錯覺。首個 PTY 輸出（shell prompt）到達即覆蓋此行。
-                // WS is open but the backend is still opening the SSH connection; show feedback so the
-                // wait doesn't look like a hang. The first PTY output overwrites this line.
-                term.write("\x1b[90mConnecting to server...\x1b[0m\r\n");
-                sendResize(ws);
-                sendPing();
-                stopPing();
-                pingInterval = setInterval(sendPing, 5000);
-            };
-
-            ws.onmessage = (event) => {
-                // 二進位 frame = 後端對 ping 的 pong 控制訊息，用來量測 RTT，「不可」寫進 xterm 畫面。
-                // 一般 PTY 輸出一律是字串（TerminalConsumer.forward_output 只送 text_data）。
-                if (typeof event.data !== "string") {
-                    setLatencyMs(Math.max(0, Date.now() - pingSentAt));
-                    return;
-                }
-                // 收到真正的 PTY 輸出 = 認證確定成功，歸零 4001 refresh 重試旗標。
-                // Real PTY output = auth definitely succeeded; reset the 4001 refresh-retry guard.
-                authRetriedRef.current = false;
-                term.write(event.data);
-            };
-
-            ws.onerror = () => {
-                setConnecting(false);
-            };
-
-            ws.onclose = (event) => {
-                setConnected(false);
-                setConnecting(false);
-                setLatencyMs(null);
-                stopPing();
-                const code = event.code;
-                if (code === 4004) {
-                    setPermissionDenied("You do not have permission to access this tunnel.");
-                    term.write("\r\n\x1b[31m[Permission Denied] You do not have access to this tunnel.\x1b[0m\r\n");
-                } else if (code === 4003) {
-                    setPermissionDenied("The specified username is not authorized for this tunnel.");
-                    term.write("\r\n\x1b[31m[Invalid Username] The username is not authorized for this tunnel.\x1b[0m\r\n");
-                } else if (code === 4001) {
-                    // token 過期/無效：refresh 一次再重連（reconnectTrigger）；已試過或 refresh 失敗才提示重新登入。
-                    // Expired/invalid token: refresh once and reconnect; only prompt re-login if already tried or refresh fails.
-                    if (!authRetriedRef.current) {
-                        authRetriedRef.current = true;
-                        refreshAccessToken().then((ok) => {
-                            if (ok) {
-                                setReconnectTrigger((t: number) => t + 1);
-                            } else {
-                                setPermissionDenied("Authentication failed. Please log in again.");
-                                term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
-                            }
-                        });
-                    } else {
-                        setPermissionDenied("Authentication failed. Please log in again.");
-                        term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
-                    }
-                } else if (code === 4002) {
-                    setPermissionDenied("Tunnel not found or server ID is invalid.");
-                    term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
-                } else if (code === 4006) {
-                    setNoUsers(true);
-                    term.write("\r\n\x1b[31m[No Users] No target server users configured for this tunnel.\x1b[0m\r\n");
-                } else {
-                    term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
-                }
-            };
-
-            term.onData((data) => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ action: "pty_input", payload: { input: data } }));
-                }
-            });
-
-            cleanupFn = () => {
-                stopPing();
-                if (resizeObserver) resizeObserver.disconnect();
-                window.removeEventListener("resize", handleWindowResize);
-                ws.close();
-                term.dispose();
-            };
+    // 視窗 / 容器尺寸變化 → refit 作用中分頁。/ Window & container resize → refit the active tab.
+    useEffect(() => {
+        const fitActive = () => {
+            const id = activeIdRef.current;
+            const s = id !== null ? sessionsRef.current.get(id) : undefined;
+            if (s) fitAndResize(s);
         };
 
-        initTerminal();
+        window.addEventListener("resize", fitActive);
+
+        let resizeObserver: ResizeObserver | null = null;
+        let resizeTimeout: ReturnType<typeof setTimeout> | undefined;
+        if (terminalRef.current) {
+            resizeObserver = new ResizeObserver(() => {
+                const id = activeIdRef.current;
+                const s = id !== null ? sessionsRef.current.get(id) : undefined;
+                if (!s) return;
+                try {
+                    s.fit.fit();
+                    s.term.scrollToBottom();
+                } catch { /* noop */ }
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(() => fitAndResize(s), 100);
+            });
+            resizeObserver.observe(terminalRef.current);
+        }
 
         return () => {
-            cleanupFn?.();
+            window.removeEventListener("resize", fitActive);
+            clearTimeout(resizeTimeout);
+            resizeObserver?.disconnect();
         };
-    }, [serverId, accessToken, username, reconnectTrigger]);
+    }, [fitAndResize]);
 
+    // 版面切換（檔案面板開合 / 主視圖切換）後補一次 refit。/ Refit after layout toggles.
     useEffect(() => {
-        if (fitAddonRef.current && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            const timer = setTimeout(() => {
-                try {
-                    fitAddonRef.current.fit();
-                    wsRef.current?.send(JSON.stringify({
-                        action: "pty_resize",
-                        payload: {
-                            size: {
-                                rows: xtermRef.current.rows,
-                                cols: xtermRef.current.cols,
-                                height: xtermRef.current.rows * 20,
-                                width: xtermRef.current.cols * 9,
-                            },
-                        },
-                    }));
-                } catch (err) {
-                    console.error("Resize error", err);
-                }
-            }, 200);
-            return () => clearTimeout(timer);
-        }
-    }, [showFiles, mainView]);
+        const timer = setTimeout(() => {
+            const id = activeIdRef.current;
+            const s = id !== null ? sessionsRef.current.get(id) : undefined;
+            if (s) fitAndResize(s);
+        }, 200);
+        return () => clearTimeout(timer);
+    }, [showFiles, mainView, fitAndResize]);
 
-    // 僅在「完整虛擬鍵盤」模式抑制原生鍵盤；accessory / hidden 模式保留原生鍵盤以便打字（含中文）。
+    // 僅在「完整虛擬鍵盤」模式抑制原生鍵盤；套用到所有分頁的 helper textarea。
+    // Suppress the native keyboard only in "full" mode; applied to every tab's helper textarea.
+    const activeTab = tabs.find(t => t.id === activeTabId) ?? null;
+    const connected = activeTab?.status === "connected";
+    const connecting = activeTab
+        ? activeTab.status === "connecting"
+        : (!noUsers && !permissionDenied);
+
     useEffect(() => {
         const suppressNative = keyboardMode === "full";
+        const applyToTextareas = (fn: (ta: HTMLTextAreaElement) => void) => {
+            if (!terminalRef.current) return;
+            terminalRef.current
+                .querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")
+                .forEach(fn);
+        };
+
         const manageNativeKeyboard = () => {
-            if (window.innerWidth < 768 && terminalRef.current) {
-                const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-                if (textarea) {
+            if (window.innerWidth < 768) {
+                applyToTextareas((textarea) => {
                     if (suppressNative) {
-                        textarea.setAttribute('readonly', 'true');
+                        textarea.setAttribute("readonly", "true");
                         textarea.blur();
                     } else {
-                        textarea.removeAttribute('readonly');
+                        textarea.removeAttribute("readonly");
                     }
-                }
+                });
             }
         };
 
-        setTimeout(manageNativeKeyboard, 100);
-
-        const handleFocus = () => {
-            if (window.innerWidth < 768 && suppressNative && terminalRef.current) {
-                const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-                if (textarea) {
-                    textarea.blur();
-                }
+        const handleFocus = (e: Event) => {
+            if (window.innerWidth < 768 && suppressNative) {
+                (e.target as HTMLTextAreaElement).blur();
             }
         };
 
-        const attachListener = () => {
-            if (terminalRef.current) {
-                const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-                if (textarea) {
-                    textarea.removeEventListener('focus', handleFocus);
-                    textarea.addEventListener('focus', handleFocus);
-                }
-            }
-        };
-        setTimeout(attachListener, 100);
+        const t = setTimeout(() => {
+            manageNativeKeyboard();
+            applyToTextareas((ta) => {
+                ta.removeEventListener("focus", handleFocus);
+                ta.addEventListener("focus", handleFocus);
+            });
+        }, 100);
 
         return () => {
-            if (terminalRef.current) {
-                const textarea = terminalRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
-                if (textarea) {
-                    textarea.removeEventListener('focus', handleFocus);
-                }
-            }
+            clearTimeout(t);
+            applyToTextareas((ta) => ta.removeEventListener("focus", handleFocus));
         };
-    }, [keyboardMode, connected]);
+    }, [keyboardMode, connected, activeTabId, tabs.length]);
 
     useEffect(() => {
         if (keyboardExpanded && xtermRef.current) {
             setTimeout(() => {
-                try {
-                    xtermRef.current.scrollToBottom();
-                } catch { } // empty catch
+                try { xtermRef.current.scrollToBottom(); } catch { /* noop */ }
             }, 150);
         }
     }, [keyboardExpanded]);
 
-    // Service Keys：開啟彈窗並呼叫 API，結果供 Terminal 頁與 Modal 顯示。
-    // Service keys: open modal and call API; result used by terminal page and modal.
+    // Service Keys：開啟彈窗並呼叫 API。/ Service keys: open modal and call API.
     const fetchServiceKeys = async () => {
         setServiceKeyModalOpen(true);
         setLoadingServiceKeys(true);
@@ -466,8 +677,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     return {
         refs: { terminalRef, xtermRef, wsRef },
         state: {
-            connected, setConnected,
-            connecting, setConnecting,
+            tabs, activeTabId,
+            connected,
+            connecting,
             latencyMs,
             permissionDenied, setPermissionDenied,
             noUsers, setNoUsers,
@@ -482,11 +694,17 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             serviceKeys, setServiceKeys,
             loadingServiceKeys, setLoadingServiceKeys,
             username, setUsername,
-            availableUsernames, setAvailableUsernames
+            availableUsernames, setAvailableUsernames,
         },
         actions: {
             fetchServiceKeys,
-            reconnect: () => setReconnectTrigger(t => t + 1),
-        }
+            reconnect: () => {
+                const id = activeIdRef.current;
+                if (id !== null) respawnSession(id);
+            },
+            addTab,
+            closeTab,
+            selectTab,
+        },
     };
 }
