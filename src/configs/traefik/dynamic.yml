@@ -37,19 +37,15 @@ http:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/ws`)"
 
-    selenium-novnc:
+    # Neko proxy browser:neko-rooms 內建 reverse proxy 以完整路徑
+    # /neko/<room>/ 做 prefix match(它自己 StripPrefix 轉發給房間容器),
+    # 所以這裡「不」strip prefix。WebSocket 訊令同路徑,entrypoint 已設
+    # readTimeout: 0,長連線安全。
+    neko-rooms:
       <<: *commonRouterSettings
-      rule: "PathPrefix(`/novnc`)"
-      service: selenium-service
-      middlewares:
-        - strip-novnc
+      rule: "PathPrefix(`/neko`)"
+      service: neko-rooms-service
 
-  middlewares:
-    strip-novnc:
-      stripPrefix:
-        prefixes:
-          - "/novnc"
-          
   services:
     frontend-service:
       <<: *frontendServiceSettings
@@ -57,7 +53,7 @@ http:
     backend-service:
       <<: *backendServiceSettings
 
-    selenium-service:
+    neko-rooms-service:
       loadBalancer:
         servers:
-          - url: "http://selenium-standalone:7900"
+          - url: "http://neko-rooms:8080"
