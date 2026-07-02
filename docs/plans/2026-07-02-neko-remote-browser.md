@@ -698,6 +698,7 @@ git commit -m "feat(neko): rewrite remote_browser_service to use neko-rooms inst
 
 > service 已用 `getattr(..., 預設)` 讀這兩個值,故本任務與 Task 3 順序可對調;完成後管理員就能在 admin 調整上限與 image。
 > migration 可用 `makemigrations` 自動產生(需容器環境),或直接手寫等價的 `AddField` migration(欄位定義單純,兩者結果一致)。
+> **注意:本 repo 的 `.gitignore` 刻意排除所有 migration 檔(`0*_*.py`),migration 只存在於各部署環境本地、不進版控** —— 所以 Step 6 的 commit 只含 models/serializers/admin 三檔。
 
 - [ ] **Step 1: models.py 加兩個欄位**
 
