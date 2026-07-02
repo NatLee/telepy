@@ -63,6 +63,33 @@ export function responseError(
     return `${fallback} (${res.status})`;
 }
 
+/**
+ * 用 refresh token 換一張新的 access token 並寫回 localStorage；成功回 true。
+ * WebSocket 連線改用「第一則訊息帶 token」認證後，若 token 過期會被關 4001，
+ * 由 ReconnectingSocket / 終端頁在收到 4001 時呼叫本函式 refresh 後重連一次。
+ * Exchange the refresh token for a fresh access token (stored in localStorage); true on success.
+ */
+export async function refreshAccessToken(): Promise<boolean> {
+    if (typeof window === "undefined") return false;
+    const refresh = localStorage.getItem("refreshToken");
+    if (!refresh) return false;
+    try {
+        const res = await fetch(`${API_BASE}/api/auth/token/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh }),
+        });
+        if (!res.ok) return false;
+        const data = await readJson<{ access?: string; access_token?: string }>(res);
+        const access = data?.access || data?.access_token;
+        if (!access) return false;
+        localStorage.setItem("accessToken", access);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export async function apiFetch(
     endpoint: string,
     options: RequestInit = {}

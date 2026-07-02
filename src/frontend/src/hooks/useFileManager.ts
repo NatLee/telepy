@@ -102,14 +102,14 @@ export function useFileManager(serverId: string, username: string, accessToken: 
         }
     }, [showError]);
 
-    // WebSocket 連線：交由共用 ReconnectingSocket（ticket 認證 + 退避重連 + 心跳）。
+    // WebSocket 連線：交由共用 ReconnectingSocket（第一則訊息帶 token 認證 + 退避重連 + 心跳）。
     useEffect(() => {
         if (!serverId || !username || !accessToken) return;
         setConnecting(true);
 
         const socket = new ReconnectingSocket({
             path: "/ws/filemanager/",
-            protocols: () => [`server.${serverId}`, `username.${username}`],
+            authFields: () => ({ server_id: serverId, username }),
             heartbeat: true,
             onStatus: (c) => {
                 setConnected(c);

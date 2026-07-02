@@ -2,10 +2,10 @@
 
 /**
  * WebSocket 連線與通知 hooks。/ WebSocket connection & notification hooks.
- * - 認證：一次性 ticket（見 reconnectingSocket.ts / common/ws_ticket.py）；JWT 不進 WS。
- *   Auth: one-time ticket; the JWT never enters the WebSocket.
- * - 連線生命週期（ticket 取得、退避重連、心跳）統一由 ReconnectingSocket 處理。
- *   Connection lifecycle (ticket fetch, backoff reconnect, heartbeat) is handled by ReconnectingSocket.
+ * - 認證：連上後第一則訊息帶 token（見 reconnectingSocket.ts）；JWT 只在 WS payload，不進 URL/header。
+ *   Auth: token in the first WS message (see reconnectingSocket.ts); the JWT stays in the WS payload.
+ * - 連線生命週期（送 auth、退避重連、心跳）統一由 ReconnectingSocket 處理。
+ *   Connection lifecycle (auth send, backoff reconnect, heartbeat) is handled by ReconnectingSocket.
  * - 通知 socket 為模組層單例：整頁所有 useNotificationWebSocket/useNotificationHandlers 共用一條連線。
  *   The notification socket is a module-level singleton shared by all callers on the page.
  */
@@ -140,7 +140,7 @@ export function useTunnelConnectionWebSocket(tunnelId: string | null) {
         if (!accessToken || !tunnelId) return;
         const socket = new ReconnectingSocket({
             path: `/ws/tunnel_connection/${tunnelId}/`,
-            protocols: () => [`tunnel.${tunnelId}`],
+            authFields: () => ({ tunnel_id: tunnelId }),
             heartbeat: true,
             onMessage: (data) => {
                 try {

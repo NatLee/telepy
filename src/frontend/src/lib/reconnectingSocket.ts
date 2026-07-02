@@ -3,37 +3,38 @@
 /**
  * 共用的可重連 WebSocket 抽象。/ Shared reconnecting WebSocket abstraction.
  *
- * 一次到位地處理：
- *  - 一次性 ticket 認證：連線前先打 /api/auth/ws-ticket（JWT 走 Authorization header，不進 WS/URL）；
- *    因為 apiFetch 遇到 401 會自動 refresh，所以每次（重）連天然帶最新身分（解決 token 過期重連）。
- *  - 指數退避 + full jitter 重連、連線穩定後才歸零、認證/權限關閉碼不重試。
- *  - 應用層心跳（ping/pong）：偵測半開連線，逾時未回 pong 就主動斷開重連。
+ * 認證：連上後「第一則訊息」送 {"type":"auth","token":<jwt>, ...authFields}。
+ *  - JWT 只在 WS 訊息 payload，不進 URL / subprotocol / 任何請求 header，避免被 proxy / access log 記錄。
+ *  - 省掉舊版 ws-ticket 的預先 HTTP round-trip（連線更快）。
+ *  - token 過期時後端回關閉碼 4001；此時 refresh 一次 access token 再重連（見 onclose）。
  *
- * Handles, in one place: one-time ticket auth (token only in the Authorization header, never in the
- * WS subprotocol/URL; apiFetch auto-refreshes so every (re)connect carries a fresh identity), exponential
- * backoff + jitter reconnect, stable-open reset, no-retry on auth/permission close codes, and an optional
- * app-level ping/pong heartbeat to detect half-open connections.
+ * 另處理：指數退避 + full jitter 重連、連線穩定後才歸零、認證/權限關閉碼不重試、
+ *        應用層心跳（ping/pong）偵測半開連線。
+ *
+ * Auth: send {"type":"auth","token":...} as the FIRST WS frame after open. The JWT stays in the WS
+ * payload (never in URL/subprotocol/headers, so proxies/logs can't capture it) and there's no
+ * ws-ticket pre-flight. On 4001 (expired token) we refresh once and reconnect. Also: exponential
+ * backoff + jitter reconnect, stable-open reset, no-retry on auth/permission codes, ping/pong heartbeat.
  */
-import { apiFetch } from "@/lib/api";
+import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CODES } from "@/lib/wsCommon";
 
 const HEARTBEAT_INTERVAL_MS = 25000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
 
-/** 取得一次性 WebSocket 連線票。/ Fetch a one-time WebSocket ticket. */
-export async function fetchWsTicket(): Promise<string> {
-    const res = await apiFetch("/api/auth/ws-ticket", { method: "POST" });
-    if (!res.ok) throw new Error(`ws-ticket request failed: ${res.status}`);
-    const data = await res.json();
-    if (!data?.ticket) throw new Error("ws-ticket response missing ticket");
-    return data.ticket as string;
+/** 讀取目前的 access token。/ Read the current access token. */
+function getAccessToken(): string | null {
+    return typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
 }
 
 export type ReconnectingSocketOptions = {
     /** e.g. "/ws/notifications/" */
     path: string;
-    /** 額外的「非敏感」subprotocols（如 server.<id>、tunnel.<id>）。/ extra non-sensitive subprotocols. */
-    protocols?: () => string[] | Promise<string[]>;
+    /**
+     * 併入第一則 auth 訊息的額外「非敏感」欄位（如 { server_id, username } 或 { tunnel_id }）。
+     * Extra non-sensitive fields merged into the first auth message (e.g. { tunnel_id }).
+     */
+    authFields?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
     /** 啟用應用層 ping/pong 心跳。/ enable app-level ping/pong heartbeat. */
     heartbeat?: boolean;
     onOpen?: (socket: ReconnectingSocket) => void;
@@ -51,6 +52,9 @@ export class ReconnectingSocket {
     private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
     private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
     private awaitingPong = false;
+    // token 過期時只允許 refresh 重連一次；連線穩定存活後歸零，避免無限 refresh 迴圈。
+    // Allow a single refresh-retry per auth failure; reset once the connection proves stable.
+    private authRefreshTried = false;
 
     constructor(private opts: ReconnectingSocketOptions) {}
 
@@ -86,19 +90,23 @@ export class ReconnectingSocket {
         if (this.closedByUser || this.connecting || this.ws) return;
         this.connecting = true;
         try {
-            const ticket = await fetchWsTicket();
-            if (this.closedByUser) { this.connecting = false; return; }
-            const extra = this.opts.protocols ? await this.opts.protocols() : [];
+            const extra = this.opts.authFields ? await this.opts.authFields() : {};
             if (this.closedByUser) { this.connecting = false; return; }
 
-            const ws = new WebSocket(`${getWsOrigin()}${this.opts.path}`, [`ticket.${ticket}`, ...extra]);
+            const ws = new WebSocket(`${getWsOrigin()}${this.opts.path}`);
             this.ws = ws;
 
             ws.onopen = () => {
                 this.connecting = false;
+                // 第一則訊息即認證：{type:'auth', token, ...authFields}。
+                // First frame authenticates: {type:'auth', token, ...authFields}.
+                ws.send(JSON.stringify({ type: "auth", token: getAccessToken(), ...extra }));
                 this.opts.onStatus?.(true);
                 if (this.stableTimer) clearTimeout(this.stableTimer);
-                this.stableTimer = setTimeout(() => { this.reconnectAttempt = 0; }, STABLE_CONNECTION_MS);
+                this.stableTimer = setTimeout(() => {
+                    this.reconnectAttempt = 0;
+                    this.authRefreshTried = false; // 連線穩定 → 允許下次 4001 再 refresh 一次
+                }, STABLE_CONNECTION_MS);
                 if (this.opts.heartbeat) this.startHeartbeat();
                 this.opts.onOpen?.(this);
             };
@@ -121,6 +129,9 @@ export class ReconnectingSocket {
                 if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
                 this.opts.onStatus?.(false);
                 if (this.closedByUser) return;
+                // 4001：token 無效/過期。refresh 一次再重連；refresh 失敗才放棄。
+                // 4001: invalid/expired token — refresh once and retry; give up only if refresh fails.
+                if (event.code === 4001) { void this.handleAuthClose(); return; }
                 if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) return;
                 this.scheduleReconnect();
             };
@@ -133,6 +144,17 @@ export class ReconnectingSocket {
             this.connecting = false;
             if (!this.closedByUser) this.scheduleReconnect();
         }
+    }
+
+    private async handleAuthClose() {
+        if (this.closedByUser || this.authRefreshTried) return; // 每次認證失敗只 refresh 一次
+        this.authRefreshTried = true;
+        const ok = await refreshAccessToken();
+        if (ok && !this.closedByUser && !this.ws) {
+            this.reconnectAttempt = 0;
+            void this.connect();
+        }
+        // refresh 失敗 → 不重連（保持關閉）。/ refresh failed → stay closed.
     }
 
     private scheduleReconnect() {

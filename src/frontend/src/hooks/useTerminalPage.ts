@@ -9,9 +9,8 @@
  *   Service keys: fetchServiceKeys calls /api/reverse/service/keys for header and modal.
  */
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
-import { fetchWsTicket } from "@/lib/reconnectingSocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 
@@ -31,6 +30,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fitAddonRef = useRef<any>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    // token 過期（4001）時只允許 refresh 重連一次；收到真正 PTY 輸出即歸零，避免無限迴圈。
+    // Allow one refresh-retry on 4001; reset once real PTY output arrives to avoid an infinite loop.
+    const authRetriedRef = useRef(false);
 
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
@@ -103,15 +105,10 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         let cleanupFn: (() => void) | undefined;
 
         const initTerminal = async () => {
-            // 連線關鍵路徑的兩個優化（原本是序列：import → 等所有字體 → 抓 ticket → 才連線）：
-            // 1) 立刻開抓一次性 ticket，讓它的 HTTP round-trip 與 xterm 動態載入、字體載入「並行」。
-            // 2) 只等終端要用的「等寬字體」，而非 document.fonts.ready —— 後者會連大型 CJK 字體
-            //    一起等，慢網路/首次載入時可能拖慢連線好幾秒；等寬字沒載到也用 1.5s 逾時保底。
-            // Two fixes on the connect critical path (was serial: import → wait ALL fonts → fetch
-            // ticket → connect): (1) start the ticket fetch now so its round-trip overlaps the xterm
-            // import + font load; (2) wait only for the terminal's monospace font instead of
-            // document.fonts.ready (which also blocks on the large CJK font), with a 1.5s timeout guard.
-            const ticketPromise = fetchWsTicket();
+            // 連線關鍵路徑優化：只等終端要用的「等寬字體」，而非 document.fonts.ready —— 後者會連
+            // 大型 CJK 字體一起等，慢網路/首次載入時可能拖慢連線好幾秒；等寬字沒載到也用 1.5s 逾時保底。
+            // Connect-path fix: wait only for the terminal's monospace font instead of document.fonts.ready
+            // (which also blocks on the large CJK font), with a 1.5s timeout guard.
 
             // CSS 變數同步可得，不必等 fonts.ready。/ The CSS var is available synchronously.
             const computedMono = getComputedStyle(document.body)
@@ -217,24 +214,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             const base = getWsOrigin();
             const wsUrl = `${base}/ws/terminal/`;
 
-            // 一次性 ticket：已於函式開頭並行開抓，這裡多半即刻取得（JWT 只走 Authorization header）。
-            // The one-time ticket was started at the top of this function in parallel, so it's usually ready.
-            let ticket: string;
-            try {
-                ticket = await ticketPromise;
-            } catch (e) {
-                console.error("Terminal ws-ticket error", e);
-                setConnecting(false);
-                return;
-            }
-
-            const protocols = [
-                `ticket.${ticket}`,
-                `server.${serverId}`,
-                `username.${username}`,
-            ];
-
-            const ws = new WebSocket(wsUrl, protocols);
+            // 認證改為「連上後第一則訊息帶 token」（見 onopen）：JWT 只在 WS payload，不進 URL/subprotocol。
+            // Auth is sent as the first WS message after open (see onopen); the JWT never enters the URL/subprotocol.
+            const ws = new WebSocket(wsUrl);
             // 後端對 ping 的 pong 以「二進位」frame 回傳，好和 PTY 文字輸出區分（見 TerminalConsumer）；
             // 設為 arraybuffer 讓控制訊息以 ArrayBuffer 進來，一般 PTY 輸出仍是字串、照常寫入 xterm。
             ws.binaryType = "arraybuffer";
@@ -276,6 +258,16 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             }
 
             ws.onopen = () => {
+                // 第一則訊息即認證：{type:'auth', token, server_id, username}。從 localStorage 取「最新」token
+                // （若剛因 4001 refresh 過，param accessToken 可能還是舊值）。
+                // First frame authenticates. Read the freshest token from localStorage (after a 4001 refresh
+                // the accessToken prop may still be stale).
+                ws.send(JSON.stringify({
+                    type: "auth",
+                    token: localStorage.getItem("accessToken"),
+                    server_id: serverId,
+                    username,
+                }));
                 setConnected(true);
                 setConnecting(false);
                 // WebSocket 已開，但後端仍在建立到裝置的 SSH 連線（雙跳）；先給使用者回饋，
@@ -296,6 +288,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                     setLatencyMs(Math.max(0, Date.now() - pingSentAt));
                     return;
                 }
+                // 收到真正的 PTY 輸出 = 認證確定成功，歸零 4001 refresh 重試旗標。
+                // Real PTY output = auth definitely succeeded; reset the 4001 refresh-retry guard.
+                authRetriedRef.current = false;
                 term.write(event.data);
             };
 
@@ -316,8 +311,22 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                     setPermissionDenied("The specified username is not authorized for this tunnel.");
                     term.write("\r\n\x1b[31m[Invalid Username] The username is not authorized for this tunnel.\x1b[0m\r\n");
                 } else if (code === 4001) {
-                    setPermissionDenied("Authentication failed. Please log in again.");
-                    term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                    // token 過期/無效：refresh 一次再重連（reconnectTrigger）；已試過或 refresh 失敗才提示重新登入。
+                    // Expired/invalid token: refresh once and reconnect; only prompt re-login if already tried or refresh fails.
+                    if (!authRetriedRef.current) {
+                        authRetriedRef.current = true;
+                        refreshAccessToken().then((ok) => {
+                            if (ok) {
+                                setReconnectTrigger((t: number) => t + 1);
+                            } else {
+                                setPermissionDenied("Authentication failed. Please log in again.");
+                                term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                            }
+                        });
+                    } else {
+                        setPermissionDenied("Authentication failed. Please log in again.");
+                        term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                    }
                 } else if (code === 4002) {
                     setPermissionDenied("Tunnel not found or server ID is invalid.");
                     term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
