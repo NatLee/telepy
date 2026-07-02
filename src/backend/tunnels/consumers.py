@@ -268,10 +268,25 @@ class TerminalConsumer(AsyncWebsocketConsumer):
         except (OSError, struct.error) as e:
             logger.warning(f"Terminal input/resize failed: {e}")
 
+    def _stop_forwarding(self):
+        """
+        立即移除 PTY fd 的 reader，避免「已 EOF / 已錯誤」的 fd 反覆觸發 forward_output 造成忙迴圈。
+        Remove the PTY fd reader immediately so a dead/EOF fd can't busy-loop this callback (which would
+        otherwise keep scheduling self.close() until disconnect()'s 0.5s sleep finally removes it).
+        remove_reader 具冪等性；disconnect() 之後再呼叫一次亦安全。
+        """
+        fd = self.fd
+        if fd is not None:
+            try:
+                asyncio.get_event_loop().remove_reader(fd)
+            except Exception:
+                pass
+
     def forward_output(self):
         try:
             data = os.read(self.fd, 1024)
             if len(data) == 0:
+                self._stop_forwarding()
                 # EOF received, meaning the shell has been exited.
                 # 注意：以「原始 bytes 長度」判斷 EOF，而非解碼後字串——因為多位元組字元被切半時
                 # 增量解碼器會回傳空字串，不能誤判為 EOF。
@@ -283,7 +298,9 @@ class TerminalConsumer(AsyncWebsocketConsumer):
             if output:
                 asyncio.ensure_future(self.send(text_data=output))
         except OSError:
-            # OSError can occur if the fd has been closed due to the process exiting
+            # OSError can occur if the fd has been closed due to the process exiting.
+            # 立即移除 reader 再排程 close，阻止忙迴圈（見 _stop_forwarding）。
+            self._stop_forwarding()
             asyncio.ensure_future(self.close())
 
 class NotificationConsumer(AsyncWebsocketConsumer):
