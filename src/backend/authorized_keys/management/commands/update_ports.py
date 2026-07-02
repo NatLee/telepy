@@ -229,9 +229,20 @@ class Command(BaseCommand):
                 ))
 
                 # 主頁面：彙整每位可存取使用者的 port→rtt（owner + 被分享者）。
-                user_latency.setdefault(tunnel.user_id, {})[port] = rtt
+                #
+                # ⚠ key 必須是字串：channel layer（channels_redis）以 msgpack 序列化，新版預設
+                # strict_map_key=True，「int 作為 map key」在收端解包時會炸出
+                # ValueError: int is not allowed for map key —— 且 channels_redis 的共用接收迴圈
+                # 會讓這個例外在同 worker 的任意 consumer 身上引爆（包含 terminal），造成全面斷線。
+                # 前端無感：訊息本來就會經 json.dumps，int key 到瀏覽器端一律變字串。
+                # ⚠ Keys MUST be strings: the channel layer serializes with msgpack, whose modern
+                # default strict_map_key=True raises on int map keys AT UNPACK TIME — and
+                # channels_redis' shared receive loop detonates that error inside an arbitrary
+                # consumer on the worker (terminal included), mass-disconnecting sockets.
+                # The frontend is unaffected: json.dumps stringifies keys anyway.
+                user_latency.setdefault(tunnel.user_id, {})[str(port)] = rtt
                 for sharing in tunnel.shared_with.all():
-                    user_latency.setdefault(sharing.shared_with_id, {})[port] = rtt
+                    user_latency.setdefault(sharing.shared_with_id, {})[str(port)] = rtt
 
             for user_id, latency in user_latency.items():
                 batch.append((
