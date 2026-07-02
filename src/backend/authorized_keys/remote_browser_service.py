@@ -20,6 +20,8 @@ _SESSIONS_LOCK = threading.Lock()
 SSH_HOST = "reverse"                 # 既有 reverse gateway,保持不變
 LABEL_MANAGED = "telepy.managed"
 LABEL_SESSION = "telepy.session-id"
+LABEL_INSTANCE = "telepy.instance"   # PROJECT_NAME —— 對帳只認本部署的房間
+INSTANCE = os.getenv("PROJECT_NAME", "main")
 
 _neko = NekoRoomsClient()
 
@@ -112,6 +114,7 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
         "labels": {
             LABEL_MANAGED: "true",
             LABEL_SESSION: session_id,
+            LABEL_INSTANCE: INSTANCE,
             "telepy.server-id": str(server_id),
         },
     }
@@ -174,7 +177,8 @@ def stop_remote_browser(session_id):
 def _reconcile_orphan_rooms():
     """刪掉 neko-rooms 內帶 telepy label、但本行程已無對應 session 的孤兒房間。"""
     try:
-        rooms = _neko.list_rooms({LABEL_MANAGED: "true"})
+        # 只列本部署(PROJECT_NAME)的房間,避免多套 stack 共用 neko-rooms 時互刪
+        rooms = _neko.list_rooms({LABEL_MANAGED: "true", LABEL_INSTANCE: INSTANCE})
     except NekoRoomsError:
         return
     with _SESSIONS_LOCK:
