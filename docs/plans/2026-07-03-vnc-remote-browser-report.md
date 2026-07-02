@@ -128,6 +128,20 @@ UI 按「Start Browser」→ 數秒內看到真桌面 Chromium;在其中開 IP �
 - **KasmVNC 進階編碼**:目前用標準 noVNC(標準 RFB 編碼,已足夠且比 CDP 好)。若要 KasmVNC 的
   turbo 編碼,需改用 KasmVNC 自家 web client,屬後續增強。
 
+## 部署後修正記錄
+
+- **前端 `Module not found: @novnc/novnc/lib/rfb`**:Docker build 的 `npm install` 以現有
+  `package-lock.json` 為準,而 novnc 只加進 package.json、沒進 lock → 被略過。已重生 lockfile
+  (novnc 鎖 1.6.0)。重建:`docker compose up -d --build frontend`。
+- **`FileNotFoundError: 'Xvnc'`**:KasmVNC 的 X server 二進位其實叫 **`Xkasmvnc`**(不是 Xvnc)。
+  已修:(a) session-manager 啟動時自動偵測二進位(`VNC_SERVER_BIN` env 可覆寫,優先 Xkasmvnc);
+  (b) Dockerfile 依架構(amd64/arm64)抓 deb、把 Xkasmvnc symlink 成 Xvnc、並在 **build 階段就
+  驗證二進位存在**(沒裝好就讓 build 失敗、附 dpkg 內容,不再等 runtime);(c) VNC server 的
+  stderr 導到 per-session log,RFB 若起不來,API 錯誤會**帶出 KasmVNC 自己的錯誤訊息**以便診斷。
+  重建:`docker compose up -d --build kasm-browser`。
+  > 若 KasmVNC 的 raw-RFB 啟動還有版本相關的旗標問題,診斷 log 會直接顯示原因;可用 `VNC_CMD`
+  > env 微調旗標,或把 `VNC_SERVER_BIN` 指到 TigerVNC 的 `Xvnc`(需在 image 裝 tigervnc)當 fallback。
+
 ## Rollback
 - 回 CDP:`git checkout feat/cdp-remote-browser`。
 - 回 Neko:`git checkout main`(或該分支)。

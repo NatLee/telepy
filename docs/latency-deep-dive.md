@@ -162,4 +162,3 @@ payload 裡的 port 必須轉成**字串** key。channel layer 用 msgpack 序�
 5. 兩段相加 ≈ 你和你的裝置之間，真實世界的距離。
 
 設計哲學一句話：**不信任何轉述（kernel、proxy），只信親自跑完全程的 byte。**
-

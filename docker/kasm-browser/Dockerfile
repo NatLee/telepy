@@ -11,9 +11,8 @@
 # 不需 docker.sock:所有 per-session 生命週期都是「在這一顆容器內起/停行程」,不做容器編排。
 FROM debian:bookworm-slim
 
+# KasmVNC 版本(如需更新改這個;.deb 檔名依架構於下方 RUN 內組出)。
 ARG KASMVNC_VERSION=1.3.4
-# KasmVNC 對應 Debian bookworm 的 server 套件(如版本更新,改這兩個 ARG 即可)。
-ARG KASMVNC_DEB=kasmvncserver_bookworm_${KASMVNC_VERSION}_amd64.deb
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 桌面 + 瀏覽器 + 字型 + Xvnc runtime deps + python(跑 session-manager)
@@ -28,13 +27,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libxfont2 libgl1-mesa-dri libgles2 \
  && rm -rf /var/lib/apt/lists/*
 
-# KasmVNC(提供 /usr/bin/Xvnc,支援 -rfbport / -SecurityTypes None / -interface)
-RUN curl -fsSL -o /tmp/kasmvnc.deb \
-      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${KASMVNC_DEB}" \
+# KasmVNC。注意:KasmVNC 的 X server 二進位名為 **Xkasmvnc**(不是 Xvnc)。
+# 依容器實際架構(dpkg --print-architecture → amd64/arm64)抓對應的 bookworm .deb,
+# 安裝後把 Xkasmvnc 連結成 Xvnc(相容),並在 build 階段就驗證二進位存在——若 KasmVNC 沒裝好,
+# build 直接失敗(附 dpkg 內容),而不是等到 runtime 才噴 FileNotFoundError。
+RUN ARCH="$(dpkg --print-architecture)" \
+ && echo "KasmVNC deb arch: ${ARCH}" \
+ && curl -fsSL -o /tmp/kasmvnc.deb \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_bookworm_${KASMVNC_VERSION}_${ARCH}.deb" \
  && apt-get update \
  && (apt-get install -y --no-install-recommends /tmp/kasmvnc.deb \
      || (dpkg -i /tmp/kasmvnc.deb; apt-get install -y -f --no-install-recommends)) \
- && rm -rf /tmp/kasmvnc.deb /var/lib/apt/lists/*
+ && rm -rf /tmp/kasmvnc.deb /var/lib/apt/lists/* \
+ && KVNC="$(command -v Xkasmvnc || true)" \
+ && if [ -n "$KVNC" ]; then ln -sf "$KVNC" /usr/bin/Xvnc; fi \
+ && if ! command -v Xkasmvnc >/dev/null && ! command -v Xvnc >/dev/null; then \
+        echo "FATAL: KasmVNC X server (Xkasmvnc/Xvnc) not found after install."; \
+        echo "kasmvncserver package binaries:"; dpkg -L kasmvncserver 2>/dev/null | grep -iE '/(X|bin/)' || true; \
+        exit 1; \
+    fi \
+ && echo "VNC server resolved to: $(command -v Xkasmvnc || command -v Xvnc)"
 
 COPY session_manager.py /app/session_manager.py
 

@@ -25,6 +25,7 @@ import json
 import time
 import uuid
 import shlex
+import shutil
 import signal
 import socket
 import logging
@@ -35,9 +36,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [session-manager] %(message)s")
 logger = logging.getLogger("session_manager")
 
+# KasmVNC 的 X server 二進位叫 Xkasmvnc(不是 Xvnc);TigerVNC 才叫 Xvnc。用 {vnc_bin}
+# 佔位,實際名稱由 _resolve_vnc_bin() 於啟動時偵測(可用 VNC_SERVER_BIN 覆寫)。
+# KasmVNC's X server binary is Xkasmvnc (TigerVNC's is Xvnc); resolved at startup.
 DEFAULT_VNC_CMD = (
-    "Xvnc :{display} -geometry {geometry} -depth 24 -SecurityTypes None "
-    "-rfbport {rfbport} -interface 0.0.0.0 -AlwaysShared -desktop telepy -verbose"
+    "{vnc_bin} :{display} -geometry {geometry} -depth 24 -SecurityTypes None "
+    "-rfbport {rfbport} -interface 0.0.0.0 -AlwaysShared -desktop telepy"
 )
 DEFAULT_WM_CMD = "openbox"
 DEFAULT_BROWSER_CMD = (
@@ -47,8 +51,23 @@ DEFAULT_BROWSER_CMD = (
 )
 
 
+def _resolve_vnc_bin():
+    """
+    找出可用的 VNC X server 二進位。KasmVNC 裝的是 Xkasmvnc;TigerVNC 是 Xvnc。
+    優先序:VNC_SERVER_BIN(env)→ Xkasmvnc → Xvnc → 常見絕對路徑。找不到就回預設,讓
+    後續 spawn 丟出明確的 FileNotFoundError。
+    """
+    candidates = [os.getenv("VNC_SERVER_BIN"), "Xkasmvnc", "Xvnc",
+                  "/usr/bin/Xkasmvnc", "/usr/bin/Xvnc"]
+    for cand in candidates:
+        if cand and (shutil.which(cand) or os.path.exists(cand)):
+            return cand
+    return os.getenv("VNC_SERVER_BIN") or "Xkasmvnc"
+
+
 class SessionManager:
     def __init__(self):
+        self.vnc_bin = _resolve_vnc_bin()
         self.vnc_cmd = os.getenv("VNC_CMD", DEFAULT_VNC_CMD)
         self.wm_cmd = os.getenv("WM_CMD", DEFAULT_WM_CMD)
         self.browser_cmd = os.getenv("BROWSER_CMD", DEFAULT_BROWSER_CMD)
@@ -79,12 +98,17 @@ class SessionManager:
             display = self._alloc_display()
         rfb_port = self.rfb_base + display
         disp = f":{display}"
+        vnc_log = f"/tmp/telepy-vnc-{display}.log"
         procs = []
         try:
             procs.append(self._spawn(self.vnc_cmd.format(
-                display=display, geometry=geometry, rfbport=rfb_port)))
+                vnc_bin=self.vnc_bin, display=display,
+                geometry=geometry, rfbport=rfb_port), log_path=vnc_log))
             if not self._wait_for_rfb(rfb_port, timeout=self.rfb_timeout):
-                raise RuntimeError(f"Xvnc RFB port {rfb_port} did not come up")
+                # 把 VNC server 自己的錯誤訊息帶出來,讓「RFB 沒起來」可診斷(而非啞掉)。
+                raise RuntimeError(
+                    f"VNC server ({self.vnc_bin}) RFB port {rfb_port} did not come up. "
+                    f"Last log lines:\n{self._tail(vnc_log)}")
             if self.wm_cmd:
                 procs.append(self._spawn(self.wm_cmd, display=disp))
             procs.append(self._spawn(self.browser_cmd.format(proxy=proxy), display=disp))
@@ -118,11 +142,25 @@ class SessionManager:
             self.stop(sid)
 
     # --- process helpers (mocked in tests) --------------------------------
-    def _spawn(self, cmd, display=None):
+    def _spawn(self, cmd, display=None, log_path=None):
         env = dict(os.environ)
         if display:
             env["DISPLAY"] = display
-        return subprocess.Popen(shlex.split(cmd), env=env, start_new_session=True)
+        out = None
+        if log_path:
+            try:
+                out = open(log_path, "wb")
+            except OSError:
+                out = None
+        return subprocess.Popen(shlex.split(cmd), env=env, start_new_session=True,
+                                stdout=out, stderr=subprocess.STDOUT)
+
+    def _tail(self, path, n=25):
+        try:
+            with open(path, "r", errors="replace") as f:
+                return "".join(f.readlines()[-n:]).strip() or "(empty)"
+        except OSError:
+            return "(no log)"
 
     def _wait_for_rfb(self, port, timeout=15):
         deadline = time.time() + timeout
