@@ -144,10 +144,20 @@ class FirstMessageAuthConsumer(AsyncWebsocketConsumer):
         if not getattr(self, '_authed', False):
             await self._authenticate(text_data)
             return
-        await self.on_message(text_data=text_data, bytes_data=bytes_data)
+        # 例外防火牆：handler 內任何未捕捉例外若往外冒，channels 會直接终結 consumer 而
+        # 「不呼叫 disconnect()」——PTY reader / 子行程 / group 成員資格全部變孤兒（實錄：一個
+        # 孤兒 reader 以每分鐘 120 筆錯誤連噴 2.5 小時）。這裡吞下並記錄，資源清理交給正常斷線流程。
+        # Exception firewall: an exception escaping a handler makes Channels kill the consumer
+        # WITHOUT calling disconnect(), orphaning the PTY reader / child / group membership
+        # (observed: one orphaned reader spamming 120 errors/min for 2.5h). Log and contain.
+        try:
+            await self.on_message(text_data=text_data, bytes_data=bytes_data)
+        except Exception:
+            logger.exception(f"{type(self).__name__}: unhandled error in on_message; frame dropped")
 
     async def _authenticate(self, text_data):
         self._auth_in_progress = True
+        auth_started = asyncio.get_event_loop().time()
         try:
             data = _parse_json(text_data)
             if not isinstance(data, dict) or data.get('type') != 'auth':
@@ -159,13 +169,37 @@ class FirstMessageAuthConsumer(AsyncWebsocketConsumer):
                 self._cancel_auth_timer()
                 await self._safe_close(code=err)
                 return
-            err = await self.after_auth(user, data)
+            # after_auth 的例外絕不可往外冒（channels 會跳過 disconnect → 資源孤兒化）。
+            # 失敗時主動走 disconnect() 清理（各 consumer 的 disconnect 均為冪等）再關閉。
+            # Never let after_auth exceptions escape (Channels would skip disconnect). On failure,
+            # run the idempotent disconnect() cleanup ourselves, then close.
+            try:
+                err = await self.after_auth(user, data)
+            except Exception:
+                logger.exception(f"{type(self).__name__}: after_auth crashed")
+                self._cancel_auth_timer()
+                # 先送 close frame，再做清理——disconnect() 會把 _ws_closed 設為 True，
+                # 順序顛倒會讓 _safe_close 變 no-op、socket 留在半開狀態。
+                # Close FIRST: disconnect() marks _ws_closed, which would turn a later
+                # _safe_close into a no-op and leave the socket half-open.
+                await self._safe_close(code=4005)
+                try:
+                    await self.disconnect(4005)
+                except Exception:
+                    logger.exception(f"{type(self).__name__}: cleanup after failed auth crashed")
+                return
             if err is not None:
                 self._cancel_auth_timer()
                 await self._safe_close(code=err)
                 return
             self._authed = True
             self._cancel_auth_timer()
+            # 認證耗時儀表：>3s 即警告（含 DB 檢查與資源建立）。這是先前「auth 超過 10s 被計時器
+            # 誤殺」事故的預警指標。/ Slow-auth telemetry: warn above 3s — the early-warning metric
+            # for the "auth exceeded the 10s timer" incident class.
+            elapsed = asyncio.get_event_loop().time() - auth_started
+            if elapsed > 3:
+                logger.warning(f"{type(self).__name__}: slow auth took {elapsed:.1f}s (DB/thread-pool congestion?)")
         finally:
             # 任一路徑（含拒絕）都要取消計時器與清旗標——舊版失敗時不取消，計時器 10 秒後
             # 對「已關閉」的 socket 再補一刀 close(4001)，噴出 Task exception was never retrieved。
@@ -250,6 +284,7 @@ class TerminalConsumer(FirstMessageAuthConsumer):
                     # worker — a classic source of "random" disconnects.
                     os.set_blocking(self.fd, False)
                     asyncio.get_event_loop().add_reader(self.fd, self.forward_output)
+                    self._session_started = asyncio.get_event_loop().time()
                 logger.info("SSH connection started")
             except Exception as e:
                 logger.error(f"Error starting SSH connection: {e}")
@@ -292,6 +327,13 @@ class TerminalConsumer(FirstMessageAuthConsumer):
 
     async def disconnect(self, close_code):
         await super().disconnect(close_code)  # 取消 auth 逾時計時器 / cancel the auth-timeout task
+        # 斷線觀測：關閉碼 + session 存活時間。固定週期的 lifetime（如恆為 ~60s）即代理層逾時、
+        # 大量同秒斷線代表 worker 死亡，一眼可判。/ Close telemetry: a constant lifetime (~60s)
+        # fingerprints a proxy timeout; many same-second closes fingerprint a worker death.
+        started = getattr(self, '_session_started', None)
+        if started is not None:
+            lived = asyncio.get_event_loop().time() - started
+            logger.info(f"Terminal session closed: code={close_code}, lived={lived:.1f}s")
         # 「每次連線都是全新 shell」的另一半保證：WebSocket 一斷，就確實終結這條連線的 ssh 客戶端，
         # 讓遠端 sshd 收到 channel 關閉並對該 shell 送 SIGHUP —— 舊 shell 不會殘留到下次連線。
         # （ControlMaster 重用的只是加密連線；shell/session 一律隨本 consumer 的 ssh process 生滅。）
