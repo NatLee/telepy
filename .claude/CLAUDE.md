@@ -118,12 +118,12 @@ Copy `.env.example` to `.env` and configure:
 
 ## Fonts
 
-- **Chinese (CJK):** jf-openhuninn (`src/frontend/src/fonts/jf-openhuninn-2.1.ttf`) — used as primary `font-sans`
-- **Terminal / Monospace:** 0xProto Nerd Font (`src/frontend/src/fonts/0xProtoNerdFont-Regular.ttf`) — used as primary `font-mono` and xterm.js terminal font
-- Source font files also kept in project root `font/` directory
-- Loaded via `next/font/local` in `layout.tsx` with `display: "block"` (fonts must finish downloading before rendering)
+- **Chinese (CJK):** jf-openhuninn (`src/frontend/src/fonts/jf-openhuninn-2.1.woff2`, converted from the TTF) — used as primary `font-sans`
+- **Terminal / Monospace:** 0xProto Nerd Font (`src/frontend/src/fonts/0xProtoNerdFont-Regular.woff2`) — used as primary `font-mono` and xterm.js terminal font
+- Source TTF files kept alongside the woff2 in `src/frontend/src/fonts/` and in project root `font/`; regenerate woff2 with `fonttools` (`font.flavor = "woff2"`)
+- Loaded via `next/font/local` in `layout.tsx` with `display: "swap"` (text renders immediately with a system fallback, then swaps — do NOT switch back to `block`, it blanks all text until the 2.2MB CJK font finishes downloading)
 - Tailwind CSS variables `--font-sans` / `--font-mono` reference custom fonts first, then Geist as fallback
-- xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and awaits `document.fonts.ready` before initialization
+- xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and explicitly awaits `document.fonts.load()` for the mono font (1.5s timeout guard) before terminal initialization — it does not depend on the CJK font
 
 ## Code Conventions
 

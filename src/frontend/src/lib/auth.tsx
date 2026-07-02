@@ -12,7 +12,7 @@
  */
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { apiFetch } from "./api";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import { UserProfile, AuthContextType } from "../types/auth";
 const AuthContext = createContext<AuthContextType>({
@@ -30,7 +30,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [user, setUser] = useState<UserProfile | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const router = useRouter();
-    const pathname = usePathname();
 
     useEffect(() => {
         const handleUnauthorized = () => {
@@ -41,6 +40,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     useEffect(() => {
+        // 樂觀初始化：有 token 就「立刻」結束 loading 讓頁面前進（根頁 redirect、各頁資料抓取
+        // 不再被 verify+profile 兩個串行 round-trip 擋住）。驗證改到背景進行：
+        //   - verify 失敗 → 嘗試 refresh → 再失敗才清除登入狀態（由 api:unauthorized / logout 收尾）。
+        //   - token 其實無效時，各頁 API 會收到 401，apiFetch 已統一派送 api:unauthorized 導回登入頁。
+        // 並改為「只在掛載時跑一次」：舊版依賴 pathname，每次換頁都重打 verify+profile 兩個請求。
+        // Optimistic init: unblock the UI immediately when a token exists; verify/refresh in the
+        // background (failures funnel into the existing 401 handling). Run once on mount — the old
+        // [pathname] dependency re-fired verify+profile on every navigation.
         const initAuth = async () => {
             const storedToken = localStorage.getItem("accessToken");
             if (!storedToken) {
@@ -49,31 +56,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             }
 
             setAccessToken(storedToken);
+            setIsLoading(false);
 
+            // 背景驗證與 profile 取得（並行，不阻塞 UI）。/ Background verify + profile (parallel).
+            void fetchUserProfileState(storedToken);
             try {
                 const res = await apiFetch("/api/auth/token/verify", {
                     method: "POST",
                     body: JSON.stringify({ token: storedToken }),
                 });
 
-                if (res.ok) {
-                    await fetchUserProfileState(storedToken);
-                } else {
-                    // try refresh
+                if (!res.ok) {
                     const refreshRes = await attemptRefresh();
                     if (!refreshRes) {
                         handleFailedAuth();
                     }
                 }
-            } catch (err) {
-                handleFailedAuth();
+            } catch {
+                // 網路錯誤時不清除登入狀態：可能只是暫時斷線，交給後續 API 的 401 處理。
+                // Don't clear auth on network errors; a later API 401 will handle true invalidity.
             }
-
-            setIsLoading(false);
         };
 
         initAuth();
-    }, [pathname]); // Re-verify occasionally or on mount
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const attemptRefresh = async () => {
         const refresh = localStorage.getItem("refreshToken");
