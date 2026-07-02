@@ -1125,3 +1125,10 @@ git checkout main && git merge --no-ff feat/neko-remote-browser
 - `internal/server/manager.go` + `internal/proxy/manager.go`:traefik disabled 時房間掛 `m1k1o.neko_rooms.proxy.*` label,server 以 `/*` fallback 反代房間(StripPrefix 自理、`httputil.ReverseProxy` 支援 WS、含等待頁);`/api` 與 admin 靜態檔為獨立路由,不經 `/neko` 前綴無法觸及。
 - `neko/apps/chromium/supervisord.conf`:官方檔含 `[program:chromium]` + `[program:openbox]` 兩段(→ 覆寫檔補回 openbox)。
 - `internal/config/room.go`:`NEKO_ROOMS_NAT1TO1=""` 經 viper `GetStringSlice` 為空 slice,安全;env 命名 `NEKO_ROOMS_*` 對應 viper key 無誤。
+
+## 實作後強化(獨立 review 後追加,非阻斷項)
+
+實作完成後另跑一次獨立 code review,無 BUG 級問題;針對兩個低風險項追加強化(已含在 `harden(neko): ...` commit):
+
+- **backend `depends_on: neko-rooms`**:讓首次開機順序確定;即使 neko-rooms 尚未 ready,`create_room` 也只會丟 `NekoRoomsError` 並回收 ssh(可重試),不會 crash。
+- **對帳範圍收斂到 `PROJECT_NAME`**:房間多打一個 `telepy.instance=<PROJECT_NAME>` label,`_reconcile_orphan_rooms` 以 `{telepy.managed, telepy.instance}` 過濾 —— 未來多套 stack 若共用同一台 neko-rooms,也不會互刪對方的活躍房間。(service 端常數 `LABEL_INSTANCE` / `INSTANCE`。)
