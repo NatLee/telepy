@@ -8,7 +8,5 @@ class SiteSettingsAdmin(admin.ModelAdmin):
         'allow_registration',
         'remote_browser_session_idle_timeout',
         'remote_browser_max_sessions',
-        'remote_browser_cdp_url',
-        'remote_browser_screencast_quality',
-        'remote_browser_screencast_every_nth_frame',
+        'remote_browser_geometry',
     ]

@@ -50,7 +50,8 @@ services:
       - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
-      - CHROMIUM_CDP_URL=http://chromium:9222
+      - KASM_BROWSER_API=http://kasm-browser:7000
+      - KASM_BROWSER_HOST=kasm-browser
 
     volumes:
       # Source code
@@ -70,7 +71,7 @@ services:
     depends_on:
       - redis
       - ssh
-      - chromium
+      - kasm-browser
 
   redis:
     <<: [ *common-networks, *common-restart ]
@@ -111,41 +112,27 @@ services:
     depends_on:
       - redis
 
-  # 共用 headless Chromium(CDP screencast 遠端瀏覽器的執行時)。一顆共用、每個 session
-  # 一個 browser context 各走各自的 SOCKS(backend 內的 ssh -D)。CDP endpoint 9222 只在
-  # telepy-network 內、絕不 publish 到 host。
-  # Shared headless Chromium (CDP screencast runtime). One shared browser; one context per
-  # session, each routed through its own SOCKS (ssh -D inside backend). Port 9222 stays on
-  # telepy-network and is NEVER published to the host.
-  chromium:
+  # 共用 KasmVNC 瀏覽器容器(取代 CDP 的 chromium)。內含 KasmVNC + Chromium + CJK 字型 +
+  # 一支 session-manager API(:7000)。backend 呼叫它 per-session 起 Xvnc+chromium(注入該
+  # session 的 SOCKS proxy),回傳 RFB 埠;Django consumer 把該 RFB 埠橋接到既有 /ws。
+  # session-manager(7000)與各 session 的 RFB 埠(5910+)只在 telepy-network 內,絕不 publish。
+  # 首次或改版需 build:docker compose up -d --build kasm-browser
+  # Shared KasmVNC browser container: KasmVNC + Chromium + CJK fonts + a session-manager API.
+  # Per session it starts Xvnc + chromium (with that session's SOCKS proxy) and returns the RFB
+  # port; the Django consumer bridges it to the existing /ws. Nothing is published to the host.
+  kasm-browser:
     <<: [ *common-networks, *common-restart ]
-    # 用自建 image(FROM chromedp/headless-shell + fonts-noto-cjk),否則中文/日韓網頁會顯示
-    # 豆腐方塊字。build 保留原 image 的 entrypoint(run.sh:headless-shell@9223 + socat 9222→9223)。
-    # 重建:docker compose up -d --build chromium
-    # Custom image = chromedp/headless-shell + CJK fonts (otherwise CJK pages render as tofu).
     build:
-      context: ./docker/chromium
-    image: telepy-chromium:latest
-    container_name: telepy-chromium-${PROJECT_NAME}
-    hostname: telepy-chromium-${PROJECT_NAME}
-    shm_size: "2gb"
-    # 重要:此 image 的 entrypoint(run.sh)「已」在 9223 起 headless-shell,並以
-    #   socat TCP-LISTEN:9222,fork TCP:127.0.0.1:9223  橋接對外 9222 → 內部 9223
-    # (近代 Chrome 不再允許把 DevTools 綁到非 loopback 位址,故用 socat 轉)。
-    # 所以這裡「絕對不要」再設 --remote-debugging-port/address —— 那會把 Chrome 逼到 9222,
-    # 與 socat 的 9222 監聽打架、且 9223 沒人聽 → socat 一直噴 "connection refused"。
-    # command 只放「額外」旗標,run.sh 會用 $@ 把它們接到 headless-shell 後面。
-    # This image's run.sh already runs headless-shell on 9223 and bridges 9222->9223 via socat.
-    # Do NOT set --remote-debugging-port/address here (it forces Chrome onto 9222, fighting socat
-    # and leaving 9223 empty -> the "connection refused" spam). Only append EXTRA flags below.
-    command:
-      # fail-closed 預設 proxy(死埠):未經 per-context 覆蓋的流量一律失敗,不以本容器 IP 洩漏身分
-      # (Phase 0 G8 已驗證 per-context proxyServer 仍可覆蓋)。
-      - "--proxy-server=socks5://127.0.0.1:1"
-      # 允許非瀏覽器 CDP client(後端 websockets)連 DevTools WS(Chrome 111+ 的 origin 檢查)。
-      - "--remote-allow-origins=*"
-      - "--disable-dev-shm-usage"
-    # 不 publish 9222:只在 telepy-network 內 / never published to host
+      context: ./docker/kasm-browser
+    image: telepy-kasm-browser:latest
+    container_name: telepy-kasm-browser-${PROJECT_NAME}
+    hostname: telepy-kasm-browser-${PROJECT_NAME}
+    shm_size: "2gb"                 # chromium 需要較大的 /dev/shm
+    environment:
+      # session-manager 用此 token 驗證只有 backend 能起/停 session(與 backend 同一把)。
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
+      - SESSION_MANAGER_PORT=7000
+    # 不 publish 任何埠:只在 telepy-network 內 / never published to host
 
 networks:
   telepy-network:

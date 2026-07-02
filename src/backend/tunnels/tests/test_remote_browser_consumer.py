@@ -1,197 +1,173 @@
+import asyncio
 import json
 from unittest import mock, IsolatedAsyncioTestCase
 
+import authorized_keys.remote_browser_service as svc
 from tunnels.consumers import RemoteBrowserConsumer
 
 
-def _make_consumer(context_id="CTX", cdp_session_id="SESS"):
-    """建立一個已「認證後」狀態的 consumer,CDP 連線換成 AsyncMock,可直接測 on_message 派送。"""
+class MockRfbServer:
+    """
+    最小 RFB 假伺服器:連上即送 greeting(server 先說話),之後把收到的位元組原樣回送(echo)。
+    用來端到端驗證 consumer 的雙向 byte-pump,不需真的 KasmVNC。
+    """
+    GREETING = b"RFB 003.008\n"
+
+    def __init__(self):
+        self._server = None
+        self.port = None
+        self.received = bytearray()
+
+    async def start(self):
+        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+
+    async def _handle(self, reader, writer):
+        writer.write(self.GREETING)
+        await writer.drain()
+        try:
+            while True:
+                d = await reader.read(4096)
+                if not d:
+                    break
+                self.received.extend(d)
+                writer.write(d)          # echo
+                await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
+    async def stop(self):
+        if self._server:
+            self._server.close()   # 不等 wait_closed:連線可能還在收尾,會卡住
+
+
+class _FakeStore:
+    def __init__(self):
+        self.data = {}
+    def get(self, sid):
+        return dict(self.data[sid]) if sid in self.data else None
+    def delete(self, sid):
+        self.data.pop(sid, None)
+    def live_session_ids(self):
+        return set(self.data)
+
+
+def _make_consumer(rfb_port, server_id=5):
     c = RemoteBrowserConsumer()
-    c.cdp = mock.AsyncMock()
-    c.cdp_session_id = cdp_session_id
-    c.context_id = context_id
-    c.target_id = "TGT"
-    c.rb_session_id = "sess-1"
-    c.width, c.height = 1280, 720
-    c.send = mock.AsyncMock()
+    c.scope = {"url_route": {"kwargs": {"session_id": "sess-1"}}}
+    c.KASM_HOST = "127.0.0.1"
+    c._ws_closed = False
     c._authed = True
+    c._auth_timeout_task = None
+    c.send = mock.AsyncMock()
+    c.close = mock.AsyncMock()             # _safe_close 呼叫真 close 會碰 channel 機制,mock 掉
+    c._verify_access = mock.AsyncMock(return_value=True)
     return c
 
 
-class RemoteBrowserInputDispatchTest(IsolatedAsyncioTestCase):
-    async def test_mouse_event_maps_to_dispatch_mouse_event(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({
-            "type": "mouse", "event": "mousePressed",
-            "x": 100, "y": 200, "button": "left", "clickCount": 1,
-        }))
-        # 高頻輸入走 notify(不等回應),不佔 reader loop
-        c.cdp.notify.assert_awaited_once()
-        c.cdp.call.assert_not_awaited()
-        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
-        self.assertEqual(method, "Input.dispatchMouseEvent")
-        self.assertEqual(params["type"], "mousePressed")
-        self.assertEqual((params["x"], params["y"]), (100, 200))
-        self.assertEqual(params["button"], "left")
-        self.assertEqual(c.cdp.notify.await_args[1]["session_id"], "SESS")
-
-    async def test_wheel_event_carries_deltas(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({
-            "type": "mouse", "event": "mouseWheel", "x": 5, "y": 6,
-            "deltaX": 0, "deltaY": -120,
-        }))
-        params = c.cdp.notify.await_args[0][1]
-        self.assertEqual(params["type"], "mouseWheel")
-        self.assertEqual(params["deltaY"], -120)
-
-    async def test_key_event_passthrough_fields(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({
-            "type": "key", "event": "keyDown", "key": "a", "code": "KeyA",
-            "windowsVirtualKeyCode": 65, "text": "a",
-        }))
-        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
-        self.assertEqual(method, "Input.dispatchKeyEvent")
-        self.assertEqual(params["windowsVirtualKeyCode"], 65)
-        self.assertEqual(params["code"], "KeyA")
-        self.assertEqual(params["text"], "a")
-
-    async def test_text_event_uses_insert_text_for_cjk_and_paste(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({"type": "text", "text": "中文貼上"}))
-        method, params = c.cdp.notify.await_args[0][0], c.cdp.notify.await_args[0][1]
-        self.assertEqual(method, "Input.insertText")
-        self.assertEqual(params["text"], "中文貼上")
-
-    async def test_screencast_frame_is_forwarded_and_acked_via_notify(self):
-        """幀轉發後用 notify 送 ack(不等回應),避免和輸入搶 reader loop 造成串流卡住。"""
-        c = _make_consumer()
-        c.cdp_session_id = "SESS"
-        await c._forward_frame({"data": "AAAA", "sessionId": 7})
-        sent = json.loads(c.send.await_args[1]["text_data"])
-        self.assertEqual(sent["type"], "frame")
-        self.assertEqual(sent["data"], "AAAA")
-        self.assertEqual(c.cdp.notify.await_args[0][0], "Page.screencastFrameAck")
-        self.assertEqual(c.cdp.notify.await_args[0][1]["sessionId"], 7)
-        c.cdp.call.assert_not_awaited()   # ack 不走 call
-
-    async def test_navigate_calls_page_navigate(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({"type": "navigate", "url": "https://example.com"}))
-        method, params = c.cdp.call.await_args[0][0], c.cdp.call.await_args[0][1]
-        self.assertEqual(method, "Page.navigate")
-        self.assertEqual(params["url"], "https://example.com")
-
-    async def test_navigate_reload_calls_page_reload(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({"type": "navigate", "action": "reload"}))
-        self.assertEqual(c.cdp.call.await_args[0][0], "Page.reload")
-
-    async def test_navigate_back_uses_history_entry(self):
-        c = _make_consumer()
-        c.cdp.call.return_value = {
-            "currentIndex": 1,
-            "entries": [{"id": 10, "url": "http://a"}, {"id": 11, "url": "http://b"}],
-        }
-        await c.on_message(json.dumps({"type": "navigate", "action": "back"}))
-        methods = [call[0][0] for call in c.cdp.call.await_args_list]
-        self.assertIn("Page.getNavigationHistory", methods)
-        last = c.cdp.call.await_args_list[-1]
-        self.assertEqual(last[0][0], "Page.navigateToHistoryEntry")
-        self.assertEqual(last[0][1]["entryId"], 10)   # 回上一筆(index 0)
-
-    async def test_navigate_back_at_start_is_noop(self):
-        c = _make_consumer()
-        c.cdp.call.return_value = {"currentIndex": 0, "entries": [{"id": 10}]}
-        await c.on_message(json.dumps({"type": "navigate", "action": "back"}))
-        methods = [call[0][0] for call in c.cdp.call.await_args_list]
-        self.assertNotIn("Page.navigateToHistoryEntry", methods)
-
-    async def test_navigate_rejects_non_http_scheme(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({"type": "navigate", "url": "file:///etc/passwd"}))
-        # 不得把 file:// / chrome:// 之類送進去(避免讀本機檔案)
-        for call in c.cdp.call.await_args_list:
-            self.assertNotEqual(call[0][0], "Page.navigate")
-
-    async def test_unknown_message_type_is_ignored(self):
-        c = _make_consumer()
-        await c.on_message(json.dumps({"type": "nonsense"}))
-        c.cdp.call.assert_not_awaited()
-
-    async def test_malformed_json_is_ignored(self):
-        c = _make_consumer()
-        await c.on_message("{not json")
-        c.cdp.call.assert_not_awaited()
+def _binary_sends(send_mock):
+    out = []
+    for call in send_mock.await_args_list:
+        if "bytes_data" in call.kwargs:
+            out.append(call.kwargs["bytes_data"])
+    return out
 
 
-class RemoteBrowserTabSecurityTest(IsolatedAsyncioTestCase):
-    async def test_new_tab_created_inside_session_context(self):
-        c = _make_consumer(context_id="CTX")
-        c.cdp.call.return_value = {"targetId": "new-tgt"}
-        with mock.patch.object(c, "_attach_and_stream", new=mock.AsyncMock()) as att, \
-             mock.patch.object(c, "_send_tab_list", new=mock.AsyncMock()):
-            await c.on_message(json.dumps({"type": "tab", "action": "new"}))
-        call = c.cdp.call.await_args_list[0]
-        self.assertEqual(call[0][0], "Target.createTarget")
-        self.assertEqual(call[0][1]["browserContextId"], "CTX")
-        att.assert_awaited_once_with("new-tgt")   # 新分頁建立後切換過去
-
-    async def test_switch_tab_rejects_target_outside_our_context(self):
-        c = _make_consumer(context_id="CTX")
-        # getTargets 回一個屬於「別的 context」的 target
-        c.cdp.call.return_value = {"targetInfos": [
-            {"targetId": "evil", "type": "page", "browserContextId": "OTHER"},
-        ]}
-        with mock.patch.object(c, "_attach_and_stream", new=mock.AsyncMock()) as att:
-            await c.on_message(json.dumps({"type": "tab", "action": "switch",
-                                           "target_id": "evil"}))
-            att.assert_not_awaited()   # 不得 attach 到別人的 target
-
-    async def test_switch_tab_allows_target_in_our_context(self):
-        c = _make_consumer(context_id="CTX")
-        c.cdp.call.return_value = {"targetInfos": [
-            {"targetId": "mine", "type": "page", "browserContextId": "CTX"},
-        ]}
-        with mock.patch.object(c, "_attach_and_stream", new=mock.AsyncMock()) as att:
-            await c.on_message(json.dumps({"type": "tab", "action": "switch",
-                                           "target_id": "mine"}))
-            att.assert_awaited_once_with("mine")
-
-    async def test_close_tab_rejects_foreign_target(self):
-        c = _make_consumer(context_id="CTX")
-        c.cdp.call.return_value = {"targetInfos": [
-            {"targetId": "evil", "type": "page", "browserContextId": "OTHER"},
-        ]}
-        await c.on_message(json.dumps({"type": "tab", "action": "close",
-                                       "target_id": "evil"}))
-        for call in c.cdp.call.await_args_list:
-            self.assertNotEqual(call[0][0], "Target.closeTarget")
-
-    async def test_tab_list_returns_only_our_context_pages(self):
-        c = _make_consumer(context_id="CTX")
-        c.cdp.call.return_value = {"targetInfos": [
-            {"targetId": "a", "type": "page", "browserContextId": "CTX",
-             "title": "A", "url": "http://a"},
-            {"targetId": "b", "type": "page", "browserContextId": "OTHER",
-             "title": "B", "url": "http://b"},
-            {"targetId": "c", "type": "background_page", "browserContextId": "CTX",
-             "title": "C", "url": "http://c"},
-        ]}
-        await c.on_message(json.dumps({"type": "tab", "action": "list"}))
-        sent = json.loads(c.send.await_args[1]["text_data"])
-        self.assertEqual(sent["type"], "tabs")
-        ids = [t["target_id"] for t in sent["tabs"]]
-        self.assertEqual(ids, ["a"])   # 只回本 context 的 page,排除別人與非 page
+def _text_sends(send_mock):
+    out = []
+    for call in send_mock.await_args_list:
+        if "text_data" in call.kwargs:
+            out.append(json.loads(call.kwargs["text_data"]))
+    return out
 
 
-class RemoteBrowserResizeTest(IsolatedAsyncioTestCase):
-    async def test_resize_sets_device_metrics_and_restarts_screencast(self):
-        c = _make_consumer()
-        with mock.patch.object(c, "_restart_screencast", new=mock.AsyncMock()) as rs:
-            await c.on_message(json.dumps({"type": "resize", "width": 800, "height": 600}))
-        methods = [call[0][0] for call in c.cdp.call.await_args_list]
-        self.assertIn("Emulation.setDeviceMetricsOverride", methods)
-        self.assertEqual((c.width, c.height), (800, 600))
-        rs.assert_awaited_once()
+class RemoteBrowserVncBridgeTest(IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.rfb = MockRfbServer()
+        await self.rfb.start()
+        # 讓真實 stop_remote_browser 不去碰 Redis/kasm(沙箱無此二者,否則 disconnect 會卡住)。
+        self._store_patch = mock.patch.object(svc, "_store", _FakeStore())
+        self._kasm_patch = mock.patch.object(svc, "_kasm", mock.Mock())
+        self._store_patch.start()
+        self._kasm_patch.start()
+
+    async def asyncTearDown(self):
+        self._store_patch.stop()
+        self._kasm_patch.stop()
+        svc.ACTIVE_SESSIONS.clear()
+        await self.rfb.stop()
+
+    async def test_after_auth_connects_rfb_and_signals_ready(self):
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            code = await c.after_auth(user=mock.Mock(), message={})
+        self.assertIsNone(code)                      # 成功
+        self.assertIn({"type": "ready"}, _text_sends(c.send))   # 先送 ready,還沒 pump
+        self.assertEqual(_binary_sends(c.send), [])  # begin 之前不送 RFB 位元組
+        await c.disconnect(1000)
+
+    async def test_begin_starts_pump_and_forwards_server_greeting(self):
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            await c.after_auth(user=mock.Mock(), message={})
+        await c.on_message(text_data=json.dumps({"type": "begin"}))
+        await asyncio.sleep(0.1)                      # 讓 pump 讀到 greeting
+        self.assertIn(MockRfbServer.GREETING, _binary_sends(c.send))
+        with mock.patch.object(svc, "stop_remote_browser"):
+            await c.disconnect(1000)
+
+    async def test_client_binary_is_written_to_rfb_and_echo_returns(self):
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            await c.after_auth(user=mock.Mock(), message={})
+        await c.on_message(text_data=json.dumps({"type": "begin"}))
+        await c.on_message(bytes_data=b"CLIENT-RFB-BYTES")
+        await asyncio.sleep(0.1)
+        self.assertIn(b"CLIENT-RFB-BYTES", bytes(self.rfb.received))   # 到了 RFB server
+        self.assertIn(b"CLIENT-RFB-BYTES", _binary_sends(c.send))      # echo 回到 client
+        with mock.patch.object(svc, "stop_remote_browser"):
+            await c.disconnect(1000)
+
+    async def test_after_auth_rejects_unknown_session(self):
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session", return_value=None):
+            code = await c.after_auth(user=mock.Mock(), message={})
+        self.assertEqual(code, 4404)
+
+    async def test_after_auth_rejects_when_permission_denied(self):
+        c = _make_consumer(self.rfb.port)
+        c._verify_access = mock.AsyncMock(return_value=False)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            code = await c.after_auth(user=mock.Mock(), message={})
+        self.assertEqual(code, 4403)
+
+    async def test_disconnect_stops_session_and_closes_writer(self):
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            await c.after_auth(user=mock.Mock(), message={})
+        with mock.patch.object(svc, "stop_remote_browser") as stop:
+            await c.disconnect(1000)
+            stop.assert_called_once_with("sess-1")
+        self.assertIsNone(c._writer)
+
+    async def test_binary_before_begin_still_forwards_to_rfb(self):
+        """client→RFB 方向不需等 begin(RFB client 本就等 server greeting)。"""
+        c = _make_consumer(self.rfb.port)
+        with mock.patch.object(svc, "get_session",
+                               return_value={"rfb_port": self.rfb.port, "server_id": 5}):
+            await c.after_auth(user=mock.Mock(), message={})
+        await c.on_message(bytes_data=b"EARLY")
+        await asyncio.sleep(0.05)
+        self.assertIn(b"EARLY", bytes(self.rfb.received))
+        with mock.patch.object(svc, "stop_remote_browser"):
+            await c.disconnect(1000)

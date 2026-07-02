@@ -21,26 +21,12 @@ class SiteSettings(models.Model):
         help_text="Maximum number of concurrent proxy-browser sessions (0 = unlimited).",
     )
 
-    remote_browser_cdp_url = models.CharField(
-        max_length=255,
-        default="http://chromium:9222",
-        verbose_name="Remote Browser CDP URL",
-        help_text="Chrome DevTools Protocol endpoint of the shared headless Chromium "
-                  "(internal to telepy-network; never published to the host).",
-    )
-
-    remote_browser_screencast_quality = models.IntegerField(
-        default=60,
-        verbose_name="Remote Browser Screencast JPEG Quality",
-        help_text="JPEG quality (1–100) for CDP Page.startScreencast frames. "
-                  "Lower = less bandwidth, softer image.",
-    )
-
-    remote_browser_screencast_every_nth_frame = models.IntegerField(
-        default=1,
-        verbose_name="Remote Browser Screencast Every Nth Frame",
-        help_text="Send only every Nth frame (1 = every frame). Raise to cut "
-                  "bandwidth/CPU on high-motion pages.",
+    remote_browser_geometry = models.CharField(
+        max_length=32,
+        default="1280x720",
+        verbose_name="Remote Browser Screen Geometry",
+        help_text="Xvnc display geometry (e.g. 1280x720) for each KasmVNC "
+                  "proxy-browser session.",
     )
 
     @classmethod

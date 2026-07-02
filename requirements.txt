@@ -39,10 +39,6 @@ channels_redis>=4.3.0
 # daphne is only used by dev `runserver` (ASGI/WebSocket). Prod uses gunicorn+uvicorn below.
 daphne>=4.1.0
 
-# async CDP client:遠端瀏覽器 consumer 以此連 headless Chromium 的 DevTools WebSocket。
-# async CDP client: the remote-browser consumer talks to Chromium's DevTools over WebSocket.
-websockets>=12.0
-
 # Prod ASGI：gunicorn 管理多個 uvicorn worker（多 process = 真正併發 HTTP/WS）。
 # uvicorn_worker 是新的獨立套件（取代已棄用的 uvicorn.workers）。
 # Prod ASGI: gunicorn managing multiple uvicorn workers (multi-process = real HTTP/WS concurrency).
