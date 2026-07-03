@@ -1,7 +1,7 @@
 import unittest
-from tunnel_script_renderer import ssh_tunnel_script_factory
-from tunnel_script_renderer import PowerShellTemplate
-from tunnel_script_renderer import AutoSshTemplate
+from tunnels.tunnel_script_renderer import ssh_tunnel_script_factory
+from tunnels.tunnel_script_renderer import PowerShellTemplate
+from tunnels.tunnel_script_renderer import AutoSshTemplate
 
 class TestPowerShellTemplate(unittest.TestCase):
     def setUp(self):

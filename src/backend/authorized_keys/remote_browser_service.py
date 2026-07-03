@@ -1,277 +1,304 @@
 import os
+import sys
 import time
+import json
 import socket
 import logging
 import subprocess
-import requests
 import uuid
 import threading
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+import redis
 
 from site_settings.models import SiteSettings
+from services.kasm_client import KasmClient, KasmError
 
 logger = logging.getLogger(__name__)
 
-# Keep track of active remote browser sessions
-# session_id -> { "ssh_process": Popen, "proxy_port": int, "target_target": str, "selenium_session_id": str }
+# ---------------------------------------------------------------------------
+# 兩層 session 記錄(與 CDP 版同一套骨架,只是瀏覽器端從 CDP context 換成 KasmVNC session):
+#   - ACTIVE_SESSIONS(本行程記憶體):存 ssh 的 Popen handle —— subprocess 無法序列化,
+#     只有啟動它的那個 gunicorn worker 能 terminate 它;GC 也在各 worker 掃自己這份。
+#   - _store(Redis):存「跨 worker 要查的欄位」(server_id / ws_port / kasm_session_id /
+#     proxy_port / last_seen)。prod 是 gunicorn 多 worker,`/start`(REST)與 VNC 橋接 WS
+#     consumer 常落在不同 worker;consumer 必須能用 session_id 反查 ws_port 並重驗權限。
+# ---------------------------------------------------------------------------
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_SESSIONS_LOCK = threading.Lock()
 
-def get_free_port():
+SSH_HOST = "reverse"                 # 既有 reverse gateway,保持不變 / unchanged
+INSTANCE = os.getenv("PROJECT_NAME", "main")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+_KEY_PREFIX = f"rb:{INSTANCE}:session:"
+
+_kasm = KasmClient()
+
+
+def _default_ttl() -> int:
+    try:
+        idle = SiteSettings.get_solo().remote_browser_session_idle_timeout
+    except Exception:
+        idle = 60
+    return int(idle) + 30
+
+
+class RedisSessionStore:
+    """
+    Session 查詢資料的共享儲存(Redis)。每筆 session 一個帶 TTL 的 key,外加一個 SET
+    記錄所有 live session_id 供列舉。ping 續 TTL;key 過期(WS 斷線後不再 ping)= 該回收。
+    """
+    def __init__(self, url: Optional[str] = None):
+        self._r = redis.Redis.from_url(url or REDIS_URL, decode_responses=True)
+        self._set_key = f"rb:{INSTANCE}:sessions"
+
+    def _k(self, session_id: str) -> str:
+        return f"{_KEY_PREFIX}{session_id}"
+
+    def put(self, session_id: str, payload: dict, ttl: Optional[int] = None) -> None:
+        ttl = ttl or _default_ttl()
+        pipe = self._r.pipeline()
+        pipe.set(self._k(session_id), json.dumps(payload), ex=ttl)
+        pipe.sadd(self._set_key, session_id)
+        pipe.execute()
+
+    def get(self, session_id: str) -> Optional[dict]:
+        raw = self._r.get(self._k(session_id))
+        return json.loads(raw) if raw else None
+
+    def refresh(self, session_id: str, ttl: Optional[int] = None) -> bool:
+        return bool(self._r.expire(self._k(session_id), ttl or _default_ttl()))
+
+    def delete(self, session_id: str) -> None:
+        pipe = self._r.pipeline()
+        pipe.delete(self._k(session_id))
+        pipe.srem(self._set_key, session_id)
+        pipe.execute()
+
+    def live_session_ids(self) -> set:
+        ids = self._r.smembers(self._set_key) or set()
+        alive = set()
+        for sid in ids:
+            if self._r.exists(self._k(sid)):
+                alive.add(sid)
+            else:
+                self._r.srem(self._set_key, sid)
+        return alive
+
+
+_store = RedisSessionStore()
+
+
+def get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
-        PORT = s.getsockname()[1]
-    return PORT
+        return s.getsockname()[1]
 
-def start_remote_browser(target_username: str, target_reverse_port: int, server_id: int):
+
+def _wait_for_port(host: str, port: int, timeout: float = 30.0, proc=None) -> bool:
     """
-    Start a remote browser session.
-    1. Start a local ssh -D to the target.
-    2. Start a selenium session using the local proxy.
-    Returns: { "session_id": ..., "vnc_url": ... }
+    等 SOCKS proxy listen。`reverse` 是兩跳連線(backend → telepy-ssh 的 ProxyCommand →
+    裝置反向隧道),兩跳都用 ControlMaster/ControlPersist,冷啟較久,故預設放寬到 30s;
+    傳入 proc 時 ssh 一死即刻失敗,不空等。
     """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            try:
+                s.connect((host, port))
+                return True
+            except OSError:
+                time.sleep(0.2)
+    return False
+
+
+def _count_active() -> int:
+    try:
+        return len(_store.live_session_ids())
+    except Exception:
+        with _SESSIONS_LOCK:
+            return len(ACTIVE_SESSIONS)
+
+
+def start_remote_browser(target_username, target_reverse_port, server_id):
+    """
+    啟動一個 remote browser session:
+      1. 起 ssh -D SOCKS proxy 連到目標(行為與 Neko/CDP 版完全一致)。
+      2. 呼叫 kasm-browser 的 session-manager 起「Xvnc 顯示 + 綁定該 SOCKS 的 chromium」。
+    回傳 { "session_id", "ws_path" }。畫面與輸入之後走既有 /ws 的 VNC 橋接。
+    """
+    settings = SiteSettings.get_solo()
+    max_sessions = getattr(settings, "remote_browser_max_sessions", 10)
+    if max_sessions and _count_active() >= max_sessions:
+        raise Exception(
+            "The Proxy Browser has reached its maximum concurrent user limit. "
+            "Please wait for someone to disconnect and try again."
+        )
+
     proxy_port = get_free_port()
-    # Execute SSH -D. We are inside the backend container. It needs to hit the ssh reverse tunnel gateway.
-    # The gateway is `reverse` container, but we use the ssh domain or `telepy-ssh` in the compose network.
-    
-    ssh_host = "reverse"
-    ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{ssh_host}"
-    
+    ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{SSH_HOST}"
     logger.info(f"Starting SSH proxy for target {server_id} on port {proxy_port}")
     ssh_process = subprocess.Popen(ssh_cmd, shell=True)
-    
-    # Wait for proxy to listen
-    time.sleep(2)
-    if ssh_process.poll() is not None:
-        raise Exception(f"Failed to start SSH proxy for target {server_id}. Command exited.")
 
-    # Now request Selenium session
-    # Standalone is at http://selenium-standalone:4444/wd/hub
-    backend_hostname = os.getenv("HOSTNAME", "backend") # the backend container's hostname
-
-    capabilities = {
-        "capabilities": {
-            "alwaysMatch": {
-                "browserName": "chrome",
-                "goog:chromeOptions": {
-                    "excludeSwitches": ["enable-automation", "enable-logging"],
-                    "useAutomationExtension": False,
-                    "args": [
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--start-maximized",
-                        f"--proxy-server=socks5://{backend_hostname}:{proxy_port}",
-                        "--proxy-bypass-list=<-loopback>",
-                        # Anti-bot-detection
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-infobars",
-                        "--lang=en-US,en",
-                    ],
-                    "prefs": {
-                        "credentials_enable_service": False,
-                        "profile.password_manager_enabled": False,
-                        "profile.default_content_setting_values.notifications": 2,
-                        "default_search_provider_data.template_url_data": {
-                            "keyword": "google.com",
-                            "short_name": "Google",
-                            "url": "https://www.google.com/search?q={searchTerms}"
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    selenium_url = "http://selenium-standalone:4444/wd/hub/session"
-    try:
-        res = requests.post(selenium_url, json=capabilities, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        selenium_session_id = data.get("value", {}).get("sessionId")
-        if selenium_session_id:
-            session_base = f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}"
-            # Comprehensive anti-bot stealth via CDP injection
-            stealth_js = """
-                // 1. Remove navigator.webdriver
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-                // 2. Fake plugins array (normal Chrome has 5 default plugins)
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => {
-                        const plugins = [
-                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
-                        ];
-                        plugins.length = 3;
-                        return plugins;
-                    }
-                });
-
-                // 3. Fake languages
-                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-
-                // 4. Fix chrome.runtime (Selenium leaves it empty)
-                window.chrome = window.chrome || {};
-                window.chrome.runtime = window.chrome.runtime || {
-                    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
-                    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
-                    PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64', MIPS: 'mips', MIPS64: 'mips64' },
-                    RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
-                    OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
-                    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' },
-                    connect: function() { return { onDisconnect: { addListener: function() {} } }; },
-                    sendMessage: function() {}
-                };
-
-                // 5. Fix permissions query (Selenium exposes 'denied' for notifications)
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications'
-                        ? Promise.resolve({ state: Notification.permission })
-                        : originalQuery(parameters)
-                );
-
-                // 6. Realistic WebGL vendor & renderer
-                const getParameter = WebGLRenderingContext.prototype.getParameter;
-                WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Google Inc. (Intel)';
-                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
-                    return getParameter.call(this, parameter);
-                };
-                const getParameter2 = WebGL2RenderingContext.prototype.getParameter;
-                WebGL2RenderingContext.prototype.getParameter = function(parameter) {
-                    if (parameter === 37445) return 'Google Inc. (Intel)';
-                    if (parameter === 37446) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
-                    return getParameter2.call(this, parameter);
-                };
-
-                // 7. Spoof hardwareConcurrency & deviceMemory
-                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-                // 8. Prevent iframe contentWindow detection
-                const originalAttachShadow = Element.prototype.attachShadow;
-                Element.prototype.attachShadow = function() {
-                    return originalAttachShadow.apply(this, [{ mode: 'open' }]);
-                };
-            """
-            try:
-                requests.post(
-                    f"{session_base}/chromium/send_command_and_get_result",
-                    json={
-                        "cmd": "Page.addScriptToEvaluateOnNewDocument",
-                        "params": { "source": stealth_js }
-                    },
-                    timeout=5
-                )
-            except Exception:
-                logger.debug(f"CDP injection skipped for session {selenium_session_id}")
-            # Navigate to Google as initial page
-            try:
-                requests.post(
-                    f"{session_base}/url",
-                    json={"url": "https://www.google.com/"},
-                    timeout=10
-                )
-            except Exception:
-                logger.warning(f"Failed to navigate to Google for session {selenium_session_id}")
-    except requests.exceptions.HTTPError as e:
-        ssh_process.terminate()
-        error_msg = str(e)
-        if res is not None:
-            try:
-                error_data = res.json()
-                # Selenium usually returns a 'value' object with a 'message'
-                if isinstance(error_data, dict) and "value" in error_data and "message" in error_data["value"]:
-                    err_message = error_data["value"]["message"]
-                    if "Could not start a new session" in err_message or "No available nodes" in err_message:
-                        raise Exception("The Proxy Browser has reached its maximum concurrent user limit. Please wait for someone to disconnect and try again.")
-            except Exception:
-                pass
-        raise Exception(f"Failed to start Selenium session: {error_msg}")
-    except Exception as e:
-        ssh_process.terminate()
-        raise Exception(f"Failed to start Selenium session: {str(e)}")
-        
-    session_id = str(uuid.uuid4())
-    ACTIVE_SESSIONS[session_id] = {
-        "ssh_process": ssh_process,
-        "proxy_port": proxy_port,
-        "server_id": server_id,
-        "selenium_session_id": selenium_session_id,
-        "last_seen": time.time()
-    }
-    
-    # VNC URL via Traefik
-    vnc_url = f"/novnc/?autoconnect=true&resize=scale"
-    
-    return {
-        "session_id": session_id,
-        "vnc_url": vnc_url,
-        "selenium_session_id": selenium_session_id
-    }
-
-def ping_remote_browser(session_id: str):
-    session = ACTIVE_SESSIONS.get(session_id)
-    if not session:
-        return False
-
-    session["last_seen"] = time.time()
-
-    # 發送 no-op WebDriver 指令，重置 Selenium 的 SE_NODE_SESSION_TIMEOUT idle timer。
-    # VNC 的手動操作不算 WebDriver 指令，不發這個的話 300s 後 Selenium 會關掉 Chrome。
-    selenium_session_id = session.get("selenium_session_id")
-    if selenium_session_id:
+    ssh_timeout = getattr(settings, "remote_browser_ssh_timeout", 30)
+    if not _wait_for_port("127.0.0.1", proxy_port, timeout=ssh_timeout, proc=ssh_process):
         try:
-            requests.get(
-                f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}",
-                timeout=3
-            )
+            ssh_process.terminate()
         except Exception:
-            logger.debug(f"Keep-alive ping to Selenium failed for session {session_id}")
+            pass
+        raise Exception(
+            f"Failed to start SSH proxy for target {server_id} "
+            f"(no SOCKS listener within {ssh_timeout}s — is the device online?)."
+        )
 
-    return True
+    session_id = str(uuid.uuid4())
+    with _SESSIONS_LOCK:
+        ACTIVE_SESSIONS[session_id] = {
+            "ssh_process": ssh_process,
+            "proxy_port": proxy_port,
+            "server_id": server_id,
+            "ws_port": None,
+            "kasm_session_id": None,
+            "last_seen": time.time(),
+        }
 
-def stop_remote_browser(session_id: str):
-    session = ACTIVE_SESSIONS.get(session_id)
-    if not session:
-        return False
-        
-    ssh_process = session["ssh_process"]
-    selenium_session_id = session["selenium_session_id"]
-    
-    # Stop selenium session
+    proxy_host = os.getenv("HOSTNAME", "backend")   # kasm-browser 經 telepy-network 連回本後端
+    geometry = getattr(settings, "remote_browser_geometry", "1280x720") or "1280x720"
     try:
-        requests.delete(f"http://selenium-standalone:4444/wd/hub/session/{selenium_session_id}", timeout=5)
-    except Exception as e:
-        logger.warning(f"Failed to delete selenium session {selenium_session_id}: {e}")
-        
-    # Stop ssh proxy
-    try:
-        ssh_process.terminate()
-        ssh_process.wait(timeout=5)
-    except Exception as e:
-        logger.warning(f"Failed to terminate SSH process: {e}")
-        ssh_process.kill()
-        
-    del ACTIVE_SESSIONS[session_id]
-    return True
+        # 設定檔每 session 臨時、停止即刪(不保留歷史;同目標並發 session 也不會踩 SingletonLock)。
+        ids = _kasm.create_session(f"socks5://{proxy_host}:{proxy_port}",
+                                   geometry=geometry)
+    except KasmError as e:
+        stop_remote_browser(session_id)             # 收 ssh + 清登記
+        raise Exception(f"Failed to create VNC browser session: {e}")
 
-# Simple cleanup thread to check if SSH processes died or frontend stopped pinging
+    with _SESSIONS_LOCK:
+        if session_id in ACTIVE_SESSIONS:
+            ACTIVE_SESSIONS[session_id]["ws_port"] = ids["ws_port"]
+            ACTIVE_SESSIONS[session_id]["kasm_session_id"] = ids["session_id"]
+    _store.put(session_id, {
+        "server_id": server_id,
+        "ws_port": ids["ws_port"],
+        "kasm_session_id": ids["session_id"],
+        "proxy_port": proxy_port,
+        "last_seen": time.time(),
+    })
+    logger.info(f"Remote browser session {session_id} ready (ws {ids['ws_port']})")
+    return {"session_id": session_id, "ws_path": f"/ws/remote-browser/{session_id}/"}
+
+
+def get_session(session_id):
+    """跨 worker 查詢:先讀共享 store(權威),回不到再退回本行程 dict。回 dict 或 None。"""
+    data = None
+    try:
+        data = _store.get(session_id)
+    except Exception:
+        logger.warning("session store lookup failed for %s", session_id, exc_info=True)
+    if data:
+        return data
+    with _SESSIONS_LOCK:
+        sess = ACTIVE_SESSIONS.get(session_id)
+        if not sess:
+            return None
+        return {
+            "server_id": sess.get("server_id"),
+            "ws_port": sess.get("ws_port"),
+            "kasm_session_id": sess.get("kasm_session_id"),
+            "proxy_port": sess.get("proxy_port"),
+        }
+
+
+def ping_remote_browser(session_id):
+    """心跳:續 Redis TTL 並更新本行程 last_seen。任一存在即算數。"""
+    refreshed = False
+    try:
+        refreshed = _store.refresh(session_id)
+    except Exception:
+        logger.warning("session store refresh failed for %s", session_id, exc_info=True)
+    with _SESSIONS_LOCK:
+        sess = ACTIVE_SESSIONS.get(session_id)
+        if sess:
+            sess["last_seen"] = time.time()
+            return True
+    return bool(refreshed)
+
+
+def stop_remote_browser(session_id):
+    """
+    結束 session。任一 worker 都能收 kasm session(經 session-manager API)與 store 記錄;
+    ssh 的 Popen 只有 owner worker 持有 —— 非 owner 呼叫時 ssh 交給 owner 的 GC 回收。
+    """
+    with _SESSIONS_LOCK:
+        session = ACTIVE_SESSIONS.pop(session_id, None)
+
+    kasm_session_id = session.get("kasm_session_id") if session else None
+    if not kasm_session_id:
+        try:
+            stored = _store.get(session_id)
+        except Exception:
+            stored = None
+        if stored:
+            kasm_session_id = stored.get("kasm_session_id")
+
+    existed = bool(session) or bool(kasm_session_id)
+
+    try:
+        _store.delete(session_id)
+    except Exception:
+        logger.warning("session store delete failed for %s", session_id, exc_info=True)
+
+    if kasm_session_id:
+        try:
+            _kasm.stop_session(kasm_session_id)
+        except Exception:
+            logger.warning("kasm stop_session %s errored", kasm_session_id, exc_info=True)
+
+    if session:
+        proc = session.get("ssh_process")
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    return existed
+
+
 def cleanup_dead_sessions():
     while True:
         try:
             idle_timeout = SiteSettings.get_solo().remote_browser_session_idle_timeout
-            dead_sessions = []
             now = time.time()
-            for sid, sess in list(ACTIVE_SESSIONS.items()):
-                # Clean up if SSH process died naturally OR if it hasn't been pinged within idle_timeout seconds
-                if sess["ssh_process"].poll() is not None or (now - sess.get("last_seen", now)) > idle_timeout:
-                    dead_sessions.append(sid)
-            for sid in dead_sessions:
+            dead = []
+            with _SESSIONS_LOCK:
+                for sid, sess in list(ACTIVE_SESSIONS.items()):
+                    proc = sess.get("ssh_process")
+                    proc_dead = proc and proc.poll() is not None
+                    idle = (now - sess.get("last_seen", now)) > idle_timeout
+                    if proc_dead or idle:
+                        dead.append(sid)
+            # store key 已消失(在別的 worker 被 stop,或 TTL 過期)也要回收本行程的 ssh。
+            try:
+                live_ids = _store.live_session_ids()
+                with _SESSIONS_LOCK:
+                    for sid in list(ACTIVE_SESSIONS.keys()):
+                        if sid not in live_ids and sid not in dead:
+                            dead.append(sid)
+            except Exception:
+                pass
+            for sid in dead:
                 stop_remote_browser(sid)
         except Exception:
             pass
         time.sleep(10)
 
-threading.Thread(target=cleanup_dead_sessions, daemon=True).start()
+
+# 測試環境不啟背景 GC(會打真實 Redis/session-manager)。
+if "test" not in sys.argv and os.getenv("REMOTE_BROWSER_GC", "1") != "0":
+    threading.Thread(target=cleanup_dead_sessions, daemon=True).start()

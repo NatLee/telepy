@@ -39,6 +39,11 @@ channels_redis>=4.3.0
 # daphne is only used by dev `runserver` (ASGI/WebSocket). Prod uses gunicorn+uvicorn below.
 daphne>=4.1.0
 
+# RemoteBrowserConsumer 以 async WebSocket client 連上游 KasmVNC 的 ws 並做 WS↔WS 中繼。
+# (KasmVNC 只開 websocket、不開 raw-RFB;此相依先前用過後移除,KasmVNC 版重新加回。)
+# async WS client for the KasmVNC upstream relay (KasmVNC is websocket-only).
+websockets>=12.0
+
 # Prod ASGI：gunicorn 管理多個 uvicorn worker（多 process = 真正併發 HTTP/WS）。
 # uvicorn_worker 是新的獨立套件（取代已棄用的 uvicorn.workers）。
 # Prod ASGI: gunicorn managing multiple uvicorn workers (multi-process = real HTTP/WS concurrency).

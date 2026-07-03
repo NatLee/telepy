@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Base
-from tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
-from tunnel_script_renderer import SshClientTemplate, SshServerTemplate
+from tunnels.tunnel_script_renderer import sshd_client_config_factory, sshd_server_config_factory
+from tunnels.tunnel_script_renderer import SshClientTemplate, SshServerTemplate
 
 
 class TestSshClientTemplate(unittest.TestCase):

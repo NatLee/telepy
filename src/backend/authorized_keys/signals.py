@@ -1,3 +1,4 @@
+import os
 from django.db.models.signals import post_save, post_delete, post_migrate
 from django.dispatch import receiver
 from authorized_keys.models import ReverseServerAuthorizedKeys
@@ -50,8 +51,17 @@ def insert_initial_public_key(sender, **kwargs):
         return
 
     service_name = "web-service"
-    with open('/root/.ssh/id_rsa.pub', 'r') as f:
-        public_key = f.read().strip()
+    # 容器內 /root/.ssh/id_rsa.pub 一定存在;但容器外(CI、本機直跑 migrate/test)可能沒有,
+    # 此時不該讓整個 post_migrate 崩掉 —— 記錄後略過即可(seed 於容器啟動時會再跑一次)。
+    # The key exists inside the container; outside it (CI, local migrate/test) it may not —
+    # don't crash post_migrate, just log and skip (the seed re-runs on container startup).
+    key_path = os.getenv("WEB_SERVICE_SSH_PUBKEY", "/root/.ssh/id_rsa.pub")
+    try:
+        with open(key_path, 'r') as f:
+            public_key = f.read().strip()
+    except OSError as e:
+        print(f"[authorized_keys] skip service-key seed: cannot read {key_path} ({e})")
+        return
 
     obj, created = ServiceAuthorizedKeys.objects.update_or_create(
         service=service_name,

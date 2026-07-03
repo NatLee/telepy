@@ -15,6 +15,20 @@ class SiteSettings(models.Model):
         help_text="If no ping is received within this duration, the remote browser session will be terminated."
     )
 
+    remote_browser_max_sessions = models.IntegerField(
+        default=10,
+        verbose_name="Remote Browser Max Concurrent Sessions",
+        help_text="Maximum number of concurrent proxy-browser sessions (0 = unlimited).",
+    )
+
+    remote_browser_geometry = models.CharField(
+        max_length=32,
+        default="1280x720",
+        verbose_name="Remote Browser Screen Geometry",
+        help_text="Xvnc display geometry (e.g. 1280x720) for each KasmVNC "
+                  "proxy-browser session.",
+    )
+
     @classmethod
     def get_solo(cls):
         # `get_or_create` will create a new object if it doesn't exist

@@ -1,0 +1,26 @@
+# Telepy remote-browser 的 KasmVNC 全域設定 → 安裝到 /etc/kasmvnc/kasmvnc.yaml。
+# 只覆寫「內網 WS 中繼」需要的關鍵項;其餘沿用 KasmVNC 預設(見官方 configuration 文件)。
+#
+# 對應關係:
+#   - network.ssl.require_ssl:false  ←→ consumer 的 KASM_WS_SCHEME=ws(純 ws,不驗證憑證)
+#   - network.websocket_port:auto    ←→ session_manager 的 ws_port = WS_BASE(8443) + display
+#   - basic auth 由 Xkasmvnc 的 -disableBasicAuth 旗標關(見 session_manager DEFAULT_VNC_CMD)
+
+network:
+  protocol: http          # 內建 web server(browser-native client);不是 vnc(那是 legacy raw-RFB)。
+  interface: 0.0.0.0      # 聽所有介面,讓 backend 經 telepy-network 連得到。
+  websocket_port: auto    # auto = 8443 + display number;與 session_manager 的 ws_port 對齊。
+  ssl:
+    require_ssl: false    # 內網走純 ws(不要 wss)。這是唯一可靠關 TLS 的地方(無對應 CLI 旗標)。
+
+# 剪貼簿(直接服務你的「剪貼簿 + 中文輸入」需求):KasmVNC 對 Chromium 有 seamless / binary 剪貼簿,
+# 中文/圖片/格式化文字都能傳。預設 allow_client_to_override=true → 由前端 client 控制啟用;此處顯式放行。
+data_loss_prevention:
+  clipboard:
+    server_to_client:
+      enabled: true
+    client_to_server:
+      enabled: true
+
+desktop:
+  allow_resize: true      # 遠端桌面隨前端視窗尺寸調整(前端 client 連上時自動 resize)。

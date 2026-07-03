@@ -2,18 +2,18 @@
 
 ## Project Overview
 
-Telepy is a full-stack web application for managing reverse SSH tunnels. It provides a web UI for creating/managing tunnels, a WebSocket-based terminal console, SFTP file management, remote browser sessions (Selenium), and tunnel sharing with permission controls.
+Telepy is a full-stack web application for managing reverse SSH tunnels. It provides a web UI for creating/managing tunnels, a WebSocket-based terminal console, SFTP file management, remote browser sessions (KasmVNC, see `docs/remote-browser.md`), and tunnel sharing with permission controls.
 
 ## Tech Stack
 
-- **Backend:** Python 3.11 / Django 5.0.6 / Django REST Framework / Daphne (ASGI) / Channels (WebSocket)
+- **Backend:** Python 3.12 / Django 6.0 / Django REST Framework / gunicorn+uvicorn (prod ASGI; dev uses runserver via daphne) / Channels (WebSocket)
 - **Frontend:** Next.js 16 (App Router) / TypeScript / Tailwind CSS 4 / Radix UI / xterm.js
 - **Database:** SQLite3 (`/data/db.sqlite3`)
 - **Cache/Channels:** Redis
 - **Auth:** Google OAuth2 + JWT (simplejwt) + Session auth
 - **Infra:** Docker Compose / Traefik v3 (reverse proxy) / Supervisor (process manager)
 - **SSH:** linuxserver/openssh-server
-- **Browser:** Selenium standalone-chromium
+- **Browser:** KasmVNC + Chromium in the `kasm-browser` container (per-session Xkasmvnc, WS↔WS relay through Django; the frontend uses the vendored KasmVNC noVNC fork in `src/frontend/src/vendor/kasm-novnc/`)
 
 ## Project Structure
 
@@ -107,7 +107,7 @@ Copy `.env.example` to `.env` and configure:
 
 ## Architecture Notes
 
-- **Services:** 6 containers orchestrated via Docker Compose: Traefik, frontend, backend, Redis, SSH, Selenium
+- **Services:** 6 containers orchestrated via Docker Compose: Traefik, frontend, backend, Redis, SSH, kasm-browser (remote browser)
 - **Routing:** Traefik routes `/api/*` and `/ws/*` to backend, everything else to frontend
 - **WebSocket:** Terminal PTY via `channels` AsyncWebsocketConsumer, auth via JWT subprotocol
 - **Permissions:** Hierarchical tunnel access — VIEW / EDIT / ADMIN — managed by `TunnelPermissionService`

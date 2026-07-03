@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored third-party code (KasmVNC noVNC fork) — not ours to lint.
+    "src/vendor/**",
   ]),
 ]);
 

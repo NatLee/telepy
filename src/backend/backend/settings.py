@@ -274,7 +274,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # loguru, written to console + telepy.log (all levels) + error.log (WARNING+).
 import common.log  # loguru 僅在 common.log 內使用 / loguru is used only inside common.log
 
-LOG_ROOT = Path("/logs")
+# 容器內為掛載的 /logs;容器外(本機直跑測試等)比照 DATA_DIR 的慣例退回 repo 相對路徑。
+# /logs inside the container (mounted volume); outside (e.g. running tests directly)
+# fall back to a repo-relative dir, same idiom as DATA_DIR above.
+LOG_ROOT = Path("/logs") if Path("/logs").exists() else (ROOT_DIR / "logs")
 LOG_ROOT.mkdir(parents=True, exist_ok=True)
 
 # DEBUG 模式輸出 DEBUG，否則 INFO；可用 LOG_LEVEL 覆寫。
