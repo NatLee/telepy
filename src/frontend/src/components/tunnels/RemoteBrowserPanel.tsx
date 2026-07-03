@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { MonitorPlay, MonitorX, AlertCircle, Loader2 } from "lucide-react";
+import { MonitorPlay, MonitorX, AlertCircle, Loader2, Languages } from "lucide-react";
 import { readJson, responseError } from "@/lib/api";
 import { getWsOrigin } from "@/lib/wsCommon";
-import RFB from "@novnc/novnc/lib/rfb";
+import KasmUI from "@/vendor/kasm-novnc/app/ui.js";
 
 export interface RemoteBrowserPanelProps {
     serverId: string;
@@ -19,13 +19,44 @@ const CLOSE_MESSAGES: Record<number, string> = {
     4013: "VNC connection closed",
 };
 
+/** 我們用到的 KasmVNC RFB 介面(vendored fork 是 untyped JS,見 vendor/kasm-novnc/README.md)。 */
+type KasmRFB = {
+    scaleViewport: boolean;
+    resizeSession: boolean;
+    background: string;
+    clipboardUp: boolean;
+    clipboardDown: boolean;
+    clipboardSeamless: boolean;
+    enableWebP: boolean;
+    enableWebRTC: boolean;
+    translateShortcuts: boolean;
+    readonly keyboard: { enableIME: boolean };
+    focus(): void;
+    disconnect(): void;
+    addEventListener(type: string, listener: (e: Event) => void): void;
+};
+type KasmRFBConstructor = new (
+    target: HTMLElement,
+    touchInput: HTMLTextAreaElement,   // 比 stock noVNC 多的參數:IME/行動鍵盤輸入用的隱形 textarea
+    urlOrChannel: string | WebSocket,
+    options?: { shared?: boolean },
+) => KasmRFB;
+
+// 動態載入 vendored client:它的 util/browser.js 在 import 當下就碰 document/window,
+// 靜態 import 會炸 SSR prerender;順便把 ~700KB 的 client 從頁面 bundle 拆出去。
+let rfbModulePromise: Promise<{ default: unknown }> | null = null;
+const loadRFB = () => {
+    if (!rfbModulePromise) rfbModulePromise = import("@/vendor/kasm-novnc/core/rfb.js");
+    return rfbModulePromise;
+};
+
 /**
  * Remote Browser (KasmVNC over the existing /ws).
  *
  * 握手:開 WS → 先送 {type:"auth",token}(沿用 FirstMessageAuthConsumer 慣例)→ 後端連上
- * RFB、回 {type:"ready"} → 前端把「同一條已認證的 WS」交給 noVNC 的 RFB(它同步接管 onmessage
- * 並呼叫 _socketOpen)→ 前端回 {type:"begin"},後端才開始把 RFB 位元組 pump 過來。之後畫面/輸入
- * 全由 noVNC ↔ KasmVNC 端到端處理(真桌面:瀏覽器自身分頁/網址列/中文輸入/剪貼簿全部免費)。
+ * KasmVNC 的 websocket、回 {type:"ready"} → 前端把「同一條已認證的 WS」交給 **KasmVNC 自家
+ * noVNC fork** 的 RFB(stock noVNC 連 KasmVNC 是黑畫面,協定已分岔)→ 前端回 {type:"begin"},
+ * 後端才開始 pump。之後畫面/輸入/剪貼簿/IME 全由 KasmVNC client ↔ server 端到端處理。
  */
 export function RemoteBrowserPanel({
     serverId,
@@ -35,10 +66,12 @@ export function RemoteBrowserPanel({
 }: RemoteBrowserPanelProps) {
     const [phase, setPhase] = useState<"idle" | "connecting" | "connected">("idle");
     const [error, setError] = useState<string | null>(null);
+    const [imeEnabled, setImeEnabled] = useState(false);
 
     const screenRef = useRef<HTMLDivElement | null>(null);
+    const keyboardInputRef = useRef<HTMLTextAreaElement | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
-    const rfbRef = useRef<RFB | null>(null);
+    const rfbRef = useRef<KasmRFB | null>(null);
     const sessionIdRef = useRef<string | null>(null);
     const cleaningRef = useRef(false);
     const connectedRef = useRef(false);
@@ -53,7 +86,7 @@ export function RemoteBrowserPanel({
         }).catch(() => { });
     }, [accessToken]);
 
-    // 統一收尾:冪等。noVNC 的 disconnect 事件、ws close、使用者 Stop 都走這裡。
+    // 統一收尾:冪等。RFB 的 disconnect 事件、ws close、使用者 Stop 都走這裡。
     const cleanup = useCallback((notifyBackend: boolean) => {
         if (cleaningRef.current) return;
         cleaningRef.current = true;
@@ -61,6 +94,7 @@ export function RemoteBrowserPanel({
         connectedRef.current = false;
         try { rfbRef.current?.disconnect(); } catch { /* noop */ }
         rfbRef.current = null;
+        KasmUI.rfb = null;
         try { wsRef.current?.close(); } catch { /* noop */ }
         wsRef.current = null;
         if (notifyBackend && sid) postStop(sid);
@@ -70,13 +104,32 @@ export function RemoteBrowserPanel({
         cleaningRef.current = false;
     }, [postStop, onActiveChange]);
 
-    const attachNoVnc = useCallback((ws: WebSocket) => {
+    const attachKasmClient = useCallback(async (ws: WebSocket) => {
         const screen = screenRef.current;
-        if (!screen) return;
-        const rfb = new RFB(screen, ws, { shared: true });   // 已開啟+已認證的 WS
-        rfb.scaleViewport = true;     // 遠端畫面等比縮放填入面板
-        rfb.resizeSession = true;     // KasmVNC 支援時,請伺服器把桌面調成面板大小
+        const keyboardInput = keyboardInputRef.current;
+        if (!screen || !keyboardInput) return;
+        let RFB: KasmRFBConstructor;
+        try {
+            RFB = (await loadRFB()).default as KasmRFBConstructor;
+        } catch {
+            setError("Failed to load the VNC client bundle");
+            cleanup(true);
+            return;
+        }
+        // chunk 載入是 async:期間 WS 可能已關、或使用者已 Stop/重啟
+        if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const rfb = new RFB(screen, keyboardInput, ws, { shared: true });   // 已開啟+已認證的 WS
+        rfb.scaleViewport = true;       // 遠端畫面等比縮放填入面板
+        rfb.resizeSession = true;       // KasmVNC 會把遠端桌面調成面板大小
         rfb.background = "#000";
+        rfb.enableWebRTC = false;       // UDP/WebRTC 過不了我們的 WS 中繼,關掉免得它反覆嘗試
+        rfb.enableWebP = true;          // 對齊 kasm 自家 standalone 預設
+        rfb.clipboardUp = true;         // 剪貼簿:本機 → 遠端
+        rfb.clipboardDown = true;       // 剪貼簿:遠端 → 本機
+        // seamless 剪貼簿走 navigator.clipboard;Safari 已知會壞(KASM-960),照上游 UI 排除
+        rfb.clipboardSeamless = !(/^((?!chrome|android).)*safari/i.test(navigator.userAgent));
+        rfb.translateShortcuts = true;  // macOS:Cmd+C/V 轉 Ctrl+C/V 給遠端
         rfb.addEventListener("connect", () => {
             connectedRef.current = true;
             setPhase("connected");
@@ -85,7 +138,14 @@ export function RemoteBrowserPanel({
         });
         rfb.addEventListener("disconnect", () => cleanup(true));
         rfbRef.current = rfb;
-        ws.send(JSON.stringify({ type: "begin" }));   // 通知後端開始 pump RFB
+        KasmUI.rfb = rfb;   // keyboard.js 經 app/ui.js shim 讀 translateShortcuts(見 vendor README)
+        // RFB 建構子把「attach 到 socket」排在下一個 tick(setTimeout 0)。把 begin 排進同一個
+        // timer 佇列(必在其後執行),確保後端開始 pump 時 onmessage 已被 RFB 接管,不漏訊息。
+        setTimeout(() => {
+            if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "begin" }));
+            }
+        }, 0);
     }, [cleanup, onActiveChange]);
 
     const startSession = useCallback(async () => {
@@ -94,6 +154,7 @@ export function RemoteBrowserPanel({
         cleaningRef.current = false;
         userStoppedRef.current = false;
         connectedRef.current = false;
+        loadRFB().catch(() => { });   // 預熱 client chunk,與 start API 並行
         try {
             const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
             const res = await fetch(
@@ -125,14 +186,14 @@ export function RemoteBrowserPanel({
                         ? localStorage.getItem("accessToken") : accessToken,
                 }));
             };
-            // setup 階段:等後端 {type:"ready"} 再把 socket 交給 noVNC。
+            // setup 階段:等後端 {type:"ready"} 再把 socket 交給 KasmVNC client。
             ws.onmessage = (ev) => {
                 if (typeof ev.data !== "string") return;
                 let msg: any;
                 try { msg = JSON.parse(ev.data); } catch { return; }
                 if (msg.type === "ready") {
-                    ws.onmessage = null;      // 交棒給 noVNC
-                    attachNoVnc(ws);
+                    ws.onmessage = null;      // 交棒給 KasmVNC client
+                    void attachKasmClient(ws);
                 }
             };
             ws.onerror = () => {
@@ -149,12 +210,26 @@ export function RemoteBrowserPanel({
             setError(err.message || "An unknown error occurred");
             cleanup(true);
         }
-    }, [serverId, username, accessToken, attachNoVnc, cleanup]);
+    }, [serverId, username, accessToken, attachKasmClient, cleanup]);
 
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
         cleanup(true);
     }, [cleanup]);
+
+    // IME(中文/日文輸入法)模式:composition 事件經隱形 textarea 差分送往遠端。
+    // 對齊 kasm 上游預設(off,經 UI 切換);開啟時把焦點交回 RFB(它會 focus 到 textarea)。
+    const toggleIme = useCallback(() => {
+        setImeEnabled((prev) => {
+            const next = !prev;
+            const rfb = rfbRef.current;
+            if (rfb) {
+                rfb.keyboard.enableIME = next;
+                try { rfb.focus(); } catch { /* noop */ }
+            }
+            return next;
+        });
+    }, []);
 
     // 心跳:讓後端 GC 能回收斷線的 session
     useEffect(() => {
@@ -192,6 +267,17 @@ export function RemoteBrowserPanel({
                 <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">
                     Proxy Browser (VNC)
                 </span>
+                {active && (
+                    <Button
+                        variant={imeEnabled ? "default" : "outline"}
+                        size="sm"
+                        onClick={toggleIme}
+                        className="h-8 gap-1"
+                        title="Toggle IME mode for CJK input (中文輸入)"
+                    >
+                        <Languages size={14} /> IME
+                    </Button>
+                )}
                 {busy ? (
                     <Button variant="destructive" size="sm" onClick={stopSession} className="h-8 gap-1">
                         <MonitorX size={14} /> Stop Session
@@ -224,11 +310,23 @@ export function RemoteBrowserPanel({
                 </div>
             )}
 
-            {/* VNC viewport area — mounted while connecting/connected so noVNC has a sized div.
+            {/* VNC viewport area — mounted while connecting/connected so the client has a sized div.
                 Loading spinner overlays it until the RFB 'connect' event fires. */}
             {busy && (
                 <div className="flex-1 min-h-0 relative bg-black">
-                    <div ref={screenRef} className="absolute inset-0" />
+                    <div ref={screenRef} className="absolute inset-0">
+                        {/* IME/行動鍵盤輸入用的隱形 textarea(對齊 kasm vnc.html 的 #noVNC_keyboardinput):
+                            要可聚焦(不能 display:none),擺在畫面中段讓 IME 候選窗出現在內容附近。 */}
+                        <textarea
+                            ref={keyboardInputRef}
+                            autoCapitalize="off"
+                            autoComplete="off"
+                            spellCheck={false}
+                            tabIndex={-1}
+                            className="absolute w-0 h-0 p-0 border-0 resize-none overflow-hidden bg-transparent text-transparent caret-transparent outline-none"
+                            style={{ left: "35%", top: "40%" }}
+                        />
+                    </div>
                     {!active && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-black/80">
                             <Loader2 size={48} className="mb-4 animate-spin text-primary" />

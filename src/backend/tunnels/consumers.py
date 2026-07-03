@@ -1317,9 +1317,10 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             kwargs["ssl"] = ctx
-        headers = self._auth_headers()
-        if not headers:
-            return await websockets.connect(url, **kwargs)
+        # KasmVNC 的 websocket 檢查要求帶 **Sec-WebSocket-Origin**(legacy header;缺了對
+        # /websockify 直接回 404「failed websocket checks」)。值不驗,帶上即可。
+        headers = {"Sec-WebSocket-Origin": f"http://{self.KASM_HOST}"}
+        headers.update(self._auth_headers() or {})
         # websockets 13+(新 asyncio client)用 additional_headers;<=12(legacy)用 extra_headers。
         try:
             return await websockets.connect(url, additional_headers=headers, **kwargs)

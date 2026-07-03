@@ -69,6 +69,10 @@ consumer 回 4011 → WS 關 → disconnect 收掉 session → Xkasmvnc 被殺 �
 ### 已釘死的事實(來自 Xvnc/vncpasswd man + 兩輪實測,別再重猜)
 - 埠是**純 ws**(`-sslOnly` 預設關)。不要用 wss。
 - 真正的 ws 端點是 **`/websockify`**;缺帳密時 KasmVNC 直接 RST(不回乾淨 401)。
+- **(2026-07-03 解掉的最後一雷)** KasmVNC 的 websocket 檢查要求 **`Sec-WebSocket-Origin`**
+  header(Hixie 時代 legacy header;Python `websockets` 等非瀏覽器 client 不會送)。缺了它
+  `/websockify` 回 **404**(log:`request failed websocket checks, missing Sec-WebSocket-Origin
+  header`),不是 401!帶上(值不驗)即回 101。consumer 的 `_ws_connect` 與 probe 都已加上。
 - 整台 KasmVNC web 層**要 HTTP Basic Auth**;`-disableBasicAuth` 在此 1.4.0 build **無效** → 改用「建
   使用者 + 帶 Authorization header」。
 - **最後一個雷(本次修的)**:密碼檔若用預設 `${HOME}/.kasmpasswd`,build 時 HOME=/root 但 runtime
@@ -159,8 +163,9 @@ B 卡住再退 **Option A**。握手協定(前端 `auth → ready → attach cli
 | ws 端點 path | **`/websockify`** | 實測 + kasm 慣例 |
 | ws_port | **8443 + display**(`WS_BASE`) | config 文件 |
 | Basic Auth | **預設開**;`-disableBasicAuth` 此 build 無效 → 用 `kasmvncpasswd` 使用者 + `Authorization: Basic` | Xvnc man / issue #284 |
+| `Sec-WebSocket-Origin` | **必帶**(legacy header,值不驗);缺了 `/websockify` 回 404 "failed websocket checks" | 實測 2026-07-03 |
 | 密碼檔 | **固定路徑** `-KasmPasswordFile /etc/kasmvnc/kasmpasswd`(勿靠 `${HOME}`) | Xvnc man + 實測 |
-| 版本 | 1.4.0(deb `kasmvncserver_bookworm_1.4.0_{amd64,arm64}.deb`) | releases |
+| 版本 | 1.4.0(deb `kasmvncserver_bookworm_1.4.0_{amd64,arm64}.deb`);client fork `@kasmtech/novnc` 1.3.0(已 vendor 進 `src/frontend/src/vendor/kasm-novnc/`,見該 README) | releases + image 內 www/package.json |
 
 ---
 

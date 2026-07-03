@@ -70,6 +70,8 @@ def _http_upgrade(sock, host, port, path, subprotocol, auth_header=None):
         "Connection: Upgrade",
         f"Sec-WebSocket-Key: {key}",
         "Sec-WebSocket-Version: 13",
+        # KasmVNC 的 websocket 檢查要求這個 legacy header,缺了回 404 "failed websocket checks"
+        f"Sec-WebSocket-Origin: http://{host}:{port}",
     ]
     if subprotocol:
         lines.append(f"Sec-WebSocket-Protocol: {subprotocol}")
