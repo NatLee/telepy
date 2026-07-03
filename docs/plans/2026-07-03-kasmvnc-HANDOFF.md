@@ -49,10 +49,10 @@
 | kasm_client / remote_browser_service → ws_port + profile_key | ✅ 完成+測綠 | ssh -D / GC 骨架不動 |
 | consumer → WS↔WS 中繼(握手/權限/斷線收尾保留) | ✅ 完成+測綠 | 含 scheme/path 自動退回 + Basic Auth |
 | Dockerfile 裝 KasmVNC 1.4.0 + kasmvnc.yaml + 建 Basic Auth 使用者 | ✅ 完成 | build 時驗證 Xkasmvnc / 密碼檔 |
-| 單元測試(34 個) | ✅ 全綠(沙箱 Django 5.2) | 見 §8 指令 |
-| **上游 WS 連線(auth/path)** | ⏳ **修法就緒,待你 rebuild 驗證** | §3 |
-| **前端改用 KasmVNC client** | ❌ **未開始(主要剩餘工程)** | §4 |
-| 端到端驗收 | ❌ 未做 | §5 |
+| 單元測試(34 個) | ✅ 全綠(真 stack,Django 6/py3.12) | 見 §8 指令 |
+| 上游 WS 連線(auth/path) | ✅ **已通(2026-07-03)** | 密碼檔修法有效;真正最後一雷是 **`Sec-WebSocket-Origin`**(§3);probe PASS、consumer 已加 header |
+| 前端改用 KasmVNC client | ✅ **完成(Option B,2026-07-03)** | vendor kasmtech/noVNC v1.3.0 至 `src/frontend/src/vendor/kasm-novnc/`(見該 README);`npm run build` 綠 |
+| 端到端驗收 | 🔶 自動化部分過(2026-07-03) | 全鏈 relay E2E 過:auth→ready→begin→RFB 雙向→斷線收 session;雙 session 隔離(:10/:11、各自 profile)過。**剩視覺/互動項**(桌面畫面、滑鼠鍵盤、中文 IME/剪貼簿、proxy 出口 IP)需真人開 UI 驗(§5) |
 
 沙箱限制(為何沒幫你 rebuild/驗端到端):無 Docker、無 sudo、Python 3.10(裝不了 Django 6)、git 被
 lock。所以後端邏輯是用 Django 5.2 在沙箱測綠;KasmVNC 本體/前端/端到端要在真環境跑。
