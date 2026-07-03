@@ -90,6 +90,37 @@ class RemoteBrowserServiceTest(TestCase):
         kasm.create_session.assert_not_called()
         proc.terminate.assert_called()
 
+    @mock.patch.object(svc, "subprocess")
+    @mock.patch.object(svc, "_kasm")
+    def test_start_retries_cold_socks_bringup_then_succeeds(self, kasm, sp):
+        """冷啟第一次 SOCKS 沒起來 → 自動重試第二次成功(把使用者手動再點一次自動化)。"""
+        sp.Popen.return_value = mock.Mock(poll=lambda: None)
+        kasm.create_session.return_value = {"session_id": "k1", "ws_port": 8453}
+        # 第一次 _wait_for_port False(冷啟失敗)、第二次 True(暖了就起來)
+        with mock.patch.object(svc, "_wait_for_port", side_effect=[False, True]) as wp:
+            result = svc.start_remote_browser("alice", 30001, 7)
+        self.assertEqual(wp.call_count, 2)          # 確實重試了一次
+        self.assertEqual(sp.Popen.call_count, 2)    # 每次嘗試各起一個 ssh
+        self.assertIn("session_id", result)
+        self.assertEqual(svc.ACTIVE_SESSIONS[result["session_id"]]["ws_port"], 8453)
+
+    @mock.patch.object(svc, "_wait_for_port", return_value=True)
+    @mock.patch.object(svc, "subprocess")
+    @mock.patch.object(svc, "_kasm")
+    def test_socks_proxy_ssh_command_is_hardened(self, kasm, sp, _wp):
+        """這條 ssh -D 必須帶硬化選項(BatchMode/ExitOnForwardFailure/ConnectTimeout),否則冷啟會卡死。"""
+        sp.Popen.return_value = mock.Mock(poll=lambda: None)
+        kasm.create_session.return_value = {"session_id": "k1", "ws_port": 8453}
+        svc.start_remote_browser("alice", 30001, 7)
+        argv = sp.Popen.call_args[0][0]
+        self.assertIsInstance(argv, list)           # argv 形式,不再走 shell=True
+        joined = " ".join(argv)
+        self.assertIn("BatchMode=yes", joined)
+        self.assertIn("ExitOnForwardFailure=yes", joined)
+        self.assertIn("ConnectTimeout=10", joined)
+        self.assertIn("-D", argv)
+        self.assertNotIn("-q", argv)                # 保留 stderr 供偵錯
+
     @mock.patch.object(svc, "_wait_for_port", return_value=True)
     @mock.patch.object(svc, "subprocess")
     @mock.patch.object(svc, "_kasm")

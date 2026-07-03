@@ -5,6 +5,7 @@ import json
 import socket
 import logging
 import subprocess
+import tempfile
 import uuid
 import threading
 from typing import Dict, Any, Optional
@@ -115,6 +116,51 @@ def _wait_for_port(host: str, port: int, timeout: float = 30.0, proc=None) -> bo
     return False
 
 
+# 反向連線的硬化 SSH 選項(這條 -D 指令過去完全沒帶 -o,才會在冷啟時無限卡住):
+#   BatchMode=yes           金鑰認證失敗絕不落到互動提示而卡死(daemon 沒有 tty)。
+#   ExitOnForwardFailure=yes 綁不到本地 SOCKS 埠就立刻 exit → _wait_for_port 靠 proc.poll() 秒失敗。
+#   ConnectTimeout=10        bound 住 ProxyCommand 第一跳的 TCP connect。
+#   ServerAliveInterval/Max  兩跳中任一段死掉時 ~15s 內放棄,不無限等。
+# 不加 -q:保留 stderr,失敗時記錄真正原因(過去 -q 把錯誤全吞了,完全無從偵錯)。
+_SSH_HARDEN_OPTS = [
+    "-o", "BatchMode=yes",
+    "-o", "ExitOnForwardFailure=yes",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=5",
+    "-o", "ServerAliveCountMax=3",
+]
+
+
+def _spawn_socks_proxy(proxy_port, target_reverse_port, target_username):
+    """起 ssh -D SOCKS proxy(argv 形式,免 shell)。stderr 導到暫存檔供失敗診斷。回 (proc, stderr_path)。"""
+    stderr_f = tempfile.NamedTemporaryFile(prefix="rb-ssh-", suffix=".log", delete=False)
+    stderr_path = stderr_f.name
+    ssh_cmd = [
+        "ssh", "-N", *_SSH_HARDEN_OPTS,
+        "-D", f"0.0.0.0:{proxy_port}",
+        "-p", str(target_reverse_port),
+        f"{target_username}@{SSH_HOST}",
+    ]
+    proc = subprocess.Popen(ssh_cmd, stdout=subprocess.DEVNULL, stderr=stderr_f)
+    stderr_f.close()   # 子行程持有自己的 fd;父行程這個 handle 關掉,之後從路徑讀
+    return proc, stderr_path
+
+
+def _drain_ssh_stderr(stderr_path):
+    """讀取並刪除 ssh stderr 暫存檔,回內容(用於失敗時記錄真正原因)。"""
+    txt = ""
+    try:
+        with open(stderr_path, "r", errors="replace") as fh:
+            txt = fh.read().strip()
+    except OSError:
+        pass
+    try:
+        os.unlink(stderr_path)
+    except OSError:
+        pass
+    return txt
+
+
 def _count_active() -> int:
     try:
         return len(_store.live_session_ids())
@@ -138,20 +184,42 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
             "Please wait for someone to disconnect and try again."
         )
 
-    proxy_port = get_free_port()
-    ssh_cmd = f"ssh -N -q -D 0.0.0.0:{proxy_port} -p {target_reverse_port} {target_username}@{SSH_HOST}"
-    logger.info(f"Starting SSH proxy for target {server_id} on port {proxy_port}")
-    ssh_process = subprocess.Popen(ssh_cmd, shell=True)
-
+    # 冷啟第一次常失敗、重試就成功:第一次連線暖了 ProxyCommand 的 telepy-ssh master
+    # (ControlPersist)與裝置端的路由/DNS 快取,第二次(fresh 埠、暖 hop1)通常就起得來。
+    # 故自動重試,把使用者原本手動再點一次的動作內建起來。每次取「新的」free port:上一輪被
+    # kill 的 ssh 可能還占著舊埠。genuinely offline 的裝置靠上面的硬化選項會快速失敗、不會空等滿。
     ssh_timeout = getattr(settings, "remote_browser_ssh_timeout", 30)
-    if not _wait_for_port("127.0.0.1", proxy_port, timeout=ssh_timeout, proc=ssh_process):
+    attempts = max(1, int(getattr(settings, "remote_browser_ssh_attempts", 2)))
+    ssh_process = None
+    proxy_port = None
+    for attempt in range(1, attempts + 1):
+        proxy_port = get_free_port()
+        logger.info(f"Starting SSH proxy for target {server_id} on port {proxy_port} "
+                    f"(attempt {attempt}/{attempts})")
+        ssh_process, stderr_path = _spawn_socks_proxy(proxy_port, target_reverse_port, target_username)
+        if _wait_for_port("127.0.0.1", proxy_port, timeout=ssh_timeout, proc=ssh_process):
+            _drain_ssh_stderr(stderr_path)   # 成功也清掉暫存檔
+            break
+        # 這一輪沒起來:收掉 ssh,記錄 stderr 的真正原因供偵錯。
         try:
             ssh_process.terminate()
+            ssh_process.wait(timeout=3)
         except Exception:
-            pass
+            try:
+                ssh_process.kill()
+            except Exception:
+                pass
+        err = _drain_ssh_stderr(stderr_path)
+        logger.warning(
+            f"SSH proxy attempt {attempt}/{attempts} for target {server_id} did not bind "
+            f"a SOCKS listener within {ssh_timeout}s"
+            + (f"; ssh stderr: {err[-500:]}" if err else " (ssh produced no stderr)")
+        )
+        ssh_process = None
+    else:
         raise Exception(
-            f"Failed to start SSH proxy for target {server_id} "
-            f"(no SOCKS listener within {ssh_timeout}s — is the device online?)."
+            f"Failed to start SSH proxy for target {server_id} after {attempts} attempts "
+            f"(no SOCKS listener within {ssh_timeout}s each — is the device online?)."
         )
 
     session_id = str(uuid.uuid4())

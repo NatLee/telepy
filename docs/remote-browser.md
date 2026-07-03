@@ -58,6 +58,14 @@ chromium --proxy-server=socks5://backend:<port>
 - **建立:** REST `/remote-browser/start` → ssh -D(等 SOCKS listen)→
   session-manager 起 Xkasmvnc/openbox/chromium → session 記錄進 Redis
   (跨 gunicorn worker 查詢用)。
+- **SSH -D 冷啟/重試:** `username@reverse` 是兩跳(ProxyCommand→telepy-ssh→反向隧道到
+  裝置 sshd),且 browser 用**獨立**的 ControlMaster(與終端機的 `/tmp/ssh_fm_*` 不共用),
+  所以每個 target 的**第一次**連線是冷的,穿隧道到裝置 + 建 SOCKS 可能 >30s 而逾時。修法:
+  `_spawn_socks_proxy` 帶硬化選項(`BatchMode`/`ExitOnForwardFailure`/`ConnectTimeout`/
+  `ServerAlive`,不再無限卡在認證;不加 `-q` 以保留 stderr),`start_remote_browser` **自動
+  重試**(預設 2 次,`remote_browser_ssh_attempts`)——第二次因 hop1 master 與裝置路由已暖而
+  通常成功。真正離線的裝置(reverse 埠不存在)會秒失敗、不會空等。失敗時 ssh stderr 會寫進
+  backend log 供偵錯。
 - **Profile:** 每 session `mkdtemp` 專屬目錄、**停止即刪**(不保留歷史)。
   絕不共用:Chromium SingletonLock 會讓第二個並發 session 的 chromium 委派給
   第一個後退出(log:`Opening in existing browser session.`),兩敗俱傷。
