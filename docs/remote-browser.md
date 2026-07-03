@@ -124,7 +124,13 @@ chromium --proxy-server=socks5://backend:<port>
    只能換一台住宅 IP 的目標機。
 2. **無 cookie/登入信任**:設定檔每 session 全新(privacy 需求,不留歷史)。YouTube 對「有登入/
    有瀏覽歷史」的 session 信任度高很多;全新 session 天生更容易被要求驗證。這與「不保留歷史」
-   直接衝突,目前站在 privacy 這邊。
+   直接衝突。
+
+   > **已決策(2026-07-04):維持每 session 全新 profile,隱私優先。** 曾出現「YouTube 要求登入」
+   > 回歸,調查確認回歸點是 967ea75(profile 改為 ephemeral)——沒有 cookie 累積 → YouTube 把每次
+   > 都當可疑新訪客。可選的折衷是「只持久化 cookie/登入、仍不留瀏覽歷史」,但使用者選擇隱私優先、
+   > 接受偶爾被要求登入(反正主宰因素是出口 IP)。**若日後要降低攔截,優先換住宅 IP 目標機,而非
+   > 動 profile。** 不要在未取得使用者同意下重新加回 profile 持久化。
 
 ## 環境變數(都有預設,通常不用設)
 
