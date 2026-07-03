@@ -30,15 +30,18 @@ class SessionManagerTest(unittest.TestCase):
         # display 從 base(預設 10)起,ws_port = ws_base(8443) + display
         self.assertEqual(out["ws_port"], self.mgr.ws_base + self.mgr.display_base)
         self.assertNotIn("rfb_port", out)
-        # 三個行程:KasmVNC X server / WM / browser
-        self.assertEqual(popen.call_count, 3)
         cmds = [" ".join(c[0][0]) for c in popen.call_args_list]
-        # 第一個是 KasmVNC(Xkasmvnc,依偵測),帶 websocketPort
+        # KasmVNC(Xkasmvnc,依偵測)帶 websocketPort
         self.assertTrue(any(self.mgr.vnc_bin in c and str(out["ws_port"]) in c for c in cmds))
-        # proxy 注入瀏覽器啟動參數(瀏覽器經 watchdog 啟動,指令在 env BROWSER_CMD)
+        # WM(openbox)、桌布(hsetroot)、面板(tint2)、瀏覽器啟動器都要起
+        self.assertTrue(any("openbox" in c for c in cmds))
+        self.assertTrue(any("hsetroot" in c for c in cmds))
+        self.assertTrue(any("tint2" in c for c in cmds))
+        self.assertTrue(any("open-browser" in c for c in cmds))
+        # proxy 注入瀏覽器啟動參數(在 env BROWSER_CMD)
         self.assertTrue(any("socks5://backend:12345" in (c[1].get("env") or {}).get("BROWSER_CMD", "")
                             for c in popen.call_args_list))
-        # 瀏覽器與 WM 帶 DISPLAY=:10
+        # 各行程帶 DISPLAY=:10
         envs = [c[1].get("env", {}).get("DISPLAY") for c in popen.call_args_list]
         self.assertIn(":10", envs)
 
@@ -104,18 +107,22 @@ class SessionManagerTest(unittest.TestCase):
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_browser_runs_under_window_watchdog(self, popen, _wait):
-        """chromium 交給 browser_watchdog.sh 監管:視窗關閉(background mode 讓行程不死,
-        行程級 respawn 無效)或 crash 都會重開;指令經 env BROWSER_CMD 傳入。"""
+    def test_browser_launched_once_via_launcher_no_autorestart(self, popen, _wait):
+        """瀏覽器由 open-browser.sh 啟動一次(不自動重啟);指令經 env BROWSER_CMD 傳入。
+        關窗後由桌面面板(tint2)捷徑再開 —— 不再有 watchdog respawn 迴圈。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
         self.mgr.create("socks5://backend:1")
-        watchdog_argv = next(c[0][0] for c in popen.call_args_list
-                             if "BROWSER_CMD" in (c[1].get("env") or {}))
-        self.assertEqual(watchdog_argv[0], "sh")
-        self.assertIn("browser_watchdog", watchdog_argv[1])
+        cmds = [" ".join(c[0][0]) for c in popen.call_args_list]
+        # 啟動器有起、且不再有 watchdog respawn
+        self.assertTrue(any("open-browser" in c for c in cmds))
+        self.assertFalse(any("browser_watchdog" in c for c in cmds))
+        # 啟動器與面板都拿到 chromium 指令(env BROWSER_CMD)
+        launcher_argv = next(c[0][0] for c in popen.call_args_list
+                             if c[0][0][0] == "sh" and "open-browser" in " ".join(c[0][0]))
+        self.assertEqual(launcher_argv[0], "sh")
         browser_cmd, env = self._browser_calls(popen)[0]
         self.assertTrue(browser_cmd.startswith("chromium "))
-        self.assertIn("DISPLAY", env)   # watchdog 靠 DISPLAY 用 xdotool 數視窗
+        self.assertIn("DISPLAY", env)
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
@@ -127,16 +134,15 @@ class SessionManagerTest(unittest.TestCase):
             with mock.patch.object(sm, "PROFILE_TMP_BASE", tmp):
                 self.mgr.create("socks5://backend:1")
                 self.mgr.create("socks5://backend:2")
-            dirs = []
+            dirs = set()
             for cmd, env in self._browser_calls(popen):
                 self.assertIn("--user-data-dir=", cmd)
                 d = next(a.split("=", 1)[1] for a in cmd.split()
                          if a.startswith("--user-data-dir="))
                 self.assertTrue(os.path.isdir(d))
                 self.assertEqual(env.get("HOME"), d)   # 下載/dotfile 都進 session 目錄
-                dirs.append(d)
-            self.assertEqual(len(dirs), 2)
-            self.assertNotEqual(dirs[0], dirs[1])   # 兩個 session 目錄不同 → 不互搶
+                dirs.add(d)
+            self.assertEqual(len(dirs), 2)   # 兩個 session 各自不同目錄 → 不互搶
 
     @mock.patch("session_manager.os.killpg")
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)

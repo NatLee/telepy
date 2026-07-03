@@ -1,0 +1,41 @@
+# Telepy remote-browser 桌面面板:一條細長的頂部工具列,放一個「開啟瀏覽器」捷徑。
+# 目的:使用者關掉瀏覽器後桌面不是全黑 —— 有桌布 + 這個面板上的捷徑可再開瀏覽器。
+# openbox 的 maximized 視窗會避開面板保留的 strut,所以 chromium 會鋪滿面板下方、不遮住它。
+
+# ---- 面板 background(id 1)----
+rounded = 0
+border_width = 0
+background_color = #20232e 100
+border_color = #000000 0
+
+# ---- 捷徑 icon background(id 2,hover 時淡淡高亮)----
+rounded = 6
+border_width = 0
+background_color = #2f3346 0
+background_color_hover = #3a3f57 100
+background_color_pressed = #454b68 100
+
+panel_items = L
+panel_size = 100% 34
+panel_margin = 0 0
+panel_padding = 6 3 6
+panel_position = top left horizontal
+panel_background_id = 1
+panel_layer = top
+wm_menu = 0
+autohide = 0
+
+# ---- 啟動器(捷徑)----
+launcher_padding = 4 0 4
+launcher_background_id = 0
+launcher_icon_background_id = 2
+launcher_icon_size = 26
+launcher_icon_asb = 100 0 0
+launcher_item_app = /usr/share/applications/telepy-browser.desktop
+launcher_tooltip = 1
+launcher_icon_theme_override = 0
+
+# 不需要工具提示延遲太久
+tooltip_show_timeout = 0.3
+tooltip_hide_timeout = 0.1
+tooltip_background_id = 1

@@ -103,12 +103,13 @@ DEFAULT_BROWSER_CMD = (
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --start-maximized {homepage}"
 )
-# 使用者在 VNC 桌面裡把 chromium 關掉(或它 crash)時自動重開:瀏覽器由 browser_watchdog.sh
-# 監管。**不能用單純的「行程死了就重啟」迴圈**:chromium 的 background mode 讓最後一個視窗
-# 關閉後主行程依然活著(實測 --disable-background-mode 等旗標壓不住)→ 行程級迴圈永遠等不到
-# → 黑畫面。watchdog 改看「可見視窗數」(xdotool),沒視窗就收掉重開。
-# session 停止時 _term 是 killpg(整組收),watchdog 與 chromium 同 group → 不會復活。
-BROWSER_WATCHDOG = os.getenv("BROWSER_WATCHDOG", "/app/browser_watchdog.sh")
+# 瀏覽器**不自動重啟**:session 首次啟動時開一次 chromium;使用者若關掉視窗,桌面會顯示桌布 +
+# tint2 面板上的「開啟瀏覽器」捷徑(open-browser.sh),由使用者自己點捷徑再開。這樣就不會有
+# 「關掉後一片黑」或「一直被自動拉回」的問題。open-browser.sh 與捷徑共用同一支腳本。
+BROWSER_LAUNCHER = os.getenv("BROWSER_LAUNCHER", "/app/open-browser.sh")
+# 桌布(不黑)+ 面板捷徑指令。桌布用 hsetroot 上一個深色純色;面板用 tint2 讀 /app/tint2rc。
+WALLPAPER_CMD = os.getenv("WALLPAPER_CMD", "hsetroot -solid #20232e")
+PANEL_CMD = os.getenv("PANEL_CMD", "tint2 -c /app/tint2rc")
 
 DEFAULT_HOMEPAGE = os.getenv("REMOTE_BROWSER_HOMEPAGE", "https://www.google.com")
 DEFAULT_LANG = os.getenv("REMOTE_BROWSER_LANG", "zh-TW")
@@ -230,14 +231,23 @@ class SessionManager:
             browser_cmd = self.browser_cmd.format(
                 proxy=proxy, homepage=self.homepage, lang=lang,
                 accept_lang=_accept_lang(lang), profile_flag=profile_flag)
-            # 交給 watchdog:視窗被關/行程 crash 都會自動重開(同 profile、同 proxy)。
-            # HOME 指到 session 專屬 profile 目錄:下載、dotfile 等所有「家目錄」寫入都
-            # 進 session 目錄、停止即刪(下載本身另由 chromium policy 全面封鎖)。
+            # 桌布(不黑)—— 一次性;失敗不致命。
+            if WALLPAPER_CMD:
+                try:
+                    self._spawn(WALLPAPER_CMD, display=disp)
+                except Exception:
+                    logger.warning("wallpaper cmd failed (non-fatal)", exc_info=True)
+            # BROWSER_CMD/HOME 傳給面板與啟動器:面板捷徑會以子行程繼承這組環境去開瀏覽器。
+            # HOME 指到 session 專屬 profile 目錄:下載/dotfile 等家目錄寫入都進 session 目錄、停止即刪。
+            browser_env = {"BROWSER_CMD": browser_cmd,
+                           "HOME": profile_dir or os.environ.get("HOME", "/root")}
+            # 桌面面板(tint2):常駐,提供「開啟瀏覽器」捷徑(關窗後不黑、可自己再開)。
+            if PANEL_CMD:
+                procs.append(self._spawn(PANEL_CMD, display=disp, extra_env=browser_env))
+            # 首次啟動:開一次瀏覽器(不自動重啟;之後由使用者點面板捷徑再開)。
             procs.append(self._spawn(
-                ["sh", BROWSER_WATCHDOG],
-                display=disp, lang=lang,
-                extra_env={"BROWSER_CMD": browser_cmd,
-                           "HOME": profile_dir or os.environ.get("HOME", "/root")}))
+                ["sh", BROWSER_LAUNCHER],
+                display=disp, lang=lang, extra_env=browser_env))
         except Exception:
             for p in procs:
                 self._term(p)

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Open Browser
+Comment=開啟代理瀏覽器 / Open the proxy browser
+Exec=/app/open-browser.sh
+Icon=/usr/share/icons/hicolor/128x128/apps/chromium.png
+Terminal=false
+Categories=Network;WebBrowser;

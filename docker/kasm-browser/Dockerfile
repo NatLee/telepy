@@ -17,13 +17,14 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 桌面 + 瀏覽器 + 字型 + KasmVNC runtime 依賴 + python(跑 session-manager)+ 下載工具。
-# xdotool:browser_watchdog.sh 用「可見視窗數」判斷 chromium 是否需要重開(background
-# mode 讓關窗後行程賴著不走,行程級 respawn 無效)。
+# xdotool:open-browser.sh 用「可見視窗數」判斷是要聚焦既有視窗還是開新的(避免疊視窗);
+# tint2 桌面面板 + hsetroot 桌布:關掉瀏覽器後桌面不黑、面板上有捷徑可再開。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates wget \
       chromium \
       openbox \
       xdotool \
+      tint2 hsetroot \
       fonts-noto-cjk fonts-noto-color-emoji xfonts-base \
       python3 \
       procps \
@@ -93,8 +94,11 @@ print("openbox-rc.xml generated and validated")
 PY
 
 COPY session_manager.py /app/session_manager.py
-COPY browser_watchdog.sh /app/browser_watchdog.sh
-RUN chmod +x /app/browser_watchdog.sh
+# 桌面捷徑:關掉瀏覽器後桌面顯示桌布 + tint2 面板上的「開啟瀏覽器」捷徑(不自動重啟、不黑畫面)。
+COPY open-browser.sh /app/open-browser.sh
+COPY tint2rc /app/tint2rc
+COPY telepy-browser.desktop /usr/share/applications/telepy-browser.desktop
+RUN chmod +x /app/open-browser.sh
 
 # 若你的 KasmVNC build 的旗標/路徑不同,可用這些環境變數覆寫,不必改碼:
 #   VNC_CMD / WM_CMD / BROWSER_CMD          (見 session_manager.py 的 DEFAULT_* 樣板)
