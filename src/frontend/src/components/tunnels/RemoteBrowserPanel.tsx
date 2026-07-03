@@ -30,7 +30,8 @@ type KasmRFB = {
     enableWebP: boolean;
     enableWebRTC: boolean;
     translateShortcuts: boolean;
-    readonly keyboard: { enableIME: boolean };
+    mouseButtonMapper: unknown;
+    readonly keyboard: { enableIME: boolean } & Record<string, unknown>;
     focus(): void;
     disconnect(): void;
     addEventListener(type: string, listener: (e: Event) => void): void;
@@ -44,10 +45,19 @@ type KasmRFBConstructor = new (
 
 // 動態載入 vendored client:它的 util/browser.js 在 import 當下就碰 document/window,
 // 靜態 import 會炸 SSR prerender;順便把 ~700KB 的 client 從頁面 bundle 拆出去。
-let rfbModulePromise: Promise<{ default: unknown }> | null = null;
-const loadRFB = () => {
-    if (!rfbModulePromise) rfbModulePromise = import("@/vendor/kasm-novnc/core/rfb.js");
-    return rfbModulePromise;
+// mousebuttonmapper 與 rfb 同一個 import graph(rfb 自己也 import 它),同 chunk。
+let clientModulesPromise: Promise<[
+    { default: unknown },
+    { MouseButtonMapper: new () => { set(btn: number, xvnc: number): void }; XVNC_BUTTONS: Record<string, number> },
+]> | null = null;
+const loadClient = () => {
+    if (!clientModulesPromise) {
+        clientModulesPromise = Promise.all([
+            import("@/vendor/kasm-novnc/core/rfb.js"),
+            import("@/vendor/kasm-novnc/core/mousebuttonmapper.js"),
+        ]) as NonNullable<typeof clientModulesPromise>;
+    }
+    return clientModulesPromise;
 };
 
 /**
@@ -66,7 +76,8 @@ export function RemoteBrowserPanel({
 }: RemoteBrowserPanelProps) {
     const [phase, setPhase] = useState<"idle" | "connecting" | "connected">("idle");
     const [error, setError] = useState<string | null>(null);
-    const [imeEnabled, setImeEnabled] = useState(false);
+    const [imeEnabled, setImeEnabled] = useState(true);   // 中文輸入預設開啟
+    const imeEnabledRef = useRef(true);
 
     const screenRef = useRef<HTMLDivElement | null>(null);
     const keyboardInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -109,8 +120,11 @@ export function RemoteBrowserPanel({
         const keyboardInput = keyboardInputRef.current;
         if (!screen || !keyboardInput) return;
         let RFB: KasmRFBConstructor;
+        let mapperMod: Awaited<ReturnType<typeof loadClient>>[1];
         try {
-            RFB = (await loadRFB()).default as KasmRFBConstructor;
+            const [rfbMod, mbm] = await loadClient();
+            RFB = rfbMod.default as KasmRFBConstructor;
+            mapperMod = mbm;
         } catch {
             setError("Failed to load the VNC client bundle");
             cleanup(true);
@@ -130,6 +144,31 @@ export function RemoteBrowserPanel({
         // seamless 剪貼簿走 navigator.clipboard;Safari 已知會壞(KASM-960),照上游 UI 排除
         rfb.clipboardSeamless = !(/^((?!chrome|android).)*safari/i.test(navigator.userAgent));
         rfb.translateShortcuts = true;  // macOS:Cmd+C/V 轉 Ctrl+C/V 給遠端
+        // 滑鼠按鍵對映:rfb.js 預設 mouseButtonMapper=null,且 _handleMouse 對「每一個」滑鼠事件
+        // 都先 .get(ev.button) —— 不設定的話所有滑鼠事件都 TypeError,滑鼠整個不能用。
+        // 對映值照上游 app/ui.js initMouseButtonMapper 的預設。
+        const { MouseButtonMapper, XVNC_BUTTONS } = mapperMod;
+        const mapper = new MouseButtonMapper();
+        mapper.set(0, XVNC_BUTTONS.LEFT_BUTTON);
+        mapper.set(1, XVNC_BUTTONS.MIDDLE_BUTTON);
+        mapper.set(2, XVNC_BUTTONS.RIGHT_BUTTON);
+        mapper.set(3, XVNC_BUTTONS.BACK_BUTTON);
+        mapper.set(4, XVNC_BUTTONS.FORWARD_BUTTON);
+        rfb.mouseButtonMapper = mapper;
+        // IME(預設開,可用面板按鈕切換)。setter 會順便 focus 到隱形 textarea。
+        rfb.keyboard.enableIME = imeEnabledRef.current;
+        // 修復 IME 重複輸出:keyboard.js 用「textarea 值 vs _lastKeyboardInput」差分決定送什麼;
+        // compositionend 與最後一個 input 事件的先後順序因瀏覽器/輸入法而異,基準一旦沒跟上,
+        // 下一次組字就會把整段舊值重送(測試 → 測試測試 → …)。每次組字結束後把值與基準
+        // 一起歸零(deferred,讓同一輪殘餘的 input 事件先跑完;組字中則跳過,別打斷使用者)。
+        keyboardInput.addEventListener("compositionend", () => {
+            setTimeout(() => {
+                const kb = rfb.keyboard as unknown as {
+                    _imeInProgress?: boolean; _keyboardInputReset?: () => void;
+                };
+                if (!kb._imeInProgress) kb._keyboardInputReset?.();
+            }, 0);
+        });
         rfb.addEventListener("connect", () => {
             connectedRef.current = true;
             setPhase("connected");
@@ -154,7 +193,7 @@ export function RemoteBrowserPanel({
         cleaningRef.current = false;
         userStoppedRef.current = false;
         connectedRef.current = false;
-        loadRFB().catch(() => { });   // 預熱 client chunk,與 start API 並行
+        loadClient().catch(() => { });   // 預熱 client chunk,與 start API 並行
         try {
             const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
             const res = await fetch(
@@ -217,11 +256,12 @@ export function RemoteBrowserPanel({
         cleanup(true);
     }, [cleanup]);
 
-    // IME(中文/日文輸入法)模式:composition 事件經隱形 textarea 差分送往遠端。
-    // 對齊 kasm 上游預設(off,經 UI 切換);開啟時把焦點交回 RFB(它會 focus 到 textarea)。
+    // IME(中文/日文輸入法)模式:composition 事件經隱形 textarea 差分送往遠端。預設開啟。
+    // 切換時把焦點交回 RFB(IME 開 → focus 到 textarea;關 → focus 到 canvas)。
     const toggleIme = useCallback(() => {
         setImeEnabled((prev) => {
             const next = !prev;
+            imeEnabledRef.current = next;
             const rfb = rfbRef.current;
             if (rfb) {
                 rfb.keyboard.enableIME = next;

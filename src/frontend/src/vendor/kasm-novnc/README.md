@@ -35,6 +35,17 @@ KasmUI.rfb = rfb;   // translateShortcuts 生效的前提
 options)`,比 stock 多一個):要傳一個**可聚焦**的隱形 `<textarea>`,IME(中文輸入)
 composition 事件靠它。
 
+### 內嵌方必做(上游把這些留給它自家 app/ui.js,core 不會自己做)
+
+1. **`rfb.mouseButtonMapper` 必須設**。`rfb.js` 預設 `null`,而 `_handleMouse` 對每個滑鼠
+   事件都先 `.get(ev.button)` —— 不設的話所有 mousedown/up/move 全部 TypeError,**滑鼠完全
+   失效**。對映照上游 `initMouseButtonMapper` 預設(0→LEFT、1→MIDDLE、2→RIGHT、3→BACK、
+   4→FORWARD)。
+2. **每次 `compositionend` 後 deferred 呼叫 `keyboard._keyboardInputReset()`**(組字中跳過)。
+   keyboard.js 以「textarea 值 vs `_lastKeyboardInput`」差分決定送什麼;compositionend 與最後
+   一個 input 事件的順序因瀏覽器/輸入法而異,基準一旦脫鉤,下一輪組字會把舊值整段重送
+   (輸入「測試」變「測試測試」、第三次三倍)。歸零讓每輪組字從乾淨狀態開始。
+
 ## 升級方式
 
 對齊 kasm-browser image 內 KasmVNC server 版本 → 查 `/usr/share/kasmvnc/www/package.json`
