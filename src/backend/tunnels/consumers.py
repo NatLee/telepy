@@ -1237,6 +1237,7 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
         self.rb_session_id = None
         self._upstream = None        # websockets client connection (KasmVNC 的 ws)
         self._pump_task = None
+        self._keepalive_task = None  # VNC WS 連著時,伺服器端每 20s 續 session TTL(見 _session_keepalive)
         self._begun = False
         self._send_lock = asyncio.Lock()   # 序列化對 client 的送出(pump 與控制訊息競速保護)
 
@@ -1262,8 +1263,28 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
         # 通知前端:已認證 + 上游 ws 已接上,可以把 socket 交給 KasmVNC client 了。
         await self.send(text_data=json.dumps({"type": "ready"}))
         self._session_started = asyncio.get_event_loop().time()
+        # VNC WS 連著就代表 session 正在使用:伺服器端每 20s 續一次 TTL,讓 idle GC 不會在
+        # 使用者只是掛著(尤其把分頁切到背景、前端 REST 心跳被瀏覽器節流/凍結)時把 session 收掉。
+        self._keepalive_task = asyncio.create_task(self._session_keepalive())
         logger.info(f"remote-browser(vnc): bridged session {sid} -> {url}")
         return None
+
+    async def _session_keepalive(self):
+        """VNC WS 連線存活 = session 存活:每 20s 續一次 Redis TTL(跨 worker 心跳權威)。
+        伺服器端計時器不受瀏覽器背景分頁節流影響,比前端 REST 心跳可靠。斷線時於 disconnect 取消。"""
+        from authorized_keys.remote_browser_service import ping_remote_browser
+        try:
+            while True:
+                await asyncio.sleep(20)
+                sid = self.rb_session_id
+                if not sid:
+                    return
+                try:
+                    await sync_to_async(ping_remote_browser)(sid)
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            pass
 
     def _upstream_candidates(self, ws_port):
         """(scheme, path) 候選;env 指定的排最前,其餘去重補上,讓上游連線自動退回試錯。"""
@@ -1372,6 +1393,9 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
 
     async def disconnect(self, close_code):
         await super().disconnect(close_code)   # 取消 auth 逾時計時器 / cancel auth timer
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         if self._pump_task is not None:
             self._pump_task.cancel()
             self._pump_task = None

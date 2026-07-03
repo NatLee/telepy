@@ -338,29 +338,48 @@ def stop_remote_browser(session_id):
     return existed
 
 
+def _dead_session_ids(now, live_ids, redis_ok, idle_timeout):
+    """
+    決定哪些本行程 session 該回收。回收條件:
+      - ssh 行程已死;或
+      - Redis 可用時:該 session 的 Redis key 已消失(= 任一 worker 都沒在 TTL 內續命)。
+      - Redis 掛掉時:退回本行程 last_seen 的 idle 判斷(僅單 worker 準)。
+
+    **關鍵**:Redis 可用時**不**看本行程 last_seen —— 多 worker 下 ping/keepalive 可能落在
+    非 owner worker,owner 的 last_seen 永不更新,拿它判 idle 會把還活著的 session 誤收。
+    """
+    dead = []
+    with _SESSIONS_LOCK:
+        for sid, sess in list(ACTIVE_SESSIONS.items()):
+            proc = sess.get("ssh_process")
+            if proc and proc.poll() is not None:
+                dead.append(sid)
+            elif redis_ok:
+                if sid not in live_ids:
+                    dead.append(sid)
+            elif (now - sess.get("last_seen", now)) > idle_timeout:
+                dead.append(sid)
+    return dead
+
+
 def cleanup_dead_sessions():
     while True:
         try:
-            idle_timeout = SiteSettings.get_solo().remote_browser_session_idle_timeout
             now = time.time()
-            dead = []
-            with _SESSIONS_LOCK:
-                for sid, sess in list(ACTIVE_SESSIONS.items()):
-                    proc = sess.get("ssh_process")
-                    proc_dead = proc and proc.poll() is not None
-                    idle = (now - sess.get("last_seen", now)) > idle_timeout
-                    if proc_dead or idle:
-                        dead.append(sid)
-            # store key 已消失(在別的 worker 被 stop,或 TTL 過期)也要回收本行程的 ssh。
+            # Redis TTL 是跨 worker 的心跳權威:ping(REST)與 VNC WS 的 keepalive 都經
+            # `_store.refresh` 續 Redis TTL,不論落在哪個 gunicorn worker。
             try:
                 live_ids = _store.live_session_ids()
-                with _SESSIONS_LOCK:
-                    for sid in list(ACTIVE_SESSIONS.keys()):
-                        if sid not in live_ids and sid not in dead:
-                            dead.append(sid)
+                redis_ok = True
             except Exception:
-                pass
-            for sid in dead:
+                live_ids, redis_ok = set(), False
+            idle_timeout = 60
+            if not redis_ok:
+                try:
+                    idle_timeout = int(SiteSettings.get_solo().remote_browser_session_idle_timeout)
+                except Exception:
+                    idle_timeout = 60
+            for sid in _dead_session_ids(now, live_ids, redis_ok, idle_timeout):
                 stop_remote_browser(sid)
         except Exception:
             pass

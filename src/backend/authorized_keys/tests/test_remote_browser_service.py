@@ -156,6 +156,35 @@ class RemoteBrowserServiceTest(TestCase):
         self.assertEqual(got["ws_port"], 5912)
         self.assertIsNone(svc.get_session("does-not-exist"))
 
+    def test_gc_keeps_session_with_fresh_redis_key_despite_stale_local_last_seen(self):
+        """多 worker bug 回歸測試:ping 落在非 owner worker → owner 的 last_seen 很舊,但只要
+        Redis key 還在(任一 worker 有續 TTL)就**不可**回收(否則使用者掛著就被無故關掉)。"""
+        alive = mock.Mock(poll=lambda: None)          # ssh 還活著
+        svc.ACTIVE_SESSIONS["s-alive"] = {"ssh_process": alive, "last_seen": 0}  # last_seen 極舊
+        svc._store.put("s-alive", {"server_id": 1, "kasm_session_id": "k", "ws_port": 8453})
+        live_ids = svc._store.live_session_ids()      # 含 s-alive(Redis 續命中)
+        dead = svc._dead_session_ids(now=10_000, live_ids=live_ids, redis_ok=True, idle_timeout=60)
+        self.assertNotIn("s-alive", dead)             # 有 Redis key → 不收(即使 last_seen 過期)
+
+    def test_gc_reaps_when_redis_key_gone_or_ssh_dead(self):
+        alive = mock.Mock(poll=lambda: None)
+        dead_proc = mock.Mock(poll=lambda: 0)         # ssh 已退出
+        svc.ACTIVE_SESSIONS["s-gone"] = {"ssh_process": alive, "last_seen": 9_999}   # Redis key 不在
+        svc.ACTIVE_SESSIONS["s-sshdead"] = {"ssh_process": dead_proc, "last_seen": 9_999}
+        svc._store.put("s-sshdead", {"server_id": 1, "kasm_session_id": "k", "ws_port": 8453})
+        live_ids = svc._store.live_session_ids()      # 只含 s-sshdead
+        dead = svc._dead_session_ids(now=10_000, live_ids=live_ids, redis_ok=True, idle_timeout=60)
+        self.assertIn("s-gone", dead)                 # Redis key 消失 → 收
+        self.assertIn("s-sshdead", dead)              # ssh 死了 → 收
+
+    def test_gc_falls_back_to_last_seen_when_redis_down(self):
+        alive = mock.Mock(poll=lambda: None)
+        svc.ACTIVE_SESSIONS["s-idle"] = {"ssh_process": alive, "last_seen": 0}
+        svc.ACTIVE_SESSIONS["s-fresh"] = {"ssh_process": alive, "last_seen": 9_990}
+        dead = svc._dead_session_ids(now=10_000, live_ids=set(), redis_ok=False, idle_timeout=60)
+        self.assertIn("s-idle", dead)                 # Redis 掛掉 → 退回 last_seen,過期就收
+        self.assertNotIn("s-fresh", dead)             # 近期有 last_seen → 保留
+
     @mock.patch.object(svc, "_wait_for_port", return_value=True)
     @mock.patch.object(svc, "subprocess")
     @mock.patch.object(svc, "_kasm")
