@@ -86,9 +86,12 @@ DEFAULT_BROWSER_CMD = (
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --start-maximized {homepage}"
 )
-# 使用者在 VNC 桌面裡把 chromium 關掉(或它 crash)時自動重開:瀏覽器行程包在這個 respawn 迴圈裡。
-# session 停止時 _term 是 killpg(整個 process group 一起收),sh 迴圈也在同一 group → 不會復活。
-BROWSER_RESPAWN_WRAP = "while :; do {cmd}; sleep 2; done"
+# 使用者在 VNC 桌面裡把 chromium 關掉(或它 crash)時自動重開:瀏覽器由 browser_watchdog.sh
+# 監管。**不能用單純的「行程死了就重啟」迴圈**:chromium 的 background mode 讓最後一個視窗
+# 關閉後主行程依然活著(實測 --disable-background-mode 等旗標壓不住)→ 行程級迴圈永遠等不到
+# → 黑畫面。watchdog 改看「可見視窗數」(xdotool),沒視窗就收掉重開。
+# session 停止時 _term 是 killpg(整組收),watchdog 與 chromium 同 group → 不會復活。
+BROWSER_WATCHDOG = os.getenv("BROWSER_WATCHDOG", "/app/browser_watchdog.sh")
 
 DEFAULT_HOMEPAGE = os.getenv("REMOTE_BROWSER_HOMEPAGE", "https://www.google.com")
 DEFAULT_LANG = os.getenv("REMOTE_BROWSER_LANG", "zh-TW")
@@ -196,10 +199,14 @@ class SessionManager:
             browser_cmd = self.browser_cmd.format(
                 proxy=proxy, homepage=self.homepage, lang=lang,
                 accept_lang=_accept_lang(lang), profile_flag=profile_flag)
-            # 包 respawn 迴圈:chromium 被關掉/crash 都會自動重開(同 profile、同 proxy)。
+            # 交給 watchdog:視窗被關/行程 crash 都會自動重開(同 profile、同 proxy)。
+            # HOME 指到 session 專屬 profile 目錄:下載、dotfile 等所有「家目錄」寫入都
+            # 進 session 目錄、停止即刪(下載本身另由 chromium policy 全面封鎖)。
             procs.append(self._spawn(
-                ["sh", "-c", BROWSER_RESPAWN_WRAP.format(cmd=browser_cmd)],
-                display=disp, lang=lang))
+                ["sh", BROWSER_WATCHDOG],
+                display=disp, lang=lang,
+                extra_env={"BROWSER_CMD": browser_cmd,
+                           "HOME": profile_dir or os.environ.get("HOME", "/root")}))
         except Exception:
             for p in procs:
                 self._term(p)
@@ -242,10 +249,12 @@ class SessionManager:
             self.stop(sid)
 
     # --- process helpers (mocked in tests) --------------------------------
-    def _spawn(self, cmd, display=None, log_path=None, lang=None):
+    def _spawn(self, cmd, display=None, log_path=None, lang=None, extra_env=None):
         env = dict(os.environ)
         if display:
             env["DISPLAY"] = display
+        if extra_env:
+            env.update({k: v for k, v in extra_env.items() if v})
         if lang:
             # 反爬蟲:讓 chromium 的 navigator.language(s) 與行程 locale 一致、非空。
             base = lang.replace("-", "_")

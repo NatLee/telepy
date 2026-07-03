@@ -35,8 +35,9 @@ class SessionManagerTest(unittest.TestCase):
         cmds = [" ".join(c[0][0]) for c in popen.call_args_list]
         # 第一個是 KasmVNC(Xkasmvnc,依偵測),帶 websocketPort
         self.assertTrue(any(self.mgr.vnc_bin in c and str(out["ws_port"]) in c for c in cmds))
-        # proxy 注入瀏覽器啟動參數
-        self.assertTrue(any("socks5://backend:12345" in c for c in cmds))
+        # proxy 注入瀏覽器啟動參數(瀏覽器經 watchdog 啟動,指令在 env BROWSER_CMD)
+        self.assertTrue(any("socks5://backend:12345" in (c[1].get("env") or {}).get("BROWSER_CMD", "")
+                            for c in popen.call_args_list))
         # 瀏覽器與 WM 帶 DISPLAY=:10
         envs = [c[1].get("env", {}).get("DISPLAY") for c in popen.call_args_list]
         self.assertIn(":10", envs)
@@ -53,13 +54,23 @@ class SessionManagerTest(unittest.TestCase):
         self.assertIn(self.mgr.kasm_password_file, vnc_cmd)
         self.assertIn("-httpd", vnc_cmd)
 
+    @staticmethod
+    def _browser_calls(popen):
+        """瀏覽器改由 watchdog 啟動:chromium 指令在 env 的 BROWSER_CMD,不在 argv。
+        回 [(browser_cmd, env), ...]。"""
+        out = []
+        for c in popen.call_args_list:
+            env = c[1].get("env") or {}
+            if "BROWSER_CMD" in env:
+                out.append((env["BROWSER_CMD"], env))
+        return out
+
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
     def test_create_uses_google_homepage_and_antibot_flags(self, popen, _wait):
         popen.side_effect = lambda *a, **k: _fake_popen()
-        out = self.mgr.create("socks5://backend:1")
-        browser_cmd = next(" ".join(c[0][0]) for c in popen.call_args_list
-                           if "chromium" in " ".join(c[0][0]))
+        self.mgr.create("socks5://backend:1")
+        browser_cmd, _env = self._browser_calls(popen)[0]
         self.assertIn("https://www.google.com", browser_cmd)                 # 首頁 Google
         self.assertIn("--disable-blink-features=AutomationControlled", browser_cmd)  # 反自動化偵測
         self.assertIn("--lang=", browser_cmd)                                # 反爬蟲:非空語系
@@ -68,33 +79,36 @@ class SessionManagerTest(unittest.TestCase):
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_browser_wrapped_in_respawn_loop(self, popen, _wait):
-        """chromium 被使用者關掉/crash → respawn 迴圈自動重開(session 停止時整組 killpg 收掉)。"""
+    def test_browser_runs_under_window_watchdog(self, popen, _wait):
+        """chromium 交給 browser_watchdog.sh 監管:視窗關閉(background mode 讓行程不死,
+        行程級 respawn 無效)或 crash 都會重開;指令經 env BROWSER_CMD 傳入。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
         self.mgr.create("socks5://backend:1")
-        browser_argv = next(c[0][0] for c in popen.call_args_list
-                            if "chromium" in " ".join(c[0][0]))
-        self.assertEqual(browser_argv[:2], ["sh", "-c"])
-        self.assertIn("while :; do chromium", browser_argv[2])
-        self.assertIn("sleep 2", browser_argv[2])
+        watchdog_argv = next(c[0][0] for c in popen.call_args_list
+                             if "BROWSER_CMD" in (c[1].get("env") or {}))
+        self.assertEqual(watchdog_argv[0], "sh")
+        self.assertIn("browser_watchdog", watchdog_argv[1])
+        browser_cmd, env = self._browser_calls(popen)[0]
+        self.assertTrue(browser_cmd.startswith("chromium "))
+        self.assertIn("DISPLAY", env)   # watchdog 靠 DISPLAY 用 xdotool 數視窗
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
     def test_each_session_gets_unique_ephemeral_profile(self, popen, _wait):
-        """並發 session 各自專屬 user-data-dir(SingletonLock 隔離),且目錄真的存在。"""
+        """並發 session 各自專屬 user-data-dir(SingletonLock 隔離),HOME(下載/dotfile
+        落點)也指到同一 session 目錄,且目錄真的存在。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(sm, "PROFILE_TMP_BASE", tmp):
                 self.mgr.create("socks5://backend:1")
                 self.mgr.create("socks5://backend:2")
-            browser_cmds = [" ".join(c[0][0]) for c in popen.call_args_list
-                            if "chromium" in " ".join(c[0][0])]
             dirs = []
-            for cmd in browser_cmds:
+            for cmd, env in self._browser_calls(popen):
                 self.assertIn("--user-data-dir=", cmd)
                 d = next(a.split("=", 1)[1] for a in cmd.split()
                          if a.startswith("--user-data-dir="))
                 self.assertTrue(os.path.isdir(d))
+                self.assertEqual(env.get("HOME"), d)   # 下載/dotfile 都進 session 目錄
                 dirs.append(d)
             self.assertEqual(len(dirs), 2)
             self.assertNotEqual(dirs[0], dirs[1])   # 兩個 session 目錄不同 → 不互搶

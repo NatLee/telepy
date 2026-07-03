@@ -17,10 +17,13 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # 桌面 + 瀏覽器 + 字型 + KasmVNC runtime 依賴 + python(跑 session-manager)+ 下載工具。
+# xdotool:browser_watchdog.sh 用「可見視窗數」判斷 chromium 是否需要重開(background
+# mode 讓關窗後行程賴著不走,行程級 respawn 無效)。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates wget \
       chromium \
       openbox \
+      xdotool \
       fonts-noto-cjk fonts-noto-color-emoji xfonts-base \
       python3 \
       procps \
@@ -65,15 +68,16 @@ RUN set -eux; \
     test -s /etc/kasmvnc/kasmpasswd || { echo "FATAL: /etc/kasmvnc/kasmpasswd not created — check kasmvncpasswd syntax"; exit 1; }; \
     echo "KasmVNC basic-auth user '${KASMVNC_USER}' → /etc/kasmvnc/kasmpasswd"
 
-# 保留的共用設定檔根目錄(chromium --user-data-dir=/profiles/<server_id>,cookie 跨 session 累積,
-# 減少人機驗證重跳)。掛一顆 volume 到這裡可讓設定檔跨容器重建仍存活(見 docker-compose)。
-RUN mkdir -p /profiles
+# Chromium 管理策略:封鎖下載(容器裡下載的檔案使用者拿不到,只會吃磁碟)+ 關背景模式。
+COPY chromium-policy.json /etc/chromium/policies/managed/telepy.json
 
 COPY session_manager.py /app/session_manager.py
+COPY browser_watchdog.sh /app/browser_watchdog.sh
+RUN chmod +x /app/browser_watchdog.sh
 
 # 若你的 KasmVNC build 的旗標/路徑不同,可用這些環境變數覆寫,不必改碼:
 #   VNC_CMD / WM_CMD / BROWSER_CMD          (見 session_manager.py 的 DEFAULT_* 樣板)
-#   REMOTE_BROWSER_HOMEPAGE / REMOTE_BROWSER_LANG / REMOTE_BROWSER_PROFILE_BASE / WS_BASE
+#   REMOTE_BROWSER_HOMEPAGE / REMOTE_BROWSER_LANG / REMOTE_BROWSER_PROFILE_TMP / WS_BASE
 ENV SESSION_MANAGER_PORT=7000
 EXPOSE 7000
 # session-manager 為 PID 1;SIGTERM 時會收掉所有 session 行程。

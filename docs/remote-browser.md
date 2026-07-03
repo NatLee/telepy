@@ -61,7 +61,14 @@ chromium --proxy-server=socks5://backend:<port>
 - **Profile:** 每 session `mkdtemp` 專屬目錄、**停止即刪**(不保留歷史)。
   絕不共用:Chromium SingletonLock 會讓第二個並發 session 的 chromium 委派給
   第一個後退出(log:`Opening in existing browser session.`),兩敗俱傷。
-- **Chromium 關閉/crash:** respawn 迴圈 2 秒內重開(同 profile 同 proxy)。
+  瀏覽器行程的 `HOME` 也指到這個目錄(dotfile 等家目錄寫入隨 session 刪除)。
+- **Chromium 關閉/crash:** `browser_watchdog.sh` 以「**可見視窗數**」(xdotool
+  `--onlyvisible`)判斷、約 10–15 秒內重開(同 profile 同 proxy)。**不能用
+  行程級 respawn**:background mode 讓使用者關掉最後一個視窗後主行程依然活著
+  (`--disable-background-mode` 等旗標實測壓不住),行程級迴圈永遠等不到 → 黑畫面。
+- **下載:** Chromium 管理策略(`/etc/chromium/policies/managed/telepy.json`)
+  `DownloadRestrictions: 3` **全面封鎖**——容器裡下載的檔案使用者本來就拿不到
+  (沒有取檔通道),只會累積吃掉容器磁碟。要開放需同時設計配額與取檔機制。
 - **停止:** WS 斷線即收整個 session(ssh + kasm + Redis);idle GC 為後備。
   行程用 `killpg(p.pid)` 整組收(`start_new_session` ⇒ pgid == pid;不可用
   `getpgid`,group leader 先死會 raise 而漏殺孤兒)。

@@ -1,0 +1,7 @@
+{
+    "_comment": "Telepy remote-browser 的 Chromium 管理策略(/etc/chromium/policies/managed)。DownloadRestrictions=3 封鎖所有下載:遠端容器裡下載的檔案使用者本來就拿不到(沒有取檔通道),只會累積吃掉容器磁碟;BackgroundModeEnabled=false 是視窗關閉後行程賴著不走的緩解之一(主要防線是 browser_watchdog.sh)。",
+    "DownloadRestrictions": 3,
+    "BackgroundModeEnabled": false,
+    "PromotionalTabsEnabled": false,
+    "MetricsReportingEnabled": false
+}
