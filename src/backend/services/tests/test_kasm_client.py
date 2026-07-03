@@ -4,21 +4,31 @@ from services.kasm_client import KasmClient, KasmError
 
 
 class KasmClientTest(TestCase):
-    def test_create_session_posts_proxy_and_returns_rfb_port(self):
+    def test_create_session_posts_proxy_and_returns_ws_port(self):
         client = KasmClient(base_url="http://kasm-test:7000", token="secret")
         resp = mock.Mock(status_code=201)
-        resp.json.return_value = {"session_id": "s1", "rfb_port": 5901}
+        resp.json.return_value = {"session_id": "s1", "ws_port": 8453}
         resp.raise_for_status = lambda: None
         with mock.patch("services.kasm_client.requests.post", return_value=resp) as post:
             out = client.create_session("socks5://backend:12345", geometry="1280x720")
 
-        self.assertEqual(out, {"session_id": "s1", "rfb_port": 5901})
+        self.assertEqual(out, {"session_id": "s1", "ws_port": 8453})
         url, kwargs = post.call_args[0][0], post.call_args[1]
         self.assertEqual(url, "http://kasm-test:7000/sessions")
         self.assertEqual(kwargs["json"]["proxy"], "socks5://backend:12345")
         self.assertEqual(kwargs["json"]["geometry"], "1280x720")
         # 內部 token 走 header,不進 URL
         self.assertEqual(kwargs["headers"]["X-Internal-Token"], "secret")
+
+    def test_create_session_forwards_profile_key(self):
+        """profile_key(通常是 server_id)要帶進 payload,讓 session-manager 用共用設定檔。"""
+        client = KasmClient(base_url="http://kasm-test:7000", token="secret")
+        resp = mock.Mock(status_code=201)
+        resp.json.return_value = {"session_id": "s1", "ws_port": 8453}
+        resp.raise_for_status = lambda: None
+        with mock.patch("services.kasm_client.requests.post", return_value=resp) as post:
+            client.create_session("socks5://backend:1", profile_key=7)
+        self.assertEqual(post.call_args[1]["json"]["profile_key"], 7)
 
     def test_create_session_raises_kasm_error_on_http_failure(self):
         client = KasmClient(base_url="http://kasm-test:7000", token="secret")
@@ -28,10 +38,10 @@ class KasmClientTest(TestCase):
             with self.assertRaises(KasmError):
                 client.create_session("socks5://backend:1")
 
-    def test_create_session_raises_on_missing_rfb_port(self):
+    def test_create_session_raises_on_missing_ws_port(self):
         client = KasmClient(base_url="http://kasm-test:7000", token="secret")
         resp = mock.Mock(status_code=201)
-        resp.json.return_value = {"session_id": "s1"}  # 少 rfb_port
+        resp.json.return_value = {"session_id": "s1"}  # 少 ws_port
         resp.raise_for_status = lambda: None
         with mock.patch("services.kasm_client.requests.post", return_value=resp):
             with self.assertRaises(KasmError):

@@ -52,6 +52,9 @@ services:
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       - KASM_BROWSER_API=http://kasm-browser:7000
       - KASM_BROWSER_HOST=kasm-browser
+      # KasmVNC web 層 Basic Auth 帳密(consumer 帶去連上游 ws;與 kasm-browser 的 build args 同源)。
+      - KASM_WS_USER=${KASM_WS_USER:-telepy}
+      - KASM_WS_PASSWORD=${KASM_WS_PASSWORD:-telepyvnc}
 
     volumes:
       # Source code
@@ -118,12 +121,17 @@ services:
   # session-manager(7000)與各 session 的 RFB 埠(5910+)只在 telepy-network 內,絕不 publish。
   # 首次或改版需 build:docker compose up -d --build kasm-browser
   # Shared KasmVNC browser container: KasmVNC + Chromium + CJK fonts + a session-manager API.
-  # Per session it starts Xvnc + chromium (with that session's SOCKS proxy) and returns the RFB
-  # port; the Django consumer bridges it to the existing /ws. Nothing is published to the host.
+  # Per session it starts Xkasmvnc + chromium (with that session's SOCKS proxy) and returns the
+  # websocket port; the Django consumer WS↔WS-relays it to the existing /ws. Nothing is published.
   kasm-browser:
     <<: [ *common-networks, *common-restart ]
     build:
       context: ./docker/kasm-browser
+      args:
+        # Basic Auth 使用者(與 backend 的 KASM_WS_USER/PASSWORD 同源,單一 .env 控制)。
+        KASMVNC_USER: ${KASM_WS_USER:-telepy}
+        KASMVNC_PASSWORD: ${KASM_WS_PASSWORD:-telepyvnc}
+        # KasmVNC 版本可覆寫:KASMVNC_VERSION: "1.4.0"
     image: telepy-kasm-browser:latest
     container_name: telepy-kasm-browser-${PROJECT_NAME}
     hostname: telepy-kasm-browser-${PROJECT_NAME}
@@ -132,6 +140,12 @@ services:
       # session-manager 用此 token 驗證只有 backend 能起/停 session(與 backend 同一把)。
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       - SESSION_MANAGER_PORT=7000
+      # 遠端瀏覽器:首頁與語系(反爬蟲:語系會影響 navigator.languages / Accept-Language)。
+      - REMOTE_BROWSER_HOMEPAGE=${REMOTE_BROWSER_HOMEPAGE:-https://www.google.com}
+      - REMOTE_BROWSER_LANG=${REMOTE_BROWSER_LANG:-zh-TW}
+    volumes:
+      # 保留的共用瀏覽器設定檔(cookie/登入跨 session 累積,減少人機驗證重跳)。以 server_id 分目錄。
+      - ./telepy-data/browser-profiles:/profiles
     # 不 publish 任何埠:只在 telepy-network 內 / never published to host
 
 networks:

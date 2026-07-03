@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 # 兩層 session 記錄(與 CDP 版同一套骨架,只是瀏覽器端從 CDP context 換成 KasmVNC session):
 #   - ACTIVE_SESSIONS(本行程記憶體):存 ssh 的 Popen handle —— subprocess 無法序列化,
 #     只有啟動它的那個 gunicorn worker 能 terminate 它;GC 也在各 worker 掃自己這份。
-#   - _store(Redis):存「跨 worker 要查的欄位」(server_id / rfb_port / kasm_session_id /
+#   - _store(Redis):存「跨 worker 要查的欄位」(server_id / ws_port / kasm_session_id /
 #     proxy_port / last_seen)。prod 是 gunicorn 多 worker,`/start`(REST)與 VNC 橋接 WS
-#     consumer 常落在不同 worker;consumer 必須能用 session_id 反查 rfb_port 並重驗權限。
+#     consumer 常落在不同 worker;consumer 必須能用 session_id 反查 ws_port 並重驗權限。
 # ---------------------------------------------------------------------------
 ACTIVE_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _SESSIONS_LOCK = threading.Lock()
@@ -160,7 +160,7 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
             "ssh_process": ssh_process,
             "proxy_port": proxy_port,
             "server_id": server_id,
-            "rfb_port": None,
+            "ws_port": None,
             "kasm_session_id": None,
             "last_seen": time.time(),
         }
@@ -168,23 +168,25 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
     proxy_host = os.getenv("HOSTNAME", "backend")   # kasm-browser 經 telepy-network 連回本後端
     geometry = getattr(settings, "remote_browser_geometry", "1280x720") or "1280x720"
     try:
-        ids = _kasm.create_session(f"socks5://{proxy_host}:{proxy_port}", geometry=geometry)
+        # profile_key=server_id:同一目標機共用設定檔(cookie/登入跨 session 累積),減少人機驗證重跳。
+        ids = _kasm.create_session(f"socks5://{proxy_host}:{proxy_port}",
+                                   geometry=geometry, profile_key=server_id)
     except KasmError as e:
         stop_remote_browser(session_id)             # 收 ssh + 清登記
         raise Exception(f"Failed to create VNC browser session: {e}")
 
     with _SESSIONS_LOCK:
         if session_id in ACTIVE_SESSIONS:
-            ACTIVE_SESSIONS[session_id]["rfb_port"] = ids["rfb_port"]
+            ACTIVE_SESSIONS[session_id]["ws_port"] = ids["ws_port"]
             ACTIVE_SESSIONS[session_id]["kasm_session_id"] = ids["session_id"]
     _store.put(session_id, {
         "server_id": server_id,
-        "rfb_port": ids["rfb_port"],
+        "ws_port": ids["ws_port"],
         "kasm_session_id": ids["session_id"],
         "proxy_port": proxy_port,
         "last_seen": time.time(),
     })
-    logger.info(f"Remote browser session {session_id} ready (rfb {ids['rfb_port']})")
+    logger.info(f"Remote browser session {session_id} ready (ws {ids['ws_port']})")
     return {"session_id": session_id, "ws_path": f"/ws/remote-browser/{session_id}/"}
 
 
@@ -203,7 +205,7 @@ def get_session(session_id):
             return None
         return {
             "server_id": sess.get("server_id"),
-            "rfb_port": sess.get("rfb_port"),
+            "ws_port": sess.get("ws_port"),
             "kasm_session_id": sess.get("kasm_session_id"),
             "proxy_port": sess.get("proxy_port"),
         }

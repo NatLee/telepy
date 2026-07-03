@@ -1,14 +1,14 @@
 """
 Backend → kasm-browser session-manager 的薄 client(同步 requests)。
 
-kasm-browser 是一顆共用容器,內含 KasmVNC(Xvnc)+ Chromium + 一個小型 session-manager
-HTTP API。每個 remote-browser session,backend 呼叫這支 API 起一組「Xvnc 顯示 + 綁定該
-session SOCKS proxy 的 chromium」,拿回 RFB(VNC)埠;consumer 之後把該 RFB 埠橋接到 /ws。
+kasm-browser 是一顆共用容器,內含 KasmVNC(Xkasmvnc)+ Chromium + 一個小型 session-manager
+HTTP API。每個 remote-browser session,backend 呼叫這支 API 起一組「Xkasmvnc 顯示 + 綁定該
+session SOCKS proxy 的 chromium」,拿回 **websocket** 埠;consumer 之後把該 ws 埠中繼到 /ws。
 
 - 不需 docker.sock:只是對「一個長命容器」呼叫 HTTP 起/停行程,不做容器編排。
 - 認證:X-Internal-Token(= INTERNAL_API_TOKEN),只在 telepy-network 內,API 不對外。
 - 同步即可:一次性控制(start/stop)在同步 DRF view / service 內呼叫(串流走 consumer 的
-  asyncio TCP,不經這裡)。
+  asyncio WebSocket 中繼,不經這裡)。
 """
 import os
 import logging
@@ -32,15 +32,23 @@ class KasmClient:
     def _headers(self):
         return {"X-Internal-Token": self.token}
 
-    def create_session(self, proxy: str, geometry: str = "1280x720") -> dict:
+    def create_session(self, proxy: str, geometry: str = "1280x720",
+                       profile_key=None, lang=None) -> dict:
         """
-        起一個 VNC 瀏覽器 session。回 {session_id, rfb_port}。
+        起一個 KasmVNC 瀏覽器 session。回 {session_id, ws_port}。
         proxy 形如 socks5://backend:<ssh -D 埠>;chromium 會以此為出口(= 目標機器身分)。
+        profile_key:傳入(通常是 server_id)→ session-manager 用共用設定檔,cookie 跨 session
+        累積,減少人機驗證重跳;不傳 → 臨時設定檔(最大隔離)。
         """
+        payload = {"proxy": proxy, "geometry": geometry}
+        if profile_key is not None:
+            payload["profile_key"] = profile_key
+        if lang is not None:
+            payload["lang"] = lang
         try:
             r = requests.post(
                 f"{self.base_url}/sessions",
-                json={"proxy": proxy, "geometry": geometry},
+                json=payload,
                 headers=self._headers(),
                 timeout=30,
             )
@@ -50,9 +58,9 @@ class KasmClient:
             raise KasmError(f"create_session failed: {e}")
         except ValueError as e:
             raise KasmError(f"create_session: bad JSON response: {e}")
-        if not data.get("session_id") or not data.get("rfb_port"):
+        if not data.get("session_id") or not data.get("ws_port"):
             raise KasmError(f"create_session: incomplete response {data!r}")
-        return {"session_id": data["session_id"], "rfb_port": int(data["rfb_port"])}
+        return {"session_id": data["session_id"], "ws_port": int(data["ws_port"])}
 
     def stop_session(self, session_id: str) -> None:
         """停掉一個 session(kill Xvnc+chromium)。best-effort:失敗只記錄,不往外丟。"""

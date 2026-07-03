@@ -3,23 +3,32 @@
 kasm-browser session-manager —— 跑在共用 kasm-browser 容器內的小型 HTTP API。
 
 每個 remote-browser session,backend(services/kasm_client.py)POST /sessions 進來,這裡就:
-  1. 配一個 X display 號 N 與 RFB 埠(rfb_base + N),
-  2. 起 KasmVNC 的 Xvnc :N(SecurityTypes None、rfbport N、bind 0.0.0.0 供 backend 連),
-  3. 起視窗管理員(openbox)與 chromium(DISPLAY=:N,--proxy-server=該 session 的 SOCKS),
-  4. 回 { session_id, rfb_port }。
+  1. 配一個 X display 號 N 與 websocket 埠(ws_base + N,對齊 KasmVNC 的 auto = 8443 + display),
+  2. 起 KasmVNC 的 Xkasmvnc :N(SecurityTypes None、disableBasicAuth、websocketPort N;TLS 由
+     /etc/kasmvnc/kasmvnc.yaml 的 network.ssl.require_ssl:false 關掉,對內網開純 ws),
+  3. 起視窗管理員(openbox)與 chromium(DISPLAY=:N,--proxy-server=該 session 的 SOCKS,
+     首頁 Google、反自動化偵測旗標、可保留的共用設定檔),
+  4. 回 { session_id, ws_port }。
 
-之後 Django 的 RemoteBrowserConsumer 會把 kasm-browser:<rfb_port> 這條 RFB(VNC)橋接到
-既有的 /ws,前端用 noVNC 呈現。DELETE /sessions/<id> 收掉該 session 的所有行程。
+之後 Django 的 RemoteBrowserConsumer 會把 kasm-browser:<ws_port> 這條 **WebSocket**(KasmVNC 的
+web-native 傳輸)中繼到既有的 /ws,前端用 KasmVNC 自家的 web client 呈現。DELETE /sessions/<id>
+收掉該 session 的所有行程。
+
+為什麼是 WebSocket 而不是 raw-RFB TCP:KasmVNC 已脫離 RFB 規範,**只開 websocket、不開傳統
+raw-RFB TCP 埠**,且它的 web client 是 fork 過、baked 在它 server 裡的 noVNC —— 一般 noVNC/VNC
+viewer 連不上。因此橋接層改成 WS↔WS,前端改用 KasmVNC 的 client(見 docs/plans 的修正版計畫)。
 
 設計要點:
   - 不需 docker.sock:只是在「一顆長命容器」內起/停行程,不做容器編排。
   - 只在 telepy-network 內、X-Internal-Token(= INTERNAL_API_TOKEN)保護,絕不對外 publish。
-  - 啟動指令用環境變數樣板化(VNC_CMD/WM_CMD/BROWSER_CMD),方便依 KasmVNC 版本微調而不改碼。
+  - 啟動指令用環境變數樣板化(VNC_CMD/WM_CMD/BROWSER_CMD),方便依 KasmVNC 版本/旗標微調而不改碼:
+    若某旗標你的 KasmVNC build 不吃,直接用 env 覆寫 VNC_CMD 即可(auto ws 埠仍是 8443+display)。
   - 每個 session 的行程都開新 process group(start_new_session),停止時整組 kill,確保 chromium
     的子行程一起收掉。
 只用標準函式庫,可獨立於 Django 執行與測試。
 """
 import os
+import re
 import sys
 import json
 import time
@@ -36,35 +45,76 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [session-manager] %(message)s")
 logger = logging.getLogger("session_manager")
 
-# TigerVNC 的 X server 是 Xvnc(部分安裝為 Xtigervnc);用 {vnc_bin} 佔位,實際名稱由
+# KasmVNC 的 X server 二進位是 Xkasmvnc(不是 TigerVNC 的 Xvnc);用 {vnc_bin} 佔位,實際名稱由
 # _resolve_vnc_bin() 於啟動時偵測(可用 VNC_SERVER_BIN 覆寫)。
-# TigerVNC:用 `-localhost no` 讓 RFB 埠聽在所有介面(否則預設只聽 127.0.0.1,backend 連不到);
-# `-SecurityTypes None` 免驗證(改由 Django 層驗 JWT+權限)。
+# 旗標說明:
+#   -SecurityTypes None       RFB 層免驗證(驗證改由 Django 的 JWT+權限)。
+#   -disableBasicAuth         嘗試關 web 層 Basic Auth(實測某些 build 無效 → 故仍設密碼檔+帶帳密)。
+#   -KasmPasswordFile <path>  **固定路徑**的 Basic Auth 密碼檔;不設會用 ${HOME}/.kasmpasswd,而 PID1
+#                             的 HOME 在容器內未必是 build 時的 /root → 會找不到使用者、一律 401。
+#   -websocketPort {ws_port}  每個 session 專屬的 websocket 埠。
+#   -httpd <dir>              serve KasmVNC 內建 web client;同時確保 /websockify 這類 ws 端點有註冊。
+#   -interface 0.0.0.0        聽在所有介面,讓 backend 經 telepy-network 連得到。
+#   TLS:Xkasmvnc 的 -sslOnly 預設關 → 內網是純 ws(不需 wss)。
 DEFAULT_VNC_CMD = (
     "{vnc_bin} :{display} -geometry {geometry} -depth 24 -SecurityTypes None "
-    "-rfbport {rfbport} -localhost no -AlwaysShared -desktop telepy"
+    "-disableBasicAuth -KasmPasswordFile {kasm_password_file} "
+    "-websocketPort {ws_port} -httpd {httpd_dir} -interface 0.0.0.0 -desktop telepy"
 )
 DEFAULT_WM_CMD = "openbox"
+# 瀏覽器指令:
+#   {homepage}      首頁(預設 Google;env REMOTE_BROWSER_HOMEPAGE 可改)。
+#   {profile_flag}  --user-data-dir=<共用設定檔目錄> 或空字串(見 _profile_flag)。
+#   {lang}          介面語系與 Accept-Language(反爬蟲:navigator.languages 空值是機器人特徵)。
+#   --disable-blink-features=AutomationControlled  移除 navigator.webdriver 之類的自動化訊號。
+# 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
+# 條件;這裡的旗標是加分,無法保證完全免除 Cloudflare/reCAPTCHA。詳見 docs/plans 修正版計畫。
 DEFAULT_BROWSER_CMD = (
     "chromium --no-sandbox --no-first-run --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
-    "--proxy-server={proxy} --start-maximized about:blank"
+    "--disable-blink-features=AutomationControlled "
+    "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
+    "--proxy-server={proxy} --start-maximized {homepage}"
 )
+
+DEFAULT_HOMEPAGE = os.getenv("REMOTE_BROWSER_HOMEPAGE", "https://www.google.com")
+DEFAULT_LANG = os.getenv("REMOTE_BROWSER_LANG", "zh-TW")
+# 保留的共用設定檔根目錄。以「目標機器(server_id)」為 key,讓同一目標的 cookie/登入狀態跨 session
+# 累積 → 通過人機驗證後較不會一直重跳。掛一顆 volume 到這裡可讓設定檔跨容器重建仍存活。
+PROFILE_BASE = os.getenv("REMOTE_BROWSER_PROFILE_BASE", "/profiles")
+# KasmVNC web 層 Basic Auth 的密碼檔:固定路徑,不依賴 $HOME(Dockerfile 用 kasmvncpasswd 建於此)。
+KASM_PASSWORD_FILE = os.getenv("KASM_PASSWORD_FILE", "/etc/kasmvnc/kasmpasswd")
+# KasmVNC 內建 web server 要 serve 的 client 目錄(KasmVNC deb 內含 /usr/share/kasmvnc/www)。
+HTTPD_DIR = os.getenv("HTTPD_DIR", "/usr/share/kasmvnc/www")
+
+
+def _accept_lang(lang: str) -> str:
+    """由 --lang 推出合理的 Accept-Language(例:zh-TW → 'zh-TW,zh;q=0.9,en;q=0.8')。"""
+    base = (lang or "en-US").split("-")[0]
+    parts = [lang, f"{base};q=0.9"]
+    if base != "en":
+        parts.append("en;q=0.8")
+    return ",".join(p for p in parts if p)
+
+
+def _safe_key(value: str) -> str:
+    """把任意 profile key(例如 server_id)洗成安全的目錄名。"""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(value))[:64] or "default"
 
 
 def _resolve_vnc_bin():
     """
-    找出可用的 VNC X server 二進位。TigerVNC 是 Xvnc/Xtigervnc(本專案採用)。
-    優先序:VNC_SERVER_BIN(env)→ Xvnc → Xtigervnc → 常見絕對路徑。找不到就回預設,讓
-    後續 spawn 丟出明確的 FileNotFoundError。(Xkasmvnc 列在最後僅供相容;KasmVNC 只開
-    websocket、不開 raw RFB,與本 TCP 橋接設計不相容。)
+    找出可用的 VNC X server 二進位。KasmVNC 是 Xkasmvnc(本專案 KasmVNC 版採用)。
+    優先序:VNC_SERVER_BIN(env)→ Xkasmvnc → 常見絕對路徑 →(相容)Xvnc/Xtigervnc。找不到就回
+    預設,讓後續 spawn 丟出明確的 FileNotFoundError。
     """
-    candidates = [os.getenv("VNC_SERVER_BIN"), "Xvnc", "Xtigervnc",
-                  "/usr/bin/Xvnc", "/usr/bin/Xtigervnc", "Xkasmvnc"]
+    candidates = [os.getenv("VNC_SERVER_BIN"), "Xkasmvnc",
+                  "/usr/bin/Xkasmvnc", "/usr/local/bin/Xkasmvnc",
+                  "Xvnc", "Xtigervnc"]
     for cand in candidates:
         if cand and (shutil.which(cand) or os.path.exists(cand)):
             return cand
-    return os.getenv("VNC_SERVER_BIN") or "Xvnc"
+    return os.getenv("VNC_SERVER_BIN") or "Xkasmvnc"
 
 
 class SessionManager:
@@ -74,9 +124,14 @@ class SessionManager:
         self.wm_cmd = os.getenv("WM_CMD", DEFAULT_WM_CMD)
         self.browser_cmd = os.getenv("BROWSER_CMD", DEFAULT_BROWSER_CMD)
         self.display_base = int(os.getenv("DISPLAY_BASE", "10"))
-        self.rfb_base = int(os.getenv("RFB_BASE", "5900"))
-        self.rfb_timeout = int(os.getenv("RFB_TIMEOUT", "15"))
-        self._sessions = {}          # sid -> {display, rfb_port, procs, proxy}
+        # KasmVNC 的 websocket 埠 auto = 8443 + display;ws_base 預設對齊,per-session 埠可預測。
+        self.ws_base = int(os.getenv("WS_BASE", "8443"))
+        self.ws_timeout = int(os.getenv("WS_TIMEOUT", os.getenv("RFB_TIMEOUT", "15")))
+        self.homepage = DEFAULT_HOMEPAGE
+        self.lang = DEFAULT_LANG
+        self.kasm_password_file = KASM_PASSWORD_FILE
+        self.httpd_dir = HTTPD_DIR
+        self._sessions = {}          # sid -> {display, ws_port, procs, proxy, profile_dir}
         self._used_displays = set()
         self._lock = threading.Lock()
 
@@ -92,28 +147,52 @@ class SessionManager:
         with self._lock:
             return len(self._sessions)
 
+    def _profile_flag(self, profile_key):
+        """
+        回 (flag_str, profile_dir)。有 profile_key → 共用設定檔(以 server_id 為 key,cookie 跨
+        session 累積);無 → 空字串(chromium 用臨時設定檔,最大隔離)。
+        注意:Chromium 對同一 user-data-dir 有 SingletonLock,同一目標的「並發」session 會互卡;
+        remote-browser 通常一目標一人使用,可接受。要完全並發隔離就別傳 profile_key。
+        """
+        if not profile_key:
+            return "", None
+        profile_dir = os.path.join(PROFILE_BASE, _safe_key(profile_key))
+        try:
+            os.makedirs(profile_dir, exist_ok=True)
+        except OSError:
+            logger.warning("could not create profile dir %s; using ephemeral profile", profile_dir)
+            return "", None
+        return f"--user-data-dir={shlex.quote(profile_dir)}", profile_dir
+
     # --- lifecycle --------------------------------------------------------
-    def create(self, proxy, geometry="1280x720"):
+    def create(self, proxy, geometry="1280x720", profile_key=None, lang=None):
         if not proxy:
             raise ValueError("proxy required")
         with self._lock:
             display = self._alloc_display()
-        rfb_port = self.rfb_base + display
+        ws_port = self.ws_base + display
         disp = f":{display}"
+        lang = lang or self.lang
+        profile_flag, profile_dir = self._profile_flag(profile_key)
         vnc_log = f"/tmp/telepy-vnc-{display}.log"
         procs = []
         try:
-            procs.append(self._spawn(self.vnc_cmd.format(
-                vnc_bin=self.vnc_bin, display=display,
-                geometry=geometry, rfbport=rfb_port), log_path=vnc_log))
-            if not self._wait_for_rfb(rfb_port, timeout=self.rfb_timeout):
-                # 把 VNC server 自己的錯誤訊息帶出來,讓「RFB 沒起來」可診斷(而非啞掉)。
+            vnc_cmd = self.vnc_cmd.format(
+                vnc_bin=self.vnc_bin, display=display, geometry=geometry, ws_port=ws_port,
+                kasm_password_file=self.kasm_password_file, httpd_dir=self.httpd_dir)
+            logger.info("spawn vnc: %s", vnc_cmd)   # 便於診斷實際旗標
+            procs.append(self._spawn(vnc_cmd, log_path=vnc_log))
+            if not self._wait_for_ws_port(ws_port, timeout=self.ws_timeout):
+                # 把 VNC server 自己的錯誤訊息帶出來,讓「websocket 沒起來」可診斷(而非啞掉)。
                 raise RuntimeError(
-                    f"VNC server ({self.vnc_bin}) RFB port {rfb_port} did not come up. "
+                    f"KasmVNC ({self.vnc_bin}) websocket port {ws_port} did not come up. "
                     f"Last log lines:\n{self._tail(vnc_log)}")
             if self.wm_cmd:
                 procs.append(self._spawn(self.wm_cmd, display=disp))
-            procs.append(self._spawn(self.browser_cmd.format(proxy=proxy), display=disp))
+            procs.append(self._spawn(self.browser_cmd.format(
+                proxy=proxy, homepage=self.homepage, lang=lang,
+                accept_lang=_accept_lang(lang), profile_flag=profile_flag),
+                display=disp, lang=lang))
         except Exception:
             for p in procs:
                 self._term(p)
@@ -122,10 +201,12 @@ class SessionManager:
             raise
         sid = uuid.uuid4().hex
         with self._lock:
-            self._sessions[sid] = {"display": display, "rfb_port": rfb_port,
-                                   "procs": procs, "proxy": proxy}
-        logger.info("session %s up: display %s rfb %s", sid, disp, rfb_port)
-        return {"session_id": sid, "rfb_port": rfb_port}
+            self._sessions[sid] = {"display": display, "ws_port": ws_port,
+                                   "procs": procs, "proxy": proxy,
+                                   "profile_dir": profile_dir}
+        logger.info("session %s up: display %s ws %s profile %s",
+                    sid, disp, ws_port, profile_dir or "(ephemeral)")
+        return {"session_id": sid, "ws_port": ws_port}
 
     def stop(self, session_id):
         with self._lock:
@@ -144,10 +225,16 @@ class SessionManager:
             self.stop(sid)
 
     # --- process helpers (mocked in tests) --------------------------------
-    def _spawn(self, cmd, display=None, log_path=None):
+    def _spawn(self, cmd, display=None, log_path=None, lang=None):
         env = dict(os.environ)
         if display:
             env["DISPLAY"] = display
+        if lang:
+            # 反爬蟲:讓 chromium 的 navigator.language(s) 與行程 locale 一致、非空。
+            base = lang.replace("-", "_")
+            env.setdefault("LANG", f"{base}.UTF-8")
+            env.setdefault("LANGUAGE", f"{lang}:{lang.split('-')[0]}")
+            env.setdefault("LC_ALL", f"{base}.UTF-8")
         out = None
         if log_path:
             try:
@@ -164,7 +251,8 @@ class SessionManager:
         except OSError:
             return "(no log)"
 
-    def _wait_for_rfb(self, port, timeout=15):
+    def _wait_for_ws_port(self, port, timeout=15):
+        """等 KasmVNC 的 websocket 埠 TCP 層 listen(能連上即視為就緒)。"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -231,7 +319,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not proxy:
             return self._send(400, {"error": "proxy required"})
         try:
-            out = self.manager.create(proxy, data.get("geometry", "1280x720"))
+            out = self.manager.create(
+                proxy,
+                data.get("geometry", "1280x720"),
+                profile_key=data.get("profile_key"),
+                lang=data.get("lang"),
+            )
         except Exception as e:
             logger.exception("create failed")
             return self._send(500, {"error": str(e)})
