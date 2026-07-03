@@ -96,8 +96,23 @@ chromium --proxy-server=socks5://backend:<port>
 
   兩者都是真瀏覽器絕不會有的鐵特徵 → 到處被 CAPTCHA。乾淨標籤 → header 正確為
   `zh-TW,zh;q=0.9,en;q=0.8`、`navigator.languages` 為 `['zh-TW','zh','en']`。
-- 無法保證完全免除 Cloudflare/reCAPTCHA;且設定檔每 session 全新(不留 cookie/歷史,
-  privacy 需求),同目標的信任度不會跨 session 累積。
+- **WebGL(`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`)**:容器無
+  GPU,headed chromium 在無 GPU 的 X display 上 GPU 初始化失敗 → `canvas.getContext("webgl")`
+  回 **null**(實測)。「完全沒有 WebGL」是強烈機器人特徵(YouTube 的「登入確認你不是機器人」
+  會查)。這三個旗標強制 SwiftShader 軟體渲染 → WebGL 正常。實測 headed:baseline `NO_WEBGL`
+  → 加旗標 `OK ANGLE (SwiftShader...)`。註:renderer 顯示 SwiftShader(非真 GPU),仍是弱訊號;
+  要更像真機需在 client 端 spoof `getParameter` 的 renderer 字串(未做)。
+
+### 極限(誠實說明)
+
+旗標只處理**瀏覽器指紋**。YouTube 這類的封鎖,主宰因素是另外兩個,本專案無法用旗標解決:
+
+1. **出口 IP 信譽**:流量走目標機 IP(`ssh -D`)。目標機若是資料中心/雲端/VPN IP,或該 IP
+   已被大量自動化存取汙染,YouTube/Cloudflare 會直接擋 —— **與瀏覽器指紋完全無關**。要繞開
+   只能換一台住宅 IP 的目標機。
+2. **無 cookie/登入信任**:設定檔每 session 全新(privacy 需求,不留歷史)。YouTube 對「有登入/
+   有瀏覽歷史」的 session 信任度高很多;全新 session 天生更容易被要求驗證。這與「不保留歷史」
+   直接衝突,目前站在 privacy 這邊。
 
 ## 環境變數(都有預設,通常不用設)
 

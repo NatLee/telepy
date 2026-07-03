@@ -79,6 +79,10 @@ class SessionManagerTest(unittest.TestCase):
         # 反爬蟲關鍵:--accept-lang 不能帶 q-value(否則 q 洩進 navigator.languages +
         # 疊出雙重-q 的 Accept-Language header,兩者都是機器人特徵)。
         self.assertNotIn("q=", browser_cmd)
+        # 反爬蟲關鍵:強制 SwiftShader 軟體 WebGL —— 否則 headed 無 GPU → WebGL context 為 null
+        # (「完全沒有 WebGL」是強機器人特徵)。
+        self.assertIn("--use-angle=swiftshader", browser_cmd)
+        self.assertIn("--enable-unsafe-swiftshader", browser_cmd)
 
     def test_accept_lang_produces_clean_tags_without_q_values(self):
         self.assertEqual(sm._accept_lang("zh-TW"), "zh-TW,zh,en")
