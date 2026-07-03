@@ -62,7 +62,10 @@ DEFAULT_VNC_CMD = (
     "-disableBasicAuth -KasmPasswordFile {kasm_password_file} "
     "-websocketPort {ws_port} -httpd {httpd_dir} -interface 0.0.0.0 -desktop telepy"
 )
-DEFAULT_WM_CMD = "openbox"
+# openbox 讀自訂設定(Dockerfile 於 build 時由預設 rc.xml 併入 applications 規則):對所有視窗
+# <decor>no</decor>(移除標題列 —— 使用者看到的「一排寫 chrome 的字」)+ <maximized>true</maximized>
+# (真正填滿整個 display;chromium 自己的 --start-maximized 實測只給 1050x700、留邊)。
+DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 # 瀏覽器指令:
 #   {homepage}      首頁(預設 Google;env REMOTE_BROWSER_HOMEPAGE 可改)。
 #   {profile_flag}  --user-data-dir=<每 session 專屬臨時目錄>(見 _make_profile_dir;session 停止
@@ -70,15 +73,18 @@ DEFAULT_WM_CMD = "openbox"
 #                   不給 → chromium 用 ~/.config/chromium)會踩 SingletonLock,第二個 session 的
 #                   chromium 只會「Opening in existing browser session」把分頁開到第一個 session
 #                   的桌面上然後退出,連鎖把兩邊都弄壞。
-#   {lang}          介面語系與 Accept-Language(反爬蟲:navigator.languages 空值是機器人特徵)。
+#   {lang}          介面語系與 Accept-Language(反爬蟲:見 _accept_lang —— **必須傳乾淨語言標籤、
+#                   不能帶 q-value**,否則 q 值會洩進 navigator.languages 並讓 Accept-Language
+#                   header 疊出雙重 q(zh;q=0.9;q=0.8),兩者都是鐵板釘釘的機器人特徵)。
 #   --disable-blink-features=AutomationControlled  移除 navigator.webdriver 之類的自動化訊號。
 #   --no-sandbox    容器內以 root 跑 chromium 的必要之惡:Docker 預設 seccomp 擋掉 unprivileged
 #                   userns(實測 unshare -U → EPERM),setuid sandbox helper 也缺對應 capability;
 #                   要開真 sandbox 得在 compose 掛自訂 seccomp profile(見 docs)。隔離邊界=容器。
-#   --test-type     壓掉「You are using an unsupported command-line flag: --no-sandbox」的黃色警告列
-#                   (chromium 唯一正式的抑制途徑;副作用僅為標記測試模式、關閉部分回報)。
+#   --test-type     壓掉「You are using an unsupported command-line flag: --no-sandbox」的黃色警告列。
+#                   實測:有/無此旗標的 JS 指紋(webdriver/chrome/languages/plugins/vendor)完全相同,
+#                   且警告列是 chromium 自家 UI、網頁看不到 → 對反爬蟲零影響,純觀感。
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
-# 條件;這裡的旗標是加分,無法保證完全免除 Cloudflare/reCAPTCHA。詳見 docs/plans 修正版計畫。
+# 條件;這裡的旗標是加分,無法保證完全免除 Cloudflare/reCAPTCHA。詳見 docs/remote-browser.md。
 DEFAULT_BROWSER_CMD = (
     "chromium --no-sandbox --test-type --no-first-run --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
@@ -104,12 +110,26 @@ HTTPD_DIR = os.getenv("HTTPD_DIR", "/usr/share/kasmvnc/www")
 
 
 def _accept_lang(lang: str) -> str:
-    """由 --lang 推出合理的 Accept-Language(例:zh-TW → 'zh-TW,zh;q=0.9,en;q=0.8')。"""
+    """
+    chromium `--accept-lang` 的值:**乾淨的語言標籤清單,不帶 q-value**(例:zh-TW → 'zh-TW,zh,en')。
+
+    關鍵(反爬蟲):chromium 用這個值同時決定 (a) HTTP Accept-Language header 與
+    (b) navigator.languages。它會**自己**替 header 算 q-value —— 我們若先塞 q 進去,
+    header 會疊成 'zh-TW,zh;q=0.9,zh;q=0.9;q=0.8,en;q=0.8;q=0.7'(雙重 q!),
+    且 navigator.languages 變成 ['zh-TW','zh;q=0.9','en;q=0.8'](q 值洩漏)。兩者都是
+    真瀏覽器絕不會有的機器人特徵。傳乾淨標籤 → header 得到正確的 'zh-TW,zh;q=0.9,en;q=0.8'、
+    navigator.languages 得到乾淨的 ['zh-TW','zh','en']。(實測確認,見 docs/remote-browser.md)
+    """
     base = (lang or "en-US").split("-")[0]
-    parts = [lang, f"{base};q=0.9"]
+    tags = [lang, base]
     if base != "en":
-        parts.append("en;q=0.8")
-    return ",".join(p for p in parts if p)
+        tags.append("en")
+    seen, out = set(), []
+    for t in tags:
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return ",".join(out)
 
 
 def _resolve_vnc_bin():

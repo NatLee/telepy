@@ -71,6 +71,27 @@ RUN set -eux; \
 # Chromium 管理策略:封鎖下載(容器裡下載的檔案使用者拿不到,只會吃磁碟)+ 關背景模式。
 COPY chromium-policy.json /etc/chromium/policies/managed/telepy.json
 
+# openbox 設定:以預設 rc.xml 為底,加一條 applications 規則 —— 對所有視窗移除標題列裝飾
+# (<decor>no</decor>)並最大化填滿 display(<maximized>true</maximized>)。session_manager 以
+# `openbox --config-file /app/openbox-rc.xml` 啟動。用預設檔為底可保留所有預設鍵位/行為。
+RUN mkdir -p /app && python3 - <<'PY'
+import re
+src = open("/etc/xdg/openbox/rc.xml").read()
+rule = (
+    "  <applications>\n"
+    '    <application class="*">\n'
+    "      <decor>no</decor>\n"
+    "      <maximized>true</maximized>\n"
+    "    </application>\n"
+    "  </applications>\n"
+)
+src = re.sub(r"<applications>.*?</applications>", "", src, flags=re.S)
+src = src.replace("</openbox_config>", rule + "</openbox_config>")
+open("/app/openbox-rc.xml", "w").write(src)
+import xml.dom.minidom as m; m.parseString(src)   # build 時驗 XML 合法,壞了直接 fail
+print("openbox-rc.xml generated and validated")
+PY
+
 COPY session_manager.py /app/session_manager.py
 COPY browser_watchdog.sh /app/browser_watchdog.sh
 RUN chmod +x /app/browser_watchdog.sh

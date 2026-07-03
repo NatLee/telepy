@@ -76,6 +76,26 @@ class SessionManagerTest(unittest.TestCase):
         self.assertIn("--lang=", browser_cmd)                                # 反爬蟲:非空語系
         self.assertIn("--accept-lang=", browser_cmd)
         self.assertIn("--test-type", browser_cmd)   # 壓掉 --no-sandbox 的黃色警告列
+        # 反爬蟲關鍵:--accept-lang 不能帶 q-value(否則 q 洩進 navigator.languages +
+        # 疊出雙重-q 的 Accept-Language header,兩者都是機器人特徵)。
+        self.assertNotIn("q=", browser_cmd)
+
+    def test_accept_lang_produces_clean_tags_without_q_values(self):
+        self.assertEqual(sm._accept_lang("zh-TW"), "zh-TW,zh,en")
+        self.assertEqual(sm._accept_lang("en-US"), "en-US,en")
+        self.assertEqual(sm._accept_lang("en"), "en")
+        self.assertNotIn("q=", sm._accept_lang("ja-JP"))
+
+    @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
+    @mock.patch("session_manager.subprocess.Popen")
+    def test_window_manager_uses_maximize_no_decor_config(self, popen, _wait):
+        """openbox 以自訂設定啟動(移除標題列 + 最大化填滿 display)。"""
+        popen.side_effect = lambda *a, **k: _fake_popen()
+        self.mgr.create("socks5://backend:1")
+        wm_argv = next(c[0][0] for c in popen.call_args_list
+                       if "openbox" in " ".join(c[0][0]))
+        self.assertIn("--config-file", wm_argv)
+        self.assertTrue(any(a.endswith("openbox-rc.xml") for a in wm_argv))
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")

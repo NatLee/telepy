@@ -73,9 +73,31 @@ chromium --proxy-server=socks5://backend:<port>
   行程用 `killpg(p.pid)` 整組收(`start_new_session` ⇒ pgid == pid;不可用
   `getpgid`,group leader 先死會 raise 而漏殺孤兒)。
 - **殭屍:** kasm-browser 以 `init: true`(tini)當 PID 1 回收 reparent 的孤兒。
+- **視窗:** openbox 以 `--config-file /app/openbox-rc.xml` 啟動(build 時由預設
+  rc.xml 併入 applications 規則):`<decor>no</decor>` 移除標題列 + `<maximized>true</maximized>`
+  填滿 display。chromium 自己的 `--start-maximized` 實測只給 1050×720、留邊且帶標題列。
 - **sandbox:** `--no-sandbox` 是容器內以 root 跑的必要之惡(Docker 預設
   seccomp 擋 unprivileged userns);`--test-type` 壓掉黃色警告條。要開真
-  sandbox 需 compose 掛自訂 seccomp profile(未做,隔離邊界=容器)。
+  sandbox 需 compose 掛自訂 seccomp profile(未做,隔離邊界=容器)。實測 `--test-type`
+  對 JS 指紋(webdriver/chrome/languages/plugins/vendor)零影響、警告列網頁也看不到。
+
+## 反爬蟲(anti-detection)
+
+真人透過 VNC 操作 + 經目標機出口 IP,本身就是最強的反偵測條件。旗標是加分:
+
+- `--disable-blink-features=AutomationControlled` → `navigator.webdriver = false`。
+- 語系:`--lang` + `--accept-lang` 給非空、一致的語系(空的 `navigator.languages`
+  是機器人特徵)。
+- **`--accept-lang` 必須傳乾淨語言標籤、不能帶 q-value**(`_accept_lang` 回 `zh-TW,zh,en`)。
+  chromium 用這個值同時決定 HTTP `Accept-Language` header **與** `navigator.languages`,
+  且會自己算 header 的 q-value。若我們先塞 q 進去(舊 bug):
+  - `Accept-Language` header 疊成 `zh-TW,zh;q=0.9,zh;q=0.9;q=0.8,en;q=0.8;q=0.7`(雙重 q)
+  - `navigator.languages` 變成 `['zh-TW','zh;q=0.9','en;q=0.8']`(q 洩漏)
+
+  兩者都是真瀏覽器絕不會有的鐵特徵 → 到處被 CAPTCHA。乾淨標籤 → header 正確為
+  `zh-TW,zh;q=0.9,en;q=0.8`、`navigator.languages` 為 `['zh-TW','zh','en']`。
+- 無法保證完全免除 Cloudflare/reCAPTCHA;且設定檔每 session 全新(不留 cookie/歷史,
+  privacy 需求),同目標的信任度不會跨 session 累積。
 
 ## 環境變數(都有預設,通常不用設)
 
