@@ -104,12 +104,16 @@ chromium --proxy-server=socks5://backend:<port>
 
   兩者都是真瀏覽器絕不會有的鐵特徵 → 到處被 CAPTCHA。乾淨標籤 → header 正確為
   `zh-TW,zh;q=0.9,en;q=0.8`、`navigator.languages` 為 `['zh-TW','zh','en']`。
-- **WebGL(`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`)**:容器無
-  GPU,headed chromium 在無 GPU 的 X display 上 GPU 初始化失敗 → `canvas.getContext("webgl")`
-  回 **null**(實測)。「完全沒有 WebGL」是強烈機器人特徵(YouTube 的「登入確認你不是機器人」
-  會查)。這三個旗標強制 SwiftShader 軟體渲染 → WebGL 正常。實測 headed:baseline `NO_WEBGL`
-  → 加旗標 `OK ANGLE (SwiftShader...)`。註:renderer 顯示 SwiftShader(非真 GPU),仍是弱訊號;
-  要更像真機需在 client 端 spoof `getParameter` 的 renderer 字串(未做)。
+- **WebGL(`--enable-unsafe-swiftshader`,且**只**這一個)**:容器無 GPU,headed chromium 在無
+  GPU 的 X display 上 GPU 初始化失敗 → `canvas.getContext("webgl")` 回 **null**(實測)。「完全
+  沒有 WebGL」是強烈機器人特徵(YouTube 的「登入確認你不是機器人」會查)。`--enable-unsafe-swiftshader`
+  **只**允許 WebGL context 回退 SwiftShader,不動合成器 → WebGL 正常(`OK ANGLE (SwiftShader...)`)。
+  **踩過的雷**:曾加 `--use-gl=angle --use-angle=swiftshader` 想確保 WebGL,結果把整個 GL **合成器**
+  也強制走軟體 SwiftShader → **YouTube 影片播不動**。實測(真 VP9 解碼 640x480):forced-swiftshader
+  掉 4 幀、`--enable-unsafe-swiftshader` 單獨與 baseline 皆掉 0 幀,且單獨版 WebGL 一樣正常。720p/1080p
+  下 forced 版的掉幀會嚴重到播不動。**結論:只留 `--enable-unsafe-swiftshader`,絕不加 `--use-gl`。**
+  註:renderer 顯示 SwiftShader(非真 GPU),仍是弱訊號;要更像真機需在 client 端 spoof
+  `getParameter` 的 renderer 字串(未做)。
 
 ### 極限(誠實說明)
 

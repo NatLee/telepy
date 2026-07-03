@@ -83,19 +83,22 @@ DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 #   --test-type     壓掉「You are using an unsupported command-line flag: --no-sandbox」的黃色警告列。
 #                   實測:有/無此旗標的 JS 指紋(webdriver/chrome/languages/plugins/vendor)完全相同,
 #                   且警告列是 chromium 自家 UI、網頁看不到 → 對反爬蟲零影響,純觀感。
-#   --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
-#                   **反爬蟲關鍵**:容器無 GPU,headed chromium 在無 GPU 的 X display 上 GPU 初始化
-#                   失敗 → `canvas.getContext("webgl")` 回 **null**(實測)。「完全沒有 WebGL」是強烈的
-#                   headless/機器人特徵(YouTube 的「登入確認你不是機器人」等會查)。這三個旗標強制
-#                   ANGLE 走 SwiftShader 軟體渲染 → WebGL 正常(renderer 顯示 SwiftShader,雖非真 GPU,
-#                   但「有可用的 WebGL」遠勝「完全沒有」)。實測 headed:baseline=NO_WEBGL、加旗標=OK。
+#   --enable-unsafe-swiftshader
+#                   **反爬蟲**:容器無 GPU,headed chromium 在無 GPU 的 X display 上 GPU 初始化失敗 →
+#                   `canvas.getContext("webgl")` 回 **null**(實測)。「完全沒有 WebGL」是強烈的機器人
+#                   特徵(YouTube 的「登入確認你不是機器人」等會查)。此旗標**只**允許 WebGL context
+#                   回退到 SwiftShader 軟體渲染 → WebGL 正常,而**不動合成器/影片路徑**。
+#                   **切勿再加 `--use-gl=angle --use-angle=swiftshader`**:那會把整個 GL 合成器也強制走
+#                   SwiftShader,實測連 640x480 影片都開始掉幀(YouTube 720p/1080p 會嚴重到播不動)。
+#                   實測(真 VP9 解碼):forced-swiftshader 掉 4 幀、unsafe-only 與 baseline 皆掉 0 幀,
+#                   且 unsafe-only 的 WebGL 一樣正常。詳見 docs/remote-browser.md。
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
 # 條件;這裡的旗標是加分。**主宰因素是出口 IP 的信譽**:目標機若是資料中心/雲端 IP,YouTube 仍會
 # 擋(與瀏覽器指紋無關);且設定檔每 session 全新、無 cookie 信任累積(privacy 取捨)。詳見 docs。
 DEFAULT_BROWSER_CMD = (
     "chromium --no-sandbox --test-type --no-first-run --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
-    "--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader "
+    "--enable-unsafe-swiftshader "
     "--disable-blink-features=AutomationControlled "
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --start-maximized {homepage}"
