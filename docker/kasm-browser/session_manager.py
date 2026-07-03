@@ -72,15 +72,23 @@ DEFAULT_WM_CMD = "openbox"
 #                   的桌面上然後退出,連鎖把兩邊都弄壞。
 #   {lang}          介面語系與 Accept-Language(反爬蟲:navigator.languages 空值是機器人特徵)。
 #   --disable-blink-features=AutomationControlled  移除 navigator.webdriver 之類的自動化訊號。
+#   --no-sandbox    容器內以 root 跑 chromium 的必要之惡:Docker 預設 seccomp 擋掉 unprivileged
+#                   userns(實測 unshare -U → EPERM),setuid sandbox helper 也缺對應 capability;
+#                   要開真 sandbox 得在 compose 掛自訂 seccomp profile(見 docs)。隔離邊界=容器。
+#   --test-type     壓掉「You are using an unsupported command-line flag: --no-sandbox」的黃色警告列
+#                   (chromium 唯一正式的抑制途徑;副作用僅為標記測試模式、關閉部分回報)。
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
 # 條件;這裡的旗標是加分,無法保證完全免除 Cloudflare/reCAPTCHA。詳見 docs/plans 修正版計畫。
 DEFAULT_BROWSER_CMD = (
-    "chromium --no-sandbox --no-first-run --no-default-browser-check "
+    "chromium --no-sandbox --test-type --no-first-run --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
     "--disable-blink-features=AutomationControlled "
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --start-maximized {homepage}"
 )
+# 使用者在 VNC 桌面裡把 chromium 關掉(或它 crash)時自動重開:瀏覽器行程包在這個 respawn 迴圈裡。
+# session 停止時 _term 是 killpg(整個 process group 一起收),sh 迴圈也在同一 group → 不會復活。
+BROWSER_RESPAWN_WRAP = "while :; do {cmd}; sleep 2; done"
 
 DEFAULT_HOMEPAGE = os.getenv("REMOTE_BROWSER_HOMEPAGE", "https://www.google.com")
 DEFAULT_LANG = os.getenv("REMOTE_BROWSER_LANG", "zh-TW")
@@ -185,9 +193,12 @@ class SessionManager:
                     f"Last log lines:\n{self._tail(vnc_log)}")
             if self.wm_cmd:
                 procs.append(self._spawn(self.wm_cmd, display=disp))
-            procs.append(self._spawn(self.browser_cmd.format(
+            browser_cmd = self.browser_cmd.format(
                 proxy=proxy, homepage=self.homepage, lang=lang,
-                accept_lang=_accept_lang(lang), profile_flag=profile_flag),
+                accept_lang=_accept_lang(lang), profile_flag=profile_flag)
+            # 包 respawn 迴圈:chromium 被關掉/crash 都會自動重開(同 profile、同 proxy)。
+            procs.append(self._spawn(
+                ["sh", "-c", BROWSER_RESPAWN_WRAP.format(cmd=browser_cmd)],
                 display=disp, lang=lang))
         except Exception:
             for p in procs:
@@ -247,7 +258,8 @@ class SessionManager:
                 out = open(log_path, "wb")
             except OSError:
                 out = None
-        return subprocess.Popen(shlex.split(cmd), env=env, start_new_session=True,
+        argv = cmd if isinstance(cmd, list) else shlex.split(cmd)
+        return subprocess.Popen(argv, env=env, start_new_session=True,
                                 stdout=out, stderr=subprocess.STDOUT)
 
     def _tail(self, path, n=25):
@@ -272,8 +284,13 @@ class SessionManager:
 
     def _term(self, p):
         # 整個 process group 一起收(chromium 會 fork 一堆子行程)。
+        # start_new_session=True → 子行程的 pgid == 它自己的 pid,直接對 p.pid killpg:
+        # 就算 group leader(例如 respawn 迴圈的 sh)已先死,只要 group 內還有成員
+        # (孤兒 chromium),killpg 依然殺得到 —— 不能用 getpgid(leader 死了會丟例外而漏殺)。
         try:
-            os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            os.killpg(p.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return   # 整個 group 都不在了
         except Exception:
             try:
                 p.terminate()
@@ -282,13 +299,14 @@ class SessionManager:
         try:
             p.wait(timeout=5)
         except Exception:
+            pass
+        try:
+            os.killpg(p.pid, signal.SIGKILL)   # 保險:TERM 後還活著的成員一律 KILL
+        except Exception:
             try:
-                os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                p.kill()
             except Exception:
-                try:
-                    p.kill()
-                except Exception:
-                    pass
+                pass
 
 
 class _Handler(BaseHTTPRequestHandler):

@@ -125,6 +125,9 @@ services:
   # websocket port; the Django consumer WS↔WS-relays it to the existing /ws. Nothing is published.
   kasm-browser:
     <<: [ *common-networks, *common-restart ]
+    # tini 當 PID 1:回收被 reparent 的孤兒(chromium 關閉/respawn 會留 zombie,
+    # session-manager 自己不 reap 非親生子行程),並轉發 SIGTERM 讓 graceful stop 照常。
+    init: true
     build:
       context: ./docker/kasm-browser
       args:

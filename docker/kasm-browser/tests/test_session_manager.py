@@ -64,6 +64,19 @@ class SessionManagerTest(unittest.TestCase):
         self.assertIn("--disable-blink-features=AutomationControlled", browser_cmd)  # 反自動化偵測
         self.assertIn("--lang=", browser_cmd)                                # 反爬蟲:非空語系
         self.assertIn("--accept-lang=", browser_cmd)
+        self.assertIn("--test-type", browser_cmd)   # 壓掉 --no-sandbox 的黃色警告列
+
+    @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
+    @mock.patch("session_manager.subprocess.Popen")
+    def test_browser_wrapped_in_respawn_loop(self, popen, _wait):
+        """chromium 被使用者關掉/crash → respawn 迴圈自動重開(session 停止時整組 killpg 收掉)。"""
+        popen.side_effect = lambda *a, **k: _fake_popen()
+        self.mgr.create("socks5://backend:1")
+        browser_argv = next(c[0][0] for c in popen.call_args_list
+                            if "chromium" in " ".join(c[0][0]))
+        self.assertEqual(browser_argv[:2], ["sh", "-c"])
+        self.assertIn("while :; do chromium", browser_argv[2])
+        self.assertIn("sleep 2", browser_argv[2])
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
@@ -86,9 +99,10 @@ class SessionManagerTest(unittest.TestCase):
             self.assertEqual(len(dirs), 2)
             self.assertNotEqual(dirs[0], dirs[1])   # 兩個 session 目錄不同 → 不互搶
 
+    @mock.patch("session_manager.os.killpg")
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_stop_deletes_profile_dir_no_history_kept(self, popen, _wait):
+    def test_stop_deletes_profile_dir_no_history_kept(self, popen, _wait, _killpg):
         """session 停止 → 設定檔目錄整個刪除(不保留歷史/cookie)。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,9 +126,10 @@ class SessionManagerTest(unittest.TestCase):
                             side_effect=lambda b: b if b == "Xkasmvnc" else None):
                 self.assertEqual(sm._resolve_vnc_bin(), "Xkasmvnc")
 
+    @mock.patch("session_manager.os.killpg")
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=False)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_create_cleans_up_and_raises_when_ws_never_comes_up(self, popen, _wait):
+    def test_create_cleans_up_and_raises_when_ws_never_comes_up(self, popen, _wait, killpg):
         procs = []
         def make(*a, **k):
             p = _fake_popen(); procs.append(p); return p
@@ -123,19 +138,24 @@ class SessionManagerTest(unittest.TestCase):
         with self.assertRaises(Exception):
             self.mgr.create("socks5://backend:1")
 
-        # 起失敗要收掉已生的行程,且釋放 display(下一次能重用 :10)
-        self.assertTrue(procs and any(p.terminate.called or p.kill.called for p in procs))
+        # 起失敗要收掉已生的行程(整個 process group:killpg 對 p.pid,因 start_new_session
+        # 讓 pgid == pid;leader 已死時 getpgid 會漏殺孤兒,故直接用 pid),並釋放 display。
+        self.assertTrue(procs)
+        killed_pgids = {c[0][0] for c in killpg.call_args_list}
+        self.assertIn(procs[0].pid, killed_pgids)
         self.assertEqual(self.mgr.count(), 0)
         self.assertNotIn(self.mgr.display_base, self.mgr._used_displays)
 
+    @mock.patch("session_manager.os.killpg")
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_stop_terminates_procs_and_frees_display(self, popen, _wait):
+    def test_stop_terminates_procs_and_frees_display(self, popen, _wait, killpg):
         popen.side_effect = lambda *a, **k: _fake_popen()
         out = self.mgr.create("socks5://backend:1")
         sid = out["session_id"]
 
         self.assertTrue(self.mgr.stop(sid))
+        self.assertTrue(killpg.called)   # 收 session = 對每個 proc 的 group killpg(pgid == pid)
         self.assertEqual(self.mgr.count(), 0)
         self.assertNotIn(self.mgr.display_base, self.mgr._used_displays)
         self.assertFalse(self.mgr.stop("nonexistent"))
