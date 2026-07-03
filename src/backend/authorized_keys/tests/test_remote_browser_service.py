@@ -51,8 +51,8 @@ class RemoteBrowserServiceTest(TestCase):
         proxy_arg = kasm.create_session.call_args[0][0]
         self.assertTrue(proxy_arg.startswith("socks5://"))
         self.assertIn(str(svc.ACTIVE_SESSIONS[result["session_id"]]["proxy_port"]), proxy_arg)
-        # profile_key=server_id → 同一目標共用設定檔(減少人機驗證重跳)
-        self.assertEqual(kasm.create_session.call_args[1]["profile_key"], 7)
+        # 設定檔每 session 臨時、停止即刪(不保留歷史)→ 不再傳 profile_key
+        self.assertNotIn("profile_key", kasm.create_session.call_args[1])
 
         # in-process 與 Redis store 都存了 ws_port + kasm_session_id 供 consumer 跨 worker 查
         sess = svc.ACTIVE_SESSIONS[result["session_id"]]

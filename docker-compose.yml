@@ -143,9 +143,7 @@ services:
       # 遠端瀏覽器:首頁與語系(反爬蟲:語系會影響 navigator.languages / Accept-Language)。
       - REMOTE_BROWSER_HOMEPAGE=${REMOTE_BROWSER_HOMEPAGE:-https://www.google.com}
       - REMOTE_BROWSER_LANG=${REMOTE_BROWSER_LANG:-zh-TW}
-    volumes:
-      # 保留的共用瀏覽器設定檔(cookie/登入跨 session 累積,減少人機驗證重跳)。以 server_id 分目錄。
-      - ./telepy-data/browser-profiles:/profiles
+    # 瀏覽器設定檔:每 session 臨時目錄、停止即刪(不保留歷史),故不掛任何 volume。
     # 不 publish 任何埠:只在 telepy-network 內 / never published to host
 
 networks:

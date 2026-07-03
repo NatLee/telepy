@@ -67,26 +67,38 @@ class SessionManagerTest(unittest.TestCase):
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_profile_key_adds_persistent_user_data_dir(self, popen, _wait):
+    def test_each_session_gets_unique_ephemeral_profile(self, popen, _wait):
+        """並發 session 各自專屬 user-data-dir(SingletonLock 隔離),且目錄真的存在。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(sm, "PROFILE_BASE", tmp):
-                out = self.mgr.create("socks5://backend:1", profile_key="7")
-            browser_cmd = next(" ".join(c[0][0]) for c in popen.call_args_list
-                               if "chromium" in " ".join(c[0][0]))
-            # 共用設定檔:以 server_id 為 key,cookie 跨 session 累積
-            self.assertIn("--user-data-dir=", browser_cmd)
-            self.assertIn(os.path.join(tmp, "7"), browser_cmd)
-            self.assertTrue(os.path.isdir(os.path.join(tmp, "7")))
+            with mock.patch.object(sm, "PROFILE_TMP_BASE", tmp):
+                self.mgr.create("socks5://backend:1")
+                self.mgr.create("socks5://backend:2")
+            browser_cmds = [" ".join(c[0][0]) for c in popen.call_args_list
+                            if "chromium" in " ".join(c[0][0])]
+            dirs = []
+            for cmd in browser_cmds:
+                self.assertIn("--user-data-dir=", cmd)
+                d = next(a.split("=", 1)[1] for a in cmd.split()
+                         if a.startswith("--user-data-dir="))
+                self.assertTrue(os.path.isdir(d))
+                dirs.append(d)
+            self.assertEqual(len(dirs), 2)
+            self.assertNotEqual(dirs[0], dirs[1])   # 兩個 session 目錄不同 → 不互搶
 
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
     @mock.patch("session_manager.subprocess.Popen")
-    def test_no_profile_key_uses_ephemeral_profile(self, popen, _wait):
+    def test_stop_deletes_profile_dir_no_history_kept(self, popen, _wait):
+        """session 停止 → 設定檔目錄整個刪除(不保留歷史/cookie)。"""
         popen.side_effect = lambda *a, **k: _fake_popen()
-        self.mgr.create("socks5://backend:1")   # 不傳 profile_key
-        browser_cmd = next(" ".join(c[0][0]) for c in popen.call_args_list
-                           if "chromium" in " ".join(c[0][0]))
-        self.assertNotIn("--user-data-dir=", browser_cmd)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(sm, "PROFILE_TMP_BASE", tmp):
+                out = self.mgr.create("socks5://backend:1")
+            sid = out["session_id"]
+            profile_dir = self.mgr._sessions[sid]["profile_dir"]
+            self.assertTrue(os.path.isdir(profile_dir))
+            self.mgr.stop(sid)
+            self.assertFalse(os.path.exists(profile_dir))
 
     def test_resolve_vnc_bin_prefers_env_then_xkasmvnc(self):
         with mock.patch.dict("os.environ", {"VNC_SERVER_BIN": "/custom/Xthing"}), \

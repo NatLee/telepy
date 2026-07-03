@@ -7,7 +7,8 @@ kasm-browser session-manager —— 跑在共用 kasm-browser 容器內的小型
   2. 起 KasmVNC 的 Xkasmvnc :N(SecurityTypes None、disableBasicAuth、websocketPort N;TLS 由
      /etc/kasmvnc/kasmvnc.yaml 的 network.ssl.require_ssl:false 關掉,對內網開純 ws),
   3. 起視窗管理員(openbox)與 chromium(DISPLAY=:N,--proxy-server=該 session 的 SOCKS,
-     首頁 Google、反自動化偵測旗標、可保留的共用設定檔),
+     首頁 Google、反自動化偵測旗標、**每 session 專屬的臨時設定檔**——session 結束即刪,
+     不保留歷史;也避免 Chromium SingletonLock 讓並發 session 互相搶佔),
   4. 回 { session_id, ws_port }。
 
 之後 Django 的 RemoteBrowserConsumer 會把 kasm-browser:<ws_port> 這條 **WebSocket**(KasmVNC 的
@@ -28,7 +29,6 @@ viewer 連不上。因此橋接層改成 WS↔WS,前端改用 KasmVNC 的 client
 只用標準函式庫,可獨立於 Django 執行與測試。
 """
 import os
-import re
 import sys
 import json
 import time
@@ -38,6 +38,7 @@ import shutil
 import signal
 import socket
 import logging
+import tempfile
 import threading
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -64,7 +65,11 @@ DEFAULT_VNC_CMD = (
 DEFAULT_WM_CMD = "openbox"
 # 瀏覽器指令:
 #   {homepage}      首頁(預設 Google;env REMOTE_BROWSER_HOMEPAGE 可改)。
-#   {profile_flag}  --user-data-dir=<共用設定檔目錄> 或空字串(見 _profile_flag)。
+#   {profile_flag}  --user-data-dir=<每 session 專屬臨時目錄>(見 _make_profile_dir;session 停止
+#                   即整個刪除 → 不保留歷史/cookie)。**必須每 session 一個目錄**:共用目錄(或
+#                   不給 → chromium 用 ~/.config/chromium)會踩 SingletonLock,第二個 session 的
+#                   chromium 只會「Opening in existing browser session」把分頁開到第一個 session
+#                   的桌面上然後退出,連鎖把兩邊都弄壞。
 #   {lang}          介面語系與 Accept-Language(反爬蟲:navigator.languages 空值是機器人特徵)。
 #   --disable-blink-features=AutomationControlled  移除 navigator.webdriver 之類的自動化訊號。
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
@@ -79,9 +84,8 @@ DEFAULT_BROWSER_CMD = (
 
 DEFAULT_HOMEPAGE = os.getenv("REMOTE_BROWSER_HOMEPAGE", "https://www.google.com")
 DEFAULT_LANG = os.getenv("REMOTE_BROWSER_LANG", "zh-TW")
-# 保留的共用設定檔根目錄。以「目標機器(server_id)」為 key,讓同一目標的 cookie/登入狀態跨 session
-# 累積 → 通過人機驗證後較不會一直重跳。掛一顆 volume 到這裡可讓設定檔跨容器重建仍存活。
-PROFILE_BASE = os.getenv("REMOTE_BROWSER_PROFILE_BASE", "/profiles")
+# 每 session 專屬臨時設定檔的父目錄(session 停止即刪,**不保留歷史**)。
+PROFILE_TMP_BASE = os.getenv("REMOTE_BROWSER_PROFILE_TMP", "/tmp")
 # KasmVNC web 層 Basic Auth 的密碼檔:固定路徑,不依賴 $HOME(Dockerfile 用 kasmvncpasswd 建於此)。
 KASM_PASSWORD_FILE = os.getenv("KASM_PASSWORD_FILE", "/etc/kasmvnc/kasmpasswd")
 # KasmVNC 內建 web server 要 serve 的 client 目錄(KasmVNC deb 內含 /usr/share/kasmvnc/www)。
@@ -95,11 +99,6 @@ def _accept_lang(lang: str) -> str:
     if base != "en":
         parts.append("en;q=0.8")
     return ",".join(p for p in parts if p)
-
-
-def _safe_key(value: str) -> str:
-    """把任意 profile key(例如 server_id)洗成安全的目錄名。"""
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(value))[:64] or "default"
 
 
 def _resolve_vnc_bin():
@@ -147,25 +146,22 @@ class SessionManager:
         with self._lock:
             return len(self._sessions)
 
-    def _profile_flag(self, profile_key):
+    def _make_profile_dir(self):
         """
-        回 (flag_str, profile_dir)。有 profile_key → 共用設定檔(以 server_id 為 key,cookie 跨
-        session 累積);無 → 空字串(chromium 用臨時設定檔,最大隔離)。
-        注意:Chromium 對同一 user-data-dir 有 SingletonLock,同一目標的「並發」session 會互卡;
-        remote-browser 通常一目標一人使用,可接受。要完全並發隔離就別傳 profile_key。
+        建每 session 專屬的臨時設定檔目錄,回 (flag_str, profile_dir)。
+        - 不保留歷史:session 停止時整個目錄刪除(見 stop)。
+        - 完全並發隔離:Chromium 對同一 user-data-dir 有 SingletonLock;共用目錄(或不指定 →
+          ~/.config/chromium)會讓第二個並發 session 的 chromium 委派給第一個後直接退出。
         """
-        if not profile_key:
-            return "", None
-        profile_dir = os.path.join(PROFILE_BASE, _safe_key(profile_key))
         try:
-            os.makedirs(profile_dir, exist_ok=True)
+            profile_dir = tempfile.mkdtemp(prefix="telepy-profile-", dir=PROFILE_TMP_BASE)
         except OSError:
-            logger.warning("could not create profile dir %s; using ephemeral profile", profile_dir)
+            logger.warning("could not create ephemeral profile dir; chromium will use its default")
             return "", None
         return f"--user-data-dir={shlex.quote(profile_dir)}", profile_dir
 
     # --- lifecycle --------------------------------------------------------
-    def create(self, proxy, geometry="1280x720", profile_key=None, lang=None):
+    def create(self, proxy, geometry="1280x720", lang=None):
         if not proxy:
             raise ValueError("proxy required")
         with self._lock:
@@ -173,7 +169,7 @@ class SessionManager:
         ws_port = self.ws_base + display
         disp = f":{display}"
         lang = lang or self.lang
-        profile_flag, profile_dir = self._profile_flag(profile_key)
+        profile_flag, profile_dir = self._make_profile_dir()
         vnc_log = f"/tmp/telepy-vnc-{display}.log"
         procs = []
         try:
@@ -198,14 +194,15 @@ class SessionManager:
                 self._term(p)
             with self._lock:
                 self._used_displays.discard(display)
+            self._rm_profile_dir(profile_dir)
             raise
         sid = uuid.uuid4().hex
         with self._lock:
             self._sessions[sid] = {"display": display, "ws_port": ws_port,
                                    "procs": procs, "proxy": proxy,
                                    "profile_dir": profile_dir}
-        logger.info("session %s up: display %s ws %s profile %s",
-                    sid, disp, ws_port, profile_dir or "(ephemeral)")
+        logger.info("session %s up: display %s ws %s profile %s (ephemeral)",
+                    sid, disp, ws_port, profile_dir or "(chromium default)")
         return {"session_id": sid, "ws_port": ws_port}
 
     def stop(self, session_id):
@@ -217,8 +214,17 @@ class SessionManager:
             return False
         for p in sess["procs"]:
             self._term(p)
+        self._rm_profile_dir(sess.get("profile_dir"))   # 不保留歷史:設定檔隨 session 刪除
         logger.info("session %s stopped", session_id)
         return True
+
+    def _rm_profile_dir(self, profile_dir):
+        if not profile_dir:
+            return
+        try:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     def stop_all(self):
         for sid in list(self._sessions.keys()):
@@ -322,7 +328,6 @@ class _Handler(BaseHTTPRequestHandler):
             out = self.manager.create(
                 proxy,
                 data.get("geometry", "1280x720"),
-                profile_key=data.get("profile_key"),
                 lang=data.get("lang"),
             )
         except Exception as e:

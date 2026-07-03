@@ -45,8 +45,8 @@
 
 | 區塊 | 狀態 | 說明 |
 |---|---|---|
-| 後端 session 生命週期(session_manager → Xkasmvnc,回 ws_port) | ✅ 完成+測綠 | 含 Google 首頁、反爬蟲旗標、保留共用設定檔 |
-| kasm_client / remote_browser_service → ws_port + profile_key | ✅ 完成+測綠 | ssh -D / GC 骨架不動 |
+| 後端 session 生命週期(session_manager → Xkasmvnc,回 ws_port) | ✅ 完成+測綠 | 含 Google 首頁、反爬蟲旗標;**2026-07-03 需求變更:設定檔改為每 session 臨時、停止即刪(不保留歷史)**——共用設定檔會踩 Chromium SingletonLock,第二個並發 session 的 chromium 直接委派+退出,把兩邊都弄壞 |
+| kasm_client / remote_browser_service → ws_port | ✅ 完成+測綠 | ssh -D / GC 骨架不動;profile_key 已移除(見上) |
 | consumer → WS↔WS 中繼(握手/權限/斷線收尾保留) | ✅ 完成+測綠 | 含 scheme/path 自動退回 + Basic Auth |
 | Dockerfile 裝 KasmVNC 1.4.0 + kasmvnc.yaml + 建 Basic Auth 使用者 | ✅ 完成 | build 時驗證 Xkasmvnc / 密碼檔 |
 | 單元測試(34 個) | ✅ 全綠(真 stack,Django 6/py3.12) | 見 §8 指令 |
@@ -147,7 +147,8 @@ B 卡住再退 **Option A**。握手協定(前端 `auth → ready → attach cli
 - [ ] 前端(B 或 A)完成:UI「Start Browser」→ **真桌面 Chromium 直接開 Google 首頁**。
 - [ ] 滑鼠鍵盤可操作;**中文可輸入**(seamless 剪貼簿貼上或 IME);**剪貼簿雙向**可互貼(含中文)。
 - [ ] proxy 走目標出口:遠端開 IP 查詢頁,公網 IP == 目標機器 IP。
-- [ ] 反爬蟲:常擋機器人的站較不會一直跳驗證;**保留設定檔**讓同目標第二次進更少驗證。
+- [ ] 反爬蟲:常擋機器人的站較不會一直跳驗證。(2026-07-03 需求變更:**不保留**設定檔/歷史——
+      每 session 臨時 profile、停止即刪;同目標兩 session 並發不再互搶。)
 - [ ] per-session 隔離:兩 session 各開 → 各自桌面、各走各 proxy。
 - [ ] 斷線/idle → session 被收(ssh + kasm + Redis 清空);`GUNICORN_WORKERS≥2` 不會 "session not found"。
 - [ ] `docker compose run --rm backend python manage.py test` 全綠。→ 準備 merge。
@@ -221,5 +222,5 @@ git checkout feat/vnc-remote-browser
 | `KASM_PASSWORD_FILE` | `/etc/kasmvnc/kasmpasswd` | 固定密碼檔路徑(Dockerfile 與 session_manager 同一值) |
 | `HTTPD_DIR` | `/usr/share/kasmvnc/www` | KasmVNC client 目錄(前端 Option A/B 可能用到) |
 | `REMOTE_BROWSER_HOMEPAGE` / `REMOTE_BROWSER_LANG` | `https://www.google.com` / `zh-TW` | 首頁 / 語系(反爬蟲) |
-| `REMOTE_BROWSER_PROFILE_BASE` / `WS_BASE` | `/profiles` / `8443` | 保留設定檔根目錄 / ws 埠基數 |
+| `REMOTE_BROWSER_PROFILE_TMP` / `WS_BASE` | `/tmp` / `8443` | 每 session 臨時設定檔的父目錄(停止即刪,不保留歷史)/ ws 埠基數 |
 ```

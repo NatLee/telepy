@@ -20,15 +20,15 @@ class KasmClientTest(TestCase):
         # 內部 token 走 header,不進 URL
         self.assertEqual(kwargs["headers"]["X-Internal-Token"], "secret")
 
-    def test_create_session_forwards_profile_key(self):
-        """profile_key(通常是 server_id)要帶進 payload,讓 session-manager 用共用設定檔。"""
+    def test_create_session_sends_no_profile_key(self):
+        """設定檔一律每 session 臨時(不保留歷史);payload 不再有 profile_key。"""
         client = KasmClient(base_url="http://kasm-test:7000", token="secret")
         resp = mock.Mock(status_code=201)
         resp.json.return_value = {"session_id": "s1", "ws_port": 8453}
         resp.raise_for_status = lambda: None
         with mock.patch("services.kasm_client.requests.post", return_value=resp) as post:
-            client.create_session("socks5://backend:1", profile_key=7)
-        self.assertEqual(post.call_args[1]["json"]["profile_key"], 7)
+            client.create_session("socks5://backend:1")
+        self.assertNotIn("profile_key", post.call_args[1]["json"])
 
     def test_create_session_raises_kasm_error_on_http_failure(self):
         client = KasmClient(base_url="http://kasm-test:7000", token="secret")

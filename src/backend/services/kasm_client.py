@@ -33,16 +33,14 @@ class KasmClient:
         return {"X-Internal-Token": self.token}
 
     def create_session(self, proxy: str, geometry: str = "1280x720",
-                       profile_key=None, lang=None) -> dict:
+                       lang=None) -> dict:
         """
         起一個 KasmVNC 瀏覽器 session。回 {session_id, ws_port}。
         proxy 形如 socks5://backend:<ssh -D 埠>;chromium 會以此為出口(= 目標機器身分)。
-        profile_key:傳入(通常是 server_id)→ session-manager 用共用設定檔,cookie 跨 session
-        累積,減少人機驗證重跳;不傳 → 臨時設定檔(最大隔離)。
+        設定檔一律「每 session 臨時、停止即刪」:不保留歷史,也避免 Chromium SingletonLock
+        讓同目標並發 session 互搶(session-manager 端實作)。
         """
         payload = {"proxy": proxy, "geometry": geometry}
-        if profile_key is not None:
-            payload["profile_key"] = profile_key
         if lang is not None:
             payload["lang"] = lang
         try:
