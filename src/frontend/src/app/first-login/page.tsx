@@ -6,7 +6,6 @@
  */
 import React from "react";
 import Script from "next/script";
-import { useAuth } from "@/lib/auth";
 import { UserPlus, User, Lock, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";

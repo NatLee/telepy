@@ -5,9 +5,8 @@ import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { X, User, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
-import { TunnelModalProps, ReverseServerUsername } from "@/types/tunnel";
+import { TunnelModalProps } from "@/types/tunnel";
 
 import { useManageUsersModal } from "@/hooks/useManageUsersModal";
 

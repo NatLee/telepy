@@ -21,9 +21,8 @@ from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
 from drf_yasg.generators import OpenAPISchemaGenerator
 
-from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.permissions import IsAdminUser
 
-from rest_framework.routers import DefaultRouter
 
 from django.conf import settings
 
@@ -80,7 +79,6 @@ schema_view = get_schema_view(
         description="API of Telepy.",
     ),
     public=True,
-    # permission_classes=(AllowAny,),
     permission_classes = (IsAdminUser,), #is_staff才可使用
     generator_class=BothHttpAndHttpsSchemaGenerator,
 )

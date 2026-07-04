@@ -4,7 +4,7 @@
 # openbox + CJK 字型 + 一支 session-manager HTTP API(session_manager.py)。backend 呼叫該 API,
 # 每個 remote-browser session 就起一組「Xkasmvnc 顯示 + 綁定該 session SOCKS 的 chromium」,
 # 回傳 websocket 埠;Django consumer 再把該 ws 埠 **WS↔WS** 中繼到既有 /ws,前端用 KasmVNC 自家的
-# web client 呈現(見 docs/plans 的修正版計畫)。
+# web client 呈現(見 docs/remote-browser.md)。
 #
 # 為何用 KasmVNC:它的動態編碼(JPEG/WebP、多執行緒、影片模式)對影片/多圖頁面優於 TigerVNC 的
 # Tight;真桌面讓 CJK 顯示與 seamless/binary 剪貼簿、IME 近乎免費。代價:KasmVNC **脫離 RFB 規範、

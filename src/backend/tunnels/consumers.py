@@ -1202,7 +1202,7 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
     """
     把 kasm-browser 內某個 KasmVNC session 的 **WebSocket**(KasmVNC 的 web-native 傳輸)透明
     中繼到既有 /ws。KasmVNC 已脫離 RFB 規範、只開 websocket、且用它自家 fork 的 web client
-    (一般 noVNC 連不上),因此上游改成 WS client、前端改用 KasmVNC 的 client(見 docs/plans 修正版計畫)。
+    (一般 noVNC 連不上),因此上游改成 WS client、前端改用 KasmVNC 的 client(見 docs/remote-browser.md)。
 
     - 沿用 FirstMessageAuthConsumer(首則訊息帶 JWT)。after_auth 內用 session 的 server_id
       **再次**重驗 tunnel 權限(不只驗身分),再連到 kasm-browser:<ws_port> 的 websocket。
@@ -1217,7 +1217,7 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
     {"type":"begin"};consumer 收到 begin 才開始 pump 上游→client。client→上游 方向不需等 begin。
     """
     KASM_HOST = os.getenv("KASM_BROWSER_HOST", "kasm-browser")
-    # KasmVNC 的 websocket scheme / path / subprotocol。實測(見 docs/plans §4b):Xkasmvnc 的
+    # KasmVNC 的 websocket scheme / path / subprotocol(實測):Xkasmvnc 的
     # -sslOnly 預設關 → 內網是**純 ws**;websocket 端點是 **/websockify**;且 KasmVNC 的 web 層
     # **預設要 HTTP Basic Auth**(我們的 -disableBasicAuth 在此 build 沒生效)→ consumer 帶帳密連。
     # scheme/path 仍會「自動退回」嘗試其他組合(見 _connect_upstream),env 只是「優先嘗試」提示。
@@ -1262,7 +1262,6 @@ class RemoteBrowserConsumer(FirstMessageAuthConsumer):
             return 4011
         # 通知前端:已認證 + 上游 ws 已接上,可以把 socket 交給 KasmVNC client 了。
         await self.send(text_data=json.dumps({"type": "ready"}))
-        self._session_started = asyncio.get_event_loop().time()
         # VNC WS 連著就代表 session 正在使用:伺服器端每 20s 續一次 TTL,讓 idle GC 不會在
         # 使用者只是掛著(尤其把分頁切到背景、前端 REST 心跳被瀏覽器節流/凍結)時把 session 收掉。
         self._keepalive_task = asyncio.create_task(self._session_keepalive())

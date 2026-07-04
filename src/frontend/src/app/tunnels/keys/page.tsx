@@ -6,7 +6,7 @@
  */
 import React from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { Copy, Plus, Key as KeyIcon, Trash2, Edit3, RefreshCw, Info } from "lucide-react";
+import { Plus, Key as KeyIcon, Trash2, Edit3, RefreshCw, Info } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Button } from "@/components/ui/button";

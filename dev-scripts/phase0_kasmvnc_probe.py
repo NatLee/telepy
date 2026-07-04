@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Phase 0 放行閘門探測 —— 用「非 KasmVNC 自家前端」的 WebSocket client 連上 KasmVNC 的 websocket,
-確認委託書 Phase 0 的三件事(過不了就別做 KasmVNC 遷移、回 TigerVNC):
+KasmVNC websocket 探測工具 —— 用「非 KasmVNC 自家前端」的 WebSocket client 連上 KasmVNC 的 websocket,
+確認以下三件事(除錯上游連不上時很有用,見 docs/remote-browser.md 疑難排解):
   A. TLS 有沒有關成純 ws(kasmvnc.yaml 的 network.ssl.require_ssl:false 有沒有生效)。
   B. Basic Auth 有沒有關(Xkasmvnc 的 -disableBasicAuth 有沒有生效;沒關會回 401)。
   C. websocket path / subprotocol 對不對、server 會不會先送 greeting(VNC 是 server 先說話)。
@@ -243,12 +243,11 @@ def main():
         if auth_header:
             print(f"    KASM_WS_USER={args.user}")
             print(f"    KASM_WS_PASSWORD={args.password}")
-        print("接著照 docs/plans 的修正版計畫做前端(改用 KasmVNC 自家 client)與端到端驗收。")
+        print("上游 ws 可連。前端用 KasmVNC 自家 client(見 docs/remote-browser.md)。")
         sys.exit(0)
     else:
         print("NO-GO ❌  沒有任何 path/scheme 連得上並收到 greeting。")
         print("逐條看上面的原因:401=auth 沒關;只 wss 能連=TLS 沒關;全連不上=path/subproto 不對。")
-        print("依委託書:過不了就維持 TigerVNC(git checkout feat/vnc-remote-browser)。")
         sys.exit(1)
 
 

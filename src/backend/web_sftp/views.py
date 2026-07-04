@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Any, Union
+from typing import List, Tuple, Dict, Any
 import json
 from pathlib import Path
 import datetime
@@ -16,7 +16,6 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authorized_keys.models import ReverseServerAuthorizedKeys
-from authorized_keys.models import ReverseServerUsernames
 from tunnels.models import TunnelPermissionManager, TunnelPermission
 from services.tunnel_permissions import TunnelPermissionService
 

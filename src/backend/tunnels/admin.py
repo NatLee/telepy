@@ -108,7 +108,6 @@ class TunnelSharingAdmin(admin.ModelAdmin):
         for group in PermissionRegistry.get_all_groups():
             # Get capabilities based on the highest permission level in this group
             capabilities = []
-            capability_keys = set()
 
             # Find the highest permission level and get its capabilities
             highest_permission = None
