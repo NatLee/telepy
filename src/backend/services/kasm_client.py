@@ -33,16 +33,19 @@ class KasmClient:
         return {"X-Internal-Token": self.token}
 
     def create_session(self, proxy: str, geometry: str = "1280x720",
-                       lang=None) -> dict:
+                       lang=None, homepage=None) -> dict:
         """
         起一個 KasmVNC 瀏覽器 session。回 {session_id, ws_port}。
         proxy 形如 socks5://backend:<ssh -D 埠>;chromium 會以此為出口(= 目標機器身分)。
+        lang/homepage 為 None 時,session-manager 退回它自己的 env 預設。
         設定檔一律「每 session 臨時、停止即刪」:不保留歷史,也避免 Chromium SingletonLock
         讓同目標並發 session 互搶(session-manager 端實作)。
         """
         payload = {"proxy": proxy, "geometry": geometry}
         if lang is not None:
             payload["lang"] = lang
+        if homepage is not None:
+            payload["homepage"] = homepage
         try:
             r = requests.post(
                 f"{self.base_url}/sessions",

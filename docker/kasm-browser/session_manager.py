@@ -17,7 +17,7 @@ web-native 傳輸)中繼到既有的 /ws,前端用 KasmVNC 自家的 web client 
 
 為什麼是 WebSocket 而不是 raw-RFB TCP:KasmVNC 已脫離 RFB 規範,**只開 websocket、不開傳統
 raw-RFB TCP 埠**,且它的 web client 是 fork 過、baked 在它 server 裡的 noVNC —— 一般 noVNC/VNC
-viewer 連不上。因此橋接層改成 WS↔WS,前端改用 KasmVNC 的 client(見 docs/plans 的修正版計畫)。
+viewer 連不上。因此橋接層改成 WS↔WS,前端改用 KasmVNC 的 client(見 docs/remote-browser.md)。
 
 設計要點:
   - 不需 docker.sock:只是在「一顆長命容器」內起/停行程,不做容器編排。
@@ -79,7 +79,7 @@ DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 #   --disable-blink-features=AutomationControlled  移除 navigator.webdriver 之類的自動化訊號。
 #   --no-sandbox    容器內以 root 跑 chromium 的必要之惡:Docker 預設 seccomp 擋掉 unprivileged
 #                   userns(實測 unshare -U → EPERM),setuid sandbox helper 也缺對應 capability;
-#                   要開真 sandbox 得在 compose 掛自訂 seccomp profile(見 docs)。隔離邊界=容器。
+#                   要開真 sandbox 得在 compose 掛自訂 seccomp profile。隔離邊界=容器。
 #   --test-type     壓掉「You are using an unsupported command-line flag: --no-sandbox」的黃色警告列。
 #                   實測:有/無此旗標的 JS 指紋(webdriver/chrome/languages/plugins/vendor)完全相同,
 #                   且警告列是 chromium 自家 UI、網頁看不到 → 對反爬蟲零影響,純觀感。
@@ -204,14 +204,15 @@ class SessionManager:
         return f"--user-data-dir={shlex.quote(profile_dir)}", profile_dir
 
     # --- lifecycle --------------------------------------------------------
-    def create(self, proxy, geometry="1280x720", lang=None):
+    def create(self, proxy, geometry="1280x720", lang=None, homepage=None):
         if not proxy:
             raise ValueError("proxy required")
         with self._lock:
             display = self._alloc_display()
         ws_port = self.ws_base + display
         disp = f":{display}"
-        lang = lang or self.lang
+        lang = lang or self.lang            # 未指定 → 退回 env 預設(REMOTE_BROWSER_LANG)
+        homepage = homepage or self.homepage  # 未指定 → 退回 env 預設(REMOTE_BROWSER_HOMEPAGE)
         profile_flag, profile_dir = self._make_profile_dir()
         vnc_log = f"/tmp/telepy-vnc-{display}.log"
         procs = []
@@ -229,7 +230,7 @@ class SessionManager:
             if self.wm_cmd:
                 procs.append(self._spawn(self.wm_cmd, display=disp))
             browser_cmd = self.browser_cmd.format(
-                proxy=proxy, homepage=self.homepage, lang=lang,
+                proxy=proxy, homepage=homepage, lang=lang,
                 accept_lang=_accept_lang(lang), profile_flag=profile_flag)
             # 桌布(不黑)—— 一次性;失敗不致命。
             if WALLPAPER_CMD:
@@ -397,6 +398,7 @@ class _Handler(BaseHTTPRequestHandler):
                 proxy,
                 data.get("geometry", "1280x720"),
                 lang=data.get("lang"),
+                homepage=data.get("homepage"),
             )
         except Exception as e:
             logger.exception("create failed")

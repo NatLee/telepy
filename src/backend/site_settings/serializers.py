@@ -9,6 +9,10 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
             'remote_browser_session_idle_timeout',
             'remote_browser_max_sessions',
             'remote_browser_geometry',
+            'remote_browser_ssh_timeout',
+            'remote_browser_ssh_attempts',
+            'remote_browser_homepage',
+            'remote_browser_language',
         ]
 
     def _apply(self, instance, validated_data):

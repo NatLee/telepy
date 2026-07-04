@@ -1,5 +1,6 @@
-# Telepy remote-browser 桌面面板:一條細長的頂部工具列,放一個「開啟瀏覽器」捷徑。
-# 目的:使用者關掉瀏覽器後桌面不是全黑 —— 有桌布 + 這個面板上的捷徑可再開瀏覽器。
+# Telepy remote-browser 桌面面板:頂部工具列 = 「開啟瀏覽器」捷徑 + 視窗工作列(taskbar)。
+# 目的:(1) 關掉瀏覽器後桌面不黑,有桌布 + 捷徑可再開;(2) **視窗被縮小(最小化)後,可從工作列
+# 點回來** —— 因為 openbox 無標題列(decor=no),沒有工作列的話最小化的視窗會消失、找不回來。
 # openbox 的 maximized 視窗會避開面板保留的 strut,所以 chromium 會鋪滿面板下方、不遮住它。
 
 # ---- 面板 background(id 1)----
@@ -8,14 +9,19 @@ border_width = 0
 background_color = #20232e 100
 border_color = #000000 0
 
-# ---- 捷徑 icon background(id 2,hover 時淡淡高亮)----
+# ---- 捷徑/工作列 item background(id 2,hover/active 時淡淡高亮)----
 rounded = 6
 border_width = 0
 background_color = #2f3346 0
 background_color_hover = #3a3f57 100
 background_color_pressed = #454b68 100
 
-panel_items = L
+# ---- 作用中視窗 background(id 3)----
+rounded = 6
+border_width = 0
+background_color = #3a3f57 100
+
+panel_items = LT
 panel_size = 100% 34
 panel_margin = 0 0
 panel_padding = 6 3 6
@@ -26,7 +32,7 @@ wm_menu = 0
 autohide = 0
 
 # ---- 啟動器(捷徑)----
-launcher_padding = 4 0 4
+launcher_padding = 4 2 4
 launcher_background_id = 0
 launcher_icon_background_id = 2
 launcher_icon_size = 26
@@ -34,6 +40,23 @@ launcher_icon_asb = 100 0 0
 launcher_item_app = /usr/share/applications/telepy-browser.desktop
 launcher_tooltip = 1
 launcher_icon_theme_override = 0
+
+# ---- 工作列(顯示所有視窗;縮小/最小化的視窗可從這裡點回來)----
+taskbar_mode = single_desktop
+taskbar_padding = 6 0 4
+taskbar_background_id = 0
+task_text = 1
+task_icon = 1
+task_centered = 0
+task_maximum_size = 280 0
+task_padding = 8 2 8
+task_tooltip = 1
+task_background_id = 2
+task_active_background_id = 3
+task_iconified_background_id = 2
+task_font = sans 10
+task_font_color = #d8dce6 100
+task_icon_asb = 100 0 0
 
 # 不需要工具提示延遲太久
 tooltip_show_timeout = 0.3

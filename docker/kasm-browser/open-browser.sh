@@ -13,11 +13,23 @@
 set -u
 
 if command -v xdotool >/dev/null 2>&1; then
+    # 已有可見視窗 → 聚焦。
     WIN=$(xdotool search --onlyvisible --class chromium 2>/dev/null | head -1)
     if [ -n "${WIN:-}" ]; then
         xdotool windowactivate "$WIN" >/dev/null 2>&1 || true
         exit 0
     fi
+    # 沒有可見視窗:可能是「被最小化/縮小」的真視窗(仍存在,只是沒顯示)。windowactivate 會把它
+    # 還原並聚焦 → 解決「縮小後不見」。要挑「真的瀏覽器視窗」:chromium 會另有一個 10x10、名稱剛好
+    # 是 "chromium" 的隱藏工具視窗,用寬度 ≥ 100 過濾掉它;沒有真視窗(=瀏覽器已關)才往下全新啟動。
+    restored=0
+    for w in $(xdotool search --class chromium 2>/dev/null); do
+        width=$(xdotool getwindowgeometry "$w" 2>/dev/null | sed -n 's/.*Geometry: \([0-9]\{1,\}\)x.*/\1/p')
+        if [ -n "$width" ] && [ "$width" -ge 100 ] 2>/dev/null; then
+            xdotool windowactivate "$w" >/dev/null 2>&1 && restored=1
+        fi
+    done
+    [ "$restored" = 1 ] && exit 0
 fi
 
 [ -n "${BROWSER_CMD:-}" ] || { echo "open-browser: BROWSER_CMD not set" >&2; exit 1; }

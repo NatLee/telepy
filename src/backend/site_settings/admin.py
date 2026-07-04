@@ -9,4 +9,8 @@ class SiteSettingsAdmin(admin.ModelAdmin):
         'remote_browser_session_idle_timeout',
         'remote_browser_max_sessions',
         'remote_browser_geometry',
+        'remote_browser_ssh_timeout',
+        'remote_browser_ssh_attempts',
+        'remote_browser_homepage',
+        'remote_browser_language',
     ]

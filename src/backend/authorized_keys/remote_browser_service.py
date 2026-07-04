@@ -235,10 +235,13 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
 
     proxy_host = os.getenv("HOSTNAME", "backend")   # kasm-browser 經 telepy-network 連回本後端
     geometry = getattr(settings, "remote_browser_geometry", "1280x720") or "1280x720"
+    homepage = getattr(settings, "remote_browser_homepage", "") or None
+    lang = getattr(settings, "remote_browser_language", "") or None
     try:
         # 設定檔每 session 臨時、停止即刪(不保留歷史;同目標並發 session 也不會踩 SingletonLock)。
+        # homepage/lang 為 None 時,session-manager 退回它自己的 env 預設。
         ids = _kasm.create_session(f"socks5://{proxy_host}:{proxy_port}",
-                                   geometry=geometry)
+                                   geometry=geometry, lang=lang, homepage=homepage)
     except KasmError as e:
         stop_remote_browser(session_id)             # 收 ssh + 清登記
         raise Exception(f"Failed to create VNC browser session: {e}")
