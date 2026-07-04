@@ -19,6 +19,17 @@ class KasmClientTest(TestCase):
         self.assertEqual(kwargs["json"]["geometry"], "1280x720")
         # 內部 token 走 header,不進 URL
         self.assertEqual(kwargs["headers"]["X-Internal-Token"], "secret")
+        self.assertEqual(kwargs["timeout"], 30)   # 預設逾時
+
+    def test_create_session_forwards_custom_timeout(self):
+        """啟動逾時由 SiteSettings.remote_browser_kasm_create_timeout 控制,經 timeout 參數帶入。"""
+        client = KasmClient(base_url="http://kasm-test:7000", token="secret")
+        resp = mock.Mock(status_code=201)
+        resp.json.return_value = {"session_id": "s1", "ws_port": 8453}
+        resp.raise_for_status = lambda: None
+        with mock.patch("services.kasm_client.requests.post", return_value=resp) as post:
+            client.create_session("socks5://backend:1", timeout=90)
+        self.assertEqual(post.call_args[1]["timeout"], 90)
 
     def test_create_session_sends_no_profile_key(self):
         """設定檔一律每 session 臨時(不保留歷史);payload 不再有 profile_key。"""

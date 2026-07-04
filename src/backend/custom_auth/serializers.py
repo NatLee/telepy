@@ -77,11 +77,17 @@ class GoogleLoginSerializer(serializers.Serializer):
             raise ValueError("Google token has no email claim")
         account, domain = email.split("@")
 
-        # 檢查是否為註冊的 domain
-        if domain not in settings.VALID_REGISTER_DOMAINS:
+        # 檢查是否為允許註冊的 email 網域。白名單以 SiteSettings.valid_register_domains(逗號分隔)
+        # 為準,可由管理員在設定頁即時調整;留空則沿用 settings.VALID_REGISTER_DOMAINS 預設。
+        # Registration domain allowlist comes from the admin-editable SiteSettings (comma-separated);
+        # empty falls back to the settings.py default.
+        from site_settings.models import SiteSettings
+        raw = SiteSettings.get_solo().valid_register_domains or ""
+        allowed = [d.strip().lower() for d in raw.split(",") if d.strip()] or list(settings.VALID_REGISTER_DOMAINS)
+        if domain.lower() not in allowed:
             logger.warning(
                 f"[AUTH][GOOGLE] `{email}` attempts to register with disallowed domain "
-                f"`{domain}` (allowed: {settings.VALID_REGISTER_DOMAINS})"
+                f"`{domain}` (allowed: {allowed})"
             )
             raise InvalidEmailError
 

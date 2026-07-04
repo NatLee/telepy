@@ -15,6 +15,14 @@ class SiteSettings(models.Model):
         help_text="是否開放新帳號自行註冊。關閉時只有管理員能建立帳號。變更後立即生效。",
     )
 
+    valid_register_domains = models.CharField(
+        max_length=512,
+        default="gmail.com",
+        verbose_name="Allowed Registration Email Domains",
+        help_text="允許用 Google 登入自行註冊的 email 網域白名單,用逗號分隔(例如 gmail.com,mycorp.com)。"
+                  "只有這些網域的 Google 帳號能註冊。留空則沿用系統預設。變更後立即生效。",
+    )
+
     # ── 遠端瀏覽器 / Remote Browser ──────────────────────────────────
     # 這一組控制 KasmVNC 代理瀏覽器(見 docs/remote-browser.md)。所有值都是**每次開新 session 時
     # 即時從這裡讀取**,所以改了之後「下次開啟瀏覽器」就套用(已經開著的 session 不受影響)。
@@ -53,6 +61,13 @@ class SiteSettings(models.Model):
         verbose_name="Remote Browser SSH Proxy Attempts",
         help_text="SOCKS 代理起不來時的重試次數(含第一次)。第一次連線是冷的常較慢,第二次因連線已暖"
                   "通常就會成功;真的離線的裝置會很快失敗、不會空等。建議 ≥ 2。下次開啟瀏覽器時生效。",
+    )
+
+    remote_browser_kasm_create_timeout = models.IntegerField(
+        default=30,
+        verbose_name="Remote Browser Startup Timeout (seconds)",
+        help_text="開啟瀏覽器時,等待瀏覽器容器把桌面(Xkasmvnc)與 chromium 起好的逾時(秒)。冷啟或"
+                  "機器忙碌時較久,太短會讓開啟失敗;太長則卡住較久才報錯。下次開啟瀏覽器時生效。",
     )
 
     remote_browser_homepage = models.CharField(
