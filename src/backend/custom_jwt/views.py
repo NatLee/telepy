@@ -97,6 +97,9 @@ class UserProfileView(APIView):
     )
     def get(self, request):
         user = request.user
+        # 個人設定(語言偏好)一併帶回,前端登入後不用再打一次 API。null = 使用者從未選過語言。
+        # Include personal settings so the frontend doesn't need an extra request. null = never chosen.
+        user_settings = getattr(user, "settings", None)
         return Response({
             'id': user.id,
             'username': user.username,
@@ -108,4 +111,5 @@ class UserProfileView(APIView):
             'is_active': user.is_active,
             'date_joined': user.date_joined,
             'last_login': user.last_login,
+            'language': user_settings.language if user_settings else None,
         })
