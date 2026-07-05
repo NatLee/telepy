@@ -8,6 +8,9 @@ export interface UserProfile {
     username?: string;
     email?: string;
     is_superuser?: boolean;
+    /** 介面語言偏好;null = 從未設定過(見 lib/i18n.tsx 的同步規則)。
+     *  UI language preference; null = never chosen (see the sync rules in lib/i18n.tsx). */
+    language?: "auto" | "en" | "zh-TW" | "ja" | null;
 }
 
 export interface AuthContextType {
