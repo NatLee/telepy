@@ -73,7 +73,7 @@ export const en = {
 
     // ── 語言 / Language switcher ───────────────────────────────────
     "language.label": "Language",
-    "language.auto": "Auto (Browser)",
+    "language.auto": "Auto",
 
     // ── 登入 / Login ───────────────────────────────────────────────
     "login.subtitle": "Sign in to your dashboard",

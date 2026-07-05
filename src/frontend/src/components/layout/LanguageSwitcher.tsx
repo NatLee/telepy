@@ -25,7 +25,9 @@ export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean })
         <div
             role="group"
             aria-label={t("language.label")}
-            className={`grid gap-1 ${collapsed ? "grid-cols-2" : "grid-cols-4"}`}
+            // 收合時 sidebar 內容區只剩 ~32px 寬,2×2 會重疊 → 直排一欄。
+            // Collapsed sidebar leaves ~32px of content width; 2×2 overlaps → single column.
+            className={`grid gap-1 ${collapsed ? "grid-cols-1" : "grid-cols-4"}`}
         >
             {OPTIONS.map((option) => {
                 const isActive = language === option.value;

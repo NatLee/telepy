@@ -67,7 +67,7 @@ export const ja: Record<TranslationKey, string> = {
 
     // ── 言語 / Language switcher ───────────────────────────────────
     "language.label": "言語",
-    "language.auto": "自動（ブラウザに従う）",
+    "language.auto": "自動",
 
     // ── ログイン / Login ───────────────────────────────────────────
     "login.subtitle": "ダッシュボードにサインイン",

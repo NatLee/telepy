@@ -67,7 +67,7 @@ export const zhTW: Record<TranslationKey, string> = {
 
     // ── 語言 / Language switcher ───────────────────────────────────
     "language.label": "語言",
-    "language.auto": "自動（跟隨瀏覽器）",
+    "language.auto": "自動",
 
     // ── 登入 / Login ───────────────────────────────────────────────
     "login.subtitle": "登入你的儀表板",

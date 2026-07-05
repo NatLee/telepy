@@ -107,7 +107,9 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         {t("settings.languageTitle")}
                     </h3>
                     <p className="text-xs text-muted-foreground mb-2">{t("settings.languageDescription")}</p>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {/* 固定 2×2:四欄在 max-w-md 的 modal 裡放不下 CJK 標籤(會換行跑版)。
+                        Fixed 2×2 — four columns can't fit CJK labels inside a max-w-md modal. */}
+                    <div className="grid grid-cols-2 gap-2">
                         {languageOptions.map((option) => {
                             const isActive = language === option.value;
                             return (
@@ -161,7 +163,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                             max={TERMINAL_FONT_SIZE_MAX}
                             value={fontSize}
                             onChange={(e) => changeFontSize(parseInt(e.target.value, 10))}
-                            className="flex-1 accent-[var(--primary)]"
+                            className="flex-1 accent-primary"
                         />
                         <span className="w-14 text-center text-sm font-mono border border-border rounded-md py-1 bg-background">
                             {fontSize}px
