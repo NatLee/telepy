@@ -8,6 +8,7 @@
 import { useState, useEffect } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useI18n } from "@/lib/i18n";
 
 export interface SettingMeta {
     label: string;
@@ -20,6 +21,7 @@ export function useSettingsPage() {
     const [meta, setMeta] = useState<Record<string, SettingMeta>>({});
     const [loading, setLoading] = useState(true);
     const { showSuccess, showError } = useToast();
+    const { t } = useI18n();
 
     const fetchSettings = async () => {
         setLoading(true);
@@ -31,10 +33,10 @@ export function useSettingsPage() {
                 setSettingsObj((obj.values && typeof obj.values === "object") ? obj.values as Record<string, unknown> : {});
                 setMeta((obj.meta && typeof obj.meta === "object") ? obj.meta as Record<string, SettingMeta> : {});
             } else {
-                showError("Failed to fetch settings");
+                showError(t("settings.fetchFailed"));
             }
         } catch (e: unknown) {
-            showError(e instanceof Error ? e.message : "Failed to fetch settings");
+            showError(e instanceof Error ? e.message : t("settings.fetchFailed"));
         } finally {
             setLoading(false);
         }
@@ -53,15 +55,15 @@ export function useSettingsPage() {
                 body: JSON.stringify({ [keyName]: newValue }),
             });
             if (res.ok) {
-                showSuccess("Setting updated");
+                showSuccess(t("settings.updated"));
             } else {
                 setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));
                 const err = await readJson(res);
-                showError(responseError(res, err, "Failed to update setting"));
+                showError(responseError(res, err, t("settings.updateFailed")));
             }
         } catch (e: unknown) {
             setSettingsObj((prev) => ({ ...prev, [keyName]: previous }));
-            showError(e instanceof Error ? e.message : "Failed to update setting");
+            showError(e instanceof Error ? e.message : t("settings.updateFailed"));
         }
     };
 

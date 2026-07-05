@@ -1,28 +1,175 @@
 "use client";
 
 /**
- * 設定頁：站台設定列表與開關,僅管理員可編輯。
- * 每項設定顯示 label + 說明(來自後端 model 的 help_text),讓管理員知道這是做什麼的。
- * Settings page: each setting shows a label + description (from the backend model help_text) so
- * admins know what it does. Only admins can edit.
+ * 設定頁(重新設計):
+ * - 個人設定(所有人):帳號資訊 + 介面語言。
+ * - 站台設定(管理員):原站台設定列表,依類別分組。
+ * - 使用者(管理員):使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
+ * Settings page (redesigned):
+ * - Preferences (everyone): account info + interface language.
+ * - Site Settings (admins): the site-wide settings list, grouped by category.
+ * - Users (admins): user list + a "Manage" modal for account flags and personal settings.
  */
 import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { Settings, ShieldAlert, Info } from "lucide-react";
+import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
+import { Settings, Info, Check, User as UserIcon, Users as UsersIcon, Globe, Shield, SlidersHorizontal } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
+import { Modal } from "@/components/ui/Modal";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
+import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
+import type { Translate } from "@/lib/i18n";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+/** 站台設定/使用者 modal 共用的開關。/ Shared toggle switch for site settings and the user modal. */
+function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disabled?: boolean; onToggle: () => void }) {
+    return (
+        <button
+            type="button"
+            onClick={() => !disabled && onToggle()}
+            disabled={disabled}
+            className={`${checked ? "bg-primary" : "bg-muted"} relative inline-flex h-6 w-11 shrink-0 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2`}
+            role="switch"
+            aria-checked={checked}
+        >
+            <span aria-hidden="true" className={`${checked ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-primary-foreground shadow ring-0 transition duration-200 ease-in-out`} />
+        </button>
+    );
+}
+
+type TabId = "preferences" | "site" | "users";
+
 export default function SettingsPage() {
     const { user } = useAuth();
+    const { t } = useI18n();
+    const isAdmin = !!user?.is_superuser;
+    const [tab, setTab] = useState<TabId>("preferences");
+
+    const tabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly: boolean }[] = [
+        { id: "preferences", label: t("settings.tabPreferences"), icon: <UserIcon size={16} />, adminOnly: false },
+        { id: "site", label: t("settings.tabSite"), icon: <SlidersHorizontal size={16} />, adminOnly: true },
+        { id: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={16} />, adminOnly: true },
+    ];
+    const visibleTabs = tabs.filter((item) => !item.adminOnly || isAdmin);
+    const activeTab: TabId = visibleTabs.some((item) => item.id === tab) ? tab : "preferences";
+
+    return (
+        <div className="animate-fade-in-up space-y-6">
+            <div>
+                <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+                    <Settings className="text-primary animate-float" />
+                    {t("settings.title")}
+                    <WebSocketStatusBadge />
+                </h1>
+                <p className="mt-2 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
+            </div>
+
+            {visibleTabs.length > 1 && (
+                <div className="border-b border-border flex gap-1" role="tablist">
+                    {visibleTabs.map((item) => (
+                        <button
+                            key={item.id}
+                            role="tab"
+                            aria-selected={activeTab === item.id}
+                            onClick={() => setTab(item.id)}
+                            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === item.id
+                                    ? "border-primary text-primary"
+                                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                                }`}
+                        >
+                            {item.icon}
+                            {item.label}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {activeTab === "preferences" && <PreferencesTab />}
+            {activeTab === "site" && isAdmin && <SiteSettingsTab />}
+            {activeTab === "users" && isAdmin && <UsersTab />}
+        </div>
+    );
+}
+
+/* ── 個人設定 / Preferences ─────────────────────────────────────── */
+
+function PreferencesTab() {
+    const { user } = useAuth();
+    const { t, language, setLanguage } = useI18n();
+
+    const options: { value: LanguagePreference; label: string }[] = [
+        { value: "auto", label: t("language.auto") },
+        ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
+    ];
+
+    return (
+        <div className="space-y-6 max-w-3xl">
+            {/* 帳號資訊 / Account */}
+            <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-6">
+                <h2 className="text-base font-semibold flex items-center gap-2 mb-4">
+                    <UserIcon size={18} className="text-primary" />
+                    {t("settings.accountTitle")}
+                </h2>
+                <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                    <div>
+                        <dt className="text-muted-foreground">{t("settings.usernameLabel")}</dt>
+                        <dd className="mt-1 font-medium text-foreground truncate">{user?.username}</dd>
+                    </div>
+                    <div>
+                        <dt className="text-muted-foreground">{t("settings.emailLabel")}</dt>
+                        <dd className="mt-1 font-medium text-foreground truncate">{user?.email || "—"}</dd>
+                    </div>
+                    <div>
+                        <dt className="text-muted-foreground">{t("settings.roleLabel")}</dt>
+                        <dd className="mt-1 font-medium text-foreground">
+                            {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
+                        </dd>
+                    </div>
+                </dl>
+            </section>
+
+            {/* 介面語言 / Language */}
+            <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-6">
+                <h2 className="text-base font-semibold flex items-center gap-2 mb-1">
+                    <Globe size={18} className="text-primary" />
+                    {t("settings.languageTitle")}
+                </h2>
+                <p className="text-sm text-muted-foreground mb-4">{t("settings.languageDescription")}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {options.map((option) => {
+                        const isActive = language === option.value;
+                        return (
+                            <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => setLanguage(option.value)}
+                                className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${isActive
+                                        ? "border-primary bg-primary/10 text-primary"
+                                        : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                                    }`}
+                            >
+                                {isActive && <Check size={14} />}
+                                {option.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </section>
+        </div>
+    );
+}
+
+/* ── 站台設定 / Site settings (admin) ───────────────────────────── */
+
+function SiteSettingsTab() {
+    const { t } = useI18n();
     const { state, actions } = useSettingsPage();
     const { settingsObj, meta, loading } = state;
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
-    const isAdmin = !!user?.is_superuser;
     const entries = Object.entries(settingsObj);
 
     // 依 meta.type(找不到就用值的型別)決定編輯器與存檔驗證。
@@ -42,109 +189,304 @@ export default function SettingsPage() {
         }
     };
 
+    // 依 key 前綴分組,讓管理員好找。/ Group by key prefix so admins can scan quickly.
+    const groups: { title: string; keys: [string, unknown][] }[] = [
+        { title: t("settings.groupAccount"), keys: entries.filter(([k]) => !k.startsWith("remote_browser")) },
+        { title: t("settings.groupRemoteBrowser"), keys: entries.filter(([k]) => k.startsWith("remote_browser")) },
+    ].filter((g) => g.keys.length > 0);
+
     return (
-        <div className="animate-fade-in-up space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                    <Settings className="text-primary animate-float" />
-                    {isAdmin ? "Admin Settings" : "User Settings"}
-                    <WebSocketStatusBadge />
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">
-                    Configure site-wide preferences. Changes take effect the next time a proxy browser is opened
-                    (toggles apply immediately).
-                </p>
-            </div>
-
-            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200 mb-6">
+        <div className="space-y-6">
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
                 <Info size={18} className="mt-0.5 shrink-0" />
-                <span>{isAdmin ? "Manage server-wide settings that affect all users. Read each setting's description before changing it." : "View your current settings. Contact an administrator to change site-wide configurations."}</span>
+                <span>{t("settings.siteBanner")} {t("settings.siteSubtitle")}</span>
             </div>
 
-            {!isAdmin && (
-                <div className="bg-warning/10 border-l-4 border-warning p-4 mb-6 rounded-r-md flex items-start">
-                    <ShieldAlert className="text-warning mr-3 shrink-0 mt-0.5" size={20} />
-                    <p className="text-sm text-warning-foreground">
-                        Some administrative settings are hidden because you do not have superuser privileges.
-                    </p>
+            {loading ? (
+                <div className="bg-card shadow sm:rounded-lg border border-border p-8 text-center text-muted-foreground">
+                    <div className="flex justify-center mb-2">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                    </div>
+                    {t("settings.loading")}
                 </div>
-            )}
-
-            <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
-                <ul className="divide-y divide-border">
-                    {loading ? (
-                        <li className="p-8 text-center text-muted-foreground">
-                            <div className="flex justify-center mb-2">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                            </div>
-                            Loading settings...
-                        </li>
-                    ) : entries.length === 0 ? (
-                        <li className="p-8 text-center text-muted-foreground">
-                            No settings found or you do not have permission to view them.
-                        </li>
-                    ) : (
-                        entries.map(([key, value]) => {
-                            const kind = typeOf(key, value);
-                            const m = meta[key];
-                            return (
-                                <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
-                                    <div className="flex items-start justify-between gap-4">
-                                        <div className="flex-1 min-w-0">
-                                            <h4 className="text-sm font-medium text-foreground">
-                                                {m?.label ?? titleize(key)}
-                                            </h4>
-                                            {m?.description && (
-                                                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
-                                                    {m.description}
-                                                </p>
-                                            )}
-                                            <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">
-                                                {key}
-                                            </p>
-                                        </div>
-                                        <div className="shrink-0 pt-0.5">
-                                            {kind === "boolean" ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => isAdmin && handleToggle(key, value)}
-                                                    disabled={!isAdmin}
-                                                    className={`${value ? "bg-primary" : "bg-muted"} relative inline-flex h-6 w-11 shrink-0 ${isAdmin ? "cursor-pointer" : "cursor-not-allowed opacity-60"} rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2`}
-                                                    role="switch"
-                                                    aria-checked={!!value}
-                                                >
-                                                    <span aria-hidden="true" className={`${value ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-primary-foreground shadow ring-0 transition duration-200 ease-in-out`} />
-                                                </button>
-                                            ) : (
-                                                <div className="flex items-center gap-2">
-                                                    <input
-                                                        type={kind === "integer" ? "number" : "text"}
-                                                        className={`${kind === "integer" ? "w-24" : "w-56"} text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring`}
-                                                        value={editValues[key] ?? String(value ?? "")}
-                                                        onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
-                                                        onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
-                                                        min={kind === "integer" ? 0 : undefined}
-                                                        disabled={!isAdmin}
-                                                    />
-                                                    {isAdmin && (
-                                                        <button
-                                                            type="button"
-                                                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
-                                                            onClick={() => commit(key, kind, value)}
-                                                        >
-                                                            Save
-                                                        </button>
+            ) : entries.length === 0 ? (
+                <div className="bg-card shadow sm:rounded-lg border border-border p-8 text-center text-muted-foreground">
+                    {t("settings.empty")}
+                </div>
+            ) : (
+                groups.map((group) => (
+                    <section key={group.title}>
+                        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2 px-1">
+                            {group.title}
+                        </h2>
+                        <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
+                            <ul className="divide-y divide-border">
+                                {group.keys.map(([key, value]) => {
+                                    const kind = typeOf(key, value);
+                                    const m = meta[key];
+                                    return (
+                                        <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
+                                            <div className="flex items-start justify-between gap-4">
+                                                <div className="flex-1 min-w-0">
+                                                    <h4 className="text-sm font-medium text-foreground">
+                                                        {m?.label ?? titleize(key)}
+                                                    </h4>
+                                                    {m?.description && (
+                                                        <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                                                            {m.description}
+                                                        </p>
+                                                    )}
+                                                    <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">
+                                                        {key}
+                                                    </p>
+                                                </div>
+                                                <div className="shrink-0 pt-0.5">
+                                                    {kind === "boolean" ? (
+                                                        <ToggleSwitch checked={!!value} onToggle={() => handleToggle(key, value)} />
+                                                    ) : (
+                                                        <div className="flex items-center gap-2">
+                                                            <input
+                                                                type={kind === "integer" ? "number" : "text"}
+                                                                className={`${kind === "integer" ? "w-24" : "w-56"} text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring`}
+                                                                value={editValues[key] ?? String(value ?? "")}
+                                                                onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                                onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
+                                                                min={kind === "integer" ? 0 : undefined}
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+                                                                onClick={() => commit(key, kind, value)}
+                                                            >
+                                                                {t("common.save")}
+                                                            </button>
+                                                        </div>
                                                     )}
                                                 </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </li>
-                            );
-                        })
-                    )}
-                </ul>
-            </div>
+                                            </div>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </div>
+                    </section>
+                ))
+            )}
         </div>
+    );
+}
+
+/* ── 使用者管理 / User management (admin) ───────────────────────── */
+
+function UsersTab() {
+    const { user: currentUser } = useAuth();
+    const { t, locale } = useI18n();
+    const { users, loading, updateUser } = useUserManagement(true);
+    const [editing, setEditing] = useState<ManagedUser | null>(null);
+
+    // modal 內容跟著列表資料走,更新後即時反映。/ Keep the modal in sync with the list data.
+    const editingUser = editing ? users.find((u) => u.id === editing.id) ?? editing : null;
+
+    const formatDate = (iso: string | null) =>
+        iso ? new Date(iso).toLocaleString(locale) : t("settings.neverLoggedIn");
+
+    return (
+        <div className="space-y-6">
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
+                <Info size={18} className="mt-0.5 shrink-0" />
+                <span>{t("settings.usersBanner")}</span>
+            </div>
+
+            <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
+                {loading ? (
+                    <div className="p-8 text-center text-muted-foreground">
+                        <div className="flex justify-center mb-2">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                        </div>
+                        {t("settings.usersLoading")}
+                    </div>
+                ) : users.length === 0 ? (
+                    <div className="p-8 text-center text-muted-foreground">{t("settings.usersEmpty")}</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-border text-sm">
+                            <thead className="bg-muted/50">
+                                <tr>
+                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thUsername")}</th>
+                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden sm:table-cell">{t("settings.thEmail")}</th>
+                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thRole")}</th>
+                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thStatus")}</th>
+                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden md:table-cell">{t("settings.thLastLogin")}</th>
+                                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">{t("settings.thActions")}</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {users.map((u) => (
+                                    <tr key={u.id} className="hover:bg-muted/50 transition-colors">
+                                        <td className="px-4 py-3 font-medium text-foreground">
+                                            {u.username}
+                                            {u.id === currentUser?.id && (
+                                                <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{u.email || "—"}</td>
+                                        <td className="px-4 py-3">
+                                            {u.is_superuser ? (
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary">
+                                                    <Shield size={12} />
+                                                    {t("settings.roleAdmin")}
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                                                    {t("settings.roleUser")}
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${u.is_active
+                                                    ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                                    : "bg-destructive/10 text-destructive"
+                                                }`}>
+                                                {u.is_active ? t("settings.statusActive") : t("settings.statusInactive")}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{formatDate(u.last_login)}</td>
+                                        <td className="px-4 py-3 text-right">
+                                            <button
+                                                type="button"
+                                                onClick={() => setEditing(u)}
+                                                className="text-xs px-3 py-1.5 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors font-medium"
+                                            >
+                                                {t("settings.manage")}
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+
+            {editingUser && (
+                <UserEditModal
+                    user={editingUser}
+                    isSelf={editingUser.id === currentUser?.id}
+                    onClose={() => setEditing(null)}
+                    updateUser={updateUser}
+                    t={t}
+                />
+            )}
+        </div>
+    );
+}
+
+/** 單一使用者的「管理」modal:帳號旗標 + 個人設定,變更即時套用。
+ *  Per-user "Manage" modal: account flags + personal settings; changes apply immediately. */
+function UserEditModal({
+    user,
+    isSelf,
+    onClose,
+    updateUser,
+    t,
+}: {
+    user: ManagedUser;
+    isSelf: boolean;
+    onClose: () => void;
+    updateUser: (userId: number, patch: ManagedUserPatch) => Promise<boolean>;
+    t: Translate;
+}) {
+    const [saving, setSaving] = useState(false);
+
+    const apply = async (patch: ManagedUserPatch) => {
+        setSaving(true);
+        await updateUser(user.id, patch);
+        setSaving(false);
+    };
+
+    const languageOptions: { value: LanguagePreference; label: string }[] = [
+        { value: "auto", label: t("language.auto") },
+        ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
+    ];
+
+    return (
+        <Modal
+            isOpen
+            onClose={onClose}
+            title={`${t("settings.userModalTitle")} — ${user.username}`}
+            isLoading={saving}
+            footer={
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
+                >
+                    {t("common.close")}
+                </button>
+            }
+        >
+            <div className="space-y-6">
+                <div className="text-sm text-muted-foreground">
+                    {user.email || "—"}
+                </div>
+
+                {isSelf && (
+                    <div className="bg-warning/10 border-l-4 border-warning p-3 rounded-r-md text-sm text-warning-foreground">
+                        {t("settings.selfEditNote")}
+                    </div>
+                )}
+
+                {/* 帳號啟用 / Account enabled */}
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <p className="text-sm font-medium text-foreground">{t("settings.userActiveLabel")}</p>
+                        <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
+                    </div>
+                    <ToggleSwitch
+                        checked={user.is_active}
+                        disabled={isSelf || saving}
+                        onToggle={() => apply({ is_active: !user.is_active })}
+                    />
+                </div>
+
+                {/* 管理員角色 / Administrator role */}
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <p className="text-sm font-medium text-foreground">{t("settings.userSuperuserLabel")}</p>
+                        <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
+                    </div>
+                    <ToggleSwitch
+                        checked={user.is_superuser}
+                        disabled={isSelf || saving}
+                        onToggle={() => apply({ is_superuser: !user.is_superuser })}
+                    />
+                </div>
+
+                {/* 介面語言 / Interface language */}
+                <div>
+                    <p className="text-sm font-medium text-foreground mb-1">{t("settings.userLanguageLabel")}</p>
+                    <select
+                        className="w-full text-sm border border-border rounded-md px-3 py-2 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        value={user.language ?? ""}
+                        disabled={saving}
+                        onChange={(e) => {
+                            const value = e.target.value as LanguagePreference | "";
+                            if (value) apply({ language: value });
+                        }}
+                    >
+                        {user.language === null && (
+                            <option value="" disabled>
+                                {t("settings.userLanguageNotSet")}
+                            </option>
+                        )}
+                        {languageOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                                {option.label}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+        </Modal>
     );
 }
