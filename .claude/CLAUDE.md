@@ -148,15 +148,30 @@ hardcode display text in components, hooks, or lib error builders.
 - **Outside React** (e.g. `lib/api.ts` error builders): use `translate()` from `@/lib/translate`
   (module-level; the provider keeps its locale in sync).
 - **Preference resolution:** `"auto" | "en" | "zh-TW" | "ja"` stored in the `telepy.language`
-  cookie. The server root layout (`app/layout.tsx`) reads the cookie + `Accept-Language` so SSR
-  matches hydration (no language flash). After login the preference syncs with the backend
-  `UserSettings` model (`/api/user/settings`; also included in `/api/auth/user/profile` as
-  `language`, `null` = never chosen → the frontend pushes its local preference up;
-  see `UserLanguageSync` in `lib/i18n.tsx`).
-- **Switcher locations:** sidebar footer (`components/layout/LanguageSwitcher.tsx`; the sidebar is
-  collapsible — state in localStorage `telepy.sidebarCollapsed`) and the Settings page
-  Preferences tab. Admins can also set a user's language via Settings → Users → Manage modal
-  (`/api/user/users`, `/api/user/users/<id>`).
+  cookie, resolved **client-side**: a pre-paint inline script in `app/layout.tsx` sets
+  `<html lang>`, and `I18nProvider` applies the locale in a `useLayoutEffect` before the hydrated
+  frame paints. **Never read `cookies()`/`headers()` in the root layout** — that makes every
+  route dynamic, disables full Link prefetch, and made page navigation take seconds (real
+  regression, since reverted). After login the preference syncs with the backend `UserSettings`
+  model (`/api/user/settings`; also included in `/api/auth/user/profile` as `language`,
+  `null` = never chosen → the frontend pushes its local preference up; see `UserSettingsSync`
+  in `lib/i18n.tsx`).
+- **Switcher locations:** sidebar footer — four inline buttons (Auto/EN/繁/日,
+  `components/layout/LanguageSwitcher.tsx`; the sidebar is collapsible — state in localStorage
+  `telepy.sidebarCollapsed`) — and the user-preferences modal (gear button in the sidebar
+  footer, `components/layout/UserPreferencesModal.tsx`). Admins can also set a user's language
+  via Settings → Users → Manage modal (`/api/user/users`, `/api/user/users/<id>`).
+- **Other user preferences** (`lib/userPrefs.ts` + `UserSettings` backend fields): `theme`
+  (system/light/dark; class-based Tailwind dark mode, applied pre-paint by the same inline
+  script from localStorage `telepy.theme`) and `terminal_font_size` (localStorage
+  `telepy.terminalFontSize`; xterm reads it at init and live-applies via the
+  `telepy:terminal-font-size` CustomEvent). Both sync server-side via `/api/user/settings`.
+- **Site-setting labels/descriptions:** the settings page prefers dictionary keys
+  `siteSettings.<field>.label` / `siteSettings.<field>.description` (localized), falling back
+  to backend model `help_text` when the key is missing. **When adding a `SiteSettings` field,
+  also add these two keys to all three dictionaries.**
+- The Settings page (`/tunnels/settings`) is admin-only (Site Settings + Users tabs); personal
+  preferences live in the sidebar gear modal.
 
 ### Rules when changing UI
 
@@ -168,8 +183,10 @@ hardcode display text in components, hooks, or lib error builders.
    (`ssh-rsa AAAA…`, `22`), code/paths inside `<code>` (pass them as `tn()` vars), size units,
    product names (SSH, PowerShell, AutoSSH, Docker), the Telepy brand, and the logs-page keyword
    filter chips (they string-match raw English sshd log content).
-4. Backend-provided text (site-setting labels/descriptions from model `help_text`, server error
-   `detail` fields, log lines) is NOT frontend-translated — it renders verbatim.
+4. Backend-provided text (server error `detail` fields, log lines) is NOT frontend-translated —
+   it renders verbatim. Exceptions with a mapping layer: site-setting labels/descriptions use
+   the `siteSettings.<field>.*` keys (fallback = backend `help_text`), and remote-browser start
+   errors with a machine-readable `code` (e.g. `device_offline`) map to `browser.*` keys.
 5. Locale-aware formatting: use `useI18n().locale` for `Date.toLocaleString()` /
    `Intl.DateTimeFormat` instead of hardcoding `'en-US'`.
 6. `metadata` in `app/layout.tsx` deliberately stays English (localizing it would force dynamic
