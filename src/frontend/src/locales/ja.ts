@@ -63,6 +63,7 @@ export const ja: Record<TranslationKey, string> = {
     "nav.navigationMenu": "ナビゲーションメニュー",
     "nav.collapseSidebar": "サイドバーを折りたたむ",
     "nav.expandSidebar": "サイドバーを展開",
+    "nav.preferences": "環境設定",
 
     // ── 言語 / Language switcher ───────────────────────────────────
     "language.label": "言語",
@@ -354,6 +355,7 @@ export const ja: Record<TranslationKey, string> = {
     "browser.wsError": "WebSocket エラー",
     "browser.connectionClosed": "接続が閉じられました",
     "browser.unknownError": "不明なエラーが発生しました",
+    "browser.deviceOffline": "ターゲットデバイスがオフラインです — リバーストンネルが接続されていません。デバイス側で接続スクリプト（「スクリプト」参照）を実行してから、もう一度お試しください。",
     "browser.imeTitle": "CJK 入力用の IME モードを切り替え（中文輸入）",
     "browser.stopSession": "セッションを停止",
     "browser.startBrowser": "ブラウザを起動",
@@ -509,18 +511,25 @@ export const ja: Record<TranslationKey, string> = {
     "logs.noMatch": "検索条件に一致するログがありません。",
     "logs.fetchFailed": "ログの取得に失敗しました",
 
-    // ── 設定 / Settings page ───────────────────────────────────────
+    // ── 環境設定モーダル / User preferences modal ──────────────────
+    "prefs.title": "環境設定",
+    "prefs.theme": "テーマ",
+    "prefs.themeDescription": "インターフェースの配色です。「システム」は OS のライト/ダーク設定に従います。",
+    "prefs.themeSystem": "システム",
+    "prefs.themeLight": "ライト",
+    "prefs.themeDark": "ダーク",
+    "prefs.terminalFontSize": "ターミナルのフォントサイズ",
+    "prefs.terminalFontSizeDescription": "Web ターミナルのフォントサイズ（px）。開いているターミナルにも即座に適用されます。",
+
+    // ── 設定 / Settings page (admin) ───────────────────────────────
     "settings.title": "設定",
-    "settings.subtitle": "個人設定とサイト管理。",
-    "settings.tabPreferences": "個人設定",
+    "settings.subtitle": "サイト管理とユーザー管理。",
     "settings.tabSite": "サイト設定",
     "settings.tabUsers": "ユーザー",
+    "settings.adminOnly": "このページは管理者用です。個人の環境設定はサイドバーの「環境設定」ボタンに移動しました。",
     "settings.languageTitle": "言語",
     "settings.languageDescription": "インターフェースの表示言語です。「自動」はブラウザの言語に従います。選択はアカウントに保存され、デバイス間で同期されます。",
     "settings.accountTitle": "アカウント",
-    "settings.usernameLabel": "ユーザー名",
-    "settings.emailLabel": "メールアドレス",
-    "settings.roleLabel": "ロール",
     "settings.siteSubtitle": "サイト全体の設定を行います。変更は次回プロキシブラウザを開いたときに適用されます(トグルは即時適用)。",
     "settings.siteBanner": "全ユーザーに影響するサーバー全体の設定を管理します。変更する前に各設定の説明をお読みください。",
     "settings.groupAccount": "アカウントと登録",
@@ -557,6 +566,28 @@ export const ja: Record<TranslationKey, string> = {
     "settings.selfEditNote": "自分自身のアカウントを無効化したり降格したりすることはできません。",
     "settings.userUpdated": "ユーザーを更新しました",
     "settings.userUpdateFailed": "ユーザーの更新に失敗しました",
+
+    // ── サイト設定のラベルと説明 / Site-setting labels & descriptions ─
+    "siteSettings.allow_registration.label": "登録を許可",
+    "siteSettings.allow_registration.description": "新規アカウントの自己登録を許可するかどうか。オフの場合、管理者のみがアカウントを作成できます。変更は即時反映されます。",
+    "siteSettings.valid_register_domains.label": "登録を許可するメールドメイン",
+    "siteSettings.valid_register_domains.description": "Google ログインでの自己登録を許可するメールドメインのホワイトリスト。カンマ区切り（例：gmail.com,mycorp.com）。これらのドメインの Google アカウントのみ登録できます。空欄の場合はシステム既定値を使用します。変更は即時反映されます。",
+    "siteSettings.remote_browser_session_idle_timeout.label": "リモートブラウザのアイドルタイムアウト（秒）",
+    "siteSettings.remote_browser_session_idle_timeout.description": "ハートビートが途絶えてからこの秒数が経過すると、ブラウザセッションを自動的に終了して回収します。未使用セッションによるリソースとターゲット接続の占有を防ぎます。ブラウザタブを開いている間はサーバーが 20 秒ごとに自動延長するため、通常の使用中に切断されることはありません。タブを閉じるか切断された後にのみカウントダウンが始まります。即時反映されます。",
+    "siteSettings.remote_browser_max_sessions.label": "リモートブラウザの最大同時セッション数",
+    "siteSettings.remote_browser_max_sessions.description": "同時に存在できるプロキシブラウザセッション数の上限で、リソースを管理します。上限に達すると、新しい「ブラウザを開く」要求は拒否され、後で再試行するよう促されます。0 = 無制限。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_geometry.label": "リモートブラウザの解像度",
+    "siteSettings.remote_browser_geometry.description": "各プロキシブラウザデスクトップの解像度。「幅x高さ」形式（例：1280x720、1920x1080）。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_ssh_timeout.label": "リモートブラウザ SSH プロキシタイムアウト（秒）",
+    "siteSettings.remote_browser_ssh_timeout.description": "ブラウザを開く際、「ssh -D」SOCKS プロキシがローカルポートをバインドするまで待つ時間（秒）。この接続は telepy-ssh を経由してターゲットデバイスまで 2 ホップするためコールドスタートは遅く、短すぎると「接続中」をデバイスのオフラインと誤判定します。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_ssh_attempts.label": "リモートブラウザ SSH プロキシ試行回数",
+    "siteSettings.remote_browser_ssh_attempts.description": "SOCKS プロキシが起動しない場合の再試行回数（初回を含む）。初回接続はコールドで遅いことが多く、2 回目は接続が温まっているため通常成功します。本当にオフラインのデバイスはすぐに失敗し、無駄に待ちません。2 以上を推奨。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_kasm_create_timeout.label": "リモートブラウザ起動タイムアウト（秒）",
+    "siteSettings.remote_browser_kasm_create_timeout.description": "ブラウザを開く際、ブラウザコンテナがデスクトップ（Xkasmvnc）と Chromium を起動するまで待つ時間（秒）。コールドスタートやマシンが混み合っているときは時間がかかります。短すぎると起動に失敗し、長すぎるとエラー表示まで待たされます。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_homepage.label": "リモートブラウザのホームページ",
+    "siteSettings.remote_browser_homepage.description": "プロキシブラウザ起動時に自動的に開くホームページの URL（http:// または https:// が必要）。次回ブラウザを開いたときに反映されます。",
+    "siteSettings.remote_browser_language.label": "リモートブラウザの言語",
+    "siteSettings.remote_browser_language.description": "プロキシブラウザの UI 言語と Accept-Language。zh-TW、en-US、ja-JP などの形式。ボット対策の navigator.languages にも影響します（言語が空なのはボットの特徴）。次回ブラウザを開いたときに反映されます。",
 
     // ── 共通 UI コンポーネント / Shared UI components ──────────────
     "ui.live": "ライブ",

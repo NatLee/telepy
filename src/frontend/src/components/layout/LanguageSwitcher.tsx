@@ -1,58 +1,52 @@
 "use client";
 
 /**
- * 語言切換器:sidebar 底部與設定頁共用。選項固定以「原生名稱」顯示(English / 繁體中文 / 日本語),
- * 「自動」則跟隨介面語言翻譯。切換即時生效並寫入 cookie;已登入時同步到帳號(跨裝置)。
- * Language switcher shared by the sidebar footer and the settings page. Options always show
- * their native names; "Auto" is translated. Changes apply instantly, persist to the cookie,
- * and sync to the account when logged in.
+ * 語言切換器:sidebar 底部的四顆並排按鈕(自動/EN/繁/日),點一下直接切換、不用下拉。
+ * 「自動」用地球 icon,其餘用語言縮寫;完整名稱放在 title tooltip。收合時排成 2×2。
+ * Language switcher: four inline buttons (Auto/EN/繁/日) — one click, no dropdown.
+ * "Auto" is a globe icon; the rest are short glyphs with full names in tooltips.
+ * Collapsed sidebar lays them out as a 2×2 grid.
  */
 import React from "react";
-import { Check, Languages } from "lucide-react";
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
+import { Globe } from "lucide-react";
+import { useI18n, LOCALE_NATIVE_NAMES, type LanguagePreference } from "@/lib/i18n";
+
+const OPTIONS: { value: LanguagePreference; glyph: React.ReactNode; nameKey?: true }[] = [
+    { value: "auto", glyph: <Globe size={15} />, nameKey: true },
+    { value: "en", glyph: "EN" },
+    { value: "zh-TW", glyph: "繁" },
+    { value: "ja", glyph: "日" },
+];
 
 export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean }) {
-    const { language, locale, t, setLanguage } = useI18n();
-
-    const currentLabel = language === "auto" ? t("language.auto") : LOCALE_NATIVE_NAMES[locale];
-    const options: { value: LanguagePreference; label: string }[] = [
-        { value: "auto", label: t("language.auto") },
-        ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
-    ];
+    const { language, t, setLanguage } = useI18n();
 
     return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <button
-                    type="button"
-                    title={t("language.label")}
-                    className={`flex w-full items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors ${collapsed ? "justify-center" : ""}`}
-                >
-                    <Languages size={18} className="shrink-0" />
-                    {!collapsed && <span className="truncate">{currentLabel}</span>}
-                </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="start" className="w-48">
-                {options.map((option) => {
-                    const isActive = language === option.value;
-                    return (
-                        <DropdownMenuItem
-                            key={option.value}
-                            onClick={() => setLanguage(option.value)}
-                            className="flex items-center justify-between"
-                        >
-                            <span>{option.label}</span>
-                            {isActive && <Check size={16} className="text-primary" />}
-                        </DropdownMenuItem>
-                    );
-                })}
-            </DropdownMenuContent>
-        </DropdownMenu>
+        <div
+            role="group"
+            aria-label={t("language.label")}
+            className={`grid gap-1 ${collapsed ? "grid-cols-2" : "grid-cols-4"}`}
+        >
+            {OPTIONS.map((option) => {
+                const isActive = language === option.value;
+                const name = option.value === "auto" ? t("language.auto") : LOCALE_NATIVE_NAMES[option.value];
+                return (
+                    <button
+                        key={option.value}
+                        type="button"
+                        title={name}
+                        aria-label={name}
+                        aria-pressed={isActive}
+                        onClick={() => setLanguage(option.value)}
+                        className={`flex items-center justify-center h-8 rounded-md text-xs font-semibold transition-colors ${isActive
+                                ? "bg-primary/15 text-primary ring-1 ring-primary/40"
+                                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                            }`}
+                    >
+                        {option.glyph}
+                    </button>
+                );
+            })}
+        </div>
     );
 }

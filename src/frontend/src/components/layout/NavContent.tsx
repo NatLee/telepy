@@ -1,13 +1,14 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Terminal, Key, FileText, Settings, LogOut, ExternalLink, Shield, BookOpen } from "lucide-react";
+import { Terminal, Key, FileText, Settings, LogOut, ExternalLink, Shield, BookOpen, SlidersHorizontal } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { UserPreferencesModal } from "./UserPreferencesModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
@@ -30,6 +31,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
     const pathname = usePathname();
     const { user, logout } = useAuth();
     const { t } = useI18n();
+    const [prefsOpen, setPrefsOpen] = useState(false);
 
     const handleLogout = () => {
         onNavigate?.();
@@ -60,19 +62,22 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                     );
                 })}
 
-                {/* 設定頁現在含個人設定(語言),所有人都看得到。/ Settings now holds personal preferences — visible to everyone. */}
-                <Link
-                    href="/tunnels/settings"
-                    onClick={onNavigate}
-                    title={collapsed ? t("nav.settings") : undefined}
-                    className={`flex items-center gap-3 ${linkLayout} py-2 rounded-md text-sm font-medium transition-all duration-200 hover:-translate-y-px ${pathname.startsWith('/tunnels/settings')
-                            ? "bg-secondary text-secondary-foreground"
-                            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                        }`}
-                >
-                    <Settings size={18} />
-                    {!collapsed && t("nav.settings")}
-                </Link>
+                {/* 設定頁只剩站台管理(個人偏好在左下齒輪 modal),回歸管理員限定。
+                    The settings page is admin-only again; personal preferences live in the gear modal. */}
+                {user?.is_superuser && (
+                    <Link
+                        href="/tunnels/settings"
+                        onClick={onNavigate}
+                        title={collapsed ? t("nav.settings") : undefined}
+                        className={`flex items-center gap-3 ${linkLayout} py-2 rounded-md text-sm font-medium transition-all duration-200 hover:-translate-y-px ${pathname.startsWith('/tunnels/settings')
+                                ? "bg-secondary text-secondary-foreground"
+                                : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                            }`}
+                    >
+                        <Settings size={18} />
+                        {!collapsed && t("nav.settings")}
+                    </Link>
+                )}
 
                 {user?.is_superuser && (
                     <>
@@ -116,16 +121,40 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 )}
             </div>
 
-            <div className={`p-4 border-t border-border space-y-1 ${className}`}>
-                {/* 語言切換器固定在 sidebar 底部。/ Language switcher pinned to the sidebar footer. */}
+            <div className={`p-4 border-t border-border space-y-2 ${className}`}>
+                {/* 語言:四顆並排按鈕,點一下直接切換。/ Language: four inline buttons, one-click switch. */}
                 <LanguageSwitcher collapsed={collapsed} />
 
+                {/* 使用者列 + 偏好設定齒輪 / User row + preferences gear */}
                 {user && !collapsed && (
-                    <div className="mb-2 mt-3 px-2">
-                        <p className="text-sm font-medium text-foreground truncate">{user.username}</p>
-                        <p className="text-xs text-muted-foreground truncate">{user.is_superuser ? t("nav.roleAdministrator") : t("nav.roleUser")}</p>
+                    <div className="flex items-center gap-2 px-2 pt-1">
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">{user.username}</p>
+                            <p className="text-xs text-muted-foreground truncate">{user.is_superuser ? t("nav.roleAdministrator") : t("nav.roleUser")}</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setPrefsOpen(true)}
+                            title={t("nav.preferences")}
+                            aria-label={t("nav.preferences")}
+                            className="p-2 rounded-md text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors shrink-0"
+                        >
+                            <SlidersHorizontal size={16} />
+                        </button>
                     </div>
                 )}
+                {user && collapsed && (
+                    <button
+                        type="button"
+                        onClick={() => setPrefsOpen(true)}
+                        title={t("nav.preferences")}
+                        aria-label={t("nav.preferences")}
+                        className="flex w-full items-center justify-center px-2 py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors"
+                    >
+                        <SlidersHorizontal size={18} />
+                    </button>
+                )}
+
                 <button
                     onClick={handleLogout}
                     title={collapsed ? t("nav.logout") : undefined}
@@ -135,6 +164,8 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                     {!collapsed && t("nav.logout")}
                 </button>
             </div>
+
+            <UserPreferencesModal isOpen={prefsOpen} onClose={() => setPrefsOpen(false)} />
         </>
     );
 }

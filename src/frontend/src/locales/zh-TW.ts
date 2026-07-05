@@ -63,6 +63,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "nav.navigationMenu": "導覽選單",
     "nav.collapseSidebar": "收合側邊欄",
     "nav.expandSidebar": "展開側邊欄",
+    "nav.preferences": "偏好設定",
 
     // ── 語言 / Language switcher ───────────────────────────────────
     "language.label": "語言",
@@ -354,6 +355,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "browser.wsError": "WebSocket 錯誤",
     "browser.connectionClosed": "連線已關閉",
     "browser.unknownError": "發生未知錯誤",
+    "browser.deviceOffline": "目標裝置離線 — 反向通道尚未連上。請在裝置上執行連線腳本（見「腳本」）後再試一次。",
     "browser.imeTitle": "切換 IME 模式以輸入中日韓文字（中文輸入）",
     "browser.stopSession": "停止工作階段",
     "browser.startBrowser": "啟動瀏覽器",
@@ -509,18 +511,25 @@ export const zhTW: Record<TranslationKey, string> = {
     "logs.noMatch": "沒有符合篩選條件的日誌。",
     "logs.fetchFailed": "取得日誌失敗",
 
-    // ── 設定頁 / Settings page ─────────────────────────────────────
+    // ── 偏好設定 modal / User preferences modal ────────────────────
+    "prefs.title": "偏好設定",
+    "prefs.theme": "主題",
+    "prefs.themeDescription": "介面配色。「系統」會跟隨作業系統的深淺色設定。",
+    "prefs.themeSystem": "系統",
+    "prefs.themeLight": "淺色",
+    "prefs.themeDark": "深色",
+    "prefs.terminalFontSize": "終端機字型大小",
+    "prefs.terminalFontSizeDescription": "網頁終端機的字型大小（px），開著的終端機會立即套用。",
+
+    // ── 設定頁 / Settings page (admin) ─────────────────────────────
     "settings.title": "設定",
-    "settings.subtitle": "個人偏好與站台管理。",
-    "settings.tabPreferences": "個人設定",
+    "settings.subtitle": "站台管理與使用者管理。",
     "settings.tabSite": "站台設定",
     "settings.tabUsers": "使用者",
+    "settings.adminOnly": "此頁面供管理員使用。你的個人偏好已移到側邊欄的「偏好設定」按鈕。",
     "settings.languageTitle": "語言",
     "settings.languageDescription": "介面顯示語言。「自動」會跟隨你的瀏覽器語言。你的選擇會儲存在帳號中並跨裝置同步。",
     "settings.accountTitle": "帳號",
-    "settings.usernameLabel": "使用者名稱",
-    "settings.emailLabel": "電子郵件",
-    "settings.roleLabel": "角色",
     "settings.siteSubtitle": "設定全站偏好。變更會在下次開啟代理瀏覽器時生效（開關類設定立即生效）。",
     "settings.siteBanner": "管理影響所有使用者的全站設定。變更前請先閱讀各設定的說明。",
     "settings.groupAccount": "帳號與註冊",
@@ -557,6 +566,28 @@ export const zhTW: Record<TranslationKey, string> = {
     "settings.selfEditNote": "你不能停用或降級自己的帳號。",
     "settings.userUpdated": "使用者已更新",
     "settings.userUpdateFailed": "更新使用者失敗",
+
+    // ── 站台設定的欄位說明 / Site-setting labels & descriptions ─────
+    "siteSettings.allow_registration.label": "開放註冊",
+    "siteSettings.allow_registration.description": "是否開放新帳號自行註冊。關閉時只有管理員能建立帳號。變更後立即生效。",
+    "siteSettings.valid_register_domains.label": "允許註冊的 Email 網域",
+    "siteSettings.valid_register_domains.description": "允許用 Google 登入自行註冊的 email 網域白名單，用逗號分隔（例如 gmail.com,mycorp.com）。只有這些網域的 Google 帳號能註冊。留空則沿用系統預設。變更後立即生效。",
+    "siteSettings.remote_browser_session_idle_timeout.label": "代理瀏覽器閒置逾時（秒）",
+    "siteSettings.remote_browser_session_idle_timeout.description": "閒置多久沒有心跳就自動關閉並回收該瀏覽器 session（秒），避免沒人用的 session 一直占用資源與目標機連線。你開著瀏覽器分頁時，伺服器每 20 秒會自動續命，所以正常使用不會被關；只有分頁關掉/斷線後才開始倒數。變更後即時生效。",
+    "siteSettings.remote_browser_max_sessions.label": "代理瀏覽器同時 session 上限",
+    "siteSettings.remote_browser_max_sessions.description": "同時可存在的代理瀏覽器 session 數上限，用來控管資源。達到上限時，新的「開啟瀏覽器」會被拒絕並提示稍後再試。設 0 = 不限制。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_geometry.label": "代理瀏覽器解析度",
+    "siteSettings.remote_browser_geometry.description": "每個代理瀏覽器桌面的解析度，格式「寬x高」（例如 1280x720、1920x1080）。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_ssh_timeout.label": "代理瀏覽器 SSH 代理逾時（秒）",
+    "siteSettings.remote_browser_ssh_timeout.description": "開啟瀏覽器時，等待「ssh -D SOCKS 代理」把本地埠拉起來的逾時（秒）。此連線經 telepy-ssh 兩跳到目標裝置，冷啟較久；太短會把「還在連」誤判成裝置離線。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_ssh_attempts.label": "代理瀏覽器 SSH 代理重試次數",
+    "siteSettings.remote_browser_ssh_attempts.description": "SOCKS 代理起不來時的重試次數（含第一次）。第一次連線是冷的常較慢，第二次因連線已暖通常就會成功；真的離線的裝置會很快失敗、不會空等。建議 ≥ 2。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_kasm_create_timeout.label": "代理瀏覽器啟動逾時（秒）",
+    "siteSettings.remote_browser_kasm_create_timeout.description": "開啟瀏覽器時，等待瀏覽器容器把桌面（Xkasmvnc）與 Chromium 起好的逾時（秒）。冷啟或機器忙碌時較久，太短會讓開啟失敗；太長則卡住較久才報錯。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_homepage.label": "代理瀏覽器首頁",
+    "siteSettings.remote_browser_homepage.description": "代理瀏覽器啟動時自動開啟的首頁網址（需含 http:// 或 https://）。下次開啟瀏覽器時生效。",
+    "siteSettings.remote_browser_language.label": "代理瀏覽器語系",
+    "siteSettings.remote_browser_language.description": "代理瀏覽器的介面語系與 Accept-Language，格式如 zh-TW、en-US、ja-JP。也影響反爬蟲的 navigator.languages（空語系是機器人特徵）。下次開啟瀏覽器時生效。",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "連線中",

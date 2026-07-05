@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useLoginPage } from "@/hooks/useLoginPage";
 import { useI18n } from "@/lib/i18n";
+import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 
 export default function LoginPage() {
     const { state, actions } = useLoginPage();
@@ -21,6 +22,11 @@ export default function LoginPage() {
     return (
         <>
             <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />
+            {/* 未登入也能切語言(cookie 生效;登入後由 UserSettingsSync 同步到帳號)。
+                Language is switchable pre-login; it syncs to the account after signing in. */}
+            <div className="fixed top-4 right-4 z-10 w-44">
+                <LanguageSwitcher />
+            </div>
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
                 <div className="w-full max-w-md bg-card text-card-foreground rounded-2xl shadow-2xl p-8 border border-border animate-in fade-in slide-in-from-bottom-8 duration-700">
                     <div className="text-center mb-8">

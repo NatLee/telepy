@@ -69,6 +69,7 @@ export const en = {
     "nav.navigationMenu": "Navigation Menu",
     "nav.collapseSidebar": "Collapse sidebar",
     "nav.expandSidebar": "Expand sidebar",
+    "nav.preferences": "Preferences",
 
     // ── 語言 / Language switcher ───────────────────────────────────
     "language.label": "Language",
@@ -370,6 +371,7 @@ export const en = {
     "browser.wsError": "WebSocket error",
     "browser.connectionClosed": "Connection closed",
     "browser.unknownError": "An unknown error occurred",
+    "browser.deviceOffline": "The target device is offline — its reverse tunnel is not connected. Run the connection script on the device (see Scripts) and try again.",
     "browser.imeTitle": "Toggle IME mode for CJK input (中文輸入)",
     "browser.stopSession": "Stop Session",
     "browser.startBrowser": "Start Browser",
@@ -525,19 +527,26 @@ export const en = {
     "logs.noMatch": "No logs matched your search filter.",
     "logs.fetchFailed": "Failed to fetch logs",
 
-    // ── 設定頁 / Settings page ─────────────────────────────────────
+    // ── 偏好設定 modal / User preferences modal ────────────────────
+    "prefs.title": "Preferences",
+    "prefs.theme": "Theme",
+    "prefs.themeDescription": "Interface color scheme. System follows your OS setting.",
+    "prefs.themeSystem": "System",
+    "prefs.themeLight": "Light",
+    "prefs.themeDark": "Dark",
+    "prefs.terminalFontSize": "Terminal Font Size",
+    "prefs.terminalFontSizeDescription": "Font size (px) for the web terminal. Applies to open terminals immediately.",
+
+    // ── 設定頁 / Settings page (admin) ─────────────────────────────
     "settings.title": "Settings",
-    "settings.subtitle": "Personal preferences and site administration.",
-    "settings.tabPreferences": "Preferences",
+    "settings.subtitle": "Site administration and user management.",
     "settings.tabSite": "Site Settings",
     "settings.tabUsers": "Users",
-    // 個人設定 / Preferences
+    "settings.adminOnly": "This page is for administrators. Your personal preferences moved to the sidebar's Preferences button.",
+    // 帳號資訊(偏好設定 modal 共用) / Account info (shared with the preferences modal)
     "settings.languageTitle": "Language",
     "settings.languageDescription": "Interface display language. Auto follows your browser's language. Your choice is saved to your account and syncs across devices.",
     "settings.accountTitle": "Account",
-    "settings.usernameLabel": "Username",
-    "settings.emailLabel": "Email",
-    "settings.roleLabel": "Role",
     // 站台設定 / Site settings
     "settings.siteSubtitle": "Configure site-wide preferences. Changes take effect the next time a proxy browser is opened (toggles apply immediately).",
     "settings.siteBanner": "Manage server-wide settings that affect all users. Read each setting's description before changing it.",
@@ -577,6 +586,32 @@ export const en = {
     "settings.selfEditNote": "You cannot deactivate or demote your own account.",
     "settings.userUpdated": "User updated",
     "settings.userUpdateFailed": "Failed to update user",
+
+    // ── 站台設定的欄位說明 / Site-setting labels & descriptions ─────
+    // 後端 SiteSettings 每個欄位對應 siteSettings.<欄位>.label / .description;找不到 key 時
+    // 前端會退回後端 meta(help_text)。新增站台設定欄位時,記得三份字典都要補。
+    // Each SiteSettings field maps to siteSettings.<field>.label/.description; the page falls
+    // back to the backend meta when a key is missing. Add keys here when adding fields.
+    "siteSettings.allow_registration.label": "Allow Registration",
+    "siteSettings.allow_registration.description": "Whether new accounts can self-register. When off, only administrators can create accounts. Takes effect immediately.",
+    "siteSettings.valid_register_domains.label": "Allowed Registration Email Domains",
+    "siteSettings.valid_register_domains.description": "Comma-separated whitelist of email domains allowed to self-register via Google sign-in (e.g. gmail.com,mycorp.com). Only Google accounts from these domains can register. Leave empty to use the system default. Takes effect immediately.",
+    "siteSettings.remote_browser_session_idle_timeout.label": "Remote Browser Session Idle Timeout (seconds)",
+    "siteSettings.remote_browser_session_idle_timeout.description": "Close and reclaim a browser session after this many seconds without a heartbeat, so unused sessions don't hold resources or target connections. While the browser tab is open the server auto-renews every 20 seconds, so normal use is never cut off; the countdown only starts after the tab closes or disconnects. Applies immediately.",
+    "siteSettings.remote_browser_max_sessions.label": "Remote Browser Max Concurrent Sessions",
+    "siteSettings.remote_browser_max_sessions.description": "Upper bound on concurrently running proxy-browser sessions, to cap resource usage. When the limit is reached, new \"open browser\" requests are rejected with a try-again-later message. 0 = unlimited. Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_geometry.label": "Remote Browser Screen Geometry",
+    "siteSettings.remote_browser_geometry.description": "Desktop resolution of each proxy browser, in \"width x height\" form (e.g. 1280x720, 1920x1080). Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_ssh_timeout.label": "Remote Browser SSH Proxy Timeout (seconds)",
+    "siteSettings.remote_browser_ssh_timeout.description": "When opening a browser, how long to wait for the \"ssh -D\" SOCKS proxy to bind its local port. This connection makes two hops through telepy-ssh to the target device and cold starts are slow; too short misreads \"still connecting\" as the device being offline. Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_ssh_attempts.label": "Remote Browser SSH Proxy Attempts",
+    "siteSettings.remote_browser_ssh_attempts.description": "Retry count (including the first try) when the SOCKS proxy fails to come up. The first attempt is cold and often slower; the second usually succeeds on the warmed connection, while a truly offline device fails fast instead of hanging. Recommended ≥ 2. Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_kasm_create_timeout.label": "Remote Browser Startup Timeout (seconds)",
+    "siteSettings.remote_browser_kasm_create_timeout.description": "When opening a browser, how long to wait for the browser container to bring up the desktop (Xkasmvnc) and Chromium. Cold starts or a busy machine take longer — too short makes opens fail, too long delays the error. Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_homepage.label": "Remote Browser Homepage",
+    "siteSettings.remote_browser_homepage.description": "URL the proxy browser opens on startup (must include http:// or https://). Applies the next time a browser is opened.",
+    "siteSettings.remote_browser_language.label": "Remote Browser Language",
+    "siteSettings.remote_browser_language.description": "UI language and Accept-Language of the proxy browser, e.g. zh-TW, en-US, ja-JP. Also affects anti-bot navigator.languages (an empty language list is a bot signal). Applies the next time a browser is opened.",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "Live",

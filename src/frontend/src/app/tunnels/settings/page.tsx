@@ -1,24 +1,26 @@
 "use client";
 
 /**
- * 設定頁(重新設計):
- * - 個人設定(所有人):帳號資訊 + 介面語言。
- * - 站台設定(管理員):原站台設定列表,依類別分組。
- * - 使用者(管理員):使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
- * Settings page (redesigned):
- * - Preferences (everyone): account info + interface language.
- * - Site Settings (admins): the site-wide settings list, grouped by category.
- * - Users (admins): user list + a "Manage" modal for account flags and personal settings.
+ * 設定頁(管理員專用):
+ * - 站台設定:全站設定列表,依類別分組。label 與說明優先用前端字典
+ *   (siteSettings.<key>.label/.description,隨介面語言切換),找不到才退回後端 meta。
+ * - 使用者:使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
+ * 個人偏好(語言/主題/終端機字型)在 sidebar 左下角的齒輪 modal,不在這裡。
+ * Settings page (admin-only): Site Settings (grouped; labels/descriptions come from the
+ * frontend dictionaries with backend-meta fallback) and Users (list + manage modal).
+ * Personal preferences live in the sidebar gear modal instead.
  */
 import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, Info, Check, User as UserIcon, Users as UsersIcon, Globe, Shield, SlidersHorizontal } from "lucide-react";
+import { Settings, Info, ShieldAlert, Users as UsersIcon, Shield, SlidersHorizontal } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
 import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
 import type { Translate } from "@/lib/i18n";
+import { en } from "@/locales/en";
+import type { TranslationKey } from "@/locales/en";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -40,21 +42,31 @@ function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disab
     );
 }
 
-type TabId = "preferences" | "site" | "users";
+type TabId = "site" | "users";
 
 export default function SettingsPage() {
     const { user } = useAuth();
     const { t } = useI18n();
     const isAdmin = !!user?.is_superuser;
-    const [tab, setTab] = useState<TabId>("preferences");
+    const [tab, setTab] = useState<TabId>("site");
 
-    const tabs: { id: TabId; label: string; icon: React.ReactNode; adminOnly: boolean }[] = [
-        { id: "preferences", label: t("settings.tabPreferences"), icon: <UserIcon size={16} />, adminOnly: false },
-        { id: "site", label: t("settings.tabSite"), icon: <SlidersHorizontal size={16} />, adminOnly: true },
-        { id: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={16} />, adminOnly: true },
+    if (!isAdmin) {
+        // 非管理員(直接輸入網址進來):提示個人偏好的新位置。
+        // Non-admins (deep link): point at the preferences modal's new home.
+        return (
+            <div className="animate-fade-in-up">
+                <div className="bg-warning/10 border-l-4 border-warning p-4 rounded-r-md flex items-start">
+                    <ShieldAlert className="text-warning mr-3 shrink-0 mt-0.5" size={20} />
+                    <p className="text-sm text-warning-foreground">{t("settings.adminOnly")}</p>
+                </div>
+            </div>
+        );
+    }
+
+    const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+        { id: "site", label: t("settings.tabSite"), icon: <SlidersHorizontal size={16} /> },
+        { id: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={16} /> },
     ];
-    const visibleTabs = tabs.filter((item) => !item.adminOnly || isAdmin);
-    const activeTab: TabId = visibleTabs.some((item) => item.id === tab) ? tab : "preferences";
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -67,97 +79,26 @@ export default function SettingsPage() {
                 <p className="mt-2 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
             </div>
 
-            {visibleTabs.length > 1 && (
-                <div className="border-b border-border flex gap-1" role="tablist">
-                    {visibleTabs.map((item) => (
-                        <button
-                            key={item.id}
-                            role="tab"
-                            aria-selected={activeTab === item.id}
-                            onClick={() => setTab(item.id)}
-                            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${activeTab === item.id
-                                    ? "border-primary text-primary"
-                                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                                }`}
-                        >
-                            {item.icon}
-                            {item.label}
-                        </button>
-                    ))}
-                </div>
-            )}
+            <div className="border-b border-border flex gap-1" role="tablist">
+                {tabs.map((item) => (
+                    <button
+                        key={item.id}
+                        role="tab"
+                        aria-selected={tab === item.id}
+                        onClick={() => setTab(item.id)}
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === item.id
+                                ? "border-primary text-primary"
+                                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+                            }`}
+                    >
+                        {item.icon}
+                        {item.label}
+                    </button>
+                ))}
+            </div>
 
-            {activeTab === "preferences" && <PreferencesTab />}
-            {activeTab === "site" && isAdmin && <SiteSettingsTab />}
-            {activeTab === "users" && isAdmin && <UsersTab />}
-        </div>
-    );
-}
-
-/* ── 個人設定 / Preferences ─────────────────────────────────────── */
-
-function PreferencesTab() {
-    const { user } = useAuth();
-    const { t, language, setLanguage } = useI18n();
-
-    const options: { value: LanguagePreference; label: string }[] = [
-        { value: "auto", label: t("language.auto") },
-        ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
-    ];
-
-    return (
-        <div className="space-y-6 max-w-3xl">
-            {/* 帳號資訊 / Account */}
-            <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-6">
-                <h2 className="text-base font-semibold flex items-center gap-2 mb-4">
-                    <UserIcon size={18} className="text-primary" />
-                    {t("settings.accountTitle")}
-                </h2>
-                <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                    <div>
-                        <dt className="text-muted-foreground">{t("settings.usernameLabel")}</dt>
-                        <dd className="mt-1 font-medium text-foreground truncate">{user?.username}</dd>
-                    </div>
-                    <div>
-                        <dt className="text-muted-foreground">{t("settings.emailLabel")}</dt>
-                        <dd className="mt-1 font-medium text-foreground truncate">{user?.email || "—"}</dd>
-                    </div>
-                    <div>
-                        <dt className="text-muted-foreground">{t("settings.roleLabel")}</dt>
-                        <dd className="mt-1 font-medium text-foreground">
-                            {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
-                        </dd>
-                    </div>
-                </dl>
-            </section>
-
-            {/* 介面語言 / Language */}
-            <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-6">
-                <h2 className="text-base font-semibold flex items-center gap-2 mb-1">
-                    <Globe size={18} className="text-primary" />
-                    {t("settings.languageTitle")}
-                </h2>
-                <p className="text-sm text-muted-foreground mb-4">{t("settings.languageDescription")}</p>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {options.map((option) => {
-                        const isActive = language === option.value;
-                        return (
-                            <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => setLanguage(option.value)}
-                                className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${isActive
-                                        ? "border-primary bg-primary/10 text-primary"
-                                        : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                                    }`}
-                            >
-                                {isActive && <Check size={14} />}
-                                {option.label}
-                            </button>
-                        );
-                    })}
-                </div>
-            </section>
+            {tab === "site" && <SiteSettingsTab />}
+            {tab === "users" && <UsersTab />}
         </div>
     );
 }
@@ -171,6 +112,15 @@ function SiteSettingsTab() {
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
     const entries = Object.entries(settingsObj);
+
+    // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
+    // Prefer the frontend dictionary (localized); fall back to backend meta for unknown keys.
+    const tOpt = (key: string): string | null =>
+        key in en ? t(key as TranslationKey) : null;
+    const labelOf = (key: string, m?: SettingMeta) =>
+        tOpt(`siteSettings.${key}.label`) ?? m?.label ?? titleize(key);
+    const descriptionOf = (key: string, m?: SettingMeta) =>
+        tOpt(`siteSettings.${key}.description`) ?? m?.description ?? "";
 
     // 依 meta.type(找不到就用值的型別)決定編輯器與存檔驗證。
     const typeOf = (key: string, value: unknown): SettingMeta["type"] =>
@@ -224,16 +174,17 @@ function SiteSettingsTab() {
                                 {group.keys.map(([key, value]) => {
                                     const kind = typeOf(key, value);
                                     const m = meta[key];
+                                    const description = descriptionOf(key, m);
                                     return (
                                         <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
                                             <div className="flex items-start justify-between gap-4">
                                                 <div className="flex-1 min-w-0">
                                                     <h4 className="text-sm font-medium text-foreground">
-                                                        {m?.label ?? titleize(key)}
+                                                        {labelOf(key, m)}
                                                     </h4>
-                                                    {m?.description && (
+                                                    {description && (
                                                         <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
-                                                            {m.description}
+                                                            {description}
                                                         </p>
                                                     )}
                                                     <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">

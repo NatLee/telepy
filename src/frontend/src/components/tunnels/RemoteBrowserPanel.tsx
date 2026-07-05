@@ -212,6 +212,11 @@ export function RemoteBrowserPanel({
             );
             if (!res.ok) {
                 const data = await readJson(res);
+                // 後端帶機器可讀 code 時用在地化訊息(如 device_offline),否則顯示原始錯誤。
+                // Prefer the localized message when the backend sends a machine-readable code.
+                if ((data as { code?: string } | null)?.code === "device_offline") {
+                    throw new Error(t("browser.deviceOffline"));
+                }
                 throw new Error(responseError(res, data, t("browser.startFailed")));
             }
             const data = await res.json();

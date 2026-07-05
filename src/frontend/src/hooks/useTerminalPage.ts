@@ -23,6 +23,7 @@ import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
+import { readTerminalFontSize, TERMINAL_FONT_SIZE_EVENT } from "@/lib/userPrefs";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
 
@@ -373,7 +374,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             cursorBlink: true,
             theme: TERMINAL_THEME,
             fontFamily: termFontFamily,
-            fontSize: 14,
+            // 使用者偏好(左下齒輪 modal),即時變更由下方的 TERMINAL_FONT_SIZE_EVENT 監聽套用。
+            // User preference (gear modal); live changes arrive via TERMINAL_FONT_SIZE_EVENT below.
+            fontSize: readTerminalFontSize(),
             lineHeight: 1.2,
         });
         const fit = new FitAddon();
@@ -598,6 +601,25 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         }, 200);
         return () => clearTimeout(timer);
     }, [showFiles, mainView, fitAndResize]);
+
+    // 偏好設定 modal 調整字型大小時，即時套用到所有開著的分頁並 refit。
+    // Live-apply terminal font size changes from the preferences modal to every open tab.
+    useEffect(() => {
+        const applyFontSize = (event: Event) => {
+            const size = (event as CustomEvent<number>).detail;
+            if (typeof size !== "number") return;
+            for (const s of sessionsRef.current.values()) {
+                try {
+                    s.term.options.fontSize = size;
+                } catch { /* noop */ }
+            }
+            const id = activeIdRef.current;
+            const active = id !== null ? sessionsRef.current.get(id) : undefined;
+            if (active) fitAndResize(active);
+        };
+        window.addEventListener(TERMINAL_FONT_SIZE_EVENT, applyFontSize);
+        return () => window.removeEventListener(TERMINAL_FONT_SIZE_EVENT, applyFontSize);
+    }, [fitAndResize]);
 
     // 僅在「完整虛擬鍵盤」模式抑制原生鍵盤；套用到所有分頁的 helper textarea。
     // Suppress the native keyboard only in "full" mode; applied to every tab's helper textarea.
