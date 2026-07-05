@@ -30,31 +30,31 @@ export function Step4TestConnection({
     const { t, tn } = useI18n();
     return (
         <div className="p-6 sm:p-8">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">{t("wizard.step4Heading")}</h3>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 flex items-start gap-2 text-sm text-blue-800">
+            <h3 className="text-lg font-medium text-foreground mb-4">{t("wizard.step4Heading")}</h3>
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-3 flex items-start gap-2 text-sm text-blue-800 dark:text-blue-200">
                 <Info size={16} className="mt-0.5 shrink-0" />
                 <span>{tn("wizard.step4Banner", { onTargetServer: <strong>{t("wizard.step4BannerOnTarget")}</strong> })}</span>
             </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-start gap-2 text-sm text-amber-800">
+            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 mb-4 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                 <span>{tn("wizard.step4Warning", {
                     step2: <strong>{t("wizard.step4WarningStep2")}</strong>,
-                    path: <code className="bg-amber-100 px-1 rounded">~/.ssh/authorized_keys</code>,
+                    path: <code className="bg-amber-100 dark:bg-amber-900/40 px-1 rounded">~/.ssh/authorized_keys</code>,
                 })}</span>
             </div>
 
             <div className="space-y-6 mb-6">
                 <div>
-                    <h4 className="text-sm font-semibold text-gray-800 mb-2">{t("wizard.step4Option1")}</h4>
+                    <h4 className="text-sm font-semibold text-foreground mb-2">{t("wizard.step4Option1")}</h4>
                     <CodeBlock language="bash" value={sshScriptContent} />
                 </div>
                 <div>
-                    <h4 className="text-sm font-semibold text-gray-800 mb-2">{t("wizard.step4Option2")}</h4>
+                    <h4 className="text-sm font-semibold text-foreground mb-2">{t("wizard.step4Option2")}</h4>
                     <CodeBlock language="bash" value={autosshScriptContent} />
                 </div>
             </div>
 
-            <div className={`p-5 rounded-lg border flex items-center gap-5 ${status?.is_connected ? "bg-green-50 border-green-200 text-green-800" : "bg-yellow-50 border-yellow-200 text-yellow-800"}`}>
+            <div className={`p-5 rounded-lg border flex items-center gap-5 ${status?.is_connected ? "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800 text-green-800 dark:text-green-200" : "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-200"}`}>
                 <ConnectionStatusLight state={status?.is_connected ? "connected" : "disconnected"} size={48} />
                 <div>
                     <strong className="block text-sm mb-1">{t("wizard.connectionStatus")}</strong>
@@ -67,7 +67,7 @@ export function Step4TestConnection({
             </div>
 
             <div className="mt-8 flex justify-between">
-                <button type="button" onClick={onBack} className="inline-flex items-center px-6 py-3 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">{t("common.back")}</button>
+                <button type="button" onClick={onBack} className="inline-flex items-center px-6 py-3 border border-border rounded-lg shadow-sm text-sm font-medium text-foreground bg-background hover:bg-muted">{t("common.back")}</button>
                 <button type="button" onClick={onNext} className="inline-flex items-center px-6 py-3 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700">{t("common.nextStep")} <ChevronRight size={16} className="ml-2 -mr-1" /></button>
             </div>
         </div>

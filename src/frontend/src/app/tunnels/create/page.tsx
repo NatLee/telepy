@@ -67,23 +67,23 @@ export default function CreateTunnelWizard() {
     return (
         <div className="max-w-4xl mx-auto pb-12 animate-fade-in-up">
             <div className="mb-8">
-                <h1 className="text-2xl font-bold text-gray-900">{t("wizard.title")}</h1>
-                <p className="mt-1 text-sm text-gray-500">{t("wizard.subtitle")}</p>
+                <h1 className="text-2xl font-bold text-foreground">{t("wizard.title")}</h1>
+                <p className="mt-1 text-sm text-muted-foreground">{t("wizard.subtitle")}</p>
             </div>
 
-            <div className="mb-8 overflow-hidden rounded-lg bg-white shadow ring-1 ring-gray-900/5">
-                <div className="flex bg-gray-50 border-b border-gray-200 divide-x divide-gray-200">
+            <div className="mb-8 overflow-hidden rounded-lg bg-card shadow ring-1 ring-border">
+                <div className="flex bg-muted/50 border-b border-border divide-x divide-border">
                     {STEPS.map((step) => {
                         const isActive = step.id === currentStep;
                         const isCompleted = step.id < currentStep;
                         return (
                             <div
                                 key={step.id}
-                                className={`flex-1 relative py-4 px-2 text-center text-sm font-medium ${isActive ? "bg-white text-green-600 after:absolute after:bottom-0 after:left-0 after:w-full after:h-[2px] after:bg-green-600 after:origin-left after:animate-progress-fill" : isCompleted ? "text-gray-900" : "text-gray-400"}`}
+                                className={`flex-1 relative py-4 px-2 text-center text-sm font-medium ${isActive ? "bg-card text-green-600 dark:text-green-400 after:absolute after:bottom-0 after:left-0 after:w-full after:h-[2px] after:bg-green-600 dark:after:bg-green-400 after:origin-left after:animate-progress-fill" : isCompleted ? "text-foreground" : "text-muted-foreground"}`}
                             >
                                 <div className="flex flex-col items-center justify-center gap-2">
                                     <div
-                                        className={`flex justify-center items-center w-8 h-8 rounded-full ${isActive ? "bg-green-100 ring-4 ring-green-100/50 animate-pulse-glow" : isCompleted ? "bg-green-500 text-white" : "bg-gray-100"}`}
+                                        className={`flex justify-center items-center w-8 h-8 rounded-full ${isActive ? "bg-green-100 dark:bg-green-500/20 ring-4 ring-green-100/50 dark:ring-green-500/10 animate-pulse-glow" : isCompleted ? "bg-green-500 text-white" : "bg-muted"}`}
                                     >
                                         {isCompleted ? <Check size={16} /> : <span className={isActive ? "animate-pulse-step block flex items-center justify-center" : ""}>{step.icon}</span>}
                                     </div>

@@ -26,16 +26,16 @@ export function KeyViewModal({ isOpen, title, content, onClose, onCopySuccess }:
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="fixed inset-0 bg-black/50" onClick={onClose} aria-hidden />
-            <div className="relative bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 z-10">
-                <h3 className="text-lg font-bold text-gray-900 mb-1">{title}</h3>
-                <p className="text-xs text-gray-500 mb-4">
-                    {tn("wizard.keyViewInstruction", { path: <code className="bg-gray-100 px-1 rounded">~/.ssh/authorized_keys</code> })}
+            <div className="relative bg-background text-foreground rounded-xl shadow-2xl border border-border max-w-xl w-full p-6 z-10">
+                <h3 className="text-lg font-bold text-foreground mb-1">{title}</h3>
+                <p className="text-xs text-muted-foreground mb-4">
+                    {tn("wizard.keyViewInstruction", { path: <code className="bg-muted text-foreground border border-border px-1 rounded">~/.ssh/authorized_keys</code> })}
                 </p>
                 <textarea
                     readOnly
                     value={content}
                     rows={6}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-3 text-xs font-mono bg-gray-50 resize-none focus:outline-none"
+                    className="w-full border border-input rounded-lg px-4 py-3 text-xs font-mono bg-muted/50 text-foreground resize-none focus:outline-none"
                 />
                 <div className="mt-4 flex justify-end gap-2">
                     <button
@@ -48,7 +48,7 @@ export function KeyViewModal({ isOpen, title, content, onClose, onCopySuccess }:
                     <button
                         type="button"
                         onClick={onClose}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                        className="px-4 py-2 text-sm font-medium text-secondary-foreground bg-secondary hover:bg-secondary/80 rounded-lg transition-colors"
                     >
                         {t("common.close")}
                     </button>

@@ -19,11 +19,11 @@ export function Step5Completion({ createdHostName, sshPort, configContent, confi
     const { t, tn } = useI18n();
     return (
         <div className="p-6 sm:p-8 text-center">
-            <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-green-100 mb-6 shadow-inner border-4 border-white shadow-xl shadow-green-100">
-                <CheckCircle2 size={40} className="text-green-600" />
+            <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-green-100 dark:bg-green-500/20 mb-6 shadow-inner border-4 border-card shadow-xl shadow-green-100 dark:shadow-green-900/30">
+                <CheckCircle2 size={40} className="text-green-600 dark:text-green-400" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">{t("wizard.step5Title")}</h2>
-            <p className="text-gray-500 mb-8 max-w-lg mx-auto">
+            <h2 className="text-2xl font-bold text-foreground mb-2">{t("wizard.step5Title")}</h2>
+            <p className="text-muted-foreground mb-8 max-w-lg mx-auto">
                 {tn("wizard.step5Body", { name: <strong>{createdHostName}</strong>, port: <strong>{sshPort}</strong> })}
             </p>
 

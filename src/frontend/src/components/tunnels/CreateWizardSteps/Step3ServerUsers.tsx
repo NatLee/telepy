@@ -35,16 +35,16 @@ export function Step3ServerUsers({
     const { t, tn } = useI18n();
     return (
         <div className="p-6 sm:p-8">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">{t("wizard.step3Heading")}</h3>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 flex items-start gap-2 text-sm text-blue-800">
+            <h3 className="text-lg font-medium text-foreground mb-4">{t("wizard.step3Heading")}</h3>
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4 flex items-start gap-2 text-sm text-blue-800 dark:text-blue-200">
                 <Info size={16} className="mt-0.5 shrink-0" />
                 <span>{tn("wizard.step3Banner", {
                     actuallyExists: <strong>{t("wizard.step3BannerActuallyExists")}</strong>,
-                    root: <code className="bg-blue-100 px-1 rounded">root</code>,
-                    ubuntu: <code className="bg-blue-100 px-1 rounded">ubuntu</code>,
+                    root: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">root</code>,
+                    ubuntu: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">ubuntu</code>,
                 })}</span>
             </div>
-            <p className="text-sm text-gray-500 mb-6">{t("wizard.step3Description")}</p>
+            <p className="text-sm text-muted-foreground mb-6">{t("wizard.step3Description")}</p>
 
             <form onSubmit={onAddUser} className="flex gap-2 mb-6">
                 <input
@@ -52,7 +52,7 @@ export function Step3ServerUsers({
                     value={newUsername}
                     onChange={(e) => onNewUsernameChange(e.target.value)}
                     placeholder={t("wizard.step3UserPlaceholder")}
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500 sm:text-sm bg-slate-50"
+                    className="flex-1 px-4 py-2 border border-input rounded-lg focus:ring-green-500 focus:border-green-500 sm:text-sm bg-muted/50 dark:bg-input/30 text-foreground placeholder:text-muted-foreground"
                 />
                 <button
                     type="submit"
@@ -63,15 +63,15 @@ export function Step3ServerUsers({
                 </button>
             </form>
 
-            <div className="bg-white border rounded-lg overflow-hidden mb-8">
+            <div className="bg-card border border-border rounded-lg overflow-hidden mb-8">
                 {users.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">{t("wizard.step3Empty")}</div>
+                    <div className="p-8 text-center text-muted-foreground">{t("wizard.step3Empty")}</div>
                 ) : (
-                    <ul className="divide-y divide-gray-200">
+                    <ul className="divide-y divide-border">
                         {users.map((serverUser) => (
                             <li key={serverUser.id} className="px-6 py-4 flex items-center justify-between">
-                                <span className="font-medium text-gray-900">{serverUser.username}</span>
-                                <button type="button" onClick={() => onDeleteUser(serverUser)} className="text-red-500 hover:text-red-700 text-sm font-medium">{t("common.remove")}</button>
+                                <span className="font-medium text-foreground">{serverUser.username}</span>
+                                <button type="button" onClick={() => onDeleteUser(serverUser)} className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 text-sm font-medium">{t("common.remove")}</button>
                             </li>
                         ))}
                     </ul>
@@ -79,7 +79,7 @@ export function Step3ServerUsers({
             </div>
 
             <div className="flex justify-between">
-                <button type="button" onClick={onBack} className="inline-flex items-center px-6 py-3 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">{t("common.back")}</button>
+                <button type="button" onClick={onBack} className="inline-flex items-center px-6 py-3 border border-border rounded-lg shadow-sm text-sm font-medium text-foreground bg-background hover:bg-muted">{t("common.back")}</button>
                 <button type="button" onClick={onNext} className="inline-flex items-center px-6 py-3 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700">{t("common.nextStep")} <ChevronRight size={16} className="ml-2 -mr-1" /></button>
             </div>
         </div>
