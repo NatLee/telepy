@@ -28,6 +28,7 @@ import {
     type LanguagePreference,
 } from "./locale";
 import { DICTIONARIES, readCookiePreference, resolveLocale, setActiveLocale } from "./translate";
+import { applyTerminalFontSize, applyTheme, isTheme, readStoredTheme, readTerminalFontSize } from "./userPrefs";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -69,28 +70,20 @@ const I18nContext = createContext<I18nContextType>({
     applyServerLanguage: () => { },
 });
 
-export function I18nProvider({
-    children,
-    initialPreference = "auto",
-    initialLocale = "en",
-}: {
-    children: React.ReactNode;
-    /** Server layout 由 cookie / Accept-Language 算出的初始值,確保 SSR 與首次 render 一致。
-     *  Initial values computed server-side (cookie / Accept-Language) so SSR matches hydration. */
-    initialPreference?: LanguagePreference;
-    initialLocale?: Locale;
-}) {
-    const [language, setLanguageState] = useState<LanguagePreference>(initialPreference);
-    const [locale, setLocale] = useState<Locale>(initialLocale);
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+    // SSR 與 client 首次 render 固定用 "en"(避免 hydration mismatch);下方 useLayoutEffect
+    // 會在瀏覽器繪製 hydration 結果**之前**套用 cookie/瀏覽器語言,登入後頁面初始都是 auth
+    // spinner,實際看不到英文閃爍。不在 server 讀 cookie:那會讓所有路由變 dynamic(見 layout.tsx)。
+    // SSR and the first client render use "en" (no hydration mismatch); the layout effect below
+    // applies the cookie/browser locale before the hydrated frame paints. Reading the cookie
+    // server-side would force every route dynamic (see layout.tsx).
+    const [language, setLanguageState] = useState<LanguagePreference>("auto");
+    const [locale, setLocale] = useState<Locale>("en");
 
-    // 掛載後以瀏覽器實際狀態校正一次(cookie 被清、或 server 對 auto 的推測與 navigator 不同)。
-    // After mount, reconcile once with the real browser state (cleared cookie, or the server's
-    // Accept-Language guess for "auto" differing from navigator.language).
-    useEffect(() => {
-        const stored = readCookiePreference() ?? language;
+    React.useLayoutEffect(() => {
+        const stored = readCookiePreference() ?? "auto";
         setLanguageState(stored);
         setLocale(resolveLocale(stored));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // 讓 <html lang> 與模組層級 translate()(lib/translate.ts)跟著生效語言走。
@@ -152,13 +145,16 @@ export function I18nProvider({
 export const useI18n = () => useContext(I18nContext);
 
 /**
- * 登入後的語言同步橋接(放在 AuthProvider 內、每頁一次):
- * - 後端已有明確偏好 → 套用到本機(跨裝置同步)。
- * - 後端還沒設定過(null)→ 把本機偏好推上去,不覆蓋使用者在這台裝置上的選擇。
- * Post-login language sync bridge (mounted once inside AuthProvider):
- * apply the backend preference if set; otherwise push the local preference up.
+ * 登入後的個人設定同步橋接(放在 AuthProvider 內、每頁一次):
+ * - 語言:後端已有明確偏好 → 套用到本機;後端還沒設定過(null)→ 把本機偏好推上去,
+ *   不覆蓋使用者在這台裝置上的選擇(登入頁可在未登入時就選語言)。
+ * - 主題 / 終端機字型大小:server 為準(只能在登入後的偏好設定 modal 修改),
+ *   直接套用到本機(localStorage + DOM/事件)。
+ * Post-login settings sync bridge (mounted once inside AuthProvider): language applies from
+ * the backend if set, else the local preference is pushed up; theme/terminal font size are
+ * server-authoritative and applied locally.
  */
-export function UserLanguageSync() {
+export function UserSettingsSync() {
     const { user } = useAuth();
     const { language, applyServerLanguage } = useI18n();
     const syncedRef = useRef(false);
@@ -172,7 +168,7 @@ export function UserLanguageSync() {
         if (syncedRef.current) return;
         syncedRef.current = true;
 
-        const serverLanguage = (user as { language?: unknown }).language;
+        const serverLanguage = user.language;
         if (isLanguagePreference(serverLanguage)) {
             if (serverLanguage !== language) applyServerLanguage(serverLanguage);
         } else if (serverLanguage === null) {
@@ -180,6 +176,14 @@ export function UserLanguageSync() {
                 method: "POST",
                 body: JSON.stringify({ language }),
             }).catch(() => { });
+        }
+
+        if (isTheme(user.theme) && user.theme !== readStoredTheme()) {
+            applyTheme(user.theme);
+        }
+        if (typeof user.terminal_font_size === "number"
+            && user.terminal_font_size !== readTerminalFontSize()) {
+            applyTerminalFontSize(user.terminal_font_size);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);

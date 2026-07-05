@@ -26,30 +26,6 @@ export function matchLocale(tag: string): Locale | null {
     return null;
 }
 
-/**
- * 解析 Accept-Language header,取第一個支援的語言(SSR 初始語言用,與瀏覽器端
- * navigator.languages 的解析結果一致)。
- * Parse the Accept-Language header into the first supported locale (for the SSR initial
- * locale; mirrors the client-side navigator.languages resolution).
- */
-export function parseAcceptLanguage(header: string | null | undefined): Locale {
-    if (!header) return "en";
-    const tags = header
-        .split(",")
-        .map((part) => {
-            const [tag, ...params] = part.trim().split(";");
-            const qParam = params.find((p) => p.trim().startsWith("q="));
-            const q = qParam ? parseFloat(qParam.trim().slice(2)) : 1;
-            return { tag: tag.trim(), q: Number.isNaN(q) ? 0 : q };
-        })
-        .sort((a, b) => b.q - a.q);
-    for (const { tag } of tags) {
-        const match = matchLocale(tag);
-        if (match) return match;
-    }
-    return "en";
-}
-
 /** 語言選項的「原生名稱」— 語言選單固定用原文顯示,不隨介面語言翻譯。
  *  Native display names for the language picker — always shown in their own language. */
 export const LOCALE_NATIVE_NAMES: Record<Locale, string> = {

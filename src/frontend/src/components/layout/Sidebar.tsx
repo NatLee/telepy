@@ -6,31 +6,35 @@
  * Desktop sidebar: collapsible (w-64 ⇄ w-16); the state persists in localStorage.
  * When collapsed, nav items render icon-only with title tooltips.
  */
-import React, { useEffect, useState } from "react";
+import React, { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Terminal, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { NavContent } from "./NavContent";
 import { useI18n } from "@/lib/i18n";
 
 const COLLAPSED_STORAGE_KEY = "telepy.sidebarCollapsed";
+const COLLAPSED_EVENT = "telepy:sidebar-collapsed";
+
+// localStorage 當外部 store:SSR 一律展開,client 端 hydration 後讀實際值(React 對
+// useSyncExternalStore 的 server/client snapshot 差異有正規處理,不會有 mismatch 錯誤)。
+// localStorage as an external store: SSR renders expanded; the client snapshot takes over
+// after hydration via the sanctioned useSyncExternalStore path (no mismatch warnings).
+function subscribeCollapsed(callback: () => void) {
+    window.addEventListener(COLLAPSED_EVENT, callback);
+    return () => window.removeEventListener(COLLAPSED_EVENT, callback);
+}
 
 export function Sidebar() {
     const { t } = useI18n();
-    const [collapsed, setCollapsed] = useState(false);
-
-    // localStorage 只在掛載後讀(SSR 沒有);預設展開,讀到收合再切換。
-    // Read localStorage after mount (not available during SSR); default expanded.
-    useEffect(() => {
-        if (localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1") {
-            setCollapsed(true);
-        }
-    }, []);
+    const collapsed = useSyncExternalStore(
+        subscribeCollapsed,
+        () => localStorage.getItem(COLLAPSED_STORAGE_KEY) === "1",
+        () => false,
+    );
 
     const toggle = () => {
-        setCollapsed((prev) => {
-            localStorage.setItem(COLLAPSED_STORAGE_KEY, prev ? "0" : "1");
-            return !prev;
-        });
+        localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "0" : "1");
+        window.dispatchEvent(new Event(COLLAPSED_EVENT));
     };
 
     return (
