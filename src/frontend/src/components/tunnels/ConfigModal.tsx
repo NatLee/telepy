@@ -18,7 +18,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
     } = useConfigModal(isOpen, tunnelId);
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={t("config.title")} size="lg" isLoading={loading}>
+        <Modal isOpen={isOpen} onClose={onClose} title={t("config.title")} size="2xl" isLoading={loading}>
             <div className="space-y-4">
                 <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-3 flex items-start gap-2 text-sm text-blue-800 dark:text-blue-200">
                     <span className="mt-0.5 shrink-0 text-lg">💡</span>

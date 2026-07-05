@@ -72,7 +72,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} size="xl" isLoading={isInitialLoading}>
+        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} size="4xl" isLoading={isInitialLoading}>
             <div className="flex flex-col flex-1 min-h-0 gap-4">
                 {/* Direction Banner */}
                 <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">

@@ -10,7 +10,7 @@ interface ModalProps {
     title: string;
     children: React.ReactNode;
     footer?: React.ReactNode;
-    size?: "sm" | "md" | "lg" | "xl";
+    size?: "sm" | "md" | "lg" | "2xl" | "3xl" | "4xl";
     isLoading?: boolean;
 }
 
@@ -26,7 +26,13 @@ export function Modal({ isOpen, onClose, title, children, footer, size = "md", i
                     size === "sm" && "sm:max-w-sm",
                     size === "md" && "sm:max-w-md",
                     size === "lg" && "sm:max-w-lg",
-                    size === "xl" && "sm:max-w-4xl"
+                    // 大尺寸用 min() 夾住:sm:max-w-* 會蓋掉基底的 calc(100%-2rem),
+                    // 不夾的話在 640px~ 的窄視窗(iPad 直立)會貼齊螢幕邊緣。
+                    // Large sizes keep the 1rem gutter via min() — the sm:max-w-* rule overrides the
+                    // base calc(100%-2rem) clamp, so without it these go edge-to-edge on ~640-928px viewports.
+                    size === "2xl" && "sm:max-w-[min(42rem,calc(100%-2rem))]",
+                    size === "3xl" && "sm:max-w-[min(48rem,calc(100%-2rem))]",
+                    size === "4xl" && "sm:max-w-[min(56rem,calc(100%-2rem))]"
                 )}
                 showCloseButton={false}
             >

@@ -11,33 +11,23 @@ import React, { useState } from "react";
 import { Check, Globe, Monitor, Moon, Sun, Terminal as TerminalIcon, User as UserIcon } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { useAuth } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import {
     applyTerminalFontSize,
-    applyTheme,
-    readStoredTheme,
+    persistUserSetting,
     readTerminalFontSize,
     TERMINAL_FONT_SIZE_MAX,
     TERMINAL_FONT_SIZE_MIN,
     type Theme,
 } from "@/lib/userPrefs";
-
-/** 已登入時把單一偏好同步到後端;失敗不擋本機切換(下次登入會再同步)。
- *  Fire-and-forget backend sync; a failure never blocks the local change. */
-function persistPreference(patch: Record<string, unknown>) {
-    if (typeof localStorage !== "undefined" && localStorage.getItem("accessToken")) {
-        apiFetch("/api/user/settings", {
-            method: "POST",
-            body: JSON.stringify(patch),
-        }).catch(() => { });
-    }
-}
+import { useThemePreference } from "@/hooks/useThemePreference";
 
 export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
     const { user } = useAuth();
     const { t, language, setLanguage } = useI18n();
-    const [theme, setThemeState] = useState<Theme>(() => readStoredTheme());
+    // THEME_EVENT 同步:sidebar 的 ThemeSwitcher 改了主題,這裡的選取狀態也會跟著動(反之亦然)。
+    // Synced over THEME_EVENT so this modal and the sidebar ThemeSwitcher never disagree.
+    const [theme, changeTheme] = useThemePreference();
     const [fontSize, setFontSizeState] = useState<number>(() => readTerminalFontSize());
 
     const languageOptions: { value: LanguagePreference; label: string }[] = [
@@ -51,16 +41,10 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
         { value: "dark", label: t("prefs.themeDark"), icon: <Moon size={14} /> },
     ];
 
-    const changeTheme = (next: Theme) => {
-        setThemeState(next);
-        applyTheme(next);
-        persistPreference({ theme: next });
-    };
-
     const changeFontSize = (next: number) => {
         setFontSizeState(next);
         applyTerminalFontSize(next);
-        persistPreference({ terminal_font_size: next });
+        persistUserSetting({ terminal_font_size: next });
     };
 
     const optionButton = (isActive: boolean) =>
@@ -74,6 +58,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
             isOpen={isOpen}
             onClose={onClose}
             title={t("prefs.title")}
+            size="lg"
             footer={
                 <button
                     type="button"
@@ -107,8 +92,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         {t("settings.languageTitle")}
                     </h3>
                     <p className="text-xs text-muted-foreground mb-2">{t("settings.languageDescription")}</p>
-                    {/* 固定 2×2:四欄在 max-w-md 的 modal 裡放不下 CJK 標籤(會換行跑版)。
-                        Fixed 2×2 — four columns can't fit CJK labels inside a max-w-md modal. */}
+                    {/* 固定 2×2:四欄在這個寬度(max-w-lg)仍放不太下 CJK 標籤(會換行跑版)。
+                        Fixed 2×2 — four columns still can't reliably fit CJK labels at max-w-lg. */}
                     <div className="grid grid-cols-2 gap-2">
                         {languageOptions.map((option) => {
                             const isActive = language === option.value;

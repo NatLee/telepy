@@ -148,7 +148,7 @@ export const useI18n = () => useContext(I18nContext);
  * 登入後的個人設定同步橋接(放在 AuthProvider 內、每頁一次):
  * - 語言:後端已有明確偏好 → 套用到本機;後端還沒設定過(null)→ 把本機偏好推上去,
  *   不覆蓋使用者在這台裝置上的選擇(登入頁可在未登入時就選語言)。
- * - 主題 / 終端機字型大小:server 為準(只能在登入後的偏好設定 modal 修改),
+ * - 主題 / 終端機字型大小:server 為準(登入後可在 sidebar 的主題切換器或偏好設定 modal 修改),
  *   直接套用到本機(localStorage + DOM/事件)。
  * Post-login settings sync bridge (mounted once inside AuthProvider): language applies from
  * the backend if set, else the local preference is pushed up; theme/terminal font size are

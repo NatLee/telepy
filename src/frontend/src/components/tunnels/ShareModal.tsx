@@ -40,7 +40,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
 
     return (
         <>
-            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} size="lg" isLoading={loading}>
+            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} size="3xl" isLoading={loading}>
                 <div className="space-y-6">
                     <ShareModalPermissionMatrix />
 

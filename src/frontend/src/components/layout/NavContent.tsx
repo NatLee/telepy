@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { ThemeSwitcher } from "./ThemeSwitcher";
 import { UserPreferencesModal } from "./UserPreferencesModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
@@ -122,8 +123,13 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
             </div>
 
             <div className={`p-4 border-t border-border space-y-2 ${className}`}>
-                {/* 語言:四顆並排按鈕,點一下直接切換。/ Language: four inline buttons, one-click switch. */}
+                {/* 語言:四顆並排按鈕,點一下直接切換;收合時是下拉選單。
+                    Language: four inline buttons, one-click switch; a dropdown when collapsed. */}
                 <LanguageSwitcher collapsed={collapsed} />
+
+                {/* 主題:系統/淺色/深色三顆並排按鈕;收合時是下拉選單。
+                    Theme: three inline buttons (system/light/dark); a dropdown when collapsed. */}
+                <ThemeSwitcher collapsed={collapsed} />
 
                 {/* 使用者列 + 偏好設定齒輪 / User row + preferences gear */}
                 {user && !collapsed && (
