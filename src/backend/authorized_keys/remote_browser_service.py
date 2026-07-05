@@ -17,6 +17,18 @@ from services.kasm_client import KasmClient, KasmError
 
 logger = logging.getLogger(__name__)
 
+
+class RemoteBrowserError(Exception):
+    """
+    Session 啟動失敗,帶機器可讀的 code 讓前端對應 i18n 訊息(例如 device_offline)。
+    Start failure carrying a machine-readable code so the frontend can map it to an
+    i18n message (e.g. device_offline).
+    """
+
+    def __init__(self, message: str, code: str = "start_failed"):
+        super().__init__(message)
+        self.code = code
+
 # ---------------------------------------------------------------------------
 # 兩層 session 記錄(與 CDP 版同一套骨架,只是瀏覽器端從 CDP context 換成 KasmVNC session):
 #   - ACTIVE_SESSIONS(本行程記憶體):存 ssh 的 Popen handle —— subprocess 無法序列化,
@@ -217,9 +229,10 @@ def start_remote_browser(target_username, target_reverse_port, server_id):
         )
         ssh_process = None
     else:
-        raise Exception(
+        raise RemoteBrowserError(
             f"Failed to start SSH proxy for target {server_id} after {attempts} attempts "
-            f"(no SOCKS listener within {ssh_timeout}s each — is the device online?)."
+            f"(no SOCKS listener within {ssh_timeout}s each — is the device online?).",
+            code="device_offline",
         )
 
     session_id = str(uuid.uuid4())

@@ -11,7 +11,12 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from authorized_keys.models import ReverseServerAuthorizedKeys, ReverseServerUsernames
 from tunnels.models import TunnelPermissionManager, TunnelPermission
 from services.tunnel_permissions import TunnelPermissionService
-from authorized_keys.remote_browser_service import start_remote_browser, stop_remote_browser, ping_remote_browser
+from authorized_keys.remote_browser_service import (
+    RemoteBrowserError,
+    start_remote_browser,
+    stop_remote_browser,
+    ping_remote_browser,
+)
 
 def check_username_allowed(user, reverse_server, username):
     allowed = TunnelPermissionService.get_allowed_usernames(user, reverse_server)
@@ -53,6 +58,9 @@ class RemoteBrowserStartView(APIView):
                 server_id=server_id
             )
             return JsonResponse(result)
+        except RemoteBrowserError as e:
+            # code 讓前端對應在地化訊息(如 device_offline)。/ code maps to an i18n message.
+            return JsonResponse({"error": str(e), "code": e.code}, status=500)
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
