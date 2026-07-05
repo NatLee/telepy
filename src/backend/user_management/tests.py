@@ -49,6 +49,30 @@ class UserSettingsApiTest(APITestCase):
         res = self.client.post(self.URL, {"language": "fr"}, format="json")
         self.assertEqual(res.status_code, 400)
 
+    def test_theme_and_terminal_font_size(self):
+        self._auth(self.user)
+        res = self.client.post(self.URL, {"theme": "dark", "terminal_font_size": 18}, format="json")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["theme"], "dark")
+        self.assertEqual(body["terminal_font_size"], 18)
+        settings = UserSettings.for_user(self.user)
+        self.assertEqual(settings.theme, "dark")
+        self.assertEqual(settings.terminal_font_size, 18)
+        # 無效值被擋下 / invalid values rejected
+        self.assertEqual(self.client.post(self.URL, {"theme": "neon"}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(self.URL, {"terminal_font_size": 99}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(self.URL, {"terminal_font_size": 5}, format="json").status_code, 400)
+
+    def test_profile_includes_theme_and_font_size_defaults(self):
+        self._auth(self.user)
+        UserSettings.for_user(self.user)  # 建立預設列 / create the default row
+        res = self.client.get("/api/auth/user/profile")
+        self.assertEqual(res.status_code, 200)
+        body = res.json()
+        self.assertEqual(body["theme"], "system")
+        self.assertEqual(body["terminal_font_size"], 14)
+
     def test_profile_includes_language(self):
         # 前端登入後從 profile 直接取得語言,不用多打一次 API。
         self._auth(self.user)

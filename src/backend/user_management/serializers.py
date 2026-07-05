@@ -5,11 +5,11 @@ from user_management.models import UserSettings
 
 
 class UserSettingsSerializer(serializers.ModelSerializer):
-    """使用者個人設定(語言偏好)。/ Per-user settings (language preference)."""
+    """使用者個人設定(語言/主題/終端機字型)。/ Per-user settings (language/theme/terminal font)."""
 
     class Meta:
         model = UserSettings
-        fields = ["language"]
+        fields = ["language", "theme", "terminal_font_size"]
 
     def validate_language(self, value):
         # 空字串視為未設定。/ Treat an empty string as "not set".
@@ -20,6 +20,12 @@ class UserSettingsSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 f"Invalid language '{value}'. Valid options: {', '.join(sorted(valid))}."
             )
+        return value
+
+    def validate_terminal_font_size(self, value):
+        # 與前端一致的邊界(lib/userPrefs.ts)。/ Same bounds as the frontend clamp.
+        if not 10 <= value <= 24:
+            raise serializers.ValidationError("terminal_font_size must be between 10 and 24.")
         return value
 
 

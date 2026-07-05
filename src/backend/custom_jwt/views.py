@@ -112,4 +112,6 @@ class UserProfileView(APIView):
             'date_joined': user.date_joined,
             'last_login': user.last_login,
             'language': user_settings.language if user_settings else None,
+            'theme': user_settings.theme if user_settings else 'system',
+            'terminal_font_size': user_settings.terminal_font_size if user_settings else 14,
         })
