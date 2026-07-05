@@ -15,8 +15,10 @@ import "xterm/css/xterm.css";
 
 import { useTerminalPage } from "@/hooks/useTerminalPage";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
+import { useI18n } from "@/lib/i18n";
 
 export default function TerminalPage() {
+    const { t, tn } = useI18n();
     const searchParams = useSearchParams();
     const serverId = searchParams.get("serverId");
     const port = searchParams.get("port");
@@ -61,11 +63,11 @@ export default function TerminalPage() {
     if (!serverId || !accessToken) {
         return (
             <StatusCard
-                title="No Connection Selected"
-                message="Please select a server from the tunnels list to open the terminal."
+                title={t("terminal.noConnectionTitle")}
+                message={t("terminal.noConnectionMessage")}
                 icon={<TerminalIcon className="text-muted-foreground" size={20} />}
                 variant="default"
-                actionLabel="Return to Tunnels List"
+                actionLabel={t("terminal.returnToList")}
                 onAction={() => router.push("/tunnels")}
             />
         );
@@ -73,11 +75,11 @@ export default function TerminalPage() {
     if (permissionDenied) {
         return (
             <StatusCard
-                title="Access Denied"
+                title={t("terminal.accessDenied")}
                 message={permissionDenied}
                 icon={<X size={20} />}
                 variant="destructive"
-                actionLabel="Return to Tunnels List"
+                actionLabel={t("terminal.returnToList")}
                 onAction={() => router.push("/tunnels")}
             />
         );
@@ -85,15 +87,11 @@ export default function TerminalPage() {
     if (noUsers) {
         return (
             <StatusCard
-                title="No Target Server Users"
-                message={
-                    <>
-                        This tunnel does not have any target server users configured. Please add at least one user in the tunnel&apos;s <strong>Target Server Users</strong> settings before connecting.
-                    </>
-                }
+                title={t("terminal.noUsersTitle")}
+                message={tn("terminal.noUsersMessage", { targetServerUsers: <strong>{t("terminal.noUsersMessageHighlight")}</strong> })}
                 icon={<Server size={20} />}
                 variant="warning"
-                actionLabel="Return to Tunnels List"
+                actionLabel={t("terminal.returnToList")}
                 onAction={() => router.push("/tunnels")}
             />
         );

@@ -23,8 +23,10 @@ import { ViewToggle } from "@/components/ui/ViewToggle";
 
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
+import { useI18n } from "@/lib/i18n";
 
 export default function TunnelsPage() {
+    const { t } = useI18n();
     const {
         tunnels,
         portsMap,
@@ -51,7 +53,7 @@ export default function TunnelsPage() {
         return (
             <Badge variant={isActive ? "default" : "secondary"} className={`${isActive ? 'bg-success hover:bg-success/90 text-success-foreground' : ''}`}>
                 <span className={`w-2.5 h-2.5 rounded-full mr-1.5 ${isActive ? "bg-white animate-pulse" : "bg-muted-foreground"}`}></span>
-                {isActive ? "Online" : "Offline"}
+                {isActive ? t("tunnels.online") : t("tunnels.offline")}
             </Badge>
         );
     };
@@ -62,17 +64,17 @@ export default function TunnelsPage() {
                 <div>
                     <h1 className="text-3xl font-bold text-foreground flex items-center gap-2 tracking-tight">
                         <Server className="text-primary animate-float" />
-                        Tunnels
+                        {t("tunnels.title")}
                         <TooltipProvider delayDuration={100}>
                             <Tooltip>
                                 <TooltipTrigger asChild>
-                                    <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label="About SSH Tunnels">
+                                    <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label={t("tunnels.aboutAria")}>
                                         <Info size={18} />
                                     </button>
                                 </TooltipTrigger>
                                 <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
                                     <p>
-                                        SSH reverse tunnels securely expose services on remote machines through this server. Use private keys to connect, manage tunnel public keys, and configure target server users below.
+                                        {t("tunnels.aboutTooltip")}
                                     </p>
                                 </TooltipContent>
                             </Tooltip>
@@ -80,7 +82,7 @@ export default function TunnelsPage() {
                         <WebSocketStatusBadge />
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">
-                        Manage your reverse proxy tunnels and configurations.
+                        {t("tunnels.subtitle")}
                     </p>
                 </div>
                 <div className="flex gap-2 items-center">
@@ -88,14 +90,14 @@ export default function TunnelsPage() {
                         <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
                         <div className="h-5 w-px bg-border mx-2"></div>
                     </div>
-                    <Button variant="outline" onClick={fetchData} disabled={loading} aria-label="Refresh tunnels">
+                    <Button variant="outline" onClick={fetchData} disabled={loading} aria-label={t("tunnels.refreshAria")}>
                         <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
-                        Refresh
+                        {t("common.refresh")}
                     </Button>
                     <Button asChild>
                         <Link href="/tunnels/create">
                             <Plus size={16} className="mr-2" />
-                            Create Tunnel
+                            {t("tunnels.create")}
                         </Link>
                     </Button>
                 </div>
@@ -106,18 +108,18 @@ export default function TunnelsPage() {
             {loading && tunnels.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-12 text-muted-foreground">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-                    Loading tunnels...
+                    {t("tunnels.loading")}
                 </div>
             ) : tunnels.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-16 border-2 border-dashed border-border rounded-lg bg-card text-center">
                     <Server size={48} className="text-muted-foreground mb-4 opacity-50" />
-                    <h3 className="text-xl font-semibold text-foreground tracking-tight">No tunnels found</h3>
-                    <p className="mt-2 text-sm text-muted-foreground max-w-sm">Get started by creating a new reverse proxy tunnel to securely expose your local services.</p>
+                    <h3 className="text-xl font-semibold text-foreground tracking-tight">{t("tunnels.emptyTitle")}</h3>
+                    <p className="mt-2 text-sm text-muted-foreground max-w-sm">{t("tunnels.emptyBody")}</p>
                     <div className="mt-6">
                         <Button asChild>
                             <Link href="/tunnels/create">
                                 <Plus size={16} className="mr-2" />
-                                New Tunnel
+                                {t("tunnels.new")}
                             </Link>
                         </Button>
                     </div>
@@ -152,11 +154,11 @@ export default function TunnelsPage() {
                     <table className="min-w-full divide-y divide-border">
                         <thead className="bg-muted/50">
                             <tr>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Name</th>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Port / Status</th>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Key Preview</th>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Sharing</th>
-                                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Actions</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("tunnels.thName")}</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("tunnels.thPortStatus")}</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("tunnels.thKeyPreview")}</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("tunnels.thSharing")}</th>
+                                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("tunnels.thActions")}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">

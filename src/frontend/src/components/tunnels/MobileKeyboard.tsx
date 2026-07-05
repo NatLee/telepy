@@ -12,6 +12,7 @@ import { AccessoryBar } from "@/components/tunnels/AccessoryBar";
 import { VirtualKeyboard } from "@/components/tunnels/VirtualKeyboard";
 import { useKeyboardViewport } from "@/hooks/useKeyboardViewport";
 import type { KeyboardController, KeyboardMode } from "@/hooks/useKeyboardController";
+import { useI18n } from "@/lib/i18n";
 
 function triggerHaptic() {
     navigator.vibrate?.(10);
@@ -27,6 +28,7 @@ interface MobileKeyboardProps {
 }
 
 export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded, setExpanded }: MobileKeyboardProps) {
+    const { t } = useI18n();
     const nativeKbHeight = useKeyboardViewport();
     const contentRef = useRef<HTMLDivElement>(null);
     const lastOpenMode = useRef<KeyboardMode>(mode === "hidden" ? "accessory" : mode);
@@ -72,18 +74,18 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
             <div ref={contentRef} className="w-full bg-background border-t border-border shadow-[0_-4px_20px_rgba(0,0,0,0.6)]">
                 {mode === "hidden" ? (
                     <button
-                        aria-label="Show keyboard"
+                        aria-label={t("kbd.showKeyboard")}
                         onPointerDown={(e) => { e.preventDefault(); restore(); }}
                         className="flex items-center justify-center gap-1.5 w-full h-9 text-xs font-medium text-muted-foreground active:bg-muted/60"
                     >
-                        <ChevronUp size={16} /> Keyboard
+                        <ChevronUp size={16} /> {t("kbd.keyboard")}
                     </button>
                 ) : (
                     <>
                         {/* 控制列：收起 + 模式切換（Native / Full） */}
                         <div className="flex items-center justify-between px-2 h-8">
                             <button
-                                aria-label="Hide keyboard"
+                                aria-label={t("kbd.hideKeyboard")}
                                 onPointerDown={(e) => { e.preventDefault(); collapse(); }}
                                 className="h-7 w-9 flex items-center justify-center rounded text-muted-foreground active:bg-muted/60"
                             >
@@ -92,7 +94,7 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
 
                             <div className="flex items-center gap-0.5 bg-muted/60 rounded-md p-0.5">
                                 <button
-                                    aria-label="Native keyboard + shortcut bar"
+                                    aria-label={t("kbd.nativeAria")}
                                     aria-pressed={mode === "accessory"}
                                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setMode("accessory"); }}
                                     className={cn(
@@ -100,10 +102,10 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
                                         mode === "accessory" ? "bg-background shadow text-foreground" : "text-muted-foreground"
                                     )}
                                 >
-                                    <Type size={13} /> Native
+                                    <Type size={13} /> {t("kbd.native")}
                                 </button>
                                 <button
-                                    aria-label="Full virtual keyboard"
+                                    aria-label={t("kbd.fullAria")}
                                     aria-pressed={mode === "full"}
                                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setMode("full"); }}
                                     className={cn(
@@ -111,7 +113,7 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
                                         mode === "full" ? "bg-background shadow text-foreground" : "text-muted-foreground"
                                     )}
                                 >
-                                    <Keyboard size={13} /> Full
+                                    <Keyboard size={13} /> {t("kbd.full")}
                                 </button>
                             </div>
                         </div>

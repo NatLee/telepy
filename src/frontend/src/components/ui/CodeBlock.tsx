@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Copy, Check } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 interface CodeBlockProps {
     language: string;
@@ -11,6 +12,7 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ language, value }: CodeBlockProps) {
+    const { t } = useI18n();
     const [copied, setCopied] = useState(false);
 
     const copyToClipboard = () => {
@@ -27,10 +29,10 @@ export function CodeBlock({ language, value }: CodeBlockProps) {
                 <button
                     onClick={copyToClipboard}
                     className="flex items-center gap-1 hover:text-white transition-colors focus:outline-none"
-                    title="Copy to clipboard"
+                    title={t("ui.copyToClipboard")}
                 >
                     {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? t("common.copied") : t("common.copy")}
                 </button>
             </div>
             <div className="text-sm overflow-x-auto">

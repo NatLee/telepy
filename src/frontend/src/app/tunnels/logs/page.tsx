@@ -11,8 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 
 import { useLogsPage } from "@/hooks/useLogsPage";
+import { useI18n } from "@/lib/i18n";
 
 export default function LogsPage() {
+    const { t } = useI18n();
     const { state, actions } = useLogsPage();
     const {
         logs,
@@ -47,23 +49,23 @@ export default function LogsPage() {
                 <div>
                     <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
                         <FileText className="text-primary animate-float" />
-                        SSH Server Logs
+                        {t("logs.title")}
                     </h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        Monitor server activity, connection events, and authentication attempts. Use the search bar to filter by keyword, IP address, or date.
+                        {t("logs.subtitle")}
                     </p>
                 </div>
                 <div className="mt-4 sm:mt-0 flex gap-2">
                     <Button onClick={fetchLogs} variant="outline" className="gap-2">
                         <RefreshCw size={16} />
-                        Refresh
+                        {t("common.refresh")}
                     </Button>
                 </div>
             </div>
 
             <div className="mb-4 shrink-0 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
                 <Info size={18} className="mt-0.5 shrink-0" />
-                <span>View real-time SSH server activity including connection events, authentication attempts, and session logs. Use search to filter by keyword, IP address, or date.</span>
+                <span>{t("logs.banner")}</span>
             </div>
 
             <div className="mb-4 shrink-0 relative">
@@ -74,7 +76,7 @@ export default function LogsPage() {
                     type="text"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Filter logs by keyword, date, IP..."
+                    placeholder={t("logs.searchPlaceholder")}
                     className="pl-10"
                 />
             </div>
@@ -84,14 +86,14 @@ export default function LogsPage() {
                     <div className="flex-1 flex justify-center items-center">
                         <div className="flex flex-col items-center">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-                            <p className="text-muted-foreground font-medium">Loading logs...</p>
+                            <p className="text-muted-foreground font-medium">{t("logs.loading")}</p>
                         </div>
                     </div>
                 ) : logs.length === 0 ? (
                     <div className="flex-1 flex justify-center items-center">
                         <div className="text-center">
                             <AlertCircle size={48} className="mx-auto text-muted mb-4 opacity-50" />
-                            <p className="text-muted-foreground font-medium text-lg">No logs available</p>
+                            <p className="text-muted-foreground font-medium text-lg">{t("logs.empty")}</p>
                         </div>
                     </div>
                 ) : (
@@ -99,8 +101,8 @@ export default function LogsPage() {
                         <table className="min-w-full divide-y divide-border border-collapse">
                             <thead className="bg-muted/50 sticky top-0 border-b border-border shadow-sm z-10">
                                 <tr>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-48 border-r border-border/50">Time</th>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider">Message</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-48 border-r border-border/50">{t("logs.thTime")}</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider">{t("logs.thMessage")}</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-card divide-y divide-border">
@@ -120,7 +122,7 @@ export default function LogsPage() {
                                 {filteredLogs.length === 0 && (
                                     <tr>
                                         <td colSpan={2} className="px-6 py-8 text-center text-sm text-muted-foreground">
-                                            No logs matched your search filter.
+                                            {t("logs.noMatch")}
                                         </td>
                                     </tr>
                                 )}

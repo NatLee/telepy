@@ -4,6 +4,7 @@
  */
 import React, { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import type { KeyboardController, ModState } from "@/hooks/useKeyboardController";
 
 function triggerHaptic() {
@@ -23,6 +24,7 @@ interface VirtualKeyboardProps {
 }
 
 export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand }: VirtualKeyboardProps) {
+    const { t } = useI18n();
     const [isSym, setIsSym] = useState(false);
     const { mods, active, press, emitChar, emitSeq } = controller;
 
@@ -52,7 +54,7 @@ export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand 
 
         return (
             <button
-                aria-label={`Key ${display}`}
+                aria-label={t("kbd.keyChar", { char: display })}
                 className={cn(
                     "h-9 px-0 min-w-0 bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 text-secondary-foreground",
                     "rounded shadow-[0_1px_1px_rgba(0,0,0,0.5)] select-none flex items-center justify-center m-0.5 text-[17px] transition-all duration-75 font-sans",
@@ -73,7 +75,7 @@ export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand 
                     <button
                         onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); onToggleExpand(); }}
                         className="bg-muted border border-border w-16 h-1.5 rounded-full shadow-inner active:bg-muted/80 active:scale-[0.95] transition-colors"
-                        aria-label={isExpanded ? "Collapse keyboard rows" : "Expand keyboard rows"}
+                        aria-label={isExpanded ? t("kbd.collapseRows") : t("kbd.expandRows")}
                     />
                 </div>
             )}
@@ -81,24 +83,24 @@ export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand 
             {/* 常駐列：修飾鍵 + 方向鍵 */}
             <div className="flex w-full justify-between items-center mb-1 gap-1 px-0.5">
                 <div className="flex gap-1 flex-1 bg-muted/50 p-1 rounded-lg shadow-inner">
-                    <button aria-label="Control key" aria-pressed={active.ctrl}
+                    <button aria-label={t("kbd.controlKey")} aria-pressed={active.ctrl}
                         className={cn("h-8 flex-1 rounded text-xs font-bold select-none transition-all duration-75 active:scale-[0.95] active:opacity-90", modClass(mods.ctrl))}
                         onPointerDown={handleSeq(() => press("ctrl"))}>CTRL</button>
-                    <button aria-label="Alt key" aria-pressed={active.alt}
+                    <button aria-label={t("kbd.altKey")} aria-pressed={active.alt}
                         className={cn("h-8 flex-1 rounded text-xs font-bold select-none transition-all duration-75 active:scale-[0.95] active:opacity-90", modClass(mods.alt))}
                         onPointerDown={handleSeq(() => press("alt"))}>ALT</button>
-                    <button aria-label="Escape key"
+                    <button aria-label={t("kbd.escapeKey")}
                         className="h-8 flex-1 rounded text-xs font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground"
                         onPointerDown={handleSeq(() => emitSeq("esc"))}>ESC</button>
-                    <button aria-label="Tab key"
+                    <button aria-label={t("kbd.tabKey")}
                         className="h-8 flex-1 rounded text-xs font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground"
                         onPointerDown={handleSeq(() => emitSeq("tab"))}>TAB</button>
                 </div>
                 <div className="flex gap-1 flex-1 bg-muted/50 p-1 rounded-lg justify-center shadow-inner">
-                    <button aria-label="Up arrow" className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("up"))}>↑</button>
-                    <button aria-label="Down arrow" className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("down"))}>↓</button>
-                    <button aria-label="Left arrow" className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("left"))}>←</button>
-                    <button aria-label="Right arrow" className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("right"))}>→</button>
+                    <button aria-label={t("kbd.upArrow")} className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("up"))}>↑</button>
+                    <button aria-label={t("kbd.downArrow")} className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("down"))}>↓</button>
+                    <button aria-label={t("kbd.leftArrow")} className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("left"))}>←</button>
+                    <button aria-label={t("kbd.rightArrow")} className="h-8 flex-1 rounded font-bold select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground" onPointerDown={handleSeq(() => emitSeq("right"))}>→</button>
                 </div>
             </div>
 
@@ -115,18 +117,18 @@ export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand 
                         {renderKey("a", "A", "[")} {renderKey("s", "S", "]")} {renderKey("d", "D", "{")} {renderKey("f", "F", "}")} {renderKey("g", "G", "#")} {renderKey("h", "H", "%")} {renderKey("j", "J", "^")} {renderKey("k", "K", "*")} {renderKey("l", "L", "+")}
                     </div>
                     <div className="flex w-full">
-                        <button aria-label="Shift key" aria-pressed={active.shift}
+                        <button aria-label={t("kbd.shiftKey")} aria-pressed={active.shift}
                             className={cn("h-9 px-0 flex-[1.2] rounded text-lg font-medium select-none m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)] flex items-center justify-center transition-all duration-75 active:scale-[0.95] active:opacity-90", modClass(mods.shift))}
                             onPointerDown={handleSeq(() => press("shift"))}>⇧</button>
                         {renderKey("z", "Z", "_")} {renderKey("x", "X", "=")} {renderKey("c", "C", "|")} {renderKey("v", "V", "~")} {renderKey("b", "B", "\\")} {renderKey("n", "N", "?")} {renderKey("m", "M", "!")} {renderKey(",", "<", ",")} {renderKey(".", ">", ".")}
-                        <button aria-label="Backspace key" className="h-9 px-0 flex-[1.2] rounded text-lg font-medium select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)] flex items-center justify-center" onPointerDown={handleSeq(() => emitSeq("backspace"))}>⌫</button>
+                        <button aria-label={t("kbd.backspaceKey")} className="h-9 px-0 flex-[1.2] rounded text-lg font-medium select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)] flex items-center justify-center" onPointerDown={handleSeq(() => emitSeq("backspace"))}>⌫</button>
                     </div>
                     <div className="flex w-full">
-                        <button aria-label="Switch to symbol keyboard" aria-pressed={isSym}
+                        <button aria-label={t("kbd.symbolKeyboard")} aria-pressed={isSym}
                             className={cn("h-9 px-0 flex-[1.5] rounded text-sm font-bold select-none m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)] transition-all duration-75 active:scale-[0.95] active:opacity-90", isSym ? "bg-primary text-primary-foreground" : "bg-secondary active:bg-secondary/80 text-secondary-foreground")}
                             onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setIsSym((v) => !v); }}>#+=</button>
-                        <button aria-label="Space key" className="h-9 px-0 flex-grow-[4] rounded text-lg select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)]" onPointerDown={handleSeq(() => emitChar(" "))}>space</button>
-                        <button aria-label="Return key" className="h-9 px-0 flex-[1.5] rounded text-sm font-bold select-none bg-primary hover:bg-primary/90 active:bg-primary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-primary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)]" onPointerDown={handleSeq(() => emitSeq("enter"))}>return</button>
+                        <button aria-label={t("kbd.spaceKey")} className="h-9 px-0 flex-grow-[4] rounded text-lg select-none bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-secondary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)]" onPointerDown={handleSeq(() => emitChar(" "))}>{t("kbd.space")}</button>
+                        <button aria-label={t("kbd.returnKey")} className="h-9 px-0 flex-[1.5] rounded text-sm font-bold select-none bg-primary hover:bg-primary/90 active:bg-primary/80 active:scale-[0.95] active:opacity-90 transition-all duration-75 text-primary-foreground m-0.5 shadow-[0_1px_1px_rgba(0,0,0,0.5)]" onPointerDown={handleSeq(() => emitSeq("enter"))}>{t("kbd.return")}</button>
                     </div>
                 </div>
             </div>

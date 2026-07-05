@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useI18n } from "@/lib/i18n";
 
 export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, onUpdate: () => void, onClose: () => void) {
+    const { t } = useI18n();
     const [details, setDetails] = useState<any>(null);
     const [loading, setLoading] = useState(false);
     const [description, setDescription] = useState("");
@@ -21,10 +23,10 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                         setDetails(data);
                         setDescription(data.description || "");
                     } else {
-                        showError("Failed to fetch tunnel details");
+                        showError(t("tunnelDetails.fetchFailed"));
                     }
                 } catch (e: any) {
-                    showError(e.message || "Failed to fetch tunnel details");
+                    showError(e.message || t("tunnelDetails.fetchFailed"));
                 } finally {
                     setLoading(false);
                 }
@@ -42,14 +44,14 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 body: JSON.stringify({ description }),
             });
             if (res.ok) {
-                showSuccess("Description updated");
+                showSuccess(t("tunnelDetails.descriptionUpdated"));
                 onUpdate();
                 onClose();
             } else {
-                showError("Failed to update description");
+                showError(t("tunnelDetails.descriptionUpdateFailed"));
             }
         } catch (e: any) {
-            showError(e.message || "Failed to update description");
+            showError(e.message || t("tunnelDetails.descriptionUpdateFailed"));
         } finally {
             setIsSaving(false);
         }

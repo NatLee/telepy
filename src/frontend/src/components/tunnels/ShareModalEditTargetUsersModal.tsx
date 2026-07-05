@@ -6,6 +6,7 @@ import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { ReverseServerUsername } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export interface ShareModalEditTargetUsersModalProps {
     isOpen: boolean;
@@ -27,14 +28,14 @@ export function ShareModalEditTargetUsersModal({
     onSave,
     onAllowedIdsChange,
 }: ShareModalEditTargetUsersModalProps) {
+    const { t, tn } = useI18n();
     if (!username) return null;
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={`Target Server Users Access - ${username}`} size="sm">
+        <Modal isOpen={isOpen} onClose={onClose} title={t("share.editTargetTitle", { username })} size="sm">
             <div className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                    Select which target server users <strong className="text-foreground">{username}</strong> is allowed to access.
-                    Leave all unchecked to allow access to all users.
+                    {tn("share.editTargetBody", { username: <strong className="text-foreground">{username}</strong> })}
                 </p>
                 <div className="bg-muted/30 border border-border rounded-lg p-3 max-h-[300px] overflow-y-auto">
                     <div className="flex flex-col gap-2">
@@ -59,7 +60,7 @@ export function ShareModalEditTargetUsersModal({
                                 <code className="font-mono bg-muted/50 px-1 py-0.5 rounded">{targetUser.username}</code>
                                 {targetUser.created_by && (
                                     <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
-                                        By: {targetUser.created_by} (#{targetUser.created_by_id})
+                                        {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                     </span>
                                 )}
                             </label>
@@ -67,8 +68,8 @@ export function ShareModalEditTargetUsersModal({
                     </div>
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
-                    <Button variant="outline" onClick={onClose}>Cancel</Button>
-                    <Button onClick={onSave}>Save Changes</Button>
+                    <Button variant="outline" onClick={onClose}>{t("common.cancel")}</Button>
+                    <Button onClick={onSave}>{t("common.saveChanges")}</Button>
                 </div>
             </div>
         </Modal>

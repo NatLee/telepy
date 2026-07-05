@@ -3,6 +3,7 @@
  */
 
 import { formatApiError } from "./formatApiError";
+import { translate } from "./translate";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
@@ -46,19 +47,19 @@ export async function readJson<T = unknown>(res: Response): Promise<T | null> {
 export function responseError(
     res: Response,
     body: unknown,
-    fallback = "Request failed."
+    fallback: string = translate("api.requestFailed")
 ): string {
     const fromBody = formatApiError(body, "");
     if (fromBody) return fromBody;
 
     if (res.status === 502 || res.status === 503 || res.status === 504) {
-        return `Server unavailable (${res.status}). The backend may be starting up — please try again in a moment.`;
+        return translate("api.serverUnavailable", { status: res.status });
     }
     if (res.status >= 500) {
-        return `Server error (${res.status}). Please try again shortly.`;
+        return translate("api.serverError", { status: res.status });
     }
     if (res.status === 0) {
-        return "Cannot reach the server. Please check your network connection.";
+        return translate("api.cannotReach");
     }
     return `${fallback} (${res.status})`;
 }

@@ -7,6 +7,7 @@ import { ShareModal } from "@/components/tunnels/ShareModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tunnel } from "@/types/tunnel";
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
+import { useI18n } from "@/lib/i18n";
 
 interface TunnelModalsProps {
     modals: ReturnType<typeof useTunnelsPage>["modals"];
@@ -17,6 +18,7 @@ interface TunnelModalsProps {
 }
 
 export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleLeaveTunnel }: TunnelModalsProps) {
+    const { t, tn } = useI18n();
     const {
         configModal, setConfigModal,
         scriptModal, setScriptModal,
@@ -63,13 +65,13 @@ export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleL
                 isOpen={deleteConfirm.isOpen}
                 onClose={() => setDeleteConfirm({ isOpen: false, tunnelId: null, name: "" })}
                 onConfirm={handleDelete}
-                title="Delete Tunnel"
+                title={t("tunnels.deleteTitle")}
                 message={
                     <span>
-                        Are you sure you want to delete tunnel <strong className="font-semibold">{deleteConfirm.name}</strong>? This action cannot be undone.
+                        {tn("tunnels.deleteMessage", { name: <strong className="font-semibold">{deleteConfirm.name}</strong> })}
                     </span>
                 }
-                confirmText="Delete"
+                confirmText={t("common.delete")}
                 isDestructive={true}
             />
             <ConfirmDialog
@@ -81,13 +83,13 @@ export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleL
                     }
                     setLeaveConfirm({ isOpen: false, tunnelId: null, name: "" });
                 }}
-                title="Leave Tunnel"
+                title={t("tunnels.leaveTitle")}
                 message={
                     <span>
-                        Are you sure you want to leave tunnel <strong className="font-semibold">{leaveConfirm.name}</strong>? You will lose access to this tunnel until the owner shares it with you again.
+                        {tn("tunnels.leaveMessage", { name: <strong className="font-semibold">{leaveConfirm.name}</strong> })}
                     </span>
                 }
-                confirmText="Leave"
+                confirmText={t("tunnels.leave")}
                 isDestructive={true}
             />
         </>

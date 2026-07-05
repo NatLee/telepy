@@ -1,6 +1,7 @@
 import React from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { Dialog, DialogContent, DialogTitle } from "./dialog";
 
 interface ModalProps {
@@ -14,6 +15,7 @@ interface ModalProps {
 }
 
 export function Modal({ isOpen, onClose, title, children, footer, size = "md", isLoading = false }: ModalProps) {
+    const { t } = useI18n();
     return (
         <Dialog open={isOpen} onOpenChange={(open) => {
             if (!open) onClose();
@@ -37,14 +39,14 @@ export function Modal({ isOpen, onClose, title, children, footer, size = "md", i
                         className="text-muted-foreground hover:bg-muted hover:rotate-90 hover:scale-110 p-1.5 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-ring"
                     >
                         <X size={18} />
-                        <span className="sr-only">Close</span>
+                        <span className="sr-only">{t("common.close")}</span>
                     </button>
                 </div>
                 <div className="flex flex-col flex-1 min-h-0 p-6 overflow-y-auto relative">
                     {isLoading && (
                         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-background/50 backdrop-blur-[2px] min-h-[150px]">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                            <span className="sr-only">Loading...</span>
+                            <span className="sr-only">{t("common.loading")}</span>
                         </div>
                     )}
                     {children}

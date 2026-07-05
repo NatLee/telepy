@@ -22,8 +22,10 @@ import {
 import { ViewToggle } from "@/components/ui/ViewToggle";
 
 import { useKeysPage } from "@/hooks/useKeysPage";
+import { useI18n } from "@/lib/i18n";
 
 export default function UserKeysPage() {
+    const { t, tn } = useI18n();
     const { state, actions } = useKeysPage();
     const {
         keys,
@@ -55,17 +57,20 @@ export default function UserKeysPage() {
                 <div>
                     <h1 className="text-2xl sm:text-3xl font-bold text-foreground flex items-center gap-2 tracking-tight">
                         <KeyIcon className="text-primary animate-float" />
-                        SSH Keys
+                        {t("keys.title")}
                         <TooltipProvider delayDuration={100}>
                             <Tooltip>
                                 <TooltipTrigger asChild>
-                                    <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label="About SSH Keys">
+                                    <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label={t("keys.aboutAria")}>
                                         <Info size={18} />
                                     </button>
                                 </TooltipTrigger>
                                 <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
                                     <p>
-                                        Your SSH public keys are registered here to authorize you on the Telepy SSH server. When you connect via terminal, the server verifies your identity using these keys. Add your <code className="bg-muted text-foreground px-1 rounded">~/.ssh/id_rsa.pub</code> or <code className="bg-muted text-foreground px-1 rounded">id_ed25519.pub</code> to get started.
+                                        {tn("keys.aboutTooltip", {
+                                            rsaPath: <code className="bg-muted text-foreground px-1 rounded">~/.ssh/id_rsa.pub</code>,
+                                            edPath: <code className="bg-muted text-foreground px-1 rounded">id_ed25519.pub</code>,
+                                        })}
                                     </p>
                                 </TooltipContent>
                             </Tooltip>
@@ -73,7 +78,10 @@ export default function UserKeysPage() {
                         <WebSocketStatusBadge />
                     </h1>
                     <p className="mt-2 text-sm text-muted-foreground">
-                        Manage your personal SSH public keys. Each key authorizes a machine to connect. Use standard OpenSSH format (<code className="bg-muted px-1 rounded text-xs">ssh-rsa</code>, <code className="bg-muted px-1 rounded text-xs">ssh-ed25519</code>, etc.).
+                        {tn("keys.subtitle", {
+                            rsa: <code className="bg-muted px-1 rounded text-xs">ssh-rsa</code>,
+                            ed25519: <code className="bg-muted px-1 rounded text-xs">ssh-ed25519</code>,
+                        })}
                     </p>
                 </div>
                 <div className="mt-4 sm:mt-0 flex gap-2 items-center">
@@ -81,13 +89,13 @@ export default function UserKeysPage() {
                         <ViewToggle value={viewMode} onChange={setViewMode} storageKey="ssh-keys-view" />
                         <div className="h-5 w-px bg-border mx-2"></div>
                     </div>
-                    <Button variant="outline" onClick={fetchKeys} disabled={loading} aria-label="Refresh keys">
+                    <Button variant="outline" onClick={fetchKeys} disabled={loading} aria-label={t("keys.refreshAria")}>
                         <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
-                        Refresh
+                        {t("common.refresh")}
                     </Button>
                     <Button onClick={() => setAddModalOpen(true)}>
                         <Plus size={16} className="-ml-1 mr-2" />
-                        Add Key
+                        {t("keys.addKey")}
                     </Button>
                 </div>
             </div>
@@ -95,17 +103,17 @@ export default function UserKeysPage() {
             {loading ? (
                 <div className="py-12 flex justify-center text-muted-foreground">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mr-3"></div>
-                    Loading keys...
+                    {t("keys.loading")}
                 </div>
             ) : keys.length === 0 ? (
                 <div className="py-16 text-center text-muted-foreground bg-card border-2 border-dashed border-border rounded-lg shadow-sm flex flex-col items-center">
                     <KeyIcon size={48} className="text-muted mb-4 opacity-50" />
-                    <h3 className="text-lg font-semibold text-foreground">No keys found</h3>
-                    <p className="mt-1 text-sm text-muted-foreground max-w-sm">Add an SSH public key to authorize yourself on the Telepy SSH server and start connecting.</p>
+                    <h3 className="text-lg font-semibold text-foreground">{t("keys.emptyTitle")}</h3>
+                    <p className="mt-1 text-sm text-muted-foreground max-w-sm">{t("keys.emptyBody")}</p>
                     <div className="mt-6">
                         <Button onClick={() => setAddModalOpen(true)}>
                             <Plus size={16} className="mr-2" />
-                            Add Key
+                            {t("keys.addKey")}
                         </Button>
                     </div>
                 </div>
@@ -139,7 +147,7 @@ export default function UserKeysPage() {
                                     }}
                                     className="text-primary hover:text-primary/90 flex items-center gap-1.5 h-8 text-xs flex-1 bg-primary/5 hover:bg-primary/10 transition-colors"
                                 >
-                                    <Edit3 size={14} /> Details
+                                    <Edit3 size={14} /> {t("common.details")}
                                 </Button>
                                 <Button
                                     variant="ghost"
@@ -147,7 +155,7 @@ export default function UserKeysPage() {
                                     onClick={() => setDeleteConfirm({ isOpen: true, keyId: keyItem.id, name: keyItem.host_friendly_name })}
                                     className="text-destructive hover:text-destructive/90 flex items-center gap-1.5 h-8 text-xs flex-1 bg-destructive/5 hover:bg-destructive/10 transition-colors"
                                 >
-                                    <Trash2 size={14} /> Delete
+                                    <Trash2 size={14} /> {t("common.delete")}
                                 </Button>
                             </CardFooter>
                         </Card>
@@ -158,10 +166,10 @@ export default function UserKeysPage() {
                     <table className="min-w-full divide-y divide-border">
                         <thead className="bg-muted/50">
                             <tr>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Name</th>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Key Preview</th>
-                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Description</th>
-                                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Actions</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("keys.thName")}</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("keys.thKeyPreview")}</th>
+                                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("keys.thDescription")}</th>
+                                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{t("keys.thActions")}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border bg-card">
@@ -192,7 +200,7 @@ export default function UserKeysPage() {
                                                 }}
                                                 className="text-primary hover:text-primary/90 flex items-center gap-1.5 h-8 px-2 text-xs hover:bg-primary/10 transition-colors"
                                             >
-                                                <Edit3 size={14} /> Details
+                                                <Edit3 size={14} /> {t("common.details")}
                                             </Button>
                                             <Button
                                                 variant="ghost"
@@ -200,7 +208,7 @@ export default function UserKeysPage() {
                                                 onClick={() => setDeleteConfirm({ isOpen: true, keyId: keyItem.id, name: keyItem.host_friendly_name })}
                                                 className="text-destructive hover:text-destructive/90 flex items-center gap-1.5 h-8 px-2 text-xs hover:bg-destructive/10 transition-colors"
                                             >
-                                                <Trash2 size={14} /> Delete
+                                                <Trash2 size={14} /> {t("common.delete")}
                                             </Button>
                                         </div>
                                     </td>
@@ -212,11 +220,11 @@ export default function UserKeysPage() {
             )}
 
             {/* Add Key Modal */}
-            <Modal isOpen={addModalOpen} onClose={() => setAddModalOpen(false)} title="Add SSH Key" size="lg">
+            <Modal isOpen={addModalOpen} onClose={() => setAddModalOpen(false)} title={t("keys.addModalTitle")} size="lg">
                 <form onSubmit={handleAddKey} className="space-y-4">
                     <div className="space-y-2">
                         <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
-                            SSH Public Key <span className="text-destructive">*</span>
+                            {t("keys.sshPublicKey")} <span className="text-destructive">*</span>
                         </label>
                         <textarea
                             required
@@ -229,39 +237,39 @@ export default function UserKeysPage() {
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
-                            Host Friendly Name <span className="text-destructive">*</span>
+                            {t("keys.hostFriendlyName")} <span className="text-destructive">*</span>
                         </label>
                         <Input
                             type="text"
                             required
                             value={newKeyName}
                             onChange={(e) => setNewKeyName(e.target.value)}
-                            placeholder="e.g. My Laptop Key"
+                            placeholder={t("keys.namePlaceholder")}
                             className="font-mono text-sm"
                         />
                     </div>
                     <div className="space-y-2">
                         <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
-                            Description <span className="text-muted-foreground font-normal">(Optional)</span>
+                            {t("common.description")} <span className="text-muted-foreground font-normal">{t("common.optional")}</span>
                         </label>
                         <Input
                             type="text"
                             value={newKeyDescription}
                             onChange={(e) => setNewKeyDescription(e.target.value)}
-                            placeholder="e.g. Used for connecting from home office"
+                            placeholder={t("keys.descriptionPlaceholder")}
                             className="text-sm"
                         />
                     </div>
                 </form>
                 <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="outline" onClick={() => setAddModalOpen(false)} disabled={isSubmitting}>Cancel</Button>
+                    <Button variant="outline" onClick={() => setAddModalOpen(false)} disabled={isSubmitting}>{t("common.cancel")}</Button>
                     <Button onClick={handleAddKey} disabled={isSubmitting || !newKeyContent || !newKeyName}>
                         {isSubmitting ? (
                             <>
                                 <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                                Adding...
+                                {t("keys.adding")}
                             </>
-                        ) : 'Add SSH Key'}
+                        ) : t("keys.addModalTitle")}
                     </Button>
                 </div>
             </Modal>
@@ -270,21 +278,21 @@ export default function UserKeysPage() {
             <Modal
                 isOpen={detailsModal.isOpen}
                 onClose={() => setDetailsModal({ isOpen: false, key: null })}
-                title="SSH Key Details"
+                title={t("keys.detailsTitle")}
                 size="lg"
             >
                 {detailsModal.key && (
                     <div className="space-y-6">
                         <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">Friendly Name</h3>
+                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("keys.friendlyName")}</h3>
                             <p className="font-mono bg-muted/30 p-2 rounded border border-border">{detailsModal.key.host_friendly_name}</p>
                         </div>
                         <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">Public Key</h3>
-                            <CodeBlock value={detailsModal.key.key || "No key available"} language="ssh" />
+                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("keys.publicKey")}</h3>
+                            <CodeBlock value={detailsModal.key.key || t("keys.noKey")} language="ssh" />
                         </div>
                         <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">Description</h3>
+                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("common.description")}</h3>
                             {isEditingDesc ? (
                                 <div className="space-y-2 mt-2">
                                     <textarea
@@ -292,31 +300,31 @@ export default function UserKeysPage() {
                                         onChange={(e) => setEditDescription(e.target.value)}
                                         rows={3}
                                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                        placeholder="Add a description..."
+                                        placeholder={t("keys.addDescriptionPlaceholder")}
                                     />
                                     <div className="flex justify-end gap-2">
                                         <Button size="sm" variant="outline" onClick={() => {
                                             setIsEditingDesc(false);
                                             setEditDescription(detailsModal.key?.description || "");
                                         }} disabled={isUpdating}>
-                                            Cancel
+                                            {t("common.cancel")}
                                         </Button>
                                         <Button size="sm" onClick={() => handleUpdateDescription()} disabled={isUpdating}>
-                                            {isUpdating ? <RefreshCw size={14} className="animate-spin mr-1" /> : 'Save'}
+                                            {isUpdating ? <RefreshCw size={14} className="animate-spin mr-1" /> : t("common.save")}
                                         </Button>
                                     </div>
                                 </div>
                             ) : (
                                 <div className="flex justify-between items-start bg-muted/10 p-3 rounded border border-border">
-                                    <p className="text-sm whitespace-pre-wrap flex-1">{detailsModal.key.description || <span className="text-muted-foreground italic">No description provided.</span>}</p>
+                                    <p className="text-sm whitespace-pre-wrap flex-1">{detailsModal.key.description || <span className="text-muted-foreground italic">{t("keys.noDescription")}</span>}</p>
                                     <Button variant="ghost" size="sm" onClick={() => setIsEditingDesc(true)} className="h-6 px-2 text-xs ml-2">
-                                        <Edit3 size={12} className="mr-1" /> Edit
+                                        <Edit3 size={12} className="mr-1" /> {t("common.edit")}
                                     </Button>
                                 </div>
                             )}
                         </div>
                         <div className="pt-4 flex justify-end">
-                            <Button variant="outline" onClick={() => setDetailsModal({ isOpen: false, key: null })}>Close</Button>
+                            <Button variant="outline" onClick={() => setDetailsModal({ isOpen: false, key: null })}>{t("common.close")}</Button>
                         </div>
                     </div>
                 )}
@@ -327,9 +335,9 @@ export default function UserKeysPage() {
                 isOpen={deleteConfirm.isOpen}
                 onClose={() => setDeleteConfirm({ isOpen: false, keyId: null, name: "" })}
                 onConfirm={handleDelete}
-                title="Delete Key"
-                message={`Are you sure you want to delete the key '${deleteConfirm.name}'? Connections depending on this key will fail.`}
-                confirmText="Delete"
+                title={t("keys.deleteTitle")}
+                message={t("keys.deleteMessage", { name: deleteConfirm.name })}
+                confirmText={t("common.delete")}
                 isDestructive={true}
             />
         </div>

@@ -14,18 +14,20 @@ import { Step3ServerUsers } from "@/components/tunnels/CreateWizardSteps/Step3Se
 import { Step4TestConnection } from "@/components/tunnels/CreateWizardSteps/Step4TestConnection";
 import { Step5Completion } from "@/components/tunnels/CreateWizardSteps/Step5Completion";
 import { KeyViewModal } from "@/components/tunnels/CreateWizardSteps/KeyViewModal";
-
-const STEPS = [
-    { id: 1, title: "Basic Config", icon: <Terminal size={18} /> },
-    { id: 2, title: "Server Keys", icon: <Key size={18} /> },
-    { id: 3, title: "Server Users", icon: <Users size={18} /> },
-    { id: 4, title: "Test Connection", icon: <Activity size={18} /> },
-    { id: 5, title: "Completion", icon: <CheckCircle2 size={18} /> },
-];
+import { useI18n } from "@/lib/i18n";
 
 export default function CreateTunnelWizard() {
+    const { t } = useI18n();
     const { showSuccess } = useToast();
     const { state, actions } = useCreateTunnelWizard();
+
+    const STEPS = [
+        { id: 1, title: t("wizard.stepBasicConfig"), icon: <Terminal size={18} /> },
+        { id: 2, title: t("wizard.stepServerKeys"), icon: <Key size={18} /> },
+        { id: 3, title: t("wizard.stepServerUsers"), icon: <Users size={18} /> },
+        { id: 4, title: t("wizard.stepTestConnection"), icon: <Activity size={18} /> },
+        { id: 5, title: t("wizard.stepCompletion"), icon: <CheckCircle2 size={18} /> },
+    ];
     const {
         currentStep,
         setCurrentStep,
@@ -65,8 +67,8 @@ export default function CreateTunnelWizard() {
     return (
         <div className="max-w-4xl mx-auto pb-12 animate-fade-in-up">
             <div className="mb-8">
-                <h1 className="text-2xl font-bold text-gray-900">Create New Tunnel</h1>
-                <p className="mt-1 text-sm text-gray-500">Follow the steps to configure and deploy a new reverse SSH tunnel.</p>
+                <h1 className="text-2xl font-bold text-gray-900">{t("wizard.title")}</h1>
+                <p className="mt-1 text-sm text-gray-500">{t("wizard.subtitle")}</p>
             </div>
 
             <div className="mb-8 overflow-hidden rounded-lg bg-white shadow ring-1 ring-gray-900/5">
@@ -151,7 +153,7 @@ export default function CreateTunnelWizard() {
                 title={keyModalTitle}
                 content={keyModalContent}
                 onClose={() => setKeyModalOpen(false)}
-                onCopySuccess={() => showSuccess("Key copied to clipboard!")}
+                onCopySuccess={() => showSuccess(t("wizard.keyCopied"))}
             />
         </div>
     );

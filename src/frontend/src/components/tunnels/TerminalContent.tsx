@@ -16,6 +16,7 @@ import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw } fr
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { ShellTabBar } from "@/components/tunnels/ShellTabBar";
 import type { ShellTab } from "@/hooks/useTerminalPage";
+import { useI18n } from "@/lib/i18n";
 
 export interface TerminalContentProps {
     mainView: TerminalMainView;
@@ -80,6 +81,7 @@ export function TerminalContent({
     serviceKeys,
     onReconnect,
 }: TerminalContentProps) {
+    const { t } = useI18n();
     const groupRef = useRef<GroupImperativeHandle>(null);
     const filesPanelRef = usePanelRef();
 
@@ -136,9 +138,9 @@ export function TerminalContent({
                     type="button"
                     onClick={() => setMainView("terminal")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "terminal" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                    title={connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
+                    title={connecting ? t("common.connecting") : connected ? t("common.connected") : t("common.disconnected")}
                 >
-                    <TerminalIcon size={13} /> Terminal
+                    <TerminalIcon size={13} /> {t("common.terminal")}
                     <span className="flex h-2 w-2 ml-0.5">
                         <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
                     </span>
@@ -148,15 +150,15 @@ export function TerminalContent({
                     onClick={() => setMainView("files")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "files" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
-                    <FolderSync size={13} /> Files
+                    <FolderSync size={13} /> {t("common.files")}
                 </button>
                 <button
                     type="button"
                     onClick={() => setMainView("browser")}
                     className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-colors relative z-10 ${mainView === "browser" ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                    title={isBrowserActive ? 'Session active' : 'No session — open to start'}
+                    title={isBrowserActive ? t("terminal.sessionActive") : t("terminal.noSession")}
                 >
-                    <MonitorPlay size={13} /> Browser
+                    <MonitorPlay size={13} /> {t("common.browser")}
                     {isBrowserActive && mainView !== "browser" && (
                         <span className="flex h-2 w-2 ml-0.5">
                             <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
@@ -214,7 +216,7 @@ export function TerminalContent({
                                     <div className="absolute inset-0 bg-black/70 z-20 flex items-center justify-center rounded-lg">
                                         <div className="text-center space-y-3">
                                             <div className="w-3 h-3 rounded-full bg-destructive mx-auto" />
-                                            <p className="text-sm text-muted-foreground">Disconnected</p>
+                                            <p className="text-sm text-muted-foreground">{t("common.disconnected")}</p>
                                             {onReconnect && (
                                                 <Button
                                                     variant="outline"
@@ -222,7 +224,7 @@ export function TerminalContent({
                                                     onClick={onReconnect}
                                                     className="gap-1.5 text-xs"
                                                 >
-                                                    <RefreshCw size={13} /> Reconnect
+                                                    <RefreshCw size={13} /> {t("common.reconnect")}
                                                 </Button>
                                             )}
                                         </div>
@@ -278,21 +280,21 @@ export function TerminalContent({
                 setExpanded={setKeyboardExpanded}
             />
 
-            <Modal isOpen={serviceKeyModalOpen} onClose={() => setServiceKeyModalOpen(false)} title="Service Keys" size="lg">
+            <Modal isOpen={serviceKeyModalOpen} onClose={() => setServiceKeyModalOpen(false)} title={t("terminal.serviceKeys")} size="lg">
                 {loadingServiceKeys ? (
                     <div className="flex justify-center py-8">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                     </div>
                 ) : (serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-8">No service keys found.</p>
+                    <p className="text-sm text-muted-foreground text-center py-8">{t("terminal.noServiceKeys")}</p>
                 ) : (
                     <div className="space-y-4 max-h-96 overflow-y-auto">
                         {(serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).map((sk, idx) => (
                             <div key={idx} className="bg-muted/50 rounded-lg p-4 border border-border min-w-0 overflow-hidden">
                                 <div className="flex items-center justify-between mb-2 gap-2">
-                                    <h4 className="text-sm font-semibold text-foreground">{sk.host_friendly_name || sk.name || `Service Key ${idx + 1}`}</h4>
+                                    <h4 className="text-sm font-semibold text-foreground">{sk.host_friendly_name || sk.name || t("terminal.serviceKeyN", { n: idx + 1 })}</h4>
                                     <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(sk.key || sk.public_key || "")} className="h-7 px-2 text-xs">
-                                        <Copy size={12} className="mr-1" /> Copy
+                                        <Copy size={12} className="mr-1" /> {t("common.copy")}
                                     </Button>
                                 </div>
                                 <div className="bg-background rounded p-2 border border-border/50 max-h-32 overflow-y-auto">

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/lib/i18n";
 
 import { FileItem } from "@/types/tunnel";
 
@@ -28,6 +29,7 @@ interface FileManagerPanelProps {
 import { useFileManager } from "@/hooks/useFileManager";
 
 export function FileManagerPanel({ serverId, username, accessToken, initialPath }: FileManagerPanelProps) {
+    const { t } = useI18n();
     const { refs, state, actions, reconnect } = useFileManager(serverId, username, accessToken, initialPath);
 
     const { fileInputRef } = refs;
@@ -84,10 +86,10 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
             <div className="p-3 border-b border-border/50 flex flex-col gap-3 shrink-0">
                 <div className="flex items-center justify-between">
                     <h2 className="text-sm font-semibold flex items-center gap-2">
-                        <Folder size={16} className="text-primary" /> File Manager
+                        <Folder size={16} className="text-primary" /> {t("files.title")}
                     </h2>
                     <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`} title={connected ? 'Connected' : 'Disconnected'} />
+                        <div className={`w-2 h-2 rounded-full ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`} title={connected ? t("common.connected") : t("common.disconnected")} />
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => loadDirectory(currentPath)} disabled={!connected || loading}>
                             <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                         </Button>
@@ -95,17 +97,17 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                 </div>
 
                 <form onSubmit={handlePathSubmit} className="flex gap-2">
-                    <Button type="button" variant="outline" size="icon" className="h-9 md:h-8 w-9 md:w-8 shrink-0" onClick={goHome} disabled={!connected} title="Home">
+                    <Button type="button" variant="outline" size="icon" className="h-9 md:h-8 w-9 md:w-8 shrink-0" onClick={goHome} disabled={!connected} title={t("files.home")}>
                         <Home size={14} />
                     </Button>
-                    <Button type="button" variant="outline" size="icon" className="h-9 md:h-8 w-9 md:w-8 shrink-0" onClick={goUp} disabled={!connected} title="Go Up relative to current folder">
+                    <Button type="button" variant="outline" size="icon" className="h-9 md:h-8 w-9 md:w-8 shrink-0" onClick={goUp} disabled={!connected} title={t("files.goUp")}>
                         <CornerLeftUp size={14} />
                     </Button>
                     <Input
                         value={currentPath}
                         onChange={(e) => setCurrentPath(e.target.value)}
                         className="h-9 md:h-8 text-xs font-mono"
-                        placeholder="Path"
+                        placeholder={t("files.pathPlaceholder")}
                         disabled={!connected}
                     />
                 </form>
@@ -124,9 +126,9 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                         disabled={!connected || uploading}
                     >
                         {uploading ? (
-                            <><RefreshCw size={14} className="animate-spin" /> Uploading...</>
+                            <><RefreshCw size={14} className="animate-spin" /> {t("files.uploading")}</>
                         ) : (
-                            <><Upload size={14} /> Upload File</>
+                            <><Upload size={14} /> {t("files.uploadFile")}</>
                         )}
                     </Button>
                 </div>
@@ -142,15 +144,15 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                         <div className="p-3 rounded-full bg-destructive/10">
                             <WifiOff size={24} className="text-destructive" />
                         </div>
-                        <p className="text-sm font-medium text-foreground">Connection Lost</p>
-                        <p className="text-xs text-muted-foreground text-center">Unable to connect to the file manager service.</p>
+                        <p className="text-sm font-medium text-foreground">{t("files.connectionLost")}</p>
+                        <p className="text-xs text-muted-foreground text-center">{t("files.unableToConnect")}</p>
                         <Button
                             variant="outline"
                             size="sm"
                             onClick={reconnect}
                             className="gap-1.5 text-xs mt-1"
                         >
-                            <RefreshCw size={13} /> Reconnect
+                            <RefreshCw size={13} /> {t("common.reconnect")}
                         </Button>
                     </div>
                 ) : error ? (
@@ -160,14 +162,14 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                             <div className="flex-1 min-w-0">
                                 <p className="text-xs font-medium text-destructive">{error}</p>
                             </div>
-                            <button onClick={() => { }} className="text-destructive/60 hover:text-destructive shrink-0" title="Dismiss">
+                            <button onClick={() => { }} className="text-destructive/60 hover:text-destructive shrink-0" title={t("common.dismiss")}>
                                 <X size={14} />
                             </button>
                         </div>
                     </div>
                 ) : items.length === 0 ? (
                     <div className="p-8 text-center text-muted-foreground text-sm">
-                        Empty directory
+                        {t("files.emptyDirectory")}
                     </div>
                 ) : (
                     <ul className="divide-y divide-border/50">
@@ -191,7 +193,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                                             size="icon"
                                             className="h-8 w-8 md:h-7 md:w-7 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                                             onClick={() => handleDownload(item)}
-                                            title="Download"
+                                            title={t("files.download")}
                                         >
                                             <Download size={14} />
                                         </Button>

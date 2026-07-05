@@ -13,12 +13,14 @@ import { ShareModalShareForm } from "@/components/tunnels/ShareModalShareForm";
 import { ShareModalSharedList, type SharedUserRow } from "@/components/tunnels/ShareModalSharedList";
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
 import { TunnelModalProps } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 interface ShareModalProps extends TunnelModalProps {
     readOnly?: boolean;
 }
 
 export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: ShareModalProps) {
+    const { t } = useI18n();
     const { state, actions } = useShareModal(tunnelId, isOpen);
     const {
         sharedUsers,
@@ -38,7 +40,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
 
     return (
         <>
-            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? "Tunnel Permissions" : "Share Tunnel"} size="lg" isLoading={loading}>
+            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} size="lg" isLoading={loading}>
                 <div className="space-y-6">
                     <ShareModalPermissionMatrix />
 
@@ -76,9 +78,9 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                 isOpen={unshareConfirm !== null}
                 onClose={() => setUnshareConfirm(null)}
                 onConfirm={handleUnshare}
-                title="Unshare Tunnel"
-                message={`Are you sure you want to unshare this tunnel with ${unshareConfirm?.username}? They will lose all access.`}
-                confirmText="Unshare"
+                title={t("share.unshareTitle")}
+                message={t("share.unshareMessage", { username: unshareConfirm?.username ?? "" })}
+                confirmText={t("share.unshare")}
                 isDestructive={true}
             />
 

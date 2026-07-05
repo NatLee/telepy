@@ -20,6 +20,7 @@
  */
 import React from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import { LatencyIndicator, latencyTier } from "@/components/ui/LatencyIndicator";
 import {
     Tooltip,
@@ -115,13 +116,14 @@ function FlowPath({
     serverToDeviceMs: number | null;
     connected: boolean;
 }) {
+    const { t } = useI18n();
     return (
         <span className="inline-flex items-center">
-            <FlowNode label="You" connected={connected} />
+            <FlowNode label={t("latency.you")} connected={connected} />
             <Hop ms={youToServerMs} connected={connected} />
-            <FlowNode label="Telepy" connected={connected} accent />
+            <FlowNode label={t("latency.telepy")} connected={connected} accent />
             <Hop ms={serverToDeviceMs} connected={connected} />
-            <FlowNode label="Device" connected={connected} />
+            <FlowNode label={t("latency.device")} connected={connected} />
         </span>
     );
 }
@@ -134,6 +136,7 @@ export function TerminalLatencyBadge({
     compact = false,
     className,
 }: TerminalLatencyBadgeProps) {
+    const { t } = useI18n();
     // 未連線且非連線中：沒有延遲可顯示，直接不渲染（連線狀態另由標題列的圓點表示）。
     if (!connected && !connecting) return null;
 
@@ -143,18 +146,18 @@ export function TerminalLatencyBadge({
     const breakdown = (
         <div className="space-y-0.5 text-left">
             <div className="flex items-center justify-between gap-3">
-                <span className="opacity-80">You → Telepy</span>
+                <span className="opacity-80">{t("latency.youToTelepy")}</span>
                 <span className="font-medium tabular-nums">{fmtMs(youToServerMs)}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
-                <span className="opacity-80">Telepy → Device</span>
+                <span className="opacity-80">{t("latency.telepyToDevice")}</span>
                 <span className="font-medium tabular-nums">{fmtMs(serverToDeviceMs)}</span>
             </div>
             <div className="flex items-center justify-between gap-3 pt-0.5 border-t border-background/20">
-                <span className="opacity-60">End-to-end</span>
+                <span className="opacity-60">{t("latency.endToEnd")}</span>
                 <span className="font-semibold tabular-nums">{fmtMs(total)}</span>
             </div>
-            <div className="opacity-50 text-[10px] pt-0.5">round-trip per hop</div>
+            <div className="opacity-50 text-[10px] pt-0.5">{t("latency.roundTripPerHop")}</div>
         </div>
     );
 

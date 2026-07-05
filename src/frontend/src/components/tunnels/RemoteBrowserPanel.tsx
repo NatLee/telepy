@@ -4,6 +4,8 @@ import { MonitorPlay, MonitorX, AlertCircle, Loader2, Languages } from "lucide-r
 import { readJson, responseError } from "@/lib/api";
 import { getWsOrigin } from "@/lib/wsCommon";
 import KasmUI from "@/vendor/kasm-novnc/app/ui.js";
+import { useI18n } from "@/lib/i18n";
+import type { TranslationKey } from "@/locales/en";
 
 export interface RemoteBrowserPanelProps {
     serverId: string;
@@ -12,11 +14,11 @@ export interface RemoteBrowserPanelProps {
     onActiveChange?: (isActive: boolean) => void;
 }
 
-const CLOSE_MESSAGES: Record<number, string> = {
-    4403: "Permission denied for this tunnel",
-    4404: "Session not found or expired",
-    4011: "Could not reach the VNC browser backend",
-    4013: "VNC connection closed",
+const CLOSE_MESSAGES: Record<number, TranslationKey> = {
+    4403: "browser.permissionDenied",
+    4404: "browser.sessionNotFound",
+    4011: "browser.backendUnreachable",
+    4013: "browser.vncClosed",
 };
 
 /** 我們用到的 KasmVNC RFB 介面(vendored fork 是 untyped JS,見 vendor/kasm-novnc/README.md)。 */
@@ -74,6 +76,7 @@ export function RemoteBrowserPanel({
     accessToken,
     onActiveChange,
 }: RemoteBrowserPanelProps) {
+    const { t } = useI18n();
     const [phase, setPhase] = useState<"idle" | "connecting" | "connected">("idle");
     const [error, setError] = useState<string | null>(null);
     const [imeEnabled, setImeEnabled] = useState(true);   // 中文輸入預設開啟
@@ -126,7 +129,7 @@ export function RemoteBrowserPanel({
             RFB = rfbMod.default as KasmRFBConstructor;
             mapperMod = mbm;
         } catch {
-            setError("Failed to load the VNC client bundle");
+            setError(t("browser.bundleLoadFailed"));
             cleanup(true);
             return;
         }
@@ -185,7 +188,7 @@ export function RemoteBrowserPanel({
                 ws.send(JSON.stringify({ type: "begin" }));
             }
         }, 0);
-    }, [cleanup, onActiveChange]);
+    }, [cleanup, onActiveChange, t]);
 
     const startSession = useCallback(async () => {
         setError(null);
@@ -209,7 +212,7 @@ export function RemoteBrowserPanel({
             );
             if (!res.ok) {
                 const data = await readJson(res);
-                throw new Error(responseError(res, data, "Failed to start remote browser"));
+                throw new Error(responseError(res, data, t("browser.startFailed")));
             }
             const data = await res.json();
             sessionIdRef.current = data.session_id;
@@ -236,20 +239,21 @@ export function RemoteBrowserPanel({
                 }
             };
             ws.onerror = () => {
-                if (!connectedRef.current) setError((e) => e || "WebSocket error");
+                if (!connectedRef.current) setError((e) => e || t("browser.wsError"));
             };
             ws.onclose = (ev) => {
                 const wasConnected = connectedRef.current;
                 if (!userStoppedRef.current && !wasConnected) {
-                    setError((e) => e || CLOSE_MESSAGES[ev.code] || "Connection closed");
+                    const closeKey = CLOSE_MESSAGES[ev.code];
+                    setError((e) => e || (closeKey ? t(closeKey) : t("browser.connectionClosed")));
                 }
                 cleanup(false);
             };
         } catch (err: any) {
-            setError(err.message || "An unknown error occurred");
+            setError(err.message || t("browser.unknownError"));
             cleanup(true);
         }
-    }, [serverId, username, accessToken, attachKasmClient, cleanup]);
+    }, [serverId, username, accessToken, attachKasmClient, cleanup, t]);
 
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
@@ -305,7 +309,7 @@ export function RemoteBrowserPanel({
             <div className="flex items-center gap-2 p-2 px-3 border-b border-border bg-muted/40">
                 <MonitorPlay size={18} className="text-muted-foreground shrink-0" />
                 <span className="flex-1 text-sm font-semibold tracking-tight text-foreground">
-                    Proxy Browser (VNC)
+                    {t("browser.title")}
                 </span>
                 {active && (
                     <Button
@@ -313,18 +317,18 @@ export function RemoteBrowserPanel({
                         size="sm"
                         onClick={toggleIme}
                         className="h-8 gap-1"
-                        title="Toggle IME mode for CJK input (中文輸入)"
+                        title={t("browser.imeTitle")}
                     >
                         <Languages size={14} /> IME
                     </Button>
                 )}
                 {busy ? (
                     <Button variant="destructive" size="sm" onClick={stopSession} className="h-8 gap-1">
-                        <MonitorX size={14} /> Stop Session
+                        <MonitorX size={14} /> {t("browser.stopSession")}
                     </Button>
                 ) : (
                     <Button variant="default" size="sm" onClick={startSession} className="h-8 gap-1">
-                        <MonitorPlay size={14} /> Start Browser
+                        <MonitorPlay size={14} /> {t("browser.startBrowser")}
                     </Button>
                 )}
             </div>
@@ -340,13 +344,11 @@ export function RemoteBrowserPanel({
             {phase === "idle" && !error && (
                 <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-4 text-center">
                     <MonitorPlay size={48} className="mb-4 opacity-20" />
-                    <h3 className="text-lg font-medium mb-2 text-foreground">Proxy Browser via SSH</h3>
+                    <h3 className="text-lg font-medium mb-2 text-foreground">{t("browser.idleTitle")}</h3>
                     <p className="text-sm max-w-sm mb-4">
-                        Starts a real Chromium desktop streamed over VNC. Traffic is tunneled
-                        through the target server ({username}@reverse), masquerading external
-                        requests as the target machine.
+                        {t("browser.idleBody", { username })}
                     </p>
-                    <Button onClick={startSession}>Click to Initialize</Button>
+                    <Button onClick={startSession}>{t("browser.clickToInitialize")}</Button>
                 </div>
             )}
 
@@ -370,7 +372,7 @@ export function RemoteBrowserPanel({
                     {!active && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground bg-black/80">
                             <Loader2 size={48} className="mb-4 animate-spin text-primary" />
-                            <p className="text-sm">Starting browser and binding SSH proxy...</p>
+                            <p className="text-sm">{t("browser.starting")}</p>
                         </div>
                     )}
                 </div>

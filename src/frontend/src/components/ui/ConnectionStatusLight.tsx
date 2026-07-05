@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useI18n } from "@/lib/i18n";
 
 type ConnectionState = "disconnected" | "connecting" | "connected";
 
@@ -35,14 +36,21 @@ const STATE_STYLES: Record<ConnectionState, { bg: string; shadow: string; ring: 
  * A circular "traffic light" indicator for connection status.
  * Three states: disconnected (red), connecting (amber), connected (green).
  */
+const STATE_LABEL_KEYS: Record<ConnectionState, "ui.stateConnected" | "ui.stateConnecting" | "ui.stateDisconnected"> = {
+    connected: "ui.stateConnected",
+    connecting: "ui.stateConnecting",
+    disconnected: "ui.stateDisconnected",
+};
+
 export function ConnectionStatusLight({ state, size = 48 }: ConnectionStatusLightProps) {
+    const { t } = useI18n();
     const s = STATE_STYLES[state];
     return (
         <div
             className={`rounded-full ring-4 ${s.bg} ${s.shadow} ${s.ring} ${s.animClass}`}
             style={{ width: size, height: size }}
             role="status"
-            aria-label={`Connection status: ${state}`}
+            aria-label={t("ui.connectionStatus", { state: t(STATE_LABEL_KEYS[state]) })}
         />
     );
 }

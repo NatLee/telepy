@@ -7,6 +7,7 @@ import { UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReverseServerUsername } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export interface ShareModalShareFormProps {
     selectedUser: string;
@@ -27,6 +28,7 @@ export function ShareModalShareForm({
     setSelectedAllowedIds,
     onShare,
 }: ShareModalShareFormProps) {
+    const { t } = useI18n();
     return (
         <form onSubmit={onShare} className="space-y-3">
             <div className="flex gap-2">
@@ -36,7 +38,7 @@ export function ShareModalShareForm({
                     disabled={availableUsers.length === 0}
                 >
                     <SelectTrigger className="flex-1">
-                        <SelectValue placeholder={availableUsers.length === 0 ? "No available users to share with" : "-- Select User --"} />
+                        <SelectValue placeholder={availableUsers.length === 0 ? t("share.noAvailableUsers") : t("share.selectUser")} />
                     </SelectTrigger>
                     <SelectContent>
                         {availableUsers.map((availableUser) => (
@@ -48,12 +50,12 @@ export function ShareModalShareForm({
                 </Select>
                 <Button type="submit" disabled={!selectedUser}>
                     <UserPlus size={16} className="mr-2" />
-                    Share
+                    {t("share.share")}
                 </Button>
             </div>
             {selectedUser && tunnelUsernames.length > 0 && (
                 <div className="bg-muted/30 border border-border rounded-lg p-3">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">Restrict to specific Target Server Users:</p>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">{t("share.restrictLabel")}</p>
                     <div className="flex flex-wrap gap-2">
                         {tunnelUsernames.map((targetUser) => (
                             <label key={targetUser.id} className="flex items-center gap-1.5 text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors">
@@ -72,7 +74,7 @@ export function ShareModalShareForm({
                                 <code className="font-mono">{targetUser.username}</code>
                                 {targetUser.created_by && (
                                     <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
-                                        By: {targetUser.created_by} (#{targetUser.created_by_id})
+                                        {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                     </span>
                                 )}
                             </label>

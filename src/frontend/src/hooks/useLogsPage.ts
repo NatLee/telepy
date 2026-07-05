@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useI18n } from "@/lib/i18n";
 
 interface LogEntry {
     id: number;
@@ -15,6 +16,7 @@ export function useLogsPage() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const { showError } = useToast();
+    const { t, locale } = useI18n();
 
     const fetchLogs = useCallback(async () => {
         setLoading(true);
@@ -58,7 +60,7 @@ export function useLogsPage() {
 
                     let timeText = time;
                     if (parsedAt && !isNaN(parsedAt.getTime())) {
-                        timeText = new Intl.DateTimeFormat('en-US', {
+                        timeText = new Intl.DateTimeFormat(locale, {
                             month: 'short',
                             day: 'numeric',
                             hour: '2-digit',
@@ -73,15 +75,15 @@ export function useLogsPage() {
 
                 setLogs(parsedLogs.reverse());
             } else {
-                showError("Failed to fetch logs");
+                showError(t("logs.fetchFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to fetch logs");
+            showError(e.message || t("logs.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [showError]);
+    }, [showError, t, locale]);
 
     useEffect(() => {
         fetchLogs();

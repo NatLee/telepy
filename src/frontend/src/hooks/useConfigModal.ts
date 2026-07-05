@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { TargetUser } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
+    const { t } = useI18n();
     const [configContent, setConfigContent] = useState<string>("");
     const [loading, setLoading] = useState(false);
     const [targetUsers, setTargetUsers] = useState<TargetUser[]>([]);
@@ -40,16 +42,16 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
                     }
                 }
 
-                setConfigContent(data.config ?? "# No SSH config available.");
+                setConfigContent(data.config ?? t("config.noConfig"));
             } else {
-                showError("Failed to load SSH configuration");
+                showError(t("config.loadFailed"));
             }
         } catch (e: any) {
-            showError(e.message || "Failed to load configuration");
+            showError(e.message || t("config.loadFailedGeneric"));
         } finally {
             setLoading(false);
         }
-    }, [tunnelId, showError]);
+    }, [tunnelId, showError, t]);
 
     useEffect(() => {
         if (isOpen && tunnelId) {

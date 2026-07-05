@@ -3,9 +3,11 @@
 import { useEffect, useState, useRef } from "react";
 import { LayoutGrid, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/lib/i18n";
 
 import { ViewToggleProps } from "@/types/ui";
 export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
+    const { t } = useI18n();
     const [mounted, setMounted] = useState(false);
     // Keep track of previous desktop state to only trigger onChange when crossing the boundary
     const wasDesktopRef = useRef<boolean | null>(null);
@@ -67,7 +69,7 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
 
     if (!mounted) {
         return (
-            <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label="View toggle">
+            <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label={t("ui.viewToggle")}>
                 <Button variant="ghost" size="sm" className="h-8 px-2.5 text-muted-foreground"><LayoutGrid size={16} /></Button>
                 <Button variant="ghost" size="sm" className="h-8 px-2.5 text-muted-foreground"><List size={16} /></Button>
             </div>
@@ -75,15 +77,15 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
     }
 
     return (
-        <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label="View toggle">
+        <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label={t("ui.viewToggle")}>
             <Button
                 variant={value === "card" ? "default" : "ghost"}
                 size="sm"
                 className={`h-8 px-2.5 ${value === "card" ? "shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => handleToggle("card")}
-                aria-label="Card view"
+                aria-label={t("ui.cardView")}
                 aria-pressed={value === "card"}
-                title="Card view"
+                title={t("ui.cardView")}
             >
                 <LayoutGrid size={16} />
             </Button>
@@ -92,9 +94,9 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
                 size="sm"
                 className={`h-8 px-2.5 ${value === "list" ? "shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => handleToggle("list")}
-                aria-label="List view"
+                aria-label={t("ui.listView")}
                 aria-pressed={value === "list"}
-                title="List view"
+                title={t("ui.listView")}
             >
                 <List size={16} />
             </Button>

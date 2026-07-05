@@ -9,9 +9,11 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
+import { useI18n } from "@/lib/i18n";
 
 export function useCreateTunnelWizard() {
     const { showSuccess, showError } = useToast();
+    const { t } = useI18n();
     const [currentStep, setCurrentStep] = useState(1);
     const [isProcessing, setIsProcessing] = useState(false);
 
@@ -77,20 +79,20 @@ export function useCreateTunnelWizard() {
     const handleStep1Submit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!isValidSSHKey(sshKey)) {
-            showError("Invalid SSH Public Key format.");
+            showError(t("wizard.invalidKeyFormat"));
             return;
         }
 
         setIsProcessing(true);
         try {
             const tokenRes = await apiFetch("/api/reverse/issue/token");
-            if (!tokenRes.ok) throw new Error("Failed to get issue token");
+            if (!tokenRes.ok) throw new Error(t("wizard.issueTokenFailed"));
             const tokenData = await tokenRes.json();
             const token = tokenData.token;
 
             const payload = {
                 key: sshKey,
-                host_friendly_name: hostName || "Unnamed Host",
+                host_friendly_name: hostName || t("wizard.unnamedHost"),
                 ssh_port: endpointSshPort,
             };
 
@@ -101,7 +103,7 @@ export function useCreateTunnelWizard() {
 
             const createData = await readJson<{ id?: number; reverse_port?: number }>(createRes);
             if (createRes.ok && createData) {
-                showSuccess("Tunnel key created successfully.");
+                showSuccess(t("wizard.tunnelCreated"));
                 setTunnelId(createData.id ?? null);
                 setSshPort(createData.reverse_port ?? null);
                 setCreatedHostName(payload.host_friendly_name);
@@ -109,11 +111,11 @@ export function useCreateTunnelWizard() {
                 fetchServerKeys();
                 setCurrentStep(2);
             } else {
-                showError(responseError(createRes, createData, "Failed to create tunnel."));
+                showError(responseError(createRes, createData, t("wizard.createFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to create tunnel.");
+            showError(e.message || t("wizard.createFailed"));
         } finally {
             setIsProcessing(false);
         }
@@ -142,12 +144,12 @@ export function useCreateTunnelWizard() {
                 body: JSON.stringify({ reverse_server: tunnelId, username: newUsername.trim() }),
             });
             if (res.ok) {
-                showSuccess(`User '${newUsername}' added.`);
+                showSuccess(t("wizard.userAdded", { name: newUsername }));
                 setNewUsername("");
                 fetchUsers();
             } else {
                 const data = await readJson(res);
-                showError(responseError(res, data, "Failed to add user"));
+                showError(responseError(res, data, t("wizard.addUserFailed")));
             }
         } finally { setIsProcessing(false); }
     };
@@ -199,12 +201,12 @@ export function useCreateTunnelWizard() {
                     const res = await apiFetch(`/tunnels/server/config/${tunnelId}`);
                     if (res.ok) {
                         const data = await res.json();
-                        setConfigContent(data.config || "No configuration available");
+                        setConfigContent(data.config || t("wizard.noConfig"));
                     } else {
-                        setConfigContent("Error loading configuration");
+                        setConfigContent(t("wizard.configError"));
                     }
                 } catch {
-                    setConfigContent("Error loading configuration");
+                    setConfigContent(t("wizard.configError"));
                 } finally {
                     setConfigLoading(false);
                 }

@@ -10,11 +10,13 @@ import { User, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useLoginPage } from "@/hooks/useLoginPage";
+import { useI18n } from "@/lib/i18n";
 
 export default function LoginPage() {
     const { state, actions } = useLoginPage();
     const { username, setUsername, password, setPassword, isSubmitting, googleClientId } = state;
     const { handleSubmit } = actions;
+    const { t } = useI18n();
 
     return (
         <>
@@ -26,13 +28,13 @@ export default function LoginPage() {
                             <User size={32} className="text-primary-foreground" />
                         </div>
                         <h1 className="text-3xl font-bold tracking-tight">Telepy</h1>
-                        <p className="text-muted-foreground mt-2">Sign in to your dashboard</p>
+                        <p className="text-muted-foreground mt-2">{t("login.subtitle")}</p>
                     </div>
 
                     <form onSubmit={handleSubmit} className="space-y-5">
                         <div className="space-y-2">
                             <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                Username
+                                {t("login.username")}
                             </label>
                             <div className="relative">
                                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -44,14 +46,14 @@ export default function LoginPage() {
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
                                     className="pl-10"
-                                    placeholder="Enter your username"
+                                    placeholder={t("login.usernamePlaceholder")}
                                 />
                             </div>
                         </div>
 
                         <div className="space-y-2">
                             <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                Password
+                                {t("login.password")}
                             </label>
                             <div className="relative">
                                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -77,7 +79,7 @@ export default function LoginPage() {
                             {isSubmitting ? (
                                 <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
                             ) : (
-                                "Sign In"
+                                t("login.signIn")
                             )}
                         </Button>
                     </form>
@@ -89,7 +91,7 @@ export default function LoginPage() {
                                     <div className="w-full border-t border-border" />
                                 </div>
                                 <div className="relative flex justify-center text-sm">
-                                    <span className="px-2 bg-card text-muted-foreground">Or continue with</span>
+                                    <span className="px-2 bg-card text-muted-foreground">{t("login.orContinueWith")}</span>
                                 </div>
                             </div>
                             <div className="mt-6 flex justify-center">

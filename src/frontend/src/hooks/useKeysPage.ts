@@ -3,9 +3,11 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { isValidSSHKey, getHostFriendlyNameFromKey } from "@/lib/utils";
 import { useViewMode } from "@/hooks/useViewMode";
+import { useI18n } from "@/lib/i18n";
 
 export function useKeysPage() {
     const { showSuccess, showError } = useToast();
+    const { t } = useI18n();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [keys, setKeys] = useState<any[]>([]);
@@ -36,15 +38,15 @@ export function useKeysPage() {
             if (res.ok) {
                 setKeys(await res.json());
             } else {
-                showError("Failed to fetch keys");
+                showError(t("keys.fetchFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to fetch keys");
+            showError(e.message || t("keys.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [showError]);
+    }, [showError, t]);
 
     useEffect(() => {
         fetchKeys();
@@ -61,19 +63,19 @@ export function useKeysPage() {
     const handleAddKey = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!isValidSSHKey(newKeyContent)) {
-            showError("Invalid SSH Public Key format.");
+            showError(t("keys.invalidFormat"));
             return;
         }
         setIsSubmitting(true);
         try {
             const payload = {
                 key: newKeyContent,
-                host_friendly_name: newKeyName || "Unnamed Key",
+                host_friendly_name: newKeyName || t("keys.unnamedKey"),
                 description: newKeyDescription,
             };
 
             const tokenRes = await apiFetch("/api/reverse/issue/token");
-            if (!tokenRes.ok) throw new Error("Failed to get issue token");
+            if (!tokenRes.ok) throw new Error(t("wizard.issueTokenFailed"));
             const { token } = await tokenRes.json();
 
             const createRes = await apiFetch(`/api/reverse/create/key/${token}`, {
@@ -82,7 +84,7 @@ export function useKeysPage() {
             });
 
             if (createRes.ok) {
-                showSuccess("Key added successfully");
+                showSuccess(t("keys.added"));
                 setAddModalOpen(false);
                 setNewKeyContent("");
                 setNewKeyName("");
@@ -90,11 +92,11 @@ export function useKeysPage() {
                 fetchKeys();
             } else {
                 const err = await readJson(createRes);
-                showError(responseError(createRes, err, "Failed to add key"));
+                showError(responseError(createRes, err, t("keys.addFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to add key");
+            showError(e.message || t("keys.addFailed"));
         } finally {
             setIsSubmitting(false);
         }
@@ -107,15 +109,15 @@ export function useKeysPage() {
                 method: "DELETE",
             });
             if (res.ok) {
-                showSuccess(`Key '${deleteConfirm.name}' deleted`);
+                showSuccess(t("keys.deleted", { name: deleteConfirm.name }));
                 fetchKeys();
                 setDeleteConfirm({ isOpen: false, keyId: null, name: "" });
             } else {
-                showError("Failed to delete key");
+                showError(t("keys.deleteFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to delete key");
+            showError(e.message || t("keys.deleteFailed"));
         }
     };
 
@@ -128,15 +130,15 @@ export function useKeysPage() {
                 body: JSON.stringify({ description: editDescription }),
             });
             if (res.ok) {
-                showSuccess("Description updated");
+                showSuccess(t("keys.descriptionUpdated"));
                 setDetailsModal({ isOpen: false, key: null });
                 fetchKeys();
             } else {
-                showError("Failed to update description");
+                showError(t("keys.descriptionUpdateFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to update description");
+            showError(e.message || t("keys.descriptionUpdateFailed"));
         } finally {
             setIsUpdating(false);
         }

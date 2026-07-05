@@ -11,6 +11,7 @@ import { TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { TerminalLatencyBadge } from "@/components/tunnels/TerminalLatencyBadge";
 import { useRouter } from "next/navigation";
+import { useI18n } from "@/lib/i18n";
 
 interface TerminalHeaderProps {
     serverId: string;
@@ -54,6 +55,7 @@ export function TerminalHeader({
     onLoadServiceKeys,
 }: TerminalHeaderProps) {
     const router = useRouter();
+    const { t } = useI18n();
 
     return (
         <Card className="shrink-0 mb-2 md:mb-4 rounded-lg overflow-hidden border-border/50">
@@ -65,7 +67,7 @@ export function TerminalHeader({
                                 <TerminalIcon className="text-primary" size={18} />
                             </div>
                             <h1 className="text-sm md:text-base font-bold text-foreground flex items-center">
-                                Terminal <Badge variant="secondary" className="ml-2 font-mono text-[10px] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
+                                {t("common.terminal")} <Badge variant="secondary" className="ml-2 font-mono text-[10px] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
                             </h1>
 
                             {/* Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見 */}
@@ -111,7 +113,7 @@ export function TerminalHeader({
                                 >
                                     {availableUsernames.map((u: TerminalUsername) => (
                                         <option key={u.id} value={u.username}>
-                                            {u.username} {u.created_by ? `(By: ${u.created_by} #${u.created_by_id})` : ''}
+                                            {u.username} {u.created_by ? t("common.byUserHashTag", { user: u.created_by, id: u.created_by_id ?? "" }) : ''}
                                         </option>
                                     ))}
                                 </select>
@@ -126,7 +128,7 @@ export function TerminalHeader({
                         {syncedPath && (
                             <button
                                 onClick={() => navigator.clipboard.writeText(syncedPath)}
-                                title={`Current path: ${syncedPath} (click to copy)`}
+                                title={t("terminal.pathTitle", { path: syncedPath })}
                                 className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/50 border border-border rounded px-2 py-1 max-w-[200px] cursor-pointer hover:bg-muted transition-colors"
                             >
                                 <FolderOpen size={12} className="shrink-0" />
@@ -142,9 +144,9 @@ export function TerminalHeader({
                                 type="button"
                                 onClick={() => setMainView("terminal")}
                                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${mainView === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                title={connecting ? 'Connecting...' : connected ? 'Connected' : 'Disconnected'}
+                                title={connecting ? t("common.connecting") : connected ? t("common.connected") : t("common.disconnected")}
                             >
-                                <TerminalIcon size={13} /> Terminal
+                                <TerminalIcon size={13} /> {t("common.terminal")}
                                 <span className="flex h-2 w-2 ml-0.5">
                                     <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
                                 </span>
@@ -153,9 +155,9 @@ export function TerminalHeader({
                                 type="button"
                                 onClick={() => setMainView("browser")}
                                 className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                title={isBrowserActive ? 'Session active' : 'No session — open to start'}
+                                title={isBrowserActive ? t("terminal.sessionActive") : t("terminal.noSession")}
                             >
-                                <MonitorPlay size={13} /> Browser
+                                <MonitorPlay size={13} /> {t("common.browser")}
                                 {isBrowserActive && mainView !== "browser" && (
                                     <span className="flex h-2 w-2 ml-0.5">
                                         <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
@@ -179,7 +181,7 @@ export function TerminalHeader({
                             variant="outline"
                             size="sm"
                             onClick={() => setShowFiles(!showFiles)}
-                            title={showFiles ? "Hide Files" : "Show Files"}
+                            title={showFiles ? t("terminal.hideFiles") : t("terminal.showFiles")}
                             className={`h-8 w-8 p-0 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
                             <FolderSync size={14} />
@@ -190,7 +192,7 @@ export function TerminalHeader({
                             onClick={() => onLoadServiceKeys()}
                             className="h-8 text-xs gap-1.5"
                         >
-                            <KeyRound size={14} /> Service Keys
+                            <KeyRound size={14} /> {t("terminal.serviceKeys")}
                         </Button>
                         <Button
                             variant="secondary"
@@ -198,7 +200,7 @@ export function TerminalHeader({
                             onClick={() => router.push("/tunnels")}
                             className="h-8 text-xs gap-1.5"
                         >
-                            <X size={14} /> Close
+                            <X size={14} /> {t("common.close")}
                         </Button>
                     </div>
                 </div>
@@ -209,11 +211,11 @@ export function TerminalHeader({
                         <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground">
                             <div className="flex items-center gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
                                 <Server size={12} className="shrink-0" />
-                                <span className="truncate">Port: {port || 'N/A'}</span>
+                                <span className="truncate">{t("terminal.portLabel")} {port || t("common.notAvailable")}</span>
                             </div>
                             {(connected || connecting) && (
                                 <div className="flex items-center justify-between gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
-                                    <span>Latency</span>
+                                    <span>{t("terminal.latency")}</span>
                                     <TerminalLatencyBadge
                                         youToServerMs={youToServerMs}
                                         serverToDeviceMs={serverToDeviceMs}
@@ -224,7 +226,7 @@ export function TerminalHeader({
                             )}
                             {username && (
                                 <div className="flex justify-between items-center bg-muted/50 p-1.5 rounded border border-border/50">
-                                    <span>User</span>
+                                    <span>{t("common.user")}</span>
                                     {availableUsernames.length > 1 ? (
                                         <select
                                             value={username}
@@ -233,7 +235,7 @@ export function TerminalHeader({
                                         >
                                             {availableUsernames.map((u: TerminalUsername) => (
                                                 <option key={u.id} value={u.username}>
-                                                    {u.username} {u.created_by ? `(By: ${u.created_by} #${u.created_by_id})` : ''}
+                                                    {u.username} {u.created_by ? t("common.byUserHashTag", { user: u.created_by, id: u.created_by_id ?? "" }) : ''}
                                                 </option>
                                             ))}
                                         </select>
@@ -261,7 +263,7 @@ export function TerminalHeader({
                                 onClick={() => onLoadServiceKeys()}
                                 className="h-10 text-xs gap-1.5"
                             >
-                                <KeyRound size={14} /> Keys
+                                <KeyRound size={14} /> {t("terminal.keysShort")}
                             </Button>
                             <Button
                                 variant="secondary"
@@ -269,7 +271,7 @@ export function TerminalHeader({
                                 onClick={() => router.push("/tunnels")}
                                 className="h-10 text-xs gap-1.5"
                             >
-                                <X size={14} /> Close
+                                <X size={14} /> {t("common.close")}
                             </Button>
                         </div>
                     </div>

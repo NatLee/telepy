@@ -7,6 +7,7 @@ import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { Button } from "@/components/ui/button";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
+import { useI18n } from "@/lib/i18n";
 
 interface TunnelTableRowProps {
     tunnel: Tunnel;
@@ -37,6 +38,7 @@ export function TunnelTableRow({
     onLeave,
     onDelete,
 }: TunnelTableRowProps) {
+    const { t } = useI18n();
     return (
         <tr className="hover:bg-muted/50 transition-colors">
             <td className="px-4 py-3 text-sm font-medium text-foreground whitespace-nowrap">
@@ -58,12 +60,12 @@ export function TunnelTableRow({
                 <div className="flex items-center gap-1">
                     {!tunnel.is_owner && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300">
-                            <Share2 size={10} /> Shared with you
+                            <Share2 size={10} /> {t("tunnels.sharedWithYou")}
                         </Badge>
                     )}
                     {tunnel.is_owner && tunnel.can_share && (
                         <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300">
-                            <Share2 size={10} /> Owner
+                            <Share2 size={10} /> {t("tunnels.owner")}
                         </Badge>
                     )}
                     {tunnel.is_owner && sharedCount > 0 && (
@@ -80,12 +82,12 @@ export function TunnelTableRow({
                 <div className="flex items-center justify-end gap-0.5">
                     <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
                         <Link href={getTerminalPageUrl(tunnel)}>
-                            <TerminalSquare size={14} className="mr-1.5" /> Terminal
+                            <TerminalSquare size={14} className="mr-1.5" /> {t("common.terminal")}
                         </Link>
                     </Button>
                     <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
                         <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
-                            <MonitorPlay size={14} className="mr-1.5" /> Browser
+                            <MonitorPlay size={14} className="mr-1.5" /> {t("common.browser")}
                         </Link>
                     </Button>
 

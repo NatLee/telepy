@@ -5,8 +5,10 @@ import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
 import { Tunnel } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export function useTunnelsPage() {
+    const { t } = useI18n();
     const [tunnels, setTunnels] = useState<Tunnel[]>([]);
     const [portsMap, setPortsMap] = useState<Record<string, boolean>>({});
     // 每個 reverse_port 的「裝置↔伺服器」延遲（毫秒）；量不到的 port 缺席，前端一律視為 null。
@@ -41,7 +43,7 @@ export function useTunnelsPage() {
                 setTunnels(Array.isArray(keys) ? keys : []);
                 setPortsMap(typeof ports === 'object' && ports !== null ? ports : {});
             } else {
-                showError("Failed to fetch tunnel data");
+                showError(t("tunnels.fetchFailed"));
             }
 
             // 延遲首屏：成功才套用，失敗靜默略過（後續由 WebSocket UPDATE-TUNNEL-LATENCY 持續更新）。
@@ -50,11 +52,11 @@ export function useTunnelsPage() {
                 if (latency && typeof latency === "object") setLatencyMap(latency);
             }
         } catch (e: any) {
-            showError(e.message || "Failed to fetch tunnel data");
+            showError(e.message || t("tunnels.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [showError]);
+    }, [showError, t]);
 
     useEffect(() => {
         fetchData();
@@ -111,30 +113,30 @@ export function useTunnelsPage() {
                 method: "DELETE"
             });
             if (res.ok) {
-                showSuccess(`Tunnel '${deleteConfirm.name}' deleted`);
+                showSuccess(t("tunnels.deleted", { name: deleteConfirm.name }));
                 fetchData();
             } else {
-                showError("Failed to delete tunnel");
+                showError(t("tunnels.deleteFailed"));
             }
         } catch (e: any) {
-            showError(e.message || "Failed to delete tunnel");
+            showError(e.message || t("tunnels.deleteFailed"));
         } finally {
             setDeleteConfirm({ isOpen: false, tunnelId: null, name: "" });
         }
     };
 
     const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {
-        if (!user?.id) { showError("Failed to get current user"); return; }
+        if (!user?.id) { showError(t("tunnels.getCurrentUserFailed")); return; }
         try {
             const res = await apiFetch(`/tunnels/unshare/${tunnelId}/${user.id}`, { method: "DELETE" });
             if (res.ok) {
-                showSuccess(`You left tunnel '${tunnelName}'`);
+                showSuccess(t("tunnels.left", { name: tunnelName }));
                 fetchData();
             } else {
-                showError("Failed to leave tunnel");
+                showError(t("tunnels.leaveFailed"));
             }
         } catch (e: any) {
-            showError(e.message || "Failed to leave tunnel");
+            showError(e.message || t("tunnels.leaveFailed"));
         }
     };
 

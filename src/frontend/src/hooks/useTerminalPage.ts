@@ -22,6 +22,7 @@ import { apiFetch, refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
+import { useI18n } from "@/lib/i18n";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
 
@@ -124,6 +125,7 @@ const TERMINAL_THEME = {
 };
 
 export function useTerminalPage(serverId: string | null, accessToken: string | null) {
+    const { t } = useI18n();
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
     const xtermRef = useRef<any>(null);
@@ -274,7 +276,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             }));
             updateTab(s.id, { status: "connected" });
             // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋，首個 PTY 輸出會覆蓋此行。
-            s.term.write("\x1b[90mConnecting to server...\x1b[0m\r\n");
+            s.term.write(`\x1b[90m${t("terminal.connectingToServer")}\x1b[0m\r\n`);
             if (activeIdRef.current === s.id) fitAndResize(s);
             sendPing();
             stopPing(s);
@@ -308,11 +310,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
             const code = event.code;
             if (code === 4004) {
-                setPermissionDenied("You do not have permission to access this tunnel.");
-                s.term.write("\r\n\x1b[31m[Permission Denied] You do not have access to this tunnel.\x1b[0m\r\n");
+                setPermissionDenied(t("terminal.permissionDeniedCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.permissionDeniedXterm")}\x1b[0m\r\n`);
             } else if (code === 4003) {
-                setPermissionDenied("The specified username is not authorized for this tunnel.");
-                s.term.write("\r\n\x1b[31m[Invalid Username] The username is not authorized for this tunnel.\x1b[0m\r\n");
+                setPermissionDenied(t("terminal.invalidUsernameCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.invalidUsernameXterm")}\x1b[0m\r\n`);
             } else if (code === 4001) {
                 // token 過期/無效：每個 session 只 refresh 重連一次。
                 if (!s.authRetried) {
@@ -323,29 +325,29 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                             updateTab(s.id, { status: "connecting" });
                             connectSession(s);
                         } else {
-                            setPermissionDenied("Authentication failed. Please log in again.");
-                            s.term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                            setPermissionDenied(t("terminal.authFailedCard"));
+                            s.term.write(`\r\n\x1b[31m${t("terminal.authFailedXterm")}\x1b[0m\r\n`);
                         }
                     });
                 } else {
-                    setPermissionDenied("Authentication failed. Please log in again.");
-                    s.term.write("\r\n\x1b[31m[Auth Failed] Your session has expired. Please log in again.\x1b[0m\r\n");
+                    setPermissionDenied(t("terminal.authFailedCard"));
+                    s.term.write(`\r\n\x1b[31m${t("terminal.authFailedXterm")}\x1b[0m\r\n`);
                 }
             } else if (code === 4002) {
-                setPermissionDenied("Tunnel not found or server ID is invalid.");
-                s.term.write("\r\n\x1b[31m[Not Found] This tunnel does not exist.\x1b[0m\r\n");
+                setPermissionDenied(t("terminal.notFoundCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.notFoundXterm")}\x1b[0m\r\n`);
             } else if (code === 4006) {
                 setNoUsers(true);
-                s.term.write("\r\n\x1b[31m[No Users] No target server users configured for this tunnel.\x1b[0m\r\n");
+                s.term.write(`\r\n\x1b[31m${t("terminal.noUsersXterm")}\x1b[0m\r\n`);
             } else if (code === 1000) {
-                s.term.write("\r\n\x1b[31m[Disconnected from server]\x1b[0m\r\n");
+                s.term.write(`\r\n\x1b[31m${t("terminal.disconnectedXterm")}\x1b[0m\r\n`);
             } else {
                 // 非正常關閉：顯示 close code 以利排查（1006 = 網路/代理層異常斷線，非後端主動關閉）。
                 // Abnormal close: surface the code (1006 = network/proxy layer drop, not the backend).
-                s.term.write(`\r\n\x1b[31m[Disconnected from server (code ${code})]\x1b[0m\r\n`);
+                s.term.write(`\r\n\x1b[31m${t("terminal.disconnectedCodeXterm", { code })}\x1b[0m\r\n`);
             }
         };
-    }, [serverId, updateTab, fitAndResize]);
+    }, [serverId, updateTab, fitAndResize, t]);
 
     /** 建立新分頁（含 xterm 實例與 WS 連線），並切換為作用中。/ Create + activate a new tab. */
     const createSession = useCallback(async (sessionUsername: string) => {

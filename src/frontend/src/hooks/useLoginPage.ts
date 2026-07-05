@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
+import { useI18n } from "@/lib/i18n";
 
 export function useLoginPage() {
     const [username, setUsername] = useState("");
@@ -14,6 +15,7 @@ export function useLoginPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const { login, isAuthenticated } = useAuth();
     const { showSuccess, showError } = useToast();
+    const { t } = useI18n();
     const router = useRouter();
 
     const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -48,16 +50,16 @@ export function useLoginPage() {
                 const data = await readJson<{ access_token?: string; refresh_token?: string }>(res);
                 if (res.ok && data?.access_token) {
                     login(data.access_token, data.refresh_token!);
-                    showSuccess("Google Login successful");
+                    showSuccess(t("login.googleSuccess"));
                     router.push("/tunnels");
                 } else {
-                    showError(responseError(res, data, "Google Login failed"));
+                    showError(responseError(res, data, t("login.googleFailed")));
                 }
             } catch (err: unknown) {
-                showError(err instanceof Error ? err.message : "Google Login failed");
+                showError(err instanceof Error ? err.message : t("login.googleFailed"));
             }
         };
-    }, [login, router, showError, showSuccess]);
+    }, [login, router, showError, showSuccess, t]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -70,13 +72,13 @@ export function useLoginPage() {
             const data = await readJson<{ access_token?: string; refresh_token?: string }>(res);
             if (res.ok && data?.access_token) {
                 login(data.access_token, data.refresh_token!);
-                showSuccess("Login successful");
+                showSuccess(t("login.success"));
                 router.push("/tunnels");
             } else {
-                showError(responseError(res, data, "Login failed"));
+                showError(responseError(res, data, t("login.failed")));
             }
         } catch (err: unknown) {
-            showError(err instanceof Error ? err.message : "Login failed");
+            showError(err instanceof Error ? err.message : t("login.failed"));
         } finally {
             setIsSubmitting(false);
         }

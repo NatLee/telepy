@@ -4,8 +4,10 @@ import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
 import { ReverseServerUsername } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export function useShareModal(tunnelId: number | null, isOpen: boolean) {
+    const { t } = useI18n();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [sharedUsers, setSharedUsers] = useState<any[]>([]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,7 +34,7 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 setSharedUsers((await sharedRes.json()).users);
                 setAvailableUsers((await availableRes.json()).users);
             } else {
-                showError("Failed to fetch shared users");
+                showError(t("share.fetchSharedFailed"));
             }
             if (usernamesRes.ok) {
                 const data = await usernamesRes.json();
@@ -40,11 +42,11 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to fetch users");
+            showError(e.message || t("share.fetchUsersFailed"));
         } finally {
             setLoading(false);
         }
-    }, [tunnelId, showError]);
+    }, [tunnelId, showError, t]);
 
     useEffect(() => {
         if (isOpen) {
@@ -82,17 +84,17 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 }),
             });
             if (res.ok) {
-                showSuccess("Tunnel shared successfully");
+                showSuccess(t("share.shared"));
                 setSelectedUser("");
                 setSelectedAllowedIds([]);
                 fetchUsers();
             } else {
                 const data = await readJson(res);
-                showError(responseError(res, data, "Failed to share tunnel"));
+                showError(responseError(res, data, t("share.shareFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to share tunnel");
+            showError(e.message || t("share.shareFailed"));
         }
     };
 
@@ -108,11 +110,11 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 fetchUsers();
             } else {
                 const data = await readJson(res);
-                showError(responseError(res, data, "Failed to update permission"));
+                showError(responseError(res, data, t("share.updatePermissionFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to update permission");
+            showError(e.message || t("share.updatePermissionFailed"));
         }
     };
 
@@ -127,11 +129,11 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 setUnshareConfirm(null);
                 fetchUsers();
             } else {
-                showError("Failed to unshare tunnel");
+                showError(t("share.unshareFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to unshare tunnel");
+            showError(e.message || t("share.unshareFailed"));
         }
     };
 
@@ -147,11 +149,11 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
                 setEditTargetUsersModal(null);
                 fetchUsers();
             } else {
-                showError("Failed to update allowed users");
+                showError(t("share.updateAllowedFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to update allowed users");
+            showError(e.message || t("share.updateAllowedFailed"));
         }
     };
 

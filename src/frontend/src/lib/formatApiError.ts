@@ -1,3 +1,5 @@
+import { translate } from "./translate";
+
 /**
  * Parse various API/DRF error response shapes into a single human-readable string.
  *
@@ -10,7 +12,7 @@
  * @param data - The parsed JSON body (or string) from a failed API response.
  * @param fallback - Fallback message if nothing useful can be extracted.
  */
-export function formatApiError(data: unknown, fallback = "An unexpected error occurred."): string {
+export function formatApiError(data: unknown, fallback: string = translate("api.unexpectedError")): string {
     if (data === null || data === undefined) return fallback;
 
     // Already a string

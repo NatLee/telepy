@@ -11,9 +11,11 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { ReconnectingSocket } from "@/lib/reconnectingSocket";
 import { FileItem } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export function useFileManager(serverId: string, username: string, accessToken: string, initialPath?: string) {
     const { showError, showSuccess } = useToast();
+    const { t } = useI18n();
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
     const [currentPath, setCurrentPath] = useState("~/");
@@ -25,6 +27,11 @@ export function useFileManager(serverId: string, username: string, accessToken: 
 
     const socketRef = useRef<ReconnectingSocket | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // 語言切換不該讓 WebSocket 重連;t 走 ref,只在訊息真的送達時才取用最新翻譯。
+    // A language switch shouldn't reconnect the WebSocket; read t via a ref at message time instead.
+    const tRef = useRef(t);
+    useEffect(() => { tRef.current = t; }, [t]);
 
     const loadDirectory = useCallback((path: string) => {
         const s = socketRef.current;
@@ -47,25 +54,25 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             });
 
             if (res.ok) {
-                showSuccess("File uploaded successfully");
+                showSuccess(t("files.uploaded"));
                 loadDirectory(currentPath);
             } else {
                 const data = await readJson(res);
-                showError(responseError(res, data, "Upload failed"));
+                showError(responseError(res, data, t("files.uploadFailed")));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
-            showError("Upload request failed: " + err.message);
+            showError(t("files.uploadRequestFailed", { error: err.message }));
         } finally {
             setUploading(false);
         }
-    }, [currentPath, loadDirectory, showError, showSuccess]);
+    }, [currentPath, loadDirectory, showError, showSuccess, t]);
 
     const downloadUrl = useCallback(async (url: string, path?: string) => {
         try {
             const res = await apiFetch(url);
             if (!res.ok) {
-                let message = "Download request failed";
+                let message = t("files.downloadRequestFailed");
                 try {
                     const data = await res.json();
                     if (data?.error && typeof data.error === "string") message = data.error;
@@ -98,9 +105,9 @@ export function useFileManager(serverId: string, username: string, accessToken: 
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
-            showError("Failed to download file: " + err.message);
+            showError(t("files.downloadFailed", { error: err.message }));
         }
-    }, [showError]);
+    }, [showError, t]);
 
     // WebSocket 連線：交由共用 ReconnectingSocket（第一則訊息帶 token 認證 + 退避重連 + 心跳）。
     useEffect(() => {
@@ -136,11 +143,11 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                             setCurrentPath(d.path);
                             setError(null);
                         } else {
-                            setError(d.error || "Failed to list directory");
+                            setError(d.error || tRef.current("files.listFailed"));
                         }
                         setLoading(false);
                     } else if (action === "error") {
-                        setError(d.message || "An error occurred");
+                        setError(d.message || tRef.current("files.genericError"));
                         setLoading(false);
                         setUploading(false);
                     }
@@ -227,12 +234,12 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     }, [serverId, username, currentPath, performActualUpload]);
 
     const handleDownload = useCallback((item: FileItem) => {
-        showSuccess("Downloading...");
+        showSuccess(t("files.downloading"));
         const separator = shellType === "powershell" ? "\\" : "/";
         const path = currentPath.endsWith(separator) ? currentPath + item.name : currentPath + separator + item.name;
         const url = `/api/sftp/download/${serverId}/${encodeURIComponent(username)}?path=${encodeURIComponent(path)}`;
         downloadUrl(url, path);
-    }, [serverId, username, currentPath, shellType, downloadUrl, showSuccess]);
+    }, [serverId, username, currentPath, shellType, downloadUrl, showSuccess, t]);
 
     return {
         refs: {

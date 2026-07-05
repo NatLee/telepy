@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import { useI18n } from "@/lib/i18n";
 
 interface TunnelUsername {
     id: number;
@@ -10,6 +11,7 @@ interface TunnelUsername {
 }
 
 export function useServerScriptModal(tunnelId: number | null, defaultSshPort: number | null, isOpen: boolean) {
+    const { t } = useI18n();
     const [activeTab, setActiveTab] = useState("ssh");
     const [scriptContent, setScriptContent] = useState<string>("");
     const [keyPath, setKeyPath] = useState<string>("");
@@ -108,17 +110,17 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
                         try {
                             const errData = await res.json();
                             if (errData.error === "No username found for this server") {
-                                showError("No username available for this tunnel. Please create a Target Server Username first.");
+                                showError(t("scripts.noUsernameForTunnel"));
                             } else {
-                                showError(errData.error || "Failed to load script");
+                                showError(errData.error || t("scripts.loadFailed"));
                             }
                         } catch {
-                            showError("Failed to load script");
+                            showError(t("scripts.loadFailed"));
                         }
                         setScriptContent("");
                     }
                 } catch (e: any) {
-                    showError(e.message || "Failed to load script");
+                    showError(e.message || t("scripts.loadFailed"));
                 } finally {
                     setIsInitialLoading(false);
                     setIsFetchingScript(false);
@@ -193,15 +195,15 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
                 setCurlCommand(cmd);
             } else {
                 const errData = await res.json().catch(() => null);
-                showError(errData?.error || "Failed to generate one-time URL");
+                showError(errData?.error || t("scripts.generateUrlFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to generate one-time URL");
+            showError(e.message || t("scripts.generateUrlFailed"));
         } finally {
             setGeneratingCurl(false);
         }
-    }, [tunnelId, targetSshPort, activeTab, keyPath, selectedUsernameId, showError]);
+    }, [tunnelId, targetSshPort, activeTab, keyPath, selectedUsernameId, showError, t]);
 
     return {
         state: {

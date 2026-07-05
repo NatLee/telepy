@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Info, Link2, Loader2 } from "lucide-react";
 
 import { TunnelModalProps } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
+import type { TranslationKey } from "@/locales/en";
 
 interface ServerScriptModalProps extends TunnelModalProps {
     sshPort: number | null;
@@ -23,29 +25,30 @@ const TABS = [
     { id: "docker-compose", label: "Docker Compose", icon: FileCode, ext: "yaml" },
 ];
 
-const TAB_DESCRIPTIONS: Record<string, string> = {
-    ssh: "Run this on your target server to establish a one-time reverse SSH tunnel back to Telepy. Suitable for quick testing.",
-    powershell: "Run this on a Windows target server. On Windows Server, you may need to add the service key to the administrators_authorized_keys file instead of the user's authorized_keys.",
-    autossh: "Run this on your target server. AutoSSH automatically reconnects the reverse tunnel if the connection drops — ideal for production use.",
-    "autossh-service": "Install this as a systemd service on your target server so the reverse tunnel starts automatically on boot.",
-    "docker-run": "Run this on your target server to start the reverse tunnel inside a Docker container.",
-    "docker-compose": "Use this Docker Compose file on your target server for a persistent, reproducible tunnel deployment.",
+const TAB_DESCRIPTIONS: Record<string, TranslationKey> = {
+    ssh: "scripts.descSsh",
+    powershell: "scripts.descPowershell",
+    autossh: "scripts.descAutossh",
+    "autossh-service": "scripts.descAutosshService",
+    "docker-run": "scripts.descDockerRun",
+    "docker-compose": "scripts.descDockerCompose",
 };
 
 const TAB_TUTORIALS: Record<string, string[]> = {};
 
-const TAB_CURL_HELPERS: Record<string, string> = {
-    ssh: "Downloads and runs the SSH script directly. Safe to paste into your shell.",
-    powershell: "Downloads and executes the PowerShell script.",
-    autossh: "Downloads and executes the AutoSSH script. (Requires autossh to be installed).",
-    "autossh-service": "Installs a systemd service and starts it. (Prompts for sudo if not root).",
-    "docker-run": "Downloads and executes the Docker run script. (Requires docker to be installed).",
-    "docker-compose": "Downloads a compose file to telepy-docker-compose.yml and brings services up in the background.",
+const TAB_CURL_HELPERS: Record<string, TranslationKey> = {
+    ssh: "scripts.curlSsh",
+    powershell: "scripts.curlPowershell",
+    autossh: "scripts.curlAutossh",
+    "autossh-service": "scripts.curlAutosshService",
+    "docker-run": "scripts.curlDockerRun",
+    "docker-compose": "scripts.curlDockerCompose",
 };
 
 import { useServerScriptModal } from "@/hooks/useServerScriptModal";
 
 export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultSshPort }: ServerScriptModalProps) {
+    const { t, tn } = useI18n();
     const { state } = useServerScriptModal(tunnelId, defaultSshPort, isOpen);
     const {
         activeTab, setActiveTab,
@@ -71,17 +74,17 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Target Server Connection Script" size="xl" isLoading={isInitialLoading}>
+        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} size="xl" isLoading={isInitialLoading}>
             <div className="flex flex-col flex-1 min-h-0 gap-4">
                 {/* Direction Banner */}
                 <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
                     <span className="mt-0.5 shrink-0 text-lg">⚠️</span>
-                    <span>Run the script below <strong>on your target server</strong> to connect it back to the Telepy SSH server. This establishes the reverse tunnel that allows you to access your server from here.</span>
+                    <span>{tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}</span>
                 </div>
                 {/* Options Row */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-1.5">
-                        <Label className="text-sm font-medium">Target Server SSH Port</Label>
+                        <Label className="text-sm font-medium">{t("scripts.targetPort")}</Label>
                         <Input
                             type="number"
                             min={1}
@@ -91,19 +94,19 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                             placeholder="22"
                         />
                         <p className="text-xs text-muted-foreground">
-                            The SSH port on your target server (default: <code className="bg-muted px-1 rounded">22</code>).
+                            {tn("scripts.targetPortHelper", { port: <code className="bg-muted px-1 rounded">22</code> })}
                         </p>
                     </div>
                     <div className="space-y-1.5">
-                        <Label className="text-sm font-medium">Optional Key Path</Label>
+                        <Label className="text-sm font-medium">{t("scripts.keyPath")}</Label>
                         <Input
                             type="text"
                             value={keyPath}
                             onChange={(e) => setKeyPath(e.target.value)}
-                            placeholder="e.g. ~/.ssh/id_rsa"
+                            placeholder={t("scripts.keyPathPlaceholder")}
                         />
                         <p className="text-xs text-muted-foreground">
-                            Leave empty for default <code className="bg-muted px-1 rounded">~/.ssh/id_rsa</code>. Auto-updates on change.
+                            {tn("scripts.keyPathHelper", { path: <code className="bg-muted px-1 rounded">~/.ssh/id_rsa</code> })}
                         </p>
                     </div>
                 </div>
@@ -113,7 +116,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                     <div className="space-y-1.5">
                         {usernames.length > 0 ? (
                             <>
-                                <Label className="text-sm font-medium">Target Server Username</Label>
+                                <Label className="text-sm font-medium">{t("scripts.targetUsername")}</Label>
                                 <select
                                     className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                     value={selectedUsernameId ?? ""}
@@ -121,18 +124,18 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                 >
                                     {usernames.map((u) => (
                                         <option key={u.id} value={u.id}>
-                                            {u.username}{u.created_by ? ` (by ${u.created_by})` : ""}
+                                            {u.username}{u.created_by ? ` ${t("common.byUser", { user: u.created_by })}` : ""}
                                         </option>
                                     ))}
                                 </select>
                                 <p className="text-xs text-muted-foreground">
-                                    Select the tunnel username to use for the systemd service.
+                                    {t("scripts.usernameHelper")}
                                 </p>
                             </>
                         ) : (
                             <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
                                 <span className="mt-0.5 shrink-0 text-lg">⚠️</span>
-                                <span>No usernames available for this tunnel. Please create a <strong>Target Server Username</strong> first (via the Create Wizard Step 3 or Tunnel management).</span>
+                                <span>{tn("scripts.noUsernames", { targetServerUsername: <strong>{t("scripts.noUsernamesHighlight")}</strong> })}</span>
                             </div>
                         )}
                     </div>
@@ -140,7 +143,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
 
                 {/* Tabs */}
                 <div className="border-b border-border">
-                    <nav className="-mb-px flex space-x-1 overflow-x-auto pb-1" aria-label="Tabs">
+                    <nav className="-mb-px flex space-x-1 overflow-x-auto pb-1" aria-label={t("scripts.tabsAria")}>
                         {TABS.map((tab) => {
                             const Icon = tab.icon;
                             return (
@@ -168,7 +171,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                         <>
                             {TAB_DESCRIPTIONS[activeTab] && (
                                 <p className="text-sm text-muted-foreground mb-3">
-                                    {TAB_DESCRIPTIONS[activeTab]}
+                                    {t(TAB_DESCRIPTIONS[activeTab])}
                                 </p>
                             )}
                             {TAB_TUTORIALS[activeTab] && (
@@ -214,10 +217,10 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                             ) : (
                                                 <Link2 size={14} />
                                             )}
-                                            Generate one-time curl URL
+                                            {t("scripts.generateUrl")}
                                         </button>
                                         <span className="text-xs text-muted-foreground">
-                                            Generates a single-use URL valid for 10 minutes.
+                                            {t("scripts.generateUrlHelper")}
                                         </span>
                                     </div>
                                     {curlCommand && (
@@ -225,7 +228,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                             <CodeBlock language="bash" value={curlCommand} />
                                             {TAB_CURL_HELPERS[activeTab] && (
                                                 <p className="text-xs text-muted-foreground ml-1">
-                                                    ℹ️ {TAB_CURL_HELPERS[activeTab]}
+                                                    ℹ️ {t(TAB_CURL_HELPERS[activeTab])}
                                                 </p>
                                             )}
                                         </div>

@@ -11,6 +11,7 @@
  */
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import {
     Tooltip,
     TooltipContent,
@@ -44,15 +45,16 @@ export type LatencyTier = {
     bars: number; // number of filled bars 1..4
     barClass: string; // filled bar colour
     textClass: string; // value text colour
-    label: string; // quality label
+    /** i18n key for the quality label; translate at display time (this is a plain function, not a component). */
+    labelKey: "latency.excellent" | "latency.good" | "latency.fair" | "latency.poor";
 };
 
 /** 依單程 RTT（毫秒）決定品質分級與配色。全站共用（訊號格、terminal 流程路徑）。 */
 export function latencyTier(rttMs: number): LatencyTier {
-    if (rttMs < 60) return { bars: 4, barClass: "bg-emerald-500", textClass: "text-emerald-600 dark:text-emerald-400", label: "Excellent" };
-    if (rttMs < 150) return { bars: 3, barClass: "bg-amber-500", textClass: "text-amber-600 dark:text-amber-400", label: "Good" };
-    if (rttMs < 300) return { bars: 2, barClass: "bg-orange-500", textClass: "text-orange-600 dark:text-orange-400", label: "Fair" };
-    return { bars: 1, barClass: "bg-red-500", textClass: "text-red-600 dark:text-red-400", label: "Poor" };
+    if (rttMs < 60) return { bars: 4, barClass: "bg-emerald-500", textClass: "text-emerald-600 dark:text-emerald-400", labelKey: "latency.excellent" };
+    if (rttMs < 150) return { bars: 3, barClass: "bg-amber-500", textClass: "text-amber-600 dark:text-amber-400", labelKey: "latency.good" };
+    if (rttMs < 300) return { bars: 2, barClass: "bg-orange-500", textClass: "text-orange-600 dark:text-orange-400", labelKey: "latency.fair" };
+    return { bars: 1, barClass: "bg-red-500", textClass: "text-red-600 dark:text-red-400", labelKey: "latency.poor" };
 }
 
 const SIZES = {
@@ -71,6 +73,7 @@ export function LatencyIndicator({
     reserveWidth = false,
     className,
 }: LatencyIndicatorProps) {
+    const { t } = useI18n();
     const known = online && rttMs != null && Number.isFinite(rttMs);
     const tier = known ? latencyTier(rttMs as number) : null;
     const dims = SIZES[size];
@@ -132,10 +135,10 @@ export function LatencyIndicator({
                     {tooltipContent ?? (
                         <span>
                             {known
-                                ? `Latency ${Math.round(rttMs as number)}ms · ${tier!.label}`
+                                ? t("latency.tooltip", { ms: Math.round(rttMs as number), tier: t(tier!.labelKey) })
                                 : online
-                                    ? "Measuring…"
-                                    : "Offline"}
+                                    ? t("latency.measuring")
+                                    : t("latency.offline")}
                         </span>
                     )}
                 </TooltipContent>

@@ -3,6 +3,7 @@
 import React from "react";
 import { useNotificationWsStatus } from "@/components/layout/AppLayout";
 import { Wifi, WifiOff } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 /**
  * Small badge indicating the notification WebSocket connection status.
@@ -11,6 +12,7 @@ import { Wifi, WifiOff } from "lucide-react";
  */
 export function WebSocketStatusBadge() {
     const { isConnected } = useNotificationWsStatus();
+    const { t } = useI18n();
 
     return (
         <div className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground select-none">
@@ -24,12 +26,12 @@ export function WebSocketStatusBadge() {
             {isConnected ? (
                 <>
                     <Wifi size={12} className="text-emerald-500" />
-                    <span>Live</span>
+                    <span>{t("ui.live")}</span>
                 </>
             ) : (
                 <>
                     <WifiOff size={12} className="text-destructive" />
-                    <span>Disconnected</span>
+                    <span>{t("common.disconnected")}</span>
                 </>
             )}
         </div>

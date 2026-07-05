@@ -6,6 +6,7 @@ import React from "react";
 import { Share2, Edit2, X } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReverseServerUsername } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export interface SharedUserRow {
     id: number;
@@ -35,13 +36,14 @@ export function ShareModalSharedList({
     onUpdatePermission,
     onUnshare,
 }: ShareModalSharedListProps) {
+    const { t } = useI18n();
     if (loading) return null;
     if (sharedUsers.length === 0) {
         return (
             <div className="bg-card border border-border rounded-md overflow-hidden">
                 <div className="p-8 text-center text-muted-foreground flex flex-col items-center">
                     <Share2 size={32} className="text-muted mb-2 opacity-50" />
-                    <p>This tunnel is not shared with anyone.</p>
+                    <p>{t("share.notShared")}</p>
                 </div>
             </div>
         );
@@ -51,15 +53,15 @@ export function ShareModalSharedList({
         <div className="bg-card border border-border rounded-md overflow-hidden">
             <div className="overflow-x-auto">
                 <div className="bg-muted/40 px-4 py-2 border-b border-border text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                    Currently Shared With
+                    {t("share.currentlySharedWith")}
                 </div>
                 <table className="min-w-full divide-y divide-border table-fixed">
                     <thead className="bg-muted/20 border-b border-border">
                         <tr>
-                            <th className={`px-4 py-3 text-left ${readOnly ? "w-[45%]" : "w-[30%]"} text-xs font-medium text-muted-foreground uppercase tracking-wider`}>User</th>
-                            <th className="px-4 py-3 text-center w-[30%] text-xs font-medium text-muted-foreground uppercase tracking-wider">Target Users</th>
-                            <th className="px-4 py-3 text-center w-[25%] text-xs font-medium text-muted-foreground uppercase tracking-wider">Permission</th>
-                            {!readOnly && <th className="px-4 py-3 text-right w-[15%] text-xs font-medium text-muted-foreground uppercase tracking-wider">Action</th>}
+                            <th className={`px-4 py-3 text-left ${readOnly ? "w-[45%]" : "w-[30%]"} text-xs font-medium text-muted-foreground uppercase tracking-wider`}>{t("share.thUser")}</th>
+                            <th className="px-4 py-3 text-center w-[30%] text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("share.thTargetUsers")}</th>
+                            <th className="px-4 py-3 text-center w-[25%] text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("share.thPermission")}</th>
+                            {!readOnly && <th className="px-4 py-3 text-right w-[15%] text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("share.thAction")}</th>}
                         </tr>
                     </thead>
                     <tbody className="bg-card divide-y divide-border">
@@ -83,7 +85,7 @@ export function ShareModalSharedList({
                                                     })
                                                 }
                                                 className="text-muted-foreground hover:text-foreground p-1 bg-muted/30 hover:bg-muted/50 rounded transition-colors"
-                                                title="Edit allowed target users"
+                                                title={t("share.editAllowedUsers")}
                                             >
                                                 <Edit2 size={12} />
                                             </button>
@@ -101,9 +103,9 @@ export function ShareModalSharedList({
                                                 <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                <SelectItem value="view">View</SelectItem>
-                                                <SelectItem value="edit">Edit</SelectItem>
-                                                <SelectItem value="admin">Admin</SelectItem>
+                                                <SelectItem value="view">{t("share.permView")}</SelectItem>
+                                                <SelectItem value="edit">{t("share.permEdit")}</SelectItem>
+                                                <SelectItem value="admin">{t("share.permAdmin")}</SelectItem>
                                             </SelectContent>
                                         </Select>
                                     </div>
@@ -113,7 +115,7 @@ export function ShareModalSharedList({
                                         <button
                                             onClick={() => onUnshare({ userId: sharedUser.id, username: sharedUser.username })}
                                             className="text-destructive hover:text-destructive/90 transition-colors bg-destructive/10 hover:bg-destructive/20 p-1.5 rounded-md"
-                                            title="Unshare Tunnel"
+                                            title={t("share.unshareTitle")}
                                         >
                                             <X size={16} />
                                         </button>

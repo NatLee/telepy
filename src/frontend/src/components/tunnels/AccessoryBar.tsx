@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, ClipboardPaste, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 import type { KeyboardController } from "@/hooks/useKeyboardController";
 import type { ModState } from "@/hooks/useKeyboardController";
 import type { SeqName } from "@/lib/terminalKeymap";
@@ -33,6 +34,7 @@ interface AccessoryBarProps {
 }
 
 export function AccessoryBar({ controller }: AccessoryBarProps) {
+    const { t } = useI18n();
     const [showFn, setShowFn] = useState(false);
     const { mods, active, press, emitSeq, emitChar, emitRaw } = controller;
 
@@ -51,7 +53,7 @@ export function AccessoryBar({ controller }: AccessoryBarProps) {
     );
 
     const charKey = (char: string) => (
-        <button key={char} aria-label={`Key ${char}`} className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-mono")}
+        <button key={char} aria-label={t("kbd.keyChar", { char })} className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-mono")}
             onPointerDown={fire(() => emitChar(char))}>
             {char}
         </button>
@@ -85,32 +87,32 @@ export function AccessoryBar({ controller }: AccessoryBarProps) {
             {/* 主特殊鍵列（橫向可捲） */}
             <div className={cn("flex gap-1 overflow-x-auto px-2 py-1.5 items-center", SCROLL_HIDE)}
                 style={{ touchAction: "pan-x" }}>
-                <button aria-label="Escape" className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-semibold")}
+                <button aria-label={t("kbd.escape")} className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-semibold")}
                     onPointerDown={fire(() => emitSeq("esc"))}>Esc</button>
-                <button aria-label="Tab" className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-semibold")}
+                <button aria-label={t("kbd.tab")} className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80 font-semibold")}
                     onPointerDown={fire(() => emitSeq("tab"))}>Tab</button>
 
                 <span className="shrink-0 w-px h-6 bg-border/70 mx-0.5" />
 
-                <button aria-label="Control" aria-pressed={active.ctrl} className={cn(KEY_BASE, "font-semibold", modClass(mods.ctrl))}
+                <button aria-label={t("kbd.control")} aria-pressed={active.ctrl} className={cn(KEY_BASE, "font-semibold", modClass(mods.ctrl))}
                     onPointerDown={fire(() => press("ctrl"))}>Ctrl</button>
-                <button aria-label="Alt" aria-pressed={active.alt} className={cn(KEY_BASE, "font-semibold", modClass(mods.alt))}
+                <button aria-label={t("kbd.alt")} aria-pressed={active.alt} className={cn(KEY_BASE, "font-semibold", modClass(mods.alt))}
                     onPointerDown={fire(() => press("alt"))}>Alt</button>
 
                 <span className="shrink-0 w-px h-6 bg-border/70 mx-0.5" />
 
-                {seqKey("left", "Left", <ArrowLeft size={16} />)}
-                {seqKey("up", "Up", <ArrowUp size={16} />)}
-                {seqKey("down", "Down", <ArrowDown size={16} />)}
-                {seqKey("right", "Right", <ArrowRight size={16} />)}
+                {seqKey("left", t("kbd.left"), <ArrowLeft size={16} />)}
+                {seqKey("up", t("kbd.up"), <ArrowUp size={16} />)}
+                {seqKey("down", t("kbd.down"), <ArrowDown size={16} />)}
+                {seqKey("right", t("kbd.right"), <ArrowRight size={16} />)}
 
                 <span className="shrink-0 w-px h-6 bg-border/70 mx-0.5" />
 
-                {seqKey("home", "Home", "Home")}
-                {seqKey("end", "End", "End")}
-                {seqKey("pageUp", "Page Up", "PgUp")}
-                {seqKey("pageDown", "Page Down", "PgDn")}
-                {seqKey("delete", "Delete", "Del")}
+                {seqKey("home", t("kbd.home"), "Home")}
+                {seqKey("end", t("kbd.end"), "End")}
+                {seqKey("pageUp", t("kbd.pageUp"), "PgUp")}
+                {seqKey("pageDown", t("kbd.pageDown"), "PgDn")}
+                {seqKey("delete", t("kbd.delete"), "Del")}
 
                 <span className="shrink-0 w-px h-6 bg-border/70 mx-0.5" />
 
@@ -123,12 +125,12 @@ export function AccessoryBar({ controller }: AccessoryBarProps) {
 
                 <span className="shrink-0 w-px h-6 bg-border/70 mx-0.5" />
 
-                <button aria-label="Function keys" aria-pressed={showFn}
+                <button aria-label={t("kbd.functionKeys")} aria-pressed={showFn}
                     className={cn(KEY_BASE, "font-semibold", showFn ? "bg-primary/80 text-primary-foreground" : "bg-secondary text-secondary-foreground active:bg-secondary/80")}
                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setShowFn((v) => !v); }}>
                     <span className="flex items-center gap-0.5">F<ChevronUp size={13} className={cn("transition-transform", showFn ? "" : "rotate-180")} /></span>
                 </button>
-                <button aria-label="Paste" className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80")}
+                <button aria-label={t("kbd.paste")} className={cn(KEY_BASE, "bg-secondary text-secondary-foreground active:bg-secondary/80")}
                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); paste(); }}>
                     <ClipboardPaste size={16} />
                 </button>

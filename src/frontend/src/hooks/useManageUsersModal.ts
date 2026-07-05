@@ -4,8 +4,10 @@ import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
 import { ReverseServerUsername } from "@/types/tunnel";
+import { useI18n } from "@/lib/i18n";
 
 export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
+    const { t } = useI18n();
     const [users, setUsers] = useState<ReverseServerUsername[]>([]);
     const [newUsername, setNewUsername] = useState("");
     const [loading, setLoading] = useState(false);
@@ -22,15 +24,15 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
                 const list = data?.usernames ?? (Array.isArray(data) ? data : (data.results ?? []));
                 setUsers(list);
             } else {
-                showError("Failed to fetch users");
+                showError(t("manageUsers.fetchFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to fetch users");
+            showError(e.message || t("manageUsers.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [tunnelId, showError]);
+    }, [tunnelId, showError, t]);
 
     useEffect(() => {
         if (isOpen) {
@@ -60,7 +62,7 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
                 setNewUsername("");
                 fetchUsers();
             } else {
-                let errorMsg = "Failed to add user";
+                let errorMsg = t("manageUsers.addFailed");
                 try {
                     const data = await res.json();
                     if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'string') {
@@ -83,7 +85,7 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to add user");
+            showError(e.message || t("manageUsers.addFailed"));
         }
     };
 
@@ -99,11 +101,11 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
                 fetchUsers();
                 setDeleteConfirm({ isOpen: false, user: null });
             } else {
-                showError("Failed to remove user");
+                showError(t("manageUsers.removeFailed"));
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (e: any) {
-            showError(e.message || "Failed to remove user");
+            showError(e.message || t("manageUsers.removeFailed"));
         }
     };
 

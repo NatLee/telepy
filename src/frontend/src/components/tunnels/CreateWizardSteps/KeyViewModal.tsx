@@ -4,6 +4,7 @@
  */
 import React from "react";
 import { Copy } from "lucide-react";
+import { useI18n } from "@/lib/i18n";
 
 export interface KeyViewModalProps {
     isOpen: boolean;
@@ -14,6 +15,7 @@ export interface KeyViewModalProps {
 }
 
 export function KeyViewModal({ isOpen, title, content, onClose, onCopySuccess }: KeyViewModalProps) {
+    const { t, tn } = useI18n();
     if (!isOpen) return null;
 
     const handleCopy = () => {
@@ -27,7 +29,7 @@ export function KeyViewModal({ isOpen, title, content, onClose, onCopySuccess }:
             <div className="relative bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 z-10">
                 <h3 className="text-lg font-bold text-gray-900 mb-1">{title}</h3>
                 <p className="text-xs text-gray-500 mb-4">
-                    Copy this key and append it to <code className="bg-gray-100 px-1 rounded">~/.ssh/authorized_keys</code> on your target server.
+                    {tn("wizard.keyViewInstruction", { path: <code className="bg-gray-100 px-1 rounded">~/.ssh/authorized_keys</code> })}
                 </p>
                 <textarea
                     readOnly
@@ -41,14 +43,14 @@ export function KeyViewModal({ isOpen, title, content, onClose, onCopySuccess }:
                         onClick={handleCopy}
                         className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
                     >
-                        <Copy size={14} /> Copy
+                        <Copy size={14} /> {t("common.copy")}
                     </button>
                     <button
                         type="button"
                         onClick={onClose}
                         className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
                     >
-                        Close
+                        {t("common.close")}
                     </button>
                 </div>
             </div>
