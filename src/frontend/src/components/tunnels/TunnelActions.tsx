@@ -54,7 +54,7 @@ export function TunnelActions({
                         <MoreHorizontal size={16} />
                     </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuContent align="end" className="w-56">
                     <DropdownMenuLabel>{t("common.actions")}</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => onDetails(tunnel.id)}>
@@ -101,21 +101,21 @@ export function TunnelActions({
     // ─── Table mode (default): inline icon buttons + overflow dropdown ───
     return (
         <div className="flex items-center gap-0.5 shrink-0">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onDetails(tunnel.id)} title={t("common.details")}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onDetails(tunnel.id)} title={t("common.details")} aria-label={t("common.details")}>
                 <FileText size={15} />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onConfig(tunnel.id)} title={t("tunnelActions.config")}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onConfig(tunnel.id)} title={t("tunnelActions.config")} aria-label={t("tunnelActions.config")}>
                 <Settings size={15} />
             </Button>
             {tunnel.is_owner && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onScript(tunnel.id)} title={t("tunnelActions.scripts")}>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onScript(tunnel.id)} title={t("tunnelActions.scripts")} aria-label={t("tunnelActions.scripts")}>
                     <Terminal size={15} />
                 </Button>
             )}
 
             {!tunnel.is_owner && (
                 <>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onUsers(tunnel.id, !tunnel.can_edit)} title={tunnel.can_edit ? t("tunnelActions.manageTargetUsers") : t("tunnelActions.viewTargetUsers")}>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onUsers(tunnel.id, !tunnel.can_edit)} title={tunnel.can_edit ? t("tunnelActions.manageTargetUsers") : t("tunnelActions.viewTargetUsers")} aria-label={tunnel.can_edit ? t("tunnelActions.manageTargetUsers") : t("tunnelActions.viewTargetUsers")}>
                         <Users size={15} />
                     </Button>
 
@@ -126,7 +126,7 @@ export function TunnelActions({
                                 <MoreHorizontal size={15} />
                             </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48">
+                        <DropdownMenuContent align="end" className="w-56">
                             <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             {tunnel.can_share && (
@@ -156,7 +156,7 @@ export function TunnelActions({
                             <MoreHorizontal size={15} />
                         </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuContent align="end" className="w-56">
                         <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
                         <DropdownMenuSeparator />
                         {tunnel.can_edit && (

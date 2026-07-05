@@ -101,6 +101,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                                 <button
                                     key={option.value}
                                     type="button"
+                                    aria-pressed={isActive}
                                     onClick={() => setLanguage(option.value)}
                                     className={optionButton(isActive)}
                                 >
@@ -124,6 +125,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                             <button
                                 key={option.value}
                                 type="button"
+                                aria-pressed={theme === option.value}
                                 onClick={() => changeTheme(option.value)}
                                 className={optionButton(theme === option.value)}
                             >

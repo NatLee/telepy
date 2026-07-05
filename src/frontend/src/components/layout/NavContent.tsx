@@ -162,8 +162,10 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 )}
 
                 <button
+                    type="button"
                     onClick={handleLogout}
                     title={collapsed ? t("nav.logout") : undefined}
+                    aria-label={t("nav.logout")}
                     className={`flex w-full items-center gap-3 ${linkLayout} py-2 rounded-md text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors ${collapsed ? "justify-center" : ""}`}
                 >
                     <LogOut size={18} />

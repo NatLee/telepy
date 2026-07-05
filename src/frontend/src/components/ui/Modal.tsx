@@ -36,13 +36,16 @@ export function Modal({ isOpen, onClose, title, children, footer, size = "md", i
                 )}
                 showCloseButton={false}
             >
-                <div className="flex items-center justify-between px-6 py-5 border-b border-border/40 bg-muted/30">
-                    <DialogTitle className="text-xl font-semibold leading-tight tracking-tight">
+                <div className="flex items-center justify-between gap-3 px-6 py-5 border-b border-border/40 bg-muted/30">
+                    {/* min-w-0 + truncate:長的在地化標題(帶使用者名稱等)才不會把關閉鈕擠出邊界。
+                        min-w-0 + truncate so long localized titles (with usernames, etc.) don't push out the close button. */}
+                    <DialogTitle className="min-w-0 truncate text-xl font-semibold leading-tight tracking-tight">
                         {title}
                     </DialogTitle>
                     <button
+                        type="button"
                         onClick={onClose}
-                        className="text-muted-foreground hover:bg-muted hover:rotate-90 hover:scale-110 p-1.5 rounded-full transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-ring"
+                        className="shrink-0 text-muted-foreground hover:bg-muted hover:rotate-90 hover:scale-110 p-1.5 rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                         <X size={18} />
                         <span className="sr-only">{t("common.close")}</span>
