@@ -103,10 +103,19 @@ DEFAULT_BROWSER_CMD = (
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --start-maximized {homepage}"
 )
-# 瀏覽器**不自動重啟**:session 首次啟動時開一次 chromium;使用者若關掉視窗,桌面會顯示桌布 +
-# tint2 面板上的「開啟瀏覽器」捷徑(open-browser.sh),由使用者自己點捷徑再開。這樣就不會有
-# 「關掉後一片黑」或「一直被自動拉回」的問題。open-browser.sh 與捷徑共用同一支腳本。
+# 瀏覽器重啟策略:
+#   - 視窗被縮小/關掉但 chromium「行程」還在(background mode)→ 不打擾,由使用者點 tint2
+#     面板捷徑還原/重開(open-browser.sh 冪等處理)。
+#   - chromium 行程**完全消失**(崩潰、被關到整個退出)→ watchdog 自動重開(見 _watchdog_tick)。
+#     實測有使用者回到 session 只看到空桌面(chromium 23:16 就沒了)、以為整個功能壞掉 ——
+#     proxy browser session 的意義就是那顆瀏覽器,行程沒了就該自己回來。
+#     REMOTE_BROWSER_RESPAWN=0 可關閉(回到純手動)。
 BROWSER_LAUNCHER = os.getenv("BROWSER_LAUNCHER", "/app/open-browser.sh")
+RESPAWN_ENABLED = os.getenv("REMOTE_BROWSER_RESPAWN", "1") != "0"
+RESPAWN_INTERVAL = int(os.getenv("REMOTE_BROWSER_RESPAWN_INTERVAL", "10"))
+# session 剛建立的寬限(launcher 還在 exec chromium 的窗口)與重啟冷卻(避免秒崩秒重開的迴圈)。
+RESPAWN_GRACE = 15
+RESPAWN_COOLDOWN = 30
 # 桌布(不黑)+ 面板捷徑指令。桌布用 hsetroot 上一個深色純色;面板用 tint2 讀 /app/tint2rc。
 WALLPAPER_CMD = os.getenv("WALLPAPER_CMD", "hsetroot -solid #20232e")
 PANEL_CMD = os.getenv("PANEL_CMD", "tint2 -c /app/tint2rc")
@@ -260,7 +269,10 @@ class SessionManager:
         with self._lock:
             self._sessions[sid] = {"display": display, "ws_port": ws_port,
                                    "procs": procs, "proxy": proxy,
-                                   "profile_dir": profile_dir}
+                                   "profile_dir": profile_dir,
+                                   # watchdog 重開 chromium 用 / for the chromium watchdog
+                                   "browser_cmd": browser_cmd, "lang": lang,
+                                   "created_at": time.time(), "last_respawn": 0.0}
         logger.info("session %s up: display %s ws %s profile %s (ephemeral)",
                     sid, disp, ws_port, profile_dir or "(chromium default)")
         return {"session_id": sid, "ws_port": ws_port}
@@ -289,6 +301,65 @@ class SessionManager:
     def stop_all(self):
         for sid in list(self._sessions.keys()):
             self.stop(sid)
+
+    # --- chromium watchdog --------------------------------------------------
+    def _chromium_alive(self, profile_dir):
+        """以 --user-data-dir=<profile> 掃 /proc cmdline:此 session 是否還有 chromium 行程。
+        (launcher 的 `sh -c "chromium …"` 也含這個字串,啟動過渡期同樣視為活著。)"""
+        needle = f"--user-data-dir={profile_dir}".encode()
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    if needle in fh.read():
+                        return True
+            except OSError:
+                continue
+        return False
+
+    def _watchdog_tick(self, now=None):
+        """chromium 行程完全消失的 session → 用 open-browser.sh 重開(冪等:有視窗只會聚焦)。
+        寬限期避開剛建立的 session;冷卻避免秒崩秒重開的迴圈。"""
+        now = now or time.time()
+        with self._lock:
+            snapshot = [(sid, dict(sess)) for sid, sess in self._sessions.items()]
+        for sid, sess in snapshot:
+            profile_dir, browser_cmd = sess.get("profile_dir"), sess.get("browser_cmd")
+            if not profile_dir or not browser_cmd:
+                continue
+            if (now - sess.get("created_at", 0)) < RESPAWN_GRACE:
+                continue
+            if (now - sess.get("last_respawn", 0)) < RESPAWN_COOLDOWN:
+                continue
+            if self._chromium_alive(profile_dir):
+                continue
+            logger.info("watchdog: chromium gone in session %s — respawning", sid)
+            try:
+                proc = self._spawn(["sh", BROWSER_LAUNCHER],
+                                   display=f":{sess['display']}", lang=sess.get("lang"),
+                                   extra_env={"BROWSER_CMD": browser_cmd, "HOME": profile_dir})
+            except Exception:
+                logger.warning("watchdog respawn failed for %s", sid, exc_info=True)
+                continue
+            with self._lock:
+                live = self._sessions.get(sid)
+                if live is not None:
+                    live["procs"].append(proc)
+                    live["last_respawn"] = now
+                else:
+                    # session 剛好在重開瞬間被停掉 → 把剛起的行程收掉。
+                    self._term(proc)
+
+    def start_watchdog(self):
+        def _loop():
+            while True:
+                time.sleep(RESPAWN_INTERVAL)
+                try:
+                    self._watchdog_tick()
+                except Exception:
+                    logger.warning("watchdog tick errored", exc_info=True)
+        threading.Thread(target=_loop, daemon=True).start()
 
     # --- process helpers (mocked in tests) --------------------------------
     def _spawn(self, cmd, display=None, log_path=None, lang=None, extra_env=None):
@@ -421,6 +492,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 def main():
     mgr = SessionManager()
+    if RESPAWN_ENABLED:
+        mgr.start_watchdog()
     _Handler.manager = mgr
     _Handler.token = os.getenv("INTERNAL_API_TOKEN", "")
     port = int(os.getenv("SESSION_MANAGER_PORT", "7000"))

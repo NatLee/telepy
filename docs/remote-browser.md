@@ -59,28 +59,40 @@ chromium --proxy-server=socks5://backend:<port>
   session-manager 起 Xkasmvnc/openbox/chromium → session 記錄進 Redis
   (跨 gunicorn worker 查詢用)。
 - **SSH -D 冷啟/重試:** `username@reverse` 是兩跳(ProxyCommand→telepy-ssh→反向隧道到
-  裝置 sshd),且 browser 用**獨立**的 ControlMaster(與終端機的 `/tmp/ssh_fm_*` 不共用),
-  所以每個 target 的**第一次**連線是冷的,穿隧道到裝置 + 建 SOCKS 可能 >30s 而逾時。修法:
-  `_spawn_socks_proxy` 帶硬化選項(`BatchMode`/`ExitOnForwardFailure`/`ConnectTimeout`/
-  `ServerAlive`,不再無限卡在認證;不加 `-q` 以保留 stderr),`start_remote_browser` **自動
-  重試**(預設 2 次,`remote_browser_ssh_attempts`)——第二次因 hop1 master 與裝置路由已暖而
-  通常成功。真正離線的裝置(reverse 埠不存在)會秒失敗、不會空等。失敗時 ssh stderr 會寫進
-  backend log 供偵錯。
+  裝置 sshd)。`_spawn_socks_proxy` 帶硬化選項(`BatchMode`/`ExitOnForwardFailure`/
+  `ConnectTimeout`/`ServerAlive`,不再無限卡在認證;不加 `-q` 以保留 stderr),
+  `start_remote_browser` 自動重試(預設 2 次,`remote_browser_ssh_attempts`)。
+  真正離線的裝置(reverse 埠不存在)會秒失敗、不會空等。失敗時 ssh stderr 會寫進 backend log。
+- **這條 -D 必須 `ControlMaster=no` + `ControlPath=none`(實測血淚):** ssh config 對
+  `Host reverse` 開了 `ControlMaster auto` + `ControlPersist`,冷啟時 ssh 會 fork 出**背景
+  master** 後讓前景 client 立刻退出 → `Popen.poll()` 誤判「ssh 死了」→ attempt 1 永遠假失敗
+  (log 一直出現 `attempt 1/2 did not bind ... no stderr` 但 0.2s 就放棄),而 master 稍後才把
+  -D 綁上,變成**沒人管的孤兒 listener**(實測活了 16 小時)。停用 mux 後這條 -D 的生命週期
+  = 該 Popen,poll()/terminate() 語義正確、session 互相隔離;ProxyCommand 的第一跳
+  (telepy-ssh)仍走它自己的 mux,冷啟只慢在第二跳 handshake(由 `remote_browser_ssh_timeout`
+  控制,慢通道可在站台設定調大)。
 - **Profile:** 每 session `mkdtemp` 專屬目錄、**停止即刪**(不保留歷史)。
   絕不共用:Chromium SingletonLock 會讓第二個並發 session 的 chromium 委派給
   第一個後退出(log:`Opening in existing browser session.`),兩敗俱傷。
   瀏覽器行程的 `HOME` 也指到這個目錄(dotfile 等家目錄寫入隨 session 刪除)。
-- **Chromium 關閉/縮小:** **不自動重啟**。session 首次啟動時開一次 chromium;使用者關掉或
-  最小化視窗後,桌面顯示桌布(hsetroot,不黑)+ 頂部 tint2 面板(啟動器捷徑 + 工作列)。
-  最小化的視窗可從**工作列**點回來;完全關掉後可點面板的**「開啟瀏覽器」捷徑**(open-browser.sh)再開。
-  捷徑會先聚焦/還原既有視窗,沒有視窗才全新啟動(收掉 background mode 殘留主行程,避免只印
-  「Opening in existing browser session」卻不開窗)。
+- **Chromium 關閉/縮小/消失:** 最小化的視窗可從**工作列**點回來;關掉視窗(chromium 行程
+  仍在 background mode)可點面板的**「開啟瀏覽器」捷徑**(open-browser.sh)再開 —— 捷徑會先
+  聚焦/還原既有視窗,沒有視窗才全新啟動(收掉 background mode 殘留主行程,避免只印
+  「Opening in existing browser session」卻不開窗)。**chromium 行程完全消失**(崩潰/整個退出)
+  時,session-manager 的 **watchdog** 每 10s 檢查(以 `--user-data-dir` 掃 /proc)並自動用同一
+  支 open-browser.sh 重開(15s 建立寬限、30s 重啟冷卻;`REMOTE_BROWSER_RESPAWN=0` 可關)。
+  實測有使用者回到 session 只剩空桌面以為功能整個壞掉 —— session 的意義就是那顆瀏覽器。
 - **下載:** Chromium 管理策略(`/etc/chromium/policies/managed/telepy.json`)
   `DownloadRestrictions: 3` **全面封鎖**——容器裡下載的檔案使用者本來就拿不到
   (沒有取檔通道),只會累積吃掉容器磁碟。要開放需同時設計配額與取檔機制。
 - **停止:** WS 斷線即收整個 session(ssh + kasm + Redis);idle GC 為後備。
   行程用 `killpg(p.pid)` 整組收(`start_new_session` ⇒ pgid == pid;不可用
   `getpgid`,group leader 先死會 raise 而漏殺孤兒)。
+- **健康檢查與孤兒回收:** ping(REST)先探測該 session 的 SOCKS 埠(`127.0.0.1:proxy_port`,
+  gunicorn 各 worker 共用 netns 都探得到)——**埠沒在聽 = ssh 已死**(典型:backend 重啟後的
+  殭屍)→ 就地回收並回 404,前端收到即收畫面顯示「session 已結束」。idle GC 另掃「Redis 有
+  記錄、不屬於本行程、埠沒在聽」的**孤兒**(擁有者 worker 已重啟,沒人持有 ssh handle)代為
+  收掉 kasm session + Redis 記錄;屬於其他活著 worker 的 session 埠仍在聽,不會誤收。
 - **殭屍:** kasm-browser 以 `init: true`(tini)當 PID 1 回收 reparent 的孤兒。
 - **視窗:** openbox 以 `--config-file /app/openbox-rc.xml` 啟動(build 時由預設
   rc.xml 併入 applications 規則):`<decor>no</decor>` 移除標題列 + `<maximized>true</maximized>`

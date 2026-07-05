@@ -185,10 +185,11 @@ class RemoteBrowserServiceTest(TestCase):
         self.assertIn("s-idle", dead)                 # Redis 掛掉 → 退回 last_seen,過期就收
         self.assertNotIn("s-fresh", dead)             # 近期有 last_seen → 保留
 
+    @mock.patch.object(svc, "_proxy_alive", return_value=True)
     @mock.patch.object(svc, "_wait_for_port", return_value=True)
     @mock.patch.object(svc, "subprocess")
     @mock.patch.object(svc, "_kasm")
-    def test_ping_refreshes_store_ttl(self, kasm, sp, _wp):
+    def test_ping_refreshes_store_ttl(self, kasm, sp, _wp, _alive):
         sp.Popen.return_value = mock.Mock(poll=lambda: None)
         kasm.create_session.return_value = {"session_id": "k", "ws_port": 5910}
         sid = svc.start_remote_browser("alice", 30001, 7)["session_id"]
@@ -196,3 +197,37 @@ class RemoteBrowserServiceTest(TestCase):
             self.assertTrue(svc.ping_remote_browser(sid))
             r.assert_called_once()
         self.assertFalse(svc.ping_remote_browser("nope"))
+
+    @mock.patch.object(svc, "_wait_for_port", return_value=True)
+    @mock.patch.object(svc, "subprocess")
+    @mock.patch.object(svc, "_kasm")
+    def test_ping_reaps_session_with_dead_proxy(self, kasm, sp, _wp):
+        """SOCKS 代理死亡(如 backend 重啟後的殭屍)→ ping 回 False 並就地回收,不再續命。"""
+        sp.Popen.return_value = mock.Mock(poll=lambda: None)
+        kasm.create_session.return_value = {"session_id": "k", "ws_port": 5910}
+        sid = svc.start_remote_browser("alice", 30001, 7)["session_id"]
+        # 測試裡 ssh 是 mock,proxy_port 沒有真的在聽 → _proxy_alive 為 False(真實探測)。
+        self.assertFalse(svc.ping_remote_browser(sid))
+        self.assertIsNone(svc._store.get(sid))          # 記錄已刪
+        kasm.stop_session.assert_called_once_with("k")  # kasm session 已收
+
+    def test_gc_reaps_redis_orphans_with_dead_proxy(self):
+        """Redis 有記錄但不屬於本行程且埠沒在聽(擁有者已重啟)→ 孤兒回收。"""
+        svc._store.put("s-orphan", {"kasm_session_id": "k-orphan", "proxy_port": 1,
+                                    "server_id": 7, "ws_port": 5910, "last_seen": 0})
+        try:
+            with mock.patch.object(svc, "_kasm") as kasm, \
+                 mock.patch.object(svc, "_proxy_alive", return_value=False):
+                live_ids = svc._store.live_session_ids()
+                self.assertIn("s-orphan", live_ids)
+                # 模擬 reaper 的孤兒掃描段落 / simulate the reaper's orphan sweep
+                with svc._SESSIONS_LOCK:
+                    mine = set(svc.ACTIVE_SESSIONS.keys())
+                for sid in live_ids - mine:
+                    stored = svc._store.get(sid)
+                    if stored and not svc._proxy_alive(stored.get("proxy_port")):
+                        svc.stop_remote_browser(sid)
+                kasm.stop_session.assert_called_once_with("k-orphan")
+            self.assertIsNone(svc._store.get("s-orphan"))
+        finally:
+            svc._store.delete("s-orphan")

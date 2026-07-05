@@ -280,7 +280,10 @@ export function RemoteBrowserPanel({
         });
     }, []);
 
-    // 心跳:讓後端 GC 能回收斷線的 session
+    // 心跳:讓後端 GC 能回收斷線的 session。後端 ping 會做健康檢查(SOCKS 代理死亡 → 404),
+    // 收到 404 表示 session 已被回收 → 收掉畫面並顯示原因,而不是對著死掉的 canvas 一直續命。
+    // Heartbeat with liveness: a 404 means the backend reaped the session (dead proxy) —
+    // tear down the canvas and surface it instead of keeping a dead session alive.
     useEffect(() => {
         if (phase !== "connected") return;
         const id = setInterval(() => {
@@ -290,10 +293,15 @@ export function RemoteBrowserPanel({
             fetch(`${apiBase}/api/reverse/server/remote-browser/${sid}/ping`, {
                 method: "POST",
                 headers: { ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
-            }).catch(() => { });
+            }).then((res) => {
+                if (res.status === 404) {
+                    setError((e) => e || t("browser.sessionNotFound"));
+                    cleanup(false);
+                }
+            }).catch(() => { });   // 暫時性網路錯誤不動作 / transient errors: no action
         }, 15000);
         return () => clearInterval(id);
-    }, [phase, accessToken]);
+    }, [phase, accessToken, cleanup, t]);
 
     // 卸載 / 關閉分頁時收掉 session
     useEffect(() => {

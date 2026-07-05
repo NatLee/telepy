@@ -215,6 +215,53 @@ class SessionManagerTest(unittest.TestCase):
         self.assertEqual(self.mgr.count(), 2)
 
 
+class WatchdogTest(unittest.TestCase):
+    """chromium watchdog:行程完全消失 → 用 launcher 重開;寬限/冷卻期間與活著時不動作。"""
+
+    def setUp(self):
+        self.mgr = sm.SessionManager()
+
+    def _make_session(self, created_at=0.0, last_respawn=0.0):
+        self.mgr._sessions["sid1"] = {
+            "display": 10, "ws_port": 8453, "procs": [], "proxy": "socks5://b:1",
+            "profile_dir": "/tmp/telepy-profile-x", "browser_cmd": "chromium --user-data-dir=/tmp/telepy-profile-x",
+            "lang": "zh-TW", "created_at": created_at, "last_respawn": last_respawn,
+        }
+
+    @mock.patch.object(sm.SessionManager, "_spawn")
+    @mock.patch.object(sm.SessionManager, "_chromium_alive", return_value=False)
+    def test_respawns_when_chromium_gone(self, _alive, spawn):
+        spawn.return_value = _fake_popen()
+        self._make_session()
+        self.mgr._watchdog_tick(now=1000.0)
+        spawn.assert_called_once()
+        args, kwargs = spawn.call_args
+        self.assertIn("open-browser", " ".join(args[0]))
+        self.assertEqual(kwargs["extra_env"]["HOME"], "/tmp/telepy-profile-x")
+        # 重開的行程要掛回 session,stop 時才收得掉;並記錄冷卻時間。
+        self.assertEqual(len(self.mgr._sessions["sid1"]["procs"]), 1)
+        self.assertEqual(self.mgr._sessions["sid1"]["last_respawn"], 1000.0)
+
+    @mock.patch.object(sm.SessionManager, "_spawn")
+    @mock.patch.object(sm.SessionManager, "_chromium_alive", return_value=True)
+    def test_no_respawn_when_alive(self, _alive, spawn):
+        self._make_session()
+        self.mgr._watchdog_tick(now=1000.0)
+        spawn.assert_not_called()
+
+    @mock.patch.object(sm.SessionManager, "_spawn")
+    @mock.patch.object(sm.SessionManager, "_chromium_alive", return_value=False)
+    def test_grace_and_cooldown_suppress_respawn(self, _alive, spawn):
+        # 剛建立(寬限期) / just created (grace period)
+        self._make_session(created_at=995.0)
+        self.mgr._watchdog_tick(now=1000.0)
+        spawn.assert_not_called()
+        # 剛重開過(冷卻) / recently respawned (cooldown)
+        self._make_session(created_at=0.0, last_respawn=990.0)
+        self.mgr._watchdog_tick(now=1000.0)
+        spawn.assert_not_called()
+
+
 class HandlerAuthTest(unittest.TestCase):
     def test_create_requires_internal_token(self):
         """POST /sessions 無正確 token → 403,且不會呼叫 manager.create。"""

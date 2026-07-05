@@ -133,6 +133,12 @@ def _wait_for_port(host: str, port: int, timeout: float = 30.0, proc=None) -> bo
 #   ExitOnForwardFailure=yes 綁不到本地 SOCKS 埠就立刻 exit → _wait_for_port 靠 proc.poll() 秒失敗。
 #   ConnectTimeout=10        bound 住 ProxyCommand 第一跳的 TCP connect。
 #   ServerAliveInterval/Max  兩跳中任一段死掉時 ~15s 內放棄,不無限等。
+#   ControlMaster=no / ControlPath=none  ← 關鍵:ssh config 對 Host reverse 開了
+#       ControlMaster auto + ControlPersist,冷啟時 ssh 會 fork 出背景 master 後讓前景
+#       client 立刻退出 → Popen.poll() 誤判「ssh 死了」→ attempt 1 永遠假失敗,而
+#       master 稍後才把 -D 綁起來,變成沒人管的孤兒 listener(實測洩漏 >16 小時)。
+#       停用 mux 後:這條 -D 的生命週期 = 這個 Popen,poll()/terminate() 語義正確,
+#       session 之間也互相隔離。ProxyCommand 的第一跳(telepy-ssh)仍走它自己的 mux,不受影響。
 # 不加 -q:保留 stderr,失敗時記錄真正原因(過去 -q 把錯誤全吞了,完全無從偵錯)。
 _SSH_HARDEN_OPTS = [
     "-o", "BatchMode=yes",
@@ -140,6 +146,8 @@ _SSH_HARDEN_OPTS = [
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=5",
     "-o", "ServerAliveCountMax=3",
+    "-o", "ControlMaster=no",
+    "-o", "ControlPath=none",
 ]
 
 
@@ -297,8 +305,48 @@ def get_session(session_id):
         }
 
 
+def _proxy_alive(proxy_port) -> bool:
+    """
+    session 的 SOCKS 代理是否還活著:對 127.0.0.1:port 做 TCP 連線探測。
+    gunicorn 各 worker 共用同一個網路命名空間,任何 worker 都能探測任何 worker 起的 ssh;
+    backend 重啟後舊 ssh 全滅、埠不再 listen → 探測失敗 = session 已死。
+    Liveness probe for the session's SOCKS proxy. Workers share one netns, so any worker can
+    probe any worker's ssh; after a backend restart the old ssh procs are gone → probe fails.
+    """
+    if not proxy_port:
+        return True   # 沒有埠資訊就不判死(保守)。/ No port info → don't declare dead.
+    try:
+        with socket.create_connection(("127.0.0.1", int(proxy_port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def ping_remote_browser(session_id):
-    """心跳:續 Redis TTL 並更新本行程 last_seen。任一存在即算數。"""
+    """
+    心跳:續 Redis TTL 並更新本行程 last_seen。
+    先做健康檢查:SOCKS 代理死了(例如 backend 重啟後的殭屍 session)就地回收並回 False,
+    讓前端收到 404 顯示「session 已結束」,而不是對著一個死畫面永遠續命。
+    Heartbeat with a liveness gate: if the SOCKS proxy is dead (e.g. a zombie left over from a
+    backend restart), reap the session and return False so the client gets a 404 instead of
+    keeping a dead canvas alive forever.
+    """
+    proxy_port = None
+    try:
+        stored = _store.get(session_id)
+        if stored:
+            proxy_port = stored.get("proxy_port")
+    except Exception:
+        stored = None
+    if proxy_port is None:
+        with _SESSIONS_LOCK:
+            sess = ACTIVE_SESSIONS.get(session_id)
+            proxy_port = sess.get("proxy_port") if sess else None
+    if not _proxy_alive(proxy_port):
+        logger.info("ping: session %s proxy (port %s) is dead — reaping", session_id, proxy_port)
+        stop_remote_browser(session_id)
+        return False
+
     refreshed = False
     try:
         refreshed = _store.refresh(session_id)
@@ -399,6 +447,25 @@ def cleanup_dead_sessions():
                     idle_timeout = 60
             for sid in _dead_session_ids(now, live_ids, redis_ok, idle_timeout):
                 stop_remote_browser(sid)
+
+            # 孤兒回收:Redis 記錄還在、但不屬於本行程,且 SOCKS 埠沒在聽 = 擁有它的 backend
+            # 行程已重啟(ssh 已死),沒人會再收它 → 由任何看到的 worker 代為收掉(kasm session +
+            # Redis 記錄)。屬於其他「活著的」worker 的 session,其埠仍在聽,不會被誤收。
+            # Orphan sweep: a redis record not owned by this process whose SOCKS port isn't
+            # listening means its owner restarted (ssh died with it) — reap it here. Sessions
+            # owned by other live workers keep their port listening and are never touched.
+            if redis_ok:
+                with _SESSIONS_LOCK:
+                    mine = set(ACTIVE_SESSIONS.keys())
+                for sid in live_ids - mine:
+                    try:
+                        stored = _store.get(sid)
+                    except Exception:
+                        continue
+                    if stored and not _proxy_alive(stored.get("proxy_port")):
+                        logger.info("reaper: orphaned session %s (proxy port %s dead) — reaping",
+                                    sid, stored.get("proxy_port"))
+                        stop_remote_browser(sid)
         except Exception:
             pass
         time.sleep(10)
