@@ -38,7 +38,8 @@ src/
     src/components/ # UI components (Shadcn-style + Radix)
     src/fonts/      # Local font files (loaded via next/font/local)
     src/hooks/      # Custom React hooks (WebSocket, notifications, etc.)
-    src/lib/        # API client, auth, WebSocket, utilities
+    src/lib/        # API client, auth, WebSocket, i18n, utilities
+    src/locales/    # i18n dictionaries: en.ts (key source of truth), zh-TW.ts, ja.ts
     src/types/      # TypeScript type definitions
   configs/          # Traefik, Nginx, Supervisor configs
   scripts/          # Utility shell scripts
@@ -125,11 +126,61 @@ Copy `.env.example` to `.env` and configure:
 - Tailwind CSS variables `--font-sans` / `--font-mono` reference custom fonts first, then Geist as fallback
 - xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and explicitly awaits `document.fonts.load()` for the mono font (1.5s timeout guard) before terminal initialization — it does not depend on the CJK font
 
+## Internationalization (i18n) — REQUIRED for all frontend UI text
+
+The frontend is fully internationalized (English / 繁體中文 / 日本語, default = browser language).
+**Every user-visible string added, changed, or removed MUST go through the i18n system** — never
+hardcode display text in components, hooks, or lib error builders.
+
+### How it works
+
+- **Dictionaries:** `src/frontend/src/locales/` — `en.ts` is the **source of truth** for keys
+  (`export const en = {...} as const` → `TranslationKey = keyof typeof en`). `zh-TW.ts` and `ja.ts`
+  are typed `Record<TranslationKey, string>`, so a missing or extra key is a **compile error**.
+  Keys are flat `namespace.camelCase` (e.g. `tunnels.deleteMessage`), namespaced by feature
+  (`common`, `nav`, `api`, `login`, `firstLogin`, `tunnels`, `tunnelActions`, `tunnelDetails`,
+  `wizard`, `terminal`, `latency`, `kbd`, `files`, `browser`, `scripts`, `config`, `share`,
+  `manageUsers`, `keys`, `logs`, `settings`, `language`, `ui`).
+- **In components/hooks:** `const { t, tn, locale, language, setLanguage } = useI18n()` from
+  `@/lib/i18n`. `t(key, vars?)` returns a string; `{var}` placeholders interpolate
+  (`t("tunnels.deleted", { name })`). `tn(key, vars)` accepts ReactNode values so sentences keep
+  inline `<code>`/`<strong>` without splitting the translation.
+- **Outside React** (e.g. `lib/api.ts` error builders): use `translate()` from `@/lib/translate`
+  (module-level; the provider keeps its locale in sync).
+- **Preference resolution:** `"auto" | "en" | "zh-TW" | "ja"` stored in the `telepy.language`
+  cookie. The server root layout (`app/layout.tsx`) reads the cookie + `Accept-Language` so SSR
+  matches hydration (no language flash). After login the preference syncs with the backend
+  `UserSettings` model (`/api/user/settings`; also included in `/api/auth/user/profile` as
+  `language`, `null` = never chosen → the frontend pushes its local preference up;
+  see `UserLanguageSync` in `lib/i18n.tsx`).
+- **Switcher locations:** sidebar footer (`components/layout/LanguageSwitcher.tsx`; the sidebar is
+  collapsible — state in localStorage `telepy.sidebarCollapsed`) and the Settings page
+  Preferences tab. Admins can also set a user's language via Settings → Users → Manage modal
+  (`/api/user/users`, `/api/user/users/<id>`).
+
+### Rules when changing UI
+
+1. **Add/change a string:** add or edit the key in `en.ts` FIRST, then mirror it in `zh-TW.ts` and
+   `ja.ts` (TypeScript fails the build until all three agree). Then use `t("the.key")` in code.
+2. **Remove UI:** delete its keys from all three dictionaries (unused keys rot; the extra-key
+   check only catches keys missing from zh-TW/ja, not orphans in en).
+3. **Do NOT translate:** keycap glyphs (Esc/Tab/Ctrl/F1…), format examples in placeholders
+   (`ssh-rsa AAAA…`, `22`), code/paths inside `<code>` (pass them as `tn()` vars), size units,
+   product names (SSH, PowerShell, AutoSSH, Docker), the Telepy brand, and the logs-page keyword
+   filter chips (they string-match raw English sshd log content).
+4. Backend-provided text (site-setting labels/descriptions from model `help_text`, server error
+   `detail` fields, log lines) is NOT frontend-translated — it renders verbatim.
+5. Locale-aware formatting: use `useI18n().locale` for `Date.toLocaleString()` /
+   `Intl.DateTimeFormat` instead of hardcoding `'en-US'`.
+6. `metadata` in `app/layout.tsx` deliberately stays English (localizing it would force dynamic
+   rendering for every route).
+
 ## Code Conventions
 
 - Backend API views use DRF `APIView` with `@swagger_auto_schema()` decorators
 - Business logic lives in service classes (e.g., `TunnelPermissionService`)
 - Frontend uses centralized `apiFetch()` with auto JWT injection and 401 handling
+- **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**
 - Comments are mixed English and Traditional Chinese
 - Django apps follow standard layout: `models.py`, `views.py`, `urls.py`, `serializers.py`, `admin.py`
 - Frontend components follow Shadcn/Radix patterns with `class-variance-authority`
