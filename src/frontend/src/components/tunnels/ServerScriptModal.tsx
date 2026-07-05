@@ -6,7 +6,7 @@ import { CodeBlock } from "@/components/ui/CodeBlock";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Info, Link2, Loader2 } from "lucide-react";
+import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Link2, Loader2 } from "lucide-react";
 
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
@@ -33,8 +33,6 @@ const TAB_DESCRIPTIONS: Record<string, TranslationKey> = {
     "docker-run": "scripts.descDockerRun",
     "docker-compose": "scripts.descDockerCompose",
 };
-
-const TAB_TUTORIALS: Record<string, string[]> = {};
 
 const TAB_CURL_HELPERS: Record<string, TranslationKey> = {
     ssh: "scripts.curlSsh",
@@ -173,22 +171,6 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                 <p className="text-sm text-muted-foreground mb-3">
                                     {t(TAB_DESCRIPTIONS[activeTab])}
                                 </p>
-                            )}
-                            {TAB_TUTORIALS[activeTab] && (
-                                <>
-                                    <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 flex items-start gap-2 text-xs text-blue-800 dark:text-blue-200 mb-3">
-                                        <Info size={14} className="mt-0.5 shrink-0" />
-                                        <span>You can replace the <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">User</code> field with your own username in the command.</span>
-                                    </div>
-                                    <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-3 mb-3">
-                                        <p className="text-xs font-semibold text-amber-800 dark:text-amber-200 mb-2">How to set up:</p>
-                                        <ol className="text-xs text-amber-700 dark:text-amber-300 space-y-1 list-none">
-                                            {TAB_TUTORIALS[activeTab].map((step, i) => (
-                                                <li key={i} className="font-mono">{step}</li>
-                                            ))}
-                                        </ol>
-                                    </div>
-                                </>
                             )}
                             <div className="flex-1 min-h-0 max-h-full overflow-auto relative">
                                 <CodeBlock language={langMap[activeTab] || "txt"} value={scriptContent} />
