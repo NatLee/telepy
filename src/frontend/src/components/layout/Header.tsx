@@ -7,15 +7,20 @@ import { Menu, Terminal } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetHeader, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { NavContent, navLinks } from "./NavContent";
+import { useI18n } from "@/lib/i18n";
 
 export function Header() {
     const pathname = usePathname();
     const [isOpen, setIsOpen] = useState(false);
+    const { t } = useI18n();
 
     // Get current page name for header title
-    const currentPage = navLinks.find(
+    const currentLink = navLinks.find(
         link => pathname === link.href || (pathname.startsWith(link.href) && link.href !== '/tunnels')
-    )?.name || (pathname.startsWith('/tunnels/settings') ? 'Settings' : 'Dashboard');
+    );
+    const currentPage = currentLink
+        ? t(currentLink.key)
+        : (pathname.startsWith('/tunnels/settings') ? t("nav.settings") : t("nav.dashboard"));
 
     return (
         <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-background px-4 sm:px-6 shadow-sm">
@@ -23,7 +28,7 @@ export function Header() {
                 <SheetTrigger asChild>
                     <Button variant="ghost" size="icon" className="md:hidden">
                         <Menu size={20} />
-                        <span className="sr-only">Toggle navigation menu</span>
+                        <span className="sr-only">{t("nav.toggleMenu")}</span>
                     </Button>
                 </SheetTrigger>
                 <SheetContent side="left" className="w-64 p-0 flex flex-col">
@@ -39,7 +44,7 @@ export function Header() {
                             </Link>
                         </SheetTitle>
                         <SheetDescription className="sr-only">
-                            Navigation Menu
+                            {t("nav.navigationMenu")}
                         </SheetDescription>
                     </SheetHeader>
                     <NavContent onNavigate={() => setIsOpen(false)} className="mt-auto" />
