@@ -87,6 +87,11 @@ class SessionManagerTest(unittest.TestCase):
         # 但**不可**強制整個 GL 合成器走 SwiftShader —— 那會讓影片掉幀/播不動(YouTube 回報)。
         self.assertNotIn("--use-gl=angle", browser_cmd)
         self.assertNotIn("--use-angle=swiftshader", browser_cmd)
+        # **勿加回 --no-first-run**:Debian chromium 150.0.7871.46(bug #1141488)在「跳過
+        # first-run 的全新 profile」上啟動 ~1s 內無聲 SIGTRAP(prepopulated Google 搜尋模板的
+        # {google:searchSource} token 沒人處理 → NOTREACHED)。實測拿掉後 Debian build 也不會
+        # 出 first-run 精靈,此旗標在本容器是零效益、純致命。
+        self.assertNotIn("--no-first-run", browser_cmd)
 
     def test_accept_lang_produces_clean_tags_without_q_values(self):
         self.assertEqual(sm._accept_lang("zh-TW"), "zh-TW,zh,en")
@@ -143,6 +148,40 @@ class SessionManagerTest(unittest.TestCase):
                 self.assertEqual(env.get("HOME"), d)   # 下載/dotfile 都進 session 目錄
                 dirs.add(d)
             self.assertEqual(len(dirs), 2)   # 兩個 session 各自不同目錄 → 不互搶
+
+    @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
+    @mock.patch("session_manager.subprocess.Popen")
+    def test_wm_and_panel_get_browser_env(self, popen, _wait):
+        """openbox 與 tint2 都要拿到 BROWSER_CMD:桌面選單/面板捷徑開瀏覽器是它們的子行程。
+        (實測血淚:openbox 沒帶 env 時,使用者從桌面選單開瀏覽器 → BROWSER_CMD not set。)"""
+        popen.side_effect = lambda *a, **k: _fake_popen()
+        self.mgr.create("socks5://backend:1")
+        for name in ("openbox", "tint2"):
+            env = next(c[1].get("env", {}) for c in popen.call_args_list
+                       if name in " ".join(c[0][0]))
+            self.assertIn("BROWSER_CMD", env, name)
+            self.assertTrue(env["BROWSER_CMD"].startswith("chromium "), name)
+
+    @mock.patch("session_manager.os.killpg")
+    @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)
+    @mock.patch("session_manager.subprocess.Popen")
+    def test_launcher_env_file_written_on_create_removed_on_stop(self, popen, _wait, _killpg):
+        """per-display env 檔(open-browser.sh 在環境遺失時的退路):create 寫入
+        BROWSER_CMD/HOME,stop 移除。"""
+        popen.side_effect = lambda *a, **k: _fake_popen()
+        with tempfile.TemporaryDirectory() as tmp:
+            env_path = os.path.join(tmp, "browser-10.env")
+            with mock.patch.object(sm.SessionManager, "_launcher_env_path",
+                                   return_value=env_path), \
+                 mock.patch.object(sm, "PROFILE_TMP_BASE", tmp):
+                out = self.mgr.create("socks5://backend:9999")
+                with open(env_path) as fh:
+                    content = fh.read()
+                self.assertIn("export BROWSER_CMD=", content)
+                self.assertIn("socks5://backend:9999", content)
+                self.assertIn("export HOME=", content)
+                self.mgr.stop(out["session_id"])
+                self.assertFalse(os.path.exists(env_path))
 
     @mock.patch("session_manager.os.killpg")
     @mock.patch.object(sm.SessionManager, "_wait_for_ws_port", return_value=True)

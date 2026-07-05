@@ -1,7 +1,13 @@
 {
     "_comment": "Telepy remote-browser 的 Chromium 管理策略(/etc/chromium/policies/managed)。DownloadRestrictions=3 封鎖所有下載:遠端容器裡下載的檔案使用者本來就拿不到(沒有取檔通道),只會累積吃掉容器磁碟;BackgroundModeEnabled=false 減少視窗關閉後行程賴著不走(不自動重啟,改由桌面 tint2 面板捷徑 open-browser.sh 再開)。",
+    "_comment_search": "DefaultSearchProvider*:把預設搜尋引擎釘成「乾淨模板」的 Google。Debian chromium 150.0.7871.46 的打包 bug(Debian bug #1141488):ungoogled 系 patch 刪掉了 {google:searchSource} token 的處理,但內建 prepopulated Google 搜尋模板仍含該 token → 任何展開該模板的路徑(例:使用者在設定把預設搜尋切回內建 Google 後在網址列搜尋)都會 NOTREACHED() → 無聲 SIGTRAP 整個瀏覽器閃退。policy 定義的引擎只用 {searchTerms},不經 prepopulated 模板 → 安全;同時把預設搜尋從該 build 的 DuckDuckGo 拉回 Google(與 149 以前的行為一致),並鎖住不讓使用者切到會閃退的內建 Google 項目。Debian 修復版出來後此 policy 仍相容、可保留。",
     "DownloadRestrictions": 3,
     "BackgroundModeEnabled": false,
     "PromotionalTabsEnabled": false,
-    "MetricsReportingEnabled": false
+    "MetricsReportingEnabled": false,
+    "DefaultSearchProviderEnabled": true,
+    "DefaultSearchProviderName": "Google",
+    "DefaultSearchProviderKeyword": "google.com",
+    "DefaultSearchProviderSearchURL": "https://www.google.com/search?q={searchTerms}",
+    "DefaultSearchProviderSuggestURL": "https://www.google.com/complete/search?output=chrome&q={searchTerms}"
 }

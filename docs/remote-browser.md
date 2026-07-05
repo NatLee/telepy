@@ -82,6 +82,12 @@ chromium --proxy-server=socks5://backend:<port>
   時,session-manager 的 **watchdog** 每 10s 檢查(以 `--user-data-dir` 掃 /proc)並自動用同一
   支 open-browser.sh 重開(15s 建立寬限、30s 重啟冷卻;`REMOTE_BROWSER_RESPAWN=0` 可關)。
   實測有使用者回到 session 只剩空桌面以為功能整個壞掉 —— session 的意義就是那顆瀏覽器。
+- **所有桌面啟動路徑都收斂到 open-browser.sh:** 右鍵桌面的 openbox 根選單已換成自訂
+  `openbox-menu.xml`(Debian 預設選單的「Web browser」= 裸 `x-www-browser` → root 無沙箱秒退,
+  使用者只覺得「點了沒反應」)。`BROWSER_CMD` 由 session-manager 以環境傳給 openbox/tint2/
+  watchdog,另外落一份 **per-display env 檔** `/tmp/telepy-browser-<display>.env`(session 停止
+  即刪):open-browser.sh 發現環境遺失時以 `$DISPLAY` source 它 —— 任何啟動路徑都開得起來
+  (實測血淚:舊版 openbox 沒帶 env,使用者從桌面選單開瀏覽器 → `BROWSER_CMD not set`)。
 - **下載:** Chromium 管理策略(`/etc/chromium/policies/managed/telepy.json`)
   `DownloadRestrictions: 3` **全面封鎖**——容器裡下載的檔案使用者本來就拿不到
   (沒有取檔通道),只會累積吃掉容器磁碟。要開放需同時設計配額與取檔機制。
@@ -173,6 +179,18 @@ docker compose exec kasm-browser python3 /tmp/probe.py --port 8463 \
   --user telepy --password telepyvnc
 ```
 
+- **Chromium 一開就無聲消失(SIGTRAP/exit 133,watchdog 每 30s 重生又立刻死)** →
+  Debian chromium 150.0.7871.46 打包 bug([#1141488](https://bugs.debian.org/1141488),2026-07):
+  ungoogled 系 patch 刪了 `{google:searchSource}` token 的處理,但內建 prepopulated Google
+  搜尋模板仍含該 token → 展開即 `NOTREACHED()` 無聲 SIGTRAP(`--v=1` 也沒有 FATAL)。
+  在本容器的觸發面:**`--no-first-run` + 全新 profile 必炸**(每 session 都是全新 profile!)、
+  `--headless=new` 也炸、使用者把預設搜尋切回內建 Google 再搜尋也會炸。已套的修法(對後續
+  版本無害,修復版出來後可保留):(1) `DEFAULT_BROWSER_CMD` **移除 `--no-first-run`**(實測
+  Debian build 沒有 first-run 精靈,零效益純致命,勿加回);(2) chromium-policy.json 以
+  `DefaultSearchProvider*` 把預設搜尋釘成**乾淨模板的 Google**(只用 `{searchTerms}`,不經
+  prepopulated 模板;順帶把該 build 預設的 DuckDuckGo 拉回 Google,並鎖住不讓使用者切到會
+  閃退的內建 Google 項目 —— **勿移除這組 policy**)。緊急備案:pin 回
+  149.0.7827.196-1~deb12u1(snapshot.debian.org 20260703T000000Z),但會凍結安全更新,不建議。
 - `404 failed websocket checks` → 缺 `Sec-WebSocket-Origin`(probe/consumer 已內建)。
 - `401` → 帳密或密碼檔問題:`ls -l /etc/kasmvnc/kasmpasswd; wc -c` 檢查非空。
 - 前端黑畫面但 ws 有通 → client 不是 Kasm fork,或 vendor README 的內嵌需求

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Telepy remote-browser 的 openbox 根選單(右鍵桌面)。
+     取代 Debian 預設 menu.xml:預設選單的「Web browser」會執行 x-www-browser,亦即裸的
+     /usr/bin/chromium(沒帶 no-sandbox 等必要旗標),在容器內以 root 執行必定秒退
+     (chromium 拒絕以 root 無沙箱模式啟動),使用者只會覺得「點了沒反應」。
+     這裡唯一的項目改走 /app/open-browser.sh(冪等:有視窗聚焦、沒視窗才全新啟動;
+     BROWSER_CMD 遺失時它會退回讀 per-display env 檔)。「Terminal emulator」等預設項目
+     指向未安裝的程式,一併移除。(註:XML 註解內不能出現雙連字號,故旗標不寫全名。) -->
+<openbox_menu xmlns="http://openbox.org/">
+  <menu id="root-menu" label="Telepy">
+    <item label="Open Browser / 開啟瀏覽器">
+      <action name="Execute"><execute>/app/open-browser.sh</execute></action>
+    </item>
+  </menu>
+</openbox_menu>

@@ -10,7 +10,19 @@
 #     精準收掉(用 --user-data-dir 匹配,**不影響其他 display 的並發 session**),再全新啟動一個乾淨視窗。
 #
 # BROWSER_CMD 由 session_manager 經環境傳入(含該 session 的 --proxy-server 與 --user-data-dir)。
+# 環境可能遺失(實測:使用者點 tint2 面板捷徑曾出現「BROWSER_CMD not set」;openbox 根選單
+# 啟動的行程也沒有這組環境)→ 退回 source session_manager 寫的 per-display env 檔
+# (/tmp/telepy-browser-<display>.env,session 停止即刪),讓任何桌面啟動路徑都開得起來。
 set -u
+
+if [ -z "${BROWSER_CMD:-}" ] && [ -n "${DISPLAY:-}" ]; then
+    _disp="${DISPLAY#:}"; _disp="${_disp%%.*}"   # ":10" / ":10.0" → "10"
+    _env_file="/tmp/telepy-browser-${_disp}.env"
+    if [ -r "$_env_file" ]; then
+        # shellcheck disable=SC1090
+        . "$_env_file"
+    fi
+fi
 
 if command -v xdotool >/dev/null 2>&1; then
     # 已有可見視窗 → 聚焦。

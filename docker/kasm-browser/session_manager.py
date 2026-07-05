@@ -95,8 +95,14 @@ DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
 # 條件;這裡的旗標是加分。**主宰因素是出口 IP 的信譽**:目標機若是資料中心/雲端 IP,YouTube 仍會
 # 擋(與瀏覽器指紋無關);且設定檔每 session 全新、無 cookie 信任累積(privacy 取捨)。詳見 docs。
+#   (無 --no-first-run)
+#                   **Chromium 150(Debian bookworm 2026-07 安全更新)帶 --no-first-run 會在啟動
+#                   ~1 秒內無聲 SIGTRAP(exit 133,--v=1 也沒有 FATAL 訊息)**,任何 profile 狀態
+#                   都會炸(sentinel 預建也擋不住;旗標二分法釘死是這一支)。實測拿掉後:全新
+#                   profile 與 watchdog 重啟都穩定,且 Debian build 本來就不出 first-run 精靈
+#                   (唯一視窗就是瀏覽器本體)→ 這支旗標在本容器是「零效益、純致命」,勿加回。
 DEFAULT_BROWSER_CMD = (
-    "chromium --no-sandbox --test-type --no-first-run --no-default-browser-check "
+    "chromium --no-sandbox --test-type --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
     "--enable-unsafe-swiftshader "
     "--disable-blink-features=AutomationControlled "
@@ -212,6 +218,33 @@ class SessionManager:
             return "", None
         return f"--user-data-dir={shlex.quote(profile_dir)}", profile_dir
 
+    def _launcher_env_path(self, display):
+        return f"/tmp/telepy-browser-{display}.env"
+
+    def _write_launcher_env(self, display, browser_cmd, profile_dir):
+        """
+        把 BROWSER_CMD/HOME 落到 per-display env 檔。桌面端的啟動路徑(tint2 面板捷徑、
+        openbox 根選單)不保證帶著 session_manager 的 extra_env —— 實測使用者點面板捷徑
+        出現過「open-browser: BROWSER_CMD not set」而完全開不了瀏覽器。open-browser.sh 在
+        環境遺失時會以 $DISPLAY source 這個檔案(session 停止即刪)。
+        """
+        path = self._launcher_env_path(display)
+        try:
+            with open(path, "w") as fh:
+                fh.write(f"export BROWSER_CMD={shlex.quote(browser_cmd)}\n")
+                if profile_dir:
+                    fh.write(f"export HOME={shlex.quote(profile_dir)}\n")
+        except OSError:
+            logger.warning("could not write launcher env file %s (non-fatal)", path)
+            return None
+        return path
+
+    def _rm_launcher_env(self, display):
+        try:
+            os.unlink(self._launcher_env_path(display))
+        except OSError:
+            pass
+
     # --- lifecycle --------------------------------------------------------
     def create(self, proxy, geometry="1280x720", lang=None, homepage=None):
         if not proxy:
@@ -236,8 +269,6 @@ class SessionManager:
                 raise RuntimeError(
                     f"KasmVNC ({self.vnc_bin}) websocket port {ws_port} did not come up. "
                     f"Last log lines:\n{self._tail(vnc_log)}")
-            if self.wm_cmd:
-                procs.append(self._spawn(self.wm_cmd, display=disp))
             browser_cmd = self.browser_cmd.format(
                 proxy=proxy, homepage=homepage, lang=lang,
                 accept_lang=_accept_lang(lang), profile_flag=profile_flag)
@@ -251,6 +282,13 @@ class SessionManager:
             # HOME 指到 session 專屬 profile 目錄:下載/dotfile 等家目錄寫入都進 session 目錄、停止即刪。
             browser_env = {"BROWSER_CMD": browser_cmd,
                            "HOME": profile_dir or os.environ.get("HOME", "/root")}
+            # 桌面啟動路徑(tint2 捷徑/openbox 選單)的環境退路 —— 見 _write_launcher_env docstring。
+            self._write_launcher_env(display, browser_cmd, profile_dir)
+            # WM 也帶 browser_env:openbox 根選單(自訂 menu.xml)的「開啟瀏覽器」是 openbox 的
+            # 子行程,環境不帶 BROWSER_CMD 時只能靠 env 檔退路 —— 直接給它,少一層依賴。
+            # (實測血淚:舊版 openbox 沒帶 env,使用者從桌面選單開瀏覽器 → BROWSER_CMD not set。)
+            if self.wm_cmd:
+                procs.append(self._spawn(self.wm_cmd, display=disp, extra_env=browser_env))
             # 桌面面板(tint2):常駐,提供「開啟瀏覽器」捷徑(關窗後不黑、可自己再開)。
             if PANEL_CMD:
                 procs.append(self._spawn(PANEL_CMD, display=disp, extra_env=browser_env))
@@ -264,6 +302,7 @@ class SessionManager:
             with self._lock:
                 self._used_displays.discard(display)
             self._rm_profile_dir(profile_dir)
+            self._rm_launcher_env(display)
             raise
         sid = uuid.uuid4().hex
         with self._lock:
@@ -287,6 +326,7 @@ class SessionManager:
         for p in sess["procs"]:
             self._term(p)
         self._rm_profile_dir(sess.get("profile_dir"))   # 不保留歷史:設定檔隨 session 刪除
+        self._rm_launcher_env(sess["display"])
         logger.info("session %s stopped", session_id)
         return True
 

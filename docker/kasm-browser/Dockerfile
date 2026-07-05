@@ -96,9 +96,15 @@ PY
 COPY session_manager.py /app/session_manager.py
 # 桌面捷徑:關掉瀏覽器後桌面顯示桌布 + tint2 面板上的「開啟瀏覽器」捷徑(不自動重啟、不黑畫面)。
 COPY open-browser.sh /app/open-browser.sh
+# openbox 根選單(右鍵桌面):取代 Debian 預設 —— 預設的「Web browser」項目會執行裸的
+# /usr/bin/chromium(無 --no-sandbox),root 下必定秒退,使用者只覺得「點了沒反應」。
+# 改成唯一項目 = /app/open-browser.sh(檔內註解有完整脈絡)。
+COPY openbox-menu.xml /etc/xdg/openbox/menu.xml
 COPY tint2rc /app/tint2rc
 COPY telepy-browser.desktop /usr/share/applications/telepy-browser.desktop
-RUN chmod +x /app/open-browser.sh
+# menu.xml 與 rc.xml 一樣在 build 時驗 XML,壞了直接 fail(openbox 讀到壞選單只會靜默退回)。
+RUN chmod +x /app/open-browser.sh \
+ && python3 -c "import xml.dom.minidom as m; m.parse('/etc/xdg/openbox/menu.xml')"
 
 # 若你的 KasmVNC build 的旗標/路徑不同,可用這些環境變數覆寫,不必改碼:
 #   VNC_CMD / WM_CMD / BROWSER_CMD          (見 session_manager.py 的 DEFAULT_* 樣板)
