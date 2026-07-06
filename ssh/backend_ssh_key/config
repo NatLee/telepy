@@ -17,7 +17,15 @@ Host reverse
     HostName localhost
     StrictHostKeyChecking no
     UserKnownHostsFile /dev/null
-    ProxyCommand ssh -q -W %h:%p telepy-ssh
+    # setsid：讓 proxy 跳板脫離呼叫端 ssh 的 session / process group。第一條終端機連線成為
+    # ControlMaster 時，這個 proxy 是 master 的實體傳輸；若不脫離，呼叫端 ssh（PTY session
+    # leader）結束時 kernel 會對其前景 process group 送 SIGHUP，proxy 陪葬 → master 斷線 →
+    # 共用 master 的其他終端機分頁全部被踢（實測 bug）。master 退場時會自行收掉 proxy。
+    # setsid detaches the proxy from the calling ssh's session/pgrp. When the first terminal
+    # connection becomes the ControlMaster this proxy IS the master's transport; without setsid
+    # the kernel HUPs it when that ssh (PTY session leader) exits, killing the master and
+    # kicking every other terminal tab that shares it. The master reaps the proxy on exit.
+    ProxyCommand setsid ssh -q -W %h:%p telepy-ssh
     # 第二跳（穿過反向隧道到裝置）同樣重用連線並關掉 GSSAPI，縮短終端機開啟等待。
     ControlMaster auto
     ControlPersist 600

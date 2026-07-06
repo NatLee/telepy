@@ -353,12 +353,20 @@ class TerminalConsumer(FirstMessageAuthConsumer):
 
         if pid:
             try:
-                # pty.fork 的子行程是 session leader（pgid == pid）：用 killpg 連同 ssh 可能衍生的
-                # 子行程（如 ProxyCommand）一起收掉。/ The child is a session leader; killpg reaps helpers too.
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    os.kill(pid, signal.SIGTERM)
+                # 只殺「直屬子行程」（本分頁的 ssh —— mux client），絕對不可 killpg：
+                # 第一條連線的 ssh 成為 ControlMaster 時，其 ProxyCommand（ssh -W，master 的實體傳輸）
+                # 會留在同一個 process group（mux master 本身以 daemon() 脫離，但 proxy 不會）。
+                # killpg 會連 proxy 一起殺掉 → master 失去傳輸而死 → 共用 master 的「其他分頁」
+                # 全部瞬間斷線（實測 bug：關掉先開的分頁，後開的分頁被強制登出）。
+                # proxy/master 屬於 ControlPersist 基礎設施，master 退場時會自行收掉 proxy；
+                # 純 mux client（第 2+ 條連線）沒有子行程，單殺 pid 即等同舊行為。
+                # Kill ONLY the direct child (this tab's ssh mux client) — NEVER killpg: when the first
+                # connection became the ControlMaster, its ProxyCommand (ssh -W, the master's transport)
+                # stays in this process group (the detached master daemonizes away, the proxy does not).
+                # killpg killed the proxy → master lost its transport → every other tab sharing the
+                # master dropped at once. The proxy/master belong to the ControlPersist infrastructure
+                # and clean themselves up when the master exits.
+                os.kill(pid, signal.SIGTERM)
 
                 # 輪詢等待（最長 ~0.5s）而非固定 sleep：ssh 幾乎都在數十 ms 內結束，斷線清理不用每次
                 # 卡滿 0.5 秒。/ Poll with WNOHANG instead of a fixed 0.5s sleep; ssh usually exits in ms.
@@ -371,10 +379,7 @@ class TerminalConsumer(FirstMessageAuthConsumer):
                     await asyncio.sleep(0.05)
 
                 if not reaped:
-                    try:
-                        os.killpg(pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        os.kill(pid, signal.SIGKILL)
+                    os.kill(pid, signal.SIGKILL)
                     os.waitpid(pid, 0)  # SIGKILL 後必定可回收 / reap is immediate after SIGKILL
             except (ProcessLookupError, ChildProcessError):
                 pass  # 行程已結束且已被回收 / already gone and reaped
