@@ -1,6 +1,7 @@
 from django.urls import path, include
 from authorized_keys.views import CheckReverseServerPortStatus
 from authorized_keys.views import CheckReverseServerLatency
+from authorized_keys.views import ReverseServerDashboard
 from authorized_keys.views import ReverseServerUsernamesMapServerId
 from authorized_keys.views import SetDefaultUsernameView
 from authorized_keys.views import ServiceAuthorizedKeysListView
@@ -9,6 +10,8 @@ from authorized_keys.browse_views import RemoteBrowserStartView, RemoteBrowserSt
 urlpatterns = [
     path('server/status/ports', CheckReverseServerPortStatus.as_view(), name='reverse-server-ports-status'),
     path('server/status/latency', CheckReverseServerLatency.as_view(), name='reverse-server-latency'),
+    # 通道列表頁一次到位端點（tunnels + ports + latency）。/ One-shot dashboard payload.
+    path('server/dashboard', ReverseServerDashboard.as_view(), name='reverse-server-dashboard'),
     path('server/<int:server_id>/usernames', ReverseServerUsernamesMapServerId.as_view(), name='reverse-server-usernames'),
     path('server/<int:server_id>/default-username', SetDefaultUsernameView.as_view(), name='set-default-username'),
     path('server/<int:server_id>/remote-browser/start', RemoteBrowserStartView.as_view(), name='remote-browser-start'),

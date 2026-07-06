@@ -29,27 +29,24 @@ export function useTunnelsPage() {
     const fetchData = useCallback(async () => {
         try {
             setLoading(true);
-            const [keysRes, portsRes, latencyRes] = await Promise.all([
-                apiFetch("/api/reverse/server/keys"),
-                apiFetch("/api/reverse/server/status/ports"),
-                // 延遲僅供首屏；獨立容錯（不併入下方 keys/ports 的成敗判斷），此端點掛掉不能讓整個列表空白。
-                apiFetch("/api/reverse/server/status/latency").catch(() => null),
-            ]);
+            // 單一「一次到位」端點：一個請求就拿到 tunnels + ports + latency（取代先前 keys/ports/latency
+            // 三個平行請求 = 三次往返、三次重複的 JWT 使用者查詢）。latency 由後端一併帶回，後續仍由
+            // WebSocket UPDATE-TUNNEL-LATENCY 持續更新；ports/latency 在後端取樣失敗時各自回 {}（容錯與
+            // 舊端點一致）。/ Single dashboard endpoint replaces the old 3-request fan-out.
+            const res = await apiFetch("/api/reverse/server/dashboard");
 
-            if (keysRes.ok && portsRes.ok) {
-                const keys = await keysRes.json();
-                const ports = await portsRes.json();
-
-                setTunnels(Array.isArray(keys) ? keys : []);
-                setPortsMap(typeof ports === 'object' && ports !== null ? ports : {});
+            if (res.ok) {
+                const data = await readJson<{
+                    tunnels?: Tunnel[];
+                    ports?: Record<string, boolean>;
+                    latency?: Record<string, number>;
+                }>(res);
+                setTunnels(Array.isArray(data?.tunnels) ? data!.tunnels : []);
+                setPortsMap(data?.ports && typeof data.ports === "object" ? data.ports : {});
+                // 首屏延遲：有值才套用（後續由 WebSocket 持續更新）。
+                if (data?.latency && typeof data.latency === "object") setLatencyMap(data.latency);
             } else {
                 showError(t("tunnels.fetchFailed"));
-            }
-
-            // 延遲首屏：成功才套用，失敗靜默略過（後續由 WebSocket UPDATE-TUNNEL-LATENCY 持續更新）。
-            if (latencyRes && latencyRes.ok) {
-                const latency = await readJson<Record<string, number>>(latencyRes);
-                if (latency && typeof latency === "object") setLatencyMap(latency);
             }
         } catch (e: any) {
             showError(e.message || t("tunnels.fetchFailed"));

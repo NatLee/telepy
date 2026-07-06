@@ -71,6 +71,16 @@ services:
       # SSH
       - ./ssh/backend_ssh_key:/root/.ssh # for ssh connection to ssh container
       - ./telepy-logs/ssh:/ssh-logs:ro # SSH logs for backend API
+    # 健康檢查：打公開的輕量端點（AllowAny，只數一次 User）。容器在 migrate/collectstatic 期間尚未
+    # listen，此時標為 unhealthy；start_period 給足首次啟動（migrate）緩衝，避免誤判而重啟。
+    # curl 已隨 image 安裝（見 Dockerfile）。gunicorn 綁 0.0.0.0:8000。
+    # Health via a cheap public endpoint; unhealthy until the ASGI server is actually listening.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/auth/setup-status"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     depends_on:
       - redis
       - ssh

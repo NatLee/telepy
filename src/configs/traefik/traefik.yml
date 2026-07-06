@@ -4,6 +4,18 @@ log:
 entryPoints:
   web:
     address: ":80"
+    # 正式環境由上游反向代理（Cloudflare / Nginx / LB）終結 TLS，再以 http 轉發到這裡。預設 Traefik
+    # 不信任外來的 X-Forwarded-* 標頭，會用「本 entrypoint 的 scheme（http）」覆寫 X-Forwarded-Proto，
+    # 導致後端永遠看到 http、即使使用者其實走 https。設 forwardedHeaders 讓 Traefik「保留」上游帶進來的
+    # X-Forwarded-Proto/Host/For，配合 backend settings.py 的 SECURE_PROXY_SSL_HEADER，Django 才能正確
+    # 判定 HTTPS。瀏覽器面向的 HTTP/2 多工由上游代理提供（本層維持 :80 即可）。
+    #   insecure: true —— 信任「任何」連進 :80 者的 X-Forwarded-*；僅在 Traefik 只能經可信上游到達
+    #   （:80 未直接對外）時安全。若 :80 可被不可信網路連到，改用 trustedIPs 指定上游 LB 的網段。
+    # The upstream proxy terminates TLS and forwards over http. By default Traefik overwrites
+    # X-Forwarded-Proto with the entrypoint scheme (http); trust the upstream's forwarded headers so
+    # Django (SECURE_PROXY_SSL_HEADER) sees the real https. Prefer trustedIPs if :80 is world-reachable.
+    forwardedHeaders:
+      insecure: true
     # WebSocket 長連線保護：Traefik v3 起 readTimeout 預設 60s（v2 為無限制），會把「單一
     # request 讀取超過 60 秒」的連線切斷——長壽命的 WS（terminal / notifications）與大檔上傳
     # 都可能中招，表現為「用一用不明斷線」。設為 0 還原 v2 行為；idleTimeout 維持預設 180s

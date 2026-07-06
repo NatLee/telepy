@@ -114,6 +114,9 @@ Copy `.env.example` to `.env` and configure:
 - **Permissions:** Hierarchical tunnel access — VIEW / EDIT / ADMIN — managed by `TunnelPermissionService`
 - **Process management:** Supervisor runs the backend ASGI server (dev `DEBUG=true` → `manage.py runserver`, with daphne from `INSTALLED_APPS` providing ASGI/WebSocket; prod → gunicorn managing uvicorn workers — see `src/scripts/start-backend.sh`) plus the `websocket_update_ports` background worker, inside the backend container
 - **API docs:** Swagger UI at `/api/__hidden_swagger`, ReDoc at `/api/__hidden_redoc` (requires auth)
+- **TLS / deployment:** prod is assumed to sit behind an upstream TLS-terminating proxy (Cloudflare / Nginx / LB) that speaks HTTP/2 to browsers and forwards `http` to Traefik `:80`. Traefik's `web` entrypoint sets `forwardedHeaders.insecure: true` to preserve the upstream's `X-Forwarded-Proto`, and Django sets `SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO','https')` so it detects HTTPS correctly. If Traefik `:80` is reachable from untrusted networks, switch `insecure: true` → `trustedIPs`.
+- **Startup / health:** the backend container runs `collectstatic` + `migrate` on start (NOT `makemigrations` — migrations are committed with the code) then supervisord. It exposes a public health endpoint `GET /api/auth/setup-status`; the compose `healthcheck` and Traefik `backend-service` `healthCheck` both use it so no `/api` request is routed before the ASGI server is listening (avoids post-deploy 502s).
+- **Tunnels list data:** the list page loads via a single `GET /api/reverse/server/dashboard` returning `{tunnels, ports, latency}` in one authenticated round-trip (collapses the older keys+ports+latency fan-out). The tunnels-list serializer avoids N+1 by precomputing a per-tunnel permission map + share counts in the view (`tunnel_permission_context`).
 - **Logging:** Loguru with timed rotating file handler + database logging
 - **Static files:** WhiteNoise in production
 

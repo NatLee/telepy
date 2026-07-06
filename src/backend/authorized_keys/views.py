@@ -45,6 +45,28 @@ class CheckReverseServerLatency(APIView):
         # 取樣不可用時回傳 {}，避免前端拿到 null。刻意「不」改動 /status/ports 的 {port: bool} 形狀。
         return Response(get_ss_latency_from_redis() or {})
 
+
+class ReverseServerDashboard(APIView):
+    """
+    通道列表頁的「一次到位」端點：一個已認證請求就回 {tunnels, ports, latency}，取代先前的三個平行
+    請求（server/keys + status/ports + status/latency）。少兩次 HTTP 往返、少兩次 JWT 使用者查詢，
+    並沿用 list 的免 N+1 權限預計算。ports/latency 讀取失敗時各自回 {}（與舊端點一致的容錯）。
+    One-shot payload for the tunnels list page: tunnels + live port status + latency in a single
+    authenticated round-trip, collapsing the previous three parallel requests into one.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(tags=['Reverse Server Keys'])
+    def get(self, request):
+        queryset = user_tunnels_queryset(request.user)
+        context = {'request': request, **tunnel_permission_context(request.user, queryset)}
+        tunnels = ReverseServerAuthorizedKeysSerializer(queryset, many=True, context=context).data
+        return Response({
+            'tunnels': tunnels,
+            'ports': get_ss_output_from_redis() or {},
+            'latency': get_ss_latency_from_redis() or {},
+        })
+
 class BaseKeyViewSet(viewsets.ModelViewSet):
     """
     Base ViewSet for handling records associated with keys.
@@ -95,6 +117,35 @@ class BaseKeyViewSet(viewsets.ModelViewSet):
         """Delete a reverse server authorized key"""
         return super().destroy(request, *args, **kwargs)
 
+def user_tunnels_queryset(user):
+    """Tunnels owned by OR shared with `user`, with the owner FK joined (avoids per-row lookups)."""
+    owned = ReverseServerAuthorizedKeys.objects.filter(user=user)
+    shared_ids = TunnelSharing.objects.filter(shared_with=user).values_list('tunnel_id', flat=True)
+    shared = ReverseServerAuthorizedKeys.objects.filter(id__in=shared_ids)
+    return (owned | shared).distinct().select_related('user')
+
+
+def tunnel_permission_context(user, queryset):
+    """
+    Precompute, in TWO queries total, the maps the serializer needs so it never issues per-row
+    permission/count queries (see ReverseServerAuthorizedKeysSerializer):
+      - my_shares:    {tunnel_id: permission_type} — the current user's permission on shared tunnels
+      - share_counts: {tunnel_id: number_of_shares}
+    """
+    tunnel_ids = list(queryset.values_list('id', flat=True))
+    my_shares = dict(
+        TunnelSharing.objects.filter(tunnel_id__in=tunnel_ids, shared_with=user)
+        .values_list('tunnel_id', 'permission_type')
+    )
+    share_counts = dict(
+        TunnelSharing.objects.filter(tunnel_id__in=tunnel_ids)
+        .values('tunnel_id')
+        .annotate(c=Count('id'))
+        .values_list('tunnel_id', 'c')
+    )
+    return {'my_shares': my_shares, 'share_counts': share_counts}
+
+
 class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
     """
     ViewSet for handling reverse server authorized keys.
@@ -105,51 +156,21 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
     queryset = ReverseServerAuthorizedKeys.objects.all()
 
     def get_queryset(self):
-        """
-        Return tunnels owned by the user or shared with the user.
-        """
-        # Get tunnels owned by the user
-        owned_tunnels = self.model.objects.filter(user=self.request.user)
-
-        # Get tunnels shared with the user
-        shared_tunnel_ids = TunnelSharing.objects.filter(
-            shared_with=self.request.user
-        ).values_list('tunnel_id', flat=True)
-
-        shared_tunnels = self.model.objects.filter(id__in=shared_tunnel_ids)
-
-        # Combine both querysets. select_related('user') so the serializer's user_id / owner check
-        # never triggers a per-row FK fetch.
-        return (owned_tunnels | shared_tunnels).distinct().select_related('user')
+        """Return tunnels owned by the user or shared with the user."""
+        return user_tunnels_queryset(self.request.user)
 
     @swagger_auto_schema(tags=['Reverse Server Keys'])
     def list(self, request, *args, **kwargs):
         """
-        List tunnels, precomputing the current user's permission map and the per-tunnel share counts
-        in TWO queries total (instead of the serializer issuing 4-6 TunnelSharing queries PER row).
-        The maps are handed to the serializer via context; see ReverseServerAuthorizedKeysSerializer.
+        List tunnels with the current user's permission map + per-tunnel share counts precomputed in
+        two queries (instead of the serializer issuing 4-6 TunnelSharing queries PER row). See the
+        serializer for how the context is consumed.
         """
         queryset = self.filter_queryset(self.get_queryset())
-        tunnel_ids = list(queryset.values_list('id', flat=True))
-
-        # 1 query: this user's shared permission for each listed tunnel {tunnel_id: permission_type}.
-        my_shares = dict(
-            TunnelSharing.objects.filter(
-                tunnel_id__in=tunnel_ids, shared_with=request.user
-            ).values_list('tunnel_id', 'permission_type')
-        )
-        # 1 query: total number of shares per listed tunnel {tunnel_id: count}.
-        share_counts = dict(
-            TunnelSharing.objects.filter(tunnel_id__in=tunnel_ids)
-            .values('tunnel_id')
-            .annotate(c=Count('id'))
-            .values_list('tunnel_id', 'c')
-        )
-
         serializer = self.get_serializer(
             queryset,
             many=True,
-            context={**self.get_serializer_context(), 'my_shares': my_shares, 'share_counts': share_counts},
+            context={**self.get_serializer_context(), **tunnel_permission_context(request.user, queryset)},
         )
         return Response(serializer.data)
 

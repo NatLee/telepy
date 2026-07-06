@@ -11,7 +11,6 @@
  *   Profile fetch: after token verify in initAuth, after refresh success, and on login.
  */
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { apiFetch } from "./api";
 import { useRouter } from "next/navigation";
 
 import { UserProfile, AuthContextType } from "../types/auth";
@@ -58,23 +57,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setAccessToken(storedToken);
             setIsLoading(false);
 
-            // 背景驗證與 profile 取得（並行，不阻塞 UI）。/ Background verify + profile (parallel).
-            void fetchUserProfileState(storedToken);
-            try {
-                const res = await apiFetch("/api/auth/token/verify", {
-                    method: "POST",
-                    body: JSON.stringify({ token: storedToken }),
-                });
-
-                if (!res.ok) {
-                    const refreshRes = await attemptRefresh();
-                    if (!refreshRes) {
-                        handleFailedAuth();
-                    }
+            // 背景認證（不阻塞 UI）：直接抓 profile —— 成功(200)即代表 token 有效，省掉先前額外多打的一支
+            // /token/verify（profile 本來就會驗證同一顆 token，兩支重複）。只有 401 才嘗試 refresh，
+            // refresh 再失敗才清除登入狀態。網路錯誤（根本拿不到回應）不動登入狀態：可能只是暫時斷線，
+            // 交給後續 API 的 401 處理。
+            // Fetch the profile directly — a 200 proves the token is valid, so the separate
+            // /token/verify round-trip is redundant. Refresh only on 401; keep auth on network errors.
+            const status = await fetchUserProfileState(storedToken);
+            if (status === "unauthorized") {
+                const refreshed = await attemptRefresh();
+                if (!refreshed) {
+                    handleFailedAuth();
                 }
-            } catch {
-                // 網路錯誤時不清除登入狀態：可能只是暫時斷線，交給後續 API 的 401 處理。
-                // Don't clear auth on network errors; a later API 401 will handle true invalidity.
             }
         };
 
@@ -117,10 +111,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem("refreshToken");
     };
 
-    const fetchUserProfileState = async (token?: string) => {
+    // 回傳認證結果讓 initAuth 決定是否 refresh：/ Returns a status so initAuth can decide whether to refresh.
+    //   "ok"           — profile 取得成功（token 有效）
+    //   "unauthorized" — 401（token 失效，應嘗試 refresh）
+    //   "error"        — 網路錯誤或其他狀態（暫時性，不清除登入狀態）
+    const fetchUserProfileState = async (token?: string): Promise<"ok" | "unauthorized" | "error"> => {
         try {
             const activeToken = token || accessToken;
-            if (!activeToken) return;
+            if (!activeToken) return "error";
             const res = await fetch((process.env.NEXT_PUBLIC_API_BASE || "") + "/api/auth/user/profile", {
                 headers: {
                     Authorization: `Bearer ${activeToken}`,
@@ -129,9 +127,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (res.ok) {
                 const data = await res.json();
                 setUser(data);
+                return "ok";
             }
+            if (res.status === 401) return "unauthorized";
+            return "error";
         } catch (e) {
             console.error("Failed to fetch user profile", e);
+            return "error";
         }
     };
 
@@ -159,7 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 user,
                 login,
                 logout,
-                fetchUserProfile: () => fetchUserProfileState(),
+                fetchUserProfile: async () => { await fetchUserProfileState(); },
             }}
         >
             {children}

@@ -153,6 +153,16 @@ ASGI_APPLICATION = "backend.asgi.application"
 
 USE_X_FORWARDED_HOST = True
 
+# 正式環境由上游反向代理（Cloudflare / Nginx / LB）終結 TLS，再以 http 轉發到 Traefik→gunicorn。
+# 信任上游帶進來的 X-Forwarded-Proto：當其值為 "https" 時，Django 視該請求為 HTTPS。這樣
+# request.is_secure()、build_absolute_uri()（OAuth 導向、Swagger 產生的網址）與 secure cookie 判定
+# 才會正確，避免 http/https 混用造成的重導迴圈與 Mixed Content。
+# 安全前提：Traefik 只能經由「可信的上游代理」連到（見 traefik.yml 的 forwardedHeaders 設定），
+# 否則用戶端可偽造此標頭。本機純 http 直連時上游不會帶此標頭，故不受影響。
+# The edge proxy terminates TLS and forwards over http; trust its X-Forwarded-Proto so Django knows
+# the original scheme was https. Safe because Traefik is only reachable via the trusted upstream.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 SWAGGER_SETTINGS = {
     "SECURITY_DEFINITIONS": {
         "Token(add prefix `Bearer` yourself)": {

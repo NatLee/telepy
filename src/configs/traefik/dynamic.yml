@@ -16,6 +16,13 @@ backendServiceSettings: &backendServiceSettings
   loadBalancer:
     servers:
       - url: "http://backend:8000"
+    # 後端啟動時要先跑 migrate / collectstatic 才 listen；在那之前不要把 /api 請求送過去（否則
+    # 使用者部署後短時間會收到 502）。Traefik 主動健康檢查：直到公開的 setup-status 回 2xx 才納入輪詢。
+    # Don't route to the backend until it's actually up (avoids 502s during the migrate/startup window).
+    healthCheck:
+      path: /api/auth/setup-status
+      interval: 10s
+      timeout: 5s
 
 http:
   middlewares:
