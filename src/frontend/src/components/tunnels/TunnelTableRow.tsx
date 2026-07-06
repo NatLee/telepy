@@ -80,13 +80,16 @@ export function TunnelTableRow({
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
                 <div className="flex items-center justify-end gap-0.5">
+                    {/* prefetch={false}：見 TunnelCard —— terminal 是重頁，每列 2 條連結，N 列 = 2N 次
+                        prefetch，載入時湧出塞爆連線、拖慢真正在等的 dashboard/profile。點了才載入。
+                        Don't prefetch the heavy terminal route per row (2N prefetch storm). */}
                     <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
-                        <Link href={getTerminalPageUrl(tunnel)}>
+                        <Link href={getTerminalPageUrl(tunnel)} prefetch={false}>
                             <TerminalSquare size={14} className="mr-1.5" /> {t("common.terminal")}
                         </Link>
                     </Button>
                     <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
-                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
+                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })} prefetch={false}>
                             <MonitorPlay size={14} className="mr-1.5" /> {t("common.browser")}
                         </Link>
                     </Button>

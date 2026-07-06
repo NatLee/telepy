@@ -50,6 +50,13 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                         <Link
                             key={link.key}
                             href={link.href}
+                            // prefetch={false}：側邊欄常駐，主頁每 ~5s 因 WebSocket 延遲更新而 re-render，
+                            // Next 的 router-tree hash 隨之改變會「反覆重抓」這幾條 nav 的 RSC(每條 route 一次
+                            // 載入被抓 4~6 次),整批湧出把連線塞爆、拖慢真正在等的 dashboard/profile。內部工具
+                            // 點導覽是刻意行為,點擊時才抓(多幾百毫秒)划算。See TunnelCard for the same rationale.
+                            // Persistent sidebar × frequent re-renders made these nav routes re-prefetch
+                            // repeatedly, flooding the connection; fetch on click instead.
+                            prefetch={false}
                             onClick={onNavigate}
                             title={collapsed ? t(link.key) : undefined}
                             className={`flex items-center gap-3 ${linkLayout} py-2 rounded-md text-sm font-medium transition-all duration-200 hover:-translate-y-px ${isActive
@@ -68,6 +75,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 {user?.is_superuser && (
                     <Link
                         href="/tunnels/settings"
+                        prefetch={false}
                         onClick={onNavigate}
                         title={collapsed ? t("nav.settings") : undefined}
                         className={`flex items-center gap-3 ${linkLayout} py-2 rounded-md text-sm font-medium transition-all duration-200 hover:-translate-y-px ${pathname.startsWith('/tunnels/settings')

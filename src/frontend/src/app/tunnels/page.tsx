@@ -95,7 +95,7 @@ export default function TunnelsPage() {
                         {t("common.refresh")}
                     </Button>
                     <Button asChild>
-                        <Link href="/tunnels/create">
+                        <Link href="/tunnels/create" prefetch={false}>
                             <Plus size={16} className="mr-2" />
                             {t("tunnels.create")}
                         </Link>
@@ -117,7 +117,7 @@ export default function TunnelsPage() {
                     <p className="mt-2 text-sm text-muted-foreground max-w-sm">{t("tunnels.emptyBody")}</p>
                     <div className="mt-6">
                         <Button asChild>
-                            <Link href="/tunnels/create">
+                            <Link href="/tunnels/create" prefetch={false}>
                                 <Plus size={16} className="mr-2" />
                                 {t("tunnels.new")}
                             </Link>

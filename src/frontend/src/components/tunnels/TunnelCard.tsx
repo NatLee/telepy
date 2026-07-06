@@ -93,13 +93,18 @@ export function TunnelCard({
                 </div>
             </CardContent>
             <CardFooter className="p-3 border-t border-border flex items-center gap-1.5 bg-muted/10 rounded-b-xl">
+                {/* prefetch={false}：terminal 是「點了才進」的重頁（xterm/VNC），每張卡有兩條連結，
+                    N 條隧道 = 2N 次 route prefetch，載入時一次湧出把伺服器/連線塞爆，害真正在等的
+                    dashboard/profile 排隊變慢。點擊時才載入，代價僅是點下去多幾百毫秒，值得。
+                    Don't prefetch the heavy terminal route for every tunnel — the 2N prefetch storm
+                    starves the requests that actually gate the list spinner. */}
                 <Button asChild variant={isActive ? "default" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
-                    <Link href={getTerminalPageUrl(tunnel)}>
+                    <Link href={getTerminalPageUrl(tunnel)} prefetch={false}>
                         <TerminalSquare size={14} className="mr-1.5 shrink-0" /> {t("common.terminal")}
                     </Link>
                 </Button>
                 <Button asChild variant={isActive ? "outline" : "secondary"} size="sm" className={`flex-1 h-8 text-xs ${!isActive ? "opacity-60" : ""}`}>
-                    <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })}>
+                    <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })} prefetch={false}>
                         <MonitorPlay size={14} className="mr-1.5 shrink-0" /> {t("common.browser")}
                     </Link>
                 </Button>
