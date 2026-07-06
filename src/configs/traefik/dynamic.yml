@@ -18,20 +18,37 @@ backendServiceSettings: &backendServiceSettings
       - url: "http://backend:8000"
 
 http:
+  middlewares:
+    # 壓縮中介層：對 HTML / JS / CSS / JSON 做 gzip + brotli。後端 Django 沒有 GZipMiddleware、
+    # gunicorn/uvicorn 也不壓縮，所以載入時會擋住渲染的 API JSON（/api/auth/user/profile、通道列表…）
+    # 先前是「未壓縮」整包過線；JSON 通常可壓掉 80-90%。Traefik 內建門檻（>1KB 才壓、已壓縮的型別跳過），
+    # 並會自動略過 WebSocket，所以只掛在 HTTP 路由、不掛在 /ws。
+    # Compress HTML/JS/CSS/JSON (gzip+brotli). Backend JSON was served uncompressed; this shrinks the
+    # render-critical API responses by ~80-90%. Traefik only compresses >1KB, skips already-compressed
+    # types, and never compresses WebSockets — so it is attached to the HTTP routers only, not /ws.
+    compress:
+      compress: {}
+
   routers:
     frontend:
       <<: *commonRouterSettings
       rule: "PathPrefix(`/`)"
       service: frontend-service
+      middlewares:
+        - compress
 
     backend-api:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/api`)"
+      middlewares:
+        - compress
 
     backend-tunnel-sharing:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/tunnels/share`) || PathPrefix(`/tunnels/unshare`) || PathPrefix(`/tunnels/shared-users`) || PathPrefix(`/tunnels/available-users`) || PathPrefix(`/tunnels/update-permission`) || PathPrefix(`/tunnels/server`)"
       priority: 100
+      middlewares:
+        - compress
 
     backend-websocket:
       <<: *backendRouterSettings

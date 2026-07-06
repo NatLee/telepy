@@ -24,16 +24,27 @@ import { I18nProvider, UserSettingsSync } from "@/lib/i18n";
 // 終端機字型不受影響：xterm 初始化前本就自行 await document.fonts.load（見 useTerminalPage）。
 // WOFF2 (~55% smaller than the TTFs) + display:swap: render text immediately with a system
 // fallback and swap when ready, instead of block's invisible-text period on first load.
+//
+// preload:false：next/font/local 預設會為字型注入 <link rel="preload" as="font">（高優先權），
+// 於是「每個」路由都會在關鍵路徑上搶頻寬去下載 2.18MB 的 CJK 字型 + 976KB 的等寬字型（共 3.13MB），
+// 把「讓頁面可互動」所需的 JS chunk 往後擠——但 display:swap 早就用系統字型立即顯示文字，這個 preload
+// 對首屏毫無幫助（登入頁 / "/" spinner 根本沒有 CJK 字元）。關掉 preload 後字型改為「CSS 真正用到時才
+// 以較低優先權延後載入」，關鍵路徑讓給 JS，頁面更快可互動；字型到位後照常 swap。
+// preload:false — next/font preloads fonts at high priority on every route by default, so 3.13MB of
+// fonts contend with the route JS that gates interactivity. display:swap already paints text with a
+// system fallback, so the preload buys nothing above-the-fold. Load fonts lazily off the critical path.
 const openHunInn = localFont({
   src: "../fonts/jf-openhuninn-2.1.woff2",
   variable: "--font-openhuninn",
   display: "swap",
+  preload: false,
 });
 
 const protoNerd = localFont({
   src: "../fonts/0xProtoNerdFont-Regular.woff2",
   variable: "--font-0xproto",
   display: "swap",
+  preload: false,
 });
 
 export const metadata: Metadata = {

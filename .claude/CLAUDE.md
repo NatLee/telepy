@@ -34,7 +34,7 @@ src/
     services/       # Service layer (remote browser, etc.)
     common/         # Shared utilities
   frontend/         # Next.js app
-    src/app/        # Pages: login, tunnels (create/index/terminal/settings/logs/keys)
+    src/app/        # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys); root page.tsx redirects by auth state
     src/components/ # UI components (Shadcn-style + Radix)
     src/fonts/      # Local font files (loaded via next/font/local)
     src/hooks/      # Custom React hooks (WebSocket, notifications, etc.)
@@ -109,10 +109,10 @@ Copy `.env.example` to `.env` and configure:
 ## Architecture Notes
 
 - **Services:** 6 containers orchestrated via Docker Compose: Traefik, frontend, backend, Redis, SSH, kasm-browser (remote browser)
-- **Routing:** Traefik routes `/api/*` and `/ws/*` to backend, everything else to frontend
+- **Routing:** Traefik routes `/api/*`, `/ws/*`, and a fixed set of `/tunnels/{share,unshare,shared-users,available-users,update-permission,server}` paths to the backend; everything else to the frontend. Traefik also applies a `compress` middleware (gzip/brotli) to all HTTP routers (not `/ws`), since Django/gunicorn don't compress responses themselves.
 - **WebSocket:** Terminal PTY via `channels` AsyncWebsocketConsumer, auth via JWT subprotocol
 - **Permissions:** Hierarchical tunnel access — VIEW / EDIT / ADMIN — managed by `TunnelPermissionService`
-- **Process management:** Supervisor runs Django (Daphne) and background WebSocket update workers inside the backend container
+- **Process management:** Supervisor runs the backend ASGI server (dev `DEBUG=true` → `manage.py runserver`, with daphne from `INSTALLED_APPS` providing ASGI/WebSocket; prod → gunicorn managing uvicorn workers — see `src/scripts/start-backend.sh`) plus the `websocket_update_ports` background worker, inside the backend container
 - **API docs:** Swagger UI at `/api/__hidden_swagger`, ReDoc at `/api/__hidden_redoc` (requires auth)
 - **Logging:** Loguru with timed rotating file handler + database logging
 - **Static files:** WhiteNoise in production
@@ -121,9 +121,9 @@ Copy `.env.example` to `.env` and configure:
 
 - **Chinese (CJK):** jf-openhuninn (`src/frontend/src/fonts/jf-openhuninn-2.1.woff2`, converted from the TTF) — used as primary `font-sans`
 - **Terminal / Monospace:** 0xProto Nerd Font (`src/frontend/src/fonts/0xProtoNerdFont-Regular.woff2`) — used as primary `font-mono` and xterm.js terminal font
-- Source TTF files kept alongside the woff2 in `src/frontend/src/fonts/` and in project root `font/`; regenerate woff2 with `fonttools` (`font.flavor = "woff2"`)
-- Loaded via `next/font/local` in `layout.tsx` with `display: "swap"` (text renders immediately with a system fallback, then swaps — do NOT switch back to `block`, it blanks all text until the 2.2MB CJK font finishes downloading)
-- Tailwind CSS variables `--font-sans` / `--font-mono` reference custom fonts first, then Geist as fallback
+- Source TTF files kept alongside the woff2 in `src/frontend/src/fonts/`; regenerate woff2 with `fonttools` (`font.flavor = "woff2"`)
+- Loaded via `next/font/local` in `layout.tsx` with `display: "swap"` **and `preload: false`** (text renders immediately with a system fallback, then swaps — do NOT switch back to `block`, it blanks all text until the 2.2MB CJK font finishes downloading). `preload: false` is deliberate: `next/font` otherwise injects a high-priority `<link rel="preload">` for BOTH fonts (~3.1MB, incl. the 2.18MB CJK) on **every** route, stealing bandwidth from the JS that gates interactivity; `swap` already paints text instantly, so preloading buys nothing above-the-fold. Fonts now load lazily off the critical path.
+- Tailwind CSS variables `--font-sans` / `--font-mono` reference the custom fonts first, then generic system fonts as fallback (`ui-sans-serif, system-ui, sans-serif` for sans; `ui-monospace, 'Courier New', monospace` for mono — see `globals.css`). No Geist dependency.
 - xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and explicitly awaits `document.fonts.load()` for the mono font (1.5s timeout guard) before terminal initialization — it does not depend on the CJK font
 
 ## Internationalization (i18n) — REQUIRED for all frontend UI text
@@ -140,7 +140,7 @@ hardcode display text in components, hooks, or lib error builders.
   Keys are flat `namespace.camelCase` (e.g. `tunnels.deleteMessage`), namespaced by feature
   (`common`, `nav`, `api`, `login`, `firstLogin`, `tunnels`, `tunnelActions`, `tunnelDetails`,
   `wizard`, `terminal`, `latency`, `kbd`, `files`, `browser`, `scripts`, `config`, `share`,
-  `manageUsers`, `keys`, `logs`, `settings`, `language`, `ui`).
+  `manageUsers`, `keys`, `logs`, `settings`, `siteSettings`, `prefs`, `language`, `ui`).
 - **In components/hooks:** `const { t, tn, locale, language, setLanguage } = useI18n()` from
   `@/lib/i18n`. `t(key, vars?)` returns a string; `{var}` placeholders interpolate
   (`t("tunnels.deleted", { name })`). `tn(key, vars)` accepts ReactNode values so sentences keep

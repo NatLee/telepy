@@ -1,5 +1,6 @@
 import logging
 
+from django.db.models import Count
 from django.http import HttpResponse
 
 from rest_framework import generics
@@ -117,8 +118,40 @@ class ReverseServerAuthorizedKeysViewSet(BaseKeyViewSet):
 
         shared_tunnels = self.model.objects.filter(id__in=shared_tunnel_ids)
 
-        # Combine both querysets
-        return (owned_tunnels | shared_tunnels).distinct()
+        # Combine both querysets. select_related('user') so the serializer's user_id / owner check
+        # never triggers a per-row FK fetch.
+        return (owned_tunnels | shared_tunnels).distinct().select_related('user')
+
+    @swagger_auto_schema(tags=['Reverse Server Keys'])
+    def list(self, request, *args, **kwargs):
+        """
+        List tunnels, precomputing the current user's permission map and the per-tunnel share counts
+        in TWO queries total (instead of the serializer issuing 4-6 TunnelSharing queries PER row).
+        The maps are handed to the serializer via context; see ReverseServerAuthorizedKeysSerializer.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        tunnel_ids = list(queryset.values_list('id', flat=True))
+
+        # 1 query: this user's shared permission for each listed tunnel {tunnel_id: permission_type}.
+        my_shares = dict(
+            TunnelSharing.objects.filter(
+                tunnel_id__in=tunnel_ids, shared_with=request.user
+            ).values_list('tunnel_id', 'permission_type')
+        )
+        # 1 query: total number of shares per listed tunnel {tunnel_id: count}.
+        share_counts = dict(
+            TunnelSharing.objects.filter(tunnel_id__in=tunnel_ids)
+            .values('tunnel_id')
+            .annotate(c=Count('id'))
+            .values_list('tunnel_id', 'c')
+        )
+
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
+            context={**self.get_serializer_context(), 'my_shares': my_shares, 'share_counts': share_counts},
+        )
+        return Response(serializer.data)
 
     def can_edit_tunnel(self, tunnel):
         """
