@@ -347,7 +347,7 @@ export function RemoteBrowserPanel({
             </div>
 
             {error && (
-                <div className="p-3 m-3 bg-red-500/10 border border-red-500/20 text-red-500 text-sm rounded-md flex items-start gap-2">
+                <div className="p-3 m-3 bg-red-500/10 border border-red-500/20 text-red-700 dark:text-red-400 text-sm rounded-md flex items-start gap-2">
                     <AlertCircle size={16} className="mt-0.5 shrink-0" />
                     <span>{error}</span>
                 </div>

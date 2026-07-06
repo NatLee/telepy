@@ -67,9 +67,9 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
             return <ImageIcon className="text-emerald-500" size={16} />;
         }
         if (name.endsWith('.js') || name.endsWith('.ts') || name.endsWith('.py') || name.endsWith('.json') || name.endsWith('.html')) {
-            return <FileCode2 className="text-slate-500" size={16} />;
+            return <FileCode2 className="text-slate-500 dark:text-slate-400" size={16} />;
         }
-        return <File className="text-slate-400" size={16} />;
+        return <File className="text-muted-foreground" size={16} />;
     };
 
     const formatSize = (sizeStr: string | number) => {

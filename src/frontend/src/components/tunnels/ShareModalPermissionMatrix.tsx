@@ -45,16 +45,16 @@ export function ShareModalPermissionMatrix() {
                                     <span className="text-[10px] text-muted-foreground/70 -mt-2">*</span>
                                 </div>
                             </td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
                         </tr>
                         <tr className="hover:bg-muted/30 transition-colors">
                             <td className="px-4 py-2 font-medium text-left text-foreground">{t("share.roleViewer")}</td>
                             <td className="px-3 py-2"><Check size={16} className="mx-auto text-foreground" /></td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
-                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/50" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
                         </tr>
                     </tbody>
                 </table>

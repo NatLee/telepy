@@ -57,7 +57,9 @@ export default function SettingsPage() {
             <div className="animate-fade-in-up">
                 <div className="bg-warning/10 border-l-4 border-warning p-4 rounded-r-md flex items-start">
                     <ShieldAlert className="text-warning mr-3 shrink-0 mt-0.5" size={20} />
-                    <p className="text-sm text-warning-foreground">{t("settings.adminOnly")}</p>
+                    {/* text-warning-foreground 是給實心 bg-warning 用的(近黑),在半透明底上會消失 → 用可讀的琥珀色。
+                        text-warning-foreground (near-black) is for solid bg-warning; on this tint it vanishes → readable amber. */}
+                    <p className="text-sm text-amber-800 dark:text-amber-200">{t("settings.adminOnly")}</p>
                 </div>
             </div>
         );
@@ -382,7 +384,7 @@ function UserEditModal({
                 </div>
 
                 {isSelf && (
-                    <div className="bg-warning/10 border-l-4 border-warning p-3 rounded-r-md text-sm text-warning-foreground">
+                    <div className="bg-warning/10 border-l-4 border-warning p-3 rounded-r-md text-sm text-amber-800 dark:text-amber-200">
                         {t("settings.selfEditNote")}
                     </div>
                 )}

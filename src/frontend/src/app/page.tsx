@@ -23,8 +23,8 @@ export default function RootPage() {
   }, [isAuthenticated, isLoading, router]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900">
-      <div className="w-10 h-10 border-4 border-slate-700 border-t-green-500 rounded-full animate-spin"></div>
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="w-10 h-10 border-4 border-border border-t-primary rounded-full animate-spin"></div>
     </div>
   );
 }
