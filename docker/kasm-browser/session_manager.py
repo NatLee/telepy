@@ -101,13 +101,28 @@ DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 #                   都會炸(sentinel 預建也擋不住;旗標二分法釘死是這一支)。實測拿掉後:全新
 #                   profile 與 watchdog 重啟都穩定,且 Debian build 本來就不出 first-run 精靈
 #                   (唯一視窗就是瀏覽器本體)→ 這支旗標在本容器是「零效益、純致命」,勿加回。
+#   --proxy-bypass-list='<-loopback>'
+#                   **讓 localhost / 127.0.0.1 / ::1 / *.localhost 也走 --proxy-server 的 SOCKS
+#                   (= 目標機器出口),而非 chromium 內建的「loopback 一律直連」預設。** 少了這旗標,
+#                   使用者在代理瀏覽器輸入 http://localhost:PORT 會被 chromium **直連**到 kasm-browser
+#                   容器自己的 loopback(什麼服務都沒有)→ 回報「代理瀏覽器不能完全以目標機身分訪問,
+#                   連 localhost 都連不到」。`<-loopback>` 是 chromium 專門用來「**移除**內建 loopback
+#                   bypass 規則」的特殊 token;移除後 loopback 目的地改由 ssh -D 送到目標機、connect
+#                   其本機服務(這條 ssh -D 的出口就是目標機 sshd,127.0.0.1 = 目標機自己)。
+#                   **單引號必留:整條 BROWSER_CMD 最後經 open-browser.sh 的 `sh -c "$BROWSER_CMD"`
+#                   二次解析,`<`/`>` 不引起來會被 shell 當成重導向 metacharacter。** 一般外網瀏覽照走
+#                   proxy(出口 IP)不變;`<-loopback>` 移除的是 chromium 對 loopback **與 link-local**
+#                   (localhost/127.0.0.1/8/::1/*.localhost 及 169.254/16、fe80::/10)的隱含 bypass,故
+#                   這些「本地位址」一併改走 proxy → 目標機網路(對本用途無害,正合「以目標機身分」訪問);
+#                   VNC 傳輸是 Xkasmvnc 自家 websocket(與 chromium 網路層無關)也完全不受影響。
 DEFAULT_BROWSER_CMD = (
     "chromium --no-sandbox --test-type --no-default-browser-check "
     "--disable-dev-shm-usage --disable-features=TranslateUI "
     "--enable-unsafe-swiftshader "
     "--disable-blink-features=AutomationControlled "
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
-    "--proxy-server={proxy} --start-maximized {homepage}"
+    "--proxy-server={proxy} --proxy-bypass-list='<-loopback>' "
+    "--start-maximized {homepage}"
 )
 # 瀏覽器重啟策略:
 #   - 視窗被縮小/關掉但 chromium「行程」還在(background mode)→ 不打擾,由使用者點 tint2

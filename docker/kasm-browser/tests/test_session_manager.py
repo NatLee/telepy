@@ -82,6 +82,10 @@ class SessionManagerTest(unittest.TestCase):
         # 反爬蟲關鍵:--accept-lang 不能帶 q-value(否則 q 洩進 navigator.languages +
         # 疊出雙重-q 的 Accept-Language header,兩者都是機器人特徵)。
         self.assertNotIn("q=", browser_cmd)
+        # localhost/127.0.0.1 也要走 proxy(= 目標機器),否則 chromium 預設 loopback 直連會打到
+        # kasm-browser 容器自己 → 使用者連不到目標機的本機服務。`<-loopback>` 移除內建 loopback bypass。
+        # 單引號必留:BROWSER_CMD 最後經 `sh -c` 二次解析,`<`/`>` 不引起來會被當成 shell 重導向。
+        self.assertIn("--proxy-bypass-list='<-loopback>'", browser_cmd)
         # 反爬蟲:允許 WebGL 回退 SwiftShader(否則 headed 無 GPU → WebGL context 為 null)。
         self.assertIn("--enable-unsafe-swiftshader", browser_cmd)
         # 但**不可**強制整個 GL 合成器走 SwiftShader —— 那會讓影片掉幀/播不動(YouTube 回報)。

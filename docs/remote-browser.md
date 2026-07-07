@@ -19,9 +19,10 @@ kasm-browser 容器 :<ws_port>(KasmVNC websocket,Basic Auth)
    ├─ openbox + chromium(respawn 迴圈包裹;每 session 專屬臨時 profile)
    └─ session-manager(:7000,X-Internal-Token 保護的 HTTP API)
 
-chromium --proxy-server=socks5://backend:<port>
+chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>'
    ▲
    └─ backend 起的 `ssh -D`(經 reverse gateway 到目標機器)= 出口 IP
+      (localhost/127.0.0.1 亦經此送到目標機,見下方 --proxy-bypass-list 說明)
 ```
 
 - **為什麼是 WS↔WS 而不是 raw-RFB TCP:** KasmVNC 已脫離 RFB 規範,只開
@@ -30,6 +31,20 @@ chromium --proxy-server=socks5://backend:<port>
 - **握手順序**(VNC 是 server 先說話,不能漏 greeting):前端 `auth` →
   後端連上游、回 `ready` → 前端把同一條 WS 交給 RFB client → 回 `begin` →
   後端才開始 pump 上游 bytes。
+- **為什麼 chromium 要帶 `--proxy-bypass-list='<-loopback>'`:** chromium 對 loopback
+  目的地(`localhost` / `127.0.0.1/8` / `::1` / `*.localhost`)**內建「一律直連、不走 proxy」的
+  隱含規則**。少了這旗標,使用者在代理瀏覽器輸入 `http://localhost:PORT` 會被 chromium **直連**到
+  kasm-browser **容器自己**的 loopback(空的),而非目標機器 → 回報「代理瀏覽器不能完全以目標機
+  身分訪問,連 localhost 都連不到」。`<-loopback>` 是 chromium 專門用來**移除**該隱含 loopback
+  bypass 的 token;移除後 loopback 目的地改由 `--proxy-server` 的 `ssh -D` 送到目標機、在目標機
+  上 `connect(127.0.0.1:PORT)`(這條 -D 的出口就是目標機 sshd,`127.0.0.1` = 目標機自己),代理
+  瀏覽器才真正「完全以目標機身分」訪問其本機服務。**單引號不可省**:整條 `BROWSER_CMD` 最後經
+  `open-browser.sh` 的 `sh -c "$BROWSER_CMD"` **二次** shell 解析,`<` / `>` 不引起來會被當成
+  重導向 metacharacter。一般外網瀏覽照走 proxy(出口 IP)不變;`<-loopback>` 移除的是 chromium 對
+  loopback **與 link-local** 的隱含 bypass(整組為 `localhost` / `*.localhost` / `[::1]` /
+  `127.0.0.1/8` / `169.254/16` / `[FE80::]/10`),故這些「本地位址」一併改走 proxy → 目標機網路
+  (對本用途無害,正合「以目標機身分」);VNC 傳輸(Xkasmvnc 自家 websocket,與 chromium 網路層
+  無關)不受影響。
 
 ## 元件地圖
 
