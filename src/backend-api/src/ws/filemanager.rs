@@ -1,18 +1,21 @@
 //! `/ws/filemanager/`：檔案管理（FileManagerConsumer）。
-//! 一條常駐 `ssh … cat` 當 ControlMaster，每個操作走同一 ControlPath 執行遠端指令並解析輸出
-//! （unix `ls -la` / PowerShell `Get-ChildItem | ConvertTo-Json`）。M4 會換成原生 SFTP，解析邏輯保留為退路。
+//! 優先走原生 SFTP（russh + russh-sftp，結構化 readdir）；SFTP subsystem 不可用時退回
+//! 「常駐 `ssh … cat` ControlMaster + 遠端 `ls -la` / PowerShell JSON」的舊路徑。
 //! Actions: `shell_detect`、`list_files {path}`；回 `{action, data}`；錯誤 `{action:"error", data:{status:"error", message}}`。
 
 use std::process::Stdio;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
+use russh_sftp::client::SftpSession;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use super::{auth, close, is_ping, send_json};
 use crate::db;
 use crate::permissions::{self, Permission};
+use crate::sftp;
+use crate::ssh::device::{self, DeviceConn};
 use crate::ssh::process::{filemanager_exec_args, filemanager_master_args, terminate_child};
 use crate::ssh::SshTarget;
 use crate::state::AppState;
@@ -85,13 +88,14 @@ pub fn parse_powershell_listing(stdout: &str) -> Vec<Value> {
         .collect()
 }
 
-struct Session {
+/// 舊路徑：常駐 ControlMaster + 單次指令。/ Fallback: exec over a ControlMaster session.
+struct ExecSession {
     state: AppState,
     target: SshTarget,
     master: Option<Child>,
 }
 
-impl Session {
+impl ExecSession {
     async fn start(state: AppState, target: SshTarget) -> std::io::Result<Self> {
         let child = Command::new(&state.config.ssh_binary)
             .args(filemanager_master_args(&target))
@@ -100,7 +104,7 @@ impl Session {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()?;
-        tracing::info!(target = %target.userhost(), port = target.port, "SSH session initialized");
+        tracing::info!(target = %target.userhost(), port = target.port, "SSH session initialized (exec fallback)");
         Ok(Self { state, target, master: Some(child) })
     }
 
@@ -157,12 +161,82 @@ impl Session {
     }
 }
 
+enum Backend {
+    Sftp { sftp: SftpSession, home: String, shell: &'static str, _conn: DeviceConn },
+    Exec(ExecSession),
+}
+
+impl Backend {
+    async fn shell(&self) -> &'static str {
+        match self {
+            Backend::Sftp { shell, .. } => shell,
+            Backend::Exec(s) => {
+                if s.is_powershell().await {
+                    "powershell"
+                } else {
+                    "unix"
+                }
+            }
+        }
+    }
+
+    /// 回 (path, files) 或錯誤訊息。
+    async fn list(&self, requested: Option<String>) -> Result<(String, Vec<Value>), String> {
+        match self {
+            Backend::Sftp { sftp, home, shell, .. } => {
+                let raw = requested.unwrap_or_else(|| if *shell == "powershell" { "C:\\".into() } else { "~/".into() });
+                let path = sftp::resolve_path(&raw, home);
+                let entries = sftp::list_dir(sftp, &path).await.map_err(|e| format!("Failed to list files: {e}"))?;
+                Ok((path, entries.iter().map(sftp::ws_entry_json).collect()))
+            }
+            Backend::Exec(s) => {
+                let is_ps = s.is_powershell().await;
+                let path = requested.unwrap_or_else(|| if is_ps { "C:\\".into() } else { "~/".into() });
+                let command = if is_ps {
+                    format!("Get-ChildItem -Path \"{path}\" | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json")
+                } else {
+                    format!("ls -la {path}")
+                };
+                let (stdout, stderr, code) = s.exec(&command).await;
+                if code != 0 {
+                    return Err(format!("Failed to list files: {stderr}"));
+                }
+                let files = if is_ps { parse_powershell_listing(&stdout) } else { parse_unix_listing(&stdout) };
+                Ok((path, files))
+            }
+        }
+    }
+
+    async fn cleanup(&mut self) {
+        if let Backend::Exec(s) = self {
+            s.cleanup().await;
+        }
+    }
+}
+
 async fn send_error(socket: &mut WebSocket, message: String) -> bool {
     send_json(socket, &json!({ "action": "error", "data": { "status": "error", "message": message } })).await
 }
 
 async fn send_response(socket: &mut WebSocket, action: &str, data: Value) -> bool {
     send_json(socket, &json!({ "action": action, "data": data })).await
+}
+
+async fn open_backend(state: &AppState, username: &str, reverse_port: i64) -> Option<Backend> {
+    match device::connect(&state.config, username, reverse_port).await {
+        Ok(conn) => match conn.sftp().await {
+            Ok(sftp) => {
+                let home = sftp::home(&sftp).await;
+                let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
+                tracing::info!(%username, reverse_port, home, "FileManager: native SFTP session ready");
+                return Some(Backend::Sftp { sftp, home, shell, _conn: conn });
+            }
+            Err(e) => tracing::warn!(error = %e, "FileManager: SFTP subsystem unavailable, falling back to exec"),
+        },
+        Err(e) => tracing::warn!(error = %e, "FileManager: native SSH connection failed, falling back to exec"),
+    }
+    let target = SshTarget::new(&state.config, username, reverse_port);
+    ExecSession::start(state.clone(), target).await.ok().map(Backend::Exec)
 }
 
 pub async fn handle(state: AppState, mut socket: WebSocket) {
@@ -208,14 +282,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
         return;
     }
 
-    let target = SshTarget::new(&state.config, &username, tunnel.reverse_port);
-    let mut session = match Session::start(state.clone(), target).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to initialize SSH session");
-            close(&mut socket, 4005).await;
-            return;
-        }
+    let Some(mut backend) = open_backend(&state, &username, tunnel.reverse_port).await else {
+        tracing::error!("Failed to initialize SSH session");
+        close(&mut socket, 4005).await;
+        return;
     };
 
     while let Some(Ok(frame)) = socket.recv().await {
@@ -242,9 +312,15 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
         let action = data.get("action").and_then(|a| a.as_str()).unwrap_or("").to_string();
         let payload = data.get("payload").cloned().unwrap_or_else(|| json!({}));
         let ok = match action.as_str() {
-            "list_files" => list_files(&session, &mut socket, &payload).await,
+            "list_files" => {
+                let requested = payload.get("path").and_then(|p| p.as_str()).map(str::to_string);
+                match backend.list(requested).await {
+                    Ok((path, files)) => send_response(&mut socket, "list_files", json!({ "status": "success", "path": path, "files": files })).await,
+                    Err(e) => send_error(&mut socket, e).await,
+                }
+            }
             "shell_detect" => {
-                let shell = if session.is_powershell().await { "powershell" } else { "unix" };
+                let shell = backend.shell().await;
                 send_response(&mut socket, "shell_detect", json!({ "status": "success", "shell": shell })).await
             }
             other => send_error(&mut socket, format!("Unknown action: {other}")).await,
@@ -253,24 +329,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
             break;
         }
     }
-    session.cleanup().await;
-}
-
-async fn list_files(session: &Session, socket: &mut WebSocket, payload: &Value) -> bool {
-    let is_ps = session.is_powershell().await;
-    let requested = payload.get("path").and_then(|p| p.as_str()).map(str::to_string);
-    let path = requested.unwrap_or_else(|| if is_ps { "C:\\".to_string() } else { "~/".to_string() });
-    let command = if is_ps {
-        format!("Get-ChildItem -Path \"{path}\" | Select-Object Mode, LastWriteTime, Length, Name | ConvertTo-Json")
-    } else {
-        format!("ls -la {path}")
-    };
-    let (stdout, stderr, code) = session.exec(&command).await;
-    if code != 0 {
-        return send_error(socket, format!("Failed to list files: {stderr}")).await;
-    }
-    let files = if is_ps { parse_powershell_listing(&stdout) } else { parse_unix_listing(&stdout) };
-    send_response(socket, "list_files", json!({ "status": "success", "path": path, "files": files })).await
+    backend.cleanup().await;
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::hub::Hub;
 use crate::monitor::StatusState;
+use crate::remote_browser::RemoteBrowser;
 use crate::tokens::TokenStores;
 
 pub struct Inner {
@@ -21,6 +22,7 @@ pub struct Inner {
     pub google: GoogleVerifier,
     pub http: reqwest::Client,
     pub status: StatusState,
+    pub remote_browser: Arc<RemoteBrowser>,
 }
 
 #[derive(Clone)]
@@ -40,7 +42,9 @@ impl AppState {
             .build()
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
+        let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         Self(Arc::new(Inner {
+            remote_browser,
             google: GoogleVerifier::new(http.clone()),
             jwt,
             hub: Hub::new(),

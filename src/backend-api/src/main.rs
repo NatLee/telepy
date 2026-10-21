@@ -90,6 +90,10 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     seed_service_key(&db, &config.web_service_pubkey_path).await?;
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
+    state.remote_browser.cleanup_orphans(&state.db).await;
+    if config.remote_browser_gc {
+        tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
+    }
     let app = telepy_server::app::build(state);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!(addr = %config.bind, "listening");
