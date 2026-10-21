@@ -38,17 +38,15 @@
 
 ## 運作原理
 
-裝置以反向 SSH 連線（`ssh -NR <port>:localhost:22 telepy@server`）連回 Telepy 的 SSH 容器，每條隧道都會分配到一個專屬埠。網頁終端機、檔案管理與代理瀏覽器都經由該埠存取裝置——裝置端不需要設定防火牆入站規則，也不需要公共 IP。
+裝置以反向 SSH 連線（`ssh -NR <port>:localhost:22 telepy@server`）連回 Telepy 後端，由內建的 SSH gateway 直接承接，每條隧道都會分配到一個專屬埠。網頁終端機、檔案管理與代理瀏覽器都經由該埠存取裝置——裝置端不需要設定防火牆入站規則，也不需要公共 IP。
 
-Telepy 由 Docker Compose 編排的六個容器組成：
+Telepy 由 Docker Compose 編排的四個容器組成：
 
 | 服務           | 角色                                                         |
 | -------------- | ------------------------------------------------------------ |
 | `traefik`      | 反向代理；將 `/api/*` 與 `/ws/*` 導向後端，其餘導向前端     |
 | `frontend`     | Next.js 網頁介面                                             |
-| `backend`      | Django + DRF + Channels（REST API 與 WebSocket 終端機）      |
-| `redis`        | 快取與 channel layer                                         |
-| `ssh`          | 承接反向隧道的 OpenSSH 伺服器                                |
+| `backend`      | Rust（axum）服務：REST API、WebSocket 終端機／檔案管理／中繼，以及承接反向隧道的內建 SSH gateway |
 | `kasm-browser` | 供遠端瀏覽器工作階段使用的 KasmVNC + Chromium                |
 
 ## 快速開始
@@ -92,7 +90,8 @@ Telepy 由 Docker Compose 編排的六個容器組成：
 | 變數                      | 預設值      | 說明                                 |
 | ------------------------- | ----------- | ------------------------------------ |
 | `PROJECT_NAME`            | `main`      | 容器名稱後綴                         |
-| `DEBUG`                   | `false`     | Django 除錯模式                      |
+| `DEBUG`                   | `false`     | 除錯等級日誌                         |
+| `SECRET_KEY`              | —           | JWT 簽章金鑰（正式環境請設定）       |
 | `WEB_SERVER_PORT`         | `8787`      | Traefik 對外提供網頁介面的埠         |
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | 裝置反向 SSH 連入的埠                |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth 用戶端 ID               |
@@ -106,25 +105,12 @@ Telepy 由 Docker Compose 編排的六個容器組成：
 ```
 Usage: ./telepy.sh sub-command [args]
 Sub-commands:
-  keygen: Generate SSH keys for Telepy service.
+  keygen: Generate SSH host keys (gateway) and the backend service key.
   create-superuser: Create an admin account for Telepy management.
-  shell: Create a shell to run arbitrary command.
-  ipython: Create a shell to run ipython.
-  supervisorctl: Attach to supervisor control shell.
-  ssh-shell: Similar to 'shell', but for ssh container.
-  migration: Run migration process.
-  backend-debug: Recreate and attach to backend container.
-  collect-static: Collect static files to increase rendering speed.
-  django-startapp: Create a new Django app.
+  shell: Open a shell in the backend container.
+  migration: Reconcile the database schema (also runs automatically on start).
+  backend-debug: Recreate the backend container and follow its logs.
 ```
-
-## API 文件
-
-請先登入，再造訪：
-
-- Swagger UI — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_swagger`
-- ReDoc — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_redoc`
-- Django admin — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_admin/`
 
 ## 延伸閱讀
 

@@ -12,7 +12,6 @@ NC='\033[0m' # No Color
 
 # Constant: container names for Telepy
 CONTAINER_WEB_NAME="telepy-web-${PROJECT_NAME}"
-CONTAINER_SSH_NAME="telepy-ssh-${PROJECT_NAME}"
 
 # Function to print colored messages
 print_message() {
@@ -45,21 +44,8 @@ case "$1" in
         ;;
     shell)
         shift
-        print_message "$YELLOW" "Starting Web Server container shell..."
+        print_message "$YELLOW" "Starting backend container shell..."
         execute_script "dev-bash" "$@"
-        ;;
-    ipython)
-        shift
-        execute_script "dev-shell" "$@"
-        ;;
-    supervisorctl)
-        shift
-        execute_script "dev-supervisorctl" "$@"
-        ;;
-    ssh-shell)
-        shift
-        print_message "$YELLOW" "Starting SSH container shell..."
-        execute_script "dev-ssh-bash" "$@"
         ;;
     migration)
         shift
@@ -69,26 +55,13 @@ case "$1" in
         shift
         execute_script "dev-backend-debug" "$@"
         ;;
-    collect-static)
-        shift
-        execute_script "dev-collect-statics" "$@"
-        ;;
-    django-startapp)
-        shift
-        execute_script "dev-startapp" "$@"
-        ;;
     *)
         print_message "$YELLOW" "Usage: $0 sub-command [args]"
         print_message "$BLUE" "Sub-commands:"
-        print_message "$GREEN" "  keygen: Generate SSH keys for Telepy service."
+        print_message "$GREEN" "  keygen: Generate SSH host keys (gateway) and the backend service key."
         print_message "$GREEN" "  create-superuser: Create an admin account for Telepy management."
-        print_message "$GREEN" "  shell: Create a shell to run arbitrary command."
-        print_message "$GREEN" "  ipython: Create a shell to run ipython."
-        print_message "$GREEN" "  supervisorctl: Attach to supervisor control shell."
-        print_message "$GREEN" "  ssh-shell: Similar to 'shell', but for ssh container."
-        print_message "$GREEN" "  migration: Run migration process."
-        print_message "$GREEN" "  backend-debug: Recreate and attach to backend container."
-        print_message "$GREEN" "  collect-static: Collect static files to increase rendering speed."
-        print_message "$GREEN" "  django-startapp: Create a new Django app."
+        print_message "$GREEN" "  shell: Open a shell in the backend container."
+        print_message "$GREEN" "  migration: Reconcile the database schema (also runs automatically on start)."
+        print_message "$GREEN" "  backend-debug: Recreate the backend container and follow its logs."
         ;;
 esac

@@ -17,8 +17,8 @@ USERNAME=$(prompt_with_default "Enter username" "admin")
 EMAIL=$(prompt_with_default "Enter email" "admin@admin.com")
 PASSWORD=$(prompt_with_default "Enter password" "1234")
 
-# Create superuser
+# Create superuser (the first user becomes a superuser automatically; this also works later)
 print_message "$BLUE" "Creating superuser..."
-docker exec -it ${CONTAINER_WEB_NAME} bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+docker exec -it ${CONTAINER_WEB_NAME} telepy-server create-superuser --username "$USERNAME" --email "$EMAIL" --password "$PASSWORD"
 
 print_message "$GREEN" "Superuser created successfully."

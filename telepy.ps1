@@ -2,7 +2,7 @@
 param(
     [Parameter(Position=0)]
     [string]$Command,
-    
+
     [Parameter(ValueFromRemainingArguments=$true)]
     [string[]]$Arguments
 )
@@ -31,7 +31,6 @@ if (-not $PROJECT_NAME) { $PROJECT_NAME = "default" }
 
 # Constant: container names for Telepy
 $CONTAINER_WEB_NAME = "telepy-web-$PROJECT_NAME"
-$CONTAINER_SSH_NAME = "telepy-ssh-$PROJECT_NAME"
 
 # Function to print colored messages
 function Write-ColorMessage {
@@ -48,11 +47,11 @@ function Invoke-DevScript {
         [string]$ScriptName,
         [string[]]$ScriptArguments
     )
-    
+
     $ps1Script = "./dev-scripts/$ScriptName.ps1"
     $batScript = "./dev-scripts/$ScriptName.bat"
     $shScript = "./dev-scripts/$ScriptName.sh"
-    
+
     if (Test-Path $ps1Script) {
         & $ps1Script @ScriptArguments
     } elseif (Test-Path $batScript) {
@@ -81,21 +80,8 @@ switch ($Command) {
         break
     }
     "shell" {
-        Write-ColorMessage $Colors.Yellow "Starting Web Server container shell..."
+        Write-ColorMessage $Colors.Yellow "Starting backend container shell..."
         Invoke-DevScript "dev-bash" $Arguments
-        break
-    }
-    "ipython" {
-        Invoke-DevScript "dev-shell" $Arguments
-        break
-    }
-    "supervisorctl" {
-        Invoke-DevScript "dev-supervisorctl" $Arguments
-        break
-    }
-    "ssh-shell" {
-        Write-ColorMessage $Colors.Yellow "Starting SSH container shell..."
-        Invoke-DevScript "dev-ssh-bash" $Arguments
         break
     }
     "migration" {
@@ -106,28 +92,14 @@ switch ($Command) {
         Invoke-DevScript "dev-backend-debug" $Arguments
         break
     }
-    "collect-static" {
-        Invoke-DevScript "dev-collect-statics" $Arguments
-        break
-    }
-    "django-startapp" {
-        Invoke-DevScript "dev-startapp" $Arguments
-        break
-    }
     default {
         Write-ColorMessage $Colors.Yellow "Usage: .\telepy.ps1 <sub-command> [args]"
         Write-ColorMessage $Colors.Blue "Sub-commands:"
-        Write-ColorMessage $Colors.Blue "Backend Development:"
-        Write-ColorMessage $Colors.Green "  keygen: Generate SSH keys for Telepy service."
+        Write-ColorMessage $Colors.Green "  keygen: Generate SSH host keys (gateway) and the backend service key."
         Write-ColorMessage $Colors.Green "  create-superuser: Create an admin account for Telepy management."
-        Write-ColorMessage $Colors.Green "  shell: Create a shell to run arbitrary command."
-        Write-ColorMessage $Colors.Green "  ipython: Create a shell to run ipython."
-        Write-ColorMessage $Colors.Green "  supervisorctl: Attach to supervisor control shell."
-        Write-ColorMessage $Colors.Green "  ssh-shell: Similar to 'shell', but for ssh container."
-        Write-ColorMessage $Colors.Green "  migration: Run migration process."
-        Write-ColorMessage $Colors.Green "  backend-debug: Recreate and attach to backend container."
-        Write-ColorMessage $Colors.Green "  collect-static: Collect static files to increase rendering speed."
-        Write-ColorMessage $Colors.Green "  django-startapp: Create a new Django app."
+        Write-ColorMessage $Colors.Green "  shell: Open a shell in the backend container."
+        Write-ColorMessage $Colors.Green "  migration: Reconcile the database schema (also runs automatically on start)."
+        Write-ColorMessage $Colors.Green "  backend-debug: Recreate the backend container and follow its logs."
         break
     }
 }

@@ -1,6 +1,7 @@
 # Telepy → Rust 後端重構規劃
 
-> 狀態：已拍板、實作中（2026-10-22）。對應程式碼版本：`bd7e29c`。追蹤：GitHub #80 與 sub-issues #81–#87。
+> 狀態：**已切換**（2026-10-22，M1–M6 完成；golden contract tests（M0/#81）改以 Rust 側的整合測試覆蓋，
+> 效能基線量測待補）。追蹤：GitHub #80 與 sub-issues #81–#87。
 > 本文是「看完現有程式碼後」的重構規劃，不是最終設計書；每個 Phase 開工前再各自細化。
 
 ---
@@ -290,3 +291,13 @@ M0 ~0.7 週、M1 ~1 週、M2 ~1.5 週、M3 ~1.75 週、M4 ~2 週、M5 A ~0.7 週
 4. Redis 移除；ssh 側取樣改 HTTP push（或由內建 gateway 產生）。
 5. 目錄名 `src/backend-api/`。
 6. SSH 側採 B：後端內建 russh gateway（§3.6、#86）。
+
+## 11. 切換與回滾（M6 實作結果）
+
+- compose：`backend` 改 build `src/backend-api/`（image `telepy-server`），發布 `REVERSE_SERVER_SSH_PORT:2222` 給內建
+  gateway；`redis`、`ssh` 服務與 supervisor 移除；`ssh/ssh_host_keys` 唯讀掛進後端供 gateway 使用。
+- Django 程式碼（`src/backend/`、根 `Dockerfile`、`requirements.txt`、`src/scripts/`、supervisord 設定、
+  `ssh/custom_scripts/`、`sshd_config`、`telepy-authorized-keys.sh`）已從 repo 移除。
+- **回滾**：`git checkout a622634`（最後一個 Python stack 可跑的 commit）再 `docker compose up -d --build`；
+  SQLite 檔與 `SECRET_KEY` 兩邊共用，使用者不需重新登入。裝置端只會重連一次。
+- 尚未做：Swagger（utoipa）、效能 before/after 數字（§7）。

@@ -2,7 +2,9 @@
 
 > 讓使用者在網頁上操作一個「經目標機器出口上網」的真實 Chromium 桌面。
 > 本文是 KasmVNC 版的**最終架構文件**(2026-07-03 遷移完成;過程紀錄見
-> `docs/articles/2026-07-03-kasmvnc-migration-warstory.md`)。
+> `docs/articles/2026-07-03-kasmvnc-migration-warstory.md`)。後端於 2026-10 改寫為 Rust（單一程序，見
+> `rust-migration-plan.md`）：文中提到的 gunicorn 多 worker / Redis session store 已由記憶體 session store
+> 取代，其餘協定與握手不變。
 
 ## 架構總覽
 
@@ -10,7 +12,7 @@
 Browser (vendored KasmVNC noVNC-fork client)
    │  wss /ws/remote-browser/<session_id>/(JWT 首訊息認證)
    ▼
-Django RemoteBrowserConsumer(tunnels/consumers.py)
+backend ws/remote_browser.rs（Rust）
    │  1. 驗 JWT + tunnel VIEW 權限(server_id 二次驗證)
    │  2. WS↔WS 透明中繼(逐訊息轉發,不解析協定)
    ▼
@@ -50,9 +52,9 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
 
 | 元件 | 位置 | 職責 |
 |---|---|---|
-| REST start/stop/ping | `authorized_keys/remote_browser_service.py` | ssh -D、呼叫 session-manager、Redis session store、idle GC |
-| session-manager client | `services/kasm_client.py` | 對 kasm-browser :7000 的 HTTP client |
-| WS 中繼 | `tunnels/consumers.py` `RemoteBrowserConsumer` | JWT+權限、上游連線(含 scheme/path 自動退回)、雙向 pump |
+| REST start/stop/ping | `src/backend-api/src/api/remote_browser.rs` + `remote_browser/mod.rs` | ssh -D、呼叫 session-manager、記憶體 session store（重啟回收用的小表）、idle reaper |
+| session-manager client | `src/backend-api/src/remote_browser/kasm.rs` | 對 kasm-browser :7000 的 HTTP client |
+| WS 中繼 | `src/backend-api/src/ws/remote_browser.rs` | JWT+權限、上游連線(含 scheme/path 自動退回)、雙向 pump |
 | session-manager | `docker/kasm-browser/session_manager.py` | 每 session:Xkasmvnc + openbox + chromium(respawn 迴圈、臨時 profile) |
 | 前端面板 | `src/frontend/src/components/tunnels/RemoteBrowserPanel.tsx` | 握手、IME textarea、剪貼簿/IME/滑鼠設定 |
 | Vendored client | `src/frontend/src/vendor/kasm-novnc/` | kasmtech/noVNC v1.3.0;**內嵌需求見該 README(必讀)** |
@@ -180,7 +182,7 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
 
 ```bash
 # 後端測試(真 stack):
-docker compose exec backend sh -c 'cd /src && python manage.py test --noinput'
+(cd src/backend-api && cargo test)   # 含 tests/remote_browser_api.rs：假 ssh -D + 假 session-manager + 假 KasmVNC ws 的端到端
 # session-manager 測試(純 stdlib):
 cd docker/kasm-browser && python3 -m unittest discover -s tests -p "test_*.py"
 
