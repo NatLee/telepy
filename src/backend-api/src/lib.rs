@@ -7,6 +7,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod gateway;
 pub mod hub;
 pub mod monitor;
 pub mod permissions;

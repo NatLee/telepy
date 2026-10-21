@@ -8,6 +8,7 @@ use crate::auth::google::GoogleVerifier;
 use crate::auth::Jwt;
 use crate::config::Config;
 use crate::db::Db;
+use crate::gateway::Gateway;
 use crate::hub::Hub;
 use crate::monitor::StatusState;
 use crate::remote_browser::RemoteBrowser;
@@ -21,7 +22,8 @@ pub struct Inner {
     pub tokens: TokenStores,
     pub google: GoogleVerifier,
     pub http: reqwest::Client,
-    pub status: StatusState,
+    pub status: Arc<StatusState>,
+    pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
 }
 
@@ -43,6 +45,9 @@ impl AppState {
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
+        // gateway 模式：狀態是事件驅動（永不過期）；OpenSSH 容器模式：取樣 15s 內有效。
+        let status = Arc::new(if config.gateway_enabled { StatusState::new(None) } else { StatusState::default() });
+        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone()));
         Self(Arc::new(Inner {
             remote_browser,
             google: GoogleVerifier::new(http.clone()),
@@ -50,7 +55,8 @@ impl AppState {
             hub: Hub::new(),
             tokens: TokenStores::new(),
             http,
-            status: StatusState::default(),
+            status,
+            gateway,
             config,
             db,
         }))

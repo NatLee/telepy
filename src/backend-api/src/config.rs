@@ -60,9 +60,17 @@ pub struct Config {
     pub ssh_gateway_host: String,
     pub ssh_gateway_port: u16,
     pub ssh_gateway_user: String,
-    /// terminal / file manager 連線的目標主機：現況 `reverse`（~/.ssh/config 的雙跳 ProxyCommand），
-    /// 內建 gateway 後改 `127.0.0.1`。/ Target host for device connections.
+    /// terminal / file manager 連線的目標主機：OpenSSH 容器模式是 `reverse`（~/.ssh/config 的雙跳
+    /// ProxyCommand），內建 gateway 模式是 `127.0.0.1`（gateway 的 loopback listener，單跳）。
     pub ssh_target_host: String,
+    // --- in-process SSH gateway ---
+    pub gateway_enabled: bool,
+    pub gateway_bind: String,
+    pub gateway_host_keys_dir: Option<PathBuf>,
+    pub gateway_user: String,
+    pub gateway_max_connections: usize,
+    pub gateway_login_grace: Duration,
+    pub gateway_probe_interval: Duration,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -102,6 +110,13 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
         let home = env("HOME").unwrap_or_else(|| "/root".to_string());
+        // gateway：有 host key 目錄就預設啟用（容器掛 /config/ssh_host_keys）。
+        let gateway_host_keys_dir = env("GATEWAY_HOST_KEYS_DIR")
+            .map(PathBuf::from)
+            .or_else(|| ["/config/ssh_host_keys"].iter().find(|p| Path::new(p).is_dir()).map(PathBuf::from));
+        let ssh_logs_path = env("SSH_LOGS_PATH").map(PathBuf::from);
+        let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
+        let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| if gateway_enabled { log_root.join("ssh-gateway.log") } else { PathBuf::from("/ssh-logs/openssh/current") });
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -116,9 +131,7 @@ impl Config {
             data_dir,
             log_level: env("LOG_LEVEL").unwrap_or_else(|| if debug { "debug".into() } else { "info".into() }),
             log_root,
-            ssh_logs_path: env("SSH_LOGS_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/ssh-logs/openssh/current")),
+            ssh_logs_path,
             web_service_pubkey_path: env("WEB_SERVICE_SSH_PUBKEY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(format!("{home}/.ssh/id_rsa.pub"))),
@@ -144,7 +157,14 @@ impl Config {
             ssh_gateway_host: env("SSH_GATEWAY_HOST").unwrap_or_else(|| "ssh".to_string()),
             ssh_gateway_port: env("SSH_GATEWAY_PORT").and_then(|v| v.parse().ok()).unwrap_or(2222),
             ssh_gateway_user: env("SSH_GATEWAY_USER").unwrap_or_else(|| "telepy".to_string()),
-            ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| "reverse".to_string()),
+            ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| if gateway_enabled { "127.0.0.1".to_string() } else { "reverse".to_string() }),
+            gateway_enabled,
+            gateway_bind: env("GATEWAY_BIND").unwrap_or_else(|| "0.0.0.0:2222".to_string()),
+            gateway_host_keys_dir,
+            gateway_user: env("GATEWAY_USER").unwrap_or_else(|| "telepy".to_string()),
+            gateway_max_connections: env("GATEWAY_MAX_CONNECTIONS").and_then(|v| v.parse().ok()).unwrap_or(4096),
+            gateway_login_grace: Duration::from_secs(env("GATEWAY_LOGIN_GRACE_SECS").and_then(|v| v.parse().ok()).unwrap_or(60)),
+            gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
         }
     }
 

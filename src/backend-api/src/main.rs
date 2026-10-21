@@ -91,6 +91,17 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
     state.remote_browser.cleanup_orphans(&state.db).await;
+    if config.gateway_enabled {
+        match tokio::net::TcpListener::bind(&config.gateway_bind).await {
+            Ok(listener) => match telepy_server::gateway::start(state.gateway.clone(), listener) {
+                Ok(_task) => {
+                    tokio::spawn(state.gateway.clone().run_probes(config.gateway_probe_interval));
+                }
+                Err(e) => tracing::error!(error = %e, "SSH gateway disabled"),
+            },
+            Err(e) => tracing::error!(bind = %config.gateway_bind, error = %e, "SSH gateway cannot bind"),
+        }
+    }
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
     }

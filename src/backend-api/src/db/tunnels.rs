@@ -91,6 +91,14 @@ pub async fn owner_by_key_prefix(db: &Db, prefix: &str) -> sqlx::Result<Option<i
         .await
 }
 
+/// 以 `type base64` 前綴找隧道（gateway 的公鑰認證）。/ Tunnel whose key starts with the offered key.
+pub async fn by_key_prefix(db: &Db, like: &str) -> sqlx::Result<Option<Tunnel>> {
+    sqlx::query_as(&format!("SELECT {T_COLS} FROM {T} WHERE key LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1"))
+        .bind(like)
+        .fetch_optional(&db.read)
+        .await
+}
+
 pub fn like_prefix(prefix: &str) -> String {
     let escaped = prefix.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     format!("{escaped}%")
