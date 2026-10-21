@@ -38,17 +38,15 @@ Click **Browser** on an online tunnel to start a Chromium session that browses t
 
 ## How it works
 
-The device keeps a reverse SSH connection (`ssh -NR <port>:localhost:22 telepy@server`) to Telepy's SSH container, which assigns each tunnel a dedicated port. The web terminal, file manager, and proxy browser all reach the device through that port — no inbound firewall rules or public IP needed on the device side.
+The device keeps a reverse SSH connection (`ssh -NR <port>:localhost:22 telepy@server`) to Telepy's backend, which terminates it with its built-in SSH gateway and assigns each tunnel a dedicated port. The web terminal, file manager, and proxy browser all reach the device through that port — no inbound firewall rules or public IP needed on the device side.
 
-Telepy runs as six containers orchestrated by Docker Compose:
+Telepy runs as four containers orchestrated by Docker Compose:
 
 | Service        | Role                                                        |
 | -------------- | ----------------------------------------------------------- |
 | `traefik`      | Reverse proxy; routes `/api/*` & `/ws/*` to the backend, everything else to the frontend |
 | `frontend`     | Next.js web UI                                              |
-| `backend`      | Django + DRF + Channels (REST API & WebSocket terminal)     |
-| `redis`        | Cache and channel layer                                     |
-| `ssh`          | OpenSSH server that terminates the reverse tunnels          |
+| `backend`      | Rust (axum) service: REST API, WebSocket terminal/file manager/relay, and the SSH gateway that terminates the reverse tunnels |
 | `kasm-browser` | KasmVNC + Chromium for remote browser sessions              |
 
 ## Quick start
@@ -92,7 +90,8 @@ Environment variables in `.env`:
 | Variable                  | Default     | Description                                  |
 | ------------------------- | ----------- | -------------------------------------------- |
 | `PROJECT_NAME`            | `main`      | Suffix for container names                   |
-| `DEBUG`                   | `false`     | Django debug mode                            |
+| `DEBUG`                   | `false`     | Debug logging                                |
+| `SECRET_KEY`              | —           | JWT signing key (set in production)          |
 | `WEB_SERVER_PORT`         | `8787`      | Port Traefik exposes the web UI on           |
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | Port devices connect their reverse SSH to    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth client ID                       |
@@ -106,30 +105,18 @@ Environment variables in `.env`:
 ```
 Usage: ./telepy.sh sub-command [args]
 Sub-commands:
-  keygen: Generate SSH keys for Telepy service.
+  keygen: Generate SSH host keys (gateway) and the backend service key.
   create-superuser: Create an admin account for Telepy management.
-  shell: Create a shell to run arbitrary command.
-  ipython: Create a shell to run ipython.
-  supervisorctl: Attach to supervisor control shell.
-  ssh-shell: Similar to 'shell', but for ssh container.
-  migration: Run migration process.
-  backend-debug: Recreate and attach to backend container.
-  collect-static: Collect static files to increase rendering speed.
-  django-startapp: Create a new Django app.
+  shell: Open a shell in the backend container.
+  migration: Reconcile the database schema (also runs automatically on start).
+  backend-debug: Recreate the backend container and follow its logs.
 ```
-
-## API documentation
-
-Log in first, then visit:
-
-- Swagger UI — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_swagger`
-- ReDoc — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_redoc`
-- Django admin — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_admin/`
 
 ## Further reading
 
 - [Remote browser architecture](./docs/remote-browser.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
+- [Rust backend migration plan](./docs/rust-migration-plan.md)
 - [Articles](./docs/articles/)
 
 ## Contributors

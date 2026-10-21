@@ -15,7 +15,6 @@ if (-not $PROJECT_NAME) { $PROJECT_NAME = "default" }
 
 # Constant: container names for Telepy
 $CONTAINER_WEB_NAME = "telepy-web-$PROJECT_NAME"
-$CONTAINER_SSH_NAME = "telepy-ssh-$PROJECT_NAME"
 
 # Function to print colored messages
 function Write-ColorMessage {

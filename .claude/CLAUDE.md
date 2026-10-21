@@ -4,47 +4,54 @@
 
 Telepy is a full-stack web application for managing reverse SSH tunnels. It provides a web UI for creating/managing tunnels, a WebSocket-based terminal console, SFTP file management, remote browser sessions (KasmVNC, see `docs/remote-browser.md`), and tunnel sharing with permission controls.
 
+The backend is a single Rust process (`src/backend-api/`, binary `telepy-server`) that serves the REST API and WebSockets **and terminates the devices' reverse SSH tunnels itself** (in-process SSH gateway). The migration from the previous Django backend is documented in `docs/rust-migration-plan.md`; the API/WebSocket contract is byte-compatible with it, so the frontend did not change.
+
 ## Tech Stack
 
-- **Backend:** Python 3.12 / Django 6.0 / Django REST Framework / gunicorn+uvicorn (prod ASGI; dev uses runserver via daphne) / Channels (WebSocket)
+- **Backend:** Rust (edition 2021) / axum 0.8 + tokio / sqlx (SQLite) / russh (SSH server for the gateway, SSH+SFTP client to devices) / jsonwebtoken / tower-http
 - **Frontend:** Next.js 16 (App Router) / TypeScript / Tailwind CSS 4 / Radix UI / xterm.js
-- **Database:** SQLite3 (`/data/db.sqlite3`)
-- **Cache/Channels:** Redis
-- **Auth:** Google OAuth2 + JWT (simplejwt) + Session auth
-- **Infra:** Docker Compose / Traefik v3 (reverse proxy) / Supervisor (process manager)
-- **SSH:** linuxserver/openssh-server
-- **Browser:** KasmVNC + Chromium in the `kasm-browser` container (per-session Xkasmvnc, WS↔WS relay through Django; the frontend uses the vendored KasmVNC noVNC fork in `src/frontend/src/vendor/kasm-novnc/`)
+- **Database:** SQLite3 (`/data/db.sqlite3`, Django-era table names kept)
+- **Auth:** Google OAuth2 (id_token verified against Google JWKS) + JWT (simplejwt-compatible HS256; `SECRET_KEY` env, legacy default with a startup warning)
+- **Infra:** Docker Compose / Traefik v3 (reverse proxy)
+- **Browser:** KasmVNC + Chromium in the `kasm-browser` container (per-session Xkasmvnc, WS↔WS relay through the backend; the frontend uses the vendored KasmVNC noVNC fork in `src/frontend/src/vendor/kasm-novnc/`)
 
 ## Project Structure
 
 ```
 src/
-  backend/          # Django project
-    backend/        # Django settings, urls, asgi config
-    tunnels/        # Core tunnel CRUD, WebSocket terminal, permissions
-    custom_auth/    # Authentication logic
-    custom_jwt/     # JWT token handling
-    login/          # Login views (Google OAuth)
-    authorized_keys/ # SSH authorized keys management
-    reverse_keys/   # Reverse tunnel key management
-    web_sftp/       # SFTP-based file manager
-    logs/           # Log viewing API
-    user_management/ # User admin
-    site_settings/  # Site configuration
-    services/       # Service layer (remote browser, etc.)
-    common/         # Shared utilities
-  frontend/         # Next.js app
-    src/app/        # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys); root page.tsx redirects by auth state
-    src/components/ # UI components (Shadcn-style + Radix)
-    src/fonts/      # Local font files (loaded via next/font/local)
-    src/hooks/      # Custom React hooks (WebSocket, notifications, etc.)
-    src/lib/        # API client, auth, WebSocket, i18n, utilities
-    src/locales/    # i18n dictionaries: en.ts (key source of truth), zh-TW.ts, ja.ts
-    src/types/      # TypeScript type definitions
-  configs/          # Traefik, Nginx, Supervisor configs
-  scripts/          # Utility shell scripts
-ssh/                # SSH keys and custom scripts
-dev-scripts/        # Development helper scripts (.sh + .ps1)
+  backend-api/        # Rust backend (crate telepy-server)
+    src/
+      main.rs         # CLI: serve (default) | migrate | create-superuser | seed-service-key
+      config.rs       # env → Config (same variable names as before: DEBUG, SECRET_KEY, REVERSE_SERVER_SSH_PORT, …)
+      app.rs          # axum Router: REST (+compression) merged with /ws routes, CORS mirror, tracing
+      db/             # sqlx over the Django-named tables; schema.rs = idempotent DDL (creates missing tables/columns, never alters existing)
+      auth/           # jwt.rs, password.rs (Django pbkdf2_sha256), google.rs (JWKS), extractor.rs (Bearer → AuthUser, InternalService)
+      api/            # REST handlers per former Django app: auth, tunnels, usernames, user_keys, reverse_keys, scripts, sharing, users, site_settings, logs, sftp, remote_browser, internal
+      ws/             # WebSockets: auth.rs (first-message JWT), notifications, tunnel_connection, terminal (PTY), filemanager (SFTP), remote_browser (KasmVNC relay)
+      gateway/        # in-process SSH server: pubkey auth from DB, tcpip-forward → 127.0.0.1:<port> loopback bridge, direct-tcpip, status + latency probes, sshd-style log
+      monitor/        # StatusState (listening ports / latency), ports.rs (debounce + latency throttle), runner.rs (5 s cycle → notifications)
+      hub.rs          # in-process notification hub (per-user / per-tunnel broadcast; replaced the Redis channel layer)
+      ssh/            # process.rs (OpenSSH client argv + PTY spawn), device.rs (russh client to a device)
+      sftp/           # path resolution, structured listing, zip download, upload
+      remote_browser/ # ssh -D SOCKS session store, kasm session-manager client, reaper
+      scripts/        # connection-script / ssh-config rendering ($var substitution, templates/)
+      permissions.rs  # VIEW/EDIT/ADMIN hierarchy, allowed target usernames
+    templates/        # ssh / autossh / systemd / PowerShell / docker scripts, ssh_config
+    tests/            # integration tests (router in-process, real listener for WS, real OpenSSH client for the gateway)
+    Dockerfile        # multi-stage build → debian-slim + openssh-client
+  frontend/           # Next.js app (unchanged by the backend rewrite)
+    src/app/          # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys); root page.tsx redirects by auth state
+    src/components/   # UI components (Shadcn-style + Radix)
+    src/fonts/        # Local font files (loaded via next/font/local)
+    src/hooks/        # Custom React hooks (WebSocket, notifications, etc.)
+    src/lib/          # API client, auth, WebSocket, i18n, utilities
+    src/locales/      # i18n dictionaries: en.ts (key source of truth), zh-TW.ts, ja.ts
+    src/types/        # TypeScript type definitions
+  configs/traefik/    # Traefik static + dynamic config
+docker/kasm-browser/  # KasmVNC + Chromium image and its session-manager
+ssh/                  # backend_ssh_key (service key + ssh config), ssh_host_keys (gateway host keys; generated, git-ignored)
+dev-scripts/          # Helper scripts behind telepy.sh / telepy.ps1
+docs/                 # remote-browser.md, latency-deep-dive.md, rust-migration-plan.md, articles/
 ```
 
 ## Development Commands
@@ -52,37 +59,28 @@ dev-scripts/        # Development helper scripts (.sh + .ps1)
 ### Docker (primary workflow)
 
 ```bash
-# Start all services
-docker compose up -d --build
-
-# Rebuild specific service
-docker compose up -d --build backend
+docker compose up -d --build            # Start all services
+docker compose up -d --build backend    # Rebuild the Rust backend only
 docker compose up -d --build frontend
 ```
 
-### CLI wrapper (`telepy.sh`)
+### CLI wrapper (`telepy.sh` / `telepy.ps1`)
 
 ```bash
-./telepy.sh keygen            # Generate SSH keys
-./telepy.sh create-superuser  # Create Django admin (first user = superuser)
-./telepy.sh shell             # Shell into backend container
-./telepy.sh ipython           # IPython shell in backend
-./telepy.sh supervisorctl     # Supervisor control shell
-./telepy.sh ssh-shell         # Shell into SSH container
-./telepy.sh migration         # Run Django migrations
-./telepy.sh collect-static    # Collect static files
-./telepy.sh backend-debug     # Recreate and attach to backend container
-./telepy.sh django-startapp   # Create a new Django app
+./telepy.sh keygen            # Generate gateway host keys + backend service key
+./telepy.sh create-superuser  # Create an admin account (first user is a superuser anyway)
+./telepy.sh shell             # Shell into the backend container
+./telepy.sh migration         # Reconcile the DB schema (runs automatically on start)
+./telepy.sh backend-debug     # Recreate the backend container and follow its logs
 ```
 
-### Backend (inside container)
+### Backend (local, needs rustup)
 
 ```bash
-python manage.py test                     # Run all tests
-python manage.py test tunnels.tests       # Run specific app tests
-python manage.py makemigrations           # Create migrations
-python manage.py migrate                  # Apply migrations
-python manage.py collectstatic --noinput  # Collect static files
+cd src/backend-api
+cargo test                    # unit + integration tests (needs ssh/ssh-keygen and, for the SFTP test, a local sftp-server; both skip otherwise)
+cargo run -- serve            # DATA_DIR / LOG_ROOT default to ./data ./logs; gateway only when GATEWAY_HOST_KEYS_DIR points at host keys
+cargo run -- create-superuser --username admin --password 1234
 ```
 
 ### Frontend
@@ -99,26 +97,29 @@ npm run build  # Production build
 Copy `.env.example` to `.env` and configure:
 
 - `PROJECT_NAME` — container name suffix (default: `main`)
-- `DEBUG` — Django debug mode (default: `false`)
+- `DEBUG` — debug logging (default: `false`); `LOG_LEVEL` overrides the level
+- `SECRET_KEY` — JWT signing key (empty = legacy default + warning; set in production)
 - `WEB_SERVER_PORT` — Traefik exposed port (default: `8787`)
-- `REVERSE_SERVER_SSH_PORT` — SSH tunnel port (default: `24242`)
+- `REVERSE_SERVER_SSH_PORT` — port devices connect their reverse SSH to (default: `24242`, published to the gateway's 2222)
 - `SOCIAL_GOOGLE_CLIENT_ID` — Google OAuth client ID
 - `SERVER_DOMAIN` — server hostname (default: `localhost`)
-- `INTERNAL_API_TOKEN` — secret for internal API communication
+- `INTERNAL_API_TOKEN` — secret for backend ↔ kasm-browser session-manager calls (and the internal endpoints)
 
 ## Architecture Notes
 
-- **Services:** 6 containers orchestrated via Docker Compose: Traefik, frontend, backend, Redis, SSH, kasm-browser (remote browser)
-- **Routing:** Traefik routes `/api/*`, `/ws/*`, and a fixed set of `/tunnels/{share,unshare,shared-users,available-users,update-permission,server}` paths to the backend; everything else to the frontend. Traefik also applies a `compress` middleware (gzip/brotli) to all HTTP routers (not `/ws`), since Django/gunicorn don't compress responses themselves.
-- **WebSocket:** Terminal PTY via `channels` AsyncWebsocketConsumer, auth via JWT subprotocol
-- **Permissions:** Hierarchical tunnel access — VIEW / EDIT / ADMIN — managed by `TunnelPermissionService`
-- **Process management:** Supervisor runs the backend ASGI server (dev `DEBUG=true` → `manage.py runserver`, with daphne from `INSTALLED_APPS` providing ASGI/WebSocket; prod → gunicorn managing uvicorn workers — see `src/scripts/start-backend.sh`) plus the `websocket_update_ports` background worker, inside the backend container
-- **API docs:** Swagger UI at `/api/__hidden_swagger`, ReDoc at `/api/__hidden_redoc` (requires auth)
-- **TLS / deployment:** prod is assumed to sit behind an upstream TLS-terminating proxy (Cloudflare / Nginx / LB) that speaks HTTP/2 to browsers and forwards `http` to Traefik `:80`. Traefik's `web` entrypoint sets `forwardedHeaders.insecure: true` to preserve the upstream's `X-Forwarded-Proto`, and Django sets `SECURE_PROXY_SSL_HEADER=('HTTP_X_FORWARDED_PROTO','https')` so it detects HTTPS correctly. If Traefik `:80` is reachable from untrusted networks, switch `insecure: true` → `trustedIPs`.
-- **Startup / health:** the backend container runs `collectstatic` + `migrate` on start (NOT `makemigrations` — migrations are committed with the code) then supervisord. It exposes a public health endpoint `GET /api/auth/setup-status`; the compose `healthcheck` and Traefik `backend-service` `healthCheck` both use it so no `/api` request is routed before the ASGI server is listening (avoids post-deploy 502s).
-- **Tunnels list data:** the list page loads via a single `GET /api/reverse/server/dashboard` returning `{tunnels, ports, latency}` in one authenticated round-trip (collapses the older keys+ports+latency fan-out). The tunnels-list serializer avoids N+1 by precomputing a per-tunnel permission map + share counts in the view (`tunnel_permission_context`).
-- **Logging:** Loguru with timed rotating file handler + database logging
-- **Static files:** WhiteNoise in production
+- **Services:** 4 containers via Docker Compose: Traefik, frontend, backend, kasm-browser. No Redis, no separate SSH container, no supervisor.
+- **Routing:** Traefik routes `/api/*`, `/ws/*`, and a fixed set of `/tunnels/{share,unshare,shared-users,available-users,update-permission,server}` paths to the backend (`backend:8000`); everything else to the frontend. Traefik applies a `compress` middleware to HTTP routers (not `/ws`); the backend also compresses REST responses.
+- **SSH gateway (`gateway/`):** the backend listens on 2222 (published as `REVERSE_SERVER_SSH_PORT`) with the host keys from `ssh/ssh_host_keys`. Only public-key auth (tunnel / user / service keys from the DB) and `tcpip-forward` are accepted; every forward binds `127.0.0.1:<reverse_port>` inside the backend container and bridges to a `forwarded-tcpip` channel, so the OpenSSH client (terminal, `ssh -D`) and russh (SFTP) reach the device in a single hop. `direct-tcpip` serves the generated ssh config's `ProxyCommand ssh -W` for user keys. Shell/exec/pty are refused. Device-side scripts are unchanged.
+- **Status / latency:** forward registration and release update `StatusState` immediately; a banner round-trip through a forwarded channel every 15 s measures RTT. `monitor/runner.rs` runs the 5 s cycle (debounce FLAP_THRESHOLD 2, latency throttle 5 ms / 6-cycle keep-alive) and emits the `UPDATE-TUNNEL-*` notifications through the in-process hub.
+- **WebSocket:** first frame `{type:"auth", token, …}` within 10 s; close codes 4000/4001 (auth), 4002/4003/4004/4005/4006 (terminal/file manager), 4403/4404/4011/4013 (remote browser). Terminal pong is a **binary** frame; the other sockets answer `{"type":"pong"}`.
+- **Terminal:** `openpty` + OpenSSH client (`ControlMaster=auto`, `ControlPersist=600`, `ControlPath=/tmp/ssh_term_%r@%h:%p`); on disconnect only the direct child gets SIGTERM → SIGKILL (never killpg — the mux master would die and kick every other tab).
+- **Permissions:** hierarchical tunnel access — VIEW / EDIT / ADMIN — in `permissions.rs` (+ allowed target usernames per share).
+- **TLS / deployment:** prod sits behind an upstream TLS-terminating proxy that forwards `http` to Traefik `:80`; Traefik keeps the upstream `X-Forwarded-*` headers (`forwardedHeaders.insecure: true`), and the backend uses `X-Forwarded-Proto` / `X-Forwarded-Host` for the one-time script URL. If Traefik `:80` is reachable from untrusted networks, switch `insecure: true` → `trustedIPs`.
+- **Startup / health:** the backend reconciles the schema, seeds the `web-service` key from `/root/.ssh/id_rsa.pub`, stops orphaned remote-browser sessions, starts the gateway and the monitor, then listens. `GET /api/auth/setup-status` is the public health endpoint used by the compose `healthcheck` and Traefik's `healthCheck`.
+- **Tunnels list data:** `GET /api/reverse/server/dashboard` returns `{tunnels, ports, latency}` in one round-trip; the list serializer uses a precomputed permission map + share counts (no per-row queries).
+- **Logging:** `tracing` → stdout + daily rolling `/logs/telepy.log` and `/logs/error.log`; the gateway writes sshd-style lines to `/logs/ssh-gateway.log` (served by `/api/log/ssh` for the Logs page).
+- **Compatibility rules:** JSON shapes, status codes and error strings mirror the former DRF views (the frontend parses `{detail}` / `{error}` / `{field: [...]}`); keep them unless the frontend is changed in the same PR. DB datetimes are stored as naive UTC with microseconds (Django format) and serialised as `+08:00` ISO (DRF field) or `…Z` (DRF encoder) exactly where the old code did.
+- **Rollback:** `git checkout a622634` (last commit with the Python stack) restores the Django compose; the SQLite file and `SECRET_KEY` are shared, so switching either way keeps users logged in.
 
 ## Fonts
 
@@ -156,7 +157,7 @@ hardcode display text in components, hooks, or lib error builders.
   frame paints. **Never read `cookies()`/`headers()` in the root layout** — that makes every
   route dynamic, disables full Link prefetch, and made page navigation take seconds (real
   regression, since reverted). After login the preference syncs with the backend `UserSettings`
-  model (`/api/user/settings`; also included in `/api/auth/user/profile` as `language`,
+  (`/api/user/settings`; also included in `/api/auth/user/profile` as `language`,
   `null` = never chosen → the frontend pushes its local preference up; see `UserSettingsSync`
   in `lib/i18n.tsx`).
 - **Switcher locations:** sidebar footer — four inline buttons (Auto/EN/繁/日,
@@ -164,15 +165,16 @@ hardcode display text in components, hooks, or lib error builders.
   `telepy.sidebarCollapsed`) — and the user-preferences modal (gear button in the sidebar
   footer, `components/layout/UserPreferencesModal.tsx`). Admins can also set a user's language
   via Settings → Users → Manage modal (`/api/user/users`, `/api/user/users/<id>`).
-- **Other user preferences** (`lib/userPrefs.ts` + `UserSettings` backend fields): `theme`
+- **Other user preferences** (`lib/userPrefs.ts` + the `user_management_usersettings` row): `theme`
   (system/light/dark; class-based Tailwind dark mode, applied pre-paint by the same inline
   script from localStorage `telepy.theme`) and `terminal_font_size` (localStorage
   `telepy.terminalFontSize`; xterm reads it at init and live-applies via the
   `telepy:terminal-font-size` CustomEvent). Both sync server-side via `/api/user/settings`.
 - **Site-setting labels/descriptions:** the settings page prefers dictionary keys
   `siteSettings.<field>.label` / `siteSettings.<field>.description` (localized), falling back
-  to backend model `help_text` when the key is missing. **When adding a `SiteSettings` field,
-  also add these two keys to all three dictionaries.**
+  to the backend `meta` (label/description embedded in `api/site_settings.rs`). **When adding a
+  site setting, add the column in `db/schema.rs`, the field in `db/settings.rs` + `api/site_settings.rs`,
+  and these two keys to all three dictionaries.**
 - The Settings page (`/tunnels/settings`) is admin-only (Site Settings + Users tabs); personal
   preferences live in the sidebar gear modal.
 
@@ -185,10 +187,10 @@ hardcode display text in components, hooks, or lib error builders.
 3. **Do NOT translate:** keycap glyphs (Esc/Tab/Ctrl/F1…), format examples in placeholders
    (`ssh-rsa AAAA…`, `22`), code/paths inside `<code>` (pass them as `tn()` vars), size units,
    product names (SSH, PowerShell, AutoSSH, Docker), the Telepy brand, and the logs-page keyword
-   filter chips (they string-match raw English sshd log content).
+   filter chips (they string-match the sshd-style gateway log lines).
 4. Backend-provided text (server error `detail` fields, log lines) is NOT frontend-translated —
    it renders verbatim. Exceptions with a mapping layer: site-setting labels/descriptions use
-   the `siteSettings.<field>.*` keys (fallback = backend `help_text`), and remote-browser start
+   the `siteSettings.<field>.*` keys (fallback = backend meta), and remote-browser start
    errors with a machine-readable `code` (e.g. `device_offline`) map to `browser.*` keys.
 5. Locale-aware formatting: use `useI18n().locale` for `Date.toLocaleString()` /
    `Intl.DateTimeFormat` instead of hardcoding `'en-US'`.
@@ -197,10 +199,10 @@ hardcode display text in components, hooks, or lib error builders.
 
 ## Code Conventions
 
-- Backend API views use DRF `APIView` with `@swagger_auto_schema()` decorators
-- Business logic lives in service classes (e.g., `TunnelPermissionService`)
+- Backend: one module per former Django app under `api/`; handlers return `ApiResult<Json<Value>>` and build errors with `ApiError::{error,detail,field}` so the JSON shape matches what the frontend expects
+- Business logic that is pure (permissions, debounce/throttle, template substitution, path resolution) lives in plain functions with unit tests; I/O stays in `api/`, `ws/`, `gateway/`
+- DB access goes through `db/*` functions (sqlx, runtime-checked queries against the Django-named tables); never alter or drop an existing column in `schema.rs`
 - Frontend uses centralized `apiFetch()` with auto JWT injection and 401 handling
 - **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**
 - Comments are mixed English and Traditional Chinese
-- Django apps follow standard layout: `models.py`, `views.py`, `urls.py`, `serializers.py`, `admin.py`
 - Frontend components follow Shadcn/Radix patterns with `class-variance-authority`

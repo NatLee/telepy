@@ -1,4 +1,4 @@
-# Create Django superuser in web container
+# Create an administrator account in the backend container
 
 # Import common functions
 . "$PSScriptRoot/common.ps1"
@@ -9,7 +9,7 @@ function Get-InputWithDefault {
         [string]$Prompt,
         [string]$Default
     )
-    
+
     $input = Read-Host "$Prompt [$Default]"
     if ([string]::IsNullOrWhiteSpace($input)) {
         return $Default
@@ -24,6 +24,6 @@ $PASSWORD = Get-InputWithDefault "Enter password" "1234"
 
 # Create superuser
 Write-ColorMessage $Colors.Blue "Creating superuser..."
-docker exec -it $CONTAINER_WEB_NAME bash -c "DJANGO_SUPERUSER_PASSWORD='$PASSWORD' python manage.py createsuperuser --noinput --username '$USERNAME' --email '$EMAIL'"
+docker exec -it $CONTAINER_WEB_NAME telepy-server create-superuser --username "$USERNAME" --email "$EMAIL" --password "$PASSWORD"
 
 Write-ColorMessage $Colors.Green "Superuser created successfully."

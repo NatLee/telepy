@@ -1,40 +1,14 @@
-Host telepy-ssh
-    HostName ssh
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-    User telepy
-    Port 2222
-    # 連線多工重用：ProxyCommand（reverse 的第一跳）走既有 socket，省掉重複的 SSH handshake。
-    # Multiplex the proxy hop so repeat connects reuse one socket instead of re-handshaking.
-    ControlMaster auto
-    ControlPersist 600
-    ControlPath /tmp/cm-%r@%h:%p
-    GSSAPIAuthentication no
-    ServerAliveInterval 15
-    ServerAliveCountMax 3
-
-Host reverse
-    HostName localhost
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-    # setsid：讓 proxy 跳板脫離呼叫端 ssh 的 session / process group。第一條終端機連線成為
-    # ControlMaster 時，這個 proxy 是 master 的實體傳輸；若不脫離，呼叫端 ssh（PTY session
-    # leader）結束時 kernel 會對其前景 process group 送 SIGHUP，proxy 陪葬 → master 斷線 →
-    # 共用 master 的其他終端機分頁全部被踢（實測 bug）。master 退場時會自行收掉 proxy。
-    # setsid detaches the proxy from the calling ssh's session/pgrp. When the first terminal
-    # connection becomes the ControlMaster this proxy IS the master's transport; without setsid
-    # the kernel HUPs it when that ssh (PTY session leader) exits, killing the master and
-    # kicking every other terminal tab that shares it. The master reaps the proxy on exit.
-    ProxyCommand setsid ssh -q -W %h:%p telepy-ssh
-    # 第二跳（穿過反向隧道到裝置）同樣重用連線並關掉 GSSAPI，縮短終端機開啟等待。
-    ControlMaster auto
-    ControlPersist 600
-    ControlPath /tmp/cm-reverse-%r@%h:%p
-    GSSAPIAuthentication no
-    ServerAliveInterval 15
-    ServerAliveCountMax 3
+# 後端 → 裝置的 ssh 連線（網頁終端機、remote-browser 的 ssh -D）現在只有一跳：目標是內建 SSH gateway
+# 在 127.0.0.1:<reverse_port> 綁的 loopback listener，不再需要 ProxyCommand / telepy-ssh 跳板。
+# ControlMaster 多工參數由後端在命令列帶入（見 src/backend-api/src/ssh/process.rs）。
+# Backend → device ssh connections are now a single hop to the in-process gateway's loopback
+# listener (127.0.0.1:<reverse_port>); no ProxyCommand. ControlMaster options are passed on the
+# command line by the backend.
 
 Host *
    StrictHostKeyChecking no
    UserKnownHostsFile /dev/null
    LogLevel ERROR
+   GSSAPIAuthentication no
+   ServerAliveInterval 15
+   ServerAliveCountMax 3

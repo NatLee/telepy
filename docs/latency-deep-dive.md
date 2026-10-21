@@ -1,5 +1,10 @@
 # 那個「ms」是怎麼來的？—— Telepy 延遲偵測小元件
 
+> **2026-10 更新：** 後端改寫為 Rust 後，第三、四、五節描述的「Bash 探測 → Redis → update_ports 輪詢」
+> 供應鏈已被內建 SSH gateway 取代：每條隧道的狀態是連線事件（forward 註冊／釋放），延遲由後端每 15 秒
+> 開一條 forwarded-tcpip 通道讀裝置 sshd banner 的第一個 byte 量得（同樣的量法，零子程序、零 Redis）。
+> 去彈跳與節流規則原樣移植（`src/backend-api/src/monitor/ports.rs`）。以下保留原文作為設計脈絡。
+
 > 一位 byte 的環球旅行，以及我們如何幫它計時。
 
 你在 Telepy 終端機標題列看到的那個小徽章：

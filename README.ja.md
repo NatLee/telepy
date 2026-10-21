@@ -38,17 +38,15 @@
 
 ## 仕組み
 
-デバイスは Telepy の SSH コンテナへリバース SSH 接続（`ssh -NR <port>:localhost:22 telepy@server`）を維持し、各トンネルには専用ポートが割り当てられます。Web ターミナル、ファイルマネージャー、プロキシブラウザはすべてこのポートを通じてデバイスへ到達します。デバイス側にインバウンドのファイアウォール設定やグローバル IP は不要です。
+デバイスは Telepy のバックエンドへリバース SSH 接続（`ssh -NR <port>:localhost:22 telepy@server`）を維持し、内蔵の SSH ゲートウェイがそれを終端して各トンネルに専用ポートを割り当てます。Web ターミナル、ファイルマネージャー、プロキシブラウザはすべてこのポートを通じてデバイスへ到達します。デバイス側にインバウンドのファイアウォール設定やグローバル IP は不要です。
 
-Telepy は Docker Compose で編成された 6 つのコンテナで動作します：
+Telepy は Docker Compose で編成された 4 つのコンテナで動作します：
 
 | サービス       | 役割                                                          |
 | -------------- | ------------------------------------------------------------- |
 | `traefik`      | リバースプロキシ。`/api/*` と `/ws/*` をバックエンドへ、それ以外をフロントエンドへルーティング |
 | `frontend`     | Next.js 製の Web UI                                           |
-| `backend`      | Django + DRF + Channels（REST API と WebSocket ターミナル）   |
-| `redis`        | キャッシュとチャネルレイヤー                                  |
-| `ssh`          | リバーストンネルを終端する OpenSSH サーバー                   |
+| `backend`      | Rust（axum）サービス：REST API、WebSocket ターミナル／ファイルマネージャー／リレー、リバーストンネルを終端する内蔵 SSH ゲートウェイ |
 | `kasm-browser` | リモートブラウザセッション用の KasmVNC + Chromium             |
 
 ## クイックスタート
@@ -92,7 +90,8 @@ Compose プラグイン付きの Docker が必要です。
 | 変数                      | デフォルト  | 説明                                       |
 | ------------------------- | ----------- | ------------------------------------------ |
 | `PROJECT_NAME`            | `main`      | コンテナ名のサフィックス                   |
-| `DEBUG`                   | `false`     | Django のデバッグモード                    |
+| `DEBUG`                   | `false`     | デバッグログ                               |
+| `SECRET_KEY`              | —           | JWT 署名キー（本番環境では必ず設定）       |
 | `WEB_SERVER_PORT`         | `8787`      | Traefik が Web UI を公開するポート         |
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | デバイスがリバース SSH で接続するポート    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth クライアント ID               |
@@ -106,25 +105,12 @@ Compose プラグイン付きの Docker が必要です。
 ```
 Usage: ./telepy.sh sub-command [args]
 Sub-commands:
-  keygen: Generate SSH keys for Telepy service.
+  keygen: Generate SSH host keys (gateway) and the backend service key.
   create-superuser: Create an admin account for Telepy management.
-  shell: Create a shell to run arbitrary command.
-  ipython: Create a shell to run ipython.
-  supervisorctl: Attach to supervisor control shell.
-  ssh-shell: Similar to 'shell', but for ssh container.
-  migration: Run migration process.
-  backend-debug: Recreate and attach to backend container.
-  collect-static: Collect static files to increase rendering speed.
-  django-startapp: Create a new Django app.
+  shell: Open a shell in the backend container.
+  migration: Reconcile the database schema (also runs automatically on start).
+  backend-debug: Recreate the backend container and follow its logs.
 ```
-
-## API ドキュメント
-
-ログイン後、以下にアクセスしてください：
-
-- Swagger UI — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_swagger`
-- ReDoc — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_redoc`
-- Django admin — `http://localhost:<WEB_SERVER_PORT>/api/__hidden_admin/`
 
 ## 参考資料
 
