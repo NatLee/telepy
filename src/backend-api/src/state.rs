@@ -1,0 +1,54 @@
+//! 全域共享狀態（axum `State`）。單一 process，所以所有「跨 worker」的東西都只是 Arc 裡的欄位。
+//! Shared application state; everything that used Redis for cross-worker sharing is a plain field here.
+
+use std::ops::Deref;
+use std::sync::Arc;
+
+use crate::auth::google::GoogleVerifier;
+use crate::auth::Jwt;
+use crate::config::Config;
+use crate::db::Db;
+use crate::hub::Hub;
+use crate::monitor::StatusState;
+use crate::tokens::TokenStores;
+
+pub struct Inner {
+    pub config: Config,
+    pub db: Db,
+    pub jwt: Jwt,
+    pub hub: Hub,
+    pub tokens: TokenStores,
+    pub google: GoogleVerifier,
+    pub http: reqwest::Client,
+    pub status: StatusState,
+}
+
+#[derive(Clone)]
+pub struct AppState(pub Arc<Inner>);
+
+impl Deref for AppState {
+    type Target = Inner;
+    fn deref(&self) -> &Inner {
+        &self.0
+    }
+}
+
+impl AppState {
+    pub fn new(config: Config, db: Db) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("reqwest client");
+        let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
+        Self(Arc::new(Inner {
+            google: GoogleVerifier::new(http.clone()),
+            jwt,
+            hub: Hub::new(),
+            tokens: TokenStores::new(),
+            http,
+            status: StatusState::default(),
+            config,
+            db,
+        }))
+    }
+}

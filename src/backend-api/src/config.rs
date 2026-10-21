@@ -1,0 +1,140 @@
+//! 執行期設定：全部來自環境變數，變數名與 Django 版一致（compose 不用改）。
+//! Runtime configuration from environment variables; names match the Django backend so the
+//! existing compose/.env keep working unchanged.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// Django settings.py 裡硬編碼的 SECRET_KEY。沿用它是為了讓切換當下既有 JWT 不失效；
+/// 正式環境請用 `SECRET_KEY` 環境變數覆蓋（啟動時會對預設值發出警告）。
+/// The hard-coded Django SECRET_KEY, kept as the default so existing JWTs stay valid across the
+/// cutover. Override with the SECRET_KEY env var in production (a warning is logged otherwise).
+pub const DJANGO_DEFAULT_SECRET_KEY: &str =
+    "django-insecure-uye!=@*gjois#e#8u*3law8=d4^&5s0sh-w*+r3_%+x5tn$lru";
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    pub debug: bool,
+    pub bind: String,
+    pub secret_key: String,
+    pub secret_key_is_default: bool,
+    /// settings.REVERSE_SERVER_SSH_PORT 在 Django 是「字串」(env 原文)，create-key 回應裡的 `port`
+    /// 也是字串；這裡保留原文以維持回應形狀。/ Kept as the raw string: the create-key response
+    /// echoes it verbatim (Django returned the env string, not an int).
+    pub reverse_server_ssh_port: String,
+    pub web_server_port: Option<String>,
+    pub server_domain: Option<String>,
+    pub google_client_id: Option<String>,
+    pub internal_api_token: String,
+    pub data_dir: PathBuf,
+    pub db_path: PathBuf,
+    pub log_root: PathBuf,
+    pub log_level: String,
+    pub ssh_logs_path: PathBuf,
+    pub web_service_pubkey_path: PathBuf,
+    pub access_token_lifetime: Duration,
+    pub refresh_token_lifetime: Duration,
+    /// settings.VALID_REGISTER_DOMAINS fallback when the site setting is blank.
+    pub default_register_domains: Vec<String>,
+    /// Asia/Taipei (+08:00, no DST) — DRF serialised datetimes in TIME_ZONE.
+    pub tz_offset_minutes: i32,
+    pub project_name: String,
+    /// 自己的 hostname（kasm-browser 經 telepy-network 連回 SOCKS 代理用）。
+    pub hostname: String,
+    // --- remote browser / kasm ---
+    pub kasm_api: String,
+    pub kasm_host: String,
+    pub kasm_ws_user: String,
+    pub kasm_ws_password: String,
+    pub kasm_ws_scheme: String,
+    pub kasm_ws_path: String,
+    pub kasm_ws_subprotocol: String,
+    pub remote_browser_gc: bool,
+    /// `ssh` client config/keys live here (mounted from ./ssh/backend_ssh_key in compose).
+    pub ssh_home: PathBuf,
+}
+
+fn env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn env_bool(name: &str, default: bool) -> bool {
+    env(name)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(default)
+}
+
+fn first_existing(candidates: &[&str], fallback: PathBuf) -> PathBuf {
+    for c in candidates {
+        if Path::new(c).exists() {
+            return PathBuf::from(c);
+        }
+    }
+    fallback
+}
+
+impl Config {
+    pub fn from_env() -> Self {
+        let debug = env_bool("DEBUG", false);
+        let data_dir = env("DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| first_existing(&["/data"], PathBuf::from("./data")));
+        let log_root = env("LOG_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| first_existing(&["/logs"], PathBuf::from("./logs")));
+        let secret_key = env("SECRET_KEY");
+        let secret_key_is_default = secret_key.is_none();
+        let access_minutes: u64 = env("ACCESS_TOKEN_LIFETIME_MINUTES")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3600);
+        let refresh_days: u64 = env("REFRESH_TOKEN_LIFETIME_DAYS")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        let home = env("HOME").unwrap_or_else(|| "/root".to_string());
+        Self {
+            debug,
+            bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
+            secret_key: secret_key.unwrap_or_else(|| DJANGO_DEFAULT_SECRET_KEY.to_string()),
+            secret_key_is_default,
+            reverse_server_ssh_port: env("REVERSE_SERVER_SSH_PORT").unwrap_or_default(),
+            web_server_port: env("WEB_SERVER_PORT"),
+            server_domain: env("SERVER_DOMAIN"),
+            google_client_id: env("SOCIAL_GOOGLE_CLIENT_ID"),
+            internal_api_token: env("INTERNAL_API_TOKEN").unwrap_or_default(),
+            db_path: env("DB_PATH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("db.sqlite3")),
+            data_dir,
+            log_level: env("LOG_LEVEL").unwrap_or_else(|| if debug { "debug".into() } else { "info".into() }),
+            log_root,
+            ssh_logs_path: env("SSH_LOGS_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/ssh-logs/openssh/current")),
+            web_service_pubkey_path: env("WEB_SERVICE_SSH_PUBKEY")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(format!("{home}/.ssh/id_rsa.pub"))),
+            access_token_lifetime: Duration::from_secs(access_minutes * 60),
+            refresh_token_lifetime: Duration::from_secs(refresh_days * 86400),
+            default_register_domains: vec!["gmail.com".to_string()],
+            tz_offset_minutes: env("TIME_ZONE_OFFSET_MINUTES")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8 * 60),
+            project_name: env("PROJECT_NAME").unwrap_or_else(|| "main".to_string()),
+            hostname: env("HOSTNAME").unwrap_or_else(|| "backend".to_string()),
+            kasm_api: env("KASM_BROWSER_API").unwrap_or_else(|| "http://kasm-browser:7000".to_string()),
+            kasm_host: env("KASM_BROWSER_HOST").unwrap_or_else(|| "kasm-browser".to_string()),
+            kasm_ws_user: std::env::var("KASM_WS_USER").unwrap_or_else(|_| "telepy".to_string()),
+            kasm_ws_password: std::env::var("KASM_WS_PASSWORD").unwrap_or_else(|_| "telepyvnc".to_string()),
+            kasm_ws_scheme: env("KASM_WS_SCHEME").unwrap_or_else(|| "ws".to_string()),
+            kasm_ws_path: env("KASM_WS_PATH").unwrap_or_else(|| "/websockify".to_string()),
+            kasm_ws_subprotocol: std::env::var("KASM_WS_SUBPROTOCOL").unwrap_or_else(|_| "binary".to_string()),
+            remote_browser_gc: env("REMOTE_BROWSER_GC").map(|v| v != "0").unwrap_or(true),
+            ssh_home: PathBuf::from(format!("{home}/.ssh")),
+        }
+    }
+
+    /// SERVER_DOMAIN 去掉 scheme 與尾斜線（容錯：env 可能填成 http://host:port）。
+    pub fn server_host(&self) -> Option<String> {
+        self.server_domain.as_ref().map(|d| {
+            d.split("://").last().unwrap_or(d).trim_end_matches('/').to_string()
+        })
+    }
+}
