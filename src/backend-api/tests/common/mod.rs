@@ -77,6 +77,15 @@ impl TestApp {
         self.request(Method::DELETE, path, token, None).await
     }
 
+    /// 換掉 ssh 執行檔（terminal 測試用假程式）：重建 state + router。
+    pub async fn set_ssh_binary(&mut self, path: &str) {
+        let mut config = self.state.config.clone();
+        config.ssh_binary = path.to_string();
+        let db = self.state.db.clone();
+        self.state = AppState::new(config, db);
+        self.router = telepy_server::app::build(self.state.clone());
+    }
+
     /// 註冊 + 登入，回 access token。/ Register and log in; returns the access token.
     pub async fn login(&self, username: &str, password: &str) -> String {
         let r = self.post("/api/auth/register", None, serde_json::json!({"username": username, "password": password})).await;

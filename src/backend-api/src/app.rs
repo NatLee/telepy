@@ -8,6 +8,7 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::api;
+use crate::ws;
 use crate::state::AppState;
 
 pub fn build(state: AppState) -> Router {
@@ -35,8 +36,10 @@ pub fn build(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .layer(CompressionLayer::new());
 
+    // WebSocket 路由不掛壓縮層（升級回應沒有 body；與 Traefik 的 /ws router 一致）。
     Router::new()
         .merge(rest)
+        .merge(ws::router())
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

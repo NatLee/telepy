@@ -1,0 +1,205 @@
+//! `/ws/terminal/`：網頁終端機（TerminalConsumer）。
+//! - 第一則訊息 `{type:"auth", token, server_id, username}`；關閉碼沿用：
+//!   4000 缺欄位、4004 無存取權/隧道不存在、4002 無 reverse_port、4006 無目標使用者、4003 username 不允許、4005 ssh 起不來。
+//! - 之後：`{action:"pty_input", payload:{input}}`、`{action:"pty_resize", payload:{size:{rows,cols,height,width}}}`、
+//!   `{action:"ping"}` → **binary** `pong`（前端把所有 text frame 寫進 xterm，pong 必須是 binary）。
+//! - PTY 輸出以 text frame 送出，增量 UTF-8 解碼避免多位元組字元被切半。
+//! Web terminal over a PTY-attached OpenSSH client, same protocol and close codes as the Django consumer.
+
+use std::time::Instant;
+
+use axum::extract::ws::{Message, WebSocket};
+use bytes::Bytes;
+use serde_json::Value;
+
+use super::{auth, close, send_text};
+use crate::db;
+use crate::permissions::{self, Permission};
+use crate::ssh::process::{spawn_in_pty, terminal_args};
+use crate::ssh::SshTarget;
+use crate::state::AppState;
+
+/// 增量 UTF-8 解碼器：未完成的尾端位元組留到下一塊；非法位元組換成 U+FFFD（Python `'replace'`）。
+#[derive(Default)]
+pub struct Utf8Decoder {
+    pending: Vec<u8>,
+}
+
+impl Utf8Decoder {
+    pub fn decode(&mut self, chunk: &[u8]) -> String {
+        self.pending.extend_from_slice(chunk);
+        let mut out = String::new();
+        let mut buf = std::mem::take(&mut self.pending);
+        loop {
+            match std::str::from_utf8(&buf) {
+                Ok(s) => {
+                    out.push_str(s);
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    out.push_str(unsafe { std::str::from_utf8_unchecked(&buf[..valid]) });
+                    match e.error_len() {
+                        None => {
+                            // 不完整的多位元組序列：留待下一塊。/ Incomplete sequence: keep for the next chunk.
+                            self.pending = buf[valid..].to_vec();
+                            break;
+                        }
+                        Some(bad) => {
+                            out.push('\u{FFFD}');
+                            buf = buf[valid + bad..].to_vec();
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+/// `_resolve_terminal_access`：一次完成所有前置檢查，回 reverse_port 或關閉碼。
+pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, username: &str) -> Result<i64, u16> {
+    let Ok(id) = server_id.parse::<i64>() else { return Err(4004) };
+    let tunnel = match db::tunnels::by_id(&state.db, id).await {
+        Ok(Some(t)) => t,
+        _ => return Err(4004),
+    };
+    if !permissions::check_access(&state.db, user_id, &tunnel, Permission::View).await.unwrap_or(false) {
+        return Err(4004);
+    }
+    if tunnel.reverse_port <= 0 {
+        return Err(4002);
+    }
+    if !db::tunnels::usernames_exist_for_tunnel(&state.db, tunnel.id).await.unwrap_or(false) {
+        return Err(4006);
+    }
+    let allowed = permissions::allowed_usernames(&state.db, user_id, &tunnel).await.unwrap_or_default();
+    if !allowed.iter().any(|u| u.username == username) {
+        return Err(4003);
+    }
+    Ok(tunnel.reverse_port)
+}
+
+pub async fn handle(state: AppState, mut socket: WebSocket) {
+    let (user, msg) = match auth::first_message(&state, &mut socket).await {
+        Ok(v) => v,
+        Err(0) => return,
+        Err(code) => {
+            close(&mut socket, code).await;
+            return;
+        }
+    };
+    let (Some(server_id), Some(username)) = (auth::id_field(&msg, "server_id"), msg.get("username").and_then(|u| u.as_str()).map(str::to_string)) else {
+        tracing::error!("Terminal auth message missing server_id/username");
+        close(&mut socket, 4000).await;
+        return;
+    };
+    tracing::info!(user = %user.username, "Terminal user authenticated");
+    let reverse_port = match resolve_access(&state, user.id, &server_id, &username).await {
+        Ok(p) => p,
+        Err(code) => {
+            tracing::error!(user = %user.username, server_id, code, "Terminal access denied");
+            close(&mut socket, code).await;
+            return;
+        }
+    };
+
+    let target = SshTarget::new(&state.config, &username, reverse_port);
+    let args = terminal_args(&target);
+    let mut pty = match spawn_in_pty(&state.config.ssh_binary, &args) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "Error starting SSH connection");
+            close(&mut socket, 4005).await;
+            return;
+        }
+    };
+    tracing::info!(%username, reverse_port, "SSH connection started");
+    let started = Instant::now();
+
+    let mut decoder = Utf8Decoder::default();
+    let mut buf = vec![0u8; 8192];
+    let mut close_code: Option<u16> = None;
+    loop {
+        tokio::select! {
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Text(t))) => {
+                    let Ok(data) = serde_json::from_str::<Value>(&t) else {
+                        tracing::warn!("Terminal received malformed JSON; ignoring frame");
+                        continue;
+                    };
+                    match data.get("action").and_then(|a| a.as_str()) {
+                        Some("ping") => {
+                            if socket.send(Message::Binary(Bytes::from_static(b"pong"))).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some("pty_input") => {
+                            if let Some(input) = data.pointer("/payload/input").and_then(|i| i.as_str()) {
+                                if let Err(e) = pty.write_nonblocking(input.as_bytes()) {
+                                    tracing::warn!(error = %e, "Terminal input failed");
+                                }
+                            }
+                        }
+                        Some("pty_resize") => {
+                            if let Some(size) = data.pointer("/payload/size").and_then(|s| s.as_object()) {
+                                let g = |k: &str| size.get(k).and_then(|v| v.as_u64()).map(|v| v.min(u16::MAX as u64) as u16);
+                                if let (Some(rows), Some(cols), Some(height), Some(width)) = (g("rows"), g("cols"), g("height"), g("width")) {
+                                    if let Err(e) = pty.resize(rows, cols, width, height) {
+                                        tracing::warn!(error = %e, "Terminal resize failed");
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Some(Ok(Message::Close(frame))) => {
+                    close_code = frame.map(|f| f.code);
+                    break;
+                }
+                None | Some(Err(_)) => break,
+                Some(Ok(_)) => {}
+            },
+            read = pty.read(&mut buf) => match read {
+                Ok(0) => {
+                    // shell 已結束 → 正常關閉。/ EOF: the shell exited; close normally.
+                    let _ = socket.send(Message::Close(None)).await;
+                    close_code = Some(1000);
+                    break;
+                }
+                Ok(n) => {
+                    let text = decoder.decode(&buf[..n]);
+                    if !text.is_empty() && !send_text(&mut socket, text).await {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "PTY read failed");
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
+                }
+            },
+        }
+    }
+
+    tracing::info!(code = ?close_code, lived = started.elapsed().as_secs_f64(), "Terminal session closed");
+    pty.terminate().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn incremental_utf8() {
+        let mut d = Utf8Decoder::default();
+        let s = "中文字".as_bytes();
+        let a = d.decode(&s[..4]); // 1 full char + 1 byte of the next
+        assert_eq!(a, "中");
+        let b = d.decode(&s[4..]);
+        assert_eq!(b, "文字");
+        let c = d.decode(&[0xff, b'x']);
+        assert_eq!(c, "\u{FFFD}x");
+    }
+}

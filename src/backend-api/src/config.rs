@@ -52,6 +52,11 @@ pub struct Config {
     pub remote_browser_gc: bool,
     /// `ssh` client config/keys live here (mounted from ./ssh/backend_ssh_key in compose).
     pub ssh_home: PathBuf,
+    /// OpenSSH 客戶端執行檔（測試可換成假程式）。/ The ssh client binary (swappable in tests).
+    pub ssh_binary: String,
+    /// terminal / file manager 連線的目標主機：現況 `reverse`（~/.ssh/config 的雙跳 ProxyCommand），
+    /// 內建 gateway 後改 `127.0.0.1`。/ Target host for device connections.
+    pub ssh_target_host: String,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -128,6 +133,8 @@ impl Config {
             kasm_ws_subprotocol: std::env::var("KASM_WS_SUBPROTOCOL").unwrap_or_else(|_| "binary".to_string()),
             remote_browser_gc: env("REMOTE_BROWSER_GC").map(|v| v != "0").unwrap_or(true),
             ssh_home: PathBuf::from(format!("{home}/.ssh")),
+            ssh_binary: env("SSH_BINARY").unwrap_or_else(|| "ssh".to_string()),
+            ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| "reverse".to_string()),
         }
     }
 
