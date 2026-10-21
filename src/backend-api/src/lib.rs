@@ -11,6 +11,8 @@ pub mod hub;
 pub mod monitor;
 pub mod permissions;
 pub mod scripts;
+pub mod ssh;
 pub mod state;
 pub mod tokens;
 pub mod util;
+pub mod ws;

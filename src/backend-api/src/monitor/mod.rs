@@ -4,6 +4,7 @@
 //! Tunnel status source (listening ports + per-port RTT), fed by the in-process gateway.
 
 pub mod ports;
+pub mod runner;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::RwLock;
@@ -17,6 +18,8 @@ struct Inner {
     listen_at: Option<Instant>,
     latency: Option<HashMap<u16, f64>>,
     latency_at: Option<Instant>,
+    /// 去彈跳後「已承認」的狀態（Django 的 cache `ports_status`）。/ The debounced, committed map.
+    committed: BTreeMap<i64, bool>,
 }
 
 pub struct StatusState {
@@ -54,6 +57,14 @@ impl StatusState {
         let mut g = self.inner.write().unwrap();
         g.latency = Some(latency);
         g.latency_at = Some(Instant::now());
+    }
+
+    pub fn committed_ports(&self) -> BTreeMap<i64, bool> {
+        self.inner.read().unwrap().committed.clone()
+    }
+
+    pub fn set_committed(&self, committed: BTreeMap<i64, bool>) {
+        self.inner.write().unwrap().committed = committed;
     }
 
     /// 目前監聽中的埠（含非隧道的 LISTEN）；取樣不可用回 None。
