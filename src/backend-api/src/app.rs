@@ -33,6 +33,8 @@ pub fn build(state: AppState) -> Router {
         .merge(api::site_settings::router())
         .merge(api::logs::router())
         .merge(api::internal::router())
+        .merge(api::sftp::router())
+        .merge(api::remote_browser::router())
         .route("/healthz", get(healthz))
         .layer(CompressionLayer::new());
 

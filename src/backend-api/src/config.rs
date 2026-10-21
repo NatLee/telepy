@@ -54,6 +54,12 @@ pub struct Config {
     pub ssh_home: PathBuf,
     /// OpenSSH 客戶端執行檔（測試可換成假程式）。/ The ssh client binary (swappable in tests).
     pub ssh_binary: String,
+    /// russh 原生連線用的私鑰（預設 ~/.ssh/id_rsa，與 ssh 客戶端同一把）。
+    pub ssh_identity: PathBuf,
+    /// 雙跳模式的第一跳（OpenSSH 容器）：telepy@ssh:2222。
+    pub ssh_gateway_host: String,
+    pub ssh_gateway_port: u16,
+    pub ssh_gateway_user: String,
     /// terminal / file manager 連線的目標主機：現況 `reverse`（~/.ssh/config 的雙跳 ProxyCommand），
     /// 內建 gateway 後改 `127.0.0.1`。/ Target host for device connections.
     pub ssh_target_host: String,
@@ -134,6 +140,10 @@ impl Config {
             remote_browser_gc: env("REMOTE_BROWSER_GC").map(|v| v != "0").unwrap_or(true),
             ssh_home: PathBuf::from(format!("{home}/.ssh")),
             ssh_binary: env("SSH_BINARY").unwrap_or_else(|| "ssh".to_string()),
+            ssh_identity: env("SSH_IDENTITY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("{home}/.ssh/id_rsa"))),
+            ssh_gateway_host: env("SSH_GATEWAY_HOST").unwrap_or_else(|| "ssh".to_string()),
+            ssh_gateway_port: env("SSH_GATEWAY_PORT").and_then(|v| v.parse().ok()).unwrap_or(2222),
+            ssh_gateway_user: env("SSH_GATEWAY_USER").unwrap_or_else(|| "telepy".to_string()),
             ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| "reverse".to_string()),
         }
     }

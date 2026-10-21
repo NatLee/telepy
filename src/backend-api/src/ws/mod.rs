@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod filemanager;
 pub mod notifications;
+pub mod remote_browser;
 pub mod terminal;
 pub mod tunnel_connection;
 
@@ -25,6 +26,11 @@ pub fn router() -> Router<AppState> {
         .route("/ws/terminal/", get(terminal_upgrade))
         .route("/ws/filemanager/", get(filemanager_upgrade))
         .route("/ws/tunnel_connection/{tunnel_id}/", get(tunnel_connection_upgrade))
+        .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
+}
+
+async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| remote_browser::handle(state, socket, session_id))
 }
 
 fn prepare(ws: WebSocketUpgrade) -> WebSocketUpgrade {
