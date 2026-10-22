@@ -5,7 +5,6 @@
  * since) in a tooltip. Hidden when nobody is connected.
  */
 import React from "react";
-import { Users } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -33,14 +32,16 @@ export function TunnelPresenceChip({ presence, className }: { presence?: TunnelP
     const chip = (
         <span
             className={cn(
-                "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75rem] font-medium ring-1 ring-inset whitespace-nowrap [&>svg]:size-3",
-                "bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:text-violet-300",
+                // 狀態 = 點 + 文字（設計語言）；和「分享給 N 人」的 Users 圖示分開。/ Status is a dot + text.
+                "inline-flex items-center gap-1.5 rounded-sm border px-1.5 py-px text-[0.75rem] whitespace-nowrap",
+                "border-success/25 bg-success/10 text-success",
                 className
             )}
             aria-label={label}
             tabIndex={presence.sessions ? 0 : undefined}
         >
-            <Users /> {label}
+            <span className="size-1.5 rounded-full bg-success" aria-hidden />
+            {label}
         </span>
     );
     if (!presence.sessions || presence.sessions.length === 0) return chip;
