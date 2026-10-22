@@ -10,6 +10,7 @@ import { useCreateTunnelWizard, type WizardStep } from "@/hooks/useCreateTunnelW
 import { useDeviceJoin } from "@/hooks/useDeviceJoin";
 import { JoinPanel, JoinWhy } from "@/components/tunnels/JoinPanel";
 import { Segmented } from "@/components/ui/segmented";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { WizardStepper } from "@/components/tunnels/CreateWizardSteps/WizardStepper";
 import { SetupDiagram } from "@/components/tunnels/CreateWizardSteps/SetupDiagram";
 import { WhyPanel } from "@/components/tunnels/CreateWizardSteps/WhyPanel";
@@ -20,7 +21,7 @@ import { StepConnect } from "@/components/tunnels/CreateWizardSteps/StepConnect"
 import { StepVerify } from "@/components/tunnels/CreateWizardSteps/StepVerify";
 import { useI18n } from "@/lib/i18n";
 
-const CARD = "rounded-2xl border border-border bg-card/85 backdrop-blur-sm shadow-card";
+const CARD = "rounded-xl border border-border bg-card shadow-card";
 const MODE_KEY = "telepy.createMode";
 type Mode = "command" | "steps";
 
@@ -58,26 +59,26 @@ export default function CreateTunnelWizard() {
 
     return (
         <div className="mx-auto max-w-5xl space-y-6 pb-12 animate-fade-in-up">
-            <header className="flex items-start gap-4">
-                <div className="hidden size-12 shrink-0 place-items-center rounded-2xl bg-brand-gradient shadow-glow sm:grid" aria-hidden>
-                    <Cable className="text-white" size={22} />
-                </div>
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight text-foreground">{t("wizard.title")}</h1>
-                    <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{mode === "command" ? t("join.pageSubtitle") : t("wizard.subtitle")}</p>
-                </div>
-            </header>
+            <PageHeader
+                icon={<Cable size={22} />}
+                title={t("wizard.title")}
+                description={mode === "command" ? t("join.pageSubtitle") : t("wizard.subtitle")}
+            />
 
             {showModes && (
-                <Segmented<Mode>
-                    kind="tabs"
-                    value={mode}
-                    onChange={setMode}
-                    options={[
-                        { value: "command", label: t("join.mode.command"), icon: <Terminal size={14} /> },
-                        { value: "steps", label: t("join.mode.steps"), icon: <ListChecks size={14} /> },
-                    ]}
-                />
+                // 分段切換不會縮（min-w-max）：窄螢幕讓它在自己這一列裡捲動，整頁不會被撐寬。
+                // The segmented control never shrinks (min-w-max): on narrow screens it scrolls in its own row instead of widening the page.
+                <div className="max-w-full overflow-x-auto [scrollbar-width:none]">
+                    <Segmented<Mode>
+                        kind="tabs"
+                        value={mode}
+                        onChange={setMode}
+                        options={[
+                            { value: "command", label: t("join.mode.command"), icon: <Terminal size={14} /> },
+                            { value: "steps", label: t("join.mode.steps"), icon: <ListChecks size={14} /> },
+                        ]}
+                    />
+                </div>
             )}
 
             {mode === "command" ? (
@@ -106,7 +107,7 @@ export default function CreateTunnelWizard() {
             ) : (
             <>
             <section className={`${CARD} space-y-6 p-4 sm:p-6`}>
-                <WizardStepper step={step} maxStep={wizard.maxStep} canLeaveFirst={!!created} onSelect={wizard.goTo} />
+                <WizardStepper wizard={wizard} />
                 <SetupDiagram
                     step={step}
                     deviceName={deviceName}

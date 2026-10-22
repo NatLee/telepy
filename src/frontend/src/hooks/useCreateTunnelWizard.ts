@@ -55,6 +55,13 @@ export interface DeviceErrors {
     port?: string;
 }
 
+/** 之前做過的步驟因為後來的修改需要重新確認的原因。/ Why an earlier-finished step needs another look after a later change. */
+export type ReviewReason =
+    | { kind: "accountsAdded"; names: string[] }
+    | { kind: "keysChanged" }
+    | { kind: "offline" }
+    | { kind: "unverified"; names: string[] };
+
 interface OneTime {
     command: string;
     loading: boolean;
@@ -95,6 +102,9 @@ export function useCreateTunnelWizard() {
     const [keyList, setKeyList] = useState<"mine" | "empty">("mine");
     const [myKeyCount, setMyKeyCount] = useState<number | null>(null);
     const [deviceOs, setDeviceOs] = useState<DeviceOs>("unix");
+    // 按「我已經執行了」那一刻的帳號與金鑰；之後再新增帳號或改金鑰，Step 3 就要重做。
+    // Accounts and keys at the moment "I've run it" was pressed; adding an account or changing keys later means redo.
+    const [authorizedFor, setAuthorizedFor] = useState<{ accounts: string[]; keys: string } | null>(null);
 
     // ── Step 4：連線 / Connect ──
     const [method, setMethod] = useState<ConnectMethod>("autossh-service");
@@ -104,6 +114,9 @@ export function useCreateTunnelWizard() {
     const { status } = useTunnelConnectionWebSocket(created ? String(created.id) : null);
     const connected = status?.is_connected === true;
     const rttMs: number | null = typeof status?.rtt_ms === "number" ? status.rtt_ms : null;
+    // 「上次渲染以來的資訊」模式：連上過一次就記住，之後離線要提醒。/ Remember a past connection so going offline can be flagged.
+    const [everConnected, setEverConnected] = useState(false);
+    if (connected && !everConnected) setEverConnected(true);
 
     // ── Step 5：驗證 / Verify ──
     const [checks, setChecks] = useState<Record<string, LoginCheck>>({});
@@ -299,6 +312,13 @@ export function useCreateTunnelWizard() {
         [serviceKeys, userKeys, excludedUserKeys, keysInstalledByTelepy],
     );
 
+    const markAuthorized = () => {
+        setAuthorizedFor({ accounts: accounts.map((a) => a.username), keys: authorizedKeys.join("\n") });
+        setStep(4);
+    };
+    const newSinceAuthorize = authorizedFor ? accounts.map((a) => a.username).filter((u) => !authorizedFor.accounts.includes(u)) : [];
+    const keysChangedSinceAuthorize = !!authorizedFor && authorizedFor.keys !== authorizedKeys.join("\n");
+
     // Step 1 要知道我有幾把金鑰（決定「放入我的金鑰」能不能選）。/ Step 1 needs my key count.
     useEffect(() => {
         let cancelled = false;
@@ -430,9 +450,17 @@ export function useCreateTunnelWizard() {
 
     const allLoginsOk = accounts.length > 0 && accounts.every((a) => checks[a.username]?.state === "ok");
 
+    // 哪些「做過的步驟」因為後來的修改需要回去看。/ Finished steps that a later change sent back for another look.
+    const review: Partial<Record<WizardStep, ReviewReason>> = {};
+    if (newSinceAuthorize.length > 0) review[3] = { kind: "accountsAdded", names: newSinceAuthorize };
+    else if (keysChangedSinceAuthorize) review[3] = { kind: "keysChanged" };
+    if (everConnected && !connected) review[4] = { kind: "offline" };
+    const unverified = accounts.map((a) => a.username).filter((u) => checks[u]?.state !== "ok");
+    if (maxStep >= 5 && step !== 5 && Object.keys(checks).length > 0 && unverified.length > 0) review[5] = { kind: "unverified", names: unverified };
+
     return {
         step, maxStep, setStep, goTo,
-        created, connected, rttMs,
+        created, connected, rttMs, review,
         device: {
             sshKey, onKeyChange, keyCheck,
             hostName, onNameChange,
@@ -446,7 +474,7 @@ export function useCreateTunnelWizard() {
         },
         keys: {
             serviceKeys, userKeys, loading: keysLoading, excludedUserKeys, toggleUserKey, authorizedKeys, keysInstalledByTelepy,
-            deviceOs, setDeviceOs,
+            deviceOs, setDeviceOs, markAuthorized, authorized: !!authorizedFor, newSinceAuthorize,
         },
         connect: {
             method, setMethod,

@@ -10,6 +10,7 @@ import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Info, KeyRound, Laptop, Lock, ServerCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -44,7 +45,7 @@ function KeyRow({ item, kind, included, onToggle }: {
                         className="size-4 accent-primary"
                     />
                 )}
-                <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", kind === "service" ? "bg-brand-gradient text-white" : "bg-info/12 text-info")} aria-hidden>
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", kind === "service" ? "bg-primary text-primary-foreground" : "bg-info/12 text-info")} aria-hidden>
                     <Icon size={15} />
                 </span>
                 <span className={cn("min-w-0 flex-1", !included && "opacity-60")}>
@@ -81,22 +82,42 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
     const k = wizard.keys;
     const accounts = wizard.accounts.list;
     const name = wizard.created?.name ?? "";
+    const review = wizard.review[3];
     const command = useMemo(() => authorizeKeysCommand(k.authorizedKeys, k.deviceOs), [k.authorizedKeys, k.deviceOs]);
 
     return (
         <div className="space-y-6">
             <StepHeading title={t("wizard.authorize.title")} subtitle={tn("wizard.authorize.subtitle", { path: <Code>~/.ssh/authorized_keys</Code> })} />
 
+            {/* 自從上次按「我已經執行了」後又加了帳號 / 改了金鑰：要再跑一次。/ Accounts or keys changed since "I've run it": run it again. */}
+            {review && (
+                <Callout tone="warning">
+                    {review.kind === "accountsAdded"
+                        ? tn("wizard.authorize.rerunAccounts", { names: <Code>{review.names.join(", ")}</Code> })
+                        : t("wizard.authorize.rerunKeys")}
+                </Callout>
+            )}
+
             <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="flex flex-wrap items-center gap-1.5 text-sm text-foreground">
                         <span>{tn("wizard.authorize.runOn", { name: <strong>{name}</strong> })}</span>
                         {accounts.length > 0 ? (
-                            accounts.map((acc) => (
-                                <span key={acc.id} className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-xs text-primary">
-                                    <UserRound size={11} aria-hidden /> {acc.username}
-                                </span>
-                            ))
+                            accounts.map((acc) => {
+                                const fresh = k.newSinceAuthorize.includes(acc.username);
+                                return (
+                                    <span
+                                        key={acc.id}
+                                        className={cn(
+                                            "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-xs",
+                                            fresh ? "bg-warning/15 text-foreground ring-1 ring-inset ring-warning/50" : "bg-primary/10 text-primary"
+                                        )}
+                                    >
+                                        <UserRound size={11} aria-hidden /> {acc.username}
+                                        {fresh && <span className="font-sans text-[0.6875rem] text-foreground/70">· {t("wizard.authorize.new")}</span>}
+                                    </span>
+                                );
+                            })
                         ) : (
                             <span className="text-muted-foreground">{t("wizard.authorize.runAsAny")}</span>
                         )}
@@ -114,7 +135,7 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                 ) : command ? (
                     <CodeBlock language={k.deviceOs === "windows" ? "powershell" : "bash"} value={command} />
                 ) : (
-                    <p className="rounded-xl border border-amber-500/35 bg-amber-500/[0.07] p-3 text-sm text-amber-800 dark:text-amber-200">{t("wizard.noServiceKeys")}</p>
+                    <Callout tone="warning">{t("wizard.noServiceKeys")}</Callout>
                 )}
 
                 <ul className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
@@ -130,7 +151,7 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                     )}
                     {k.deviceOs === "windows" && (
                         <li className="flex gap-2">
-                            <Info size={13} className="mt-0.5 shrink-0 text-amber-500" aria-hidden />
+                            <Info size={13} className="mt-0.5 shrink-0 text-warning" aria-hidden />
                             <span>{tn("wizard.authorize.windowsAdmin", { path: <Code>C:\ProgramData\ssh\administrators_authorized_keys</Code> })}</span>
                         </li>
                     )}
@@ -172,8 +193,8 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
             </div>
 
             <StepFooter onBack={() => wizard.goTo(2)}>
-                <Button type="button" onClick={() => wizard.setStep(4)}>
-                    {t("wizard.authorize.done")} <ChevronRight />
+                <Button type="button" onClick={k.markAuthorized}>
+                    {review ? t("wizard.authorize.doneAgain") : t("wizard.authorize.done")} <ChevronRight />
                 </Button>
             </StepFooter>
         </div>

@@ -17,6 +17,7 @@ import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import type { DeviceJoin, JoinPhase } from "@/hooks/useDeviceJoin";
 import type { TranslationKey } from "@/locales/en";
 import { CopyLine, Disclosure, FieldError, Segmented, StepFooter, StepHeading } from "./CreateWizardSteps/parts";
+import { DialInRadar, type RadarState } from "@/components/tunnels/DialIn";
 
 const ORDER: JoinPhase[] = ["waiting", "registered", "connected", "verified"];
 
@@ -89,7 +90,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                 )}
                 {form.error && <Callout tone="danger">{form.error}</Callout>}
                 <StepFooter>
-                    <Button type="submit" disabled={form.creating} className="shadow-glow">
+                    <Button type="submit" disabled={form.creating} className="">
                         {form.creating ? <Loader2 className="animate-spin" /> : <Terminal />} {t("join.create")}
                     </Button>
                 </StepFooter>
@@ -111,6 +112,8 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
     const command = sudo === "sudo" ? ticket.command : ticket.command_no_sudo;
     const device = ticket.tunnel_name ?? ticket.name ?? t("join.thisDevice");
     const hostInfo = [ticket.hostname, ticket.os].filter(Boolean).join(" · ");
+    // 雷達：等裝置撥進來時掃描，連上（或驗證完）變綠。/ Radar: sweeps while waiting, turns green once connected.
+    const radarState: RadarState = failed ? "failed" : ticket.phase === "connected" || ticket.phase === "verified" ? "connected" : expired ? "idle" : "waiting";
 
     return (
         <div className="space-y-6">
@@ -145,12 +148,15 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
 
             {expired && ticket.phase === "waiting" && <Callout tone="warning">{t("join.expired")}</Callout>}
 
-            <ol className="space-y-4 rounded-xl border border-border bg-surface p-4" aria-live="polite">
+            <div className="flex flex-col items-center gap-5 rounded-xl border border-border bg-surface p-4 sm:flex-row sm:items-center">
+            <DialInRadar state={radarState} />
+            <ol className="w-full min-w-0 flex-1 space-y-4" aria-live="polite">
                 <ProgressRow state={rowState(0)} title={t("join.step.waiting")} detail={phaseIndex === 0 && !expired ? t("join.step.waitingDetail") : undefined} />
                 <ProgressRow state={rowState(1)} title={t("join.step.registered", { name: device })} detail={hostInfo || undefined} />
                 <ProgressRow state={rowState(2)} title={t("join.step.connected")} detail={ticket.reverse_port ? t("join.step.connectedDetail", { port: ticket.reverse_port }) : undefined} />
                 <ProgressRow state={rowState(3)} title={t("join.step.verified", { user: ticket.username ?? "…" })} detail={failed ? ticket.detail ?? undefined : undefined} />
             </ol>
+            </div>
 
             {ticket.phase === "verified" && ticket.tunnel_id && ticket.reverse_port && (
                 <Callout tone="tip">{t("join.done", { name: device, user: ticket.username ?? "" })}</Callout>
@@ -167,7 +173,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                     </Button>
                 )}
                 {ticket.tunnel_id && ticket.reverse_port && ticket.phase === "verified" && (
-                    <Button asChild className="shadow-glow">
+                    <Button asChild className="">
                         <Link href={getTerminalPageUrl({ id: ticket.tunnel_id, reverse_port: ticket.reverse_port })} prefetch={false}>
                             <Terminal /> {t("join.openTerminal")}
                         </Link>
@@ -193,9 +199,9 @@ const WHY_POINTS: { icon: LucideIcon; text: TranslationKey }[] = [
 export function JoinWhy() {
     const { t } = useI18n();
     return (
-        <aside className="relative overflow-hidden rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.07] via-transparent to-transparent p-4 animate-fade-in-up sm:p-5" aria-labelledby="join-why-title">
+        <aside className="relative overflow-hidden rounded-xl border border-warning/25 bg-warning/[0.07] p-4 animate-fade-in-up sm:p-5" aria-labelledby="join-why-title">
             <div className="flex items-center gap-2.5">
-                <span className="grid size-8 place-items-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400" aria-hidden>
+                <span className="grid size-8 place-items-center rounded-lg bg-warning/15 text-warning" aria-hidden>
                     <Lightbulb size={16} />
                 </span>
                 <h3 id="join-why-title" className="text-sm text-foreground">{t("join.why.title")}</h3>
@@ -204,7 +210,7 @@ export function JoinWhy() {
             <ul className="mt-4 space-y-3">
                 {WHY_POINTS.map(({ icon: Icon, text }) => (
                     <li key={text} className="flex gap-2.5 text-xs leading-relaxed text-muted-foreground">
-                        <Icon size={14} className="mt-0.5 shrink-0 text-amber-600/80 dark:text-amber-400/80" aria-hidden />
+                        <Icon size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden />
                         <span>{t(text)}</span>
                     </li>
                 ))}
