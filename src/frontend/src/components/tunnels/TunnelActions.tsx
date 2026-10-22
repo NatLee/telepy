@@ -19,6 +19,7 @@ import {
     ChevronDown,
     FileCode2,
     Info,
+    KeyRound,
     LogOut,
     Rocket,
     ScrollText,
@@ -80,6 +81,7 @@ export function TunnelActions({
     onScript,
     onLogs,
     onCommands,
+    onKeys,
     onUsers,
     onShare,
     onLeave,
@@ -114,6 +116,12 @@ export function TunnelActions({
                         label={t("tunnelActions.sshConfig")}
                         hint={t("tunnelActions.sshConfigHint")}
                         onSelect={() => onConfig(tunnel.id)}
+                    />
+                    <ActionItem
+                        icon={KeyRound}
+                        label={t("tunnelActions.deviceKeys")}
+                        hint={t("tunnelActions.deviceKeysHint")}
+                        onSelect={() => onKeys(tunnel.id)}
                     />
                 </DropdownMenuGroup>
 

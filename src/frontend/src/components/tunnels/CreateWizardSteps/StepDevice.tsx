@@ -6,7 +6,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, Loader2, Lock, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, KeyRound, Loader2, Lock, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -154,6 +154,42 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                     {d.errors.port ? <FieldError>{d.errors.port}</FieldError> : <p className="text-xs text-muted-foreground">{t("wizard.device.portHelper")}</p>}
                 </div>
             </div>
+
+            {/* 裝置金鑰清單的起點 / Where the device key list starts */}
+            <fieldset className="space-y-2">
+                <legend className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                    <KeyRound size={14} className="text-primary" aria-hidden /> {t("wizard.device.keyListTitle")}
+                </legend>
+                {d.myKeyCount === 0 ? (
+                    <p className="text-xs leading-relaxed text-muted-foreground">{t("wizard.device.keyListNoKeys")}</p>
+                ) : (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                        {(["mine", "empty"] as const).map((v) => (
+                            <label
+                                key={v}
+                                className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-border px-3 py-2.5 transition-colors hover:bg-muted/40 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/6"
+                            >
+                                <input
+                                    type="radio"
+                                    name="wizard-key-list"
+                                    value={v}
+                                    checked={d.keyList === v}
+                                    onChange={() => d.setKeyList(v)}
+                                    className="mt-0.5 size-4 accent-primary"
+                                />
+                                <span className="min-w-0">
+                                    <span className="block text-sm text-foreground">
+                                        {v === "mine" ? t("wizard.device.keyListMine", { n: d.myKeyCount ?? "…" }) : t("wizard.device.keyListEmpty")}
+                                    </span>
+                                    <span className="block text-xs leading-relaxed text-muted-foreground">
+                                        {v === "mine" ? t("wizard.device.keyListMineHint") : t("wizard.device.keyListEmptyHint")}
+                                    </span>
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+                )}
+            </fieldset>
 
             <StepFooter>
                 <Button type="submit" disabled={d.creating || kc.kind === "private"} className="shadow-glow">

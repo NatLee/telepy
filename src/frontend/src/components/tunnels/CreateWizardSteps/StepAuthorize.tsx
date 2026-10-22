@@ -143,10 +143,24 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                 </h3>
                 <ul className="space-y-2">
                     {k.serviceKeys.map((item) => <KeyRow key={`s${item.id}`} item={item} kind="service" included />)}
-                    {k.userKeys.map((item) => (
-                        <KeyRow key={`u${item.id}`} item={item} kind="user" included={!k.excludedUserKeys.has(item.id)} onToggle={() => k.toggleUserKey(item.id)} />
-                    ))}
+                    {!k.keysInstalledByTelepy &&
+                        k.userKeys.map((item) => (
+                            <KeyRow key={`u${item.id}`} item={item} kind="user" included={!k.excludedUserKeys.has(item.id)} onToggle={() => k.toggleUserKey(item.id)} />
+                        ))}
                 </ul>
+                {k.keysInstalledByTelepy && (
+                    <p className="flex flex-wrap items-start gap-1.5 rounded-xl border border-primary/20 bg-primary/6 p-3 text-xs leading-relaxed text-foreground/85">
+                        <Laptop size={14} className="mt-px shrink-0 text-primary" aria-hidden />
+                        <span className="min-w-0 flex-1">
+                            {t("wizard.authorize.userKeysAuto", { n: k.userKeys.length })}{" "}
+                            {wizard.created && (
+                                <Link href={`/tunnels/keys?device=${wizard.created.id}`} target="_blank" prefetch={false} className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline">
+                                    {t("wizard.authorize.manageKeys")} <ExternalLink size={11} aria-hidden />
+                                </Link>
+                            )}
+                        </span>
+                    </p>
+                )}
                 {!k.loading && k.userKeys.length === 0 && (
                     <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                         <Laptop size={13} aria-hidden /> {t("wizard.authorize.noUserKeys")}

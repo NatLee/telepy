@@ -64,6 +64,8 @@ export interface TunnelActionHandlers {
     onLogs: (tunnelId: number) => void;
     /** 指令速查：埠轉發等指令（/tunnels/cheatsheet?tunnel=<id>）。/ Command sheet for this tunnel. */
     onCommands: (tunnelId: number) => void;
+    /** 這台裝置的金鑰清單（/tunnels/keys?device=<id>）。/ This device's key list. */
+    onKeys: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;

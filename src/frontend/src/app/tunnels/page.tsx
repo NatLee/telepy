@@ -89,6 +89,7 @@ export default function TunnelsPage() {
         onConfig: (tunnelId) => setConfigModal({ isOpen: true, tunnelId }),
         onScript: (tunnelId) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 }),
         onLogs: (tunnelId) => router.push(`/tunnels/logs?tunnel=${tunnelId}`),
+        onKeys: (tunnelId) => router.push(`/tunnels/keys?device=${tunnelId}`),
         onCommands: (tunnelId) => router.push(`/tunnels/cheatsheet?tunnel=${tunnelId}`),
         onUsers: (tunnelId, readOnly) => setUsersModal({ isOpen: true, tunnelId, readOnly }),
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),

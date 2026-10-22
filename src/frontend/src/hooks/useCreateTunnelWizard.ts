@@ -90,6 +90,10 @@ export function useCreateTunnelWizard() {
     const [userKeys, setUserKeys] = useState<PublicKeyItem[]>([]);
     const [keysLoading, setKeysLoading] = useState(false);
     const [excludedUserKeys, setExcludedUserKeys] = useState<Set<number>>(new Set());
+    // 裝置的金鑰清單從哪裡開始："mine" = 我所有的金鑰（Telepy 連上後自己裝），"empty" = 空的。
+    // Where the device key list starts: "mine" = all my keys (Telepy installs them itself), "empty" = nothing.
+    const [keyList, setKeyList] = useState<"mine" | "empty">("mine");
+    const [myKeyCount, setMyKeyCount] = useState<number | null>(null);
     const [deviceOs, setDeviceOs] = useState<DeviceOs>("unix");
 
     // ── Step 4：連線 / Connect ──
@@ -156,7 +160,12 @@ export function useCreateTunnelWizard() {
             const tokenRes = await apiFetch("/api/reverse/issue/token");
             const tokenData = await readJson<{ token?: string }>(tokenRes);
             if (!tokenRes.ok || !tokenData?.token) throw new Error(t("wizard.issueTokenFailed"));
-            const payload = { key: keyCheck.normalized, host_friendly_name: name, ssh_port: Number(sshPort) };
+            const payload = {
+                key: keyCheck.normalized,
+                host_friendly_name: name,
+                ssh_port: Number(sshPort),
+                key_list: keyList === "mine" && (myKeyCount ?? 0) > 0 ? "mine" : "empty",
+            };
 
             // 先查重複，給欄位上的友善訊息（建立時的 UNIQUE 錯誤很難讀）。
             // Check duplicates first for friendly field errors (the create call's UNIQUE error is cryptic).
@@ -279,10 +288,30 @@ export function useCreateTunnelWizard() {
         });
     };
 
+    // 個人金鑰在裝置清單上（key_list = mine）時由 Telepy 自己裝，指令裡只放服務金鑰。
+    // With key_list = "mine" Telepy installs the personal keys itself, so the command only carries the service key.
+    const keysInstalledByTelepy = keyList === "mine" && userKeys.length > 0;
     const authorizedKeys = useMemo(
-        () => [...serviceKeys.map((k) => k.key), ...userKeys.filter((k) => !excludedUserKeys.has(k.id)).map((k) => k.key)],
-        [serviceKeys, userKeys, excludedUserKeys],
+        () => [
+            ...serviceKeys.map((k) => k.key),
+            ...(keysInstalledByTelepy ? [] : userKeys.filter((k) => !excludedUserKeys.has(k.id)).map((k) => k.key)),
+        ],
+        [serviceKeys, userKeys, excludedUserKeys, keysInstalledByTelepy],
     );
+
+    // Step 1 要知道我有幾把金鑰（決定「放入我的金鑰」能不能選）。/ Step 1 needs my key count.
+    useEffect(() => {
+        let cancelled = false;
+        apiFetch("/api/reverse/user/keys")
+            .then((res) => (res.ok ? readJson<unknown[]>(res) : null))
+            .then((rows) => {
+                if (!cancelled) setMyKeyCount(rows?.length ?? 0);
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (!created) return;
@@ -409,13 +438,14 @@ export function useCreateTunnelWizard() {
             hostName, onNameChange,
             sshPort, onPortChange,
             errors, creating, submitDevice,
+            keyList, setKeyList, myKeyCount,
         },
         accounts: {
             list: accounts, newAccount, setNewAccount, adding: addingAccount, add: addAccount, remove: removeAccount,
             suggestedFromKey: keyCheck.kind === "valid" ? keyCheck.comment : "",
         },
         keys: {
-            serviceKeys, userKeys, loading: keysLoading, excludedUserKeys, toggleUserKey, authorizedKeys,
+            serviceKeys, userKeys, loading: keysLoading, excludedUserKeys, toggleUserKey, authorizedKeys, keysInstalledByTelepy,
             deviceOs, setDeviceOs,
         },
         connect: {
