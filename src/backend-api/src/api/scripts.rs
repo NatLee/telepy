@@ -109,6 +109,7 @@ async fn render_for(
     };
     let service_key = db::keys::first_service_key(&state.db).await?;
     let ctx = ScriptContext {
+        host_friendly_name: &t.host_friendly_name,
         server_domain: domain,
         reverse_port: t.reverse_port,
         ssh_port,

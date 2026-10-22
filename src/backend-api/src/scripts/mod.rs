@@ -39,6 +39,7 @@ pub fn safe_substitute(text: &str, mapping: &HashMap<&str, String>) -> String {
 
 #[derive(Debug, Clone)]
 pub struct ScriptContext<'a> {
+    pub host_friendly_name: &'a str,
     pub server_domain: &'a str,
     pub reverse_port: i64,
     pub ssh_port: i64,
@@ -52,6 +53,7 @@ pub struct ScriptContext<'a> {
 
 fn base_mapping(ctx: &ScriptContext) -> HashMap<&'static str, String> {
     let mut m = HashMap::new();
+    m.insert("host_friendly_name", ctx.host_friendly_name.to_string());
     m.insert("username", ctx.username.to_string());
     m.insert("server_domain", ctx.server_domain.to_string());
     m.insert("reverse_port", ctx.reverse_port.to_string());
@@ -78,18 +80,21 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             Ok((safe_substitute(POWERSHELL, &m), "powershell"))
         }
         "docker-run" | "docker-compose" => {
+            // 容器版（jnovack/autossh）：金鑰掛到 /id_rsa、用環境變數設定；沒給 key_path 就用預設的 ~/.ssh/id_rsa
+            //（compose 會展開 ~，shell 版用 $HOME 讓 bash 展開）。容器透過 host.docker.internal 連本機 sshd。
+            // Container flavour (jnovack/autossh): key mounted at /id_rsa, env-driven; key_path defaults to
+            // ~/.ssh/id_rsa (compose expands ~, the shell flavour uses $HOME). The container reaches the host's
+            // sshd via host.docker.internal.
             let compose = tunnel_type.eq_ignore_ascii_case("docker-compose");
-            if let Some(k) = ctx.key_path {
-                m.insert("key_mount", format!("  -v {k}:/root/.ssh/id_rsa:ro"));
-                m.insert("key_option", "  -i /root/.ssh/id_rsa".into());
-            } else {
-                m.insert("key_mount", String::new());
-                m.insert("key_option", String::new());
-            }
-            m.insert("docker_type", if compose { "compose".into() } else { "run".into() });
+            let default_key = if compose { "~/.ssh/id_rsa" } else { "$HOME/.ssh/id_rsa" };
+            m.insert("key_path", ctx.key_path.unwrap_or(default_key).to_string());
             m.insert(
                 "telepy_public_key",
-                ctx.telepy_public_key.map(str::to_string).unwrap_or_else(|| "# Telepy public key not found".into()),
+                match ctx.telepy_public_key {
+                    Some(k) => k.to_string(),
+                    None if compose => "<Telepy service key not found - add one on the Keys page>".to_string(),
+                    None => String::new(),
+                },
             );
             let tpl = if compose { DOCKER_COMPOSE } else { DOCKER_RUN };
             Ok((safe_substitute(tpl, &m), if compose { "yaml" } else { "bash" }))
@@ -160,6 +165,7 @@ mod tests {
     #[test]
     fn ssh_script_with_and_without_key() {
         let ctx = ScriptContext {
+            host_friendly_name: "My Box",
             server_domain: "telepy.test",
             reverse_port: 12345,
             ssh_port: 22,
@@ -180,11 +186,48 @@ mod tests {
         assert_eq!(lang, "powershell");
         assert!(s.contains("-i '~/.ssh/id_rsa' -o ServerAliveInterval=15"));
         assert!(s.contains("$Host.UI.RawUI.ReadKey"), "unknown $identifiers must survive");
-        let (s, lang) = render_script("docker-compose", &ctx2).unwrap();
-        assert_eq!(lang, "yaml");
-        assert!(s.contains("  -v ~/.ssh/id_rsa:/root/.ssh/id_rsa:ro"));
-        assert!(s.contains("# Telepy public key not found"));
         assert!(render_script("nope", &ctx).is_err());
+    }
+
+    #[test]
+    fn docker_scripts_use_a_real_image_and_reach_the_host() {
+        let ctx = ScriptContext {
+            host_friendly_name: "My Box",
+            server_domain: "telepy.test",
+            reverse_port: 12345,
+            ssh_port: 22,
+            reverse_server_ssh_port: "24242",
+            username: "root",
+            key_path: None,
+            telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
+        };
+        let (s, lang) = render_script("docker-compose", &ctx).unwrap();
+        assert_eq!(lang, "yaml");
+        assert!(s.contains("image: jnovack/autossh:latest"), "{s}");
+        assert!(s.contains("- \"~/.ssh/id_rsa:/id_rsa:ro\""), "default key path: {s}");
+        assert!(s.contains("- \"host.docker.internal:host-gateway\""));
+        assert!(s.contains("SSH_TARGET_HOST: host.docker.internal"));
+        assert!(s.contains("SSH_TUNNEL_PORT: \"12345\"") && s.contains("SSH_TARGET_PORT: \"22\"") && s.contains("SSH_REMOTE_PORT: \"24242\""));
+        assert!(s.contains("SSH_REMOTE_HOST: \"telepy.test\"") && s.contains("SSH_REMOTE_USER: telepy"));
+        assert!(s.contains("grep -qxF 'ssh-ed25519 AAAAtest web-service' ~/.ssh/authorized_keys"), "append, never overwrite: {s}");
+        assert!(s.contains("docker compose -f telepy-docker-compose.yml up -d"));
+        assert!(!s.contains("ports:"), "the reverse port is bound on the Telepy server, not on the device");
+        assert!(!s.contains("${"), "every placeholder must be substituted (compose would try to expand it): {s}");
+        assert!(s.contains("\"My Box\""));
+
+        let (s, lang) = render_script("docker-run", &ScriptContext { key_path: Some("/keys/dev.pem"), ..ctx.clone() }).unwrap();
+        assert_eq!(lang, "bash");
+        assert!(s.contains("KEY_FILE=/keys/dev.pem\n"), "{s}");
+        assert!(s.contains("-v \"$KEY_FILE\":/id_rsa:ro"));
+        assert!(s.contains("--add-host host.docker.internal:host-gateway"));
+        assert!(s.contains("-e SSH_TUNNEL_PORT=12345") && s.contains("-e SSH_TARGET_PORT=22") && s.contains("-e SSH_REMOTE_HOST=telepy.test"));
+        assert!(s.contains("TELEPY_KEY='ssh-ed25519 AAAAtest web-service'"));
+        assert!(s.contains(">> ~/.ssh/authorized_keys") && !s.contains(" > ~/.ssh/authorized_keys"), "append only: {s}");
+        assert!(s.contains("jnovack/autossh:latest"));
+        let (s, _) = render_script("docker-run", &ctx).unwrap();
+        assert!(s.contains("KEY_FILE=$HOME/.ssh/id_rsa\n"), "{s}");
+        let (s, _) = render_script("docker-run", &ScriptContext { telepy_public_key: None, ..ctx.clone() }).unwrap();
+        assert!(s.contains("TELEPY_KEY=''"), "no service key → nothing appended: {s}");
     }
 
     #[test]
