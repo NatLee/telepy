@@ -174,4 +174,9 @@ Sub-commands:
 
 ## License
 
-[MIT](./LICENSE)
+Telepy is licensed under the [GNU Affero General Public License v3.0](./LICENSE) (AGPL-3.0). If you run a modified
+Telepy as a service for other people, you must offer them its source code. If that does not fit your use, a
+commercial license is available — contact [@NatLee](https://github.com/NatLee).
+
+Versions released before October 2026 were MIT-licensed; see [NOTICE](./NOTICE). Contributions are made under the
+[Contributor License Agreement](./CONTRIBUTING.md#contributor-license-agreement).

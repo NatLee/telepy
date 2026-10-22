@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Telepy backend: REST + WebSocket server for reverse SSH tunnel management"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [[bin]]
 name = "telepy-server"

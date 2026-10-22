@@ -168,4 +168,6 @@ Sub-commands:
 
 ## 授權條款
 
-[MIT](./LICENSE)
+Telepy 採用 [GNU Affero General Public License v3.0](./LICENSE)（AGPL-3.0）。若你把修改過的 Telepy 架成服務給其他人使用，就必須提供原始碼給這些使用者。如果這不符合你的用途，可以取得商業授權，請聯絡 [@NatLee](https://github.com/NatLee)。
+
+2026 年 10 月以前發布的版本採用 MIT 授權，詳見 [NOTICE](./NOTICE)。貢獻程式碼即表示同意[貢獻者授權協議（CLA）](./CONTRIBUTING.md#contributor-license-agreement)。
