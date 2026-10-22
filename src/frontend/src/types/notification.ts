@@ -15,6 +15,8 @@ export const NOTIFICATION_ACTIONS = {
     // AI（MCP）工具開/關 SSH session：送給 session 的使用者與隧道擁有者。/ AI session lifecycle (user + tunnel owner).
     AI_SESSION_OPENED: "AI-SESSION-OPENED",
     AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
+    // 裝置金鑰清單同步完（送給隧道擁有者與被分享者）。/ A device's key list was synced (tunnel audience).
+    DEVICE_KEYS_UPDATED: "DEVICE-KEYS-UPDATED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];
