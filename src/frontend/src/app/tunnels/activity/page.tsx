@@ -191,6 +191,7 @@ export default function AiActivityPage() {
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
                                                     <span className="font-medium">{r.user.username ?? "—"}</span>
                                                     {r.client_name && <span className="block text-muted-foreground truncate max-w-[10rem]">{r.client_name}</span>}
+                                                    {r.ip && <span className="block font-mono text-[11px] text-muted-foreground" title={t("activity.ipTitle")}>{r.ip}</span>}
                                                 </td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
                                                     <Badge variant={r.tool === "ssh_exec" || r.tool === "sftp_write" ? "default" : "outline"} className="text-[10px] leading-none py-0.5">

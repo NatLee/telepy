@@ -9,7 +9,11 @@ use serde_json::json;
 
 use super::ports::{transitions, Debouncer, LatencyThrottle};
 use crate::db::{self, tunnels::Tunnel};
+use crate::presence;
 use crate::state::AppState;
+
+/// presence 變動的推播頻率（只是讀一個 set，很便宜）。/ How often presence changes are pushed.
+const PRESENCE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 pub struct Runner {
@@ -20,12 +24,41 @@ pub struct Runner {
 pub async fn run(state: AppState, interval: Duration) {
     let mut runner = Runner::default();
     tracing::info!(interval = ?interval, "port monitor started");
+    tokio::spawn(run_presence(state.clone()));
     loop {
         if let Err(e) = cycle(&state, &mut runner).await {
             tracing::warn!(error = %e, "port monitor cycle error");
         }
         tokio::time::sleep(interval).await;
     }
+}
+
+async fn run_presence(state: AppState) {
+    loop {
+        if let Err(e) = dispatch_presence(&state).await {
+            tracing::warn!(error = %e, "presence dispatch error");
+        }
+        tokio::time::sleep(PRESENCE_INTERVAL).await;
+    }
+}
+
+/// 有人開 / 關終端機、檔案管理…之後，告訴看得到這條隧道的人現在幾個人在用（`UPDATE-TUNNEL-PRESENCE`）。
+/// 只帶人數：誰、從哪裡只給 owner / ADMIN / 管理員，由前端重抓列表拿。
+/// Tell everyone who can see a tunnel how many people use it now; the details come with the list.
+pub async fn dispatch_presence(state: &AppState) -> sqlx::Result<()> {
+    let dirty = state.presence.take_dirty();
+    if dirty.is_empty() {
+        return Ok(());
+    }
+    let by_tunnel = state.presence.by_tunnel();
+    for tunnel_id in dirty {
+        let Some(t) = db::tunnels::by_id(&state.db, tunnel_id).await? else { continue };
+        let mut users = vec![t.user_id];
+        users.extend(db::sharing::sharee_ids(&state.db, t.id).await?);
+        let count = by_tunnel.get(&tunnel_id).map(|e| presence::distinct_users(e)).unwrap_or(0);
+        state.hub.notify_users(users, &json!({ "action": "UPDATE-TUNNEL-PRESENCE", "tunnel_id": tunnel_id, "count": count }));
+    }
+    Ok(())
 }
 
 /// 每個隧道的「可見使用者」（owner + sharees）。/ Audience per tunnel.

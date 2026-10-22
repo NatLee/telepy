@@ -16,6 +16,7 @@ use crate::join::JoinTickets;
 use crate::lan::scan::LanScans;
 use crate::mfa::MfaStores;
 use crate::monitor::StatusState;
+use crate::presence::Presence;
 use crate::remote_browser::RemoteBrowser;
 use crate::ssh::pool::DevicePool;
 use crate::tokens::TokenStores;
@@ -29,6 +30,8 @@ pub struct Inner {
     pub google: GoogleVerifier,
     pub http: reqwest::Client,
     pub status: Arc<StatusState>,
+    /// 誰正在用哪條隧道（記憶體）。/ Who is using which tunnel right now.
+    pub presence: Arc<Presence>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
     /// 依「隧道 + OS 帳號」共用的裝置 SSH 連線（SFTP / 檔案管理）。
@@ -65,7 +68,8 @@ impl AppState {
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
         let status = Arc::new(StatusState::new(None));
-        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone()));
+        let presence = Arc::new(Presence::default());
+        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
         Self(Arc::new(Inner {
             remote_browser,
             google: GoogleVerifier::new(http.clone()),
@@ -74,6 +78,7 @@ impl AppState {
             tokens: TokenStores::new(),
             http,
             status,
+            presence,
             gateway,
             pool: Arc::new(DevicePool::default()),
             ai: AiSessions::default(),

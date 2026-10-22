@@ -15,6 +15,7 @@ use axum::routing::get;
 use axum::Router;
 use serde_json::Value;
 
+use crate::client_ip::ClientMeta;
 use crate::state::AppState;
 
 /// 上游 VNC frame 可能很大；terminal/file manager 用不到但統一放寬。
@@ -29,8 +30,8 @@ pub fn router() -> Router<AppState> {
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
 }
 
-async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, ws: WebSocketUpgrade) -> Response {
-    prepare(ws).on_upgrade(move |socket| remote_browser::handle(state, socket, session_id))
+async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| remote_browser::handle(state, socket, session_id, meta))
 }
 
 fn prepare(ws: WebSocketUpgrade) -> WebSocketUpgrade {
@@ -41,12 +42,12 @@ async fn notifications_upgrade(State(state): State<AppState>, ws: WebSocketUpgra
     prepare(ws).on_upgrade(move |socket| notifications::handle(state, socket))
 }
 
-async fn terminal_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    prepare(ws).on_upgrade(move |socket| terminal::handle(state, socket))
+async fn terminal_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| terminal::handle(state, socket, meta))
 }
 
-async fn filemanager_upgrade(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
-    prepare(ws).on_upgrade(move |socket| filemanager::handle(state, socket))
+async fn filemanager_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| filemanager::handle(state, socket, meta))
 }
 
 async fn tunnel_connection_upgrade(State(state): State<AppState>, Path(tunnel_id): Path<String>, ws: WebSocketUpgrade) -> Response {

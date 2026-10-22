@@ -10,6 +10,9 @@ import { useI18n } from "@/lib/i18n";
 export function useTunnelsPage() {
     const { t } = useI18n();
     const [tunnels, setTunnels] = useState<Tunnel[]>([]);
+    // 通知處理器讀「目前」的列表用（不必等 setState 的 updater 執行）。/ Latest list for notification handlers.
+    const tunnelsRef = useRef<Tunnel[]>([]);
+    tunnelsRef.current = tunnels;
     const [portsMap, setPortsMap] = useState<Record<string, boolean>>({});
     // 每個 reverse_port 的「裝置↔伺服器」延遲（毫秒）；量不到的 port 缺席，前端一律視為 null。
     const [latencyMap, setLatencyMap] = useState<Record<string, number>>({});
@@ -98,6 +101,15 @@ export function useTunnelsPage() {
             if (latency && typeof latency === "object") {
                 setLatencyMap(prev => ({ ...prev, ...latency }));
             }
+        },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_PRESENCE]: (msg) => {
+            // 人數直接換；看得到細節（誰 / IP）的隧道再靜默重抓一次列表。/ Update the count; refetch when details are visible.
+            const id = msg.tunnel_id;
+            const count = typeof msg.count === "number" ? msg.count : null;
+            if (id === undefined || count === null) return;
+            const detailed = Array.isArray(tunnelsRef.current.find(tn => tn.id === id)?.presence?.sessions);
+            setTunnels(prev => prev.map(tn => (tn.id === id ? { ...tn, presence: { count, sessions: tn.presence?.sessions ?? null } } : tn)));
+            if (detailed) reloadSoon();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg) => {
             if (msg.details) showSuccess(msg.details);

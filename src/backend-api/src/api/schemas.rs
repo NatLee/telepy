@@ -144,6 +144,31 @@ pub struct Tunnel {
     /// 只有列表（`/keys`、`/dashboard`）帶：裝置的公網 IP。看不到（只看狀態的 sharee）或從沒連過時是 null。
     /// List / dashboard only: the device's public IP; null when hidden (status-only sharee) or never connected.
     pub endpoint: Option<TunnelEndpoint>,
+    /// 只有列表帶：誰正在用。/ List / dashboard only: who is using the tunnel right now.
+    pub presence: Option<TunnelPresence>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelPresence {
+    /// 正在用的人數（同一人多個分頁算一次）。/ Distinct users with an open session.
+    pub count: i64,
+    /// owner / ADMIN / 管理員才有；其他人 null。/ Owner / ADMIN / superuser only; null for everyone else.
+    pub sessions: Option<Vec<PresenceSession>>,
+}
+
+#[derive(ToSchema)]
+pub struct PresenceSession {
+    #[schema(example = "alice")]
+    pub user: String,
+    /// terminal / files / browser / ssh / ai
+    #[schema(example = "terminal")]
+    pub kind: String,
+    #[schema(example = "198.51.100.7")]
+    pub ip: Option<String>,
+    #[schema(example = "2026-10-23T01:02:03.123456Z")]
+    pub since: String,
+    /// AI session 的 app 名稱。/ The app behind an AI session.
+    pub client: Option<String>,
 }
 
 /// 裝置連上 gateway 的來源位址（gateway 看到的 TCP 來源；中間若有 L4 proxy 會是 proxy 的 IP）。
@@ -823,6 +848,9 @@ pub struct AiActivity {
     pub duration_ms: Option<i64>,
     pub bytes_out: Option<i64>,
     pub error: Option<String>,
+    /// MCP 請求的來源 IP（AI app 的出口）。/ The MCP client's address.
+    #[schema(example = "203.0.113.40")]
+    pub ip: Option<String>,
 }
 
 // ---------------------------------------------------------------- two-factor

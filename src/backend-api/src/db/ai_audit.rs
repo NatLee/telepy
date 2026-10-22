@@ -1,5 +1,6 @@
 //! AI（MCP）工具呼叫的稽核紀錄：每一次 tool call 一列（誰、哪個 app、哪個隧道、跑了什麼、結果）。
-//! 與 `telepy_gateway_event` 一樣有列數上限。/ Audit trail of MCP tool calls, capped like the gateway events.
+//! 與 `telepy_gateway_event` 一樣有列數上限；帶 app 的來源 IP，所以也只留 90 天（`db::retention`）。
+//! Audit trail of MCP tool calls, capped like the gateway events; kept 90 days (`db::retention`).
 
 use sqlx::FromRow;
 
@@ -26,6 +27,8 @@ pub struct NewEvent<'a> {
     pub duration_ms: Option<i64>,
     pub bytes_out: Option<i64>,
     pub error: Option<&'a str>,
+    /// MCP 請求的來源 IP（AI app 的出口，不一定是使用者本人）。/ The MCP client's address.
+    pub ip: Option<&'a str>,
 }
 
 /// 事件 + 使用者名稱 + 隧道名稱（隧道刪掉後為 NULL）。/ Event joined with user and tunnel names.
@@ -48,6 +51,7 @@ pub struct Event {
     pub duration_ms: Option<i64>,
     pub bytes_out: Option<i64>,
     pub error: Option<String>,
+    pub ip: Option<String>,
 }
 
 const T: &str = "telepy_ai_audit_event";
@@ -58,8 +62,8 @@ fn clip(s: Option<&str>) -> Option<String> {
 
 pub async fn insert(db: &Db, e: NewEvent<'_>) -> sqlx::Result<i64> {
     let id = sqlx::query(&format!(
-        "INSERT INTO {T} (at, user_id, grant_id, client_name, tool, tunnel_id, session_id, target_username, detail, ok, exit_code, duration_ms, bytes_out, error) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO {T} (at, user_id, grant_id, client_name, tool, tunnel_id, session_id, target_username, detail, ok, exit_code, duration_ms, bytes_out, error, ip) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ))
     .bind(now_db())
     .bind(e.user_id)
@@ -75,6 +79,7 @@ pub async fn insert(db: &Db, e: NewEvent<'_>) -> sqlx::Result<i64> {
     .bind(e.duration_ms)
     .bind(e.bytes_out)
     .bind(clip(e.error))
+    .bind(e.ip)
     .execute(&db.write)
     .await?
     .last_insert_rowid();
@@ -97,7 +102,7 @@ pub struct Filter {
 pub async fn list(db: &Db, f: &Filter) -> sqlx::Result<Vec<Event>> {
     let mut sql = format!(
         "SELECT e.id, e.at, e.user_id, u.username, e.grant_id, e.client_name, e.tool, e.tunnel_id, t.host_friendly_name AS tunnel_name, \
-                e.session_id, e.target_username, e.detail, e.ok, e.exit_code, e.duration_ms, e.bytes_out, e.error \
+                e.session_id, e.target_username, e.detail, e.ok, e.exit_code, e.duration_ms, e.bytes_out, e.error, e.ip \
          FROM {T} e LEFT JOIN auth_user u ON u.id = e.user_id \
          LEFT JOIN authorized_keys_reverseserverauthorizedkeys t ON t.id = e.tunnel_id WHERE 1 = 1"
     );

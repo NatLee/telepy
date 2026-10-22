@@ -104,6 +104,7 @@ async fn activity(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q
                     "duration_ms": e.duration_ms,
                     "bytes_out": e.bytes_out,
                     "error": e.error,
+                    "ip": e.ip,
                 })
             })
             .collect(),

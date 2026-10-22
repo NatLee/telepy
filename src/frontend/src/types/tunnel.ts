@@ -16,6 +16,24 @@ export interface Tunnel {
     shared_with_count?: number;
     /** 裝置的公網 IP（只在列表裡；看不到或從沒連過時 null）。/ Device public IP (list only; null when hidden or never connected). */
     endpoint?: TunnelEndpoint | null;
+    /** 誰在用（只在列表裡）。/ Who is using the tunnel (list only). */
+    presence?: TunnelPresence | null;
+}
+
+/** 人數給所有人；sessions 只給 owner / ADMIN / 管理員（其他人 null）。/ Count for all; sessions for owner / ADMIN / admins. */
+export interface TunnelPresence {
+    count: number;
+    sessions: PresenceSession[] | null;
+}
+
+export interface PresenceSession {
+    user: string;
+    /** terminal / files / browser / ssh / ai */
+    kind: string;
+    ip: string | null;
+    since: string;
+    /** AI session 的 app。/ The app behind an AI session. */
+    client: string | null;
 }
 
 /** gateway 看到的裝置連線來源。/ The device's source address as the gateway sees it. */

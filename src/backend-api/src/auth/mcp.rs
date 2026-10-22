@@ -18,6 +18,8 @@ pub struct McpPrincipal {
     pub scopes: Vec<String>,
     /// None = 使用者看得到的全部隧道。/ None = every tunnel the user can see.
     pub tunnel_ids: Option<Vec<i64>>,
+    /// 這次 MCP 請求的來源 IP（AI app 的出口）；由 `/mcp` 中介層填。/ Client IP of this MCP request.
+    pub ip: Option<String>,
 }
 
 impl McpPrincipal {
@@ -79,5 +81,6 @@ pub async fn resolve(state: &AppState, token: &str) -> Result<McpPrincipal, McpA
         client_id: grant.client_id,
         client_name,
         scopes,
+        ip: None,
     })
 }

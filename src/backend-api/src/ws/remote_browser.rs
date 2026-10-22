@@ -15,6 +15,7 @@ use tokio_tungstenite::tungstenite::Message as UpMsg;
 use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
 use super::{auth, close, send_json};
+use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
@@ -71,7 +72,7 @@ async fn connect_upstream(state: &AppState, ws_port: u16) -> anyhow::Result<(Ups
     Err(last.unwrap_or_else(|| anyhow::anyhow!("no upstream websocket candidate connected")))
 }
 
-pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String) {
+pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, meta: ClientMeta) {
     let (user, _) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
@@ -111,6 +112,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String) 
         return;
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
+    let _presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
 
     // VNC WS 連著 = session 在用：每 20s 續命（伺服器端計時，不受瀏覽器背景分頁節流影響）。
     let keepalive = {

@@ -27,6 +27,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::ai::{self, AiSession, CloseReason, OpenRequest};
+use crate::client_ip::ClientMeta;
 use crate::auth::mcp::{self as mcp_auth, McpAuthError, McpPrincipal};
 use crate::db;
 use crate::oauth;
@@ -85,7 +86,9 @@ async fn require_token(State(state): State<AppState>, mut req: Request, next: Ne
         .filter(|t| !t.is_empty());
     let Some(token) = token else { return unauthorized(&issuer, McpAuthError::Missing) };
     match mcp_auth::resolve(&state, &token).await {
-        Ok(p) => {
+        Ok(mut p) => {
+            let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
+            p.ip = ClientMeta::from_headers(req.headers(), peer, &state.config).ip;
             req.extensions_mut().insert(p);
             next.run(req).await
         }
@@ -231,6 +234,7 @@ impl TelepyMcp {
                 duration_ms: Some(started.elapsed().as_millis() as i64),
                 bytes_out: a.bytes_out,
                 error: a.error.as_deref(),
+                ip: p.ip.as_deref(),
             },
         )
         .await;

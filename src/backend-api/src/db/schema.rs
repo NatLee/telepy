@@ -247,7 +247,8 @@ const TABLES: &[(&str, &str)] = &[
             "exit_code" integer NULL,
             "duration_ms" integer NULL,
             "bytes_out" integer NULL,
-            "error" text NULL
+            "error" text NULL,
+            "ip" varchar(64) NULL
         )"#,
     ),
     // Rust 自有：每條隧道最後一次連上 gateway 的公網 IP（一條隧道一列、覆寫；隧道刪除時一起刪）。
@@ -336,6 +337,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_sign_in_event_user_id" ON "telepy_sign_in_event" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_sign_in_event_at" ON "telepy_sign_in_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_at" ON "telepy_ai_audit_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
@@ -357,6 +359,7 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),

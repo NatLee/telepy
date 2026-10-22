@@ -33,6 +33,7 @@ use tokio::sync::Mutex;
 use crate::config::Config;
 use crate::db::{self, tunnels::like_prefix, Db};
 use crate::monitor::{Endpoint, StatusState};
+use crate::presence::{self, Presence, PresenceGuard};
 
 /// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
 #[derive(Debug, Clone)]
@@ -68,6 +69,7 @@ pub struct Gateway {
     config: Config,
     db: Db,
     status: Arc<StatusState>,
+    presence: Arc<Presence>,
     forwards: DashMap<u16, Arc<Forward>>,
     /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
@@ -84,8 +86,6 @@ pub struct Gateway {
 const HOST_KEY_FILES: [&str; 3] = ["ssh_host_ed25519_key", "ssh_host_rsa_key", "ssh_host_ecdsa_key"];
 /// `telepy_gateway_event` 最多保留的列數。/ Row cap for the event table.
 const EVENT_RETENTION_ROWS: i64 = 100_000;
-/// 事件帶著來源 IP（個資），超過這麼多天就刪，與列數上限先到者為準。/ Events carry IPs; drop them after this many days.
-const EVENT_RETENTION_DAYS: i64 = 90;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub fn load_host_keys(dir: &Path) -> Vec<PrivateKey> {
@@ -144,7 +144,7 @@ fn bare_key(key: &russh::keys::PublicKey) -> anyhow::Result<String> {
 }
 
 impl Gateway {
-    pub fn new(config: Config, db: Db, status: Arc<StatusState>) -> Self {
+    pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>) -> Self {
         let keys = config.gateway_host_keys_dir.as_deref().map(load_host_keys).unwrap_or_default();
         let host_keys_loaded = keys.len();
         Self {
@@ -152,6 +152,7 @@ impl Gateway {
             config,
             db,
             status,
+            presence,
             forwards: DashMap::new(),
             conns: DashMap::new(),
             live: AtomicUsize::new(0),
@@ -181,8 +182,6 @@ impl Gateway {
                 .bind(EVENT_RETENTION_ROWS)
                 .execute(&self.db.write)
                 .await;
-            let cutoff = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(EVENT_RETENTION_DAYS));
-            let _ = sqlx::query("DELETE FROM telepy_gateway_event WHERE at < ?").bind(cutoff).execute(&self.db.write).await;
         }
     }
 
@@ -250,6 +249,15 @@ impl Gateway {
         if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
         }
+    }
+
+    /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。
+    /// A laptop reaching a device through the gateway counts as using that tunnel.
+    async fn ssh_presence(&self, user_id: i64, port: u16, peer: SocketAddr) -> Option<PresenceGuard> {
+        let tunnel = db::tunnels::by_port(&self.db, port as i64).await.ok()?.into_iter().next()?;
+        let user = db::users::by_id(&self.db, user_id).await.ok().flatten()?;
+        let ip = Some(peer.ip().to_canonical().to_string());
+        Some(self.presence.join(presence::Entry::new(tunnel.id, user_id, &user.username, presence::Kind::Ssh, ip)))
     }
 
     async fn remember_release(&self, port: u16) {
@@ -557,7 +565,12 @@ impl Handler for GatewayHandler {
         };
         reply.accept().await;
         let originator = originator_address.to_string();
+        let guard = match (&self.identity, port) {
+            (Some(Identity::User { user_id }), Some(p)) => self.gw.ssh_presence(*user_id, p, self.peer).await,
+            _ => None,
+        };
         tokio::spawn(async move {
+            let _presence = guard;
             if let Err(e) = bridge_channels(fwd, channel, originator, originator_port).await {
                 tracing::debug!(error = %e, "gateway: direct-tcpip bridge ended with error");
             }
