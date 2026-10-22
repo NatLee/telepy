@@ -1,10 +1,19 @@
 "use client";
 
+/**
+ * 目標主機連線腳本:六種腳本(ssh / PowerShell / autossh / systemd / docker run / compose)+ 一次性 curl 網址。
+ * 分頁放在對話框的工具列(固定、不捲動):以前放在內容區的 flex 欄裡,切到有額外欄位的分頁(systemd 服務要選
+ * 帳號)時內容變高、分頁列被擠成一條線,看起來像被蓋掉。
+ * Target-host connection script dialog: six script kinds plus a one-time curl URL. The tabs live in the
+ * dialog's fixed toolbar: inside the scrolling body's flex column they got squashed to a sliver as soon
+ * as a tab added fields (the systemd tab's account picker), which looked like something covering them.
+ */
 import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Field } from "@/components/ui/field";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Link2, Loader2, Rocket, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -45,6 +54,15 @@ const TAB_CURL_HELPERS: Record<string, TranslationKey> = {
     "docker-compose": "scripts.curlDockerCompose",
 };
 
+const LANG: Record<string, string> = {
+    ssh: "bash",
+    autossh: "bash",
+    "docker-run": "bash",
+    powershell: "powershell",
+    "autossh-service": "bash",
+    "docker-compose": "yaml",
+};
+
 import { useServerScriptModal } from "@/hooks/useServerScriptModal";
 
 export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultSshPort }: ServerScriptModalProps) {
@@ -64,143 +82,103 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
         generateOneTimeUrl
     } = state;
 
-    const langMap: Record<string, string> = {
-        ssh: "bash",
-        autossh: "bash",
-        "docker-run": "bash",
-        powershell: "powershell",
-        "autossh-service": "bash",
-        "docker-compose": "yaml",
-    };
-
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} icon={<Rocket />} size="4xl" isLoading={isInitialLoading}>
-            <div className="flex flex-col flex-1 min-h-0 gap-5">
-                {/* Direction Banner */}
-                <Callout tone="warning">
-                    {tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}
-                </Callout>
-                {/* Options Row */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                        <Label>{t("scripts.targetPort")}</Label>
-                        <Input
-                            type="number"
-                            min={1}
-                            max={65535}
-                            value={targetSshPort}
-                            onChange={(e) => setTargetSshPort(e.target.value)}
-                            placeholder="22"
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            {tn("scripts.targetPortHelper", { port: <code className="rounded bg-muted px-1 font-mono">22</code> })}
-                        </p>
-                    </div>
-                    <div className="space-y-2">
-                        <Label>{t("scripts.keyPath")}</Label>
-                        <Input
-                            type="text"
-                            value={keyPath}
-                            onChange={(e) => setKeyPath(e.target.value)}
-                            placeholder={t("scripts.keyPathPlaceholder")}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                            {tn("scripts.keyPathHelper", { path: <code className="rounded bg-muted px-1 font-mono">~/.ssh/id_rsa</code> })}
-                        </p>
-                    </div>
+        <Modal
+            isOpen={isOpen}
+            onClose={onClose}
+            title={t("scripts.title")}
+            description={tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}
+            icon={<Rocket />}
+            size="4xl"
+            isLoading={isInitialLoading}
+            toolbar={
+                <Segmented
+                    kind="tabs"
+                    aria-label={t("scripts.tabsAria")}
+                    value={activeTab}
+                    onChange={setActiveTab}
+                    options={TABS.map((tab) => ({ value: tab.id, label: tab.label, icon: <tab.icon size={14} /> }))}
+                />
+            }
+        >
+            <div className="space-y-5">
+                {/* 共用選項 / Options shared by every script */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <Field
+                        id="script-target-port"
+                        label={t("scripts.targetPort")}
+                        hint={tn("scripts.targetPortHelper", { port: <code className="rounded bg-muted px-1 font-mono">22</code> })}
+                    >
+                        <Input type="number" min={1} max={65535} value={targetSshPort} onChange={(e) => setTargetSshPort(e.target.value)} placeholder="22" className="font-mono" />
+                    </Field>
+                    <Field
+                        id="script-key-path"
+                        label={t("scripts.keyPath")}
+                        hint={tn("scripts.keyPathHelper", { path: <code className="rounded bg-muted px-1 font-mono">~/.ssh/id_rsa</code> })}
+                    >
+                        <Input type="text" value={keyPath} onChange={(e) => setKeyPath(e.target.value)} placeholder={t("scripts.keyPathPlaceholder")} className="font-mono" />
+                    </Field>
                 </div>
 
-                {/* Username selector for autossh-service */}
+                {/* systemd 服務要用哪個帳號 / Account the systemd service runs as */}
                 {activeTab === "autossh-service" && (
-                    <div className="space-y-2">
-                        {usernames.length > 0 ? (
-                            <>
-                                <Label>{t("scripts.targetUsername")}</Label>
-                                <select
-                                    className="flex h-9 w-full rounded-lg border border-input bg-card px-3 py-1 text-sm shadow-xs transition-[border-color,box-shadow] hover:border-foreground/20 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 dark:bg-input/30"
-                                    value={selectedUsernameId ?? ""}
-                                    onChange={(e) => setSelectedUsernameId(Number(e.target.value))}
-                                >
-                                    {usernames.map((u) => (
-                                        <option key={u.id} value={u.id}>
-                                            {u.username}{u.created_by ? ` ${t("common.byUser", { user: u.created_by })}` : ""}
-                                        </option>
-                                    ))}
-                                </select>
-                                <p className="text-xs text-muted-foreground">
-                                    {t("scripts.usernameHelper")}
-                                </p>
-                            </>
-                        ) : (
-                            <Callout tone="warning">
-                                {tn("scripts.noUsernames", { targetServerUsername: <strong>{t("scripts.noUsernamesHighlight")}</strong> })}
-                            </Callout>
-                        )}
-                    </div>
+                    usernames.length > 0 ? (
+                        <Field id="script-username" label={t("scripts.targetUsername")} hint={t("scripts.usernameHelper")}>
+                            <NativeSelect value={selectedUsernameId ?? ""} onChange={(e) => setSelectedUsernameId(Number(e.target.value))}>
+                                {usernames.map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                        {u.username}{u.created_by ? ` ${t("common.byUser", { user: u.created_by })}` : ""}
+                                    </option>
+                                ))}
+                            </NativeSelect>
+                        </Field>
+                    ) : (
+                        <Callout tone="warning">
+                            {tn("scripts.noUsernames", { targetServerUsername: <strong>{t("scripts.noUsernamesHighlight")}</strong> })}
+                        </Callout>
+                    )
                 )}
 
-                {/* Tabs:分段膠囊,手機上橫向捲動。/ Segmented pill tabs; scroll sideways on phones. */}
-                <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
-                    <Segmented
-                        kind="tabs"
-                        aria-label={t("scripts.tabsAria")}
-                        value={activeTab}
-                        onChange={setActiveTab}
-                        options={TABS.map((tab) => ({ value: tab.id, label: tab.label, icon: <tab.icon size={14} /> }))}
-                    />
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 min-h-[200px] overflow-auto flex flex-col min-h-0 relative">
-                    {isInitialLoading ? null : (
-                        <>
-                            {TAB_DESCRIPTIONS[activeTab] && (
-                                <p className="text-sm text-muted-foreground mb-3">
-                                    {t(TAB_DESCRIPTIONS[activeTab])}
-                                </p>
+                {/* 腳本 / The script */}
+                {!isInitialLoading && (
+                    <section className="space-y-2.5">
+                        {TAB_DESCRIPTIONS[activeTab] && (
+                            <p className="text-sm text-muted-foreground">{t(TAB_DESCRIPTIONS[activeTab])}</p>
+                        )}
+                        <div className="relative">
+                            <CodeBlock language={LANG[activeTab] || "txt"} value={scriptContent} />
+                            {isFetchingScript && (
+                                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-card/50 backdrop-blur-[1px] transition-all duration-200">
+                                    <Loader2 className="size-6 animate-spin text-primary opacity-70" />
+                                </div>
                             )}
-                            <div className="flex-1 min-h-0 max-h-full overflow-auto relative">
-                                <CodeBlock language={langMap[activeTab] || "txt"} value={scriptContent} />
-                                {isFetchingScript && (
-                                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-card/50 backdrop-blur-[1px] transition-all duration-200">
-                                        <Loader2 className="w-6 h-6 animate-spin text-primary opacity-70" />
-                                    </div>
+                        </div>
+                    </section>
+                )}
+
+                {/* 一次性 curl 網址 / One-time curl URL */}
+                {!isInitialLoading && (
+                    <section className="space-y-3 rounded-xl bg-surface p-4 ring-1 ring-inset ring-border/80">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                            <Button size="sm" variant="soft" onClick={generateOneTimeUrl} disabled={generatingCurl || !scriptContent || isFetchingScript}>
+                                {generatingCurl ? <Loader2 className="animate-spin" /> : <Link2 />}
+                                {t("scripts.generateUrl")}
+                            </Button>
+                            <span className="text-sm text-muted-foreground">{t("scripts.generateUrlHelper")}</span>
+                        </div>
+                        {curlCommand && (
+                            <div className="space-y-2">
+                                <CodeBlock language="bash" value={curlCommand} />
+                                {TAB_CURL_HELPERS[activeTab] && (
+                                    <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
+                                        <Info size={15} className="mt-0.5 shrink-0 text-info" aria-hidden />
+                                        {t(TAB_CURL_HELPERS[activeTab])}
+                                    </p>
                                 )}
                             </div>
-
-                            {/* One-time curl URL section */}
-                            <div className="mt-5 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80 space-y-3">
-                                <div className="flex flex-col gap-1.5">
-                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                                        <Button
-                                            size="sm"
-                                            variant="soft"
-                                            onClick={generateOneTimeUrl}
-                                            disabled={generatingCurl || !scriptContent || isFetchingScript}
-                                        >
-                                            {generatingCurl ? <Loader2 className="animate-spin" /> : <Link2 />}
-                                            {t("scripts.generateUrl")}
-                                        </Button>
-                                        <span className="text-xs text-muted-foreground">
-                                            {t("scripts.generateUrlHelper")}
-                                        </span>
-                                    </div>
-                                    {curlCommand && (
-                                        <div className="space-y-1.5 mt-1">
-                                            <CodeBlock language="bash" value={curlCommand} />
-                                            {TAB_CURL_HELPERS[activeTab] && (
-                                                <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-                                                    <Info size={13} className="mt-px shrink-0 text-info" aria-hidden />
-                                                    {t(TAB_CURL_HELPERS[activeTab])}
-                                                </p>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </>
-                    )}
-                </div>
+                        )}
+                    </section>
+                )}
             </div>
         </Modal>
     );

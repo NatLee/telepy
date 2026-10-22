@@ -24,7 +24,7 @@ const LANGUAGES: [&str; 4] = ["auto", "en", "zh-TW", "ja"];
 const THEMES: [&str; 3] = ["system", "light", "dark"];
 
 fn settings_json(s: &UserSettings) -> Value {
-    json!({ "language": s.language, "theme": s.theme, "terminal_font_size": s.terminal_font_size })
+    json!({ "language": s.language, "theme": s.theme, "terminal_font_size": s.terminal_font_size, "ui_scale": s.ui_scale })
 }
 
 /// `validate_language`：空字串 → None；不在清單 → 錯誤（選項依 Python sorted 順序）。
@@ -69,7 +69,18 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         }
         None => None,
     };
-    let s = db::users::settings_update(&state.db, user.id, language, theme, font).await?;
+    // 介面顯示大小：85–130%（前端的滑桿範圍；預設 100）。/ UI display scale: 85–130 percent.
+    let scale = match body.get("ui_scale") {
+        Some(v) => {
+            let n = v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).ok_or_else(|| ApiError::field("ui_scale", "A valid integer is required."))?;
+            if !(85..=130).contains(&n) {
+                return Err(ApiError::field("ui_scale", "ui_scale must be between 85 and 130."));
+            }
+            Some(n)
+        }
+        None => None,
+    };
+    let s = db::users::settings_update(&state.db, user.id, language, theme, font, scale).await?;
     Ok(Json(settings_json(&s)))
 }
 
@@ -128,7 +139,7 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     db::users::set_flags(&state.db, id, is_active, is_superuser).await?;
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
-        db::users::settings_update(&state.db, id, Some(lang), None, None).await?;
+        db::users::settings_update(&state.db, id, Some(lang), None, None, None).await?;
     }
     let target = db::users::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("User not found."))?;
     let lang = db::users::settings_for(&state.db, id).await?.and_then(|s| s.language);

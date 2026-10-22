@@ -73,7 +73,7 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                     />
                 </div>
                 <CopyLine value={FIND_KEY[os].show} />
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-[0.75rem] leading-relaxed text-muted-foreground">
                     {tn("wizard.device.findKeyNoKey", { cmd: <Code>{FIND_KEY[os].generate}</Code> })}
                 </p>
             </div>

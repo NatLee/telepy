@@ -58,7 +58,7 @@ export function latencyTier(rttMs: number): LatencyTier {
 }
 
 const SIZES = {
-    xs: { width: "w-[2px]", heights: [4, 6, 8, 10], gap: "gap-[1.5px]", text: "text-[10px]" },
+    xs: { width: "w-[2px]", heights: [4, 6, 8, 10], gap: "gap-[1.5px]", text: "text-[0.6875rem]" },
     sm: { width: "w-[3px]", heights: [5, 7, 9, 11], gap: "gap-[2px]", text: "text-xs" },
 } as const;
 

@@ -45,10 +45,12 @@ export const metadata: Metadata = {
   description: "Telepy Reverse Proxy Dashboard",
 };
 
-// 繪製前先把 <html lang> 與主題 class 設好(語言:cookie → 瀏覽器語言;主題:localStorage →
-// 系統偏好)。避免 dark 模式白屏閃爍與錯誤的 lang。必須是同步 inline script。
-// Pre-paint bootstrap: set <html lang> (cookie → browser language) and the theme class
-// (localStorage → system preference) before first paint. Must be a synchronous inline script.
+// 繪製前先把 <html lang>、主題 class 與顯示大小設好(語言:cookie → 瀏覽器語言;主題:localStorage →
+// 系統偏好;顯示大小:localStorage → <html> font-size)。避免 dark 模式白屏閃爍、錯誤的 lang 與版面跳動。
+// 必須是同步 inline script。
+// Pre-paint bootstrap: set <html lang> (cookie → browser language), the theme class (localStorage →
+// system preference) and the display scale (localStorage → root font-size) before first paint, so
+// there is no flash of the wrong theme, language or size. Must be a synchronous inline script.
 const BOOTSTRAP_SCRIPT = `
 (function () {
   try {
@@ -64,6 +66,9 @@ const BOOTSTRAP_SCRIPT = `
     var theme = localStorage.getItem("telepy.theme") || "system";
     var dark = theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", dark);
+    // 顯示大小(lib/userPrefs.ts 的 UI_SCALE_*):85–130%,100 = 預設不設。/ Display scale, 85–130%.
+    var scale = parseInt(localStorage.getItem("telepy.uiScale") || "", 10);
+    if (scale >= 85 && scale <= 130 && scale !== 100) document.documentElement.style.fontSize = scale + "%";
   } catch (e) { }
 })();
 `;

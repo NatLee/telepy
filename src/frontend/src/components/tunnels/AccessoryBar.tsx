@@ -16,7 +16,7 @@ function triggerHaptic() {
 }
 
 const KEY_BASE =
-    "shrink-0 h-9 min-w-9 px-2.5 rounded-md text-[13px] font-medium select-none " +
+    "shrink-0 h-9 min-w-9 px-2.5 rounded-md text-[0.875rem] font-medium select-none " +
     "flex items-center justify-center transition-all duration-75 active:scale-[0.94] active:opacity-90 " +
     "shadow-[0_1px_1px_rgba(0,0,0,0.4)]";
 

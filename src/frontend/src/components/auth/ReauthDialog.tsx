@@ -10,6 +10,7 @@ import { KeyRound, ShieldCheck } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { apiFetch, readJson } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
@@ -72,22 +73,16 @@ export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone
                 {codeMethods.length > 0 && (
                     <form onSubmit={submitCode} className="space-y-2.5">
                         {codeMethods.length > 1 && (
-                            <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
-                                {codeMethods.map((m) => (
-                                    <button
-                                        key={m}
-                                        type="button"
-                                        aria-pressed={codeMethod === m}
-                                        onClick={() => {
-                                            setCodeMethod(m);
-                                            setCode("");
-                                        }}
-                                        className={`rounded-lg px-3 py-1.5 text-xs transition-[color,background-color,box-shadow] ${codeMethod === m ? "bg-card text-foreground shadow-card" : "text-muted-foreground hover:text-foreground"}`}
-                                    >
-                                        {m === "totp" ? t("security.reauthTotp") : t("security.reauthRecovery")}
-                                    </button>
-                                ))}
-                            </div>
+                            <Segmented
+                                fullWidth
+                                size="sm"
+                                options={codeMethods.map((m) => ({ value: m, label: m === "totp" ? t("security.reauthTotp") : t("security.reauthRecovery") }))}
+                                value={codeMethod}
+                                onChange={(m) => {
+                                    setCodeMethod(m);
+                                    setCode("");
+                                }}
+                            />
                         )}
                         <div className="flex gap-2">
                             <Input

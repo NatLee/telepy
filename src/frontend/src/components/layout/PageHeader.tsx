@@ -27,7 +27,7 @@ export function PageHeader({ icon, title, titleAddon, description, actions, clas
                     {icon}
                 </div>
                 <div className="min-w-0">
-                    <h1 className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[1.625rem] leading-tight tracking-tight text-foreground sm:text-[1.75rem]">
+                    <h1 className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[1.75rem] leading-tight tracking-tight text-foreground sm:text-[1.875rem]">
                         {title}
                         {titleAddon}
                     </h1>

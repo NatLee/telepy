@@ -14,6 +14,8 @@ import { Activity, ArrowRight, KeyRound, Plug, ShieldCheck, SlidersHorizontal, T
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
+import { Segmented } from "@/components/ui/segmented";
+import { Chip, SectionHeading } from "@/components/ui/section";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
@@ -36,13 +38,10 @@ const SESSION_RULES: TranslationKey[] = [
     "mcp.ruleAudit",
 ];
 
-function Panel({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Panel({ icon, title, description, children }: { icon: React.ReactNode; title: string; description?: string; children: React.ReactNode }) {
     return (
-        <section className="rounded-xl border border-border bg-card text-card-foreground shadow-sm p-5">
-            <h2 className="text-sm font-semibold flex items-center gap-2 mb-3">
-                <span className="text-primary">{icon}</span>
-                {title}
-            </h2>
+        <section className="rounded-2xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
+            <SectionHeading as="h2" icon={icon} title={title} description={description} className="mb-3" />
             {children}
         </section>
     );
@@ -62,6 +61,7 @@ export default function McpPage() {
     ];
 
     const code = (text: string) => <code className="px-1 py-0.5 rounded bg-muted font-mono text-[0.85em]">{text}</code>;
+    const linkCardClass = "flex items-center gap-3 rounded-xl bg-surface px-3.5 py-3 text-sm ring-1 ring-inset ring-border/80 transition-colors hover:bg-primary/5 hover:ring-primary/40";
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -70,38 +70,24 @@ export default function McpPage() {
             <div className="grid gap-6 lg:grid-cols-5 items-start">
                 <div className="lg:col-span-3 space-y-6 min-w-0">
                     {/* 伺服器網址 / Server URL */}
-                    <Panel icon={<Plug size={15} />} title={t("mcp.serverUrl")}>
-                        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 pl-3 pr-1 py-1">
-                            <span className="flex-1 min-w-0 truncate font-mono text-sm text-foreground" title={url}>{url}</span>
+                    <Panel icon={<Plug />} title={t("mcp.serverUrl")}>
+                        <div className="flex items-center gap-2 rounded-xl bg-surface py-1 pl-3.5 pr-1 ring-1 ring-inset ring-border/80">
+                            <span className="min-w-0 flex-1 truncate font-mono text-sm text-foreground" title={url}>{url}</span>
                             {serverUrl && <CopyButton value={serverUrl} />}
                         </div>
-                        <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{t("mcp.serverUrlHint")}</p>
+                        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{t("mcp.serverUrlHint")}</p>
                     </Panel>
 
                     {/* 客戶端設定 / Client setup */}
-                    <Panel icon={<SlidersHorizontal size={15} />} title={t("mcp.setupTitle")}>
-                        <div className="flex flex-wrap gap-1.5 mb-3" role="tablist">
-                            {clients.map((c) => (
-                                <button
-                                    key={c.id}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={client === c.id}
-                                    onClick={() => setClient(c.id)}
-                                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${client === c.id
-                                        ? "border-primary bg-primary/10 text-primary"
-                                        : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-                                        }`}
-                                >
-                                    {c.label}
-                                </button>
-                            ))}
+                    <Panel icon={<SlidersHorizontal />} title={t("mcp.setupTitle")}>
+                        <div className="-mx-1 mb-3 overflow-x-auto px-1 py-0.5">
+                            <Segmented kind="tabs" aria-label={t("mcp.setupTitle")} options={clients.map((c) => ({ value: c.id, label: c.label }))} value={client} onChange={setClient} />
                         </div>
 
                         {client === "claudeCode" && (
                             <div className="space-y-2">
                                 <CodeBlock language="bash" value={`claude mcp add --transport http telepy ${url}`} />
-                                <p className="text-xs text-muted-foreground">{tn("mcp.claudeCodeHint", { cmd: code("/mcp") })}</p>
+                                <p className="text-sm text-muted-foreground">{tn("mcp.claudeCodeHint", { cmd: code("/mcp") })}</p>
                             </div>
                         )}
                         {client === "claudeApp" && (
@@ -114,25 +100,24 @@ export default function McpPage() {
                         {client === "other" && (
                             <div className="space-y-2">
                                 <CodeBlock language="json" value={JSON.stringify({ mcpServers: { telepy: { url } } }, null, 2)} />
-                                <p className="text-xs text-muted-foreground">{tn("mcp.otherHint", { file: code("mcp.json") })}</p>
+                                <p className="text-sm text-muted-foreground">{tn("mcp.otherHint", { file: code("mcp.json") })}</p>
                             </div>
                         )}
                     </Panel>
 
                     {/* 權限與工具 / Permissions and tools */}
-                    <Panel icon={<KeyRound size={15} />} title={t("mcp.permissionsTitle")}>
-                        <p className="text-xs text-muted-foreground leading-relaxed mb-3">{t("mcp.permissionsHint")}</p>
-                        <ul className="rounded-lg border border-border divide-y divide-border">
+                    <Panel icon={<KeyRound />} title={t("mcp.permissionsTitle")} description={t("mcp.permissionsHint")}>
+                        <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
                             {SCOPES.map((s) => (
                                 <li key={s.scope} className="px-4 py-3 text-sm sm:flex sm:items-start sm:gap-4">
-                                    <div className="sm:w-1/2 min-w-0">
-                                        <p className="font-medium text-foreground">{t(s.label)}</p>
+                                    <div className="min-w-0 sm:w-1/2">
+                                        <p className="text-foreground">{t(s.label)}</p>
                                         <p className="text-xs text-muted-foreground">{t(s.description)}</p>
-                                        <p className="mt-1 font-mono text-[11px] text-muted-foreground/80">{s.scope}</p>
+                                        <p className="mt-1 font-mono text-xs text-muted-foreground/80">{s.scope}</p>
                                     </div>
-                                    <div className="mt-2 sm:mt-0 flex flex-wrap gap-1.5 sm:flex-1">
+                                    <div className="mt-2 flex flex-wrap gap-1.5 sm:mt-0 sm:flex-1">
                                         {s.tools.map((tool) => (
-                                            <code key={tool} className="px-1.5 py-0.5 rounded border border-border bg-muted/50 font-mono text-[11px] text-foreground">
+                                            <code key={tool} className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
                                                 {tool}
                                             </code>
                                         ))}
@@ -145,47 +130,45 @@ export default function McpPage() {
 
                 <div className="lg:col-span-2 space-y-6 min-w-0">
                     {/* 已連接的應用程式 / Connected apps */}
-                    <section className="rounded-xl border border-border bg-card text-card-foreground shadow-sm p-5">
+                    <section className="rounded-2xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
                         <ConnectedApps />
                     </section>
 
                     {/* Session 規則 / How sessions end */}
-                    <Panel icon={<Timer size={15} />} title={t("mcp.sessionsTitle")}>
+                    <Panel icon={<Timer />} title={t("mcp.sessionsTitle")}>
                         <ul className="space-y-2 text-sm text-muted-foreground">
                             {SESSION_RULES.map((key) => (
                                 <li key={key} className="flex gap-2">
-                                    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-primary/70" />
+                                    <ShieldCheck size={15} className="mt-0.5 shrink-0 text-primary/70" />
                                     <span className="leading-relaxed">{t(key)}</span>
                                 </li>
                             ))}
                         </ul>
+                        {/* 每個人都看得到 AI 活動;工作階段上限是全站設定,只有管理員能改(其他人看不到這張卡)。
+                            Everyone can open AI activity; session limits are a site setting only admins can
+                            change, so only they see that card. */}
                         <div className="mt-4 flex flex-col gap-2">
-                            <Link
-                                href="/tunnels/activity"
-                                prefetch={false}
-                                className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                            >
-                                <Activity size={15} className="text-primary shrink-0" />
-                                <span className="flex-1 min-w-0">
-                                    <span className="block font-medium text-foreground">{t("mcp.viewActivity")}</span>
-                                    {openSessions !== null && (
-                                        <span className="block text-xs text-muted-foreground">{t("mcp.openSessions", { count: openSessions })}</span>
-                                    )}
+                            <Link href="/tunnels/activity" prefetch={false} className={linkCardClass}>
+                                <Activity size={16} className="shrink-0 text-primary" />
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-foreground">{t("mcp.viewActivity")}</span>
+                                    <span className="block text-xs text-muted-foreground">
+                                        {openSessions !== null ? t("mcp.openSessions", { count: openSessions }) : t("mcp.viewActivityDescription")}
+                                    </span>
                                 </span>
-                                <ArrowRight size={15} className="text-muted-foreground shrink-0" />
+                                <ArrowRight size={15} className="shrink-0 text-muted-foreground" />
                             </Link>
                             {user?.is_superuser && (
-                                <Link
-                                    href="/tunnels/settings?tab=ai"
-                                    prefetch={false}
-                                    className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2.5 text-sm hover:border-primary/50 hover:bg-primary/5 transition-colors"
-                                >
-                                    <SlidersHorizontal size={15} className="text-primary shrink-0" />
-                                    <span className="flex-1 min-w-0">
-                                        <span className="block font-medium text-foreground">{t("mcp.adminLimits")}</span>
+                                <Link href="/tunnels/settings?tab=ai" prefetch={false} className={linkCardClass}>
+                                    <SlidersHorizontal size={16} className="shrink-0 text-primary" />
+                                    <span className="min-w-0 flex-1">
+                                        <span className="flex flex-wrap items-center gap-1.5 text-foreground">
+                                            {t("mcp.adminLimits")}
+                                            <Chip tone="primary">{t("common.adminOnly")}</Chip>
+                                        </span>
                                         <span className="block text-xs text-muted-foreground">{t("mcp.adminLimitsDescription")}</span>
                                     </span>
-                                    <ArrowRight size={15} className="text-muted-foreground shrink-0" />
+                                    <ArrowRight size={15} className="shrink-0 text-muted-foreground" />
                                 </Link>
                             )}
                         </div>

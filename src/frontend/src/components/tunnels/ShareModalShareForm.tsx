@@ -73,7 +73,7 @@ export function ShareModalShareForm({
                                 />
                                 <code className="font-mono">{targetUser.username}</code>
                                 {targetUser.created_by && (
-                                    <span className="rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+                                    <span className="rounded-full bg-muted px-1.5 py-px text-[0.6875rem] text-muted-foreground">
                                         {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                     </span>
                                 )}

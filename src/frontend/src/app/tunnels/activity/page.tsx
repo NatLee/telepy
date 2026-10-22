@@ -87,7 +87,7 @@ export default function AiActivityPage() {
                 <h2 className="text-sm font-semibold flex items-center gap-2 mb-2">
                     <Activity size={15} className="text-primary" />
                     {t("activity.sessionsTitle")}
-                    <Badge variant="secondary" className="text-[10px] leading-none py-0.5">{sessions.length}</Badge>
+                    <Badge variant="secondary" className="text-[0.6875rem] leading-none py-0.5">{sessions.length}</Badge>
                 </h2>
                 {sessions.length === 0 ? (
                     <p className="text-xs text-muted-foreground rounded-lg border border-dashed border-border px-4 py-3">{t("activity.sessionsEmpty")}</p>
@@ -104,9 +104,9 @@ export default function AiActivityPage() {
                                         </p>
                                     </div>
                                     {s.busy ? (
-                                        <Badge variant="default" className="text-[10px] leading-none py-0.5 gap-1 whitespace-nowrap"><Loader2 size={10} className="animate-spin" /> {t("activity.sessionBusy")}</Badge>
+                                        <Badge variant="default" className="text-[0.6875rem] leading-none py-0.5 gap-1 whitespace-nowrap"><Loader2 size={10} className="animate-spin" /> {t("activity.sessionBusy")}</Badge>
                                     ) : (
-                                        <Badge variant="outline" className="text-[10px] leading-none py-0.5 whitespace-nowrap">{t("activity.sessionIdle")}</Badge>
+                                        <Badge variant="outline" className="text-[0.6875rem] leading-none py-0.5 whitespace-nowrap">{t("activity.sessionIdle")}</Badge>
                                     )}
                                 </div>
                                 <p className="text-xs text-muted-foreground">
@@ -193,7 +193,7 @@ export default function AiActivityPage() {
                                                     {r.client_name && <span className="block text-muted-foreground truncate max-w-[10rem]">{r.client_name}</span>}
                                                 </td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
-                                                    <Badge variant={r.tool === "ssh_exec" || r.tool === "sftp_write" ? "default" : "outline"} className="text-[10px] leading-none py-0.5">
+                                                    <Badge variant={r.tool === "ssh_exec" || r.tool === "sftp_write" ? "default" : "outline"} className="text-[0.6875rem] leading-none py-0.5">
                                                         {toolKey ? t(toolKey) : r.tool}
                                                     </Badge>
                                                 </td>
@@ -206,7 +206,7 @@ export default function AiActivityPage() {
                                                     {r.error && <span className="block text-destructive font-sans mt-0.5">{r.error}</span>}
                                                 </td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
-                                                    <Badge variant={r.ok ? "secondary" : "destructive"} className="text-[10px] leading-none py-0.5">
+                                                    <Badge variant={r.ok ? "secondary" : "destructive"} className="text-[0.6875rem] leading-none py-0.5">
                                                         {r.ok ? t("activity.resultOk") : t("activity.resultFailed")}
                                                     </Badge>
                                                     <span className="block text-muted-foreground mt-0.5">

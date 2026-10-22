@@ -14,6 +14,10 @@ import { NOTIFICATION_ACTIONS } from "@/types/notification";
 import type { KeyDevice, UserKey } from "@/types/keys";
 import { deviceKeyError } from "@/lib/deviceKeyErrors";
 
+/** 金鑰可改的欄位(PATCH 只送有改的)。/ Editable key fields (PATCH sends only what changed). */
+export type KeyPatch = Partial<{ host_friendly_name: string; key: string; description: string }>;
+export type KeyPatchErrors = Partial<Record<keyof KeyPatch, string>>;
+
 export interface NewKey {
     key: string;
     name: string;
@@ -154,24 +158,42 @@ export function useKeysPage() {
         [fetchDevices, fetchKeys, showError, showSuccess, t]
     );
 
-    const updateDescription = useCallback(
-        async (key: UserKey, description: string): Promise<boolean> => {
+    /**
+     * 改名稱 / 公鑰 / 說明。回傳欄位錯誤(null = 成功):重複的公鑰翻成好懂的句子,其餘照後端文字。
+     * 換了公鑰內容後裝置清單會重新同步,所以也重抓裝置。
+     * Rename / replace key material / describe. Returns field errors (null on success): a duplicate key
+     * gets a friendly sentence, anything else is shown verbatim. New key material re-syncs devices.
+     */
+    const updateKey = useCallback(
+        async (key: UserKey, patch: KeyPatch): Promise<KeyPatchErrors | null> => {
             try {
-                const res = await apiFetch(`/api/reverse/user/keys/${key.id}`, { method: "PATCH", body: JSON.stringify({ description }) });
-                if (!res.ok) {
-                    showError(t("keys.descriptionUpdateFailed"));
-                    return false;
+                const res = await apiFetch(`/api/reverse/user/keys/${key.id}`, { method: "PATCH", body: JSON.stringify(patch) });
+                const body = await readJson<Record<string, unknown>>(res);
+                if (res.ok && body) {
+                    setKeys((prev) => prev.map((k) => (k.id === key.id ? (body as unknown as UserKey) : k)));
+                    showSuccess(t("keys.updated"));
+                    if (patch.key !== undefined) void fetchDevices();
+                    return null;
                 }
-                const updated: UserKey = await res.json();
-                setKeys((prev) => prev.map((k) => (k.id === updated.id ? updated : k)));
-                showSuccess(t("keys.descriptionUpdated"));
-                return true;
+                const errors: KeyPatchErrors = {};
+                for (const field of ["host_friendly_name", "key", "description"] as const) {
+                    const v = body?.[field];
+                    const msg = Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
+                    if (!msg) continue;
+                    errors[field] =
+                        field === "key" && msg.includes("already exists") ? t("keys.keyTaken")
+                            : field === "key" && msg.includes("already used by a tunnel") ? t("keys.keyUsedElsewhere")
+                                : msg;
+                }
+                if (Object.keys(errors).length) return errors;
+                showError(responseError(res, body, t("keys.updateFailed")));
+                return {};
             } catch (e) {
-                showError(e instanceof Error ? e.message : t("keys.descriptionUpdateFailed"));
-                return false;
+                showError(e instanceof Error ? e.message : t("keys.updateFailed"));
+                return {};
             }
         },
-        [showError, showSuccess, t]
+        [fetchDevices, showError, showSuccess, t]
     );
 
     /** 勾選 / 取消：把我的金鑰放進或移出某台裝置的清單。/ Put a key on, or take it off, a device's list. */
@@ -246,7 +268,7 @@ export function useKeysPage() {
         fetchDevices,
         addKey,
         deleteKey,
-        updateDescription,
+        updateKey,
         toggle,
         syncDevice,
         openDevice,

@@ -115,6 +115,7 @@ const TABLES: &[(&str, &str)] = &[
             "language" varchar(8) NULL,
             "theme" varchar(8) NOT NULL DEFAULT 'system',
             "terminal_font_size" smallint unsigned NOT NULL DEFAULT 14 CHECK ("terminal_font_size" >= 0),
+            "ui_scale" smallint unsigned NOT NULL DEFAULT 100,
             "user_id" integer NOT NULL UNIQUE REFERENCES "auth_user" ("id") DEFERRABLE INITIALLY DEFERRED
         )"#,
     ),
@@ -375,6 +376,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "lan_scan_enabled", "bool NOT NULL DEFAULT 1"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
+    // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.
+    ("user_management_usersettings", "ui_scale", "smallint unsigned NOT NULL DEFAULT 100"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

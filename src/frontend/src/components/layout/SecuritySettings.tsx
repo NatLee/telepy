@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { RecoveryCodesDialog } from "@/components/auth/RecoveryCodesDialog";
+import { SectionHeading } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { passkeySupported } from "@/lib/webauthn";
@@ -52,23 +53,19 @@ export function SecuritySettings() {
         }
     };
 
-    const subheading = "text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5";
+    const subheading = "text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1.5";
 
     return (
-        <section>
-            <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                <ShieldCheck size={15} className="text-primary" />
-                {t("security.title")}
-            </h3>
-            <p className="text-xs text-muted-foreground mb-2">{t("security.description")}</p>
+        <section className="space-y-3">
+            <SectionHeading icon={<ShieldCheck />} title={t("security.title")} description={t("security.description")} />
 
             {loadFailed ? (
-                <p className="text-xs text-destructive">{t("security.loadFailed")}</p>
+                <p className="text-sm text-destructive">{t("security.loadFailed")}</p>
             ) : !status ? (
-                <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
+                <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
             ) : (
-                <div className="rounded-lg border border-border divide-y divide-border text-sm">
-                    <div className={`px-4 py-2.5 flex items-center gap-2 font-medium ${status.mfa_enabled ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}>
+                <div className="divide-y divide-border/70 rounded-xl text-sm ring-1 ring-inset ring-border/80">
+                    <div className={`flex items-center gap-2 rounded-t-xl bg-surface px-4 py-2.5 ${status.mfa_enabled ? "text-success" : "text-muted-foreground"}`}>
                         {status.mfa_enabled ? <ShieldCheck size={15} /> : <ShieldOff size={15} />}
                         {status.mfa_enabled ? t("security.statusOn") : t("security.statusOff")}
                     </div>
@@ -105,7 +102,7 @@ export function SecuritySettings() {
                                         ) : (
                                             <>
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="font-medium truncate">{p.name}</p>
+                                                    <p className="truncate text-foreground">{p.name}</p>
                                                     <p className="text-xs text-muted-foreground">
                                                         {t("security.passkeyCreated", { time: fmt(p.created_at) })} · {t("security.passkeyLastUsed", { time: fmt(p.last_used_at) })}
                                                     </p>

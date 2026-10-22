@@ -36,7 +36,7 @@ export function TunnelStatusPill({ online, className }: { online: boolean; class
     );
 }
 
-const chip = "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap [&>svg]:size-3";
+const chip = "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75rem] font-medium ring-1 ring-inset whitespace-nowrap [&>svg]:size-3";
 
 /** 這條隧道和「我」的關係：我的 / 別人分享給我的，以及我分享給幾個人。/ How the tunnel relates to me. */
 export function TunnelAccessBadges({ tunnel, sharedCount }: { tunnel: Tunnel; sharedCount: number }) {

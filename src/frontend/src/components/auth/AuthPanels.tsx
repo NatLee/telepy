@@ -39,7 +39,7 @@ function DiagramNode({ Icon, label, accent = false }: { Icon: LucideIcon; label:
 function DiagramLink({ label, reverse = false }: { label: string; reverse?: boolean }) {
     return (
         <div className="mb-6 flex min-w-0 flex-1 flex-col items-center gap-1.5">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground/80">{label}</span>
+            <span className="font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground/80">{label}</span>
             <span className="relative h-px w-full bg-gradient-to-r from-border via-white/25 to-border">
                 <span
                     className={cn(

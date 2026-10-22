@@ -16,7 +16,7 @@ export function BrandMark({ collapsed = false, className }: { collapsed?: boolea
             {!collapsed && (
                 <span className="flex flex-col min-w-0 leading-none">
                     <span className="text-lg font-bold tracking-tight text-foreground truncate">Telepy</span>
-                    <span className="mt-1 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground truncate">
+                    <span className="mt-1 text-[0.6875rem] font-medium uppercase tracking-[0.18em] text-muted-foreground truncate">
                         Reverse SSH
                     </span>
                 </span>
