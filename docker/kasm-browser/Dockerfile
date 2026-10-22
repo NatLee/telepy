@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # vnc-browser(目錄名 kasm-browser)—— 共用的 VNC 瀏覽器容器。
 #
 # 一顆長命容器,內含 KasmVNC(提供 Xkasmvnc:web-native 的 VNC-over-WebSocket)+ Chromium +
@@ -19,7 +20,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 桌面 + 瀏覽器 + 字型 + KasmVNC runtime 依賴 + python(跑 session-manager)+ 下載工具。
 # xdotool:open-browser.sh 用「可見視窗數」判斷是要聚焦既有視窗還是開新的(避免疊視窗);
 # tint2 桌面面板 + hsetroot 桌布:關掉瀏覽器後桌面不黑、面板上有捷徑可再開。
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt 的下載與索引放在 BuildKit cache mount（#54）：Chromium + CJK 字型有數百 MB，重建這層不必重抓，也不進 layer。
+# apt downloads and lists live in BuildKit cache mounts (#54): Chromium and the CJK fonts are hundreds of MB.
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
+RUN --mount=type=cache,id=telepy-kasm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=telepy-kasm-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates wget \
       chromium \
       openbox \
@@ -30,14 +36,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
       dbus-x11 xauth x11-xkb-utils xkb-data \
       libgl1-mesa-dri libgles2 \
-      ssl-cert \
- && rm -rf /var/lib/apt/lists/*
+      ssl-cert
 
 # ── KasmVNC(Xkasmvnc)──────────────────────────────────────────────────────
 # 依架構抓對應 .deb(amd64 / arm64),用 apt 安裝以自動補足相依。版本用 ARG,方便日後 bump。
 # releases:https://github.com/kasmtech/KasmVNC/releases
 ARG KASMVNC_VERSION=1.4.0
-RUN set -eux; \
+RUN --mount=type=cache,id=telepy-kasm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=telepy-kasm-apt-lists,target=/var/lib/apt/lists,sharing=locked \
+    set -eux; \
     arch="$(dpkg --print-architecture)"; \
     url="https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_bookworm_${KASMVNC_VERSION}_${arch}.deb"; \
     echo "Downloading KasmVNC: ${url}"; \
@@ -45,7 +52,6 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends /tmp/kasmvnc.deb; \
     rm -f /tmp/kasmvnc.deb; \
-    rm -rf /var/lib/apt/lists/*; \
     # build 階段就驗證二進位存在,沒裝好直接讓 build 失敗(而非等 runtime 才噴 FileNotFoundError)。
     command -v Xkasmvnc >/dev/null 2>&1 || { echo "FATAL: Xkasmvnc not installed by the KasmVNC deb"; exit 1; }; \
     echo "KasmVNC resolved to: $(command -v Xkasmvnc)"
