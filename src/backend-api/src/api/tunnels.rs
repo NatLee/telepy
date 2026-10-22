@@ -9,7 +9,7 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use super::notify;
-use super::serialize::{endpoint_json, tunnel_json};
+use super::serialize::{endpoint_json, presence_json, tunnel_json};
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}};
@@ -53,13 +53,15 @@ async fn status_latency(State(state): State<AppState>, _user: AuthUser) -> ApiRe
 }
 
 /// 列表序列化：以預先算好的表避免每列查詢（`tunnel_permission_context`）。
-/// 列表多一個 `endpoint`（裝置的公網 IP）：只給 [`permissions::can_see_endpoint`] 允許的人，其他人是 null。
+/// 列表多一個 `endpoint`（裝置的公網 IP）：只給 [`permissions::can_see_endpoint`] 允許的人，其他人是 null；
+/// 和 `presence`（誰在用：人數給大家，細節給 [`permissions::can_see_presence_details`]）。
 async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiResult<Vec<Value>> {
     let tunnels = db::tunnels::visible_to(&state.db, user_id).await?;
     let (my_shares, counts) = db::sharing::permission_context(&state.db, user_id).await?;
     let with_accounts = db::sharing::tunnels_with_allowed_usernames(&state.db, user_id).await?;
     let last = db::tunnel_endpoints::visible_to(&state.db, user_id).await?;
     let live = state.status.endpoints();
+    let using = state.presence.by_tunnel();
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -72,6 +74,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             } else {
                 Value::Null
             };
+            let entries = using.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
+            v["presence"] = presence_json(entries, permissions::can_see_presence_details(eff, is_superuser));
             v
         })
         .collect())

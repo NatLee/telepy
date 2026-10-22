@@ -7,6 +7,7 @@ use crate::db::keys::UserKey;
 use crate::db::tunnel_endpoints::LastEndpoint;
 use crate::db::tunnels::{Tunnel, Username};
 use crate::monitor::Endpoint;
+use crate::presence::{self, Entry};
 use crate::permissions::{Effective, Permission};
 use crate::util::{db_to_iso, db_to_iso_utc_z, opt_db_to_iso};
 
@@ -47,6 +48,18 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Va
         }),
         (None, None) => Value::Null,
     }
+}
+
+/// 誰在用：人數給所有看得到隧道的人；`sessions`（誰、哪種連線、IP、多久）只在 `details` 時帶，否則 null。
+/// Presence: the count for everyone, the sessions only with `details`.
+pub fn presence_json(entries: &[Entry], details: bool) -> Value {
+    let sessions = details.then(|| {
+        entries
+            .iter()
+            .map(|e| json!({ "user": e.username, "kind": e.kind.as_str(), "ip": e.ip, "since": db_to_iso_utc_z(&e.since), "client": e.client }))
+            .collect::<Vec<_>>()
+    });
+    json!({ "count": presence::distinct_users(entries), "sessions": sessions })
 }
 
 /// `ReverseServerUsernamesSerializer`

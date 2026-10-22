@@ -29,6 +29,7 @@ use tokio::sync::Semaphore;
 use crate::auth::mcp::McpPrincipal;
 use crate::db::{self, settings::SiteSettings};
 use crate::permissions::{self, Permission};
+use crate::presence::{Entry, Kind, PresenceGuard};
 use crate::sftp;
 use crate::ssh::device::{self, DeviceConn};
 use crate::state::AppState;
@@ -132,6 +133,10 @@ pub struct AiSession {
     conn: DeviceConn,
     sftp: tokio::sync::Mutex<Option<Arc<SftpSession>>>,
     slots: Semaphore,
+    /// 開 session 的 MCP 請求來源 IP。/ Client IP of the MCP request that opened it.
+    pub ip: Option<String>,
+    /// 存在期間算「在用這條隧道」。/ Counts as using the tunnel while the session exists.
+    _presence: PresenceGuard,
 }
 
 /// 指令進行中（busy）；結束時更新最後活動時間。/ Marks the session busy for the duration of a call.
@@ -316,6 +321,8 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
         conn,
         sftp: tokio::sync::Mutex::new(None),
         slots: Semaphore::new(MAX_CONCURRENT_COMMANDS),
+        ip: p.ip.clone(),
+        _presence: state.presence.join(Entry { client: Some(p.client_name.clone()), ..Entry::new(tunnel.id, p.user.id, &p.user.username, Kind::Ai, p.ip.clone()) }),
     });
     state.ai.map.insert(session.id.clone(), session.clone());
     tracing::info!(session = %session.id, user = %session.user_name, client = %session.client_name, tunnel = %session.tunnel_name, username = %session.target_username, "AI session opened");
@@ -342,6 +349,7 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Ar
             detail: Some(&format!("reason: {}; commands: {}", reason.as_str(), s.commands())),
             ok: true,
             duration_ms: Some(s.created.elapsed().as_millis() as i64),
+            ip: s.ip.as_deref(),
             ..Default::default()
         },
     )

@@ -19,6 +19,7 @@ pub mod mfa;
 pub mod monitor;
 pub mod oauth;
 pub mod permissions;
+pub mod presence;
 pub mod remote_browser;
 pub mod scripts;
 pub mod sftp;

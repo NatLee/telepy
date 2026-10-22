@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use super::{auth, close, is_ping, send_json};
+use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::sftp;
@@ -236,7 +237,7 @@ async fn open_backend(state: &AppState, username: &str, reverse_port: i64) -> Op
     ExecSession::start(state.clone(), target).await.ok().map(Backend::Exec)
 }
 
-pub async fn handle(state: AppState, mut socket: WebSocket) {
+pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     let (user, msg) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
@@ -284,6 +285,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
         close(&mut socket, 4005).await;
         return;
     };
+    let _presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
 
     while let Some(Ok(frame)) = socket.recv().await {
         let text = match frame {

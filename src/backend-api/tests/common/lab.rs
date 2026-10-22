@@ -243,10 +243,16 @@ impl server::Handler for SshdHandler {
             "whoami" => (format!("{user}\n"), String::new(), 0),
             "hostname" => (format!("{}\n", self.m.name), String::new(), 0),
             "whereami" => (format!("{user}@{}\n", self.m.name), String::new(), 0),
+            c if c.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).is_some() => (String::new(), String::new(), 0),
             _ => (String::new(), format!("{cmd}: command not found\n"), 127),
         };
+        // `sleep N`：讓 session 開著一陣子（測 presence 這類「連線期間」的狀態）。/ Keeps the session open for N seconds.
+        let delay = cmd.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).map(Duration::from_secs);
         let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
         tokio::spawn(async move {
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             if !out.is_empty() {
                 let _ = ch.data_bytes(out.into_bytes()).await;
             }
@@ -685,7 +691,8 @@ impl Lab {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let addr = listener.local_addr().unwrap();
                 let router = self.app.router.clone();
-                tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+                // 與正式環境一樣帶 ConnectInfo（來源 IP）。/ Serve with ConnectInfo like production.
+                tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
                 format!("ws://{addr}")
             })
             .await;

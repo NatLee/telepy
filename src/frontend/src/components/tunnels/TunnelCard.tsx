@@ -12,6 +12,7 @@ import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
+import { TunnelPresenceChip } from "@/components/tunnels/TunnelPresence";
 import { Button } from "@/components/ui/button";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         </span>
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
+                        <TunnelPresenceChip presence={tunnel.presence} />
                     </div>
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">

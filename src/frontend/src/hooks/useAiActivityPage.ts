@@ -42,6 +42,8 @@ export interface AiActivityRow {
     duration_ms: number | null;
     bytes_out: number | null;
     error: string | null;
+    /** MCP 請求的來源 IP（AI app 的出口）。/ The MCP client's address. */
+    ip?: string | null;
 }
 
 export interface FilterOption {

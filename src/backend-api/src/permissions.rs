@@ -140,6 +140,16 @@ pub fn can_see_endpoint(eff: Option<Effective>, has_allowed_usernames: bool, is_
     }
 }
 
+/// 「誰在用、從哪個 IP」：只給 owner / ADMIN / 管理員；其他看得到隧道的人只看到人數。別人的 IP 從裝置上
+/// 查不到（所有 session 在裝置看來都來自 127.0.0.1），所以這裡不比照 [`can_see_endpoint`] 放寬。
+/// Who is using the tunnel and from where: owner / ADMIN / superuser only; everyone else gets the count.
+pub fn can_see_presence_details(eff: Option<Effective>, is_superuser: bool) -> bool {
+    match eff {
+        None => false,
+        Some(e) => is_superuser || e.satisfies(Permission::Admin),
+    }
+}
+
 pub fn filter_allowed(all: Vec<UsernameWithCreator>, allowed: &[i64]) -> Vec<UsernameWithCreator> {
     all.into_iter().filter(|u| allowed.contains(&u.id)).collect()
 }
@@ -158,6 +168,16 @@ mod tests {
             updated_at: String::new(),
             created_by: String::new(),
         }
+    }
+
+    #[test]
+    fn presence_details_for_owner_admin_and_superuser_only() {
+        assert!(can_see_presence_details(Some(Effective::Owner), false));
+        assert!(can_see_presence_details(Some(Effective::Shared(Permission::Admin)), false));
+        assert!(!can_see_presence_details(Some(Effective::Shared(Permission::Edit)), false));
+        assert!(!can_see_presence_details(Some(Effective::Shared(Permission::View)), false));
+        assert!(can_see_presence_details(Some(Effective::Shared(Permission::View)), true));
+        assert!(!can_see_presence_details(None, true));
     }
 
     #[test]

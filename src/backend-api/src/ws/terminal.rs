@@ -14,8 +14,10 @@ use bytes::Bytes;
 use serde_json::Value;
 
 use super::{auth, close, send_text};
+use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
+use crate::presence::{Entry, Kind};
 use crate::ssh::process::{lan_terminal_args, spawn_in_pty, terminal_args, valid_login};
 use crate::ssh::SshTarget;
 use crate::state::AppState;
@@ -81,7 +83,7 @@ pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, use
     Ok(tunnel.reverse_port)
 }
 
-pub async fn handle(state: AppState, mut socket: WebSocket) {
+pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     let (user, msg) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
@@ -149,6 +151,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
     };
     tracing::info!(%username, reverse_port, "SSH connection started");
     let started = Instant::now();
+    // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
+    let tunnel_id: i64 = server_id.parse().unwrap_or(0);
+    let _presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
 
     let mut decoder = Utf8Decoder::default();
     let mut buf = vec![0u8; 8192];

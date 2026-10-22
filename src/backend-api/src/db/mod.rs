@@ -8,6 +8,7 @@ pub mod lan;
 pub mod mfa;
 pub mod oauth;
 pub mod pool;
+pub mod retention;
 pub mod schema;
 pub mod settings;
 pub mod sharing;

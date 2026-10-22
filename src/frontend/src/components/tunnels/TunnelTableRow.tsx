@@ -11,6 +11,7 @@ import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
+import { TunnelPresenceChip } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
 
@@ -60,7 +61,10 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
+                <div className="flex flex-col items-start gap-1">
+                    <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
+                    <TunnelPresenceChip presence={tunnel.presence} />
+                </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
                 <div className="flex items-center justify-end gap-2">
