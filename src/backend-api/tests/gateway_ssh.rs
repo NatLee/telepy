@@ -103,6 +103,11 @@ async fn reverse_tunnel_through_real_openssh_client() {
     let gw_port = listener.local_addr().unwrap().port();
     let _accept = gateway::start(gw.clone(), listener).unwrap();
     assert!(app.state.status.listen_ports().is_some(), "gateway publishes an (empty) live port set immediately");
+    // Logs 頁從第一天就有東西：還沒有任何裝置連線時，/api/log/ssh 也要 200 並含 listening 事件。
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let r = app.get("/api/log/ssh", Some(&token)).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    assert!(r.json.as_str().unwrap().contains("Server listening on"), "{}", r.text);
 
     let echo_port = echo_server().await;
 
@@ -200,5 +205,11 @@ async fn reverse_tunnel_through_real_openssh_client() {
     assert!(log.contains("Disconnected from user telepy"), "{log}");
     let r = app.get("/api/log/ssh", Some(&token)).await;
     assert!(r.json.as_str().unwrap().contains("Accepted publickey"));
+    // structured events, filterable by tunnel
+    let r = app.get(&format!("/api/log/ssh/events?tunnel_id={}", tunnel.id), Some(&token)).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    let kinds: Vec<&str> = r.json.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert!(kinds.contains(&"accepted") && kinds.contains(&"forward") && kinds.contains(&"disconnect"), "{kinds:?}");
+    assert!(r.json[0]["at"].as_str().unwrap().contains("+08:00"));
     let _ = tunnel;
 }
