@@ -33,7 +33,7 @@ export function TunnelPresenceChip({ presence, className }: { presence?: TunnelP
     const chip = (
         <span
             className={cn(
-                "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset whitespace-nowrap [&>svg]:size-3",
+                "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.75rem] font-medium ring-1 ring-inset whitespace-nowrap [&>svg]:size-3",
                 "bg-violet-500/10 text-violet-700 ring-violet-500/25 dark:text-violet-300",
                 className
             )}
