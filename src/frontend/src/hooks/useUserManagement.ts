@@ -17,6 +17,8 @@ export interface ManagedUser {
     date_joined: string | null;
     last_login: string | null;
     language: LanguagePreference | null;
+    /** 有 passkey 或驗證器 App。/ Has a passkey or an authenticator app. */
+    mfa_enabled?: boolean;
 }
 
 export interface ManagedUserPatch {
@@ -80,5 +82,22 @@ export function useUserManagement(enabled: boolean) {
         }
     };
 
-    return { users, loading, fetchUsers, updateUser };
+    /** 清掉某使用者的所有第二因素（passkey、驗證器 App、復原碼）。/ Remove every second factor of a user. */
+    const resetMfa = async (userId: number, username: string): Promise<boolean> => {
+        try {
+            const res = await apiFetch(`/api/user/users/${userId}/mfa`, { method: "DELETE" });
+            if (res.ok) {
+                setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, mfa_enabled: false } : u)));
+                showSuccess(t("security.adminResetDone", { user: username }));
+                return true;
+            }
+            showError(responseError(res, await readJson(res), t("security.failed")));
+            return false;
+        } catch (e: unknown) {
+            showError(e instanceof Error ? e.message : t("security.failed"));
+            return false;
+        }
+    };
+
+    return { users, loading, fetchUsers, updateUser, resetMfa };
 }

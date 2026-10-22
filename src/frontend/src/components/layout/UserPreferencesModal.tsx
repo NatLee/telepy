@@ -2,7 +2,8 @@
 
 /**
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。
- * 內容:帳號資訊、介面語言、主題(系統/淺色/深色)、終端機字型大小、已連接的應用程式(OAuth grants)。
+ * 內容:帳號資訊、介面語言、主題(系統/淺色/深色)、終端機字型大小、登入安全性(passkey / 驗證器 App / 復原碼)、
+ * 已連接的應用程式(OAuth grants)。
  * 變更即時套用並寫入本機(cookie/localStorage),已登入時同步到後端 UserSettings(跨裝置)。
  * User preferences modal, opened from the sidebar footer gear button. Changes apply
  * instantly, persist locally, and sync to the backend UserSettings for cross-device use.
@@ -22,6 +23,7 @@ import {
 } from "@/lib/userPrefs";
 import { useThemePreference } from "@/hooks/useThemePreference";
 import { ConnectedApps } from "./ConnectedApps";
+import { SecuritySettings } from "./SecuritySettings";
 
 export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
     const { user } = useAuth();
@@ -158,6 +160,9 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         </span>
                     </div>
                 </section>
+
+                {/* 登入安全性 / Sign-in security (passkeys, authenticator app, recovery codes) */}
+                <SecuritySettings />
 
                 {/* 已連接的應用程式 / Connected apps (MCP / AI clients) */}
                 <ConnectedApps />

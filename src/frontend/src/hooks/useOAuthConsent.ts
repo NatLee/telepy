@@ -9,6 +9,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch, readJson } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
+import { useReauth } from "@/hooks/useReauth";
+import { mfaErrorMessage, needsReauth, type MfaMethod, type MfaProof } from "@/lib/mfa";
 
 export interface ConsentScope {
     name: string;
@@ -28,6 +30,8 @@ export interface ConsentInfo {
     scopes: ConsentScope[];
     tunnels: ConsentTunnel[];
     user: { id: number; username: string };
+    /** 帳號有兩步驟驗證 → 核可前要再驗證。/ Accounts with 2FA confirm the approval. */
+    reauth?: { required: boolean; methods: MfaMethod[] };
 }
 
 export interface ConsentError {
@@ -45,8 +49,11 @@ export function useOAuthConsent() {
     const searchParams = useSearchParams();
     const { isAuthenticated, isLoading: authLoading } = useAuth();
     const { t } = useI18n();
+    const reauth = useReauth();
 
     const [info, setInfo] = useState<ConsentInfo | null>(null);
+    /** 再驗證失敗（碼錯、鎖定…）：顯示在按鈕旁，不換成錯誤頁。/ Step-up failures stay next to the buttons. */
+    const [stepUpError, setStepUpError] = useState<string | null>(null);
     const [error, setError] = useState<ConsentError | null>(null);
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
@@ -119,16 +126,36 @@ export function useOAuthConsent() {
     const decide = useCallback(
         async (approve: boolean) => {
             setSubmitting(true);
+            setStepUpError(null);
             try {
                 const body: Record<string, unknown> = { ...request, approve };
                 if (approve) {
                     body.scopes = selectedScopes;
                     body.tunnel_ids = tunnelIds;
+                    // 核可 = 讓 AI 拿到 SSH 權限：有兩步驟驗證的帳號先再驗證。/ Step up before granting SSH access.
+                    if (info?.reauth?.required) {
+                        const proof: MfaProof | null = await reauth.request(info.reauth.methods);
+                        if (!proof) return;
+                        body.reauth = proof;
+                    }
                 }
-                const res = await apiFetch("/api/oauth/authorize", { method: "POST", body: JSON.stringify(body) });
-                const data = await readJson<{ redirect_to?: string } & ConsentError>(res);
+                let res = await apiFetch("/api/oauth/authorize", { method: "POST", body: JSON.stringify(body) });
+                let data = await readJson<{ redirect_to?: string; code?: string } & ConsentError>(res);
+                // 頁面載入後才啟用 2FA：後端要求再驗證就問一次。/ 2FA turned on after the page loaded.
+                const methods = approve && !body.reauth ? needsReauth(res.status, data) : null;
+                if (methods) {
+                    const proof = await reauth.request(methods);
+                    if (!proof) return;
+                    body.reauth = proof;
+                    res = await apiFetch("/api/oauth/authorize", { method: "POST", body: JSON.stringify(body) });
+                    data = await readJson<{ redirect_to?: string; code?: string } & ConsentError>(res);
+                }
                 if (res.ok && data?.redirect_to) {
                     window.location.assign(data.redirect_to);
+                    return;
+                }
+                if (data?.code) {
+                    setStepUpError(mfaErrorMessage(t, data, t("oauth.decisionFailed")));
                     return;
                 }
                 setError({ error: data?.error ?? "server_error", error_description: data?.error_description ?? t("oauth.decisionFailed"), redirect_to: data?.redirect_to });
@@ -138,7 +165,7 @@ export function useOAuthConsent() {
                 setSubmitting(false);
             }
         },
-        [request, selectedScopes, tunnelIds, t]
+        [request, selectedScopes, tunnelIds, t, info, reauth]
     );
 
     const allTunnelIds = info?.tunnels.map((x) => x.id) ?? [];
@@ -146,7 +173,8 @@ export function useOAuthConsent() {
     const canApprove = !!info && selectedScopes.length > 0 && (tunnelIds === null || tunnelIds.length > 0) && !submitting;
 
     return {
-        state: { info, error, loading: loading || authLoading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove, request },
+        state: { info, error, loading: loading || authLoading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove, request, stepUpError },
+        reauthDialog: reauth.dialog,
         actions: { toggleScope, toggleTunnel, selectAllTunnels, approve: () => decide(true), deny: () => decide(false) },
     };
 }
