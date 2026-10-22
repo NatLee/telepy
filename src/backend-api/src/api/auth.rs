@@ -2,8 +2,7 @@
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::{body_object, AppJson};
@@ -12,20 +11,22 @@ use crate::auth::{AuthUser, TokenType};
 use crate::db::{self, users::NewUser};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{json_str, opt_db_to_iso_utc_z, db_to_iso_utc_z};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/auth/setup-status", get(setup_status))
-        .route("/api/auth/token", post(obtain_token))
-        .route("/api/auth/token/refresh", post(refresh_token))
-        .route("/api/auth/token/verify", post(verify_token))
-        .route("/api/auth/user/profile", get(profile))
-        .route("/api/auth/register", post(register))
-        .route("/api/auth/google/token", post(google_login))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(setup_status))
+        .routes(routes!(obtain_token))
+        .routes(routes!(refresh_token))
+        .routes(routes!(verify_token))
+        .routes(routes!(profile))
+        .routes(routes!(register))
+        .routes(routes!(google_login))
 }
 
 /// 公開健康/首次設定端點（compose healthcheck 與 Traefik healthCheck 都打這支）。
+#[utoipa::path(get, path = "/api/auth/setup-status", tag = "Login", responses((status = 200, description = "Whether no user exists yet (first-time setup)", body = super::schemas::SetupStatus)))]
 async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let n = db::users::count(&state.db).await?;
     Ok(Json(json!({ "first_time_setup": n == 0 })))
@@ -59,6 +60,7 @@ fn required_fields_error(body: &Value, fields: &[&str]) -> Option<ApiError> {
 }
 
 /// simplejwt TokenObtainPairView（MyTokenObtainPairSerializer 改名為 access_token/refresh_token）。
+#[utoipa::path(post, path = "/api/auth/token", tag = "Login", request_body = super::schemas::LoginRequest, responses((status = 200, body = super::schemas::TokenPair), (status = 400, description = "Missing fields: {field: [message]}", body = Object), (status = 401, description = "Bad credentials or inactive account", body = super::schemas::ErrorBody)))]
 async fn obtain_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["username", "password"]) {
@@ -83,6 +85,7 @@ fn token_not_valid() -> ApiError {
 }
 
 /// simplejwt TokenRefreshView（ROTATE_REFRESH_TOKENS=False：只回新的 access）。
+#[utoipa::path(post, path = "/api/auth/token/refresh", tag = "Login", request_body = super::schemas::RefreshRequest, responses((status = 200, body = super::schemas::AccessToken), (status = 401, description = "Token is invalid or expired", body = super::schemas::ErrorBody)))]
 async fn refresh_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["refresh"]) {
@@ -94,6 +97,7 @@ async fn refresh_token(State(state): State<AppState>, AppJson(body): AppJson<Val
 }
 
 /// simplejwt TokenVerifyView：任何型別的有效 token 都回 200 `{}`。
+#[utoipa::path(post, path = "/api/auth/token/verify", tag = "Login", request_body = super::schemas::VerifyRequest, responses((status = 200, description = "Valid token (empty object)", body = Object), (status = 401, body = super::schemas::ErrorBody)))]
 async fn verify_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["token"]) {
@@ -105,6 +109,7 @@ async fn verify_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
 }
 
 /// UserProfileView：基本資料 + 個人設定（language/theme/terminal_font_size）。
+#[utoipa::path(get, path = "/api/auth/user/profile", tag = "Authentication", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserProfile), (status = 401, body = super::schemas::ErrorBody)))]
 async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let settings = db::users::settings_for(&state.db, user.id).await?;
     Ok(Json(json!({
@@ -133,6 +138,7 @@ async fn registration_allowed(state: &AppState) -> ApiResult<bool> {
 }
 
 /// login.views.Register：帳密註冊。第一位使用者成為 superuser。
+#[utoipa::path(post, path = "/api/auth/register", tag = "Login", request_body = super::schemas::RegisterRequest, responses((status = 201, body = super::schemas::RegisterResponse), (status = 400, description = "Username taken, registration disabled, …", body = super::schemas::ErrorBody)))]
 async fn register(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let body = body_object(&body);
     let username = json_str(&body, "username").unwrap_or_default();
@@ -176,6 +182,7 @@ fn third_party_error(status: StatusCode, detail: &str) -> ApiError {
 }
 
 /// custom_auth GoogleLogin + third_party_login：驗 id_token、網域白名單、建立/取得使用者、發 JWT。
+#[utoipa::path(post, path = "/api/auth/google/token", tag = "Login", request_body = super::schemas::GoogleLoginRequest, responses((status = 200, body = super::schemas::TokenPair), (status = 400, description = "Registration disabled", body = super::schemas::ErrorBody), (status = 401, description = "Email domain not allowed", body = super::schemas::ErrorBody), (status = 500, description = "Token could not be verified", body = super::schemas::ErrorBody)))]
 async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["credential"]) {

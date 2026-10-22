@@ -42,6 +42,10 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 # native SSH client + SFTP (file manager, device connections)
 russh = "0.64"
 russh-sftp = "3"
+# OpenAPI document + Swagger UI (vendored assets: no download at build time)
+utoipa = { version = "6", features = ["axum_extras", "chrono"] }
+utoipa-axum = "0.3"
+utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
 # misc
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }

@@ -2,8 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::AppJson;
@@ -11,13 +10,14 @@ use crate::auth::AuthUser;
 use crate::db::{self, users::{User, UserSettings}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{db_to_iso, opt_db_to_iso};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/user/settings", get(get_settings).post(update_settings))
-        .route("/api/user/users", get(list_users))
-        .route("/api/user/users/{id}", post(update_user))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(get_settings, update_settings))
+        .routes(routes!(list_users))
+        .routes(routes!(update_user))
 }
 
 const LANGUAGES: [&str; 4] = ["auto", "en", "zh-TW", "ja"];
@@ -42,11 +42,13 @@ fn parse_language(v: &Value) -> Result<Option<String>, ApiError> {
     }
 }
 
+#[utoipa::path(get, path = "/api/user/settings", tag = "User Management", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserSettings)))]
 async fn get_settings(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let s = db::users::settings_get_or_create(&state.db, user.id).await?;
     Ok(Json(settings_json(&s)))
 }
 
+#[utoipa::path(post, path = "/api/user/settings", tag = "User Management", security(("bearer" = [])), request_body = super::schemas::UserSettingsPatch, responses((status = 200, body = super::schemas::UserSettings), (status = 400, description = "{field: [message]}", body = Object)))]
 async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let language = match body.get("language") {
         Some(v) => Some(parse_language(v)?),
@@ -84,6 +86,7 @@ fn managed_user_json(u: &User, language: Option<&str>, tz: i32) -> Value {
     })
 }
 
+#[utoipa::path(get, path = "/api/user/users", tag = "User Management", security(("bearer" = [])), responses((status = 200, description = "All users (admins only)", body = super::schemas::ManagedUsers), (status = 403, body = super::schemas::ErrorBody)))]
 async fn list_users(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
     if !me.is_superuser {
         return Err(ApiError::forbidden("Permission denied. Only administrators can list users."));
@@ -96,6 +99,7 @@ async fn list_users(State(state): State<AppState>, AuthUser(me): AuthUser) -> Ap
     })))
 }
 
+#[utoipa::path(post, path = "/api/user/users/{id}", tag = "User Management", security(("bearer" = [])), params(("id" = i64, Path, description = "User id")), request_body = super::schemas::ManagedUserUpdate, responses((status = 200, body = super::schemas::ManagedUser), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     if !me.is_superuser {
         return Err(ApiError::forbidden("Permission denied. Only administrators can manage users."));

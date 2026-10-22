@@ -2,8 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::post;
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::AppJson;
@@ -13,15 +12,17 @@ use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::remote_browser::StartError;
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::json_str;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/server/{id}/remote-browser/start", post(start))
-        .route("/api/reverse/server/remote-browser/{sid}/stop", post(stop))
-        .route("/api/reverse/server/remote-browser/{sid}/ping", post(ping))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(start))
+        .routes(routes!(stop))
+        .routes(routes!(ping))
 }
 
+#[utoipa::path(post, path = "/api/reverse/server/{id}/remote-browser/start", tag = "Remote Browser", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::RemoteBrowserStartRequest, responses((status = 200, description = "Session started; connect the KasmVNC client to ws_path", body = super::schemas::RemoteBrowserSession), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 500, description = "code = device_offline when the SOCKS proxy never came up", body = super::schemas::RemoteBrowserError)))]
 async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let tunnel = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
     if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
@@ -50,7 +51,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
     }
 }
 
-async fn stop(State(state): State<AppState>, AuthUser(_): AuthUser, Path(sid): Path<String>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/reverse/server/remote-browser/{sid}/stop", tag = "Remote Browser", security(("bearer" = [])), params(("sid" = String, Path, description = "Session id")), responses((status = 200, body = super::schemas::Status), (status = 404, body = super::schemas::ErrorBody)))]
+async fn stop(State(state): State<AppState>, _user: AuthUser, Path(sid): Path<String>) -> ApiResult<Json<Value>> {
     if state.remote_browser.stop(&state.db, &sid).await {
         Ok(Json(json!({ "status": "success" })))
     } else {
@@ -58,7 +60,8 @@ async fn stop(State(state): State<AppState>, AuthUser(_): AuthUser, Path(sid): P
     }
 }
 
-async fn ping(State(state): State<AppState>, AuthUser(_): AuthUser, Path(sid): Path<String>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/reverse/server/remote-browser/{sid}/ping", tag = "Remote Browser", security(("bearer" = [])), params(("sid" = String, Path, description = "Session id")), responses((status = 200, description = "Session alive (TTL refreshed)", body = super::schemas::Status), (status = 404, description = "Unknown or dead session (reaped)", body = super::schemas::ErrorBody)))]
+async fn ping(State(state): State<AppState>, _user: AuthUser, Path(sid): Path<String>) -> ApiResult<Json<Value>> {
     if state.remote_browser.ping(&state.db, &sid).await {
         Ok(Json(json!({ "status": "ok" })))
     } else {

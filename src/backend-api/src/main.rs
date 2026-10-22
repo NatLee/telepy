@@ -1,4 +1,4 @@
-//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key。
+//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key / openapi。
 //! 啟動流程 = Django 版 docker-entrypoint 的 migrate + post_migrate signals + 聽埠，一個 binary 搞定，
 //! 不需要 supervisor / collectstatic。
 
@@ -36,6 +36,8 @@ enum Command {
     },
     /// Seed/refresh the `web-service` SSH public key from WEB_SERVICE_SSH_PUBKEY.
     SeedServiceKey,
+    /// Print the OpenAPI document (JSON) to stdout and exit.
+    Openapi,
 }
 
 fn init_logging(config: &Config) -> Vec<tracing_appender::non_blocking::WorkerGuard> {
@@ -133,6 +135,11 @@ async fn shutdown_signal() {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if matches!(cli.command, Some(Command::Openapi)) {
+        // 不碰 DB、不開 log（stdout 要保持乾淨給 pipe 用）。/ No DB, no logging: keep stdout clean for pipes.
+        println!("{}", telepy_server::app::openapi().to_pretty_json()?);
+        return Ok(());
+    }
     let config = Config::from_env();
     let _guards = init_logging(&config);
     match cli.command.unwrap_or(Command::Serve) {
@@ -158,5 +165,6 @@ async fn main() -> anyhow::Result<()> {
             let db = open_db(&config).await?;
             seed_service_key(&db, &config.web_service_pubkey_path).await
         }
+        Command::Openapi => unreachable!("handled above"),
     }
 }

@@ -97,6 +97,15 @@ Compose プラグイン付きの Docker が必要です。
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth クライアント ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy サーバーの公開ホスト名              |
 | `INTERNAL_API_TOKEN`      | —           | 内部サービス間通信用のシークレット         |
+| `OPENAPI_ENABLED`         | `true`      | Swagger UI と OpenAPI 仕様を公開（下記参照）|
+
+### API ドキュメント
+
+バックエンドは `/api/openapi.json` で OpenAPI 3 ドキュメントを、`/api/__hidden_swagger` で Swagger UI を
+提供します。`POST /api/auth/token` でログインし、`access_token` を **Authorize**（Bearer）に貼り付ければ、
+ページ上からすべてのエンドポイントを試せます。仕様は実際のルートから生成される（`utoipa`）ため、常に
+サーバーと一致します。`telepy-server openapi` で CLI からも同じドキュメントを出力できます。
+`OPENAPI_ENABLED=false` で両方とも無効化できます。
 
 ## CLI ヘルパー
 

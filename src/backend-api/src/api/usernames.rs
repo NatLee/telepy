@@ -2,8 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::notify;
@@ -14,14 +13,16 @@ use crate::db::{self, tunnels::Username};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{json_i64, json_str};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/server/usernames", get(list).post(create))
-        .route("/api/reverse/server/usernames/{id}", get(retrieve).put(update).patch(update).delete(destroy))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(retrieve, update, replace, destroy))
 }
 
+#[utoipa::path(get, path = "/api/reverse/server/usernames", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "Usernames you created plus all usernames on tunnels shared with you", body = Vec<super::schemas::Username>)))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let rows = db::tunnels::usernames_visible_to(&state.db, user.id).await?;
     let tz = state.config.tz_offset_minutes;
@@ -40,6 +41,7 @@ async fn visible_username(state: &AppState, user_id: i64, id: i64) -> ApiResult<
     Err(ApiError::drf_not_found())
 }
 
+#[utoipa::path(post, path = "/api/reverse/server/usernames", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UsernameWrite, responses((status = 201, body = super::schemas::Username), (status = 400, description = "Validation error or duplicate ([message] or {field: [message]})", body = Object), (status = 403, description = "Needs EDIT permission", body = super::schemas::ErrorBody)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     // serializer 驗證：reverse_server 必填且存在、username 必填非空。
     let mut errors = serde_json::Map::new();
@@ -92,11 +94,13 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     Ok((StatusCode::CREATED, Json(username_json(&u, state.config.tz_offset_minutes))))
 }
 
+#[utoipa::path(get, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), responses((status = 200, body = super::schemas::Username), (status = 404, body = super::schemas::ErrorBody)))]
 async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let u = visible_username(&state, user.id, id).await?;
     Ok(Json(username_json(&u, state.config.tz_offset_minutes)))
 }
 
+#[utoipa::path(patch, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), request_body = super::schemas::UsernamePatch, responses((status = 200, body = super::schemas::Username), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let u = visible_username(&state, user.id, id).await?;
     let tunnel = db::tunnels::by_id(&state.db, u.reverse_server_id).await?.ok_or_else(ApiError::drf_not_found)?;
@@ -122,7 +126,14 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     Ok(Json(username_json(&updated, state.config.tz_offset_minutes)))
 }
 
+/// PUT 與 PATCH 語意相同（ModelSerializer 只有 username 可寫）。
+#[utoipa::path(put, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), request_body = super::schemas::UsernamePatch, responses((status = 200, body = super::schemas::Username), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn replace(state: State<AppState>, user: AuthUser, id: Path<i64>, body: AppJson<Value>) -> ApiResult<Json<Value>> {
+    update(state, user, id, body).await
+}
+
 /// Owner / Admin / 建立者 → 真刪除；只有 Editor 權限的非建立者 → 從自己的允許清單「離開」。
+#[utoipa::path(delete, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), responses((status = 204, description = "Deleted; editors who did not create it only leave their allow-list"), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
     let u = visible_username(&state, user.id, id).await?;
     let tunnel = db::tunnels::by_id(&state.db, u.reverse_server_id).await?.ok_or_else(ApiError::drf_not_found)?;

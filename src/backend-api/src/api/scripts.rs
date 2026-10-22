@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::AppJson;
@@ -16,18 +15,19 @@ use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::scripts::{self, ScriptContext, ALLOWED_SCRIPT_TYPES};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::tokens::ScriptTokenPayload;
 use crate::util::{host_without_port, json_i64, json_str};
 
 const CLIENT_STEM: &str = "\n# ========================================\n# Endpoint Configuration\n# ========================================\n";
 const SERVER_STEM: &str = "# ========================================\n# Reverse Server Configuration\n# ========================================\n";
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/tunnels/server/config/{id}", get(config))
-        .route("/tunnels/server/script/one-time/token", post(one_time_token))
-        .route("/tunnels/server/script/one-time/{token}", get(one_time_script))
-        .route("/tunnels/server/script/{kind}/{id}/{ssh_port}", get(script))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(config))
+        .routes(routes!(one_time_token))
+        .routes(routes!(one_time_script))
+        .routes(routes!(script))
 }
 
 /// Django 用 `HTTP_HOST`（去掉 port）當 server_domain，沒有才退回 settings.SERVER_DOMAIN。
@@ -53,6 +53,7 @@ fn clean_key_path(raw: Option<&String>) -> Option<String> {
 }
 
 /// `ReverseServerAuthorizedKeysConfig`
+#[utoipa::path(get, path = "/tunnels/server/config/{id}", tag = "Script", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username_id" = Option<i64>, Query, description = "Render the client stanza for one target username only")), responses((status = 200, description = "~/.ssh/config stanzas (server + one per target username)", body = super::schemas::ConfigResponse), (status = 404, body = super::schemas::ErrorBody)))]
 async fn config(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -120,6 +121,7 @@ async fn render_for(
 }
 
 /// `/tunnels/server/script/{kind}/{id}/{ssh_port}`
+#[utoipa::path(get, path = "/tunnels/server/script/{kind}/{id}/{ssh_port}", tag = "Script", security(("bearer" = [])), params(("kind" = String, Path, description = "ssh | powershell | autossh | autossh-service | docker-run | docker-compose"), ("id" = i64, Path, description = "Tunnel id"), ("ssh_port" = i64, Path, description = "sshd port on the device"), ("key_path" = Option<String>, Query, description = "Private key path to embed (-i)"), ("username_id" = Option<i64>, Query, description = "autossh-service only: which target username runs the service")), responses((status = 200, body = super::schemas::ScriptResponse), (status = 404, body = super::schemas::ErrorBody)))]
 async fn script(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -139,6 +141,7 @@ async fn script(
 }
 
 /// `OneTimeScriptTokenView`：`{"token", "url"}`；url 的 scheme/host 依 X-Forwarded-* 決定。
+#[utoipa::path(post, path = "/tunnels/server/script/one-time/token", tag = "Script", security(("bearer" = [])), request_body = super::schemas::OneTimeTokenRequest, responses((status = 200, description = "Single-use URL (10 minutes) that serves the script without auth", body = super::schemas::OneTimeToken), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn one_time_token(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -201,6 +204,7 @@ fn plain(status: StatusCode, body: String) -> Response {
 }
 
 /// `OneTimeScriptView`（AllowAny）：取用即失效，回 text/plain。
+#[utoipa::path(get, path = "/tunnels/server/script/one-time/{token}", tag = "Script", params(("token" = String, Path, description = "Single-use token")), responses((status = 200, description = "The script, text/plain; the token is consumed", content_type = "text/plain", body = String), (status = 404, description = "Token invalid or already used", content_type = "text/plain", body = String)))]
 async fn one_time_script(State(state): State<AppState>, Path(token): Path<String>, headers: HeaderMap) -> Response {
     let Some(payload) = state.tokens.pop_script_token(&token) else {
         return plain(StatusCode::NOT_FOUND, "Token invalid or already used".into());

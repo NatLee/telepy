@@ -2,8 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::serialize::user_key_json;
@@ -12,12 +11,13 @@ use crate::auth::AuthUser;
 use crate::db::{self, keys::UserKey};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::json_str;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/user/keys", get(list).post(create))
-        .route("/api/reverse/user/keys/{id}", get(retrieve).put(update).patch(update).delete(destroy))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(list, create))
+        .routes(routes!(retrieve, update, replace, destroy))
 }
 
 fn unique_error(e: sqlx::Error) -> ApiError {
@@ -33,6 +33,7 @@ fn unique_error(e: sqlx::Error) -> ApiError {
     }
 }
 
+#[utoipa::path(get, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::UserKey>)))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let rows = db::keys::user_keys(&state.db, user.id).await?;
     let tz = state.config.tz_offset_minutes;
@@ -59,6 +60,7 @@ fn validate_full(body: &Value) -> Result<(String, String), ApiError> {
     Ok((name.unwrap(), key.unwrap()))
 }
 
+#[utoipa::path(post, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UserKeyWrite, responses((status = 201, body = super::schemas::UserKey), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (name, key) = validate_full(&body)?;
     let description = json_str(&body, "description");
@@ -73,11 +75,13 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     Ok((StatusCode::CREATED, Json(user_key_json(&k, state.config.tz_offset_minutes))))
 }
 
+#[utoipa::path(get, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
 async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let k = own_key(&state, user.id, id).await?;
     Ok(Json(user_key_json(&k, state.config.tz_offset_minutes)))
 }
 
+#[utoipa::path(patch, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), request_body = super::schemas::UserKeyPatch, responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     own_key(&state, user.id, id).await?;
     let name = json_str(&body, "host_friendly_name");
@@ -89,6 +93,12 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     Ok(Json(user_key_json(&k, state.config.tz_offset_minutes)))
 }
 
+#[utoipa::path(put, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), request_body = super::schemas::UserKeyWrite, responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
+async fn replace(state: State<AppState>, user: AuthUser, id: Path<i64>, body: AppJson<Value>) -> ApiResult<Json<Value>> {
+    update(state, user, id, body).await
+}
+
+#[utoipa::path(delete, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), responses((status = 204, description = "Deleted"), (status = 404, body = super::schemas::ErrorBody)))]
 async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
     own_key(&state, user.id, id).await?;
     db::keys::user_key_delete(&state.db, id).await?;

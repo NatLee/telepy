@@ -300,4 +300,4 @@ M0 ~0.7 週、M1 ~1 週、M2 ~1.5 週、M3 ~1.75 週、M4 ~2 週、M5 A ~0.7 週
   `ssh/custom_scripts/`、`sshd_config`、`telepy-authorized-keys.sh`）已從 repo 移除。
 - **回滾**：`git checkout a622634`（最後一個 Python stack 可跑的 commit）再 `docker compose up -d --build`；
   SQLite 檔與 `SECRET_KEY` 兩邊共用，使用者不需重新登入。裝置端只會重連一次。
-- 尚未做：Swagger（utoipa）、效能 before/after 數字（§7）。
+- Swagger（utoipa，`/api/__hidden_swagger` + `/api/openapi.json`）與效能 before/after 數字（`docs/benchmarks.md`）已補上；API token / MCP / OAuth 見 #93。

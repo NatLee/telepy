@@ -50,6 +50,8 @@ services:
     environment:
       - DEBUG=${DEBUG}
       - LOG_LEVEL=${LOG_LEVEL:-}
+      # Swagger UI (/api/__hidden_swagger) + OpenAPI spec (/api/openapi.json); false hides both.
+      - OPENAPI_ENABLED=${OPENAPI_ENABLED:-true}
       # JWT 簽章金鑰；留空沿用舊版 Django 的預設（啟動時會警告）。正式環境請設定。
       # JWT signing key; empty keeps the legacy default (warned at startup). Set it in production.
       - SECRET_KEY=${SECRET_KEY:-}

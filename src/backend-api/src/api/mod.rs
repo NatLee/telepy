@@ -2,11 +2,13 @@
 //! REST handlers grouped by the Django app they replace; shapes mirror the original views.
 
 pub mod auth;
+pub mod doc;
 pub mod internal;
 pub mod logs;
 pub mod notify;
 pub mod remote_browser;
 pub mod reverse_keys;
+pub mod schemas;
 pub mod scripts;
 pub mod serialize;
 pub mod sftp;
