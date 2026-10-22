@@ -1,12 +1,13 @@
 # Telepy backend (Rust). Multi-stage: build with the official Rust image, run on a slim Debian with
-# only the OpenSSH client (terminal / ssh -D), CA certs (Google JWKS) and curl (healthcheck).
-# 兩階段：builder 編譯，runtime 只裝 openssh-client / ca-certificates / curl。
+# only the OpenSSH client (terminal / ssh -D), CA certs (Google JWKS), libssl3 (passkeys) and curl (healthcheck).
+# 兩階段：builder 編譯，runtime 只裝 openssh-client / ca-certificates / curl / libssl3。
 
 FROM rust:1-bookworm AS builder
 
 # aws-lc-sys (rustls / russh crypto) builds its C sources; cmake + clang keep that build reliable.
+# libssl-dev: webauthn-rs (passkeys) links OpenSSL.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends cmake clang pkg-config \
+ && apt-get install -y --no-install-recommends cmake clang pkg-config libssl-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -27,7 +28,7 @@ RUN touch src/main.rs src/lib.rs && cargo build --release --locked
 FROM debian:bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-client ca-certificates curl \
+ && apt-get install -y --no-install-recommends openssh-client ca-certificates curl libssl3 \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /data /logs /config/ssh_host_keys /root/.ssh
 

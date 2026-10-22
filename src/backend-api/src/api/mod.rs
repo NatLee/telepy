@@ -5,6 +5,7 @@ pub mod ai;
 pub mod auth;
 pub mod doc;
 pub mod logs;
+pub mod mfa;
 pub mod notify;
 pub mod oauth;
 pub mod remote_browser;

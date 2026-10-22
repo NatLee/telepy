@@ -14,7 +14,7 @@
 - **分享與權限** — 以 VIEW / EDIT / ADMIN 階層式權限與其他使用者共享隧道。
 - **指令速查** — 選一條隧道，就能拿到可直接貼上的 `ssh -L` / `-R` / `-D` / `-J` / `scp` 指令，在自己的電腦上轉發埠或複製檔案，每個情境都有即時流程圖畫出流量怎麼走；可搭配 `~/.ssh/config`，也能用不需設定的單行指令。
 - **金鑰與日誌** — 在介面中管理授權金鑰並檢視 SSH gateway 日誌，可看全部或只看某條隧道（使用者只看得到自己與被分享的隧道）。
-- **身分驗證** — Google OAuth2 或帳號密碼登入，API 採 JWT。第一位登入的使用者自動成為超級管理員。
+- **身分驗證** — Google OAuth2 或帳號密碼登入，API 採 JWT。第一位登入的使用者自動成為超級管理員。可選用兩步驟驗證：passkey（也能免密碼登入）或驗證器 App（TOTP），並附一次性復原碼；管理員可以重設使用者的第二因素。
 - **多語系與主題** — 英文、繁體中文、日本語；淺色與深色主題。
 
 ## 使用方式
@@ -97,7 +97,7 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | 裝置反向 SSH 連入的埠                |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth 用戶端 ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy 伺服器的公開主機名稱          |
-| `PUBLIC_URL`              | —           | 對外的 base URL，例如 `https://telepy.example.com`（MCP 客戶端的 OAuth issuer；留空則依請求推導） |
+| `PUBLIC_URL`              | —           | 對外的 base URL，例如 `https://telepy.example.com`（MCP 客戶端的 OAuth issuer 與 passkey 的 origin；留空則依請求推導）。passkey 需要網域名稱 + https（或 `localhost`） |
 | `INTERNAL_API_TOKEN`      | —           | 內部服務間通訊用的密鑰               |
 | `OPENAPI_ENABLED`         | `true`      | 提供 Swagger UI 與 OpenAPI 規格（見下）|
 

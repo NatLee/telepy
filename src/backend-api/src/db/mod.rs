@@ -3,6 +3,7 @@
 
 pub mod ai_audit;
 pub mod keys;
+pub mod mfa;
 pub mod oauth;
 pub mod pool;
 pub mod schema;

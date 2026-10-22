@@ -37,6 +37,17 @@ pub struct TokenPair {
 }
 
 #[derive(ToSchema)]
+#[schema(description = "Either the token pair, or — when the account has a passkey or an authenticator app — a two-factor challenge to finish with POST /api/auth/mfa/verify")]
+pub struct LoginResponse {
+    pub refresh_token: Option<String>,
+    pub access_token: Option<String>,
+    pub mfa_required: Option<bool>,
+    pub mfa_token: Option<String>,
+    #[schema(example = json!(["passkey", "totp", "recovery_code"]))]
+    pub methods: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
 pub struct RefreshRequest {
     pub refresh: String,
 }
@@ -104,6 +115,8 @@ pub struct UserProfile {
     #[schema(example = "system")]
     pub theme: String,
     pub terminal_font_size: i64,
+    /// A passkey or an authenticator app is set up
+    pub mfa_enabled: bool,
 }
 
 // ---------------------------------------------------------------- tunnels
@@ -421,6 +434,7 @@ pub struct ManagedUser {
     pub date_joined: String,
     pub last_login: Option<String>,
     pub language: Option<String>,
+    pub mfa_enabled: bool,
 }
 
 #[derive(ToSchema)]
@@ -618,6 +632,9 @@ pub struct AuthorizeInfo {
     pub tunnels: Vec<OAuthTunnelChoice>,
     #[schema(value_type = Object)]
     pub user: serde_json::Value,
+    /// `{required, methods}`: accounts with a passkey or an authenticator app confirm the approval
+    #[schema(value_type = Object)]
+    pub reauth: serde_json::Value,
 }
 
 #[derive(ToSchema)]
@@ -636,6 +653,8 @@ pub struct AuthorizeDecision {
     pub scopes: Option<Vec<String>>,
     /// null = every tunnel the user can see; an array restricts the grant to those tunnels
     pub tunnel_ids: Option<Vec<i64>>,
+    /// Required (when approving) for accounts with a second factor
+    pub reauth: Option<MfaProof>,
 }
 
 #[derive(ToSchema)]
@@ -755,4 +774,129 @@ pub struct AiActivity {
     pub duration_ms: Option<i64>,
     pub bytes_out: Option<i64>,
     pub error: Option<String>,
+}
+
+// ---------------------------------------------------------------- two-factor
+
+#[derive(ToSchema)]
+#[schema(description = "Two-factor error: {error, code}; code is mfa_expired, mfa_invalid, mfa_locked, reauth_required (with methods), passkey_failed or passkey_unavailable")]
+pub struct MfaError {
+    pub error: String,
+    #[schema(example = "reauth_required")]
+    pub code: String,
+    pub methods: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct MfaTokenRequest {
+    pub mfa_token: String,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "A second-factor proof: {method: totp|recovery_code, code} or {method: passkey, challenge_id, credential}")]
+pub struct MfaProof {
+    #[schema(example = "totp")]
+    pub method: String,
+    pub code: Option<String>,
+    pub challenge_id: Option<String>,
+    /// PublicKeyCredential JSON from navigator.credentials.get()
+    #[schema(value_type = Option<Object>)]
+    pub credential: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct MfaVerifyRequest {
+    pub mfa_token: String,
+    #[schema(example = "totp")]
+    pub method: String,
+    pub code: Option<String>,
+    pub challenge_id: Option<String>,
+    #[schema(value_type = Option<Object>)]
+    pub credential: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct ReauthRequest {
+    /// Required when the account already has a second factor
+    pub reauth: Option<MfaProof>,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyOptions {
+    pub challenge_id: String,
+    /// PublicKeyCredentialCreationOptions / RequestOptions (JSON, base64url binary fields) for the browser
+    #[serde(rename = "publicKey")]
+    #[schema(value_type = Object)]
+    pub public_key: serde_json::Value,
+    #[schema(example = "conditional")]
+    pub mediation: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyCredentialRequest {
+    pub challenge_id: String,
+    #[schema(value_type = Object)]
+    pub credential: serde_json::Value,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyRegisterRequest {
+    pub challenge_id: String,
+    #[schema(example = "MacBook Touch ID")]
+    pub name: Option<String>,
+    /// PublicKeyCredential JSON from navigator.credentials.create()
+    #[schema(value_type = Object)]
+    pub credential: serde_json::Value,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyInfo {
+    pub id: i64,
+    pub name: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyRename {
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct PasskeyRegistered {
+    pub passkey: PasskeyInfo,
+    pub recovery_codes: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct MfaStatus {
+    pub mfa_enabled: bool,
+    pub methods: Vec<String>,
+    pub totp_enabled: bool,
+    pub totp_enabled_at: Option<String>,
+    pub passkeys: Vec<PasskeyInfo>,
+    pub recovery_codes_remaining: i64,
+}
+
+#[derive(ToSchema)]
+pub struct TotpSetup {
+    /// Base32 secret for manual entry
+    pub secret: String,
+    #[schema(example = "otpauth://totp/Telepy%3Aadmin%40telepy.example.com?secret=…")]
+    pub otpauth_uri: String,
+    /// The otpauth URI as an SVG QR code
+    pub qr_svg: String,
+}
+
+#[derive(ToSchema)]
+pub struct TotpEnableRequest {
+    #[schema(example = "123456")]
+    pub code: String,
+}
+
+#[derive(ToSchema)]
+pub struct RecoveryCodes {
+    /// Shown once; each works one time
+    #[schema(example = json!(["abcd-efgh-jkmn"]))]
+    pub recovery_codes: Option<Vec<String>>,
 }

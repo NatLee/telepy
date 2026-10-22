@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::gateway::Gateway;
 use crate::hub::Hub;
+use crate::mfa::MfaStores;
 use crate::monitor::StatusState;
 use crate::remote_browser::RemoteBrowser;
 use crate::tokens::TokenStores;
@@ -28,6 +29,8 @@ pub struct Inner {
     pub remote_browser: Arc<RemoteBrowser>,
     /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
     pub ai: AiSessions,
+    /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
+    pub mfa: MfaStores,
 }
 
 #[derive(Clone)]
@@ -61,6 +64,7 @@ impl AppState {
             status,
             gateway,
             ai: AiSessions::default(),
+            mfa: MfaStores::new(&config.secret_key),
             config,
             db,
         }))

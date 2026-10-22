@@ -14,7 +14,7 @@
 - **共有と権限** — VIEW / EDIT / ADMIN の階層的な権限で、他のユーザーとトンネルを共有。
 - **コマンド早見表** — トンネルを選ぶだけで、手元の PC からポート転送やファイルコピーをするための `ssh -L` / `-R` / `-D` / `-J` / `scp` コマンドをそのままコピーできます。各シナリオには通信の流れを示すライブ図が付き、`~/.ssh/config` 利用でも設定不要のワンライナーでも使えます。
 - **キーとログ** — 認証キーの管理と SSH ゲートウェイログの閲覧を UI から行えます。全体またはトンネルごとに表示でき、ユーザーには自分のトンネルと共有されたトンネルだけが見えます。
-- **認証** — Google OAuth2 またはユーザー名／パスワード、JWT ベースの API。最初にログインしたユーザーがスーパーユーザーになります。
+- **認証** — Google OAuth2 またはユーザー名／パスワード、JWT ベースの API。最初にログインしたユーザーがスーパーユーザーになります。パスキー（パスワードレスにも対応）または認証アプリ（TOTP）による二段階認証と、使い捨てのリカバリーコードを任意で設定でき、管理者はユーザーの第二要素をリセットできます。
 - **多言語対応とテーマ** — 英語・繁體中文・日本語、ライト／ダークテーマ。
 
 ## 使い方
@@ -97,7 +97,7 @@ Compose プラグイン付きの Docker が必要です。
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | デバイスがリバース SSH で接続するポート    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth クライアント ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy サーバーの公開ホスト名              |
-| `PUBLIC_URL`              | —           | 公開ベース URL（例: `https://telepy.example.com`）。MCP クライアント向け OAuth の issuer。空ならリクエストから推定 |
+| `PUBLIC_URL`              | —           | 公開ベース URL（例: `https://telepy.example.com`）。MCP クライアント向け OAuth の issuer とパスキーの origin。空ならリクエストから推定。パスキーにはドメイン名 + https（または `localhost`）が必要 |
 | `INTERNAL_API_TOKEN`      | —           | 内部サービス間通信用のシークレット         |
 | `OPENAPI_ENABLED`         | `true`      | Swagger UI と OpenAPI 仕様を公開（下記参照）|
 

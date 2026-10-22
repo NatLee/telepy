@@ -173,6 +173,41 @@ const TABLES: &[(&str, &str)] = &[
             "revoked_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：兩步驟驗證（TOTP secret 加密存放、passkey、復原碼只存雜湊）。/ Two-factor login.
+    (
+        "telepy_user_mfa",
+        r#"CREATE TABLE "telepy_user_mfa" (
+            "user_id" integer NOT NULL PRIMARY KEY,
+            "webauthn_user_id" varchar(36) NOT NULL UNIQUE,
+            "totp_secret" text NULL,
+            "totp_pending_secret" text NULL,
+            "totp_enabled_at" datetime NULL,
+            "totp_last_step" integer NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    (
+        "telepy_passkey",
+        r#"CREATE TABLE "telepy_passkey" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "name" varchar(100) NOT NULL,
+            "credential_id" varchar(1400) NOT NULL UNIQUE,
+            "passkey" text NOT NULL,
+            "created_at" datetime NOT NULL,
+            "last_used_at" datetime NULL
+        )"#,
+    ),
+    (
+        "telepy_recovery_code",
+        r#"CREATE TABLE "telepy_recovery_code" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "code_hash" varchar(64) NOT NULL,
+            "used_at" datetime NULL,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：MCP（AI）tool call 的稽核紀錄。/ Audit trail of MCP tool calls.
     (
         "telepy_ai_audit_event",
@@ -197,6 +232,8 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,

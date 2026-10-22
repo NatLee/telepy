@@ -32,7 +32,7 @@ async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "first_time_setup": n == 0 })))
 }
 
-fn token_pair(state: &AppState, user_id: i64) -> Value {
+pub(crate) fn token_pair(state: &AppState, user_id: i64) -> Value {
     json!({
         "refresh_token": state.jwt.refresh(user_id),
         "access_token": state.jwt.access(user_id),
@@ -60,7 +60,7 @@ fn required_fields_error(body: &Value, fields: &[&str]) -> Option<ApiError> {
 }
 
 /// simplejwt TokenObtainPairView（MyTokenObtainPairSerializer 改名為 access_token/refresh_token）。
-#[utoipa::path(post, path = "/api/auth/token", tag = "Login", request_body = super::schemas::LoginRequest, responses((status = 200, body = super::schemas::TokenPair), (status = 400, description = "Missing fields: {field: [message]}", body = Object), (status = 401, description = "Bad credentials or inactive account", body = super::schemas::ErrorBody)))]
+#[utoipa::path(post, path = "/api/auth/token", tag = "Login", request_body = super::schemas::LoginRequest, responses((status = 200, body = super::schemas::LoginResponse), (status = 400, description = "Missing fields: {field: [message]}", body = Object), (status = 401, description = "Bad credentials or inactive account", body = super::schemas::ErrorBody)))]
 async fn obtain_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["username", "password"]) {
@@ -77,7 +77,8 @@ async fn obtain_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
     if !ok || !user.is_active {
         return Err(denied());
     }
-    Ok(Json(token_pair(&state, user.id)))
+    // 有第二因素 → 回登入挑戰（mfa_required），否則直接發 token。/ Second factor → challenge, else tokens.
+    Ok(Json(super::mfa::complete_login(&state, &user).await?))
 }
 
 fn token_not_valid() -> ApiError {
@@ -126,6 +127,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> Api
         "language": settings.as_ref().and_then(|s| s.language.clone()),
         "theme": settings.as_ref().map(|s| s.theme.clone()).unwrap_or_else(|| "system".into()),
         "terminal_font_size": settings.as_ref().map(|s| s.terminal_font_size).unwrap_or(14),
+        "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
     })))
 }
 
@@ -182,7 +184,7 @@ fn third_party_error(status: StatusCode, detail: &str) -> ApiError {
 }
 
 /// custom_auth GoogleLogin + third_party_login：驗 id_token、網域白名單、建立/取得使用者、發 JWT。
-#[utoipa::path(post, path = "/api/auth/google/token", tag = "Login", request_body = super::schemas::GoogleLoginRequest, responses((status = 200, body = super::schemas::TokenPair), (status = 400, description = "Registration disabled", body = super::schemas::ErrorBody), (status = 401, description = "Email domain not allowed", body = super::schemas::ErrorBody), (status = 500, description = "Token could not be verified", body = super::schemas::ErrorBody)))]
+#[utoipa::path(post, path = "/api/auth/google/token", tag = "Login", request_body = super::schemas::GoogleLoginRequest, responses((status = 200, body = super::schemas::LoginResponse), (status = 400, description = "Registration disabled", body = super::schemas::ErrorBody), (status = 401, description = "Email domain not allowed", body = super::schemas::ErrorBody), (status = 500, description = "Token could not be verified", body = super::schemas::ErrorBody)))]
 async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["credential"]) {
@@ -236,7 +238,10 @@ async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Valu
     if !user.is_active {
         return Err(third_party_error(StatusCode::UNAUTHORIZED, "This email is invalid."));
     }
-    db::users::touch_last_login(&state.db, user.id).await?;
-    tracing::info!(username = user.username, "[AUTH][3RD] Login success");
-    Ok(Json(token_pair(&state, user.id)))
+    let result = super::mfa::complete_login(&state, &user).await?;
+    if result.get("mfa_required").is_none() {
+        db::users::touch_last_login(&state.db, user.id).await?;
+        tracing::info!(username = user.username, "[AUTH][3RD] Login success");
+    }
+    Ok(Json(result))
 }

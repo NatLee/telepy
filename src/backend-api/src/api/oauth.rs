@@ -278,6 +278,7 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
     let v = validate_authorize(&state, &iss, &p).await?;
     let tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
     let (mine, _) = db::sharing::permission_context(&state.db, user.id).await?;
+    let factors = super::mfa::factors(&state, user.id).await?;
     Ok(Json(json!({
         "client": {
             "client_id": v.client.client_id,
@@ -293,6 +294,7 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
             json!({ "id": t.id, "name": t.host_friendly_name, "permission": eff.map(|e| e.label()) })
         }).collect::<Vec<_>>(),
         "user": { "id": user.id, "username": user.username },
+        "reauth": { "required": factors.any(), "methods": factors.methods() },
     })))
 }
 
@@ -306,6 +308,8 @@ struct AuthorizeDecision {
     scopes: Option<Vec<String>>,
     /// null = 全部隧道；陣列 = 只限這些。/ null = every tunnel; an array restricts the grant.
     tunnel_ids: Option<Vec<i64>>,
+    /// 有第二因素的帳號核可時要再驗證（TOTP / passkey / 復原碼）。/ Step-up proof for accounts with a second factor.
+    reauth: Option<Value>,
 }
 
 #[utoipa::path(post, path = "/api/oauth/authorize", tag = "OAuth", security(("bearer" = [])), request_body = super::schemas::AuthorizeDecision, responses((status = 200, description = "Where the browser goes next (the client's redirect URI with a code, or with error=access_denied)", body = super::schemas::AuthorizeRedirect), (status = 400, body = super::schemas::OAuthErrorBody)))]
@@ -324,6 +328,8 @@ async fn authorize_decide(State(state): State<AppState>, AuthUser(user): AuthUse
     if scopes.is_empty() {
         return Err(oauth_error(StatusCode::BAD_REQUEST, "invalid_scope", "Select at least one permission"));
     }
+    // 核可 = 讓 AI 拿到 SSH 權限：有 passkey / TOTP 的帳號要再驗證一次。/ Approving grants SSH access: step up.
+    super::mfa::require_reauth(&state, &headers, &user, body.reauth.as_ref()).await?;
     let tunnel_ids = match body.tunnel_ids {
         None => None,
         Some(ids) => {

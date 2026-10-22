@@ -14,7 +14,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **Sharing & permissions** — share tunnels with other users under hierarchical VIEW / EDIT / ADMIN permissions.
 - **Command sheet** — pick a tunnel and get copy-ready `ssh -L` / `-R` / `-D` / `-J` / `scp` commands for forwarding ports or copying files from your own computer, each with a live diagram of where the traffic flows; works with your `~/.ssh/config` or as standalone one-liners.
 - **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels).
-- **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser.
+- **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser. Optional two-factor sign-in with passkeys (also passwordless) or an authenticator app (TOTP), plus one-time recovery codes; administrators can reset a user's second factors.
 - **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
 
 ## Usage
@@ -97,7 +97,7 @@ Environment variables in `.env`:
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | Port devices connect their reverse SSH to    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth client ID                       |
 | `SERVER_DOMAIN`           | `localhost` | Public hostname of your Telepy server        |
-| `PUBLIC_URL`              | —           | Public base URL, e.g. `https://telepy.example.com` (OAuth issuer for MCP clients; derived from the request when empty) |
+| `PUBLIC_URL`              | —           | Public base URL, e.g. `https://telepy.example.com` (OAuth issuer for MCP clients and the passkey origin; derived from the request when empty). Passkeys need a domain name with https (or `localhost`) |
 | `INTERNAL_API_TOKEN`      | —           | Secret for internal service-to-service calls |
 | `OPENAPI_ENABLED`         | `true`      | Serve Swagger UI + OpenAPI spec (see below)  |
 
