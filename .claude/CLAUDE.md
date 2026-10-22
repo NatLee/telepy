@@ -37,7 +37,7 @@ src/
       scripts/        # connection-script / ssh-config rendering ($var substitution, templates/)
       permissions.rs  # VIEW/EDIT/ADMIN hierarchy, allowed target usernames
     templates/        # ssh / autossh / systemd / PowerShell / docker scripts, ssh_config
-    tests/            # integration tests (router in-process, real listener for WS, real OpenSSH client for the gateway)
+    tests/            # integration tests (router in-process, real listener for WS, real OpenSSH client for the gateway); common/lab.rs = reusable SSH topology
     Dockerfile        # multi-stage build → debian-slim + openssh-client
   frontend/           # Next.js app (unchanged by the backend rewrite)
     src/app/          # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys); root page.tsx redirects by auth state
@@ -204,6 +204,7 @@ hardcode display text in components, hooks, or lib error builders.
 
 - Backend: one module per former Django app under `api/`; handlers return `ApiResult<Json<Value>>` and build errors with `ApiError::{error,detail,field}` so the JSON shape matches what the frontend expects
 - Business logic that is pure (permissions, debounce/throttle, template substitution, path resolution) lives in plain functions with unit tests; I/O stays in `api/`, `ws/`, `gateway/`
+- Anything on an SSH path (gateway, device login, terminal, SFTP, laptop ProxyCommand/ProxyJump, sharing/username permissions) gets an end-to-end test on `tests/common/lab.rs`: `Lab::start()` runs the real gateway; `lab.machine(name, &[(os_user, &[keys])], allow_jump)` is a device/LAN sshd with per-OS-user `authorized_keys` and a login log (`logged_in(user, key)`); `lab.device(owner, name, &machine)` brings its tunnel up with a real `ssh -NR`; paths: `backend_exec` / `backend_sftp` (russh), `backend_ssh` (OpenSSH), `laptop_exec(user, &[Hop::Tunnel(..), Hop::Direct(..)], cmd)`, `generated_ssh_config`, `terminal` (WS). Users are created in the DB (no pbkdf2), so a scenario runs in seconds — see `tests/ssh_topology.rs`
 - DB access goes through `db/*` functions (sqlx, runtime-checked queries against the Django-named tables); never alter or drop an existing column in `schema.rs`
 - Frontend uses centralized `apiFetch()` with auto JWT injection and 401 handling
 - **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**
