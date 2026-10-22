@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod device_keys;
 pub mod doc;
 pub mod lan;
 pub mod logs;

@@ -8,7 +8,7 @@ use crate::db::tunnel_endpoints::LastEndpoint;
 use crate::db::tunnels::{Tunnel, Username};
 use crate::monitor::Endpoint;
 use crate::permissions::{Effective, Permission};
-use crate::util::{db_to_iso, db_to_iso_utc_z};
+use crate::util::{db_to_iso, db_to_iso_utc_z, opt_db_to_iso};
 
 /// `ReverseServerAuthorizedKeysSerializer`（含 6 個由有效權限推導的欄位）。
 pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, tz: i32) -> Value {
@@ -62,7 +62,9 @@ pub fn username_json(u: &Username, tz: i32) -> Value {
 }
 
 /// `UserAuthorizedKeysSerializer`
+/// 另外附上由公鑰解析出的 `fingerprint` / `key_type` / `bits` / `comment`（無法解析時為 null）與最後使用紀錄。
 pub fn user_key_json(k: &UserKey, tz: i32) -> Value {
+    let parsed = crate::device_keys::authorized_keys::parse_public_key(&k.key);
     json!({
         "id": k.id,
         "host_friendly_name": k.host_friendly_name,
@@ -71,6 +73,12 @@ pub fn user_key_json(k: &UserKey, tz: i32) -> Value {
         "created_at": db_to_iso(&k.created_at, tz),
         "updated_at": db_to_iso(&k.updated_at, tz),
         "user": k.user_id,
+        "fingerprint": parsed.as_ref().map(|p| p.fingerprint.clone()),
+        "key_type": parsed.as_ref().map(|p| p.label),
+        "bits": parsed.as_ref().and_then(|p| p.bits),
+        "comment": parsed.as_ref().map(|p| p.comment.clone()).filter(|c| !c.is_empty()),
+        "last_used_at": opt_db_to_iso(&k.last_used_at, tz),
+        "last_used_ip": k.last_used_ip,
     })
 }
 

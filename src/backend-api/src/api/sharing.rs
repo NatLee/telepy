@@ -105,6 +105,9 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
 
     db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, uid).await?;
     db::sharing::delete(&state.db, sharing.id).await?;
+    // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
+    db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
+    state.device_keys.kick(t.id);
 
     if !is_self {
         state.hub.notify_user(
@@ -148,6 +151,8 @@ async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser
     if perm == Permission::View && matches!(Permission::parse(&old), Some(Permission::Edit) | Some(Permission::Admin)) {
         db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, uid).await?;
     }
+    // ADMIN ↔ 其他等級會改變可用的 OS 帳號。/ The level changes which accounts their keys go into.
+    state.device_keys.kick(t.id);
     let target_name = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_default();
     let display = perm.display();
     state.hub.notify_user(
@@ -230,6 +235,7 @@ async fn update_allowed_usernames(State(state): State<AppState>, AuthUser(me): A
         Some(_) => return Err(ApiError::bad_request("allowed_target_username_ids must be a list")),
     };
     db::sharing::replace_allowed_usernames(&state.db, sharing.id, t.id, &ids).await?;
+    state.device_keys.kick(t.id);
     state.hub.notify_users(
         [me.id, uid],
         &json!({ "action": "TUNNEL-USERNAMES-UPDATED", "details": "Allowed target usernames updated", "tunnel_id": t.id }),

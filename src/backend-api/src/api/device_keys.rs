@@ -1,0 +1,406 @@
+//! 裝置金鑰清單的 REST 端點（模型見 `device_keys` 模組）。
+//! - `GET    /api/reverse/server/{id}/device-keys`：這台裝置的清單、每把金鑰裝在哪些帳號、同步狀態
+//! - `POST   /api/reverse/server/{id}/device-keys`：把「自己的」金鑰加進清單（任何有存取權的人）
+//! - `DELETE /api/reverse/server/{id}/device-keys/{key_id}`：移出清單（金鑰擁有者；擁有者 / ADMIN 可移任何人的）
+//! - `POST   /api/reverse/server/{id}/device-keys/sync`：立刻同步（重讀每個帳號的 authorized_keys）
+//! - `GET    /api/reverse/server/{id}/authorized-keys`：稽核——實際讀裝置每個帳號的 authorized_keys（擁有者 / ADMIN）
+//! - `POST   /api/reverse/server/{id}/authorized-keys/remove`：從某帳號移除一把清單外的金鑰（擁有者 / ADMIN）
+//! - `GET    /api/reverse/user/keys/devices`：金鑰頁的矩陣——我的金鑰 × 我能用的裝置
+//! REST endpoints for per-device key lists, the live authorized_keys audit and the keys-page matrix.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::Duration;
+
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::Json;
+use serde_json::{json, Value};
+
+use super::AppJson;
+use crate::auth::AuthUser;
+use crate::db::{self, device_keys::Installed, device_keys::SyncStatus, tunnels::Tunnel};
+use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, remove_key};
+use crate::device_keys::{self as dk, remote::AuthorizedKeysFile, Desired};
+use crate::error::{ApiError, ApiResult};
+use crate::permissions::{self, Effective, Permission};
+use crate::state::AppState;
+use crate::util::{db_to_iso, json_str};
+use utoipa_axum::{router::OpenApiRouter, routes};
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(show, add))
+        .routes(routes!(remove))
+        .routes(routes!(sync_now))
+        .routes(routes!(audit))
+        .routes(routes!(audit_remove))
+        .routes(routes!(my_devices))
+}
+
+/// 稽核讀檔的整體逾時（每個帳號一條 SSH 連線，並行）。/ Overall audit deadline.
+const AUDIT_TIMEOUT: Duration = Duration::from_secs(45);
+
+fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
+    ApiError::new(status, json!({ "error": msg.into(), "code": code }))
+}
+
+/// 有存取權才看得到（否則 404，不洩漏存在與否）。/ 404 unless the caller can see the tunnel.
+async fn access(state: &AppState, user_id: i64, id: i64) -> ApiResult<(Tunnel, Effective)> {
+    let not_found = || ApiError::not_found("Tunnel not found or access denied");
+    let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(not_found)?;
+    let eff = permissions::effective_for(&state.db, user_id, &t).await?.ok_or_else(not_found)?;
+    Ok((t, eff))
+}
+
+fn require_manager(eff: Effective) -> ApiResult<()> {
+    if eff.satisfies(Permission::Admin) {
+        Ok(())
+    } else {
+        Err(coded(StatusCode::FORBIDDEN, "not_manager", "Only the tunnel owner or an ADMIN sharee can manage this device's authorized_keys."))
+    }
+}
+
+/// 一台裝置算狀態要的資料。
+struct Snapshot {
+    desired: Desired,
+    installed: Vec<Installed>,
+    sync: HashMap<String, SyncStatus>,
+}
+
+async fn snapshot(state: &AppState, t: &Tunnel) -> ApiResult<Snapshot> {
+    Ok(Snapshot {
+        desired: dk::desired(&state.db, t).await?,
+        installed: db::device_keys::installed_for_tunnel(&state.db, t.id).await?,
+        sync: db::device_keys::sync_for_tunnel(&state.db, t.id).await?.into_iter().map(|s| (s.username.clone(), s)).collect(),
+    })
+}
+
+impl Snapshot {
+    /// 一把金鑰在每個（應裝的）帳號上的狀態：installed / pending / error。
+    fn targets(&self, bare: &str) -> Vec<Value> {
+        let installed: BTreeSet<(&str, &str)> = self.installed.iter().map(|i| (i.username.as_str(), i.key_bare.as_str())).collect();
+        self.desired
+            .iter()
+            .filter(|(_, keys)| keys.contains_key(bare))
+            .map(|(acct, _)| {
+                let (status, error) = if installed.contains(&(acct.as_str(), bare)) {
+                    ("installed", None)
+                } else {
+                    match self.sync.get(acct) {
+                        Some(s) if !s.ok => ("error", s.error.clone()),
+                        _ => ("pending", None),
+                    }
+                };
+                json!({ "username": acct, "status": status, "error": error })
+            })
+            .collect()
+    }
+
+    /// 裝過但已不該在的（等裝置上線後移除）。
+    fn removals(&self) -> Vec<&Installed> {
+        self.installed.iter().filter(|i| !self.desired.get(&i.username).is_some_and(|k| k.contains_key(&i.key_bare))).collect()
+    }
+}
+
+async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective) -> ApiResult<Value> {
+    let tz = state.config.tz_offset_minutes;
+    let manager = eff.satisfies(Permission::Admin);
+    let snap = snapshot(state, t).await?;
+    let accounts: Vec<String> = permissions::allowed_usernames(&state.db, user_id, t).await?.into_iter().map(|u| u.username).collect();
+    let entries = db::device_keys::entries_for_tunnel(&state.db, t.id).await?;
+    let in_list: BTreeSet<i64> = entries.iter().filter(|e| e.user_id == user_id).map(|e| e.user_key_id).collect();
+    let mut names: HashMap<i64, String> = HashMap::new();
+    let mut entry_values = Vec::new();
+    for e in entries.iter().filter(|e| manager || e.user_id == user_id) {
+        let parsed = parse_public_key(&e.key);
+        if !names.contains_key(&e.added_by_id) {
+            let n = db::users::by_id(&state.db, e.added_by_id).await?.map(|u| u.username).unwrap_or_default();
+            names.insert(e.added_by_id, n);
+        }
+        entry_values.push(json!({
+            "user_key_id": e.user_key_id,
+            "name": e.name,
+            "fingerprint": parsed.as_ref().map(|p| p.fingerprint.clone()),
+            "key_type": parsed.as_ref().map(|p| p.label),
+            "owner": { "id": e.user_id, "username": e.owner_username },
+            "mine": e.user_id == user_id,
+            "added_by": names[&e.added_by_id],
+            "created_at": db_to_iso(&e.created_at, tz),
+            "targets": parsed.map(|p| snap.targets(&p.bare)).unwrap_or_default(),
+        }));
+    }
+    let owners: HashMap<i64, String> = entries.iter().map(|e| (e.user_id, e.owner_username.clone())).collect();
+    let removals: Vec<Value> = if manager {
+        let mut out = Vec::new();
+        for i in snap.removals() {
+            let owner = match i.user_id {
+                Some(uid) => match owners.get(&uid) {
+                    Some(n) => Some(n.clone()),
+                    None => db::users::by_id(&state.db, uid).await?.map(|u| u.username),
+                },
+                None => None,
+            };
+            let failed = snap.sync.get(&i.username).filter(|s| !s.ok);
+            out.push(json!({
+                "username": i.username,
+                "fingerprint": i.fingerprint,
+                "owner": owner,
+                "status": if failed.is_some() { "error" } else { "pending" },
+                "error": failed.and_then(|s| s.error.clone()),
+            }));
+        }
+        out
+    } else {
+        vec![]
+    };
+    let sync: Vec<Value> = snap
+        .sync
+        .values()
+        .filter(|s| manager || accounts.contains(&s.username))
+        .map(|s| json!({ "username": s.username, "ok": s.ok, "error": s.error, "synced_at": db_to_iso(&s.synced_at, tz) }))
+        .collect();
+    let my_keys: Vec<Value> = db::keys::user_keys(&state.db, user_id)
+        .await?
+        .iter()
+        .map(|k| {
+            let p = parse_public_key(&k.key);
+            json!({
+                "id": k.id,
+                "name": k.host_friendly_name,
+                "fingerprint": p.as_ref().map(|p| p.fingerprint.clone()),
+                "key_type": p.as_ref().map(|p| p.label),
+                "in_list": in_list.contains(&k.id),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "tunnel": { "id": t.id, "host_friendly_name": t.host_friendly_name, "online": dk::online(state, t.reverse_port), "role": eff.label() },
+        "can_manage": manager,
+        "accounts": accounts,
+        "entries": entry_values,
+        "removals": removals,
+        "sync": sync,
+        "my_keys": my_keys,
+    }))
+}
+
+#[utoipa::path(get, path = "/api/reverse/server/{id}/device-keys", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::DeviceKeys), (status = 404, body = super::schemas::ErrorBody)))]
+async fn show(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    Ok(Json(device_json(&state, me.id, &t, eff).await?))
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/device-keys", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DeviceKeysAdd, responses((status = 200, body = super::schemas::DeviceKeys), (status = 400, description = "Missing ids or a key that is not yours", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn add(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    let ids: Vec<i64> = match body.get("user_key_ids") {
+        Some(Value::Array(a)) if !a.is_empty() => a.iter().filter_map(Value::as_i64).collect(),
+        _ => return Err(coded(StatusCode::BAD_REQUEST, "user_key_ids_required", "user_key_ids must be a non-empty list of your key ids")),
+    };
+    for kid in &ids {
+        // 只能放自己的金鑰。/ Only your own keys.
+        if db::keys::user_key_by_id(&state.db, me.id, *kid).await?.is_none() {
+            return Err(coded(StatusCode::BAD_REQUEST, "not_your_key", format!("Key {kid} is not one of your keys")));
+        }
+    }
+    for kid in ids {
+        db::device_keys::add_entry(&state.db, t.id, kid, me.id, me.id).await?;
+    }
+    state.device_keys.kick(t.id);
+    Ok(Json(device_json(&state, me.id, &t, eff).await?))
+}
+
+#[utoipa::path(delete, path = "/api/reverse/server/{id}/device-keys/{key_id}", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("key_id" = i64, Path, description = "User key id")), responses((status = 200, body = super::schemas::DeviceKeys), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn remove(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, key_id)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    let entry = db::device_keys::entries_for_tunnel(&state.db, t.id).await?.into_iter().find(|e| e.user_key_id == key_id);
+    let Some(entry) = entry else { return Err(ApiError::not_found("This key is not in the device's key list")) };
+    if entry.user_id != me.id {
+        require_manager(eff)?;
+    }
+    db::device_keys::delete_entry(&state.db, t.id, key_id).await?;
+    state.device_keys.kick(t.id);
+    Ok(Json(device_json(&state, me.id, &t, eff).await?))
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/device-keys/sync", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::DeviceKeys), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "Device offline (code device_offline)", body = super::schemas::ErrorBody)))]
+async fn sync_now(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    match dk::sync_tunnel(&state, t.id, true).await.map_err(|e| ApiError::error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))? {
+        dk::SyncOutcome::Offline => Err(coded(StatusCode::CONFLICT, "device_offline", "The device is offline; changes will be applied when it reconnects.")),
+        dk::SyncOutcome::Done { .. } => Ok(Json(device_json(&state, me.id, &t, eff).await?)),
+    }
+}
+
+/// 稽核用：bare → (金鑰 id, 金鑰名, 擁有者)。
+async fn telepy_keys(state: &AppState) -> ApiResult<HashMap<String, (i64, String, String)>> {
+    Ok(db::keys::all_with_owner(&state.db)
+        .await?
+        .into_iter()
+        .filter_map(|(id, key, name, _uid, username)| parse_public_key(&key).map(|p| (p.bare, (id, name, username))))
+        .collect())
+}
+
+/// 稽核要讀的帳號：隧道上的 OS 帳號 ∪ Telepy 裝過金鑰的帳號。
+async fn audit_accounts(state: &AppState, t: &Tunnel) -> ApiResult<Vec<String>> {
+    let mut set: BTreeSet<String> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| u.username).collect();
+    set.extend(db::device_keys::installed_for_tunnel(&state.db, t.id).await?.into_iter().map(|i| i.username));
+    Ok(set.into_iter().collect())
+}
+
+#[utoipa::path(get, path = "/api/reverse/server/{id}/authorized-keys", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::AuthorizedKeysAudit), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "Device offline (code device_offline)", body = super::schemas::ErrorBody)))]
+async fn audit(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    require_manager(eff)?;
+    if !dk::online(&state, t.reverse_port) {
+        return Err(coded(StatusCode::CONFLICT, "device_offline", "The device is offline."));
+    }
+    let accounts = audit_accounts(&state, &t).await?;
+    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
+    let telepy = telepy_keys(&state).await?;
+    let snap = snapshot(&state, &t).await?;
+    let managed: BTreeSet<(String, String)> = snap.installed.iter().map(|i| (i.username.clone(), i.key_bare.clone())).collect();
+
+    let reads = accounts.iter().map(|acct| {
+        let state = state.clone();
+        let acct = acct.clone();
+        async move {
+            let r = async {
+                let f: AuthorizedKeysFile = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await?;
+                let exists = f.exists();
+                anyhow::Ok((exists, f.read().await?))
+            }
+            .await;
+            (acct, r)
+        }
+    });
+    let results = tokio::time::timeout(AUDIT_TIMEOUT, futures::future::join_all(reads))
+        .await
+        .map_err(|_| coded(StatusCode::GATEWAY_TIMEOUT, "timeout", "Timed out reading authorized_keys from the device."))?;
+
+    let mut out = Vec::new();
+    for (acct, r) in results {
+        match r {
+            Err(e) => out.push(json!({ "username": acct, "ok": false, "error": format!("{e:#}"), "exists": false, "lines": [] })),
+            Ok((exists, content)) => {
+                let lines: Vec<Value> = parse_authorized_keys(&content)
+                    .into_iter()
+                    .filter(|l| !l.raw.trim().is_empty() && !l.raw.trim_start().starts_with('#'))
+                    .map(|l| {
+                        let Some(k) = l.key else {
+                            return json!({ "line_no": l.line_no, "kind": "invalid", "raw": l.raw.chars().take(120).collect::<String>() });
+                        };
+                        let in_list = snap.desired.get(&acct).is_some_and(|d| d.contains_key(&k.bare));
+                        let (kind, owner) = if service.contains(&k.bare) {
+                            ("service", None)
+                        } else if managed.contains(&(acct.clone(), k.bare.clone())) {
+                            ("managed", telepy.get(&k.bare))
+                        } else if let Some(o) = telepy.get(&k.bare) {
+                            ("telepy_user", Some(o))
+                        } else {
+                            ("unknown", None)
+                        };
+                        json!({
+                            "line_no": l.line_no,
+                            "kind": kind,
+                            "key_type": k.label,
+                            "bits": k.bits,
+                            "fingerprint": k.fingerprint,
+                            "comment": if k.comment.is_empty() { None } else { Some(k.comment) },
+                            "options": l.options,
+                            "in_list": in_list,
+                            "owner": owner.map(|(_, _, u)| u.clone()),
+                            "key_name": owner.map(|(_, n, _)| n.clone()),
+                        })
+                    })
+                    .collect();
+                out.push(json!({ "username": acct, "ok": true, "error": null, "exists": exists, "lines": lines }));
+            }
+        }
+    }
+    Ok(Json(json!({ "tunnel_id": t.id, "accounts": out })))
+}
+
+#[utoipa::path(post, path = "/api/reverse/server/{id}/authorized-keys/remove", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::AuthorizedKeyRemove, responses((status = 200, body = super::schemas::AuthorizedKeyRemoved), (status = 400, description = "Service key (code service_key) or bad request", body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "In the device key list (code in_key_list) or device offline (code device_offline)", body = super::schemas::ErrorBody)))]
+async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let (t, eff) = access(&state, me.id, id).await?;
+    require_manager(eff)?;
+    let (Some(acct), Some(fp)) = (json_str(&body, "username"), json_str(&body, "fingerprint")) else {
+        return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "username and fingerprint are required"));
+    };
+    if !audit_accounts(&state, &t).await?.contains(&acct) {
+        return Err(ApiError::not_found("Unknown account for this tunnel"));
+    }
+    if !dk::online(&state, t.reverse_port) {
+        return Err(coded(StatusCode::CONFLICT, "device_offline", "The device is offline."));
+    }
+    let lock = state.device_keys.lock_for(t.id);
+    let _guard = lock.lock().await;
+    let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+    let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+    let found: Option<String> = parse_authorized_keys(&content).into_iter().filter_map(|l| l.key).find(|k| k.fingerprint == fp).map(|k| k.bare);
+    let Some(bare) = found else {
+        return Err(ApiError::not_found("That key is not in this account's authorized_keys"));
+    };
+    if db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).any(|k| k.bare == bare) {
+        return Err(coded(StatusCode::BAD_REQUEST, "service_key", "This is Telepy's service key; removing it would cut Telepy off from this account."));
+    }
+    let desired: BTreeMap<String, _> = dk::desired(&state.db, &t).await?;
+    if desired.get(&acct).is_some_and(|d| d.contains_key(&bare)) {
+        return Err(coded(StatusCode::CONFLICT, "in_key_list", "This key is in the device's key list; remove it from the list instead."));
+    }
+    let (new, removed) = remove_key(&content, &bare);
+    file.write(&new).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+    db::device_keys::installed_delete(&state.db, t.id, &acct, &bare).await?;
+    tracing::info!(tunnel_id = t.id, account = %acct, fingerprint = %fp, by = %me.username, "device keys: removed a key from authorized_keys");
+    let audience = super::notify::tunnel_audience(&state, &t).await?;
+    state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": t.id }));
+    Ok(Json(json!({ "removed": removed })))
+}
+
+#[utoipa::path(get, path = "/api/reverse/user/keys/devices", tag = "Device Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::KeyDevice>)))]
+async fn my_devices(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+    let mine: HashMap<i64, String> = db::keys::user_keys(&state.db, me.id).await?.into_iter().filter_map(|k| parse_public_key(&k.key).map(|p| (k.id, p.bare))).collect();
+    let in_list: BTreeSet<(i64, i64)> = db::device_keys::entries_for_user(&state.db, me.id).await?.into_iter().map(|e| (e.tunnel_id, e.user_key_id)).collect();
+    let (my_shares, _) = db::sharing::permission_context(&state.db, me.id).await?;
+    let mut out = Vec::new();
+    for t in db::tunnels::visible_to(&state.db, me.id).await? {
+        let Some(eff) = permissions::effective(me.id, t.user_id, my_shares.get(&t.id).map(String::as_str)) else { continue };
+        let accounts: Vec<String> = permissions::allowed_usernames(&state.db, me.id, &t).await?.into_iter().map(|u| u.username).collect();
+        let has_entries = in_list.iter().any(|(tid, _)| *tid == t.id);
+        let snap = if has_entries { Some(snapshot(&state, &t).await?) } else { None };
+        let keys: Vec<Value> = mine
+            .iter()
+            .filter(|(kid, _)| in_list.contains(&(t.id, **kid)))
+            .map(|(kid, bare)| json!({ "user_key_id": kid, "targets": snap.as_ref().map(|s| s.targets(bare)).unwrap_or_default() }))
+            .collect();
+        out.push(json!({
+            "tunnel_id": t.id,
+            "host_friendly_name": t.host_friendly_name,
+            "online": dk::online(&state, t.reverse_port),
+            "role": eff.label(),
+            "accounts": accounts,
+            "keys": keys,
+        }));
+    }
+    Ok(Json(Value::Array(out)))
+}
+
+/// 建立隧道時的 `key_list`：`"mine"` = 清單從我所有的金鑰開始；`"empty"`（預設）= 空清單。
+pub fn key_list_choice(body: &Value) -> ApiResult<bool> {
+    match body.get("key_list") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::String(s)) if s == "empty" => Ok(false),
+        Some(Value::String(s)) if s == "mine" => Ok(true),
+        Some(_) => Err(ApiError::field("key_list", "Must be \"mine\" or \"empty\".")),
+    }
+}
+
+/// `key_list = "mine"`：把建立者的每一把金鑰放進新裝置的清單（之後新增的金鑰要自己勾）。
+pub async fn seed_key_list(state: &AppState, tunnel_id: i64, user_id: i64) -> ApiResult<()> {
+    for k in db::keys::user_keys(&state.db, user_id).await? {
+        db::device_keys::add_entry(&state.db, tunnel_id, k.id, user_id, user_id).await?;
+    }
+    state.device_keys.kick(tunnel_id);
+    Ok(())
+}

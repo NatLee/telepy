@@ -470,6 +470,12 @@ impl Handler for GatewayHandler {
             Some(Identity::Tunnel { tunnel_id, .. }) => Some(*tunnel_id),
             _ => None,
         };
+        // 使用者金鑰：記下最後使用時間與來源（金鑰頁顯示）。/ Record when and from where a user key was last used.
+        if let (Some(Identity::User { .. }), Some(bare)) = (&self.identity, &self.offered) {
+            if let Err(e) = db::keys::touch_last_used(&self.gw.db, &like_prefix(bare), &self.peer.ip().to_string()).await {
+                tracing::debug!(error = %e, "gateway: cannot record user key use");
+            }
+        }
         self.gw
             .event("accepted", Some(self.peer), None, tunnel_id, format!("Accepted publickey for {} from {} port {} ssh2: {}", self.gw.config.gateway_user, self.peer.ip(), self.peer.port(), self.key_desc))
             .await;

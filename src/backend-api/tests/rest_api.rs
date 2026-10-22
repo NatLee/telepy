@@ -6,7 +6,9 @@ use serde_json::{json, Value};
 
 const KEY_A: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq4u5n7tS1kO6o4m3yQ0tYQd6v7Jc5Zq8Hh3n5Vt7Wk device-a";
 const KEY_B: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq4u5n7tS1kO6o4m3yQ0tYQd6v7Jc5Zq8Hh3n5Vt7Wl device-b";
-const USER_KEY: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 laptop";
+const USER_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHAgjb8hhCbQ4/2TIVTp6pRlUi97oIezKoHrwtI5hIDU laptop";
+const USER_KEY_2: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC0IpUODAh6nEE6nsxVUVINtlvKLCYnrc/Xfzbp1ui1K other";
+const RSA_1024: &str = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDfJoXhbfbTVWOGa30diB5dY07RMBntvLd+q1uT8vc7qLbQhsStQ3uK6g2kj2s/fMn9J3Ayan4au4KLfcMcnWaTy+A6J/vSFogh8q3M8w/80nkQ3clT/492fRCOWb1usAmMRJsl38BgO8BfbQtY65KFxC/mPvv6zBvKMbI4Vtd6Xw== small";
 
 async fn create_tunnel(app: &common::TestApp, token: &str, name: &str, key: &str) -> Value {
     let r = app.get("/api/reverse/issue/token", Some(token)).await;
@@ -300,9 +302,21 @@ async fn user_keys_settings_and_admin_users() {
     let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "laptop", "key": USER_KEY, "description": ""})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
     let kid = r.json["id"].as_i64().unwrap();
-    let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "laptop", "key": "ssh-rsa BBBB other"})).await;
+    // russh 解析出的指紋 / 類型。/ Parsed by russh.
+    assert_eq!(r.json["key_type"], "ED25519");
+    assert_eq!(r.json["bits"], 256);
+    assert_eq!(r.json["comment"], "laptop");
+    assert!(r.json["fingerprint"].as_str().unwrap().starts_with("SHA256:"), "{}", r.text);
+    assert_eq!(r.json["last_used_at"], Value::Null);
+    let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "laptop", "key": USER_KEY_2})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json, json!({"host_friendly_name": ["user keys with this Host Friendly Name already exists."]}));
+    // 格式錯誤、太短的 RSA、同一把金鑰換個註解。/ Garbage, short RSA, same key with another comment.
+    for bad in ["ssh-rsa BBBB other", RSA_1024, &USER_KEY.replace("laptop", "renamed")] {
+        let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "second", "key": bad})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}: {}", r.text);
+        assert!(r.json["key"][0].is_string(), "{}", r.text);
+    }
     let r = app.post("/api/reverse/user/keys", Some(&admin), json!({})).await;
     assert_eq!(r.json, json!({"host_friendly_name": ["This field is required."], "key": ["This field is required."]}));
     let r = app.patch(&format!("/api/reverse/user/keys/{kid}"), Some(&admin), json!({"description": "my laptop"})).await;

@@ -30,6 +30,12 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/reverse/server/keys/{id}", vec!["get", "put", "patch", "delete"]),
         ("/api/reverse/server/usernames/{id}", vec!["get", "put", "patch", "delete"]),
         ("/api/reverse/user/keys/{id}", vec!["get", "put", "patch", "delete"]),
+        ("/api/reverse/user/keys/devices", vec!["get"]),
+        ("/api/reverse/server/{id}/device-keys", vec!["get", "post"]),
+        ("/api/reverse/server/{id}/device-keys/{key_id}", vec!["delete"]),
+        ("/api/reverse/server/{id}/device-keys/sync", vec!["post"]),
+        ("/api/reverse/server/{id}/authorized-keys", vec!["get"]),
+        ("/api/reverse/server/{id}/authorized-keys/remove", vec!["post"]),
         ("/api/reverse/create/key/{token}", vec!["post"]),
         ("/tunnels/share/{id}", vec!["post"]),
         ("/tunnels/server/script/{kind}/{id}/{ssh_port}", vec!["get"]),
@@ -80,6 +86,8 @@ async fn spec_is_served_and_covers_the_rest_api() {
     // 回應 schema 真的被收進 components。/ Response schemas actually land in components.
     assert!(spec["components"]["schemas"]["Tunnel"]["properties"]["reverse_port"].is_object());
     assert!(spec["components"]["schemas"]["Dashboard"]["properties"]["tunnels"].is_object());
+    assert!(spec["components"]["schemas"]["DeviceKeys"]["properties"]["entries"].is_object());
+    assert!(spec["components"]["schemas"]["UserKey"]["properties"]["fingerprint"].is_object());
 
     // 程式內的 openapi() 與 HTTP 端點給的是同一份。/ The in-process document equals the served one.
     let inproc: Value = serde_json::from_str(&telepy_server::app::openapi().to_json().unwrap()).unwrap();

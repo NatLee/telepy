@@ -261,6 +261,48 @@ const TABLES: &[(&str, &str)] = &[
             "last_seen_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：裝置金鑰清單——哪些使用者金鑰要裝進這台裝置（依擁有者允許的 OS 帳號）。
+    // Device key lists: which user keys Telepy installs on a device (into the owner's allowed accounts).
+    (
+        "telepy_device_key",
+        r#"CREATE TABLE "telepy_device_key" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "user_key_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "added_by_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            UNIQUE ("tunnel_id", "user_key_id")
+        )"#,
+    ),
+    // Rust 自有：Telepy 實際寫進裝置 authorized_keys 的金鑰（只移除自己裝過的）。
+    // Keys Telepy wrote into a device account's authorized_keys (it only ever removes these).
+    (
+        "telepy_device_key_installed",
+        r#"CREATE TABLE "telepy_device_key_installed" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(128) NOT NULL,
+            "key_bare" text NOT NULL,
+            "fingerprint" varchar(128) NOT NULL,
+            "user_key_id" integer NULL,
+            "user_id" integer NULL,
+            "installed_at" datetime NOT NULL,
+            UNIQUE ("tunnel_id", "username", "key_bare")
+        )"#,
+    ),
+    // Rust 自有：每台裝置每個 OS 帳號最近一次同步的結果。/ Last sync result per device account.
+    (
+        "telepy_device_key_sync",
+        r#"CREATE TABLE "telepy_device_key_sync" (
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(128) NOT NULL,
+            "ok" bool NOT NULL,
+            "error" text NULL,
+            "synced_at" datetime NOT NULL,
+            PRIMARY KEY ("tunnel_id", "username")
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -279,6 +321,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
@@ -297,6 +341,8 @@ const INDEXES: &[&str] = &[
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
+    ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
+    ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),

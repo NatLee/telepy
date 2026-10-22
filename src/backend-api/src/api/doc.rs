@@ -44,6 +44,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "Authentication", description = "The current user"),
         (name = "Reverse Server Keys", description = "Tunnels (reverse server keys), target usernames, live status"),
         (name = "Service Keys", description = "Public keys of the Telepy service itself"),
+        (name = "Device Keys", description = "Per-device key lists: Telepy installs users' public keys into a device's authorized_keys over SSH, removes them when access is revoked, and audits what is there"),
         (name = "Tunnel Sharing", description = "Share tunnels with other users (view / edit / admin)"),
         (name = "Script", description = "Connection scripts and ssh config for a tunnel"),
         (name = "SFTP", description = "File manager REST endpoints"),

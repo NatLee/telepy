@@ -32,6 +32,7 @@
 | 裝置 → 伺服器 | `ssh -NR` 到 ssh 容器 | 一樣的指令，連到後端內建 gateway |
 | 網頁終端機 | 後端 → ssh 容器（第一次 SSH）→ 裝置（第二次） | 後端 → loopback → 裝置（一次 SSH），分頁共用 ControlMaster |
 | 檔案管理 / SFTP | 每個操作 spawn `ssh` / `scp`，各自兩次 SSH | 行程內通道 + 一次 SSH，**同一台同一帳號共用一條連線**（第三節） |
+| 裝置金鑰清單（`device_keys`） | 沒有：使用者自己把公鑰貼進裝置的 authorized_keys | 同一個池子借連線，SFTP 讀寫 `~/.ssh/authorized_keys`（暫存檔 + `posix-rename` 原子取代） |
 | 筆電 | `ProxyCommand ssh -W` 經 ssh 容器 | 一樣，經 gateway |
 
 ## 二、port 用在哪裡？會不會用完？

@@ -9,6 +9,7 @@ use crate::auth::google::GoogleVerifier;
 use crate::auth::Jwt;
 use crate::config::Config;
 use crate::db::Db;
+use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
 use crate::hub::Hub;
 use crate::lan::scan::LanScans;
@@ -37,6 +38,8 @@ pub struct Inner {
     pub mfa: MfaStores,
     /// 區網掃描的進度 / 最近結果（每條隧道一筆）。/ LAN scan status per tunnel.
     pub lan_scans: LanScans,
+    /// 裝置金鑰清單的同步狀態（kick / 鎖 / 重試）。/ Device key list sync state.
+    pub device_keys: DeviceKeys,
 }
 
 #[derive(Clone)]
@@ -73,6 +76,7 @@ impl AppState {
             ai: AiSessions::default(),
             mfa: MfaStores::new(&config.secret_key),
             lan_scans: LanScans::default(),
+            device_keys: DeviceKeys::default(),
             config,
             db,
         }))

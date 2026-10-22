@@ -155,6 +155,7 @@ fn validate_full(body: &Value) -> Result<(String, String, i64), ApiError> {
 #[utoipa::path(post, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::TunnelWrite, responses((status = 201, body = super::schemas::Tunnel), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (name, key, port) = validate_full(&body)?;
+    let seed = super::device_keys::key_list_choice(&body)?;
     let description = json_str(&body, "description");
     let default_username_id = json_i64(&body, "default_username");
     let t = db::tunnels::create(
@@ -170,6 +171,9 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     )
     .await
     .map_err(unique_error)?;
+    if seed {
+        super::device_keys::seed_key_list(&state, t.id, user.id).await?;
+    }
     notify::tunnel_updated(&state, &t).await?;
     Ok((StatusCode::CREATED, Json(single_json(&state, user.id, &t).await?)))
 }
@@ -227,6 +231,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to delete this tunnel."));
     }
     let audience = notify::tunnel_audience(&state, &t).await?;
+    crate::device_keys::forget_tunnel(&state, &t).await;
     db::tunnels::delete(&state.db, id).await?;
     state.hub.notify_users(
         audience,

@@ -166,6 +166,8 @@ pub struct TunnelWrite {
     pub reverse_port: i64,
     pub description: Option<String>,
     pub default_username: Option<i64>,
+    /// `mine` starts the device key list with all of your keys; `empty` (default) starts it empty
+    pub key_list: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -242,6 +244,15 @@ pub struct UserKey {
     pub created_at: String,
     pub updated_at: String,
     pub user: i64,
+    /// `SHA256:…` (same as `ssh-keygen -lf`); null when the stored key cannot be parsed
+    pub fingerprint: Option<String>,
+    /// ED25519 / RSA / ECDSA / SK-ED25519 / SK-ECDSA
+    pub key_type: Option<String>,
+    pub bits: Option<u32>,
+    pub comment: Option<String>,
+    /// Last successful SSH gateway login with this key
+    pub last_used_at: Option<String>,
+    pub last_used_ip: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -276,6 +287,8 @@ pub struct CreateKeyRequest {
     pub host_friendly_name: String,
     pub key: String,
     pub description: Option<String>,
+    /// `mine` starts the device key list with all of your keys; `empty` (default) starts it empty
+    pub key_list: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1043,4 +1056,156 @@ pub struct LanTopologyTunnel {
 #[derive(ToSchema)]
 pub struct LanTopology {
     pub tunnels: Vec<LanTopologyTunnel>,
+}
+
+// ---------------------------------------------------------------- device keys
+
+#[derive(ToSchema)]
+pub struct DeviceKeyTarget {
+    /// OS account on the device
+    pub username: String,
+    /// installed / pending / error
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyOwner {
+    pub id: i64,
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyEntry {
+    pub user_key_id: i64,
+    pub name: String,
+    pub fingerprint: Option<String>,
+    pub key_type: Option<String>,
+    pub owner: DeviceKeyOwner,
+    pub mine: bool,
+    pub added_by: String,
+    pub created_at: String,
+    /// One per OS account the key's owner may use on this device
+    pub targets: Vec<DeviceKeyTarget>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyRemoval {
+    pub username: String,
+    pub fingerprint: String,
+    pub owner: Option<String>,
+    /// pending / error
+    pub status: String,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeySync {
+    pub username: String,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub synced_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyTunnel {
+    pub id: i64,
+    pub host_friendly_name: String,
+    pub online: bool,
+    /// owner / admin / edit / view
+    pub role: String,
+}
+
+#[derive(ToSchema)]
+pub struct MyKeyChoice {
+    pub id: i64,
+    pub name: String,
+    pub fingerprint: Option<String>,
+    pub key_type: Option<String>,
+    pub in_list: bool,
+}
+
+/// A device's key list. Owners and ADMIN sharees see every entry and pending removals; other sharees see their own.
+#[derive(ToSchema)]
+pub struct DeviceKeys {
+    pub tunnel: DeviceKeyTunnel,
+    /// Owner or ADMIN sharee
+    pub can_manage: bool,
+    /// OS accounts the caller may use here (their keys go into exactly these)
+    pub accounts: Vec<String>,
+    pub entries: Vec<DeviceKeyEntry>,
+    /// Keys Telepy installed that must go (access revoked, key deleted …), removed once the device is online
+    pub removals: Vec<DeviceKeyRemoval>,
+    pub sync: Vec<DeviceKeySync>,
+    pub my_keys: Vec<MyKeyChoice>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeysAdd {
+    /// Ids of your own keys to add to the device's list
+    pub user_key_ids: Vec<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeyLine {
+    pub line_no: i64,
+    /// service / managed / telepy_user / unknown / invalid
+    pub kind: String,
+    pub key_type: Option<String>,
+    pub bits: Option<u32>,
+    pub fingerprint: Option<String>,
+    pub comment: Option<String>,
+    pub options: Option<String>,
+    /// In the device key list for this account
+    pub in_list: Option<bool>,
+    /// Telepy user who owns this key (managed / telepy_user)
+    pub owner: Option<String>,
+    pub key_name: Option<String>,
+    /// First 120 characters of an unparseable line
+    pub raw: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeysAccount {
+    pub username: String,
+    pub ok: bool,
+    pub error: Option<String>,
+    pub exists: bool,
+    pub lines: Vec<AuthorizedKeyLine>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeysAudit {
+    pub tunnel_id: i64,
+    pub accounts: Vec<AuthorizedKeysAccount>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeyRemove {
+    pub username: String,
+    pub fingerprint: String,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeyRemoved {
+    /// Lines removed
+    pub removed: i64,
+}
+
+#[derive(ToSchema)]
+pub struct KeyDeviceKey {
+    pub user_key_id: i64,
+    pub targets: Vec<DeviceKeyTarget>,
+}
+
+/// One device you can use, with the state of your keys on it (keys-page matrix).
+#[derive(ToSchema)]
+pub struct KeyDevice {
+    pub tunnel_id: i64,
+    pub host_friendly_name: String,
+    pub online: bool,
+    pub role: String,
+    pub accounts: Vec<String>,
+    /// Your keys that are in this device's list
+    pub keys: Vec<KeyDeviceKey>,
 }

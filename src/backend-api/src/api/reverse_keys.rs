@@ -54,6 +54,7 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
         return Err(ApiError::bad_request("Invalid SSH public key format"));
     }
     let description = json_str(&body, "description").unwrap_or_default();
+    let seed = super::device_keys::key_list_choice(&body)?;
     let used = state.status.used_ports(&state.db).await?;
     let port = find_free_port(&used, loopback_bindable).map_err(ApiError::bad_request)?;
     let t = db::tunnels::create(
@@ -63,6 +64,9 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
     .await
     .map_err(|e| if is_unique_violation(&e) { ApiError::bad_request(crate::error::db_error_message(&e)) } else { ApiError::from(e) })?;
     state.tokens.remove_issue_token(&token);
+    if seed {
+        super::device_keys::seed_key_list(&state, t.id, user.id).await?;
+    }
     notify::tunnel_updated(&state, &t).await?;
     Ok(Json(json!({
         "id": t.id,
