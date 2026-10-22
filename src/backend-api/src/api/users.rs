@@ -73,7 +73,7 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
     Ok(Json(settings_json(&s)))
 }
 
-fn managed_user_json(u: &User, language: Option<&str>, tz: i32) -> Value {
+fn managed_user_json(u: &User, language: Option<&str>, mfa_enabled: bool, tz: i32) -> Value {
     json!({
         "id": u.id,
         "username": u.username,
@@ -83,6 +83,7 @@ fn managed_user_json(u: &User, language: Option<&str>, tz: i32) -> Value {
         "date_joined": db_to_iso(&u.date_joined, tz),
         "last_login": opt_db_to_iso(&u.last_login, tz),
         "language": language,
+        "mfa_enabled": mfa_enabled,
     })
 }
 
@@ -93,9 +94,10 @@ async fn list_users(State(state): State<AppState>, AuthUser(me): AuthUser) -> Ap
     }
     let users = db::users::all_ordered(&state.db).await?;
     let langs = db::users::settings_language_map(&state.db).await?;
+    let mfa = db::mfa::users_with_mfa(&state.db).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(Json(json!({
-        "users": users.iter().map(|u| managed_user_json(u, langs.get(&u.id).and_then(|l| l.as_deref()), tz)).collect::<Vec<_>>()
+        "users": users.iter().map(|u| managed_user_json(u, langs.get(&u.id).and_then(|l| l.as_deref()), mfa.contains(&u.id), tz)).collect::<Vec<_>>()
     })))
 }
 
@@ -130,7 +132,8 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     }
     let target = db::users::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("User not found."))?;
     let lang = db::users::settings_for(&state.db, id).await?.and_then(|s| s.language);
-    Ok(Json(managed_user_json(&target, lang.as_deref(), state.config.tz_offset_minutes)))
+    let mfa_enabled = super::mfa::factors(&state, id).await?.any();
+    Ok(Json(managed_user_json(&target, lang.as_deref(), mfa_enabled, state.config.tz_offset_minutes)))
 }
 
 #[allow(dead_code)]

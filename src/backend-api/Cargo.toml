@@ -49,6 +49,11 @@ utoipa-swagger-ui = { version = "10", default-features = false, features = ["ven
 # MCP server (official Rust SDK; stateless Streamable HTTP at /mcp)
 rmcp = { version = "3.6", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
 schemars = "1"
+# two-factor login: passkeys (WebAuthn) and TOTP (secret encrypted at rest, QR code as SVG)
+webauthn-rs = { version = "0.5.5", features = ["conditional-ui"] }
+aes-gcm = "0.10"
+sha1 = "0.10"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # misc
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
@@ -73,6 +78,8 @@ url = "2"
 
 [dev-dependencies]
 tempfile = "3"
+# 測試用的軟體 passkey（模擬瀏覽器 + authenticator）。/ Software passkey for the WebAuthn tests.
+webauthn-authenticator-rs = { version = "0.5.5", features = ["softpasskey"] }
 
 [profile.release]
 lto = "thin"
