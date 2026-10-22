@@ -2,7 +2,7 @@
 name = "telepy-server"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Telepy backend: REST + WebSocket server for reverse SSH tunnel management"
 license = "MIT"
 
@@ -46,6 +46,9 @@ russh-sftp = "3"
 utoipa = { version = "6", features = ["axum_extras", "chrono"] }
 utoipa-axum = "0.3"
 utoipa-swagger-ui = { version = "10", default-features = false, features = ["vendored"] }
+# MCP server (official Rust SDK; stateless Streamable HTTP at /mcp)
+rmcp = { version = "3.6", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1"
 # misc
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }

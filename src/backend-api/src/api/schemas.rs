@@ -702,3 +702,57 @@ pub struct OAuthGrant {
     /// When the refresh token expires without further use
     pub expires_at: Option<String>,
 }
+
+// ---------------------------------------------------------------- AI sessions (MCP)
+
+#[derive(ToSchema)]
+pub struct AiUserRef {
+    pub id: i64,
+    pub username: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct AiTunnelRef {
+    pub id: i64,
+    pub name: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct AiSession {
+    #[schema(example = "ais_3f2a…")]
+    pub id: String,
+    pub user: AiUserRef,
+    pub client_name: String,
+    pub grant_id: i64,
+    pub tunnel: AiTunnelRef,
+    /// Target username on the device
+    pub username: String,
+    pub created_at: String,
+    pub last_used_at: String,
+    /// End of the maximum lifetime (it may close earlier when idle)
+    pub expires_at: String,
+    pub idle_timeout_s: i64,
+    pub commands: i64,
+    /// A command or file transfer is running
+    pub busy: bool,
+}
+
+#[derive(ToSchema)]
+pub struct AiActivity {
+    pub id: i64,
+    pub at: String,
+    pub user: AiUserRef,
+    pub client_name: String,
+    #[schema(example = "ssh_exec")]
+    pub tool: String,
+    pub tunnel: Option<AiTunnelRef>,
+    pub session_id: Option<String>,
+    pub target_username: Option<String>,
+    /// Command, path or close reason
+    pub detail: Option<String>,
+    pub ok: bool,
+    pub exit_code: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub bytes_out: Option<i64>,
+    pub error: Option<String>,
+}

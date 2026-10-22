@@ -41,6 +41,9 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "remote_browser_kasm_create_timeout", kind: Kind::Int, label: "Remote Browser Startup Timeout (seconds)", description: "開啟瀏覽器時,等待瀏覽器容器把桌面(Xkasmvnc)與 chromium 起好的逾時(秒)。冷啟或機器忙碌時較久,太短會讓開啟失敗;太長則卡住較久才報錯。下次開啟瀏覽器時生效。" },
     FieldMeta { name: "remote_browser_homepage", kind: Kind::Str(512), label: "Remote Browser Homepage", description: "代理瀏覽器啟動時自動開啟的首頁網址(需含 http:// 或 https://)。下次開啟瀏覽器時生效。" },
     FieldMeta { name: "remote_browser_language", kind: Kind::Str(16), label: "Remote Browser Language", description: "代理瀏覽器的介面語系與 Accept-Language,格式如 zh-TW、en-US、ja-JP。也影響反爬蟲的navigator.languages(空語系是機器人特徵)。下次開啟瀏覽器時生效。" },
+    FieldMeta { name: "ai_session_idle_timeout", kind: Kind::Int, label: "AI Session Idle Timeout (seconds)", description: "AI 工具（MCP）開的 SSH session 閒置多久沒有指令就自動關閉(秒)。執行中的指令不算閒置。變更後對新開的 session 生效。" },
+    FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
+    FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -55,6 +58,9 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("remote_browser_kasm_create_timeout".into(), json!(s.remote_browser_kasm_create_timeout));
     m.insert("remote_browser_homepage".into(), json!(s.remote_browser_homepage));
     m.insert("remote_browser_language".into(), json!(s.remote_browser_language));
+    m.insert("ai_session_idle_timeout".into(), json!(s.ai_session_idle_timeout));
+    m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
+    m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     Value::Object(m)
 }
 

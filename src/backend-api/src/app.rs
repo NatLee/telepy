@@ -32,6 +32,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::sftp::router())
         .merge(api::remote_browser::router())
         .merge(api::oauth::router())
+        .merge(api::ai::router())
 }
 
 /// 完整的 OpenAPI 文件（不需要 AppState；`telepy-server openapi` 子命令與測試用）。
@@ -48,7 +49,7 @@ pub fn build(state: AppState) -> Router {
         .allow_methods(AllowMethods::mirror_request())
         .allow_headers(AllowHeaders::mirror_request())
         .allow_credentials(true)
-        .expose_headers([header::CONTENT_DISPOSITION]);
+        .expose_headers([header::CONTENT_DISPOSITION, header::WWW_AUTHENTICATE, header::HeaderName::from_static("mcp-session-id")]);
 
     let (mut rest, openapi) = api_router().split_for_parts();
     rest = rest.route("/healthz", get(healthz));
@@ -59,10 +60,12 @@ pub fn build(state: AppState) -> Router {
     }
     let rest = rest.layer(CompressionLayer::new());
 
-    // WebSocket 路由不掛壓縮層（升級回應沒有 body；與 Traefik 的 /ws router 一致）。
+    // WebSocket 與 MCP 路由不掛壓縮層（升級回應沒有 body；MCP 可能回 SSE 串流）。
+    // No compression on WebSockets (no body) or MCP (may stream SSE).
     Router::new()
         .merge(rest)
         .merge(ws::router())
+        .merge(crate::mcp::router(state.clone()))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

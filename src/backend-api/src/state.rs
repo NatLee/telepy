@@ -4,6 +4,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::ai::AiSessions;
 use crate::auth::google::GoogleVerifier;
 use crate::auth::Jwt;
 use crate::config::Config;
@@ -25,6 +26,8 @@ pub struct Inner {
     pub status: Arc<StatusState>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
+    /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
+    pub ai: AiSessions,
 }
 
 #[derive(Clone)]
@@ -57,6 +60,7 @@ impl AppState {
             http,
             status,
             gateway,
+            ai: AiSessions::default(),
             config,
             db,
         }))

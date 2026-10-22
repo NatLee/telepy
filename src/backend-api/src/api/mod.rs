@@ -1,6 +1,7 @@
 //! REST handlers，依 Django app 分檔。每個檔案的回應形狀/狀態碼/錯誤字串都對照原 view。
 //! REST handlers grouped by the Django app they replace; shapes mirror the original views.
 
+pub mod ai;
 pub mod auth;
 pub mod doc;
 pub mod logs;

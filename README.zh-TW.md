@@ -108,6 +108,11 @@ Telepy 本身就是 OAuth 2.1 授權伺服器，任何支援 MCP 的 AI 工具�
 （查看隧道／執行指令／讀寫檔案）與可用的隧道。核可過的應用程式列在 **偏好設定 → 已連接的應用程式**，
 撤銷會立刻停止存取並關閉它的工作階段。AI 工具開啟的工作階段閒置時會自動關閉，上限是站台設定。
 
+Claude Code：`claude mcp add --transport http telepy https://<你的主機>/mcp`。工具：`list_tunnels`、
+`tunnel_status`、`ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`、`sftp_list` /
+`sftp_read` / `sftp_write`。每次工具呼叫都會留下稽核紀錄（`/api/ai/activity`），被分享的使用者用 AI 連上隧道時
+擁有者會收到通知。詳見 [docs/mcp.md](docs/mcp.md)。
+
 ### API 文件
 
 後端在 `/api/openapi.json` 提供 OpenAPI 3 文件，並在 `/api/__hidden_swagger` 提供 Swagger UI。

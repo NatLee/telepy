@@ -109,6 +109,11 @@ Telepy 自身が OAuth 2.1 認可サーバーなので、MCP に対応した AI 
 **環境設定 → 接続済みアプリ** に表示され、取り消すとアクセスは即座に停止しセッションも閉じられます。
 AI ツールが開いたセッションはアイドル時に自動で閉じ、上限はサイト設定で変更できます。
 
+Claude Code の場合：`claude mcp add --transport http telepy https://<ホスト>/mcp`。ツール：`list_tunnels`、
+`tunnel_status`、`ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`、`sftp_list` /
+`sftp_read` / `sftp_write`。すべてのツール呼び出しは監査ログ（`/api/ai/activity`）に残り、共有先のユーザーが
+AI セッションを開くとトンネルの所有者に通知されます。詳細は [docs/mcp.md](docs/mcp.md)。
+
 ### API ドキュメント
 
 バックエンドは `/api/openapi.json` で OpenAPI 3 ドキュメントを、`/api/__hidden_swagger` で Swagger UI を
