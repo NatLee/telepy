@@ -1,8 +1,8 @@
 //! 以 russh 原生連到裝置（取代 spawn `ssh`/`scp`）。
-//! 現況是雙跳：backend → ssh 容器（telepy@ssh:2222）→ `direct-tcpip localhost:<reverse_port>` →
-//! 裝置 sshd（與 ~/.ssh/config 的 `ProxyCommand ssh -W` 相同語意）。內建 gateway（M5）後改單跳直連
-//! `127.0.0.1:<reverse_port>`。主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
-//! Native SSH connection to a device: double hop through the OpenSSH container today, single hop later.
+//! 預設單跳：直連內建 gateway 綁的 `127.0.0.1:<reverse_port>`，只有對裝置 sshd 的一次認證。
+//! `SSH_TARGET_HOST=reverse`（舊 OpenSSH 容器，回滾用）才走雙跳：backend → ssh 容器（telepy@ssh:2222）→
+//! `direct-tcpip localhost:<reverse_port>` → 裝置 sshd。主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
+//! Native SSH connection to a device: one hop via the gateway's loopback listener (two only for the legacy container).
 
 use std::path::Path;
 use std::sync::Arc;
