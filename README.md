@@ -102,10 +102,13 @@ Environment variables in `.env`:
 ### API docs
 
 The backend publishes its OpenAPI 3 document at `/api/openapi.json` and a Swagger UI at
-`/api/__hidden_swagger`. Log in with `POST /api/auth/token`, paste the `access_token` into
-**Authorize** (Bearer) and every endpoint can be tried from the page. The spec is generated from
-the actual routes (`utoipa`), so it is always in sync with the server; `telepy-server openapi`
-prints the same document from the CLI. Set `OPENAPI_ENABLED=false` to hide both.
+`/api/__hidden_swagger`. Both require a login: the page reuses your web session (open it in the
+browser you are logged in with; otherwise it sends you to `/login`), and the spec needs a Bearer
+token (`Authorization: Bearer <access_token>` from `POST /api/auth/token`). "Try it out" requests
+carry your login automatically; **Authorize** lets you test with another token. The spec is
+generated from the actual routes (`utoipa`), so it is always in sync with the server;
+`telepy-server openapi` prints the same document from the CLI. Set `OPENAPI_ENABLED=false` to
+remove both.
 
 ## CLI helper
 

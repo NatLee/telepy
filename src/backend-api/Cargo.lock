@@ -4078,13 +4078,11 @@ version = "10.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f1fd2f9615838885c6ff4115fde8a2b58825dc7b4617f78d29c167377a15c92"
 dependencies = [
- "axum",
  "base64 0.23.1",
  "mime_guess",
  "regex",
  "serde",
  "serde_json",
- "url",
  "utoipa",
  "utoipa-swagger-ui-vendored",
  "zip 9.0.5",

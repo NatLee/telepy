@@ -1,5 +1,5 @@
-//! OpenAPI 文件與 Swagger UI：spec 覆蓋所有 REST 路由、安全方案正確、頁面可開、可用 OPENAPI_ENABLED 關掉。
-//! OpenAPI document + Swagger UI: every REST route is in the spec, security schemes are right, the page serves,
+//! OpenAPI 文件與 Swagger UI：spec 覆蓋所有 REST 路由、安全方案正確、兩者都要登入、可用 OPENAPI_ENABLED 關掉。
+//! OpenAPI document + Swagger UI: every REST route is in the spec, security schemes are right, both need a login,
 //! and OPENAPI_ENABLED=false hides both.
 mod common;
 
@@ -9,8 +9,13 @@ use serde_json::Value;
 #[tokio::test]
 async fn spec_is_served_and_covers_the_rest_api() {
     let app = common::spawn().await;
-    let r = app.get("/api/openapi.json", None).await;
+    // 規格要登入。/ The spec needs a login.
+    assert_eq!(app.get("/api/openapi.json", None).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(app.get("/api/openapi.json", Some("not-a-token")).await.status, StatusCode::UNAUTHORIZED);
+    let token = app.login("admin", "pw").await;
+    let r = app.get("/api/openapi.json", Some(&token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(r.headers.get("content-type").unwrap().to_str().unwrap().starts_with("application/json"));
     let spec = r.json;
     assert_eq!(spec["openapi"].as_str().unwrap_or("").split('.').next(), Some("3"));
     assert_eq!(spec["info"]["title"], "Telepy API");
@@ -70,19 +75,38 @@ async fn spec_is_served_and_covers_the_rest_api() {
 }
 
 #[tokio::test]
-async fn swagger_ui_page_is_served() {
+async fn swagger_ui_page_is_served_behind_the_web_login() {
     let app = common::spawn().await;
-    for path in ["/api/__hidden_swagger", "/api/__hidden_swagger/"] {
-        let r = app.get(path, None).await;
-        assert!(r.status == StatusCode::OK || r.status.is_redirection(), "{path}: {}", r.status);
-        if r.status == StatusCode::OK {
-            assert!(r.text.contains("swagger-ui"), "{path}: not the Swagger page");
-        }
-    }
-    // 頁面的初始化腳本指向我們的 spec。/ The page's initializer points at our spec URL.
+    // 無斜線 → 導到有斜線（相對路徑的資產才找得到）。/ No slash → redirect so the relative asset URLs resolve.
+    let r = app.get("/api/__hidden_swagger", None).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+    assert_eq!(r.headers.get("location").unwrap(), "/api/__hidden_swagger/");
+
+    // 頁殼本身不含任何 API 資訊；沒 token 時第一個 script 就導去 /login。
+    // The shell holds no API information; without a stored token its first script redirects to /login.
+    let r = app.get("/api/__hidden_swagger/", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.headers.get("content-type").unwrap().to_str().unwrap().starts_with("text/html"));
+    assert!(r.text.contains(r#"location.replace("/login")"#), "{}", r.text);
+    assert!(r.text.contains("swagger-initializer.js"));
+    assert!(!r.text.contains("/api/reverse/"), "shell must not embed the spec");
+
+    // 初始化腳本：先 verify/refresh 再載入規格，並把 Bearer 帶進每個請求。
+    // Initializer: verify/refresh first, then load the spec with the Bearer header on every request.
     let r = app.get("/api/__hidden_swagger/swagger-initializer.js", None).await;
     assert_eq!(r.status, StatusCode::OK);
-    assert!(r.text.contains("/api/openapi.json"), "initializer does not point at the spec: {}", r.text);
+    for needle in ["/api/openapi.json", "/api/auth/token/verify", "/api/auth/token/refresh", "requestInterceptor", r#"location.replace(LOGIN)"#] {
+        assert!(r.text.contains(needle), "initializer lacks {needle}");
+    }
+
+    // 靜態資產來自 vendored bundle；不存在的檔案 404。/ Assets come from the vendored bundle; unknown files 404.
+    let r = app.get("/api/__hidden_swagger/swagger-ui-bundle.js", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.headers.get("content-type").unwrap().to_str().unwrap().contains("javascript"));
+    let r = app.get("/api/__hidden_swagger/swagger-ui.css", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(app.get("/api/__hidden_swagger/nope.js", None).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get("/api/__hidden_swagger/../openapi.json", None).await.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -92,8 +116,10 @@ async fn openapi_can_be_disabled() {
     config.openapi_enabled = false;
     app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
     app.router = telepy_server::app::build(app.state.clone());
-    assert_eq!(app.get("/api/openapi.json", None).await.status, StatusCode::NOT_FOUND);
+    let token = app.login("admin", "pw").await;
+    assert_eq!(app.get("/api/openapi.json", Some(&token)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.get("/api/__hidden_swagger/", None).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get("/api/__hidden_swagger/swagger-ui-bundle.js", None).await.status, StatusCode::NOT_FOUND);
     // 其餘 API 不受影響。/ The rest of the API is unaffected.
     assert_eq!(app.get("/api/auth/setup-status", None).await.status, StatusCode::OK);
 }

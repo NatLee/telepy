@@ -102,9 +102,10 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 ### API 文件
 
 後端在 `/api/openapi.json` 提供 OpenAPI 3 文件，並在 `/api/__hidden_swagger` 提供 Swagger UI。
-先用 `POST /api/auth/token` 登入，把 `access_token` 貼進 **Authorize**（Bearer），就能在頁面上直接
-試打每個端點。規格由實際路由產生（`utoipa`），永遠與伺服器一致；`telepy-server openapi` 也能從
-CLI 印出同一份文件。設定 `OPENAPI_ENABLED=false` 可同時關閉兩者。
+兩者都需要登入：頁面沿用你的網頁登入狀態（用已登入的瀏覽器開啟，否則會導去 `/login`），規格則需要
+Bearer token（`POST /api/auth/token` 拿到的 `access_token`）。「Try it out」會自動帶上你的登入，
+**Authorize** 可改用別的 token 測試。規格由實際路由產生（`utoipa`），永遠與伺服器一致；
+`telepy-server openapi` 也能從 CLI 印出同一份文件。設定 `OPENAPI_ENABLED=false` 可同時關閉兩者。
 
 ## CLI 工具
 
