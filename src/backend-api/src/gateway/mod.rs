@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -69,7 +69,11 @@ pub struct Gateway {
     db: Db,
     status: Arc<StatusState>,
     forwards: DashMap<u16, Arc<Forward>>,
+    /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
+    /// 所有活著的連線（含握手中、未認證的）；連線上限看這個，不然沒認證的連線不受限。
+    /// Every live connection, authenticated or not; the connection limit counts these.
+    live: AtomicUsize,
     next_id: AtomicU64,
     log: Mutex<Option<tokio::fs::File>>,
     event_counter: AtomicU64,
@@ -150,6 +154,7 @@ impl Gateway {
             status,
             forwards: DashMap::new(),
             conns: DashMap::new(),
+            live: AtomicUsize::new(0),
             next_id: AtomicU64::new(1),
             log: Mutex::new(None),
             event_counter: AtomicU64::new(0),
@@ -563,6 +568,7 @@ impl Handler for GatewayHandler {
 
 impl Drop for GatewayHandler {
     fn drop(&mut self) {
+        self.gw.live.fetch_sub(1, Ordering::SeqCst);
         let (dropped, info) = self.gw.on_disconnect(self.conn_id);
         let gw = self.gw.clone();
         let peer = info.as_ref().map(|i| i.peer).unwrap_or(self.peer);
@@ -598,17 +604,25 @@ async fn handle_connection(gw: Arc<Gateway>, stream: TcpStream, peer: SocketAddr
     let _ = stream.set_nodelay(true);
     let conn_id = gw.next_id.fetch_add(1, Ordering::SeqCst);
     let authed = Arc::new(AtomicBool::new(false));
+    // `live` 在 GatewayHandler::drop 歸還，握手失敗 / 逾時時 handler 也會被 drop。/ Released in GatewayHandler::drop.
+    gw.live.fetch_add(1, Ordering::SeqCst);
     let handler = GatewayHandler { gw: gw.clone(), conn_id, peer, identity: None, offered: None, key_desc: String::new(), authed: authed.clone() };
-    let session = match server::run_stream(gw.server_config.clone(), stream, handler).await {
-        Ok(s) => s,
-        Err(e) => {
+    let grace = gw.config.gateway_login_grace;
+    // 握手（版本交換 + KEX）也受 LoginGraceTime 約束：連上來不講話的連線不能無限期占位。
+    // The handshake is bounded by the login grace time too, so an idle pre-KEX connection cannot hold a slot forever.
+    let session = match tokio::time::timeout(grace, server::run_stream(gw.server_config.clone(), stream, handler)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
             tracing::debug!(%peer, error = %e, "gateway: handshake failed");
+            return;
+        }
+        Err(_) => {
+            tracing::debug!(%peer, "gateway: handshake timed out");
             return;
         }
     };
     // LoginGraceTime：逾時未認證就斷線。
     let grace_handle = session.handle();
-    let grace = gw.config.gateway_login_grace;
     let grace_flag = authed.clone();
     tokio::spawn(async move {
         tokio::time::sleep(grace).await;
@@ -643,7 +657,7 @@ pub fn start(gw: Arc<Gateway>, listener: TcpListener) -> anyhow::Result<tokio::t
                     continue;
                 }
             };
-            if gw.conns.len() >= gw.config.gateway_max_connections {
+            if gw.live.load(Ordering::SeqCst) >= gw.config.gateway_max_connections {
                 tracing::warn!(%peer, "gateway: connection limit reached; dropping");
                 continue;
             }

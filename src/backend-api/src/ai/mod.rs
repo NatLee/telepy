@@ -176,15 +176,27 @@ impl AiSession {
         expiry(self.created.elapsed(), self.idle_for(), self.busy(), self.idle_timeout, self.max_lifetime)
     }
 
-    /// SFTP subsystem 第一次用時才開，之後共用。/ Opened lazily, then shared.
-    async fn sftp(&self) -> anyhow::Result<Arc<SftpSession>> {
+    /// SFTP subsystem 第一次用時才開，之後共用。每次取用先探一下（`realpath .`，順便拿到家目錄）：
+    /// channel 已經不在（裝置端關掉 sftp-server、連線重置…）就丟掉重開，不然這個 session 之後每個 sftp_* 都會失敗。
+    /// 回傳 (session, 家目錄)。/ Opened lazily and shared; probed on every use (which also yields the home
+    /// directory) and reopened when the channel is gone. Returns (session, home).
+    async fn sftp(&self) -> anyhow::Result<(Arc<SftpSession>, String)> {
         let mut slot = self.sftp.lock().await;
         if let Some(s) = slot.as_ref() {
-            return Ok(s.clone());
+            match s.canonicalize(".").await {
+                Ok(home) => return Ok((s.clone(), home)),
+                // 伺服器有回應（只是路徑解析失敗）：channel 活著。/ The server answered: the channel is alive.
+                Err(russh_sftp::client::error::Error::Status(_)) => return Ok((s.clone(), "/".to_string())),
+                Err(e) => {
+                    tracing::info!(session = %self.id, error = %e, "AI session: SFTP channel is gone; reopening");
+                    *slot = None;
+                }
+            }
         }
         let s = Arc::new(self.conn.sftp().await.context("open the SFTP subsystem (is sftp enabled on the device?)")?);
+        let home = sftp::home(&s).await;
         *slot = Some(s.clone());
-        Ok(s)
+        Ok((s, home))
     }
 }
 
@@ -448,15 +460,10 @@ pub struct Listing {
     pub truncated: bool,
 }
 
-async fn resolve(sftp_session: &SftpSession, raw: &str) -> String {
-    let home = sftp::home(sftp_session).await;
-    sftp::resolve_path(raw, &home)
-}
-
 pub async fn sftp_list(s: &AiSession, path: &str) -> anyhow::Result<Listing> {
     let _busy = s.begin();
-    let session = s.sftp().await?;
-    let path = resolve(&session, path).await;
+    let (session, home) = s.sftp().await?;
+    let path = sftp::resolve_path(path, &home);
     let mut entries = sftp::list_dir(&session, &path).await.with_context(|| format!("list {path}"))?;
     let truncated = entries.len() > MAX_LIST_ENTRIES;
     entries.truncate(MAX_LIST_ENTRIES);
@@ -474,8 +481,8 @@ pub struct ReadResult {
 
 pub async fn sftp_read(s: &AiSession, path: &str, offset: u64, max_bytes: usize) -> anyhow::Result<ReadResult> {
     let _busy = s.begin();
-    let session = s.sftp().await?;
-    let path = resolve(&session, path).await;
+    let (session, home) = s.sftp().await?;
+    let path = sftp::resolve_path(path, &home);
     let meta = session.metadata(&path).await.with_context(|| format!("stat {path}"))?;
     if meta.is_dir() {
         bail!("{path} is a directory; use sftp_list");
@@ -501,8 +508,8 @@ pub async fn sftp_read(s: &AiSession, path: &str, offset: u64, max_bytes: usize)
 
 pub async fn sftp_write(s: &AiSession, path: &str, data: &[u8], append: bool) -> anyhow::Result<(String, u64)> {
     let _busy = s.begin();
-    let session = s.sftp().await?;
-    let path = resolve(&session, path).await;
+    let (session, home) = s.sftp().await?;
+    let path = sftp::resolve_path(path, &home);
     let flags = OpenFlags::WRITE | OpenFlags::CREATE | if append { OpenFlags::APPEND } else { OpenFlags::TRUNCATE };
     let mut f = session.open_with_flags(&path, flags).await.with_context(|| format!("open {path} for writing"))?;
     if append {

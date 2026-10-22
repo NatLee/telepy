@@ -75,7 +75,10 @@ pub struct ExecResult {
 pub async fn run(handle: &Handle<ClientHandler>, command: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
     let started = Instant::now();
     let mut ch = handle.channel_open_session().await.context("open a channel (is the device still connected?)")?;
-    ch.exec(true, command.as_bytes()).await.context("send the command")?;
+    if let Err(e) = ch.exec(true, command.as_bytes()).await {
+        let _ = ch.close().await;
+        return Err(e).context("send the command");
+    }
     let mut out = HeadTail::new(max_output);
     let mut err = HeadTail::new(max_output);
     let (mut exit_code, mut signal, mut timed_out) = (None, None, false);
@@ -100,7 +103,12 @@ pub async fn run(handle: &Handle<ClientHandler>, command: &str, timeout: Duratio
                         deadline.as_mut().reset(grace);
                     }
                 }
-                Some(ChannelMsg::Failure) => bail!("the device refused to run the command"),
+                Some(ChannelMsg::Failure) => {
+                    // 裝置拒絕 exec：把 channel 關掉，別留到 session 結束（會占掉裝置的 MaxSessions）。
+                    // The device refused the exec request: close the channel instead of leaking it until the session ends.
+                    let _ = ch.close().await;
+                    bail!("the device refused to run the command");
+                }
                 Some(ChannelMsg::Close) | None => break,
                 Some(_) => {}
             },
