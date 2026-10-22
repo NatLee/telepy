@@ -1,7 +1,9 @@
 //! 以 russh 原生連到裝置（取代 spawn `ssh`/`scp`）。
-//! 單跳：直連內建 gateway 綁的 `127.0.0.1:<reverse_port>`，只有對裝置 sshd 的一次認證。
+//! 傳輸在行程內：向內建 gateway 要一條裝置隧道上的 forwarded-tcpip 通道（`Gateway::open_stream`），直接在上面做
+//! 對裝置 sshd 的 SSH 握手 —— 不經 loopback TCP、不占本機 port。共用連線見 `ssh::pool`。
+//! gateway 沒啟用（沒有 host key 的開發環境、自帶 sshd 的測試）時才退回 TCP `ssh_target_host:port`。
 //! 主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
-//! Native SSH connection to a device: one hop via the gateway's loopback listener.
+//! Native SSH connection to a device over an in-process gateway channel (no loopback TCP).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,7 +14,7 @@ use russh::client::{self, Handle, Handler};
 use russh::keys::{load_secret_key, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 
-use crate::config::Config;
+use crate::state::AppState;
 
 pub struct ClientHandler;
 
@@ -24,7 +26,7 @@ impl Handler for ClientHandler {
     }
 }
 
-/// 到裝置的連線；雙跳時同時持有 gateway 那條（drop 即關閉）。
+/// 到裝置的一條 SSH 連線（drop 即關閉）。
 pub struct DeviceConn {
     pub device: Handle<ClientHandler>,
 }
@@ -57,19 +59,24 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, user: &str, key: &Arc<
     Ok(())
 }
 
-async fn connect_inner(config: &Config, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
-    let key = load_identity(&config.ssh_identity).await?;
+async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
+    let key = load_identity(&state.config.ssh_identity).await?;
     let port = u16::try_from(reverse_port).context("invalid reverse port")?;
-    let mut device = client::connect(client_config(), (config.ssh_target_host.as_str(), port), ClientHandler)
-        .await
-        .with_context(|| format!("connect to {}:{port}", config.ssh_target_host))?;
+    let mut device = if state.config.gateway_enabled {
+        let stream = state.gateway.open_stream(port).await?;
+        client::connect_stream(client_config(), stream, ClientHandler).await.context("ssh handshake with the device")?
+    } else {
+        let host = state.config.ssh_target_host.as_str();
+        client::connect(client_config(), (host, port), ClientHandler).await.with_context(|| format!("connect to {host}:{port}"))?
+    };
     authenticate(&mut device, username, &key).await.context("device auth")?;
     Ok(DeviceConn { device })
 }
 
-/// 連線 + 認證，整體 30s 逾時。/ Connect and authenticate with an overall timeout.
-pub async fn connect(config: &Config, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
-    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(config, username, reverse_port))
+/// 連線 + 認證，整體 30s 逾時。每次都是新的一條；要共用請走 `ssh::pool`。
+/// Connect and authenticate (30 s overall). Always a fresh connection; use `ssh::pool` to share one.
+pub async fn connect(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
+    tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(state, username, reverse_port))
         .await
         .map_err(|_| anyhow::anyhow!("timed out connecting to the device"))?
 }

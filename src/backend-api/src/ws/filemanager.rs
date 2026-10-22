@@ -7,7 +7,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use russh_sftp::client::SftpSession;
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
@@ -15,7 +14,7 @@ use super::{auth, close, is_ping, send_json};
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::sftp;
-use crate::ssh::device::{self, DeviceConn};
+use crate::ssh::pool::PooledSftp;
 use crate::ssh::process::{filemanager_exec_args, filemanager_master_args, terminate_child};
 use crate::ssh::SshTarget;
 use crate::state::AppState;
@@ -162,7 +161,7 @@ impl ExecSession {
 }
 
 enum Backend {
-    Sftp { sftp: SftpSession, home: String, shell: &'static str, _conn: DeviceConn },
+    Sftp { sftp: PooledSftp, home: String, shell: &'static str },
     Exec(ExecSession),
 }
 
@@ -223,17 +222,15 @@ async fn send_response(socket: &mut WebSocket, action: &str, data: Value) -> boo
 }
 
 async fn open_backend(state: &AppState, username: &str, reverse_port: i64) -> Option<Backend> {
-    match device::connect(&state.config, username, reverse_port).await {
-        Ok(conn) => match conn.sftp().await {
-            Ok(sftp) => {
-                let home = sftp::home(&sftp).await;
-                let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
-                tracing::info!(%username, reverse_port, home, "FileManager: native SFTP session ready");
-                return Some(Backend::Sftp { sftp, home, shell, _conn: conn });
-            }
-            Err(e) => tracing::warn!(error = %e, "FileManager: SFTP subsystem unavailable, falling back to exec"),
-        },
-        Err(e) => tracing::warn!(error = %e, "FileManager: native SSH connection failed, falling back to exec"),
+    // 共用連線池：同一台、同一個 OS 帳號的檔案管理 / SFTP REST 共用一條 SSH 連線，各自一條 channel。
+    match state.pool.sftp(state, reverse_port, username).await {
+        Ok(sftp) => {
+            let home = sftp::home(&sftp).await;
+            let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
+            tracing::info!(%username, reverse_port, home, "FileManager: native SFTP session ready");
+            return Some(Backend::Sftp { sftp, home, shell });
+        }
+        Err(e) => tracing::warn!(error = format!("{e:#}"), "FileManager: native SFTP unavailable, falling back to exec"),
     }
     let target = SshTarget::new(&state.config, username, reverse_port);
     ExecSession::start(state.clone(), target).await.ok().map(Backend::Exec)

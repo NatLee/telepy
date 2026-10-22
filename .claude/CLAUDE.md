@@ -31,7 +31,7 @@ src/
       gateway/        # in-process SSH server: pubkey auth from DB, tcpip-forward → 127.0.0.1:<port> loopback bridge, direct-tcpip, status + latency probes, sshd-style log
       monitor/        # StatusState (listening ports / latency), ports.rs (debounce + latency throttle), runner.rs (5 s cycle → notifications)
       hub.rs          # in-process notification hub (per-user / per-tunnel broadcast; replaced the Redis channel layer)
-      ssh/            # process.rs (OpenSSH client argv + PTY spawn), device.rs (russh client to a device)
+      ssh/            # process.rs (OpenSSH client argv + PTY spawn), device.rs (russh client to a device, in-process via the gateway), pool.rs (one shared connection per tunnel + OS account)
       sftp/           # path resolution, structured listing, zip download, upload
       remote_browser/ # ssh -D SOCKS session store, kasm session-manager client, reaper
       scripts/        # connection-script / ssh-config rendering ($var substitution, templates/)
@@ -54,7 +54,7 @@ src/
 docker/kasm-browser/  # KasmVNC + Chromium image and its session-manager
 ssh/                  # backend_ssh_key (service key + ssh config), ssh_host_keys (gateway host keys; generated, git-ignored)
 dev-scripts/          # Helper scripts behind telepy.sh / telepy.ps1
-docs/                 # remote-browser.md, latency-deep-dive.md, rust-migration-plan.md, articles/
+docs/                 # remote-browser.md, latency-deep-dive.md, device-connections.md, rust-migration-plan.md, articles/
 ```
 
 ## Development Commands
@@ -113,7 +113,7 @@ Copy `.env.example` to `.env` and configure:
 
 - **Services:** 4 containers via Docker Compose: Traefik, frontend, backend, kasm-browser. No Redis, no separate SSH container, no supervisor.
 - **Routing:** Traefik routes `/api/*`, `/ws/*`, and a fixed set of `/tunnels/{share,unshare,shared-users,available-users,update-permission,server}` paths to the backend (`backend:8000`); everything else to the frontend. Traefik applies a `compress` middleware to HTTP routers (not `/ws`); the backend also compresses REST responses.
-- **SSH gateway (`gateway/`):** the backend listens on 2222 (published as `REVERSE_SERVER_SSH_PORT`) with the host keys from `ssh/ssh_host_keys`. Only public-key auth (tunnel / user keys from the DB) and `tcpip-forward` are accepted — the service key is deliberately **not** accepted (the backend reaches devices over loopback; that key sits in every device's `authorized_keys`), a tunnel key may only forward its own port and a user key only ports of tunnels the user owns; every forward binds `127.0.0.1:<reverse_port>` inside the backend container and bridges to a `forwarded-tcpip` channel, so the OpenSSH client (terminal, `ssh -D`) and russh (SFTP) reach the device in a single hop. `direct-tcpip` serves the generated ssh config's `ProxyCommand ssh -W` for user keys. Shell/exec/pty are refused. Device-side scripts are unchanged.
+- **SSH gateway (`gateway/`):** the backend listens on 2222 (published as `REVERSE_SERVER_SSH_PORT`) with the host keys from `ssh/ssh_host_keys`. Only public-key auth (tunnel / user keys from the DB) and `tcpip-forward` are accepted — the service key is deliberately **not** accepted (the backend reaches devices over loopback; that key sits in every device's `authorized_keys`), a tunnel key may only forward its own port and a user key only ports of tunnels the user owns; every forward binds `127.0.0.1:<reverse_port>` inside the backend container and bridges to a `forwarded-tcpip` channel, so the OpenSSH client (terminal, `ssh -D`) reaches the device in a single hop; russh (SFTP, file manager, AI sessions) skips TCP and opens the forwarded-tcpip channel in-process (`Gateway::open_stream`), and SFTP / the file manager share one connection per (tunnel, OS account) through `ssh::pool` (lease = channel, ≤ 8 per connection, learns a lower device MaxSessions, idle 5 min). See `docs/device-connections.md`. `direct-tcpip` serves the generated ssh config's `ProxyCommand ssh -W` for user keys. Shell/exec/pty are refused. Device-side scripts are unchanged.
 - **Device-side scripts (`scripts/`, `templates/`):** rendered with Python `string.Template.safe_substitute` semantics (unknown `$names` survive, so shell variables in templates are fine). The Docker flavours use `jnovack/autossh` (env-driven, key mounted at `/id_rsa`, defaults to `~/.ssh/id_rsa`) and reach the device's sshd through `host.docker.internal` (`extra_hosts`/`--add-host host-gateway`, Docker 20.10+ / Docker Desktop); the compose one-liner needs `-f telepy-docker-compose.yml`. Scripts only ever *append* the service key to `authorized_keys`. There is no public `alpine/autossh` image — don't bring it back.
 - **Status / latency:** forward registration and release update `StatusState` immediately; a banner round-trip through a forwarded channel every 15 s measures RTT. `monitor/runner.rs` runs the 5 s cycle (debounce FLAP_THRESHOLD 2, latency throttle 5 ms / 6-cycle keep-alive) and emits the `UPDATE-TUNNEL-*` notifications through the in-process hub.
 - **WebSocket:** first frame `{type:"auth", token, …}` within 10 s; close codes 4000/4001 (auth), 4002/4003/4004/4005/4006 (terminal/file manager), 4403/4404/4011/4013 (remote browser). Terminal pong is a **binary** frame; the other sockets answer `{"type":"pong"}`.
