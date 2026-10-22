@@ -162,12 +162,3 @@ pub async fn add_allowed_usernames(db: &Db, sharing_id: i64, tunnel_id: i64, ids
     }
     Ok(())
 }
-
-pub async fn remove_allowed_username(db: &Db, sharing_id: i64, username_id: i64) -> sqlx::Result<()> {
-    sqlx::query(&format!("DELETE FROM {A} WHERE tunnel_sharing_id = ? AND reverse_server_username_id = ?"))
-        .bind(sharing_id)
-        .bind(username_id)
-        .execute(&db.write)
-        .await?;
-    Ok(())
-}

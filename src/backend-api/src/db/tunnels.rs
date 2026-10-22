@@ -237,6 +237,17 @@ pub async fn username_exists(db: &Db, user_id: i64, tunnel_id: i64, username: &s
     Ok(n > 0)
 }
 
+/// 隧道上是否已有這個名字（不分建立者；`except` = 改名時排除自己）。
+pub async fn username_taken(db: &Db, tunnel_id: i64, username: &str, except: Option<i64>) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {U} WHERE reverse_server_id = ? AND username = ? AND id <> ?"))
+        .bind(tunnel_id)
+        .bind(username)
+        .bind(except.unwrap_or(-1))
+        .fetch_one(&db.read)
+        .await?;
+    Ok(n > 0)
+}
+
 pub async fn username_create(db: &Db, user_id: i64, tunnel_id: i64, username: &str) -> sqlx::Result<Username> {
     let now = now_db();
     let id = sqlx::query(&format!("INSERT INTO {U} (username, created_at, updated_at, reverse_server_id, user_id) VALUES (?, ?, ?, ?, ?)"))

@@ -39,12 +39,7 @@ export function ShareModalPermissionMatrix() {
                             <td className="px-4 py-2 font-medium text-left text-foreground">{t("share.roleEditor")}</td>
                             <td className="px-3 py-2"><Check size={16} className="mx-auto text-foreground" /></td>
                             <td className="px-3 py-2"><Check size={16} className="mx-auto text-foreground" /></td>
-                            <td className="px-3 py-2 text-center">
-                                <div className="flex items-center justify-center gap-0.5" title={t("share.editorNote")}>
-                                    <Check size={16} className="text-foreground" />
-                                    <span className="text-[10px] text-muted-foreground/70 -mt-2">*</span>
-                                </div>
-                            </td>
+                            <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
                             <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
                             <td className="px-3 py-2"><X size={16} className="mx-auto text-muted-foreground/70" /></td>
                         </tr>
@@ -60,7 +55,7 @@ export function ShareModalPermissionMatrix() {
                 </table>
             </div>
             <div className="px-4 py-2 border-t border-border bg-muted/20 text-[10px] text-muted-foreground">
-                {t("share.editorFootnote")}
+                {t("share.allowListFootnote")}
             </div>
         </div>
     );

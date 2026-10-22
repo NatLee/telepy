@@ -89,7 +89,7 @@ async fn tunnel_lifecycle_and_dashboard() {
     assert_eq!(r.json["reverse_server"], id);
     let r = app.post("/api/reverse/server/usernames", Some(&admin), json!({"reverse_server": id, "username": "ubuntu"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    assert_eq!(r.json, json!(["You already have a target user named 'ubuntu' on this tunnel."]));
+    assert_eq!(r.json, json!(["This tunnel already has a target user named 'ubuntu'."]));
     let r = app.post("/api/reverse/server/usernames", Some(&admin), json!({"reverse_server": 999, "username": "x"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json["reverse_server"][0], "Invalid pk \"999\" - object does not exist.");
@@ -245,12 +245,21 @@ async fn sharing_permissions_flow() {
     assert_eq!(u["allowed_target_usernames"][0]["id"], root_uid);
     assert!(u["shared_at"].as_str().unwrap().ends_with("+00:00"));
 
-    // upgrade to edit; bob adds his own username, then downgrade transfers it to owner
+    // an editor still cannot manage target users: only the owner and ADMIN sharees can
     let r = app.patch(&format!("/tunnels/update-permission/{id}/{bob_id}"), Some(&owner), json!({"permission_type": "edit"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(r.json["permission_type"], "edit");
     let r = app.post("/api/reverse/server/usernames", Some(&bob), json!({"reverse_server": id, "username": "bobuser"})).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    let r = app.delete(&format!("/api/reverse/server/usernames/{root_uid}"), Some(&bob)).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    // ADMIN adds one (sees every username), then a downgrade transfers it to the owner and bob is back to his allow-list
+    let r = app.patch(&format!("/tunnels/update-permission/{id}/{bob_id}"), Some(&owner), json!({"permission_type": "admin"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = app.post("/api/reverse/server/usernames", Some(&bob), json!({"reverse_server": id, "username": "bobuser"})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let r = app.post("/api/reverse/server/usernames", Some(&bob), json!({"reverse_server": id, "username": "root"})).await;
+    assert_eq!(r.json, json!(["This tunnel already has a target user named 'root'."]), "names are unique per tunnel, whoever created them");
     let r = app.get(&format!("/api/reverse/server/{id}/usernames"), Some(&bob)).await;
     let names: Vec<&str> = r.json["usernames"].as_array().unwrap().iter().map(|u| u["username"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["root", "bobuser"]);
@@ -259,6 +268,9 @@ async fn sharing_permissions_flow() {
     let r = app.get(&format!("/api/reverse/server/{id}/usernames"), Some(&owner)).await;
     let creators: Vec<&str> = r.json["usernames"].as_array().unwrap().iter().map(|u| u["created_by"].as_str().unwrap()).collect();
     assert_eq!(creators, vec!["owner", "owner"], "downgrade transfers bob's username to the owner");
+    let r = app.get(&format!("/api/reverse/server/{id}/usernames"), Some(&bob)).await;
+    let names: Vec<&str> = r.json["usernames"].as_array().unwrap().iter().map(|u| u["username"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["root"], "a viewer gets exactly the allow-list");
 
     // replace allow-list
     let r = app.patch(&format!("/tunnels/share/{id}/{bob_id}/allowed-usernames"), Some(&owner), json!({"allowed_target_username_ids": "nope"})).await;
@@ -266,7 +278,7 @@ async fn sharing_permissions_flow() {
     let r = app.patch(&format!("/tunnels/share/{id}/{bob_id}/allowed-usernames"), Some(&owner), json!({"allowed_target_username_ids": []})).await;
     assert_eq!(r.json["message"], "Allowed usernames updated");
     let r = app.get(&format!("/api/reverse/server/{id}/usernames"), Some(&bob)).await;
-    assert_eq!(r.json["usernames"], json!([]), "empty allow-list → only self-created (none)");
+    assert_eq!(r.json["usernames"], json!([]), "empty allow-list → no target users at all");
 
     // self-unshare (leave)
     let r = app.delete(&format!("/tunnels/unshare/{id}/{bob_id}"), Some(&bob)).await;
@@ -361,4 +373,42 @@ async fn user_keys_settings_and_admin_users() {
     let r = app.get("/api/log/ssh", Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.json, json!(""));
+}
+
+/// 一次性 data migration：非 ADMIN 被分享者以前自己建的 username 全部刪掉（連同允許清單、預設值），之後不再跑。
+#[tokio::test]
+async fn legacy_sharee_usernames_are_dropped_once() {
+    use telepy_server::db::{schema, sharing, tunnels, users};
+    let app = common::spawn().await;
+    let db = &app.state.db;
+    let mk = |name: &'static str| users::NewUser { username: name, password_hash: "!", email: "", first_name: "", last_name: "" };
+    let owner = users::create(db, mk("owner")).await.unwrap();
+    let editor = users::create(db, mk("editor")).await.unwrap();
+    let admin = users::create(db, mk("admin2")).await.unwrap();
+    let gone = users::create(db, mk("gone")).await.unwrap();
+    let t = tunnels::create(db, tunnels::NewTunnel { user_id: owner.id, host_friendly_name: "box", key: KEY_A, reverse_port: 40001, description: None, default_username_id: None }).await.unwrap();
+    let s_editor = sharing::create(db, t.id, owner.id, editor.id, "edit").await.unwrap();
+    sharing::create(db, t.id, owner.id, admin.id, "admin").await.unwrap();
+
+    let ubuntu = tunnels::username_create(db, owner.id, t.id, "ubuntu").await.unwrap();
+    let by_editor = tunnels::username_create(db, editor.id, t.id, "root").await.unwrap();
+    tunnels::username_create(db, admin.id, t.id, "deploy").await.unwrap();
+    tunnels::username_create(db, gone.id, t.id, "old").await.unwrap(); // creator no longer shared
+    sharing::add_allowed_usernames(db, s_editor.id, t.id, &[ubuntu.id, by_editor.id]).await.unwrap();
+    sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET default_username_id = ? WHERE id = ?").bind(by_editor.id).bind(t.id).execute(&db.write).await.unwrap();
+
+    // the fresh DB already recorded the migration; forget it to replay it on this data
+    sqlx::query("DELETE FROM telepy_data_migration").execute(&db.write).await.unwrap();
+    schema::ensure_schema(&db.write).await.unwrap();
+    let names: Vec<String> = tunnels::usernames_for_tunnel(db, t.id).await.unwrap().into_iter().map(|u| u.username).collect();
+    assert_eq!(names, vec!["ubuntu", "deploy"], "owner and ADMIN rows stay; editor and ex-sharee rows go");
+    assert_eq!(sharing::allowed_username_ids(db, s_editor.id).await.unwrap(), vec![ubuntu.id]);
+    assert_eq!(tunnels::by_id(db, t.id).await.unwrap().unwrap().default_username_id, None);
+
+    // recorded → a later run leaves rows alone (e.g. an ADMIN downgraded afterwards keeps theirs)
+    let later = tunnels::username_create(db, editor.id, t.id, "later").await.unwrap();
+    schema::ensure_schema(&db.write).await.unwrap();
+    assert!(tunnels::username_by_id(db, later.id).await.unwrap().is_some());
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(schema::DROP_SHAREE_USERNAMES).fetch_one(&db.read).await.unwrap();
+    assert_eq!(n, 1);
 }

@@ -1,4 +1,7 @@
 //! `/api/reverse/server/usernames`：目標主機使用者名稱 ViewSet（`ReverseServerUsernamesViewSet`）。
+//! 新增 / 改 / 刪只有隧道擁有者與 ADMIN 分享者能做；其他被分享者能用哪些帳號由擁有者 / ADMIN 的允許清單決定
+//! （見 `permissions::allowed_usernames`）。同一條隧道上名字不重複（不分建立者）。
+//! Only the owner and ADMIN sharees manage a tunnel's target OS accounts; names are unique per tunnel.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -41,7 +44,7 @@ async fn visible_username(state: &AppState, user_id: i64, id: i64) -> ApiResult<
     Err(ApiError::drf_not_found())
 }
 
-#[utoipa::path(post, path = "/api/reverse/server/usernames", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UsernameWrite, responses((status = 201, body = super::schemas::Username), (status = 400, description = "Validation error or duplicate ([message] or {field: [message]})", body = Object), (status = 403, description = "Needs EDIT permission", body = super::schemas::ErrorBody)))]
+#[utoipa::path(post, path = "/api/reverse/server/usernames", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UsernameWrite, responses((status = 201, body = super::schemas::Username), (status = 400, description = "Validation error or duplicate ([message] or {field: [message]})", body = Object), (status = 403, description = "Needs owner or ADMIN permission", body = super::schemas::ErrorBody)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     // serializer 驗證：reverse_server 必填且存在、username 必填非空。
     let mut errors = serde_json::Map::new();
@@ -77,19 +80,13 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     }
     let (tunnel, username) = (tunnel.unwrap(), username.unwrap());
 
-    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Edit).await? {
+    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Admin).await? {
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to add usernames to this tunnel."));
     }
-    if db::tunnels::username_exists(&state.db, user.id, tunnel.id, &username).await? {
-        return Err(ApiError::validation_list(format!("You already have a target user named '{username}' on this tunnel.")));
+    if db::tunnels::username_taken(&state.db, tunnel.id, &username, None).await? {
+        return Err(duplicate(&username));
     }
-    let u = db::tunnels::username_create(&state.db, user.id, tunnel.id, &username).await.map_err(|e| {
-        if is_unique_violation(&e) {
-            ApiError::validation_list(format!("You already have a target user named '{username}' on this tunnel."))
-        } else {
-            ApiError::from(e)
-        }
-    })?;
+    let u = db::tunnels::username_create(&state.db, user.id, tunnel.id, &username).await.map_err(|e| if is_unique_violation(&e) { duplicate(&username) } else { ApiError::from(e) })?;
     notify::tunnel_users(&state, &tunnel, "TUNNEL-USERNAMES-UPDATED", &format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name)).await?;
     Ok((StatusCode::CREATED, Json(username_json(&u, state.config.tz_offset_minutes))))
 }
@@ -100,11 +97,15 @@ async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(
     Ok(Json(username_json(&u, state.config.tz_offset_minutes)))
 }
 
-#[utoipa::path(patch, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), request_body = super::schemas::UsernamePatch, responses((status = 200, body = super::schemas::Username), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+fn duplicate(username: &str) -> ApiError {
+    ApiError::validation_list(format!("This tunnel already has a target user named '{username}'."))
+}
+
+#[utoipa::path(patch, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), request_body = super::schemas::UsernamePatch, responses((status = 200, body = super::schemas::Username), (status = 403, description = "Needs owner or ADMIN permission", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let u = visible_username(&state, user.id, id).await?;
     let tunnel = db::tunnels::by_id(&state.db, u.reverse_server_id).await?.ok_or_else(ApiError::drf_not_found)?;
-    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Edit).await? {
+    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Admin).await? {
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to edit this username."));
     }
     let username = json_str(&body, "username").map(|s| s.trim().to_string());
@@ -112,17 +113,13 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         if name.is_empty() {
             return Err(ApiError::field("username", "This field may not be blank."));
         }
-    }
-    let updated = db::tunnels::username_update(&state.db, id, username.as_deref()).await.map_err(|e| {
-        if is_unique_violation(&e) {
-            ApiError::validation_list(format!(
-                "You already have a target user named '{}' on this tunnel.",
-                username.clone().unwrap_or_default()
-            ))
-        } else {
-            ApiError::from(e)
+        if db::tunnels::username_taken(&state.db, tunnel.id, name, Some(id)).await? {
+            return Err(duplicate(name));
         }
-    })?;
+    }
+    let updated = db::tunnels::username_update(&state.db, id, username.as_deref())
+        .await
+        .map_err(|e| if is_unique_violation(&e) { duplicate(username.as_deref().unwrap_or_default()) } else { ApiError::from(e) })?;
     Ok(Json(username_json(&updated, state.config.tz_offset_minutes)))
 }
 
@@ -132,26 +129,16 @@ async fn replace(state: State<AppState>, user: AuthUser, id: Path<i64>, body: Ap
     update(state, user, id, body).await
 }
 
-/// Owner / Admin / 建立者 → 真刪除；只有 Editor 權限的非建立者 → 從自己的允許清單「離開」。
-#[utoipa::path(delete, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), responses((status = 204, description = "Deleted; editors who did not create it only leave their allow-list"), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+/// 刪除（連帶從所有允許清單移除）：只有 owner / ADMIN。
+#[utoipa::path(delete, path = "/api/reverse/server/usernames/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Username id")), responses((status = 204, description = "Deleted (also removed from every allow-list)"), (status = 403, description = "Needs owner or ADMIN permission", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
     let u = visible_username(&state, user.id, id).await?;
     let tunnel = db::tunnels::by_id(&state.db, u.reverse_server_id).await?.ok_or_else(ApiError::drf_not_found)?;
-    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Edit).await? {
+    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::Admin).await? {
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to delete this username."));
     }
-    let can_full_delete = user.id == tunnel.user_id
-        || user.id == u.user_id
-        || permissions::check_access(&state.db, user.id, &tunnel, Permission::Admin).await?;
-    let details = if can_full_delete {
-        db::tunnels::username_delete(&state.db, id).await?;
-        format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name)
-    } else {
-        if let Some(sharing) = db::sharing::get(&state.db, tunnel.id, user.id).await? {
-            db::sharing::remove_allowed_username(&state.db, sharing.id, id).await?;
-        }
-        format!("A user left Target Server Users for tunnel '{}'", tunnel.host_friendly_name)
-    };
+    db::tunnels::username_delete(&state.db, id).await?;
+    let details = format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name);
     notify::tunnel_users(&state, &tunnel, "TUNNEL-USERNAMES-UPDATED", &details).await?;
     Ok(StatusCode::NO_CONTENT)
 }

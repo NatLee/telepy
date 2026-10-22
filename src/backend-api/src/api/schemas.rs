@@ -402,7 +402,7 @@ pub struct AvailableUsers {
 
 #[derive(ToSchema)]
 pub struct AllowedUsernamesRequest {
-    /// Empty list = only self-created usernames
+    /// The only target users this sharee (VIEW / EDIT) may log in as; empty = none
     pub allowed_target_username_ids: Vec<i64>,
 }
 
