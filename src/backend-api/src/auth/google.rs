@@ -55,6 +55,12 @@ pub enum GoogleError {
     NotConfigured,
     #[error("failed to fetch Google certificates: {0}")]
     Fetch(String),
+    #[error("the Google token has expired")]
+    Expired,
+    /// token 的 aud 不是後端設定的 client ID：前端按鈕與後端的 SOCIAL_GOOGLE_CLIENT_ID 不一致（常見部署錯誤）。
+    /// The token was issued for another client ID: the button and SOCIAL_GOOGLE_CLIENT_ID disagree.
+    #[error("the Google token was issued for another client ID")]
+    WrongAudience,
     #[error("invalid Google token: {0}")]
     Invalid(String),
 }
@@ -105,7 +111,11 @@ impl GoogleVerifier {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[client_id]);
         validation.set_issuer(&ISSUERS);
-        let data = decode::<GoogleClaims>(credential, &key, &validation).map_err(|e| GoogleError::Invalid(e.to_string()))?;
+        let data = decode::<GoogleClaims>(credential, &key, &validation).map_err(|e| match e.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => GoogleError::Expired,
+            jsonwebtoken::errors::ErrorKind::InvalidAudience => GoogleError::WrongAudience,
+            _ => GoogleError::Invalid(e.to_string()),
+        })?;
         Ok(data.claims)
     }
 }

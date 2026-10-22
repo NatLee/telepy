@@ -1,16 +1,15 @@
 "use client";
 
 /**
- * 指令顯示：終端機風格面板，token 依種類上色，每一段滑過就有說明；下面的圖例把每一段的意思列出來（手機沒有 hover）。
- * Command display: a terminal-style panel with tokens coloured by kind and a tooltip per segment; the legend below
- * spells out every segment (phones have no hover).
+ * 指令顯示：一條大的指令列（複製按鈕很明顯）、像 explainshell 那樣「每一段底下標註意思」的拆解圖、速查表用的小列。
+ * Command display: one big command bar with an obvious Copy button, an explainshell-style breakdown that labels
+ * every part right under it, and compact rows for the quick reference.
  */
 import React, { useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { segmentsToString, type Segment, type TokenKind } from "@/lib/forwardRecipes";
+import { SHORT_LABEL, segmentsToString, type Segment, type TokenKind } from "@/lib/forwardRecipes";
 
 const TOKEN_CLASS: Record<TokenKind, string> = {
     cmd: "text-emerald-400 font-semibold",
@@ -31,7 +30,7 @@ function useCopy(text: string) {
     return { copied, copy };
 }
 
-export function CopyButton({ text, className, compact = false }: { text: string; className?: string; compact?: boolean }) {
+function CopyButton({ text, big = false }: { text: string; big?: boolean }) {
     const { t } = useI18n();
     const { copied, copy } = useCopy(text);
     return (
@@ -41,117 +40,110 @@ export function CopyButton({ text, className, compact = false }: { text: string;
             title={t("ui.copyToClipboard")}
             aria-label={t("ui.copyToClipboard")}
             className={cn(
-                "inline-flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors shrink-0",
-                compact ? "p-1.5" : "px-2.5 py-1.5",
-                copied ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-slate-200 hover:bg-white/20",
-                className
+                "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg font-medium transition-all",
+                big ? "h-10 px-4 text-sm" : "p-1.5 text-xs",
+                big
+                    ? copied ? "bg-emerald-500 text-white" : "bg-primary text-primary-foreground shadow-glow hover:-translate-y-px hover:bg-primary/90"
+                    : copied ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-slate-200 hover:bg-white/20"
             )}
         >
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {!compact && (copied ? t("common.copied") : t("common.copy"))}
+            {copied ? <Check size={big ? 16 : 14} /> : <Copy size={big ? 16 : 14} />}
+            {big && (copied ? t("common.copied") : t("common.copy"))}
         </button>
     );
 }
 
-function Tokens({ segments, interactive }: { segments: Segment[]; interactive: boolean }) {
-    const { t } = useI18n();
+function Tokens({ segments }: { segments: Segment[] }) {
     return (
         <>
-            {segments.map((seg, i) => {
-                const body = seg.tokens.map((tk, j) => (
-                    <React.Fragment key={j}>
-                        {j > 0 && " "}
-                        <span className={cn("whitespace-nowrap", TOKEN_CLASS[tk.kind])}>{tk.text}</span>
-                    </React.Fragment>
-                ));
-                return (
-                    <React.Fragment key={i}>
-                        {i > 0 && " "}
-                        {interactive && seg.explain ? (
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <span className="rounded px-0.5 -mx-0.5 cursor-help transition-colors hover:bg-white/10">{body}</span>
-                                </TooltipTrigger>
-                                <TooltipContent side="top" className="max-w-xs text-xs">
-                                    {t(seg.explain.key, seg.explain.vars)}
-                                </TooltipContent>
-                            </Tooltip>
-                        ) : (
-                            <span>{body}</span>
-                        )}
-                    </React.Fragment>
-                );
-            })}
+            {segments.map((seg, i) => (
+                <React.Fragment key={i}>
+                    {i > 0 && " "}
+                    {seg.tokens.map((tk, j) => (
+                        <React.Fragment key={j}>
+                            {j > 0 && " "}
+                            <span className={cn("whitespace-nowrap", TOKEN_CLASS[tk.kind])}>{tk.text}</span>
+                        </React.Fragment>
+                    ))}
+                </React.Fragment>
+            ))}
         </>
     );
 }
 
-/** 主指令面板（含複製按鈕）。/ Main command panel with a copy button. */
-export function CommandLine({ segments, title }: { segments: Segment[]; title?: string }) {
+/** 主指令列：只有指令和一顆大大的複製鈕。/ The main command bar: just the command and a big Copy button. */
+export function CommandBar({ segments }: { segments: Segment[] }) {
     const text = segmentsToString(segments);
     return (
-        <div className="overflow-hidden rounded-xl border border-slate-800 bg-[#0b1020] shadow-card">
-            <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-white/[0.03] px-3 py-2">
-                <span className="flex items-center gap-1.5" aria-hidden>
-                    <span className="size-2.5 rounded-full bg-red-400/80" />
-                    <span className="size-2.5 rounded-full bg-amber-400/80" />
-                    <span className="size-2.5 rounded-full bg-emerald-400/80" />
-                </span>
-                {title && <span className="truncate text-[11px] font-medium text-slate-400">{title}</span>}
-                <CopyButton text={text} />
-            </div>
-            <TooltipProvider delayDuration={120}>
-                <pre className="whitespace-pre-wrap overflow-x-auto px-4 py-4 font-mono text-[13px] leading-relaxed text-slate-200">
-                    <span className="select-none text-slate-500">$ </span>
-                    <Tokens segments={segments} interactive />
-                </pre>
-            </TooltipProvider>
+        <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
+            <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap py-1 font-mono text-[15px] leading-relaxed text-slate-200">
+                <span className="select-none text-slate-500">$ </span>
+                <Tokens segments={segments} />
+            </pre>
+            <CopyButton text={text} big />
         </div>
     );
 }
 
-/** 單行小指令（測試 / 停止用），可複製。/ Small one-line copyable command (for tests / stopping). */
+/** 單行小指令（測試 / 停止用）。/ Small one-line copyable command (tests / stopping). */
 export function MiniCommand({ command }: { command: string }) {
     return (
         <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
-            <code className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap font-mono text-xs text-slate-200">
+            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-slate-200">
                 <span className="select-none text-slate-500">$ </span>{command}
             </code>
-            <CopyButton text={command} compact />
+            <CopyButton text={command} />
         </div>
     );
 }
 
-/** 速查表的一列：彩色 token、不帶 tooltip、可橫向捲動。/ A quick-reference row: coloured, no tooltips, scrolls sideways. */
+/** 速查表的一列：彩色、可橫向捲動。/ A quick-reference row: coloured, scrolls sideways. */
 export function InlineCommand({ segments }: { segments: Segment[] }) {
-    const text = segmentsToString(segments);
     return (
-        <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5 min-w-0">
-            <code className="flex-1 min-w-0 overflow-x-auto whitespace-nowrap font-mono text-xs">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg border border-slate-800 bg-[#0b1020] py-1.5 pl-3 pr-1.5">
+            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs">
                 <span className="select-none text-slate-500">$ </span>
-                <Tokens segments={segments} interactive={false} />
+                <Tokens segments={segments} />
             </code>
-            <CopyButton text={text} compact />
+            <CopyButton text={segmentsToString(segments)} />
         </div>
     );
 }
 
-/** 每一段的意思（與 tooltip 同一份資料）。/ What every segment means (same data as the tooltips). */
-export function CommandLegend({ segments }: { segments: Segment[] }) {
+const PART_COLORS = [
+    { text: "text-emerald-400", bar: "bg-emerald-400" },
+    { text: "text-sky-400", bar: "bg-sky-400" },
+    { text: "text-amber-300", bar: "bg-amber-300" },
+    { text: "text-violet-300", bar: "bg-violet-300" },
+    { text: "text-pink-300", bar: "bg-pink-300" },
+    { text: "text-teal-300", bar: "bg-teal-300" },
+];
+
+/**
+ * 拆解圖：指令的每一段各一個顏色，底下一條色條 + 幾個字的意思（滑過看完整說明）。
+ * Breakdown: each part of the command in its own colour with a bar and a few words underneath (hover for more).
+ */
+export function AnnotatedCommand({ segments }: { segments: Segment[] }) {
     const { t } = useI18n();
-    const explained = segments.filter((s) => s.explain);
     return (
-        <dl className="divide-y divide-border rounded-xl border border-border bg-background/60">
-            {explained.map((seg, i) => (
-                <div key={i} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[minmax(0,13rem)_1fr] sm:gap-4">
-                    <dt className="min-w-0">
-                        <code className="inline-block max-w-full truncate rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground" title={seg.tokens.map((tk) => tk.text).join(" ")}>
-                            {seg.tokens.map((tk) => tk.text).join(" ")}
-                        </code>
-                    </dt>
-                    <dd className="text-xs leading-relaxed text-muted-foreground">{t(seg.explain!.key, seg.explain!.vars)}</dd>
-                </div>
-            ))}
-        </dl>
+        <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-[#0b1020] p-4 sm:p-5">
+            <div className="flex flex-wrap items-start gap-x-4 gap-y-5">
+                {segments.map((seg, i) => {
+                    const color = PART_COLORS[i % PART_COLORS.length];
+                    const short = seg.explain ? SHORT_LABEL[seg.explain.key] : undefined;
+                    return (
+                        <div key={i} className="flex min-w-0 flex-col items-center" title={seg.explain ? t(seg.explain.key, seg.explain.vars) : undefined}>
+                            <span className={cn("whitespace-nowrap font-mono text-sm", color.text)}>{seg.tokens.map((tk) => tk.text).join(" ")}</span>
+                            <span className={cn("mt-1.5 h-[3px] w-full min-w-6 rounded-full", color.bar)} aria-hidden />
+                            {short && (
+                                <span className="mt-1.5 max-w-[11rem] text-center text-[11px] leading-snug text-slate-300">
+                                    {t(short, seg.explain!.vars)}
+                                </span>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
     );
 }

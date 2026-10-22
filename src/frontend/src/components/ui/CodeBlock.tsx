@@ -10,15 +10,17 @@ import React, { useState } from "react";
 // bundling all 297 languages into the first-load JS of routes that merely *might* open a modal.
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import bash from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
 import powershell from "react-syntax-highlighter/dist/esm/languages/prism/powershell";
 import yaml from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
 import vscDarkPlus from "react-syntax-highlighter/dist/esm/styles/prism/vsc-dark-plus";
 import { Copy, Check } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 
-// 只註冊會用到的語法：bash（ssh/autossh/docker-run/curl 腳本）、powershell、yaml（docker-compose）。
+// 只註冊會用到的語法：bash（ssh/autossh/docker-run/curl 腳本）、json（MCP 客戶端設定）、powershell、yaml（docker-compose）。
 // Register only the grammars actually passed to CodeBlock; "ssh"/"txt" fall back to plaintext.
 SyntaxHighlighter.registerLanguage("bash", bash);
+SyntaxHighlighter.registerLanguage("json", json);
 SyntaxHighlighter.registerLanguage("powershell", powershell);
 SyntaxHighlighter.registerLanguage("yaml", yaml);
 

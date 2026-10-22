@@ -19,6 +19,9 @@ MCP 端點是 `https://<你的主機>/mcp`（Streamable HTTP）。正式環境�
 
 不需要手動產生 token：第一次呼叫時客戶端拿到 401，自動走完下面的 OAuth 流程。
 
+網頁左側 **AI → MCP**（`/tunnels/mcp`）顯示實際要填的端點網址（取自 discovery 的 `resource`，所以會反映
+`PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的應用程式。
+
 ## 授權流程（OAuth 2.1）
 
 ```
@@ -43,7 +46,7 @@ MCP client ── POST /mcp ─────────────────�
 
   使用者可以取消勾選任何一項，也可以把 app 限制在部分隧道。
 - access token 是 `token_type: "mcp_access"` 的 JWT，REST API 不接受；網頁的 token 也不能打 `/mcp`。
-  每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **偏好設定 → 已連接的應用程式** 撤銷後立即失效，
+  每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁** 或 **偏好設定 → 已連接的應用程式** 撤銷後立即失效，
   該 app 開著的 SSH session 也會馬上關閉。
 
 ## 工具
@@ -86,7 +89,7 @@ username，與 web terminal 相同）。
 - MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是 OAuth grant（哪個 app），不是 MCP 連線；
   不同 app 互相看不到彼此的 session。
 
-三個上限都在 **設定 → 站台設定 → AI access**，變更後對新開的 session 生效。
+三個上限都在 **設定 → AI 存取（MCP）** 分頁（`/tunnels/settings?tab=ai`，同頁也顯示 MCP 端點網址），變更後對新開的 session 生效。
 
 ## 通知與稽核
 
