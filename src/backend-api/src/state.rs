@@ -45,8 +45,8 @@ impl AppState {
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
-        // gateway 模式：狀態是事件驅動（永不過期）；OpenSSH 容器模式：取樣 15s 內有效。
-        let status = Arc::new(if config.gateway_enabled { StatusState::new(None) } else { StatusState::default() });
+        // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
+        let status = Arc::new(StatusState::new(None));
         let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone()));
         Self(Arc::new(Inner {
             remote_browser,

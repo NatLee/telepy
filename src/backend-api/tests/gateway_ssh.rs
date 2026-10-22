@@ -51,6 +51,16 @@ fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
+async fn gw_client(port: u16) -> russh::client::Handle<telepy_server::ssh::device::ClientHandler> {
+    let cfg = Arc::new(russh::client::Config::default());
+    russh::client::connect(cfg, ("127.0.0.1", port), telepy_server::ssh::device::ClientHandler).await.unwrap()
+}
+
+async fn gw_auth(h: &mut russh::client::Handle<telepy_server::ssh::device::ClientHandler>, key_path: &std::path::Path) -> bool {
+    let key = Arc::new(russh::keys::load_secret_key(key_path, None).unwrap());
+    h.authenticate_publickey("telepy", russh::keys::PrivateKeyWithHashAlg::new(key, None)).await.unwrap().success()
+}
+
 async fn wait_until(timeout: Duration, mut f: impl FnMut() -> bool) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     while tokio::time::Instant::now() < deadline {
@@ -73,6 +83,8 @@ async fn reverse_tunnel_through_real_openssh_client() {
     let (device_key, device_pub) = keygen(dir.path(), "device_key");
     let (user_key, user_pub) = keygen(dir.path(), "user_key");
     let (_stranger_key, _) = keygen(dir.path(), "stranger_key");
+    let (service_key, service_pub) = keygen(dir.path(), "service_key");
+    let (guest_key, guest_pub) = keygen(dir.path(), "guest_key");
 
     // gateway-enabled app
     let mut app = common::spawn().await;
@@ -96,6 +108,11 @@ async fn reverse_tunnel_through_real_openssh_client() {
     .await
     .unwrap();
     app.post("/api/reverse/user/keys", Some(&token), json!({"host_friendly_name": "laptop", "key": user_pub})).await;
+    // backend service key (in every device's authorized_keys) and a guest with a VIEW share + own user key
+    db::keys::service_key_upsert(&app.state.db, "web-service", &service_pub, "test").await.unwrap();
+    let guest = db::users::create(&app.state.db, db::users::NewUser { username: "guest", password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
+    db::sharing::create(&app.state.db, tunnel.id, uid, guest.id, "view").await.unwrap();
+    db::keys::user_key_create(&app.state.db, guest.id, "guest-laptop", &guest_pub, None).await.unwrap();
 
     let gw = app.state.gateway.clone();
     assert_eq!(gw.host_keys_loaded, 1);
@@ -182,13 +199,10 @@ async fn reverse_tunnel_through_real_openssh_client() {
         assert!(h.channel_open_session().await.is_err());
     }
 
-    // 5) unknown key is rejected; wrong user is rejected
-    {
-        let key = Arc::new(russh::keys::load_secret_key(dir.path().join("stranger_key"), None).unwrap());
-        let cfg = Arc::new(russh::client::Config::default());
-        let mut h = russh::client::connect(cfg, ("127.0.0.1", gw_port), telepy_server::ssh::device::ClientHandler).await.unwrap();
-        let res = h.authenticate_publickey("telepy", russh::keys::PrivateKeyWithHashAlg::new(key, None)).await.unwrap();
-        assert!(!res.success());
+    // 5) unknown key is rejected; so is the backend's service key (it only belongs on devices)
+    for key_path in [dir.path().join("stranger_key"), service_key.clone()] {
+        let mut h = gw_client(gw_port).await;
+        assert!(!gw_auth(&mut h, &key_path).await, "{key_path:?} must not authenticate to the gateway");
     }
 
     // 6) killing the client releases the forward and the port goes offline
@@ -196,6 +210,17 @@ async fn reverse_tunnel_through_real_openssh_client() {
     let released = wait_until(Duration::from_secs(15), || app.state.status.listen_ports().map(|p| !p.contains(&(reverse_port as u16))).unwrap_or(false)).await;
     assert!(released, "forward must be released when the client disconnects");
     assert!(TcpStream::connect(("127.0.0.1", reverse_port as u16)).await.is_err(), "loopback listener must be closed");
+
+    // 6b) with the device offline, a shared user's key cannot take over its port (no impersonating the
+    //     device); the owner's own user key can.
+    {
+        let mut h = gw_client(gw_port).await;
+        assert!(gw_auth(&mut h, &guest_key).await, "a shared user's key authenticates (for direct-tcpip)");
+        assert!(h.tcpip_forward("*", reverse_port as u32).await.is_err(), "shared user must not forward the tunnel port");
+        let mut h = gw_client(gw_port).await;
+        assert!(gw_auth(&mut h, &user_key).await);
+        assert!(h.tcpip_forward("*", reverse_port as u32).await.is_ok(), "owner's user key may forward its own tunnel port");
+    }
 
     // 7) sshd-style log lines for the Logs page
     tokio::time::sleep(Duration::from_millis(300)).await;

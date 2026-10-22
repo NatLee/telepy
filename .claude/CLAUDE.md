@@ -25,8 +25,8 @@ src/
       config.rs       # env → Config (same variable names as before: DEBUG, SECRET_KEY, REVERSE_SERVER_SSH_PORT, …)
       app.rs          # axum Router: REST (+compression) merged with /ws routes, CORS mirror, tracing
       db/             # sqlx over the Django-named tables; schema.rs = idempotent DDL (creates missing tables/columns, never alters existing)
-      auth/           # jwt.rs, password.rs (Django pbkdf2_sha256), google.rs (JWKS), extractor.rs (Bearer → AuthUser, InternalService)
-      api/            # REST handlers per former Django app: auth, tunnels, usernames, user_keys, reverse_keys, scripts, sharing, users, site_settings, logs, sftp, remote_browser, internal
+      auth/           # jwt.rs, password.rs (Django pbkdf2_sha256), google.rs (JWKS), extractor.rs (Bearer → AuthUser)
+      api/            # REST handlers per former Django app: auth, tunnels, usernames, user_keys, reverse_keys, scripts, sharing, users, site_settings, logs, sftp, remote_browser
       ws/             # WebSockets: auth.rs (first-message JWT), notifications, tunnel_connection, terminal (PTY), filemanager (SFTP), remote_browser (KasmVNC relay)
       gateway/        # in-process SSH server: pubkey auth from DB, tcpip-forward → 127.0.0.1:<port> loopback bridge, direct-tcpip, status + latency probes, sshd-style log
       monitor/        # StatusState (listening ports / latency), ports.rs (debounce + latency throttle), runner.rs (5 s cycle → notifications)
@@ -37,7 +37,7 @@ src/
       scripts/        # connection-script / ssh-config rendering ($var substitution, templates/)
       permissions.rs  # VIEW/EDIT/ADMIN hierarchy, allowed target usernames
     templates/        # ssh / autossh / systemd / PowerShell / docker scripts, ssh_config
-    tests/            # integration tests (router in-process, real listener for WS, real OpenSSH client for the gateway)
+    tests/            # integration tests (router in-process, real listener for WS, real OpenSSH client for the gateway); common/lab.rs = reusable SSH topology
     Dockerfile        # multi-stage build → debian-slim + openssh-client
   frontend/           # Next.js app (unchanged by the backend rewrite)
     src/app/          # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys/cheatsheet); root page.tsx redirects by auth state
@@ -104,13 +104,13 @@ Copy `.env.example` to `.env` and configure:
 - `REVERSE_SERVER_SSH_PORT` — port devices connect their reverse SSH to (default: `24242`, published to the gateway's 2222)
 - `SOCIAL_GOOGLE_CLIENT_ID` — Google OAuth client ID
 - `SERVER_DOMAIN` — server hostname (default: `localhost`)
-- `INTERNAL_API_TOKEN` — secret for backend ↔ kasm-browser session-manager calls (and the internal endpoints)
+- `INTERNAL_API_TOKEN` — secret for backend → kasm-browser session-manager calls
 
 ## Architecture Notes
 
 - **Services:** 4 containers via Docker Compose: Traefik, frontend, backend, kasm-browser. No Redis, no separate SSH container, no supervisor.
 - **Routing:** Traefik routes `/api/*`, `/ws/*`, and a fixed set of `/tunnels/{share,unshare,shared-users,available-users,update-permission,server}` paths to the backend (`backend:8000`); everything else to the frontend. Traefik applies a `compress` middleware to HTTP routers (not `/ws`); the backend also compresses REST responses.
-- **SSH gateway (`gateway/`):** the backend listens on 2222 (published as `REVERSE_SERVER_SSH_PORT`) with the host keys from `ssh/ssh_host_keys`. Only public-key auth (tunnel / user / service keys from the DB) and `tcpip-forward` are accepted; every forward binds `127.0.0.1:<reverse_port>` inside the backend container and bridges to a `forwarded-tcpip` channel, so the OpenSSH client (terminal, `ssh -D`) and russh (SFTP) reach the device in a single hop. `direct-tcpip` serves the generated ssh config's `ProxyCommand ssh -W` for user keys. Shell/exec/pty are refused.
+- **SSH gateway (`gateway/`):** the backend listens on 2222 (published as `REVERSE_SERVER_SSH_PORT`) with the host keys from `ssh/ssh_host_keys`. Only public-key auth (tunnel / user keys from the DB) and `tcpip-forward` are accepted — the service key is deliberately **not** accepted (the backend reaches devices over loopback; that key sits in every device's `authorized_keys`), a tunnel key may only forward its own port and a user key only ports of tunnels the user owns; every forward binds `127.0.0.1:<reverse_port>` inside the backend container and bridges to a `forwarded-tcpip` channel, so the OpenSSH client (terminal, `ssh -D`) and russh (SFTP) reach the device in a single hop. `direct-tcpip` serves the generated ssh config's `ProxyCommand ssh -W` for user keys. Shell/exec/pty are refused. Device-side scripts are unchanged.
 - **Device-side scripts (`scripts/`, `templates/`):** rendered with Python `string.Template.safe_substitute` semantics (unknown `$names` survive, so shell variables in templates are fine). The Docker flavours use `jnovack/autossh` (env-driven, key mounted at `/id_rsa`, defaults to `~/.ssh/id_rsa`) and reach the device's sshd through `host.docker.internal` (`extra_hosts`/`--add-host host-gateway`, Docker 20.10+ / Docker Desktop); the compose one-liner needs `-f telepy-docker-compose.yml`. Scripts only ever *append* the service key to `authorized_keys`. There is no public `alpine/autossh` image — don't bring it back.
 - **Status / latency:** forward registration and release update `StatusState` immediately; a banner round-trip through a forwarded channel every 15 s measures RTT. `monitor/runner.rs` runs the 5 s cycle (debounce FLAP_THRESHOLD 2, latency throttle 5 ms / 6-cycle keep-alive) and emits the `UPDATE-TUNNEL-*` notifications through the in-process hub.
 - **WebSocket:** first frame `{type:"auth", token, …}` within 10 s; close codes 4000/4001 (auth), 4002/4003/4004/4005/4006 (terminal/file manager), 4403/4404/4011/4013 (remote browser). Terminal pong is a **binary** frame; the other sockets answer `{"type":"pong"}`.
@@ -124,7 +124,6 @@ Copy `.env.example` to `.env` and configure:
 - **Tunnels list data:** `GET /api/reverse/server/dashboard` returns `{tunnels, ports, latency}` in one round-trip; the list serializer uses a precomputed permission map + share counts (no per-row queries).
 - **Logging:** `tracing` → stdout + daily rolling `/logs/telepy.log` and `/logs/error.log` (a bare `LOG_LEVEL=debug` silences sqlx/hyper/russh internals; pass a full EnvFilter directive to override). Gateway events (accepted / forward / disconnect / refused …) go to the `telepy_gateway_event` table (capped at 100k rows) and are also appended sshd-style to `/logs/ssh-gateway.log`; `/api/log/ssh/events?limit=&tunnel_id=` returns them as JSON (what the Logs page uses; oldest first) and `/api/log/ssh` renders the last 500 as sshd-style text (200 with an empty string when there are none). **Both are scoped:** admins (`is_superuser`) see every event, other users only events of tunnels they own or that are shared with them (tunnel-less events such as `listening` are admin-only; a foreign `tunnel_id` is a 404). The Logs page (`/tunnels/logs?tunnel=<id>`) keeps the tunnel filter in the URL and the tunnel actions menu deep-links to it; event badges key off the structured `event` field (`logs.event.*` i18n keys), not message text.
 - **Compatibility rules:** JSON shapes, status codes and error strings mirror the former DRF views (the frontend parses `{detail}` / `{error}` / `{field: [...]}`); keep them unless the frontend is changed in the same PR. DB datetimes are stored as naive UTC with microseconds (Django format) and serialised as `+08:00` ISO (DRF field) or `…Z` (DRF encoder) exactly where the old code did.
-- **Rollback:** `git checkout a622634` (last commit with the Python stack) restores the Django compose; the SQLite file and `SECRET_KEY` are shared, so switching either way keeps users logged in.
 
 ## Fonts
 
@@ -206,6 +205,7 @@ hardcode display text in components, hooks, or lib error builders.
 
 - Backend: one module per former Django app under `api/`; handlers return `ApiResult<Json<Value>>` and build errors with `ApiError::{error,detail,field}` so the JSON shape matches what the frontend expects
 - Business logic that is pure (permissions, debounce/throttle, template substitution, path resolution) lives in plain functions with unit tests; I/O stays in `api/`, `ws/`, `gateway/`
+- Anything on an SSH path (gateway, device login, terminal, SFTP, laptop ProxyCommand/ProxyJump, sharing/username permissions) gets an end-to-end test on `tests/common/lab.rs`: `Lab::start()` runs the real gateway; `lab.machine(name, &[(os_user, &[keys])], allow_jump)` is a device/LAN sshd with per-OS-user `authorized_keys` and a login log (`logged_in(user, key)`); `lab.device(owner, name, &machine)` brings its tunnel up with a real `ssh -NR`; paths: `backend_exec` / `backend_sftp` (russh), `backend_ssh` (OpenSSH), `laptop_exec(user, &[Hop::Tunnel(..), Hop::Direct(..)], cmd)`, `generated_ssh_config`, `terminal` (WS). Users are created in the DB (no pbkdf2), so a scenario runs in seconds — see `tests/ssh_topology.rs`
 - DB access goes through `db/*` functions (sqlx, runtime-checked queries against the Django-named tables); never alter or drop an existing column in `schema.rs`
 - Frontend uses centralized `apiFetch()` with auto JWT injection and 401 handling
 - **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**

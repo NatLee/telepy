@@ -1,8 +1,7 @@
 //! 以 russh 原生連到裝置（取代 spawn `ssh`/`scp`）。
-//! 現況是雙跳：backend → ssh 容器（telepy@ssh:2222）→ `direct-tcpip localhost:<reverse_port>` →
-//! 裝置 sshd（與 ~/.ssh/config 的 `ProxyCommand ssh -W` 相同語意）。內建 gateway（M5）後改單跳直連
-//! `127.0.0.1:<reverse_port>`。主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
-//! Native SSH connection to a device: double hop through the OpenSSH container today, single hop later.
+//! 單跳：直連內建 gateway 綁的 `127.0.0.1:<reverse_port>`，只有對裝置 sshd 的一次認證。
+//! 主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
+//! Native SSH connection to a device: one hop via the gateway's loopback listener.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -28,7 +27,6 @@ impl Handler for ClientHandler {
 /// 到裝置的連線；雙跳時同時持有 gateway 那條（drop 即關閉）。
 pub struct DeviceConn {
     pub device: Handle<ClientHandler>,
-    _gateway: Option<Handle<ClientHandler>>,
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -61,27 +59,12 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, user: &str, key: &Arc<
 
 async fn connect_inner(config: &Config, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
     let key = load_identity(&config.ssh_identity).await?;
-    let cfg = client_config();
-    if config.ssh_target_host == "reverse" {
-        let mut gateway = client::connect(cfg.clone(), (config.ssh_gateway_host.as_str(), config.ssh_gateway_port), ClientHandler)
-            .await
-            .with_context(|| format!("connect to {}:{}", config.ssh_gateway_host, config.ssh_gateway_port))?;
-        authenticate(&mut gateway, &config.ssh_gateway_user, &key).await.context("gateway auth")?;
-        let channel = gateway
-            .channel_open_direct_tcpip("localhost", u32::try_from(reverse_port).unwrap_or(0), "127.0.0.1", 0)
-            .await
-            .context("open direct-tcpip to the reverse port (device offline?)")?;
-        let mut device = client::connect_stream(cfg, channel.into_stream(), ClientHandler).await.context("ssh handshake with the device")?;
-        authenticate(&mut device, username, &key).await.context("device auth")?;
-        Ok(DeviceConn { device, _gateway: Some(gateway) })
-    } else {
-        let port = u16::try_from(reverse_port).context("invalid reverse port")?;
-        let mut device = client::connect(cfg, (config.ssh_target_host.as_str(), port), ClientHandler)
-            .await
-            .with_context(|| format!("connect to {}:{port}", config.ssh_target_host))?;
-        authenticate(&mut device, username, &key).await.context("device auth")?;
-        Ok(DeviceConn { device, _gateway: None })
-    }
+    let port = u16::try_from(reverse_port).context("invalid reverse port")?;
+    let mut device = client::connect(client_config(), (config.ssh_target_host.as_str(), port), ClientHandler)
+        .await
+        .with_context(|| format!("connect to {}:{port}", config.ssh_target_host))?;
+    authenticate(&mut device, username, &key).await.context("device auth")?;
+    Ok(DeviceConn { device })
 }
 
 /// 連線 + 認證，整體 30s 逾時。/ Connect and authenticate with an overall timeout.

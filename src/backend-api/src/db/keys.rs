@@ -102,18 +102,6 @@ pub async fn service_keys(db: &Db) -> sqlx::Result<Vec<ServiceKey>> {
     sqlx::query_as(&format!("SELECT {SK_COLS} FROM {SK} ORDER BY id")).fetch_all(&db.read).await
 }
 
-pub async fn service_key_strings(db: &Db) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar(&format!("SELECT key FROM {SK}")).fetch_all(&db.read).await
-}
-
-pub async fn service_key_matches_prefix(db: &Db, like: &str) -> sqlx::Result<bool> {
-    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {SK} WHERE key LIKE ? ESCAPE '\\'"))
-        .bind(like)
-        .fetch_one(&db.read)
-        .await?;
-    Ok(n > 0)
-}
-
 pub async fn first_service_key(db: &Db) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar(&format!("SELECT key FROM {SK} ORDER BY id LIMIT 1")).fetch_optional(&db.read).await
 }

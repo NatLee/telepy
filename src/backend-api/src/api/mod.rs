@@ -3,7 +3,6 @@
 
 pub mod auth;
 pub mod doc;
-pub mod internal;
 pub mod logs;
 pub mod notify;
 pub mod oauth;

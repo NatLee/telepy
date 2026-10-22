@@ -184,7 +184,7 @@ async fn terminal_pty_roundtrip_with_fake_ssh() {
             other => panic!("unexpected {other:?}"),
         }
     }
-    assert!(seen.contains("ubuntu@reverse"), "{seen}");
+    assert!(seen.contains("ubuntu@127.0.0.1"), "{seen}");
     assert!(seen.contains("ControlMaster=auto"), "{seen}");
 
     send_json(&mut ws, json!({"action": "pty_resize", "payload": {"size": {"rows": 30, "cols": 100, "height": 600, "width": 900}}})).await;
