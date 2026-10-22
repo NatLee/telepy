@@ -20,6 +20,16 @@ struct Inner {
     latency_at: Option<Instant>,
     /// 去彈跳後「已承認」的狀態（Django 的 cache `ports_status`）。/ The debounced, committed map.
     committed: BTreeMap<i64, bool>,
+    /// 每個 forward 是從哪個公網位址連進來的（gateway 看到的 TCP 來源）。/ Who holds each forward, as the gateway sees it.
+    endpoints: HashMap<u16, Endpoint>,
+}
+
+/// 撐著某個 reverse port 的那條 SSH 連線：來源 IP 與連上的時間（DB 格式）。
+/// The SSH connection holding a reverse port: source IP and when it connected (DB format).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Endpoint {
+    pub ip: String,
+    pub since: String,
 }
 
 pub struct StatusState {
@@ -45,6 +55,15 @@ impl StatusState {
         let mut g = self.inner.write().unwrap();
         g.listen_ports = Some(ports);
         g.listen_at = Some(Instant::now());
+    }
+
+    pub fn set_endpoints(&self, endpoints: HashMap<u16, Endpoint>) {
+        self.inner.write().unwrap().endpoints = endpoints;
+    }
+
+    /// 目前每個 forward 的來源（沒有 gateway 時是空的）。/ Live source of every forward (empty without a gateway).
+    pub fn endpoints(&self) -> HashMap<u16, Endpoint> {
+        self.inner.read().unwrap().endpoints.clone()
     }
 
     pub fn set_latency(&self, latency: HashMap<u16, f64>) {

@@ -4,9 +4,11 @@
 use serde_json::{json, Value};
 
 use crate::db::keys::UserKey;
+use crate::db::tunnel_endpoints::LastEndpoint;
 use crate::db::tunnels::{Tunnel, Username};
+use crate::monitor::Endpoint;
 use crate::permissions::{Effective, Permission};
-use crate::util::db_to_iso;
+use crate::util::{db_to_iso, db_to_iso_utc_z};
 
 /// `ReverseServerAuthorizedKeysSerializer`（含 6 個由有效權限推導的欄位）。
 pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, tz: i32) -> Value {
@@ -30,6 +32,21 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
         "user": t.user_id,
         "default_username": t.default_username_id,
     })
+}
+
+/// 裝置的公網來源：連著就用 gateway 現在看到的，離線就用最後一次記下的；都沒有回 null。
+/// Device source address: the live one while connected, else the last recorded one, else null.
+pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Value {
+    match (live, last) {
+        (Some(e), _) => json!({"ip": e.ip, "live": true, "connected_at": db_to_iso_utc_z(&e.since), "last_seen_at": null}),
+        (None, Some(l)) => json!({
+            "ip": l.ip,
+            "live": false,
+            "connected_at": db_to_iso_utc_z(&l.connected_at),
+            "last_seen_at": db_to_iso_utc_z(&l.last_seen_at),
+        }),
+        (None, None) => Value::Null,
+    }
 }
 
 /// `ReverseServerUsernamesSerializer`

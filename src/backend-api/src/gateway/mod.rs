@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::db::{self, tunnels::like_prefix, Db};
-use crate::monitor::StatusState;
+use crate::monitor::{Endpoint, StatusState};
 
 /// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
 #[derive(Debug, Clone)]
@@ -53,6 +53,15 @@ pub struct Forward {
 struct ConnInfo {
     peer: SocketAddr,
     identity: Identity,
+    /// 認證成功的時間（DB 格式）。/ When the connection authenticated (DB format).
+    since: String,
+}
+
+impl ConnInfo {
+    fn endpoint(&self) -> Endpoint {
+        // 雙堆疊 listener 上的 IPv4 會是 ::ffff:a.b.c.d，轉回一般寫法。/ Unmap IPv4-mapped addresses.
+        Endpoint { ip: self.peer.ip().to_canonical().to_string(), since: self.since.clone() }
+    }
 }
 
 pub struct Gateway {
@@ -71,6 +80,8 @@ pub struct Gateway {
 const HOST_KEY_FILES: [&str; 3] = ["ssh_host_ed25519_key", "ssh_host_rsa_key", "ssh_host_ecdsa_key"];
 /// `telepy_gateway_event` 最多保留的列數。/ Row cap for the event table.
 const EVENT_RETENTION_ROWS: i64 = 100_000;
+/// 事件帶著來源 IP（個資），超過這麼多天就刪，與列數上限先到者為準。/ Events carry IPs; drop them after this many days.
+const EVENT_RETENTION_DAYS: i64 = 90;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub fn load_host_keys(dir: &Path) -> Vec<PrivateKey> {
@@ -165,6 +176,8 @@ impl Gateway {
                 .bind(EVENT_RETENTION_ROWS)
                 .execute(&self.db.write)
                 .await;
+            let cutoff = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(EVENT_RETENTION_DAYS));
+            let _ = sqlx::query("DELETE FROM telepy_gateway_event WHERE at < ?").bind(cutoff).execute(&self.db.write).await;
         }
     }
 
@@ -200,6 +213,22 @@ impl Gateway {
 
     fn publish_status(&self) {
         self.status.set_listen_ports(self.forwards.iter().map(|e| *e.key()).collect());
+        let endpoints = self.forwards.iter().filter_map(|f| self.conns.get(&f.conn_id).map(|c| (*f.key(), c.endpoint()))).collect();
+        self.status.set_endpoints(endpoints);
+    }
+
+    /// forward 註冊好之後：記下這條隧道最後一次從哪裡連上來（離線時 tunnel list 顯示「最後 IP」）。
+    async fn remember_endpoint(&self, conn_id: u64, port: u16) {
+        let Some(ep) = self.conns.get(&conn_id).map(|c| c.endpoint()) else { return };
+        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+        }
+    }
+
+    async fn remember_release(&self, port: u16) {
+        if let Err(e) = db::tunnel_endpoints::record_released(&self.db, port, &crate::util::now_db()).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record tunnel release");
+        }
     }
 
     /// 金鑰 → 身分（InternalKeysView 的規則，但不含服務金鑰）。
@@ -418,7 +447,7 @@ impl Handler for GatewayHandler {
     async fn auth_succeeded(&mut self, _session: &mut Session) -> Result<(), Self::Error> {
         self.authed.store(true, Ordering::SeqCst);
         if let Some(id) = &self.identity {
-            self.gw.conns.insert(self.conn_id, ConnInfo { peer: self.peer, identity: id.clone() });
+            self.gw.conns.insert(self.conn_id, ConnInfo { peer: self.peer, identity: id.clone(), since: crate::util::now_db() });
         }
         let tunnel_id = match &self.identity {
             Some(Identity::Tunnel { tunnel_id, .. }) => Some(*tunnel_id),
@@ -447,6 +476,7 @@ impl Handler for GatewayHandler {
         match self.gw.register_forward(self.conn_id, address, p, session.handle()).await {
             Ok(()) => {
                 self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
+                self.gw.remember_endpoint(self.conn_id, p).await;
                 Ok(true)
             }
             Err(e) => {
@@ -458,7 +488,11 @@ impl Handler for GatewayHandler {
 
     async fn cancel_tcpip_forward(&mut self, _address: &str, port: u32, _session: &mut Session) -> Result<bool, Self::Error> {
         let Ok(p) = u16::try_from(port) else { return Ok(false) };
-        Ok(self.gw.unregister_forward(self.conn_id, p))
+        let released = self.gw.unregister_forward(self.conn_id, p);
+        if released {
+            self.gw.remember_release(p).await;
+        }
+        Ok(released)
     }
 
     async fn channel_open_session(&mut self, _channel: Channel<Msg>, reply: server::ChannelOpenHandle, _session: &mut Session) -> Result<(), Self::Error> {
@@ -522,6 +556,7 @@ impl Drop for GatewayHandler {
                     gw.event("disconnect", Some(peer), None, tunnel_id, format!("Disconnected from user {user}{who} {} port {}", peer.ip(), peer.port())).await;
                     for p in dropped {
                         gw.event("forward_released", Some(peer), Some(p), tunnel_id, format!("Remote forward on port {p} released ({} port {})", peer.ip(), peer.port())).await;
+                        gw.remember_release(p).await;
                     }
                 } else {
                     gw.event("preauth_close", Some(peer), None, None, format!("Connection closed by authenticating user {user} {} port {} [preauth]", peer.ip(), peer.port())).await;

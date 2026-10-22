@@ -229,6 +229,17 @@ const TABLES: &[(&str, &str)] = &[
             "error" text NULL
         )"#,
     ),
+    // Rust 自有：每條隧道最後一次連上 gateway 的公網 IP（一條隧道一列、覆寫；隧道刪除時一起刪）。
+    // Last known public IP per tunnel (one overwritten row each, deleted with the tunnel).
+    (
+        "telepy_tunnel_endpoint",
+        r#"CREATE TABLE "telepy_tunnel_endpoint" (
+            "tunnel_id" integer NOT NULL PRIMARY KEY,
+            "ip" varchar(64) NOT NULL,
+            "connected_at" datetime NOT NULL,
+            "last_seen_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",

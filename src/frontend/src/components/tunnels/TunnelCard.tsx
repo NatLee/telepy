@@ -9,6 +9,7 @@ import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { Button } from "@/components/ui/button";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/80" title={t("tunnels.portTitle")}>
                             :{tunnel.reverse_port}
                         </span>
+                        <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
                     </div>
                 </div>
