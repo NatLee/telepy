@@ -32,6 +32,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::internal::router())
         .merge(api::sftp::router())
         .merge(api::remote_browser::router())
+        .merge(api::oauth::router())
 }
 
 /// 完整的 OpenAPI 文件（不需要 AppState；`telepy-server openapi` 子命令與測試用）。

@@ -6,6 +6,7 @@ pub mod doc;
 pub mod internal;
 pub mod logs;
 pub mod notify;
+pub mod oauth;
 pub mod remote_browser;
 pub mod reverse_keys;
 pub mod schemas;

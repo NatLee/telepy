@@ -96,6 +96,7 @@ Environment variables in `.env`:
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | Port devices connect their reverse SSH to    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth client ID                       |
 | `SERVER_DOMAIN`           | `localhost` | Public hostname of your Telepy server        |
+| `PUBLIC_URL`              | —           | Public base URL, e.g. `https://telepy.example.com` (OAuth issuer for MCP clients; derived from the request when empty) |
 | `INTERNAL_API_TOKEN`      | —           | Secret for internal service-to-service calls |
 | `OPENAPI_ENABLED`         | `true`      | Serve Swagger UI + OpenAPI spec (see below)  |
 

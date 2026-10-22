@@ -143,9 +143,41 @@ const TABLES: &[(&str, &str)] = &[
             "created_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：OAuth 2.1（MCP 連接器）的 client（RFC 7591 動態註冊）與 grant（一次同意一列，refresh token 只存雜湊）。
+    (
+        "telepy_oauth_client",
+        r#"CREATE TABLE "telepy_oauth_client" (
+            "client_id" varchar(64) NOT NULL PRIMARY KEY,
+            "client_secret_hash" varchar(64) NULL,
+            "client_name" varchar(200) NOT NULL,
+            "redirect_uris" text NOT NULL,
+            "token_endpoint_auth_method" varchar(32) NOT NULL,
+            "client_uri" varchar(2000) NULL,
+            "logo_uri" varchar(2000) NULL,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
+    (
+        "telepy_oauth_grant",
+        r#"CREATE TABLE "telepy_oauth_grant" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "client_id" varchar(64) NOT NULL,
+            "scope" varchar(256) NOT NULL,
+            "tunnel_ids" text NULL,
+            "resource" varchar(2000) NOT NULL,
+            "refresh_token_hash" varchar(64) NULL UNIQUE,
+            "refresh_expires_at" datetime NULL,
+            "created_at" datetime NOT NULL,
+            "last_used_at" datetime NULL,
+            "revoked_at" datetime NULL
+        )"#,
+    ),
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,

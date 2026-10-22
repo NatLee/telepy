@@ -10,6 +10,7 @@ pub mod error;
 pub mod gateway;
 pub mod hub;
 pub mod monitor;
+pub mod oauth;
 pub mod permissions;
 pub mod remote_browser;
 pub mod scripts;

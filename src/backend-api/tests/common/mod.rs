@@ -55,6 +55,11 @@ impl TestApp {
             Some(v) => req.header(header::CONTENT_TYPE, "application/json").body(Body::from(v.to_string())).unwrap(),
             None => req.body(Body::empty()).unwrap(),
         };
+        self.send(req).await
+    }
+
+    /// 送任意請求（自訂 header / form body 用）。/ Send an arbitrary request (custom headers, form bodies).
+    pub async fn send(&self, req: Request<Body>) -> Resp {
         let resp = self.router.clone().oneshot(req).await.unwrap();
         let status = resp.status();
         let headers = resp.headers().clone();

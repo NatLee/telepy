@@ -9,7 +9,12 @@ use serde_json::Value;
 /// Django 以 USE_TZ=True 存進 SQLite 的格式：UTC、無時區、6 位微秒。
 /// How Django stores aware datetimes in SQLite: naive UTC with microseconds.
 pub fn now_db() -> String {
-    Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string()
+    db_time(Utc::now())
+}
+
+/// 任意時間點的 DB 格式（到期時間等）；字串可直接字典序比較。/ DB format for any instant; compares lexicographically.
+pub fn db_time(t: DateTime<Utc>) -> String {
+    t.naive_utc().format("%Y-%m-%d %H:%M:%S%.6f").to_string()
 }
 
 pub fn parse_db_datetime(s: &str) -> Option<NaiveDateTime> {

@@ -1,6 +1,7 @@
 //! 短期 token 儲存（取代 Django cache）：
 //! - reverse-key 建立 token（10 分鐘，值 = user_id）
 //! - 一次性腳本 token（10 分鐘，值 = payload；取用即刪）
+//! - OAuth authorization code（10 分鐘，值 = 同意內容；換 token 時取用即刪）
 //! TTL in-memory stores replacing the Redis-backed Django cache for short-lived tokens.
 
 use std::time::Duration;
@@ -18,9 +19,22 @@ pub struct ScriptTokenPayload {
     pub username_id: Option<i64>,
 }
 
+/// 使用者在同意頁核可後、換成 token 之前的授權內容。/ What the user approved, until the code is redeemed.
+#[derive(Debug, Clone)]
+pub struct OAuthCode {
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub code_challenge: String,
+    pub user_id: i64,
+    pub scope: String,
+    pub tunnel_ids: Option<Vec<i64>>,
+    pub resource: String,
+}
+
 pub struct TokenStores {
     issue: Cache<String, i64>,
     script: Cache<String, ScriptTokenPayload>,
+    oauth_code: Cache<String, OAuthCode>,
 }
 
 impl TokenStores {
@@ -28,6 +42,7 @@ impl TokenStores {
         Self {
             issue: Cache::builder().time_to_live(Duration::from_secs(600)).max_capacity(10_000).build(),
             script: Cache::builder().time_to_live(Duration::from_secs(600)).max_capacity(10_000).build(),
+            oauth_code: Cache::builder().time_to_live(Duration::from_secs(600)).max_capacity(10_000).build(),
         }
     }
 
@@ -58,6 +73,19 @@ impl TokenStores {
         let p = self.script.get(token)?;
         self.script.invalidate(token);
         Some(p)
+    }
+
+    /// 存一個 authorization code（值只存在記憶體；重啟即失效，客戶端會重跑授權）。
+    pub fn issue_oauth_code(&self, payload: OAuthCode) -> String {
+        let code = crate::oauth::random_token("");
+        self.oauth_code.insert(code.clone(), payload);
+        code
+    }
+
+    /// 一次性取用：moka 的 `remove` 是原子的，同一個 code 兩次並行兌換只會有一次拿到值。
+    /// Single use: `remove` is atomic, so two concurrent redemptions cannot both get the payload.
+    pub fn pop_oauth_code(&self, code: &str) -> Option<OAuthCode> {
+        self.oauth_code.remove(code)
     }
 }
 
