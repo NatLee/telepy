@@ -106,7 +106,9 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 Telepy 本身就是 OAuth 2.1 授權伺服器，任何支援 MCP 的 AI 工具（Claude、Cursor…）都能指向
 `https://<你的主機>/mcp`。第一次使用時瀏覽器會開啟核可頁面：確認應用程式的導回位址、選擇權限
 （查看隧道／執行指令／讀寫檔案）與可用的隧道。核可過的應用程式列在 **偏好設定 → 已連接的應用程式**，
-撤銷會立刻停止存取並關閉它的工作階段。AI 工具開啟的工作階段閒置時會自動關閉，上限是站台設定。
+撤銷會立刻停止存取並關閉它的工作階段。AI 工具開啟的工作階段閒置時會自動關閉，上限是站台設定。側邊欄的
+**AI 活動** 會列出開啟中的工作階段（可直接關閉）與 agent 做過的每一次工具呼叫；agent 連上被分享的隧道時，
+擁有者會收到通知。細節見 [docs/mcp.md](./docs/mcp.md)。
 
 Claude Code：`claude mcp add --transport http telepy https://<你的主機>/mcp`。工具：`list_tunnels`、
 `tunnel_status`、`ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`、`sftp_list` /

@@ -12,6 +12,9 @@ export const NOTIFICATION_ACTIONS = {
     TUNNEL_PERMISSION_UPDATED: "TUNNEL-PERMISSION-UPDATED",
     TUNNEL_USERNAMES_UPDATED: "TUNNEL-USERNAMES-UPDATED",
     UPDATED_TUNNELS: "UPDATED-TUNNELS",
+    // AI（MCP）工具開/關 SSH session：送給 session 的使用者與隧道擁有者。/ AI session lifecycle (user + tunnel owner).
+    AI_SESSION_OPENED: "AI-SESSION-OPENED",
+    AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];
