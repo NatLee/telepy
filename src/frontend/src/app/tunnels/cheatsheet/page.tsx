@@ -369,7 +369,7 @@ function CheatsheetInner() {
                     {needsSetup ? <AlertTriangle size={16} /> : <ListChecks size={16} />}
                     {needsSetup ? t("sheet.setupNeeded") : t("sheet.setupGuide")}
                     {needsSetup && (
-                        <span className="rounded-full bg-amber-500/15 px-1.5 py-px font-mono text-[11px] tabular-nums">
+                        <span className="rounded-full bg-amber-500/15 px-1.5 py-px font-mono text-[0.75rem] tabular-nums">
                             {checklist.done}/{checklist.total}
                         </span>
                     )}
