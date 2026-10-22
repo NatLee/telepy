@@ -107,6 +107,8 @@ pub struct Machine {
     /// 當前目錄 = sftp-server 的 home。
     pub home: PathBuf,
     logins: Arc<Mutex<Vec<Login>>>,
+    ptys: Arc<Mutex<Vec<PtyState>>>,
+    resizes: Arc<Mutex<Vec<(u32, u32)>>>,
 }
 
 impl Machine {
@@ -132,6 +134,14 @@ impl Machine {
     /// 帳號的 authorized_keys 檔案內容（沒有就空字串）。
     pub fn authorized_keys(&self, user: &str) -> String {
         std::fs::read_to_string(self.home.join(user).join(".ssh/authorized_keys")).unwrap_or_default()
+    }
+    /// 收到過的 pty-req（term + 初始大小）。/ PTY requests seen so far.
+    pub fn ptys(&self) -> Vec<PtyState> {
+        self.ptys.lock().unwrap().clone()
+    }
+    /// 收到過的 window-change。/ Window changes seen so far.
+    pub fn resizes(&self) -> Vec<(u32, u32)> {
+        self.resizes.lock().unwrap().clone()
     }
 }
 
@@ -159,6 +169,18 @@ struct MachineState {
     opts: MachineOpts,
     home: PathBuf,
     logins: Arc<Mutex<Vec<Login>>>,
+    /// 每次 pty-req 的 term + 初始大小。/ Every pty request seen.
+    ptys: Arc<Mutex<Vec<PtyState>>>,
+    /// 每次 window-change 的 (cols, rows)。/ Every window change seen.
+    resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+}
+
+/// 一個 session channel 的 PTY 狀態（term + 視窗大小），`tty` 指令與 shell 的 `tty` 行會印出來。
+#[derive(Clone, Debug, Default)]
+pub struct PtyState {
+    pub term: String,
+    pub cols: u32,
+    pub rows: u32,
 }
 
 struct SshdHandler {
@@ -167,6 +189,8 @@ struct SshdHandler {
     channels: HashMap<ChannelId, Channel<Msg>>,
     /// 這條連線上開著的 session channel。
     sessions: HashSet<ChannelId>,
+    /// 每個 channel 要到的 PTY；shell 啟動後共用同一份（window_change 會改它）。
+    ptys: HashMap<ChannelId, Arc<Mutex<PtyState>>>,
 }
 
 impl SshdHandler {
@@ -209,26 +233,67 @@ impl server::Handler for SshdHandler {
     async fn channel_close(&mut self, channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
         self.sessions.remove(&channel);
         self.channels.remove(&channel);
+        self.ptys.remove(&channel);
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn pty_request(&mut self, channel: ChannelId, _term: &str, _c: u32, _r: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+    async fn pty_request(&mut self, channel: ChannelId, term: &str, cols: u32, rows: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+        self.ptys.insert(channel, Arc::new(Mutex::new(PtyState { term: term.to_string(), cols, rows })));
+        self.m.ptys.lock().unwrap().push(PtyState { term: term.to_string(), cols, rows });
         session.channel_success(channel)?;
         Ok(())
     }
 
+    async fn window_change_request(&mut self, channel: ChannelId, cols: u32, rows: u32, _pw: u32, _ph: u32, session: &mut Session) -> Result<(), Self::Error> {
+        if let Some(p) = self.ptys.get(&channel) {
+            let mut p = p.lock().unwrap();
+            p.cols = cols;
+            p.rows = rows;
+            self.m.resizes.lock().unwrap().push((cols, rows));
+        }
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
+    /// shell：先印 `login:user@machine`，之後逐行處理：`tty` 印 `tty:<term> <cols>x<rows>`、`exit` 結束
+    /// （exit-status 0 + 關 channel），其餘原樣 echo。沒有 PTY 的 shell 也一樣跑。
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
+        let pty = self.ptys.get(&channel).cloned();
         let banner = format!("login:{}@{}\r\n", self.user.clone().unwrap_or_default(), self.m.name);
         tokio::spawn(async move {
             let _ = ch.data_bytes(banner.into_bytes()).await;
             let mut s = ch.into_stream();
             let mut buf = [0u8; 4096];
-            while let Ok(n) = s.read(&mut buf).await {
-                if n == 0 || s.write_all(&buf[..n]).await.is_err() {
+            let mut line = Vec::new();
+            'outer: while let Ok(n) = s.read(&mut buf).await {
+                if n == 0 {
                     break;
+                }
+                for &b in &buf[..n] {
+                    if b == b'\n' || b == b'\r' {
+                        let cmd = String::from_utf8_lossy(&line).trim().to_string();
+                        line.clear();
+                        let reply = match cmd.as_str() {
+                            "" => continue,
+                            "exit" => break 'outer,
+                            "tty" => match &pty {
+                                Some(p) => {
+                                    let p = p.lock().unwrap();
+                                    format!("tty:{} {}x{}\r\n", p.term, p.cols, p.rows)
+                                }
+                                None => "tty:none\r\n".to_string(),
+                            },
+                            other => format!("{other}\r\n"),
+                        };
+                        if s.write_all(reply.as_bytes()).await.is_err() {
+                            break 'outer;
+                        }
+                    } else {
+                        line.push(b);
+                    }
                 }
             }
         });
@@ -339,12 +404,16 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let home = dir.join(format!("{name}-home"));
     std::fs::create_dir_all(&home).unwrap();
     let logins = Arc::new(Mutex::new(Vec::new()));
+    let ptys = Arc::new(Mutex::new(Vec::new()));
+    let resizes = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
         opts,
         home: home.clone(),
         logins: logins.clone(),
+        ptys: ptys.clone(),
+        resizes: resizes.clone(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -352,14 +421,14 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         while let Ok((stream, _)) = listener.accept().await {
             let (config, m) = (config.clone(), state.clone());
             tokio::spawn(async move {
-                let handler = SshdHandler { m, user: None, channels: HashMap::new(), sessions: HashSet::new() };
+                let handler = SshdHandler { m, user: None, channels: HashMap::new(), sessions: HashSet::new(), ptys: HashMap::new() };
                 if let Ok(session) = server::run_stream(config, stream, handler).await {
                     let _ = session.await;
                 }
             });
         }
     });
-    Machine { name: name.to_string(), port, home, logins }
+    Machine { name: name.to_string(), port, home, logins, ptys, resizes }
 }
 
 // ------------------------------------------------------------------ lab
@@ -402,6 +471,31 @@ impl Terminal {
     pub async fn input(&mut self, text: &str) {
         let msg = json!({"action": "pty_input", "payload": {"input": text}});
         self.ws.send(Message::Text(msg.to_string().into())).await.unwrap();
+    }
+
+    /// 前端的 `pty_resize`。/ The front end's resize message.
+    pub async fn resize(&mut self, cols: u32, rows: u32) {
+        let msg = json!({"action": "pty_resize", "payload": {"size": {"rows": rows, "cols": cols, "height": rows * 16, "width": cols * 8}}});
+        self.ws.send(Message::Text(msg.to_string().into())).await.unwrap();
+    }
+
+    /// 像瀏覽器關分頁：送 Close、丟掉 socket。/ Close the tab the way a browser does.
+    pub async fn close(mut self) {
+        let _ = self.ws.close(None).await;
+    }
+
+    /// 等伺服器端關閉這條連線，回關閉碼（1000 = shell 正常結束）；10 秒沒關就 panic。
+    pub async fn wait_closed(&mut self) -> Option<u16> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Close(f)))) => return f.map(|f| u16::from(f.code)),
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(_))) | Ok(None) => return None,
+                Err(_) => panic!("terminal was not closed by the server; output so far: {:?}", self.seen),
+            }
+        }
     }
 
     /// 讀 PTY 輸出直到出現 `needle`（10 秒逾時）。
@@ -483,6 +577,20 @@ impl Lab {
         keygen(self.dir.path(), name)
     }
 
+    /// 改設定並重建 state / router（gateway 與 DB 保留）。在開任何 WebSocket 之前呼叫。
+    /// Change config and rebuild state + router (the gateway and DB stay). Call before opening any WebSocket.
+    pub fn reconfigure(&mut self, f: impl FnOnce(&mut telepy_server::config::Config)) {
+        assert!(self.ws_base.get().is_none(), "reconfigure before the first WebSocket");
+        let mut config = self.app.state.config.clone();
+        f(&mut config);
+        let gateway = self.app.state.gateway.clone();
+        let status = self.app.state.status.clone();
+        let presence = self.app.state.presence.clone();
+        let db = self.app.state.db.clone();
+        self.app.state = telepy_server::state::AppState::with_gateway(config, db, gateway, status, presence);
+        self.app.router = telepy_server::app::build(self.app.state.clone());
+    }
+
     /// 直接在 DB 建帳號並簽 access token（不走註冊 / 登入：debug build 的 pbkdf2 一百萬次要好幾秒）。
     async fn account(&self, name: &str) -> (i64, String) {
         let u = db::users::create(&self.app.state.db, db::users::NewUser { username: name, password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
@@ -521,8 +629,8 @@ impl Lab {
         Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
     }
 
-    /// 裝置斷線再連回來（同一把金鑰、同一個 port），等到新的 forward 註冊好。
-    pub async fn reconnect_device(&self, device: &Device) {
+    /// 裝置斷線（殺掉它的 `ssh -NR`），等到 forward 釋放。/ Drop the device's tunnel and wait for the release.
+    pub async fn disconnect_device(&self, device: &Device) {
         let old = self.tunnels.lock().unwrap().remove(&device.tunnel_id);
         if let Some(mut c) = old {
             let _ = c.kill().await;
@@ -532,8 +640,23 @@ impl Lab {
             assert!(tokio::time::Instant::now() < deadline, "device {}: forward never released", device.name);
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// 裝置斷線再連回來（同一把金鑰、同一個 port），等到新的 forward 註冊好。
+    pub async fn reconnect_device(&self, device: &Device) {
+        self.disconnect_device(device).await;
         let ssh = self.spawn_tunnel(&device.key, device.reverse_port, device.target.port, &device.name).await;
         self.tunnels.lock().unwrap().insert(device.tunnel_id, ssh);
+    }
+
+    /// 在隧道的區網主機表手動加一台（#20），回 host id。/ Add a LAN host behind the device; returns its id.
+    pub async fn lan_host(&self, as_user: &LabUser, device: &Device, address: &str, ssh_port: u16, username: Option<&str>) -> i64 {
+        let r = self
+            .app
+            .post(&format!("/api/reverse/server/{}/lan/hosts", device.tunnel_id), Some(&as_user.token), json!({"address": address, "ssh_port": ssh_port, "username": username}))
+            .await;
+        assert!(r.status.is_success(), "lan host: {}", r.text);
+        r.json["id"].as_i64().unwrap()
     }
 
     /// 一行指令加入的裝置：用 join 腳本的選項（釘住 gateway host key）把隧道連上來。`host_keys` 是 `type base64` 行。
