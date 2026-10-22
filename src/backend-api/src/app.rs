@@ -9,10 +9,9 @@ use tower_http::trace::TraceLayer;
 
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
-use utoipa_swagger_ui::SwaggerUi;
 
 use crate::api;
-use crate::api::doc::{ApiDoc, OPENAPI_JSON_PATH, SWAGGER_PATH};
+use crate::api::doc::ApiDoc;
 use crate::state::AppState;
 use crate::ws;
 
@@ -54,9 +53,9 @@ pub fn build(state: AppState) -> Router {
     let (mut rest, openapi) = api_router().split_for_parts();
     rest = rest.route("/healthz", get(healthz));
     if state.config.openapi_enabled {
-        // Swagger UI 沿用 Django 時代的路徑；spec 在 /api/openapi.json（兩者都不需登入，OPENAPI_ENABLED=false 可關）。
-        // Swagger UI keeps the Django-era path; the spec is public at /api/openapi.json (OPENAPI_ENABLED=false hides both).
-        rest = rest.merge(SwaggerUi::new(SWAGGER_PATH).url(OPENAPI_JSON_PATH, openapi));
+        // Swagger UI 沿用 Django 時代的路徑；spec 在 /api/openapi.json。兩者都要登入（見 api/doc.rs），
+        // OPENAPI_ENABLED=false 可整組關掉。/ Login-gated Swagger UI + spec (see api/doc.rs); OPENAPI_ENABLED=false removes both.
+        rest = rest.merge(api::doc::router(&openapi));
     }
     let rest = rest.layer(CompressionLayer::new());
 

@@ -102,10 +102,12 @@ Compose プラグイン付きの Docker が必要です。
 ### API ドキュメント
 
 バックエンドは `/api/openapi.json` で OpenAPI 3 ドキュメントを、`/api/__hidden_swagger` で Swagger UI を
-提供します。`POST /api/auth/token` でログインし、`access_token` を **Authorize**（Bearer）に貼り付ければ、
-ページ上からすべてのエンドポイントを試せます。仕様は実際のルートから生成される（`utoipa`）ため、常に
-サーバーと一致します。`telepy-server openapi` で CLI からも同じドキュメントを出力できます。
-`OPENAPI_ENABLED=false` で両方とも無効化できます。
+提供します。どちらもログインが必要です。ページは Web のログイン状態を再利用し（ログイン済みのブラウザで
+開いてください。未ログインなら `/login` へ移動します）、仕様は Bearer トークン（`POST /api/auth/token` の
+`access_token`）を要求します。「Try it out」は自動的にログインを引き継ぎ、**Authorize** で別のトークンを
+使って試すこともできます。仕様は実際のルートから生成される（`utoipa`）ため、常にサーバーと一致します。
+`telepy-server openapi` で CLI からも同じドキュメントを出力できます。`OPENAPI_ENABLED=false` で両方とも
+無効化できます。
 
 ## CLI ヘルパー
 

@@ -45,7 +45,7 @@ russh-sftp = "3"
 # OpenAPI document + Swagger UI (vendored assets: no download at build time)
 utoipa = { version = "6", features = ["axum_extras", "chrono"] }
 utoipa-axum = "0.3"
-utoipa-swagger-ui = { version = "10", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10", default-features = false, features = ["vendored"] }
 # misc
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
