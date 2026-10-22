@@ -82,13 +82,27 @@ async fn setup_status_register_login_profile_refresh() {
     let r = app.post("/api/auth/token/verify", None, json!({"token": "x.y.z"})).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 
-    // google: missing credential → field error; bogus credential → 500 "Something went wrong :("
+    // google: missing credential → field error; bogus credential → a specific error with a code (#23)
     let r = app.post("/api/auth/google/token", None, json!({})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json, json!({"credential": ["This field is required."]}));
-    let r = app.post("/api/auth/google/token", None, json!({"credential": "not-a-jwt"})).await;
-    assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(r.json, json!({"status": "error", "detail": "Something went wrong :("}));
+}
+
+#[tokio::test]
+async fn google_token_errors_are_specific() {
+    // 沒設 client ID → 伺服器設定錯誤；有設 → 壞掉的 token 是 400。/ Not configured → 500; configured → 400.
+    let mut app = common::spawn().await;
+    for (client_id, status, code) in [(None, StatusCode::INTERNAL_SERVER_ERROR, "google_not_configured"), (Some("cid.apps.googleusercontent.com"), StatusCode::BAD_REQUEST, "google_invalid")] {
+        let mut config = app.state.config.clone();
+        config.google_client_id = client_id.map(str::to_string);
+        app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
+        app.router = telepy_server::app::build(app.state.clone());
+        let r = app.post("/api/auth/google/token", None, json!({"credential": "not-a-jwt"})).await;
+        assert_eq!(r.status, status, "{}", r.text);
+        assert_eq!(r.json["code"], code);
+        assert_eq!(r.json["status"], "error");
+        assert!(r.json["detail"].as_str().unwrap().len() > 10);
+    }
 }
 
 #[tokio::test]

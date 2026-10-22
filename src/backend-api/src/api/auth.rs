@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use super::{body_object, AppJson};
 use crate::auth::password::{check_password, make_password, unusable_password};
+use crate::auth::google::{GoogleClaims, GoogleError};
 use crate::auth::{AuthUser, TokenType};
 use crate::db::{self, users::NewUser};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
@@ -179,35 +180,72 @@ async fn register(State(state): State<AppState>, AppJson(body): AppJson<Value>) 
     ))
 }
 
-fn third_party_error(status: StatusCode, detail: &str) -> ApiError {
-    ApiError::new(status, json!({ "status": "error", "detail": detail }))
+/// Google 登入的錯誤：`{status: "error", detail, code, …}`。前端依 code 轉成在地化訊息，detail 是英文退路。
+/// Google-login errors carry a machine-readable `code` (mapped to dictionary text by the frontend).
+fn google_error(status: StatusCode, code: &str, detail: impl Into<String>, extra: Value) -> ApiError {
+    let mut body = json!({ "status": "error", "detail": detail.into(), "code": code });
+    if let (Some(b), Value::Object(extra)) = (body.as_object_mut(), extra) {
+        b.extend(extra);
+    }
+    ApiError::new(status, body)
+}
+
+fn google_verify_error(e: &GoogleError) -> ApiError {
+    match e {
+        GoogleError::NotConfigured => google_error(StatusCode::INTERNAL_SERVER_ERROR, "google_not_configured", "Google sign-in is not configured on this server (SOCIAL_GOOGLE_CLIENT_ID).", json!({})),
+        GoogleError::Fetch(_) => google_error(StatusCode::BAD_GATEWAY, "google_unreachable", "Could not reach Google to verify the sign-in. Try again in a moment.", json!({})),
+        GoogleError::Expired => google_error(StatusCode::BAD_REQUEST, "google_expired", "The Google sign-in expired. Please try again.", json!({})),
+        GoogleError::WrongAudience => google_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "google_client_mismatch",
+            "This server's Google client ID does not match the sign-in button. Check SOCIAL_GOOGLE_CLIENT_ID.",
+            json!({}),
+        ),
+        GoogleError::Invalid(_) => google_error(StatusCode::BAD_REQUEST, "google_invalid", "The Google sign-in could not be verified. Please try again.", json!({})),
+    }
 }
 
 /// custom_auth GoogleLogin + third_party_login：驗 id_token、網域白名單、建立/取得使用者、發 JWT。
-#[utoipa::path(post, path = "/api/auth/google/token", tag = "Login", request_body = super::schemas::GoogleLoginRequest, responses((status = 200, body = super::schemas::LoginResponse), (status = 400, description = "Registration disabled", body = super::schemas::ErrorBody), (status = 401, description = "Email domain not allowed", body = super::schemas::ErrorBody), (status = 500, description = "Token could not be verified", body = super::schemas::ErrorBody)))]
+/// 錯誤不再一律是 "Something went wrong :("（#23）：每種情況有自己的 code 與訊息。
+#[utoipa::path(post, path = "/api/auth/google/token", tag = "Login", request_body = super::schemas::GoogleLoginRequest, responses(
+    (status = 200, body = super::schemas::LoginResponse),
+    (status = 400, description = "google_invalid / google_expired / google_no_email, or a missing credential", body = super::schemas::GoogleLoginError),
+    (status = 403, description = "google_domain_not_allowed / registration_closed / account_disabled", body = super::schemas::GoogleLoginError),
+    (status = 409, description = "google_account_conflict: the username belongs to a password account", body = super::schemas::GoogleLoginError),
+    (status = 500, description = "google_not_configured / google_client_mismatch (server configuration)", body = super::schemas::GoogleLoginError),
+    (status = 502, description = "google_unreachable", body = super::schemas::GoogleLoginError),
+))]
 async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["credential"]) {
         return Err(e);
     }
     let credential = json_str(&body, "credential").unwrap_or_default();
-    let claims = match state.google.verify(&credential, state.config.google_client_id.as_deref()).await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(error = %e, "[AUTH][GOOGLE] id_token verification failed");
-            return Err(third_party_error(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong :("));
-        }
-    };
+    let claims = state.google.verify(&credential, state.config.google_client_id.as_deref()).await.map_err(|e| {
+        tracing::error!(error = %e, "[AUTH][GOOGLE] id_token verification failed");
+        google_verify_error(&e)
+    })?;
+    Ok(Json(google_sign_in(&state, claims).await?))
+}
+
+/// id_token 驗過之後：網域白名單 → 找 / 建帳號 → 檢查 → 發 token 或 2FA 挑戰。拆出來以便直接測試各種錯誤。
+/// After the id_token is verified: domain allow-list, find or create the account, checks, tokens or a 2FA challenge.
+pub async fn google_sign_in(state: &AppState, claims: GoogleClaims) -> ApiResult<Value> {
     let Some(email) = claims.email.filter(|e| e.contains('@')) else {
         tracing::error!("[AUTH][GOOGLE] Token has no `email` claim");
-        return Err(third_party_error(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong :("));
+        return Err(google_error(StatusCode::BAD_REQUEST, "google_no_email", "Your Google account did not share an email address.", json!({})));
     };
     let (account, domain) = email.split_once('@').expect("checked above");
     let settings = db::settings::get_solo(&state.db).await?;
     let allowed = settings.register_domains(&state.config.default_register_domains);
     if !allowed.contains(&domain.to_ascii_lowercase()) {
         tracing::warn!(email, domain, "[AUTH][GOOGLE] attempts to register with disallowed domain");
-        return Err(third_party_error(StatusCode::UNAUTHORIZED, "This email is invalid."));
+        return Err(google_error(
+            StatusCode::FORBIDDEN,
+            "google_domain_not_allowed",
+            format!("Accounts from {domain} cannot sign in to this server."),
+            json!({ "domain": domain }),
+        ));
     }
     let first_name = claims.given_name.clone().unwrap_or_default();
     let last_name = claims.family_name.clone().unwrap_or_default();
@@ -215,9 +253,14 @@ async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Valu
     let user = match db::users::by_username(&state.db, account).await? {
         Some(u) => u,
         None => {
-            if !registration_allowed(&state).await? {
+            if !registration_allowed(state).await? {
                 tracing::warn!(email, "[AUTH][GOOGLE] registration disabled");
-                return Err(third_party_error(StatusCode::BAD_REQUEST, "Disallowed creation of user now."));
+                return Err(google_error(
+                    StatusCode::FORBIDDEN,
+                    "registration_closed",
+                    "This server does not accept new accounts. Ask an administrator to create one for you.",
+                    json!({}),
+                ));
             }
             let hash = unusable_password();
             let u = db::users::create(
@@ -230,18 +273,24 @@ async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Valu
             u
         }
     };
-    // 帳號可能是用其他方式註冊的：沒有 SocialAccount 就拒絕（與 Django 版相同的 ValueError → 500）。
+    // 同名帳號是用帳密建立的（沒有 Google 連結）：說清楚該怎麼登入，而不是 500。
+    // The username belongs to a password account without a Google link: say how to sign in instead of a 500.
     if db::users::social_for(&state.db, user.id, "google").await?.is_none() {
-        tracing::error!(username = user.username, "[AUTH][GOOGLE] SocialAccount does not exist");
-        return Err(third_party_error(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong :("));
+        tracing::warn!(username = user.username, "[AUTH][GOOGLE] username belongs to an account without a Google link");
+        return Err(google_error(
+            StatusCode::CONFLICT,
+            "google_account_conflict",
+            format!("An account named \"{}\" already exists and signs in with a password. Sign in with your password instead.", user.username),
+            json!({ "username": user.username }),
+        ));
     }
     if !user.is_active {
-        return Err(third_party_error(StatusCode::UNAUTHORIZED, "This email is invalid."));
+        return Err(google_error(StatusCode::FORBIDDEN, "account_disabled", "This account is disabled. Contact an administrator.", json!({})));
     }
-    let result = super::mfa::complete_login(&state, &user).await?;
+    let result = super::mfa::complete_login(state, &user).await?;
     if result.get("mfa_required").is_none() {
         db::users::touch_last_login(&state.db, user.id).await?;
         tracing::info!(username = user.username, "[AUTH][3RD] Login success");
     }
-    Ok(Json(result))
+    Ok(result)
 }
