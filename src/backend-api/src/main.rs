@@ -39,7 +39,15 @@ enum Command {
 }
 
 fn init_logging(config: &Config) -> Vec<tracing_appender::non_blocking::WorkerGuard> {
-    let filter = || EnvFilter::try_new(&config.log_level).unwrap_or_else(|_| EnvFilter::new("info"));
+    // LOG_LEVEL 可以是單一等級或完整的 EnvFilter 指令；單一 `debug` 時把 sqlx/hyper/russh 的內部 debug 壓掉
+    // （否則每個 SQL 都會印一行，DEBUG=true 跑幾小時就是幾 MB）。
+    // A bare `debug` keeps our own modules verbose but silences sqlx/hyper/russh internals.
+    let directive = match config.log_level.to_ascii_lowercase().as_str() {
+        "debug" => "debug,sqlx=warn,hyper=info,hyper_util=info,h2=info,russh=info,tokio_tungstenite=info,tungstenite=info".to_string(),
+        "trace" => "trace,sqlx=info,hyper=info,hyper_util=info,h2=info".to_string(),
+        other => other.to_string(),
+    };
+    let filter = move || EnvFilter::try_new(&directive).unwrap_or_else(|_| EnvFilter::new("info"));
     let mut guards = Vec::new();
     let stdout = fmt::layer().with_target(true).with_filter(filter());
     let registry = tracing_subscriber::registry().with(stdout);

@@ -63,11 +63,14 @@ pub struct Gateway {
     conns: DashMap<u64, ConnInfo>,
     next_id: AtomicU64,
     log: Mutex<Option<tokio::fs::File>>,
+    event_counter: AtomicU64,
     server_config: Arc<ServerConfig>,
     pub host_keys_loaded: usize,
 }
 
 const HOST_KEY_FILES: [&str; 3] = ["ssh_host_ed25519_key", "ssh_host_rsa_key", "ssh_host_ecdsa_key"];
+/// `telepy_gateway_event` 最多保留的列數。/ Row cap for the event table.
+const EVENT_RETENTION_ROWS: i64 = 100_000;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
 pub fn load_host_keys(dir: &Path) -> Vec<PrivateKey> {
@@ -138,7 +141,30 @@ impl Gateway {
             conns: DashMap::new(),
             next_id: AtomicU64::new(1),
             log: Mutex::new(None),
+            event_counter: AtomicU64::new(0),
             host_keys_loaded,
+        }
+    }
+
+    /// 結構化事件：寫進 `telepy_gateway_event`（Logs 頁 / API 的來源），同時以 sshd 風格附加到
+    /// ssh-gateway.log（運維用）。`kind` 是機器可讀的類別（accepted / forward / disconnect / refused …）。
+    pub async fn event(&self, kind: &str, peer: Option<SocketAddr>, port: Option<u16>, tunnel_id: Option<i64>, message: String) {
+        let _ = sqlx::query("INSERT INTO telepy_gateway_event (at, event, peer, port, tunnel_id, message) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(crate::util::now_db())
+            .bind(kind)
+            .bind(peer.map(|p| p.to_string()))
+            .bind(port.map(|p| p as i64))
+            .bind(tunnel_id)
+            .bind(&message)
+            .execute(&self.db.write)
+            .await;
+        self.log(&message).await;
+        // 保留：最多 EVENT_RETENTION_ROWS 列（每 128 筆順手清一次）。/ Retention: cap the table size.
+        if self.event_counter.fetch_add(1, Ordering::Relaxed) % 128 == 0 {
+            let _ = sqlx::query("DELETE FROM telepy_gateway_event WHERE id <= (SELECT id FROM telepy_gateway_event ORDER BY id DESC LIMIT 1 OFFSET ?)")
+                .bind(EVENT_RETENTION_ROWS)
+                .execute(&self.db.write)
+                .await;
         }
     }
 
@@ -363,7 +389,7 @@ impl Handler for GatewayHandler {
 
     async fn auth_publickey_offered(&mut self, user: &str, key: &russh::keys::PublicKey) -> Result<Auth, Self::Error> {
         if user != self.gw.config.gateway_user {
-            self.gw.log(&format!("Invalid user {user} from {} port {}", self.peer.ip(), self.peer.port())).await;
+            self.gw.event("invalid_user", Some(self.peer), None, None, format!("Invalid user {user} from {} port {}", self.peer.ip(), self.peer.port())).await;
             return Ok(Auth::reject());
         }
         let bare = bare_key(key)?;
@@ -375,7 +401,7 @@ impl Handler for GatewayHandler {
                 Ok(Auth::Accept)
             }
             None => {
-                self.gw.log(&format!("Failed publickey for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
+                self.gw.event("failed_publickey", Some(self.peer), None, None, format!("Failed publickey for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
                 Ok(Auth::reject())
             }
         }
@@ -398,8 +424,12 @@ impl Handler for GatewayHandler {
         if let Some(id) = &self.identity {
             self.gw.conns.insert(self.conn_id, ConnInfo { peer: self.peer, identity: id.clone() });
         }
+        let tunnel_id = match &self.identity {
+            Some(Identity::Tunnel { tunnel_id, .. }) => Some(*tunnel_id),
+            _ => None,
+        };
         self.gw
-            .log(&format!("Accepted publickey for {} from {} port {} ssh2: {}", self.gw.config.gateway_user, self.peer.ip(), self.peer.port(), self.key_desc))
+            .event("accepted", Some(self.peer), None, tunnel_id, format!("Accepted publickey for {} from {} port {} ssh2: {}", self.gw.config.gateway_user, self.peer.ip(), self.peer.port(), self.key_desc))
             .await;
         Ok(())
     }
@@ -410,17 +440,21 @@ impl Handler for GatewayHandler {
         if p == 0 {
             return Ok(false);
         }
+        let tunnel_id = match &id {
+            Identity::Tunnel { tunnel_id, .. } => Some(*tunnel_id),
+            _ => None,
+        };
         if !self.gw.may_forward(&id, p).await? {
-            self.gw.log(&format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
+            self.gw.event("refused_forward", Some(self.peer), Some(p), tunnel_id, format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
             return Ok(false);
         }
         match self.gw.register_forward(self.conn_id, address, p, session.handle()).await {
             Ok(()) => {
-                self.gw.log(&format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
+                self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
                 Ok(true)
             }
             Err(e) => {
-                self.gw.log(&format!("Refused remote forward for port {p} from {} port {}: {e}", self.peer.ip(), self.peer.port())).await;
+                self.gw.event("refused_forward", Some(self.peer), Some(p), tunnel_id, format!("Refused remote forward for port {p} from {} port {}: {e}", self.peer.ip(), self.peer.port())).await;
                 Ok(false)
             }
         }
@@ -454,7 +488,7 @@ impl Handler for GatewayHandler {
             _ => false,
         };
         let Some(fwd) = port.and_then(|p| self.gw.forwards.get(&p).map(|f| f.clone())).filter(|_| allowed) else {
-            self.gw.log(&format!("Refused direct-tcpip to {host_to_connect}:{port_to_connect} from {} port {}", self.peer.ip(), self.peer.port())).await;
+            self.gw.event("refused_direct", Some(self.peer), port, None, format!("Refused direct-tcpip to {host_to_connect}:{port_to_connect} from {} port {}", self.peer.ip(), self.peer.port())).await;
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         };
@@ -474,7 +508,12 @@ impl Drop for GatewayHandler {
         let (dropped, info) = self.gw.on_disconnect(self.conn_id);
         let gw = self.gw.clone();
         let peer = info.as_ref().map(|i| i.peer).unwrap_or(self.peer);
-        let who = match info.map(|i| i.identity) {
+        let identity = info.map(|i| i.identity);
+        let tunnel_id = match &identity {
+            Some(Identity::Tunnel { tunnel_id, .. }) => Some(*tunnel_id),
+            _ => None,
+        };
+        let who = match identity {
             Some(Identity::Tunnel { tunnel_id, .. }) => format!(" (tunnel {tunnel_id})"),
             Some(Identity::User { user_id }) => format!(" (user {user_id})"),
             Some(Identity::Service { name }) => format!(" (service {name})"),
@@ -485,12 +524,12 @@ impl Drop for GatewayHandler {
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn(async move {
                 if authed {
-                    gw.log(&format!("Disconnected from user {user}{who} {} port {}", peer.ip(), peer.port())).await;
+                    gw.event("disconnect", Some(peer), None, tunnel_id, format!("Disconnected from user {user}{who} {} port {}", peer.ip(), peer.port())).await;
                     for p in dropped {
-                        gw.log(&format!("Remote forward on port {p} released ({} port {})", peer.ip(), peer.port())).await;
+                        gw.event("forward_released", Some(peer), Some(p), tunnel_id, format!("Remote forward on port {p} released ({} port {})", peer.ip(), peer.port())).await;
                     }
                 } else {
-                    gw.log(&format!("Connection closed by authenticating user {user} {} port {} [preauth]", peer.ip(), peer.port())).await;
+                    gw.event("preauth_close", Some(peer), None, None, format!("Connection closed by authenticating user {user} {} port {} [preauth]", peer.ip(), peer.port())).await;
                 }
             });
         }
@@ -532,7 +571,11 @@ pub fn start(gw: Arc<Gateway>, listener: TcpListener) -> anyhow::Result<tokio::t
     gw.publish_status();
     let addr = listener.local_addr()?;
     tracing::info!(%addr, host_keys = gw.host_keys_loaded, "SSH gateway listening");
+    let startup = gw.clone();
     Ok(tokio::spawn(async move {
+        let gw = startup;
+        // sshd 也會寫這行；確保 Logs 頁從第一天就有內容。/ sshd logs this too; the Logs page is never empty.
+        gw.event("listening", None, Some(addr.port()), None, format!("Server listening on {} port {}.", addr.ip(), addr.port())).await;
         loop {
             let (stream, peer) = match listener.accept().await {
                 Ok(v) => v,

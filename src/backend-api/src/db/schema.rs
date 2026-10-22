@@ -118,6 +118,19 @@ const TABLES: &[(&str, &str)] = &[
             "user_id" integer NOT NULL UNIQUE REFERENCES "auth_user" ("id") DEFERRABLE INITIALLY DEFERRED
         )"#,
     ),
+    // Rust 自有：SSH gateway 事件（Logs 頁、/api/log/ssh；取代讀 sshd 的文字檔）。
+    (
+        "telepy_gateway_event",
+        r#"CREATE TABLE "telepy_gateway_event" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "event" varchar(32) NOT NULL,
+            "peer" varchar(64) NULL,
+            "port" integer NULL,
+            "tunnel_id" integer NULL,
+            "message" text NOT NULL
+        )"#,
+    ),
     // Rust 自有：remote-browser session 記錄（後端重啟後據此回收 kasm 側孤兒）。
     (
         "telepy_remote_browser_session",
@@ -133,6 +146,8 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "authorized_keys_reverseserverusernames_reverse_server_id_567b60c7" ON "authorized_keys_reverseserverusernames" ("reverse_server_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "authorized_keys_reverseserverusernames_user_id_9104f26d" ON "authorized_keys_reverseserverusernames" ("user_id")"#,
