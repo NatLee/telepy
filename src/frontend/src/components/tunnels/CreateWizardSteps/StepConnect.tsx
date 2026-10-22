@@ -6,7 +6,7 @@
 "use client";
 
 import React from "react";
-import { CheckCircle2, ChevronRight, Container, Cpu, FileCode, FileText, Loader2, Monitor, Power, RefreshCw, TerminalSquare, type LucideIcon } from "lucide-react";
+import { ChevronRight, Container, FileCode, FileText, Loader2, Monitor, Power, RefreshCw, TerminalSquare, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodeBlock } from "@/components/ui/CodeBlock";
@@ -17,6 +17,7 @@ import { METHOD_LANGUAGE, type ConnectMethod } from "@/lib/tunnelSetup";
 import type { TranslationKey } from "@/locales/en";
 import type { CreateTunnelWizard } from "@/hooks/useCreateTunnelWizard";
 import { Disclosure, StepFooter, StepHeading } from "./parts";
+import { DialInMonitor } from "@/components/tunnels/DialIn";
 
 const METHODS: { id: ConnectMethod; icon: LucideIcon; title: TranslationKey; desc: TranslationKey; tag?: TranslationKey }[] = [
     { id: "autossh-service", icon: Power, title: "wizard.connect.service", desc: "wizard.connect.serviceDesc", tag: "wizard.connect.recommended" },
@@ -26,42 +27,6 @@ const METHODS: { id: ConnectMethod; icon: LucideIcon; title: TranslationKey; des
     { id: "docker-compose", icon: FileCode, title: "wizard.connect.compose", desc: "wizard.connect.composeDesc" },
     { id: "powershell", icon: Monitor, title: "wizard.connect.windows", desc: "wizard.connect.windowsDesc" },
 ];
-
-function LiveStatus({ name, connected, reversePort, rttMs }: { name: string; connected: boolean; reversePort: number; rttMs: number | null }) {
-    const { t } = useI18n();
-    return (
-        <div
-            role="status"
-            aria-live="polite"
-            className={cn(
-                "flex items-center gap-4 rounded-2xl border p-4 transition-colors duration-500 sm:p-5",
-                connected ? "border-emerald-500/30 bg-emerald-500/[0.07]" : "border-amber-500/30 bg-amber-500/[0.06]"
-            )}
-        >
-            <span className="relative grid size-12 shrink-0 place-items-center" aria-hidden>
-                {!connected && (
-                    <>
-                        <span className="absolute inset-0 rounded-full bg-amber-400/40 animate-status-ping" />
-                        <span className="absolute inset-0 rounded-full bg-amber-400/30 animate-status-ping [animation-delay:1.1s]" />
-                    </>
-                )}
-                <span className={cn("relative grid size-12 place-items-center rounded-full text-white", connected ? "bg-emerald-500 shadow-[0_0_24px_rgba(16,185,129,0.45)]" : "bg-amber-500")}>
-                    {connected ? <CheckCircle2 size={24} /> : <Cpu size={22} />}
-                </span>
-            </span>
-            <div className="min-w-0">
-                <p className="text-sm font-semibold text-foreground">
-                    {connected ? t("wizard.connect.online", { name }) : t("wizard.connect.waiting", { name })}
-                </p>
-                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                    {connected
-                        ? t(rttMs !== null ? "wizard.connect.onlineDetailRtt" : "wizard.connect.onlineDetail", { port: reversePort, ms: rttMs !== null ? Math.round(rttMs) : 0 })
-                        : t("wizard.connect.waitingDetail")}
-                </p>
-            </div>
-        </div>
-    );
-}
 
 export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
     const { t } = useI18n();
@@ -87,10 +52,10 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                             className={cn(
                                 "group relative flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-all duration-200 sm:p-3",
                                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                selected ? "border-primary/60 bg-primary/[0.06] ring-1 ring-primary/30" : "border-border bg-background/60 hover:-translate-y-px hover:border-primary/30"
+                                selected ? "border-primary/60 bg-primary/[0.06] ring-1 ring-primary/30" : "border-border bg-background/60 hover:border-primary/30"
                             )}
                         >
-                            <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg transition-colors", selected ? "bg-brand-gradient text-white" : "bg-muted text-muted-foreground group-hover:text-primary")} aria-hidden>
+                            <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg transition-colors", selected ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground group-hover:text-primary")} aria-hidden>
                                 <Icon size={16} />
                             </span>
                             <span className="min-w-0 text-sm font-medium leading-tight text-foreground">{t(title)}</span>
@@ -107,7 +72,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                 })}
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-border bg-muted/20 p-4">
+            <div className="space-y-4 rounded-xl border border-border bg-muted/20 p-4">
                 <p className="text-sm leading-relaxed text-foreground/85">{t(current.desc)}</p>
 
                 <div className="flex flex-wrap items-end gap-4">
@@ -137,7 +102,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                 </div>
 
                 {c.needsAccount && accounts.length === 0 ? (
-                    <p className="rounded-xl border border-amber-500/35 bg-amber-500/[0.07] p-3 text-sm text-amber-800 dark:text-amber-200">
+                    <p className="rounded-xl border border-warning/35 bg-warning/[0.07] p-3 text-sm text-foreground/85">
                         {t("wizard.connect.needsAccount")}{" "}
                         <button type="button" onClick={() => wizard.goTo(2)} className="font-medium underline underline-offset-2">{t("wizard.connect.addAccount")}</button>
                     </p>
@@ -173,14 +138,21 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                 )}
             </div>
 
-            <LiveStatus name={created.name} connected={wizard.connected} reversePort={created.reversePort} rttMs={wizard.rttMs} />
+            <DialInMonitor
+                tunnelId={created.id}
+                name={created.name}
+                reversePort={created.reversePort}
+                connected={wizard.connected}
+                rttMs={wizard.rttMs}
+                keyTail={wizard.device.keyCheck.kind === "valid" ? wizard.device.keyCheck.tail : undefined}
+            />
 
             <StepFooter onBack={() => wizard.goTo(3)}>
                 <Button
                     type="button"
                     variant={wizard.connected ? "default" : "outline"}
                     onClick={() => wizard.setStep(5)}
-                    className={cn(wizard.connected && "shadow-glow")}
+                    className={cn(wizard.connected && "")}
                 >
                     {wizard.connected ? t("wizard.connect.next") : t("wizard.connect.nextAnyway")} <ChevronRight />
                 </Button>

@@ -5,7 +5,8 @@
 "use client";
 
 import React from "react";
-import { ChevronRight, Loader2, Plus, UserRound, Users, X } from "lucide-react";
+import { ChevronRight, KeyRound, Loader2, Plus, UserRound, Users, X } from "lucide-react";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/lib/i18n";
@@ -21,11 +22,28 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
     const name = wizard.created?.name ?? "";
     const fromKey = commentUser(a.suggestedFromKey);
     const taken = new Set(a.list.map((x) => x.username));
+    // 新增、但還沒在 Step 3 跑過授權指令的帳號。/ Accounts added after the step-3 command was run.
+    const unauthorized = new Set(wizard.keys.newSinceAuthorize);
+    const needsReauth = !!wizard.review[3];
     const suggestions = Array.from(new Set([fromKey, ...COMMON_ACCOUNTS].filter((s): s is string => !!s))).filter((s) => !taken.has(s));
 
     return (
         <div className="space-y-6">
             <StepHeading title={t("wizard.accounts.title")} subtitle={tn("wizard.accounts.subtitle", { name: <strong className="text-foreground">{name}</strong> })} />
+
+            {/* 回頭修改時：說清楚會影響哪些後面的步驟。/ When revisiting: say which later steps a change affects. */}
+            {wizard.maxStep > 2 && (
+                needsReauth ? (
+                    <Callout tone="warning">
+                        <p>{t("wizard.accounts.impactAdded", { names: wizard.keys.newSinceAuthorize.join(", ") })}</p>
+                        <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => wizard.goTo(3)}>
+                            <KeyRound /> {t("wizard.accounts.goAuthorize")}
+                        </Button>
+                    </Callout>
+                ) : (
+                    <Callout tone="info">{t("wizard.accounts.impact")}</Callout>
+                )
+            )}
 
             <div className="space-y-3">
                 <form
@@ -70,7 +88,7 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
 
             {a.list.length === 0 ? (
                 <div className="flex flex-col items-center rounded-xl border border-dashed border-border bg-muted/20 px-6 py-8 text-center">
-                    <span className="mb-3 grid size-11 place-items-center rounded-2xl bg-primary/10 text-primary" aria-hidden>
+                    <span className="mb-3 grid size-11 place-items-center rounded-xl bg-primary/10 text-primary" aria-hidden>
                         <Users size={20} />
                     </span>
                     <p className="text-sm font-medium text-foreground">{t("wizard.accounts.emptyTitle")}</p>
@@ -79,15 +97,20 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
                     </p>
                 </div>
             ) : (
-                <ul className="grid gap-2 sm:grid-cols-2">
+                <ul className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(13rem,1fr))]">
                     {a.list.map((acc) => (
                         <li key={acc.id} className="flex items-center gap-3 rounded-xl border border-border bg-background/60 px-3 py-2.5 animate-fade-in-up">
                             <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary" aria-hidden>
                                 <UserRound size={16} />
                             </span>
                             <span className="min-w-0 flex-1">
-                                <span className="block truncate font-mono text-sm font-medium text-foreground">{acc.username}</span>
-                                <span className="block truncate text-[0.75rem] text-muted-foreground">{acc.username}@{name}</span>
+                                <span className="block truncate font-mono text-sm text-foreground">{acc.username}</span>
+                                {/* 還沒授權的帳號：第二行換成提示，名字不會被擠掉。/ Unauthorized: the second line becomes the badge so the name keeps its room. */}
+                                {unauthorized.has(acc.username) ? (
+                                    <span className="mt-0.5 inline-block rounded-sm bg-warning/15 px-1.5 py-px text-[0.6875rem] text-foreground/80 ring-1 ring-inset ring-warning/40">{t("wizard.accounts.notAuthorized")}</span>
+                                ) : (
+                                    <span className="block truncate text-[0.75rem] text-muted-foreground">{acc.username}@{name}</span>
+                                )}
                             </span>
                             <Button
                                 type="button"
@@ -111,7 +134,7 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
                     </Button>
                 )}
                 <Button type="button" onClick={() => wizard.setStep(3)} disabled={a.list.length === 0}>
-                    {t("common.nextStep")} <ChevronRight />
+                    {needsReauth ? t("wizard.accounts.nextReauth") : t("common.nextStep")} <ChevronRight />
                 </Button>
             </StepFooter>
         </div>
