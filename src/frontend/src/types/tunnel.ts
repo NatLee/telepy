@@ -14,6 +14,17 @@ export interface Tunnel {
     can_share: boolean;
     can_delete: boolean;
     shared_with_count?: number;
+    /** 裝置的公網 IP（只在列表裡；看不到或從沒連過時 null）。/ Device public IP (list only; null when hidden or never connected). */
+    endpoint?: TunnelEndpoint | null;
+}
+
+/** gateway 看到的裝置連線來源。/ The device's source address as the gateway sees it. */
+export interface TunnelEndpoint {
+    ip: string;
+    /** true = 現在連著；false = 最後一次的紀錄。/ true while connected, false = last recorded connection. */
+    live: boolean;
+    connected_at: string;
+    last_seen_at: string | null;
 }
 
 export interface ReverseServerUsername {

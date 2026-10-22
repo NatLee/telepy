@@ -9,7 +9,7 @@ use axum::Json;
 use serde_json::{json, Value};
 
 use super::notify;
-use super::serialize::tunnel_json;
+use super::serialize::{endpoint_json, tunnel_json};
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}};
@@ -52,16 +52,27 @@ async fn status_latency(State(state): State<AppState>, _user: AuthUser) -> ApiRe
     Ok(Json(latency_json(&state)))
 }
 
-/// 列表序列化：以兩張預先算好的表避免每列查詢（`tunnel_permission_context`）。
-async fn list_json(state: &AppState, user_id: i64) -> ApiResult<Vec<Value>> {
+/// 列表序列化：以預先算好的表避免每列查詢（`tunnel_permission_context`）。
+/// 列表多一個 `endpoint`（裝置的公網 IP）：只給 [`permissions::can_see_endpoint`] 允許的人，其他人是 null。
+async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiResult<Vec<Value>> {
     let tunnels = db::tunnels::visible_to(&state.db, user_id).await?;
     let (my_shares, counts) = db::sharing::permission_context(&state.db, user_id).await?;
+    let with_accounts = db::sharing::tunnels_with_allowed_usernames(&state.db, user_id).await?;
+    let last = db::tunnel_endpoints::visible_to(&state.db, user_id).await?;
+    let live = state.status.endpoints();
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
         .map(|t| {
             let eff = permissions::effective(user_id, t.user_id, my_shares.get(&t.id).map(String::as_str));
-            tunnel_json(t, eff, counts.get(&t.id).copied().unwrap_or(0), tz)
+            let mut v = tunnel_json(t, eff, counts.get(&t.id).copied().unwrap_or(0), tz);
+            v["endpoint"] = if permissions::can_see_endpoint(eff, with_accounts.contains(&t.id), is_superuser) {
+                let port = u16::try_from(t.reverse_port).ok();
+                endpoint_json(port.and_then(|p| live.get(&p)), last.get(&t.id))
+            } else {
+                Value::Null
+            };
+            v
         })
         .collect())
 }
@@ -75,7 +86,7 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
 #[utoipa::path(get, path = "/api/reverse/server/dashboard", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "Tunnels visible to the user plus live port status and latency", body = super::schemas::Dashboard)))]
 async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "tunnels": list_json(&state, user.id).await?,
+        "tunnels": list_json(&state, user.id, user.is_superuser).await?,
         "ports": ports_json(&state).await?,
         "latency": latency_json(&state),
     })))
@@ -83,7 +94,7 @@ async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser) -> A
 
 #[utoipa::path(get, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::Tunnel>)))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
-    Ok(Json(Value::Array(list_json(&state, user.id).await?)))
+    Ok(Json(Value::Array(list_json(&state, user.id, user.is_superuser).await?)))
 }
 
 /// ViewSet.get_object()：只在「我看得到」的集合內找，否則 404。

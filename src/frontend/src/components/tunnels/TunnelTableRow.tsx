@@ -1,6 +1,7 @@
 /**
  * 隧道表格列（≥1200px 的清單檢視）：名稱 + 說明、狀態 + 延遲、埠、存取關係、帶標籤的開啟按鈕與「更多」選單。
- * Tunnel table row (list view, ≥1200px): name + description, status + latency, port, access, labelled open
+ * （埠那一欄下方是裝置的公網 IP。）
+ * Tunnel table row (list view, ≥1200px): name + description, status + latency, port (+ device IP), access, labelled open
  * buttons and the grouped "More" menu.
  */
 import React from "react";
@@ -9,6 +10,7 @@ import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +54,10 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                <div className="flex flex-col items-start gap-1">
+                    <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                    <TunnelEndpointChip endpoint={tunnel.endpoint} />
+                </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />

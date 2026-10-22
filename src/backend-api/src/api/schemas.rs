@@ -141,6 +141,22 @@ pub struct Tunnel {
     pub updated_at: String,
     pub user: i64,
     pub default_username: Option<i64>,
+    /// 只有列表（`/keys`、`/dashboard`）帶：裝置的公網 IP。看不到（只看狀態的 sharee）或從沒連過時是 null。
+    /// List / dashboard only: the device's public IP; null when hidden (status-only sharee) or never connected.
+    pub endpoint: Option<TunnelEndpoint>,
+}
+
+/// 裝置連上 gateway 的來源位址（gateway 看到的 TCP 來源；中間若有 L4 proxy 會是 proxy 的 IP）。
+#[derive(ToSchema)]
+pub struct TunnelEndpoint {
+    #[schema(example = "203.0.113.7")]
+    pub ip: String,
+    /// true = 現在連著；false = 最後一次連線的紀錄。/ true while connected, false = last recorded connection.
+    pub live: bool,
+    #[schema(example = "2026-10-22T09:15:02.123456Z")]
+    pub connected_at: String,
+    /// 離線時：forward 釋放的時間；連著時 null。/ When the forward went away; null while live.
+    pub last_seen_at: Option<String>,
 }
 
 #[derive(ToSchema)]

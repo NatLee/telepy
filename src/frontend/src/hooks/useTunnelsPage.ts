@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { apiFetch, readJson } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/lib/auth";
@@ -26,9 +26,10 @@ export function useTunnelsPage() {
     const { showSuccess, showError } = useToast();
     const { user } = useAuth();
 
-    const fetchData = useCallback(async () => {
+    // silent = 背景重抓（不轉圈、失敗不吵）。/ silent = background refresh: no spinner, no error toast.
+    const load = useCallback(async (silent: boolean) => {
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             // 單一「一次到位」端點：一個請求就拿到 tunnels + ports + latency（取代先前 keys/ports/latency
             // 三個平行請求 = 三次往返、三次重複的 JWT 使用者查詢）。latency 由後端一併帶回，後續仍由
             // WebSocket UPDATE-TUNNEL-LATENCY 持續更新；ports/latency 在後端取樣失敗時各自回 {}（容錯與
@@ -45,15 +46,30 @@ export function useTunnelsPage() {
                 setPortsMap(data?.ports && typeof data.ports === "object" ? data.ports : {});
                 // 首屏延遲：有值才套用（後續由 WebSocket 持續更新）。
                 if (data?.latency && typeof data.latency === "object") setLatencyMap(data.latency);
-            } else {
+            } else if (!silent) {
                 showError(t("tunnels.fetchFailed"));
             }
         } catch (e: any) {
-            showError(e.message || t("tunnels.fetchFailed"));
+            if (!silent) showError(e.message || t("tunnels.fetchFailed"));
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [showError, t]);
+    const fetchData = useCallback(() => load(false), [load]);
+
+    // 裝置連上 / 斷線後靜默重抓一次列表，讓公網 IP（endpoint）跟著換；連續的狀態變化合併成一次。
+    // Refresh the list quietly after a device connects / drops so its public IP follows; bursts coalesce.
+    const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const reloadSoon = useCallback(() => {
+        if (reloadTimer.current) clearTimeout(reloadTimer.current);
+        reloadTimer.current = setTimeout(() => {
+            reloadTimer.current = null;
+            load(true);
+        }, 800);
+    }, [load]);
+    useEffect(() => () => {
+        if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    }, []);
 
     useEffect(() => {
         fetchData();
@@ -73,6 +89,7 @@ export function useTunnelsPage() {
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_STATUS]: (msg) => {
             if (msg.port !== undefined) {
                 setPortsMap(prev => ({ ...prev, [String(msg.port)]: msg.status === "connected" }));
+                reloadSoon();
             }
         },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_LATENCY]: (msg) => {

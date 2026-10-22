@@ -1,6 +1,6 @@
 //! 分享（TunnelSharing）與允許的目標使用者名稱（TunnelSharingAllowedUsername）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::FromRow;
 
@@ -116,6 +116,20 @@ pub async fn allowed_username_ids(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<
         .bind(sharing_id)
         .fetch_all(&db.read)
         .await
+}
+
+/// 這位 sharee 至少有一個「允許的目標帳號」的隧道（與 `permissions::allowed_usernames` 同語意：
+/// 只算仍屬於該隧道的帳號）。一次查完，給列表用。/ Tunnels where this sharee may log in as at least one account.
+pub async fn tunnels_with_allowed_usernames(db: &Db, user_id: i64) -> sqlx::Result<HashSet<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(&format!(
+        "SELECT DISTINCT s.tunnel_id FROM {S} s JOIN {A} a ON a.tunnel_sharing_id = s.id \
+         JOIN authorized_keys_reverseserverusernames u ON u.id = a.reverse_server_username_id AND u.reverse_server_id = s.tunnel_id \
+         WHERE s.shared_with_id = ?"
+    ))
+    .bind(user_id)
+    .fetch_all(&db.read)
+    .await?;
+    Ok(ids.into_iter().collect())
 }
 
 /// (username_id, username) for the shared-users listing.
