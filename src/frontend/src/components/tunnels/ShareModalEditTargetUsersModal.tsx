@@ -47,7 +47,7 @@ export function ShareModalEditTargetUsersModal({
                 </>
             }
         >
-            <div className="flex max-h-[300px] flex-col divide-y divide-border/70 overflow-y-auto rounded-xl ring-1 ring-inset ring-border/80">
+            <div className="flex flex-col divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
                 {tunnelUsernames.map((targetUser) => {
                     const selfCreated = !!targetUser.created_by && targetUser.created_by === username;
                     return (
@@ -70,7 +70,7 @@ export function ShareModalEditTargetUsersModal({
                             />
                             <code className="font-mono text-foreground">{targetUser.username}</code>
                             {targetUser.created_by && (
-                                <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">
                                     {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                 </span>
                             )}

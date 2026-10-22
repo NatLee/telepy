@@ -44,7 +44,7 @@ function LogsPageInner() {
     const eventBadge = (event: string) => {
         const known = EVENT_BADGES[event];
         return (
-            <Badge variant={known?.variant ?? "outline"} className="text-[10px] leading-none py-0.5 whitespace-nowrap">
+            <Badge variant={known?.variant ?? "outline"} className="text-[0.6875rem] leading-none py-0.5 whitespace-nowrap">
                 {known ? t(known.key) : event}
             </Badge>
         );

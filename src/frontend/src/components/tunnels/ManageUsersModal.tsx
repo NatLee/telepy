@@ -74,7 +74,7 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
                             <p className="mt-1 text-sm text-muted-foreground">{t("manageUsers.emptySubtext")}</p>
                         </div>
                     ) : (
-                        <ul className="max-h-64 divide-y divide-border/70 overflow-y-auto rounded-xl ring-1 ring-inset ring-border/80">
+                        <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
                             {users.map((user) => (
                                 <li key={user.id} className="flex min-w-0 items-center justify-between gap-2 px-3.5 py-2.5 transition-colors hover:bg-surface">
                                     <div className="flex min-w-0 items-center gap-3">
@@ -83,7 +83,7 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
                                         </span>
                                         <span className="truncate font-mono text-sm text-foreground">{user.username}</span>
                                         {user.created_by && (
-                                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">
                                                 {t("common.byUserTag", { user: user.created_by, id: user.created_by_id ?? "" })}
                                             </span>
                                         )}

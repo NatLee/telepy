@@ -10,6 +10,8 @@ import { apiFetch } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SectionHeading } from "@/components/ui/section";
+import { Button } from "@/components/ui/button";
 
 export interface OAuthGrant {
     id: number;
@@ -67,23 +69,22 @@ export function ConnectedApps() {
     };
 
     return (
-        <section>
-            <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                <Bot size={15} className="text-primary" />
-                {t("prefs.connectedApps")}
-            </h3>
-            <p className="text-xs text-muted-foreground mb-2">{t("prefs.connectedAppsDescription")}</p>
+        <section className="space-y-3">
+            <SectionHeading icon={<Bot />} title={t("prefs.connectedApps")} description={t("prefs.connectedAppsDescription")} />
             {grants === null ? (
-                <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
+                <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
             ) : grants.length === 0 ? (
-                <p className="text-xs text-muted-foreground rounded-lg border border-dashed border-border px-4 py-3">{t("prefs.noConnectedApps")}</p>
+                <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{t("prefs.noConnectedApps")}</p>
             ) : (
-                <ul className="rounded-lg border border-border divide-y divide-border">
+                <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
                     {grants.map((g) => (
-                        <li key={g.id} className="px-4 py-3 flex items-start gap-3 text-sm">
-                            <div className="flex-1 min-w-0">
-                                <p className="font-medium truncate">{g.client_name}</p>
-                                <p className="text-xs text-muted-foreground truncate">
+                        <li key={g.id} className="flex items-start gap-3 px-4 py-3">
+                            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary" aria-hidden>
+                                <Bot size={16} />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                                <p className="truncate text-foreground">{g.client_name}</p>
+                                <p className="truncate text-xs text-muted-foreground">
                                     {g.scopes.join(" · ")}
                                     {" — "}
                                     {g.tunnels === null ? t("prefs.appAllTunnels") : t("prefs.appTunnelCount", { count: g.tunnels.length })}
@@ -92,14 +93,16 @@ export function ConnectedApps() {
                                     {t("prefs.appLastUsed", { time: fmt(g.last_used_at) })}
                                 </p>
                             </div>
-                            <button
+                            <Button
                                 type="button"
+                                variant="ghost"
+                                size="xs"
                                 onClick={() => setPending(g)}
-                                className="shrink-0 inline-flex items-center gap-1 text-xs text-destructive hover:underline"
+                                className="shrink-0 text-destructive hover:bg-destructive/8 hover:text-destructive"
                                 aria-label={t("prefs.revokeApp")}
                             >
-                                <Trash2 size={13} /> {t("prefs.revokeApp")}
-                            </button>
+                                <Trash2 /> {t("prefs.revokeApp")}
+                            </Button>
                         </li>
                     ))}
                 </ul>

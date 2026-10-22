@@ -63,7 +63,7 @@ function FlowNode({ label, connected, accent }: { label: string; connected: bool
                     )}
                 />
             }
-            bottom={<span className="text-[10px] text-muted-foreground whitespace-nowrap">{label}</span>}
+            bottom={<span className="text-[0.6875rem] text-muted-foreground whitespace-nowrap">{label}</span>}
         />
     );
 }
@@ -79,7 +79,7 @@ function Hop({ ms, connected }: { ms: number | null; connected: boolean }) {
             top={
                 <span
                     className={cn(
-                        "block w-14 text-center text-[10px] font-medium tabular-nums transition-colors duration-300",
+                        "block w-14 text-center text-[0.6875rem] font-medium tabular-nums transition-colors duration-300",
                         tier ? tier.textClass : "text-muted-foreground/70"
                     )}
                 >
@@ -157,7 +157,7 @@ export function TerminalLatencyBadge({
                 <span className="opacity-60">{t("latency.endToEnd")}</span>
                 <span className="font-semibold tabular-nums">{fmtMs(total)}</span>
             </div>
-            <div className="opacity-50 text-[10px] pt-0.5">{t("latency.roundTripPerHop")}</div>
+            <div className="opacity-50 text-[0.6875rem] pt-0.5">{t("latency.roundTripPerHop")}</div>
         </div>
     );
 
@@ -193,7 +193,7 @@ export function TerminalLatencyBadge({
                             connected={connected}
                         />
                         {/* Σ 欄固定寬度並常駐（未知時顯示 Σ —），總和位數變動不影響版面。 */}
-                        <span className="ml-2 pl-2 border-l border-border/50 w-[3.4rem] shrink-0 text-[10px] tabular-nums text-muted-foreground/80 whitespace-nowrap">
+                        <span className="ml-2 pl-2 border-l border-border/50 w-[3.4rem] shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/80 whitespace-nowrap">
                             {total != null ? `Σ ${Math.round(total)}ms` : "Σ —"}
                         </span>
                     </div>

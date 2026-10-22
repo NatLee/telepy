@@ -36,7 +36,7 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
             title={`${label}\n${t("tunnels.endpointCopyHint")}`}
             aria-label={label}
             className={cn(
-                "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px] ring-1 ring-inset whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
+                "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[0.75rem] ring-1 ring-inset whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
                 endpoint.live
                     ? "bg-muted text-foreground/80 ring-border hover:text-primary hover:ring-primary/30"
                     : "text-muted-foreground ring-border/70 hover:text-foreground",

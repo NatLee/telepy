@@ -68,13 +68,13 @@ export function WizardStepper({ step, maxStep, canLeaveFirst, onSelect }: Wizard
                                     {done ? <Check size={18} strokeWidth={2.5} /> : <Icon size={18} />}
                                 </span>
                                 <span className="flex flex-col items-center gap-0.5">
-                                    <span className={cn("text-[11px] font-medium uppercase tracking-wider", active ? "text-primary" : "text-muted-foreground")}>
+                                    <span className={cn("text-[0.75rem] font-medium uppercase tracking-wider", active ? "text-primary" : "text-muted-foreground")}>
                                         {t("wizard.stepN", { n: id })}
                                     </span>
                                     <span className={cn("hidden text-sm font-semibold sm:block", active || done ? "text-foreground" : "text-muted-foreground")}>
                                         {t(title)}
                                     </span>
-                                    <span className="hidden max-w-[11rem] text-[11px] leading-snug text-muted-foreground lg:block">{t(hint)}</span>
+                                    <span className="hidden max-w-[11rem] text-[0.75rem] leading-snug text-muted-foreground lg:block">{t(hint)}</span>
                                 </span>
                             </button>
                         </li>

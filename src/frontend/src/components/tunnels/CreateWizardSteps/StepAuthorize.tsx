@@ -51,10 +51,10 @@ function KeyRow({ item, kind, included, onToggle }: {
                     <span className="flex items-center gap-2">
                         <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
                         {kind === "service" && (
-                            <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-[10px] font-semibold text-primary">{t("wizard.authorize.required")}</span>
+                            <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-px text-[0.6875rem] font-semibold text-primary">{t("wizard.authorize.required")}</span>
                         )}
                     </span>
-                    <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    <span className="block truncate font-mono text-[0.75rem] text-muted-foreground">
                         {parsed.kind === "valid" ? `${parsed.algo} …${parsed.tail}` : item.key.slice(0, 24)}
                         {" · "}
                         {kind === "service" ? t("wizard.authorize.serviceUse") : t("wizard.authorize.userUse")}
@@ -68,7 +68,7 @@ function KeyRow({ item, kind, included, onToggle }: {
                 </Button>
             </div>
             {open && (
-                <pre className="mx-3 mb-3 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed text-foreground/85">
+                <pre className="mx-3 mb-3 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted/60 p-2.5 font-mono text-[0.75rem] leading-relaxed text-foreground/85">
                     {item.key}
                 </pre>
             )}

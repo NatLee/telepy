@@ -50,44 +50,6 @@ function splitConfig(text: string): [string, string] | null {
  * When the dialog body is cut off, overlay a fade and a "more below" pill at the bottom (click = scroll to the end);
  * hidden once the end is visible. -bottom-5 cancels the Modal body's py-5 so the fade sits on the scrollport edge.
  */
-function MoreBelow() {
-    const { t } = useI18n();
-    const end = useRef<HTMLDivElement>(null);
-    const [cut, setCut] = useState(false);
-    useEffect(() => {
-        const el = end.current;
-        if (!el || typeof IntersectionObserver === "undefined") return;
-        const io = new IntersectionObserver(([e]) => setCut(!e.isIntersecting));
-        io.observe(el);
-        return () => io.disconnect();
-    }, []);
-    return (
-        <>
-            <div ref={end} className="h-px" aria-hidden />
-            <div
-                aria-hidden
-                className={cn(
-                    "pointer-events-none sticky -bottom-5 -mt-16 flex h-16 items-end justify-center bg-gradient-to-t from-card via-card/85 to-transparent pb-1 transition-opacity duration-200",
-                    cut ? "opacity-100" : "opacity-0"
-                )}
-            >
-                <button
-                    type="button"
-                    tabIndex={-1}
-                    onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
-                    className={cn(
-                        "inline-flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs text-muted-foreground shadow-pop ring-1 ring-border hover:text-foreground",
-                        cut && "pointer-events-auto"
-                    )}
-                >
-                    <ChevronDown size={13} className="animate-bounce" aria-hidden />
-                    {t("sheet.setup.moreBelow")}
-                </button>
-            </div>
-        </>
-    );
-}
-
 function StepBadge({ n, state, current }: { n: number; state: SetupStepState; current: boolean }) {
     const base = "grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold";
     if (state === "done") {
@@ -106,7 +68,7 @@ function StepBadge({ n, state, current }: { n: number; state: SetupStepState; cu
 function StateChip({ state, current }: { state: SetupStepState; current: boolean }) {
     const { t } = useI18n();
     if (state === "todo" && current) {
-        return <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[11px] text-primary-foreground">{t("sheet.setup.nextUp")}</span>;
+        return <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[0.75rem] text-primary-foreground">{t("sheet.setup.nextUp")}</span>;
     }
     const style: Record<SetupStepState, string> = {
         done: "bg-success/10 text-success",
@@ -116,7 +78,7 @@ function StateChip({ state, current }: { state: SetupStepState; current: boolean
         loading: "bg-muted text-muted-foreground",
     };
     return (
-        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px]", style[state])}>
+        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.75rem]", style[state])}>
             {state === "loading" && <Loader2 size={11} className="animate-spin" aria-hidden />}
             {t(`sheet.setup.state.${state}`)}
         </span>
@@ -303,12 +265,12 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
                                         <KeyRound size={14} className="shrink-0 text-muted-foreground" aria-hidden />
                                         <span className="min-w-0 flex-1">
                                             <span className="block truncate text-foreground">{k.name}</span>
-                                            {k.fingerprint && <span className="block truncate font-mono text-[11px] text-muted-foreground">{k.fingerprint}</span>}
+                                            {k.fingerprint && <span className="block truncate font-mono text-[0.75rem] text-muted-foreground">{k.fingerprint}</span>}
                                         </span>
                                         {target ? (
                                             <TargetChip target={target} online={online} />
                                         ) : (
-                                            <span className="shrink-0 text-[11px] text-muted-foreground">{t("sheet.setup.notOnDevice")}</span>
+                                            <span className="shrink-0 text-[0.75rem] text-muted-foreground">{t("sheet.setup.notOnDevice")}</span>
                                         )}
                                     </li>
                                 );
@@ -453,7 +415,6 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
                     );
                 })}
             </ol>
-            <MoreBelow />
         </Modal>
     );
 }

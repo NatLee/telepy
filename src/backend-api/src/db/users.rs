@@ -25,6 +25,8 @@ pub struct UserSettings {
     pub language: Option<String>,
     pub theme: String,
     pub terminal_font_size: i64,
+    /// 介面顯示大小（%）。/ UI display scale in percent (85–130).
+    pub ui_scale: i64,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -139,7 +141,7 @@ pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: 
 // ---------------------------------------------------------------- settings
 
 pub async fn settings_for(db: &Db, user_id: i64) -> sqlx::Result<Option<UserSettings>> {
-    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size FROM user_management_usersettings WHERE user_id = ?")
+    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale FROM user_management_usersettings WHERE user_id = ?")
         .bind(user_id)
         .fetch_optional(&db.read)
         .await
@@ -150,7 +152,7 @@ pub async fn settings_get_or_create(db: &Db, user_id: i64) -> sqlx::Result<UserS
     if let Some(s) = settings_for(db, user_id).await? {
         return Ok(s);
     }
-    sqlx::query("INSERT OR IGNORE INTO user_management_usersettings (language, theme, terminal_font_size, user_id) VALUES (NULL, 'system', 14, ?)")
+    sqlx::query("INSERT OR IGNORE INTO user_management_usersettings (language, theme, terminal_font_size, ui_scale, user_id) VALUES (NULL, 'system', 14, 100, ?)")
         .bind(user_id)
         .execute(&db.write)
         .await?;
@@ -163,6 +165,7 @@ pub async fn settings_update(
     language: Option<Option<String>>,
     theme: Option<String>,
     terminal_font_size: Option<i64>,
+    ui_scale: Option<i64>,
 ) -> sqlx::Result<UserSettings> {
     settings_get_or_create(db, user_id).await?;
     if let Some(lang) = language {
@@ -182,6 +185,13 @@ pub async fn settings_update(
     if let Some(f) = terminal_font_size {
         sqlx::query("UPDATE user_management_usersettings SET terminal_font_size = ? WHERE user_id = ?")
             .bind(f)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(s) = ui_scale {
+        sqlx::query("UPDATE user_management_usersettings SET ui_scale = ? WHERE user_id = ?")
+            .bind(s)
             .bind(user_id)
             .execute(&db.write)
             .await?;

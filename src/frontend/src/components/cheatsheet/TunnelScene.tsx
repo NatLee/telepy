@@ -51,7 +51,7 @@ function Node({ node }: { node: SceneNode }) {
             <div className="flex flex-col md:items-center gap-1.5 min-w-0">
                 <div className="min-w-0">
                     <p className="text-sm font-semibold text-foreground truncate" title={node.name}>{node.name}</p>
-                    {node.sub && <p className="text-[11px] leading-snug text-muted-foreground">{node.sub}</p>}
+                    {node.sub && <p className="text-[0.75rem] leading-snug text-muted-foreground">{node.sub}</p>}
                 </div>
                 {node.socket && (
                     <span
@@ -66,7 +66,7 @@ function Node({ node }: { node: SceneNode }) {
                     </span>
                 )}
                 {node.entry && (
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">{t("sheet.scene.useHere")}</span>
+                    <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-primary">{t("sheet.scene.useHere")}</span>
                 )}
             </div>
         </div>
@@ -128,7 +128,7 @@ function Track({ link, axis, file }: { link: SceneLink; axis: "x" | "y"; file: b
 function LinkLabel({ link }: { link: SceneLink }) {
     if (link.kind === "tunnel") {
         return (
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary/25 bg-card px-2 py-0.5 text-[11px] font-medium text-primary shadow-sm">
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary/25 bg-card px-2 py-0.5 text-[0.75rem] font-medium text-primary shadow-sm">
                 <span className="grid place-items-center size-4 rounded bg-brand-gradient" aria-hidden><TelepyGlyph size={11} className="text-white" /></span>
                 <Lock size={10} aria-hidden />
                 {link.label}
@@ -136,7 +136,7 @@ function LinkLabel({ link }: { link: SceneLink }) {
         );
     }
     return (
-        <span className={cn("inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium", link.kind === "plain" ? "text-muted-foreground" : "text-primary")}>
+        <span className={cn("inline-flex items-center gap-1 whitespace-nowrap text-[0.75rem] font-medium", link.kind === "plain" ? "text-muted-foreground" : "text-primary")}>
             {link.kind === "ssh" && <Lock size={10} aria-hidden />}
             {link.label}
         </span>

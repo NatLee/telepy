@@ -288,7 +288,7 @@ export function TerminalContent({
                 ) : (serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">{t("terminal.noServiceKeys")}</p>
                 ) : (
-                    <div className="space-y-3 max-h-96 overflow-y-auto">
+                    <div className="space-y-3">
                         {(serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).map((sk, idx) => (
                             <div key={idx} className="min-w-0 overflow-hidden rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80">
                                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -297,8 +297,8 @@ export function TerminalContent({
                                         <Copy /> {t("common.copy")}
                                     </Button>
                                 </div>
-                                <div className="max-h-32 overflow-y-auto rounded-lg bg-card p-2.5 ring-1 ring-inset ring-border/60">
-                                    <code className="block max-w-full break-all whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">{sk.key || sk.public_key || "—"}</code>
+                                <div className="rounded-lg bg-card p-2.5 ring-1 ring-inset ring-border/60">
+                                    <code className="block max-w-full break-all whitespace-pre-wrap font-mono text-[0.75rem] leading-relaxed text-muted-foreground">{sk.key || sk.public_key || "—"}</code>
                                 </div>
                             </div>
                         ))}

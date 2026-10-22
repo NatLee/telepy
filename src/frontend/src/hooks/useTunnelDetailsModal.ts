@@ -1,81 +1,153 @@
-import { useState, useEffect } from "react";
-import { apiFetch } from "@/lib/api";
+/**
+ * 通道詳細資訊視窗的邏輯:載入通道、可編輯的主機別名 / 公鑰 / 描述(只送有改的欄位),
+ * 後端的欄位錯誤(別名或公鑰與別條通道重複)顯示在對應欄位旁。
+ * Tunnel details dialog logic: load the tunnel, edit alias / public key / description (only changed
+ * fields are sent), and surface the backend's field errors (duplicate alias or key) next to the field.
+ */
+import { useEffect, useMemo, useState } from "react";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
+import { keyProblem } from "@/lib/sshKeys";
+import type { TranslationKey } from "@/locales/en";
+
+export interface TunnelDetails {
+    id: number;
+    host_friendly_name: string;
+    key: string;
+    reverse_port: number;
+    description: string | null;
+    user_permission: "owner" | "admin" | "edit" | "view" | null;
+    is_owner: boolean;
+    can_edit: boolean;
+    created_at?: string;
+    updated_at?: string;
+    shared_with_count?: number;
+}
+
+export type TunnelForm = { host_friendly_name: string; key: string; description: string };
+export type TunnelFormErrors = Partial<Record<keyof TunnelForm, string>>;
+
+const PROBLEM: Record<NonNullable<ReturnType<typeof keyProblem>>, TranslationKey> = {
+    invalid: "keys.problem.invalid",
+    multiline: "keys.problem.multiline",
+    dsa: "keys.problem.dsa",
+    rsaShort: "keys.problem.rsaShort",
+};
 
 export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, onUpdate: () => void, onClose: () => void) {
     const { t } = useI18n();
-    const [details, setDetails] = useState<any>(null);
+    const [details, setDetails] = useState<TunnelDetails | null>(null);
     const [loading, setLoading] = useState(false);
-    const [description, setDescription] = useState("");
+    const [form, setForm] = useState<TunnelForm>({ host_friendly_name: "", key: "", description: "" });
+    const [errors, setErrors] = useState<TunnelFormErrors>({});
     const [isSaving, setIsSaving] = useState(false);
-    const [copiedKey, setCopiedKey] = useState(false);
     const { showSuccess, showError } = useToast();
 
     useEffect(() => {
-        if (isOpen && tunnelId) {
-            const fetchDetails = async () => {
-                setLoading(true);
-                try {
-                    const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        setDetails(data);
-                        setDescription(data.description || "");
-                    } else {
-                        showError(t("tunnelDetails.fetchFailed"));
-                    }
-                } catch (e: any) {
-                    showError(e.message || t("tunnelDetails.fetchFailed"));
-                } finally {
-                    setLoading(false);
+        if (!isOpen || !tunnelId) return;
+        let cancelled = false;
+        (async () => {
+            setLoading(true);
+            setErrors({});
+            try {
+                const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`);
+                const data = await readJson<TunnelDetails>(res);
+                if (cancelled) return;
+                if (res.ok && data) {
+                    setDetails(data);
+                    setForm({ host_friendly_name: data.host_friendly_name ?? "", key: data.key ?? "", description: data.description ?? "" });
+                } else {
+                    showError(responseError(res, data, t("tunnelDetails.fetchFailed")));
                 }
-            };
-            fetchDetails();
-        }
-    }, [isOpen, tunnelId, showError]);
+            } catch (e) {
+                if (!cancelled) showError(e instanceof Error ? e.message : t("tunnelDetails.fetchFailed"));
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen, tunnelId]);
 
-    const handleSaveDescription = async () => {
-        if (!tunnelId) return;
+    // 關閉後清掉上一條通道的資料,下次打開不會先閃一下舊內容。/ Drop the previous tunnel on close.
+    useEffect(() => {
+        if (!isOpen) {
+            setDetails(null);
+            setErrors({});
+        }
+    }, [isOpen]);
+
+    const canEdit = !!details && details.user_permission !== "view";
+    const setField = (name: keyof TunnelForm, value: string) => {
+        setForm((f) => ({ ...f, [name]: value }));
+        // 刪掉而不是設成 undefined:合併 {...live, ...server} 時 undefined 會蓋掉即時檢查的錯誤。
+        // Delete rather than set undefined, which would shadow the live error when merging.
+        setErrors((e) => {
+            if (!(name in e)) return e;
+            const next = { ...e };
+            delete next[name];
+            return next;
+        });
+    };
+
+    /** 只送有改的欄位。/ Only the changed fields. */
+    const patch = useMemo(() => {
+        if (!details) return {};
+        const p: Partial<TunnelForm> = {};
+        if (form.host_friendly_name.trim() !== details.host_friendly_name) p.host_friendly_name = form.host_friendly_name.trim();
+        if (form.key.trim() !== details.key) p.key = form.key.trim();
+        if (form.description !== (details.description ?? "")) p.description = form.description;
+        return p;
+    }, [details, form]);
+    const dirty = Object.keys(patch).length > 0;
+    const keyChanged = patch.key !== undefined;
+
+    // 即時檢查(後端會再檢查一次):別名必填、公鑰格式 / 強度。/ Live checks; the backend re-validates.
+    const liveErrors: TunnelFormErrors = {};
+    if (details && !form.host_friendly_name.trim()) liveErrors.host_friendly_name = t("tunnelDetails.nameRequired");
+    if (keyChanged) {
+        const problem = form.key.trim() ? keyProblem(form.key) : "invalid";
+        if (problem) liveErrors.key = t(PROBLEM[problem]);
+    }
+    const valid = Object.keys(liveErrors).length === 0;
+
+    const save = async () => {
+        if (!tunnelId || !dirty || !valid) return;
         setIsSaving(true);
         try {
-            const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, {
-                method: "PATCH",
-                body: JSON.stringify({ description }),
-            });
+            const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, { method: "PATCH", body: JSON.stringify(patch) });
+            const body = await readJson<Record<string, unknown>>(res);
             if (res.ok) {
-                showSuccess(t("tunnelDetails.descriptionUpdated"));
+                showSuccess(t("tunnelDetails.updated"));
                 onUpdate();
                 onClose();
-            } else {
-                showError(t("tunnelDetails.descriptionUpdateFailed"));
+                return;
             }
-        } catch (e: any) {
-            showError(e.message || t("tunnelDetails.descriptionUpdateFailed"));
+            // 欄位錯誤 {field: [msg]}:重複的別名 / 公鑰翻成好懂的句子,其餘照後端文字顯示。
+            // Field errors {field: [msg]}: duplicates get a friendly sentence, anything else is shown verbatim.
+            const fieldErrors: TunnelFormErrors = {};
+            for (const field of ["host_friendly_name", "key", "description"] as const) {
+                const v = body?.[field];
+                const msg = Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
+                if (!msg) continue;
+                fieldErrors[field] = msg.includes("already exists")
+                    ? t(field === "key" ? "tunnelDetails.keyTaken" : "tunnelDetails.nameTaken")
+                    : msg;
+            }
+            if (Object.keys(fieldErrors).length) setErrors(fieldErrors);
+            else showError(responseError(res, body, t("tunnelDetails.updateFailed")));
+        } catch (e) {
+            showError(e instanceof Error ? e.message : t("tunnelDetails.updateFailed"));
         } finally {
             setIsSaving(false);
         }
     };
 
-    const copyKey = () => {
-        if (details?.key) {
-            navigator.clipboard.writeText(details.key);
-            setCopiedKey(true);
-            setTimeout(() => setCopiedKey(false), 2000);
-        }
-    };
-
     return {
-        state: {
-            details,
-            loading,
-            description, setDescription,
-            isSaving,
-            copiedKey
-        },
-        actions: {
-            handleSaveDescription,
-            copyKey
-        }
+        state: { details, loading, form, errors: { ...liveErrors, ...errors }, canEdit, dirty, keyChanged, valid, isSaving },
+        actions: { setField, save },
     };
 }

@@ -118,7 +118,7 @@ export function AddKeyModal({
                     {parsed && !problem && (
                         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface px-2.5 py-2 ring-1 ring-border">
                             <KeyTypeBadge type={parsed.label} bits={parsed.bits} />
-                            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{fp ?? "…"}</span>
+                            <span className="min-w-0 truncate font-mono text-[0.75rem] text-muted-foreground">{fp ?? "…"}</span>
                         </div>
                     )}
                     {problem && <Callout tone={problem === "invalid" || problem === "multiline" ? "danger" : "warning"}>{t(PROBLEM[problem])}</Callout>}
@@ -147,7 +147,7 @@ export function AddKeyModal({
                     <fieldset className="space-y-2">
                         <legend className="text-sm text-foreground">{t("keys.installOn")}</legend>
                         <p className="text-xs text-muted-foreground">{t("keys.installOnHint")}</p>
-                        <div className="grid max-h-56 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                        <div className="grid gap-1.5 sm:grid-cols-2">
                             {devices.map((d) => (
                                 <label
                                     key={d.tunnel_id}
@@ -159,7 +159,7 @@ export function AddKeyModal({
                                             <HardDrive size={13} className="text-muted-foreground" aria-hidden />
                                             <span className="truncate">{d.host_friendly_name}</span>
                                         </span>
-                                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                                        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.75rem] text-muted-foreground">
                                             <OnlineDot online={d.online} />
                                             <span className="font-mono">{d.accounts.length ? d.accounts.join(", ") : t("keys.status.noAccounts")}</span>
                                         </span>

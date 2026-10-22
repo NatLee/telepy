@@ -60,7 +60,7 @@ function ActionItem({
             <Icon className="mt-0.5" />
             <span className="flex flex-col min-w-0 gap-0.5">
                 <span className="font-medium leading-tight">{label}</span>
-                {hint && <span className="text-[11px] leading-snug text-muted-foreground whitespace-normal">{hint}</span>}
+                {hint && <span className="text-[0.75rem] leading-snug text-muted-foreground whitespace-normal">{hint}</span>}
             </span>
         </DropdownMenuItem>
     );
@@ -68,7 +68,7 @@ function ActionItem({
 
 function GroupLabel({ children }: { children: React.ReactNode }) {
     return (
-        <DropdownMenuLabel className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
+        <DropdownMenuLabel className="px-2 pt-1.5 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
             {children}
         </DropdownMenuLabel>
     );

@@ -171,4 +171,6 @@ Sub-commands:
 
 ## ライセンス
 
-[MIT](./LICENSE)
+Telepy は [GNU Affero General Public License v3.0](./LICENSE)（AGPL-3.0）で提供しています。改変した Telepy をサービスとして他の人に提供する場合は、その利用者にソースコードを提供する必要があります。用途に合わない場合は商用ライセンスもご用意しています。[@NatLee](https://github.com/NatLee) までご連絡ください。
+
+2026 年 10 月より前に公開されたバージョンは MIT ライセンスです。詳しくは [NOTICE](./NOTICE) を参照してください。コントリビューションは[コントリビューターライセンス契約（CLA）](./CONTRIBUTING.md#contributor-license-agreement)に基づいて受け付けます。

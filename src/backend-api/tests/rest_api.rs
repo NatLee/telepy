@@ -328,10 +328,13 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14}));
-    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16})).await;
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100}));
+    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115}));
+    let r = app.post("/api/user/settings", Some(&admin), json!({"ui_scale": 200})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["ui_scale"][0], "ui_scale must be between 85 and 130.");
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "fr"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json["language"][0], "Invalid language 'fr'. Valid options: auto, en, ja, zh-TW.");
@@ -340,6 +343,7 @@ async fn user_keys_settings_and_admin_users() {
     let r = app.get("/api/auth/user/profile", Some(&admin)).await;
     assert_eq!(r.json["language"], "zh-TW");
     assert_eq!(r.json["terminal_font_size"], 16);
+    assert_eq!(r.json["ui_scale"], 115);
 
     // admin users
     let r = app.get("/api/user/users", Some(&admin)).await;
