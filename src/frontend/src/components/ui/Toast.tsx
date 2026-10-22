@@ -26,10 +26,10 @@ const TOAST_ICON: Record<ToastType, typeof Info> = {
 };
 
 const TOAST_TONE: Record<ToastType, string> = {
-    success: "bg-success/12 text-success",
-    error: "bg-destructive/12 text-destructive",
-    warning: "bg-warning/15 text-warning",
-    info: "bg-info/12 text-info",
+    success: "text-success",
+    error: "text-destructive",
+    warning: "text-warning",
+    info: "text-info",
 };
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
@@ -84,16 +84,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                     return (
                         <div
                             key={t.id}
-                            className="pointer-events-auto flex items-start gap-3 rounded-xl bg-popover py-3 pr-2.5 pl-3.5 text-popover-foreground shadow-pop animate-toast-in"
+                            className="pointer-events-auto flex items-start gap-3 rounded-lg border border-border bg-popover py-3 pr-2.5 pl-3.5 text-popover-foreground shadow-pop animate-toast-in"
                             role="alert"
                         >
-                            <span className={cn("mt-px grid size-6 shrink-0 place-items-center rounded-full", TOAST_TONE[t.type])}>
-                                <Icon size={15} aria-hidden />
+                            <span className={cn("mt-0.5 shrink-0", TOAST_TONE[t.type])}>
+                                <Icon size={17} aria-hidden />
                             </span>
                             <div className="min-w-0 flex-1 pt-0.5 text-sm leading-relaxed break-words">{t.message}</div>
                             <button
                                 onClick={() => removeToast(t.id)}
-                                className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                                className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                             >
                                 <X size={15} />
                             </button>

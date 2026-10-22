@@ -23,20 +23,20 @@ interface TunnelTableRowProps extends TunnelActionHandlers {
 
 export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelTableRowProps) {
     return (
-        <tr className="group hover:bg-primary/[0.03] transition-colors">
+        <tr className="group hover:bg-surface transition-colors">
             <td className="px-4 py-3">
                 <div className="flex items-center gap-3 min-w-0">
                     <div
                         className={cn(
-                            "grid place-items-center w-8 h-8 rounded-lg shrink-0 ring-1 ring-inset",
-                            isActive ? "bg-primary/10 text-primary ring-primary/20" : "bg-muted text-muted-foreground ring-border"
+                            "grid place-items-center size-8 rounded-md shrink-0 border",
+                            isActive ? "border-success/25 bg-success/10 text-success" : "border-border bg-surface text-muted-foreground"
                         )}
                         aria-hidden
                     >
                         <Server size={15} />
                     </div>
                     <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground truncate max-w-[18rem]" title={tunnel.host_friendly_name}>
+                        <p className="text-sm text-foreground truncate max-w-[18rem]" title={tunnel.host_friendly_name}>
                             {tunnel.host_friendly_name}
                         </p>
                         {tunnel.description && (
@@ -55,7 +55,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex flex-col items-start gap-1">
-                    <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
+                    <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
                     <TunnelEndpointChip endpoint={tunnel.endpoint} />
                 </div>
             </td>

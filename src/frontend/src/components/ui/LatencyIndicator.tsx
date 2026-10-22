@@ -7,7 +7,8 @@
  * 全站共用：主頁面卡片 / 表格列、terminal 標題列與手機分頁列。
  *
  * 分級門檻（單程 RTT，毫秒）：
- *   <60 極佳(4 綠) · 60–150 良好(3 黃) · 150–300 普通(2 橙) · >300 不佳(1 紅)
+ *   <60 極佳(4 綠) · 60–150 良好(3 綠) · 150–300 普通(2 琥珀) · >300 不佳(1 紅)
+ * 顏色一律用語意 token（success / warning / destructive），不用 Tailwind 的 emerald / amber。
  */
 import * as React from "react";
 import { cn } from "@/lib/utils";
@@ -51,10 +52,10 @@ export type LatencyTier = {
 
 /** 依單程 RTT（毫秒）決定品質分級與配色。全站共用（訊號格、terminal 流程路徑）。 */
 export function latencyTier(rttMs: number): LatencyTier {
-    if (rttMs < 60) return { bars: 4, barClass: "bg-emerald-500", textClass: "text-emerald-600 dark:text-emerald-400", labelKey: "latency.excellent" };
-    if (rttMs < 150) return { bars: 3, barClass: "bg-amber-500", textClass: "text-amber-600 dark:text-amber-400", labelKey: "latency.good" };
-    if (rttMs < 300) return { bars: 2, barClass: "bg-orange-500", textClass: "text-orange-600 dark:text-orange-400", labelKey: "latency.fair" };
-    return { bars: 1, barClass: "bg-red-500", textClass: "text-red-600 dark:text-red-400", labelKey: "latency.poor" };
+    if (rttMs < 60) return { bars: 4, barClass: "bg-success", textClass: "text-success", labelKey: "latency.excellent" };
+    if (rttMs < 150) return { bars: 3, barClass: "bg-success", textClass: "text-success", labelKey: "latency.good" };
+    if (rttMs < 300) return { bars: 2, barClass: "bg-warning", textClass: "text-warning", labelKey: "latency.fair" };
+    return { bars: 1, barClass: "bg-destructive", textClass: "text-destructive", labelKey: "latency.poor" };
 }
 
 const SIZES = {
@@ -111,7 +112,7 @@ export function LatencyIndicator({
                     {label && <span className="text-muted-foreground/70">{label}</span>}
                     <span
                         className={cn(
-                            "font-medium transition-colors",
+                            "transition-colors",
                             tier ? tier.textClass : "text-muted-foreground",
                             reserveWidth && "inline-block min-w-[4.75ch] text-left"
                         )}

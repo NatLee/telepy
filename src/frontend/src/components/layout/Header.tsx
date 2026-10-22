@@ -28,7 +28,7 @@ export function Header() {
                     : t("nav.dashboard");
 
     return (
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border/60 bg-background/75 backdrop-blur-xl px-4 sm:px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background px-4 sm:px-6">
             <Sheet open={isOpen} onOpenChange={setIsOpen}>
                 <SheetTrigger asChild>
                     <Button variant="ghost" size="icon" className="md:hidden">
@@ -61,7 +61,7 @@ export function Header() {
 
             {/* 通知 WebSocket 狀態：全站共用一條連線，放在標題列每頁都看得到。
                 The notification WebSocket is app-wide, so its status lives in the header on every page. */}
-            <div className="shrink-0 rounded-full bg-card/80 px-2.5 py-1 shadow-card ring-1 ring-border/70">
+            <div className="shrink-0">
                 <WebSocketStatusBadge />
             </div>
         </header>

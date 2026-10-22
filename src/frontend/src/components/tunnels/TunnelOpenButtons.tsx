@@ -1,6 +1,8 @@
 /**
  * 「開啟」三顆按鈕：終端機 / 檔案 / 瀏覽器，一律帶文字標籤（卡片是圖示在上的方塊，表格是精簡橫排）。
- * The three "open" actions — Terminal / Files / Browser — always labelled (tiles on cards, a compact row in the table).
+ * 線上時終端機是實色主色、其餘外框；離線一律淡色。沒有光暈、位移或放大。
+ * The three "open" actions — Terminal / Files / Browser — always labelled (tiles on cards, a compact row in the
+ * table). Online: Terminal is solid primary, the others outlined; offline: all muted. No glow, lift or scale.
  *
  * prefetch={false}：terminal 是「點了才進」的重頁（xterm/VNC），每條隧道三條連結，N 條隧道 = 3N 次 route
  * prefetch，載入時一次湧出把伺服器/連線塞爆，害真正在等的 dashboard/profile 排隊變慢。點擊時才載入。
@@ -36,7 +38,7 @@ export function TunnelOpenButtons({ tunnel, online, variant = "tiles" }: TunnelO
 
     if (variant === "compact") {
         return (
-            <div className="inline-flex items-center rounded-lg border border-border bg-background/60 p-0.5">
+            <div className="inline-flex items-center rounded-md border border-border bg-surface p-0.5">
                 {OPEN_ACTIONS.map(({ view, icon: Icon, label, hint }) => (
                     <Link
                         key={view}
@@ -44,13 +46,13 @@ export function TunnelOpenButtons({ tunnel, online, variant = "tiles" }: TunnelO
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(
-                            "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium transition-colors",
+                            "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-sm text-xs transition-colors",
                             online
-                                ? "text-foreground hover:bg-primary/10 hover:text-primary"
+                                ? "text-foreground hover:bg-card hover:ring-1 hover:ring-border"
                                 : "text-muted-foreground/70 hover:bg-muted hover:text-muted-foreground"
                         )}
                     >
-                        <Icon size={14} className={online && view === "terminal" ? "text-primary" : undefined} />
+                        <Icon size={14} className={online && view === "terminal" ? "text-success" : undefined} />
                         {t(label)}
                     </Link>
                 ))}
@@ -69,14 +71,14 @@ export function TunnelOpenButtons({ tunnel, online, variant = "tiles" }: TunnelO
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(
-                            "group/open flex flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2.5 text-xs font-medium transition-all duration-200",
+                            "flex flex-col items-center justify-center gap-1 rounded-md border px-2 py-2.5 text-xs transition-colors duration-150",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            !online && "border-transparent bg-muted/60 text-muted-foreground/80 hover:bg-muted hover:text-muted-foreground",
-                            online && primary && "border-transparent bg-primary text-primary-foreground shadow-glow hover:-translate-y-px hover:bg-primary/90",
-                            online && !primary && "border-border bg-background/60 text-foreground hover:-translate-y-px hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                            !online && "border-border bg-surface text-muted-foreground/80 hover:bg-muted hover:text-muted-foreground",
+                            online && primary && "border-transparent bg-primary text-primary-foreground hover:bg-primary/90",
+                            online && !primary && "border-input bg-card text-foreground hover:bg-muted hover:border-foreground/30"
                         )}
                     >
-                        <Icon size={18} className="transition-transform group-hover/open:scale-110" />
+                        <Icon size={18} />
                         <span className="truncate max-w-full">{t(label)}</span>
                     </Link>
                 );

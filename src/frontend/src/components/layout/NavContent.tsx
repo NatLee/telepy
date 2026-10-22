@@ -60,13 +60,13 @@ interface NavContentProps {
     collapsed?: boolean;
 }
 
-/** 目前頁面是浮起的白色膠囊(圖示轉主色),其餘是安靜的灰字。/ The current page is a raised pill with a brand-tinted icon. */
+/** 目前頁面是淡灰底 + 主色圖示(不浮起、沒有陰影),其餘是安靜的灰字。/ The current page is a flat tinted row with a primary icon — no raised pill. */
 function navItemClass(active: boolean, collapsed: boolean) {
     return cn(
-        "group relative flex items-center gap-3 py-2 rounded-xl text-sm transition-[color,background-color,box-shadow] duration-150",
+        "group relative flex items-center gap-3 py-1.5 rounded-md text-sm transition-[color,background-color] duration-150",
         collapsed ? "justify-center px-2" : "px-3",
         active
-            ? "bg-card text-foreground shadow-card ring-1 ring-sidebar-border [&>svg]:text-primary"
+            ? "bg-sidebar-accent text-foreground [&>svg]:text-primary"
             : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
     );
 }
@@ -74,7 +74,7 @@ function navItemClass(active: boolean, collapsed: boolean) {
 function SectionLabel({ children, collapsed }: { children: React.ReactNode; collapsed: boolean }) {
     if (collapsed) return <div className="my-3 mx-2 border-t border-sidebar-border" />;
     return (
-        <p className="px-3 pt-5 pb-1.5 text-[0.75rem] uppercase tracking-[0.14em] text-muted-foreground/70">
+        <p className="px-3 pt-5 pb-1 text-xs text-muted-foreground/80">
             {children}
         </p>
     );
@@ -179,8 +179,8 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
 
                 {/* 使用者列 + 偏好設定齒輪 + 登出 / User row + preferences gear + logout */}
                 {user && !collapsed && (
-                    <div className="flex items-center gap-2.5 rounded-xl bg-card/80 p-2 shadow-card ring-1 ring-sidebar-border">
-                        <span className="grid place-items-center w-8 h-8 rounded-full bg-brand-gradient text-white text-sm shrink-0 uppercase" aria-hidden>
+                    <div className="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-card p-2">
+                        <span className="grid place-items-center size-8 rounded-full bg-foreground text-background text-sm shrink-0 uppercase" aria-hidden>
                             {(user.username ?? "?").slice(0, 1)}
                         </span>
                         <div className="flex-1 min-w-0">
@@ -192,7 +192,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             onClick={() => setPrefsOpen(true)}
                             title={t("nav.preferences")}
                             aria-label={t("nav.preferences")}
-                            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors shrink-0"
+                            className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors shrink-0"
                         >
                             <SlidersHorizontal size={16} />
                         </button>
@@ -201,7 +201,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             onClick={handleLogout}
                             title={t("nav.logout")}
                             aria-label={t("nav.logout")}
-                            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                            className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
                         >
                             <LogOut size={16} />
                         </button>

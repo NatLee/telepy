@@ -1,13 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <!-- Telepy：裝置往外連（圓點 →），伺服器沿同一條連線折返連回來（← 箭頭）= reverse tunnel。
        Device dials out (dot →), the server reaches back through the same connection (← arrow).
-       漸層 = globals.css 的 primary → brand-2（淺色主題）。線寬 8、水平線落在 4 的倍數，16/32px 時對齊整數像素。
-       Gradient = globals.css primary → brand-2 (light theme). Stroke 8 on multiples of 4 stays pixel-aligned at 16/32px.
+       漸層 = globals.css 的 .bg-brand-gradient（琥珀橘 oklch(0.68 0.165 55) → 柿子橘 oklch(0.56 0.165 40)，不分主題）。
+       線寬 8、水平線落在 4 的倍數，16/32px 時對齊整數像素。
+       Gradient = globals.css .bg-brand-gradient (amber-orange to persimmon, same in both themes).
+       Stroke 8 on multiples of 4 stays pixel-aligned at 16/32px.
        favicon.ico / apple-icon.png 由此檔渲染 / are rendered from this file. -->
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#00a368"/>
-      <stop offset="1" stop-color="#00a5c3"/>
+      <stop offset="0" stop-color="#e3770e"/>
+      <stop offset="1" stop-color="#c04815"/>
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="15" fill="url(#g)"/>

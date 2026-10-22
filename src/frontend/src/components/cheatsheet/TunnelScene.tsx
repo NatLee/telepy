@@ -34,10 +34,11 @@ export interface SceneLink {
     label?: string;
 }
 
+// 橘色只代表 Telepy 的通道；裝置本身用中性色，免得跟通道混在一起。/ Orange means the Telepy tunnel; the device stays neutral.
 const ROLE_TONE: Record<SceneRole, string> = {
     you: "bg-info/12 text-info ring-info/30",
-    device: "bg-primary/12 text-primary ring-primary/30",
-    target: "bg-amber-500/12 text-amber-600 ring-amber-500/30 dark:text-amber-400",
+    device: "bg-foreground/[0.06] text-foreground ring-border",
+    target: "bg-warning/12 text-warning ring-warning/30",
 };
 
 function Node({ node }: { node: SceneNode }) {
@@ -45,7 +46,7 @@ function Node({ node }: { node: SceneNode }) {
     const Icon = node.icon;
     return (
         <div className="flex md:flex-col items-center gap-3 md:gap-2 md:text-center min-w-0 md:w-40 lg:w-44 md:shrink-0">
-            <span className={cn("grid place-items-center size-14 md:size-16 shrink-0 rounded-2xl ring-1 ring-inset bg-card shadow-card", ROLE_TONE[node.role])} aria-hidden>
+            <span className={cn("grid place-items-center size-14 md:size-16 shrink-0 rounded-xl ring-1 ring-inset bg-card shadow-card", ROLE_TONE[node.role])} aria-hidden>
                 <Icon size={28} strokeWidth={1.75} />
             </span>
             <div className="flex flex-col md:items-center gap-1.5 min-w-0">
@@ -57,7 +58,7 @@ function Node({ node }: { node: SceneNode }) {
                     <span
                         className={cn(
                             "inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 font-mono text-xs ring-1 ring-inset",
-                            node.entry ? "bg-primary text-primary-foreground ring-primary shadow-glow" : "bg-muted text-foreground ring-border"
+                            node.entry ? "bg-primary text-primary-foreground ring-primary" : "bg-muted text-foreground ring-border"
                         )}
                         title={node.socket}
                     >
@@ -66,7 +67,7 @@ function Node({ node }: { node: SceneNode }) {
                     </span>
                 )}
                 {node.entry && (
-                    <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-primary">{t("sheet.scene.useHere")}</span>
+                    <span className="text-[0.6875rem] text-primary">{t("sheet.scene.useHere")}</span>
                 )}
             </div>
         </div>
@@ -86,7 +87,7 @@ function Packets({ axis, back, file, plain }: { axis: "x" | "y"; back: boolean; 
                 ) : (
                     <span
                         key={delay}
-                        className={cn("absolute size-2 rounded-full opacity-0", pos, anim, plain ? "bg-brand-2" : "bg-primary shadow-[0_0_8px_var(--primary)]")}
+                        className={cn("absolute size-2 rounded-full opacity-0", pos, anim, plain ? "bg-brand-2" : "bg-primary")}
                         style={{ animationDelay: delay }}
                         aria-hidden
                     />
@@ -171,7 +172,7 @@ export function TunnelScene({ nodes, links, file = false, caption }: {
 }) {
     const { t } = useI18n();
     return (
-        <figure className="rounded-2xl border border-border bg-linear-to-b from-muted/40 to-transparent px-4 pt-6 pb-4 sm:px-6" aria-label={t("sheet.scene.aria")}>
+        <figure className="rounded-xl border border-border bg-surface/60 px-4 pt-6 pb-4 sm:px-6" aria-label={t("sheet.scene.aria")}>
             <div className="flex flex-col md:flex-row md:items-start md:justify-center">
                 {nodes.map((node, i) => (
                     <React.Fragment key={i}>

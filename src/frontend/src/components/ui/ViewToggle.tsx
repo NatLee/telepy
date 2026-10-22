@@ -69,7 +69,7 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
 
     if (!mounted) {
         return (
-            <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label={t("ui.viewToggle")}>
+            <div className="flex bg-surface p-0.5 rounded-md border border-border" role="group" aria-label={t("ui.viewToggle")}>
                 <Button variant="ghost" size="sm" className="h-8 px-2.5 text-muted-foreground"><LayoutGrid size={16} /></Button>
                 <Button variant="ghost" size="sm" className="h-8 px-2.5 text-muted-foreground"><List size={16} /></Button>
             </div>
@@ -77,11 +77,11 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
     }
 
     return (
-        <div className="flex bg-muted/50 p-0.5 rounded-lg border border-border" role="group" aria-label={t("ui.viewToggle")}>
+        <div className="flex bg-surface p-0.5 rounded-md border border-border" role="group" aria-label={t("ui.viewToggle")}>
             <Button
-                variant={value === "card" ? "default" : "ghost"}
+                variant={value === "card" ? "outline" : "ghost"}
                 size="sm"
-                className={`h-8 px-2.5 ${value === "card" ? "shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`h-7 rounded-sm px-2.5 ${value === "card" ? "" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => handleToggle("card")}
                 aria-label={t("ui.cardView")}
                 aria-pressed={value === "card"}
@@ -90,9 +90,9 @@ export function ViewToggle({ value, onChange, storageKey }: ViewToggleProps) {
                 <LayoutGrid size={16} />
             </Button>
             <Button
-                variant={value === "list" ? "default" : "ghost"}
+                variant={value === "list" ? "outline" : "ghost"}
                 size="sm"
-                className={`h-8 px-2.5 ${value === "list" ? "shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                className={`h-7 rounded-sm px-2.5 ${value === "list" ? "" : "text-muted-foreground hover:text-foreground"}`}
                 onClick={() => handleToggle("list")}
                 aria-label={t("ui.listView")}
                 aria-pressed={value === "list"}

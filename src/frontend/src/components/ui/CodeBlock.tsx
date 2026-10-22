@@ -41,22 +41,16 @@ export function CodeBlock({ language, value }: CodeBlockProps) {
     };
 
     return (
-        <div className="relative group overflow-hidden rounded-xl bg-[oklch(0.205_0.02_262)] ring-1 ring-black/5 dark:bg-[oklch(0.14_0.012_262)] dark:ring-white/8">
-            <div className="flex items-center justify-between border-b border-white/8 px-4 py-2 text-xs text-white/60">
-                <span className="flex items-center gap-2">
-                    <span className="flex gap-1.5" aria-hidden>
-                        <span className="size-2.5 rounded-full bg-white/15" />
-                        <span className="size-2.5 rounded-full bg-white/15" />
-                        <span className="size-2.5 rounded-full bg-white/15" />
-                    </span>
-                    <span className="ml-1 font-mono uppercase tracking-wider">{language}</span>
-                </span>
+        <div className="relative group overflow-hidden rounded-lg bg-[oklch(0.2_0.012_260)] ring-1 ring-black/10 dark:bg-[oklch(0.14_0.01_260)] dark:ring-white/10">
+            {/* 標題列只有語言名稱與複製鈕，沒有假的視窗紅綠燈。/ Header: language label + copy, no fake window chrome. */}
+            <div className="flex items-center justify-between border-b border-white/8 px-4 py-1.5 text-xs text-white/55">
+                <span className="font-mono">{language}</span>
                 <button
                     onClick={copyToClipboard}
                     className="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition-colors hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
                     title={t("ui.copyToClipboard")}
                 >
-                    {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                    {copied ? <Check size={14} className="text-success" /> : <Copy size={14} />}
                     {copied ? t("common.copied") : t("common.copy")}
                 </button>
             </div>

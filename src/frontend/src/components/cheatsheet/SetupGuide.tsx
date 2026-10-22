@@ -54,21 +54,21 @@ function StepBadge({ n, state, current }: { n: number; state: SetupStepState; cu
     const base = "grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold";
     if (state === "done") {
         return (
-            <span className={cn(base, "bg-success text-white")}>
+            <span className={cn(base, "bg-success text-success-foreground")}>
                 <Check size={15} strokeWidth={3} aria-hidden />
             </span>
         );
     }
     if (state === "working") return <span className={cn(base, "bg-warning/12 text-warning ring-1 ring-inset ring-warning/35")}><Clock3 size={15} aria-hidden /></span>;
     if (state === "error") return <span className={cn(base, "bg-destructive/10 text-destructive ring-1 ring-inset ring-destructive/30")}><CircleAlert size={15} aria-hidden /></span>;
-    if (current) return <span className={cn(base, "bg-brand-gradient text-white shadow-glow")}>{n}</span>;
+    if (current) return <span className={cn(base, "bg-primary text-primary-foreground")}>{n}</span>;
     return <span className={cn(base, "bg-muted text-muted-foreground ring-1 ring-inset ring-border")}>{n}</span>;
 }
 
 function StateChip({ state, current }: { state: SetupStepState; current: boolean }) {
     const { t } = useI18n();
     if (state === "todo" && current) {
-        return <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-[0.75rem] text-primary-foreground">{t("sheet.setup.nextUp")}</span>;
+        return <span className="shrink-0 rounded-sm bg-primary px-1.5 py-px text-[0.75rem] text-primary-foreground">{t("sheet.setup.nextUp")}</span>;
     }
     const style: Record<SetupStepState, string> = {
         done: "bg-success/10 text-success",
@@ -78,7 +78,7 @@ function StateChip({ state, current }: { state: SetupStepState; current: boolean
         loading: "bg-muted text-muted-foreground",
     };
     return (
-        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.75rem]", style[state])}>
+        <span className={cn("inline-flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-px text-[0.75rem]", style[state])}>
             {state === "loading" && <Loader2 size={11} className="animate-spin" aria-hidden />}
             {t(`sheet.setup.state.${state}`)}
         </span>

@@ -40,10 +40,10 @@ export function Sidebar() {
 
     return (
         <aside
-            className={`hidden md:flex flex-col ${collapsed ? "w-[4.5rem]" : "w-64"} relative z-20 border-r border-sidebar-border bg-sidebar/85 backdrop-blur-xl shrink-0 h-screen sticky top-0 transition-[width] duration-200`}
+            className={`hidden md:flex flex-col ${collapsed ? "w-[4.5rem]" : "w-64"} relative z-20 border-r border-sidebar-border bg-sidebar shrink-0 h-screen sticky top-0 transition-[width] duration-200`}
         >
             <div className={`h-16 flex items-center border-b border-sidebar-border ${collapsed ? "justify-center px-2" : "justify-between pl-4 pr-3"}`}>
-                <Link href="/tunnels" className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <Link href="/tunnels" className="min-w-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     <BrandMark collapsed={collapsed} />
                 </Link>
                 {!collapsed && (

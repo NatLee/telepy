@@ -27,7 +27,7 @@ export function SectionHeading({
     return (
         <div className={cn("flex items-start justify-between gap-3", className)}>
             <div className="min-w-0 flex-1">
-                <Tag className="flex items-center gap-2 text-base leading-snug text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-primary">
+                <Tag className="flex items-center gap-2 text-base leading-snug text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
                     {icon}
                     <span className="min-w-0 truncate">{title}</span>
                 </Tag>
@@ -50,7 +50,7 @@ export function Section({ children, className, ...heading }: React.ComponentProp
 
 /** 屬性清單外框:凹槽底 + 細線分隔。/ Property list frame: well surface, hairline dividers. */
 export function PropertyList({ children, className }: { children: React.ReactNode; className?: string }) {
-    return <dl className={cn("divide-y divide-border/70 rounded-xl bg-surface px-4 ring-1 ring-inset ring-border/80", className)}>{children}</dl>;
+    return <dl className={cn("divide-y divide-border rounded-lg border border-border bg-surface px-4", className)}>{children}</dl>;
 }
 
 export function Property({ label, children, mono = false }: { label: React.ReactNode; children: React.ReactNode; mono?: boolean }) {
@@ -79,7 +79,7 @@ export function Chip({
 }: React.ComponentProps<"span"> & { tone?: keyof typeof CHIP_TONE; mono?: boolean }) {
     return (
         <span
-            className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs leading-5 whitespace-nowrap [&>svg]:size-3.5", CHIP_TONE[tone], mono && "font-mono tabular-nums", className)}
+            className={cn("inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-xs leading-5 whitespace-nowrap [&>svg]:size-3.5", CHIP_TONE[tone], mono && "font-mono tabular-nums", className)}
             {...props}
         >
             {children}

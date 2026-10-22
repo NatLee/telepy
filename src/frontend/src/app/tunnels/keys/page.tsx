@@ -103,7 +103,7 @@ function UserKeysPage() {
                         {t("keys.loading")}
                     </div>
                 ) : page.keys.length === 0 ? (
-                    <div className="flex flex-col items-center rounded-2xl border-2 border-dashed border-border bg-card px-6 py-14 text-center">
+                    <div className="flex flex-col items-center rounded-xl border-2 border-dashed border-border bg-card px-6 py-14 text-center">
                         <KeyIcon size={44} className="mb-4 text-muted-foreground/50" />
                         <h3 className="text-lg text-foreground">{t("keys.emptyTitle")}</h3>
                         <p className="mt-1 max-w-sm text-sm text-muted-foreground">{t("keys.emptyBody")}</p>

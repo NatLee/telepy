@@ -95,7 +95,7 @@ function MoreBelow() {
                     tabIndex={-1}
                     onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
                     className={cn(
-                        "inline-flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs text-muted-foreground shadow-pop ring-1 ring-border hover:text-foreground",
+                        "inline-flex items-center gap-1 rounded-md bg-card px-3 py-1 text-xs text-muted-foreground shadow-pop ring-1 ring-border hover:text-foreground",
                         cut && "pointer-events-auto",
                     )}
                 >
@@ -141,10 +141,10 @@ export function Modal({
                     className={cn(
                         "fixed z-50 flex flex-col overflow-hidden bg-card text-card-foreground shadow-dialog outline-none",
                         // 桌面:置中卡片。/ Desktop: centred card.
-                        "sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-[calc(100%-2rem)] sm:max-h-[min(90dvh,64rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[1.25rem]",
+                        "sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-[calc(100%-2rem)] sm:max-h-[min(90dvh,64rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl",
                         "sm:data-[state=open]:animate-dialog-content-show sm:data-[state=closed]:animate-dialog-content-hide",
                         // 手機:底部 sheet。/ Phone: bottom sheet.
-                        "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-[1.5rem]",
+                        "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-xl",
                         "max-sm:data-[state=open]:animate-sheet-up-show max-sm:data-[state=closed]:animate-sheet-up-hide",
                         SIZE_CLASS[size],
                     )}
@@ -156,10 +156,12 @@ export function Modal({
                             <span
                                 aria-hidden
                                 className={cn(
-                                    "grid size-10 shrink-0 place-items-center rounded-xl ring-1 ring-inset [&_svg]:size-5",
+                                    // 圖示方塊是中性的；只有危險操作才上色，免得每個對話框都一片橘。
+                                    // The icon tile is neutral; only dangerous actions get colour, so dialogs aren't all orange.
+                                    "grid size-9 shrink-0 place-items-center rounded-md border [&_svg]:size-[18px]",
                                     tone === "danger"
-                                        ? "bg-destructive/10 text-destructive ring-destructive/15"
-                                        : "bg-primary/10 text-primary ring-primary/15",
+                                        ? "border-destructive/20 bg-destructive/10 text-destructive"
+                                        : "border-border bg-surface text-foreground/70",
                                 )}
                             >
                                 {icon}
@@ -178,7 +180,7 @@ export function Modal({
                             )}
                         </div>
                         <DialogPrimitive.Close
-                            className="-mr-1.5 -mt-0.5 grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                            className="-mr-1.5 -mt-0.5 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
                         >
                             <X size={18} />
                             <span className="sr-only">{t("common.close")}</span>
@@ -195,7 +197,7 @@ export function Modal({
                     {hasBody && (
                         <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}>
                             {isLoading && (
-                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/70 backdrop-blur-[2px]">
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/70">
                                     <Loader2 className="size-6 animate-spin text-primary" />
                                     <span className="sr-only">{t("common.loading")}</span>
                                 </div>

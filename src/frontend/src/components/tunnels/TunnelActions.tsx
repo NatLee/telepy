@@ -68,7 +68,7 @@ function ActionItem({
 
 function GroupLabel({ children }: { children: React.ReactNode }) {
     return (
-        <DropdownMenuLabel className="px-2 pt-1.5 pb-0.5 text-[0.6875rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
+        <DropdownMenuLabel className="px-2 pt-1.5 pb-0.5 text-xs text-muted-foreground">
             {children}
         </DropdownMenuLabel>
     );

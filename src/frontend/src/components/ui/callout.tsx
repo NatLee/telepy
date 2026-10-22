@@ -9,7 +9,7 @@ import { CircleAlert, Info, Lightbulb, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const calloutVariants = cva(
-    "flex items-start gap-3 rounded-xl px-3.5 py-3 text-sm leading-relaxed ring-1 ring-inset [&_code]:rounded-md [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.85em]",
+    "flex items-start gap-3 rounded-lg px-3.5 py-3 text-sm leading-relaxed ring-1 ring-inset [&_code]:rounded-sm [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.85em]",
     {
         variants: {
             tone: {

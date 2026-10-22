@@ -111,7 +111,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                 <div className="space-y-6">
                     {/* 帳號 / Account */}
                     <section className="flex items-center gap-3.5 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80" aria-label={t("settings.accountTitle")}>
-                        <span className="grid size-11 shrink-0 place-items-center rounded-full bg-brand-gradient text-lg text-white uppercase" aria-hidden>
+                        <span className="grid size-11 shrink-0 place-items-center rounded-full bg-foreground text-lg text-background uppercase" aria-hidden>
                             {user?.username?.slice(0, 1)}
                         </span>
                         <div className="min-w-0 flex-1">

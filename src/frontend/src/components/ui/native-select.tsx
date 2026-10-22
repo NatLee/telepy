@@ -14,8 +14,8 @@ export function NativeSelect({ className, children, ...props }: React.ComponentP
             <select
                 data-slot="native-select"
                 className={cn(
-                    "h-9 w-full min-w-0 appearance-none rounded-lg border border-input bg-card pl-3 pr-9 text-sm text-foreground shadow-xs transition-[border-color,box-shadow] outline-none dark:bg-input/30",
-                    "hover:border-foreground/20 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25",
+                    "h-9 w-full min-w-0 appearance-none rounded-md border border-input bg-card pl-3 pr-9 text-sm text-foreground transition-[border-color,box-shadow] outline-none",
+                    "hover:border-foreground/30 focus-visible:border-primary focus-visible:ring-[3px] focus-visible:ring-primary/20",
                     "disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:border-destructive aria-invalid:ring-destructive/20",
                 )}
                 {...props}

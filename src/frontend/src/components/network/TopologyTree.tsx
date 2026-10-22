@@ -7,7 +7,8 @@
  * from `lg`; links are hairlines, solid for online devices and dashed for offline ones.
  */
 import React, { useEffect, useRef, useState } from "react";
-import { Cloud, Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronDown } from "lucide-react";
+import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
+import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
@@ -152,12 +153,12 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
     return (
         <div
             className={cn(
-                "w-full rounded-2xl border bg-card p-3 shadow-card lg:w-80",
+                "w-full rounded-xl border bg-card p-3 shadow-card lg:w-80",
                 focused ? "border-primary ring-2 ring-primary/30" : "border-border"
             )}
         >
             <div className="flex items-center gap-3">
-                <span className={cn("relative grid size-10 shrink-0 place-items-center rounded-xl ring-1 ring-inset", online ? "bg-primary/10 text-primary ring-primary/15" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
+                <span className={cn("relative grid size-10 shrink-0 place-items-center rounded-xl ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
                     <Router size={18} />
                     <span className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
                 </span>
@@ -251,10 +252,10 @@ export function TopologyTree({ tunnels, isOnline, focusTunnel, onOpenHost, onSca
 }) {
     const { t } = useI18n();
     return (
-        <div className="overflow-x-auto rounded-2xl border border-border bg-card p-4 shadow-card sm:p-6">
+        <div className="overflow-x-auto rounded-xl border border-border bg-card p-4 shadow-card sm:p-6">
             <div className="flex items-center gap-3">
-                <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-gradient text-white shadow-glow ring-1 ring-inset ring-white/20" aria-hidden>
-                    <Cloud size={20} />
+                <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-brand-gradient text-white" aria-hidden>
+                    <TelepyGlyph size={20} />
                 </span>
                 <div>
                     <p className="text-[1rem] text-foreground">Telepy</p>

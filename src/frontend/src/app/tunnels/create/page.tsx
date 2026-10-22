@@ -60,7 +60,7 @@ export default function CreateTunnelWizard() {
     return (
         <div className="mx-auto max-w-5xl space-y-6 pb-12 animate-fade-in-up">
             <PageHeader
-                icon={<Cable size={22} />}
+                icon={<Cable />}
                 title={t("wizard.title")}
                 description={mode === "command" ? t("join.pageSubtitle") : t("wizard.subtitle")}
             />

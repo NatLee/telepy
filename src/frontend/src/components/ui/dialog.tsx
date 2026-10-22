@@ -40,7 +40,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "data-[state=open]:animate-dialog-overlay-show data-[state=closed]:animate-dialog-overlay-hide fixed inset-0 z-50 bg-(--overlay) backdrop-blur-[3px]",
+        "data-[state=open]:animate-dialog-overlay-show data-[state=closed]:animate-dialog-overlay-hide fixed inset-0 z-50 bg-(--overlay)",
         className
       )}
       {...props}
@@ -63,7 +63,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-card text-card-foreground data-[state=open]:animate-dialog-content-show data-[state=closed]:animate-dialog-content-hide fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-2xl p-6 shadow-dialog outline-none",
+          "bg-card text-card-foreground data-[state=open]:animate-dialog-content-show data-[state=closed]:animate-dialog-content-hide fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-xl p-6 shadow-dialog outline-none",
           className
         )}
         {...props}
