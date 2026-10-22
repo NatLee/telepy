@@ -74,11 +74,11 @@ export function useKeysPage() {
                 description: newKeyDescription,
             };
 
-            const tokenRes = await apiFetch("/api/reverse/issue/token");
-            if (!tokenRes.ok) throw new Error(t("wizard.issueTokenFailed"));
-            const { token } = await tokenRes.json();
-
-            const createRes = await apiFetch(`/api/reverse/create/key/${token}`, {
+            // 個人金鑰走 /api/reverse/user/keys；/api/reverse/create/key/{token} 是「建立通道」，
+            // 以前這裡誤用它，結果每加一把金鑰就多出一條通道、金鑰清單裡卻看不到。
+            // Personal keys go to /api/reverse/user/keys. /api/reverse/create/key/{token} creates a *tunnel*;
+            // using it here added a tunnel per key while the key never showed up in this list.
+            const createRes = await apiFetch("/api/reverse/user/keys", {
                 method: "POST",
                 body: JSON.stringify(payload),
             });
