@@ -9,6 +9,16 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 
+/**
+ * 登入後要回去的路徑（?next=）：只接受站內路徑，避免 open redirect。OAuth 同意頁沒登入時會帶著自己的 URL 過來。
+ * Where to go after login (?next=): same-origin paths only (no open redirect); the OAuth consent page uses it.
+ */
+export function safeNextPath(): string {
+    if (typeof window === "undefined") return "/tunnels";
+    const next = new URLSearchParams(window.location.search).get("next") ?? "";
+    return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/tunnels";
+}
+
 export function useLoginPage() {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
@@ -24,7 +34,7 @@ export function useLoginPage() {
     // Redirect to tunnels when authenticated; to first-login when first-time setup.
     useEffect(() => {
         if (isAuthenticated) {
-            router.replace("/tunnels");
+            router.replace(safeNextPath());
             return;
         }
         const base = process.env.NEXT_PUBLIC_API_BASE || "";
@@ -51,7 +61,7 @@ export function useLoginPage() {
                 if (res.ok && data?.access_token) {
                     login(data.access_token, data.refresh_token!);
                     showSuccess(t("login.googleSuccess"));
-                    router.push("/tunnels");
+                    router.push(safeNextPath());
                 } else {
                     showError(responseError(res, data, t("login.googleFailed")));
                 }
@@ -73,7 +83,7 @@ export function useLoginPage() {
             if (res.ok && data?.access_token) {
                 login(data.access_token, data.refresh_token!);
                 showSuccess(t("login.success"));
-                router.push("/tunnels");
+                router.push(safeNextPath());
             } else {
                 showError(responseError(res, data, t("login.failed")));
             }

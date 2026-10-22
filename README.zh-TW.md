@@ -100,6 +100,13 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 | `INTERNAL_API_TOKEN`      | —           | 內部服務間通訊用的密鑰               |
 | `OPENAPI_ENABLED`         | `true`      | 提供 Swagger UI 與 OpenAPI 規格（見下）|
 
+### AI 工具（MCP）
+
+Telepy 本身就是 OAuth 2.1 授權伺服器，任何支援 MCP 的 AI 工具（Claude、Cursor…）都能指向
+`https://<你的主機>/mcp`。第一次使用時瀏覽器會開啟核可頁面：確認應用程式的導回位址、選擇權限
+（查看隧道／執行指令／讀寫檔案）與可用的隧道。核可過的應用程式列在 **偏好設定 → 已連接的應用程式**，
+撤銷會立刻停止存取並關閉它的工作階段。AI 工具開啟的工作階段閒置時會自動關閉，上限是站台設定。
+
 ### API 文件
 
 後端在 `/api/openapi.json` 提供 OpenAPI 3 文件，並在 `/api/__hidden_swagger` 提供 Swagger UI。
