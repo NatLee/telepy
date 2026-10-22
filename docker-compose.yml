@@ -59,6 +59,8 @@ services:
       - WEB_SERVER_PORT=${WEB_SERVER_PORT}
       - SOCIAL_GOOGLE_CLIENT_ID=${SOCIAL_GOOGLE_CLIENT_ID}
       - SERVER_DOMAIN=${SERVER_DOMAIN}
+      # 對外 base URL（MCP 連接器的 OAuth issuer）；留空依 X-Forwarded-* 推導。/ OAuth issuer; empty = from the request.
+      - PUBLIC_URL=${PUBLIC_URL:-}
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN}
       - KASM_BROWSER_API=http://kasm-browser:7000
       - KASM_BROWSER_HOST=kasm-browser

@@ -96,6 +96,7 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | 裝置反向 SSH 連入的埠                |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth 用戶端 ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy 伺服器的公開主機名稱          |
+| `PUBLIC_URL`              | —           | 對外的 base URL，例如 `https://telepy.example.com`（MCP 客戶端的 OAuth issuer；留空則依請求推導） |
 | `INTERNAL_API_TOKEN`      | —           | 內部服務間通訊用的密鑰               |
 | `OPENAPI_ENABLED`         | `true`      | 提供 Swagger UI 與 OpenAPI 規格（見下）|
 

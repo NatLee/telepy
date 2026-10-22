@@ -51,6 +51,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "User Management", description = "Personal settings and user administration"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),
         (name = "Logs", description = "SSH gateway events"),
+        (name = "OAuth", description = "OAuth 2.1 authorization server for MCP clients: discovery, dynamic client registration, consent, tokens, connected apps"),
         (name = "Internal", description = "Service-to-service endpoints (Bearer INTERNAL_API_TOKEN)")
     )
 )]

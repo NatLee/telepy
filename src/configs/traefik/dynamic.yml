@@ -57,6 +57,13 @@ http:
       middlewares:
         - compress
 
+    # OAuth 2.1 discovery（MCP 連接器用；RFC 8414 / RFC 9728 規定在根目錄的 /.well-known 底下）。
+    # OAuth discovery documents for MCP connectors live under the root /.well-known (RFC 8414 / RFC 9728).
+    backend-oauth-discovery:
+      <<: *backendRouterSettings
+      rule: "PathPrefix(`/.well-known/oauth-`)"
+      priority: 100
+
     backend-websocket:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/ws`)"

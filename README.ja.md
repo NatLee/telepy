@@ -96,6 +96,7 @@ Compose プラグイン付きの Docker が必要です。
 | `REVERSE_SERVER_SSH_PORT` | `24242`     | デバイスがリバース SSH で接続するポート    |
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth クライアント ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy サーバーの公開ホスト名              |
+| `PUBLIC_URL`              | —           | 公開ベース URL（例: `https://telepy.example.com`）。MCP クライアント向け OAuth の issuer。空ならリクエストから推定 |
 | `INTERNAL_API_TOKEN`      | —           | 内部サービス間通信用のシークレット         |
 | `OPENAPI_ENABLED`         | `true`      | Swagger UI と OpenAPI 仕様を公開（下記参照）|
 

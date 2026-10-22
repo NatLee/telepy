@@ -24,6 +24,9 @@ pub struct Config {
     pub reverse_server_ssh_port: String,
     pub web_server_port: Option<String>,
     pub server_domain: Option<String>,
+    /// 對外的 base URL（例 `https://telepy.example.com`）：OAuth issuer 與 MCP resource 由它決定；沒設就依
+    /// X-Forwarded-* / Host 推導。/ Public base URL used as the OAuth issuer; derived from the request when unset.
+    pub public_url: Option<String>,
     pub google_client_id: Option<String>,
     pub internal_api_token: String,
     pub data_dir: PathBuf,
@@ -127,6 +130,7 @@ impl Config {
             reverse_server_ssh_port: env("REVERSE_SERVER_SSH_PORT").unwrap_or_default(),
             web_server_port: env("WEB_SERVER_PORT"),
             server_domain: env("SERVER_DOMAIN"),
+            public_url: env("PUBLIC_URL").map(|u| u.trim().trim_end_matches('/').to_string()),
             google_client_id: env("SOCIAL_GOOGLE_CLIENT_ID"),
             internal_api_token: env("INTERNAL_API_TOKEN").unwrap_or_default(),
             db_path: env("DB_PATH").map(PathBuf::from).unwrap_or_else(|| data_dir.join("db.sqlite3")),

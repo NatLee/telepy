@@ -497,3 +497,188 @@ pub struct PushAck {
     pub status: String,
     pub ports: i64,
 }
+
+// ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)
+
+#[derive(ToSchema)]
+#[schema(description = "OAuth error (RFC 6749 §5.2); the consent endpoints add `redirect_to` when the error may be returned to the client")]
+pub struct OAuthErrorBody {
+    #[schema(example = "invalid_grant")]
+    pub error: String,
+    pub error_description: Option<String>,
+    pub redirect_to: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthServerMetadata {
+    #[schema(example = "https://telepy.example.com")]
+    pub issuer: String,
+    #[schema(example = "https://telepy.example.com/oauth/authorize")]
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub registration_endpoint: String,
+    pub revocation_endpoint: String,
+    pub scopes_supported: Vec<String>,
+    pub response_types_supported: Vec<String>,
+    pub grant_types_supported: Vec<String>,
+    pub token_endpoint_auth_methods_supported: Vec<String>,
+    pub code_challenge_methods_supported: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ProtectedResourceMetadata {
+    #[schema(example = "https://telepy.example.com/mcp")]
+    pub resource: String,
+    pub authorization_servers: Vec<String>,
+    pub scopes_supported: Vec<String>,
+    pub bearer_methods_supported: Vec<String>,
+    pub resource_name: String,
+}
+
+#[derive(ToSchema)]
+pub struct ClientRegistrationRequest {
+    #[schema(example = json!(["http://localhost:33418/callback"]))]
+    pub redirect_uris: Vec<String>,
+    pub client_name: Option<String>,
+    /// `none` (public client, PKCE only), `client_secret_post` or `client_secret_basic` (default)
+    #[schema(example = "none")]
+    pub token_endpoint_auth_method: Option<String>,
+    pub grant_types: Option<Vec<String>>,
+    pub response_types: Option<Vec<String>>,
+    pub scope: Option<String>,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ClientRegistrationResponse {
+    pub client_id: String,
+    /// Only for confidential clients; shown once
+    pub client_secret: Option<String>,
+    pub client_id_issued_at: i64,
+    pub client_secret_expires_at: Option<i64>,
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    pub grant_types: Vec<String>,
+    pub response_types: Vec<String>,
+    pub token_endpoint_auth_method: String,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthScope {
+    #[schema(example = "ssh:exec")]
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthClientInfo {
+    pub client_id: String,
+    pub client_name: String,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthTunnelChoice {
+    pub id: i64,
+    pub name: String,
+    #[schema(example = "owner")]
+    pub permission: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizeInfo {
+    pub client: OAuthClientInfo,
+    pub redirect_uri: String,
+    #[schema(example = "localhost:33418")]
+    pub redirect_host: String,
+    pub scopes: Vec<OAuthScope>,
+    /// Tunnels the user can restrict the grant to
+    pub tunnels: Vec<OAuthTunnelChoice>,
+    #[schema(value_type = Object)]
+    pub user: serde_json::Value,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizeDecision {
+    pub response_type: String,
+    pub client_id: String,
+    pub redirect_uri: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub scope: Option<String>,
+    pub state: Option<String>,
+    pub resource: Option<String>,
+    /// false = deny (the client gets error=access_denied)
+    pub approve: bool,
+    /// Scopes the user kept; omitted = every requested scope
+    pub scopes: Option<Vec<String>>,
+    /// null = every tunnel the user can see; an array restricts the grant to those tunnels
+    pub tunnel_ids: Option<Vec<i64>>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizeRedirect {
+    #[schema(example = "http://localhost:33418/callback?code=…&state=…&iss=https%3A%2F%2Ftelepy.example.com")]
+    pub redirect_to: String,
+}
+
+#[derive(ToSchema)]
+pub struct TokenRequest {
+    #[schema(example = "authorization_code")]
+    pub grant_type: String,
+    pub code: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub code_verifier: Option<String>,
+    pub refresh_token: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    /// Optional narrower scope (refresh_token grant)
+    pub scope: Option<String>,
+    pub resource: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TokenResponse {
+    /// JWT for `Authorization: Bearer` on /mcp (1 hour); not accepted by the REST API
+    pub access_token: String,
+    #[schema(example = "Bearer")]
+    pub token_type: String,
+    #[schema(example = 3600)]
+    pub expires_in: i64,
+    /// Rotated on every refresh (30 days)
+    #[schema(example = "tpr_…")]
+    pub refresh_token: String,
+    #[schema(example = "tunnels:read ssh:exec ssh:files")]
+    pub scope: String,
+}
+
+#[derive(ToSchema)]
+pub struct RevokeRequest {
+    pub token: String,
+    pub token_type_hint: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantTunnel {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrant {
+    pub id: i64,
+    pub client_id: String,
+    pub client_name: String,
+    pub client_uri: Option<String>,
+    pub scopes: Vec<String>,
+    /// null = every tunnel
+    pub tunnels: Option<Vec<OAuthGrantTunnel>>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    /// When the refresh token expires without further use
+    pub expires_at: Option<String>,
+}

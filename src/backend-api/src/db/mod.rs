@@ -2,6 +2,7 @@
 //! Data-access layer over the Django-named tables. Struct fields mirror column names.
 
 pub mod keys;
+pub mod oauth;
 pub mod pool;
 pub mod schema;
 pub mod settings;

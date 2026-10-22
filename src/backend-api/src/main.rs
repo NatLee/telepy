@@ -112,6 +112,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
             Err(e) => tracing::error!(bind = %config.gateway_bind, error = %e, "SSH gateway cannot bind"),
         }
     }
+    tokio::spawn(telepy_server::oauth::run_cleanup(state.db.clone()));
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
     }
