@@ -38,6 +38,13 @@ interface PasskeyOptions {
     publicKey: Record<string, unknown>;
 }
 
+/**
+ * 自動填入的挑戰多久換一張。後端儀式只活 5 分鐘（`mfa::passkey::CEREMONY_TTL`），而掛著等使用者的 conditional
+ * 請求可能停好幾個小時；不換的話使用者久一點才點 passkey，簽的就是一張過期的挑戰，後端回 passkey_failed。
+ * How often the autofill challenge is renewed: the backend ceremony lives 5 minutes, the pending request may wait hours.
+ */
+const AUTOFILL_RENEW_MS = 4 * 60 * 1000;
+
 export function useLoginPage() {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
@@ -122,17 +129,39 @@ export function useLoginPage() {
     useEffect(() => {
         if (isAuthenticated || !passkeySupported()) return;
         let cancelled = false;
+        const fetchOptions = async (): Promise<PasskeyOptions | null> => {
+            const res = await apiFetch("/api/auth/passkey/options", { method: "POST", body: "{}" });
+            const opts = await readJson<PasskeyOptions>(res);
+            return res.ok && opts ? opts : null;
+        };
         (async () => {
             try {
-                const res = await apiFetch("/api/auth/passkey/options", { method: "POST", body: "{}" });
-                const opts = await readJson<PasskeyOptions>(res);
-                if (cancelled || !res.ok || !opts) return;
+                let opts = await fetchOptions();
+                if (cancelled || !opts) return;
                 setPasskeyAvailable(true);
                 if (!(await conditionalMediationAvailable()) || cancelled) return;
-                const ctrl = new AbortController();
-                conditional.current = ctrl;
-                const credential = await getPasskey(opts.publicKey, { mediation: "conditional", signal: ctrl.signal });
-                if (!cancelled) await finishPasskeyLogin(opts.challenge_id, credential);
+                // 掛一張挑戰等自動填入；到期前中止、換一張新的再掛回去，使用者看不出差別。
+                // Arm the autofill request; before the challenge expires, abort and re-arm with a fresh one.
+                while (!cancelled && opts) {
+                    const ctrl = new AbortController();
+                    conditional.current = ctrl;
+                    let renewing = false;
+                    const renew = setTimeout(() => {
+                        renewing = true;
+                        ctrl.abort();
+                    }, AUTOFILL_RENEW_MS);
+                    try {
+                        const credential = await getPasskey(opts.publicKey, { mediation: "conditional", signal: ctrl.signal });
+                        if (!cancelled) await finishPasskeyLogin(opts.challenge_id, credential);
+                        return;
+                    } catch (err) {
+                        // 使用者取消或我們自己停掉（stopAutofill）：安靜結束。/ Dismissed or stopped on purpose: stay quiet.
+                        if (cancelled || !renewing) throw err;
+                    } finally {
+                        clearTimeout(renew);
+                    }
+                    opts = await fetchOptions();
+                }
             } catch {
                 /* 自動填入被取消 / 中止：不打擾使用者。/ Autofill dismissed or aborted: stay quiet. */
             }

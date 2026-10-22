@@ -84,8 +84,20 @@ impl Deref for PooledSftp {
 
 #[derive(Default)]
 struct Slot {
-    /// 持有這把鎖的人負責建新連線，同一個 key 的其他人等它（不會同時握手好幾次）。
-    conns: tokio::sync::Mutex<Vec<Arc<PooledConn>>>,
+    /// 現有連線。同步鎖、短臨界區，從不跨 await。/ Live connections; a short critical section, never held across an await.
+    conns: Mutex<Vec<Arc<PooledConn>>>,
+    /// 同一個 key 一次只握手一條：要新連線的人在這裡排隊，能重用現成連線的人不必等。
+    /// One handshake at a time per key; callers that can reuse a connection never wait for it.
+    connecting: tokio::sync::Mutex<()>,
+}
+
+impl Slot {
+    /// 有空位的現成連線就借出。/ Lease an existing connection with room, if any.
+    fn lease_if_room(&self) -> Option<Lease> {
+        let mut conns = self.conns.lock().unwrap();
+        conns.retain(|c| !c.closed());
+        conns.iter().find(|c| c.has_room()).map(|c| Lease::new(c.clone()))
+    }
 }
 
 #[derive(Default)]
@@ -97,18 +109,29 @@ pub struct DevicePool {
 impl DevicePool {
     /// 借一條到 (port, username) 的連線：有空位的現成連線優先，否則新連一條。
     pub async fn acquire(&self, state: &AppState, reverse_port: i64, username: &str) -> anyhow::Result<Lease> {
+        // 這個 Arc 一直握到回傳：reaper 看到 strong_count > 1 就不會把 slot 從 map 移掉（見 `reap`）。
+        // Held until we return, so the reaper leaves the slot in the map while we use it (see `reap`).
         let slot = self.slots.entry((reverse_port, username.to_string())).or_default().clone();
-        let mut conns = slot.conns.lock().await;
-        conns.retain(|c| !c.closed());
-        if let Some(c) = conns.iter().find(|c| c.has_room()) {
-            return Ok(Lease::new(c.clone()));
+        if let Some(lease) = slot.lease_if_room() {
+            return Ok(lease);
+        }
+        // 沒空位：排隊握手。輪到時再看一次，前一個人剛連好的那條可能就有位子。
+        // No room: queue for a handshake, and re-check first since the previous one may have just added a connection.
+        let _connecting = slot.connecting.lock().await;
+        if let Some(lease) = slot.lease_if_room() {
+            return Ok(lease);
         }
         let conn = device::connect(state, username, reverse_port).await?;
         self.handshakes.fetch_add(1, Ordering::SeqCst);
         let pooled = Arc::new(PooledConn { conn, active: AtomicUsize::new(0), capacity: AtomicUsize::new(MAX_CHANNELS), last_used: Mutex::new(Instant::now()) });
-        conns.push(pooled.clone());
-        tracing::debug!(reverse_port, %username, connections = conns.len(), "device pool: new connection");
-        Ok(Lease::new(pooled))
+        let lease = Lease::new(pooled.clone());
+        let connections = {
+            let mut conns = slot.conns.lock().unwrap();
+            conns.push(pooled);
+            conns.len()
+        };
+        tracing::debug!(reverse_port, %username, connections, "device pool: new connection");
+        Ok(lease)
     }
 
     /// 借一條連線並開 `sftp` 子系統（用完 drop 即關 channel、還 lease）。
@@ -143,7 +166,7 @@ impl DevicePool {
     pub fn reap(&self, idle: Duration) -> usize {
         let mut closed = 0;
         for slot in self.slots.iter() {
-            let Ok(mut conns) = slot.conns.try_lock() else { continue };
+            let mut conns = slot.conns.lock().unwrap();
             conns.retain(|c| {
                 let idle_for = c.last_used.lock().unwrap().elapsed();
                 let keep = !c.closed() && !(c.active.load(Ordering::SeqCst) == 0 && idle_for >= idle);
@@ -157,7 +180,10 @@ impl DevicePool {
                 keep
             });
         }
-        self.slots.retain(|_, s| s.conns.try_lock().map(|c| !c.is_empty()).unwrap_or(true));
+        // 空的 slot 移掉。有人剛從 map 拿到這個 Arc、正要用（strong_count > 1）就留著，否則他接著建的連線會掛在
+        // 一個已經不在 map 裡的 slot 上：沒人重用得到、也沒人回收。/ Drop empty slots, except one somebody just
+        // fetched and is about to use: a connection added to an orphaned slot would be neither reused nor reaped.
+        self.slots.retain(|_, s| Arc::strong_count(s) > 1 || !s.conns.lock().unwrap().is_empty());
         closed
     }
 
@@ -175,7 +201,7 @@ impl DevicePool {
     pub fn connections(&self, reverse_port: i64, username: &str) -> usize {
         self.slots
             .get(&(reverse_port, username.to_string()))
-            .and_then(|s| s.conns.try_lock().ok().map(|c| c.iter().filter(|c| !c.closed()).count()))
+            .map(|s| s.conns.lock().unwrap().iter().filter(|c| !c.closed()).count())
             .unwrap_or(0)
     }
 

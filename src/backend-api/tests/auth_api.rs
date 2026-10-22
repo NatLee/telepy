@@ -54,6 +54,7 @@ async fn setup_status_register_login_profile_refresh() {
     assert_eq!(r.json["terminal_font_size"], 14);
     assert_eq!(r.json["ui_scale"], 100);
     assert!(r.json["date_joined"].as_str().unwrap().ends_with('Z'));
+    assert!(r.json["last_login"].is_string(), "a password login records last_login: {}", r.text);
 
     // unauthenticated / bad token
     let r = app.get("/api/auth/user/profile", None).await;

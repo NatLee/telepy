@@ -34,6 +34,7 @@ import { MINI_SCENES, sceneFor } from "@/components/cheatsheet/sceneSpec";
 import { AnnotatedCommand, CommandBar, InlineCommand, MiniCommand } from "@/components/cheatsheet/CommandView";
 import { SetupGuide } from "@/components/cheatsheet/SetupGuide";
 import { useCheatsheetPage } from "@/hooks/useCheatsheetPage";
+import { useSetupChecklist } from "@/hooks/useSetupChecklist";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -174,6 +175,13 @@ function CheatsheetInner() {
     });
     const [options, setOptions] = useState<ForwardOptions>({ background: false, keepAlive: false, exitOnFailure: false });
     const [setupOpen, setSetupOpen] = useState(false);
+    const checklist = useSetupChecklist({
+        tunnelId: selected?.id ?? null,
+        username: hasTargetUser && target ? target.username : null,
+        keyCount,
+        online,
+        mode,
+    });
 
     const def = RECIPE_BY_ID[recipe];
     const params = paramsById[recipe];
@@ -227,7 +235,7 @@ function CheatsheetInner() {
     }
 
     const alias = target.alias;
-    const needsSetup = keyCount === 0 || !online;
+    const needsSetup = checklist.current !== null;
     const code = (s: string) => <code className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[0.9em] text-foreground ring-1 ring-border">{s}</code>;
     const field = (key: string) => def.fields.find((f) => f.key === key)!;
     const blank = (key: string) => <Blank field={field(key)} value={params[key] ?? ""} onChange={(v) => setParam(key, v)} />;
@@ -360,6 +368,11 @@ function CheatsheetInner() {
                 >
                     {needsSetup ? <AlertTriangle size={16} /> : <ListChecks size={16} />}
                     {needsSetup ? t("sheet.setupNeeded") : t("sheet.setupGuide")}
+                    {needsSetup && (
+                        <span className="rounded-full bg-amber-500/15 px-1.5 py-px font-mono text-[11px] tabular-nums">
+                            {checklist.done}/{checklist.total}
+                        </span>
+                    )}
                 </Button>
             </div>
 
@@ -530,12 +543,14 @@ function CheatsheetInner() {
             <SetupGuide
                 isOpen={setupOpen}
                 onClose={() => setSetupOpen(false)}
+                tunnelId={selected?.id ?? 0}
                 alias={alias}
-                keyCount={keyCount}
+                username={hasTargetUser ? target.username : null}
                 online={online}
                 mode={mode}
                 setMode={actions.setMode}
                 configText={config?.config ?? null}
+                checklist={checklist}
             />
         </div>
     );

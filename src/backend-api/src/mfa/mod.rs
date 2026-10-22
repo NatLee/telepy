@@ -9,6 +9,8 @@
 
 pub mod passkey;
 
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use aes_gcm::aead::{Aead, KeyInit};
@@ -36,11 +38,26 @@ pub const LOCKOUT_WINDOW: Duration = Duration::from_secs(900);
 
 // ---------------------------------------------------------------- in-memory state
 
-/// 帳密 / Google 通過、等待第二步的登入。/ A login waiting for its second factor.
+/// 帳密 / Google 通過、等待第二步的登入。失敗次數放在 `Arc` 裡原地累加：不重新 insert，所以每次失敗
+/// 不會把 `CHALLENGE_TTL` 重算一次（moka 的 insert 會重設 TTL），並行的兩次失敗也不會互相蓋掉。
+/// A login waiting for its second factor; attempts are counted in place so a failure never extends the TTL.
 #[derive(Debug, Clone)]
 pub struct LoginChallenge {
     pub user_id: i64,
-    pub attempts: u32,
+    pub attempts: Arc<AtomicU32>,
+}
+
+impl LoginChallenge {
+    pub fn new(user_id: i64) -> Self {
+        Self { user_id, attempts: Arc::new(AtomicU32::new(0)) }
+    }
+    /// 記一次失敗，回傳累計次數。/ Record a failure; returns the new total.
+    pub fn fail(&self) -> u32 {
+        self.attempts.fetch_add(1, Ordering::SeqCst) + 1
+    }
+    pub fn exhausted(&self) -> bool {
+        self.attempts.load(Ordering::SeqCst) >= CHALLENGE_ATTEMPTS
+    }
 }
 
 /// 2FA 的記憶體狀態：登入挑戰（`mfa_token`）、每位使用者的失敗次數、passkey 儀式、TOTP secret 的加解密。
@@ -281,6 +298,18 @@ mod tests {
         assert!(SecretBox::new("key-b").open(&sealed).is_none(), "another SECRET_KEY cannot open it");
         assert!(a.open("v1:AAAA").is_none());
         assert!(a.open("garbage").is_none());
+    }
+
+    #[test]
+    fn login_challenge_counts_failures_in_place() {
+        let ch = LoginChallenge::new(7);
+        let clone = ch.clone();
+        for n in 1..CHALLENGE_ATTEMPTS {
+            assert_eq!(clone.fail(), n);
+            assert!(!ch.exhausted(), "attempt {n}");
+        }
+        assert_eq!(clone.fail(), CHALLENGE_ATTEMPTS);
+        assert!(ch.exhausted(), "the clone shares the counter, so the cached challenge sees every failure");
     }
 
     #[test]

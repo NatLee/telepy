@@ -102,10 +102,12 @@ pub async fn factors(state: &AppState, user_id: i64) -> sqlx::Result<Factors> {
 pub async fn complete_login(state: &AppState, user: &User) -> ApiResult<Value> {
     let f = factors(state, user.id).await?;
     if !f.any() {
+        // 沒有第二步，這裡就是登入完成（有第二步時由 mfa_verify 記）。/ No second step: the login completes here.
+        db::users::touch_last_login(&state.db, user.id).await?;
         return Ok(token_pair(state, user.id));
     }
     let token = crate::oauth::random_token("");
-    state.mfa.challenges.insert(token.clone(), LoginChallenge { user_id: user.id, attempts: 0 });
+    state.mfa.challenges.insert(token.clone(), LoginChallenge::new(user.id));
     Ok(json!({ "mfa_required": true, "mfa_token": token, "methods": f.methods() }))
 }
 
@@ -230,8 +232,8 @@ async fn recovery_after_change(state: &AppState, user_id: i64, had_any: bool) ->
 async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let expired = || mfa_error(StatusCode::BAD_REQUEST, "mfa_expired", "The sign-in attempt expired. Log in again.");
     let token = body.get("mfa_token").and_then(Value::as_str).unwrap_or_default().to_string();
-    let Some(mut ch) = state.mfa.challenges.get(&token) else { return Err(expired()) };
-    if ch.attempts >= mfa::CHALLENGE_ATTEMPTS {
+    let Some(ch) = state.mfa.challenges.get(&token) else { return Err(expired()) };
+    if ch.exhausted() {
         state.mfa.challenges.invalidate(&token);
         return Err(expired());
     }
@@ -245,8 +247,11 @@ async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, AppJson(b
             Ok(Json(token_pair(&state, user.id)))
         }
         Err(e) => {
-            ch.attempts += 1;
-            state.mfa.challenges.insert(token, ch);
+            // 原地累加，不重新 insert（那會把挑戰的 5 分鐘重算）；用完次數就直接作廢。
+            // Count in place (re-inserting would reset the TTL); drop the challenge once the attempts are used up.
+            if ch.fail() >= mfa::CHALLENGE_ATTEMPTS {
+                state.mfa.challenges.invalidate(&token);
+            }
             Err(e)
         }
     }
@@ -359,6 +364,7 @@ async fn totp_enable(State(state): State<AppState>, AuthUser(user): AuthUser, Ap
         state.mfa.record_failure(user.id);
         return Err(mfa_error(StatusCode::BAD_REQUEST, "mfa_invalid", "That code is not valid. Check the time on your phone and try the next code."));
     };
+    state.mfa.clear_failures(user.id);
     let had_any = factors(&state, user.id).await?.any();
     db::mfa::enable_totp(&state.db, user.id, step).await?;
     let codes = recovery_after_change(&state, user.id, had_any).await?;
