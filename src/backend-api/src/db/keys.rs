@@ -14,6 +14,9 @@ pub struct UserKey {
     pub description: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// 最近一次在 gateway 認證成功的時間與來源 IP。/ Last successful gateway login with this key.
+    pub last_used_at: Option<String>,
+    pub last_used_ip: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -27,7 +30,7 @@ pub struct ServiceKey {
 }
 
 const UK: &str = "authorized_keys_userauthorizedkeys";
-const UK_COLS: &str = "id, user_id, host_friendly_name, key, description, created_at, updated_at";
+const UK_COLS: &str = "id, user_id, host_friendly_name, key, description, created_at, updated_at, last_used_at, last_used_ip";
 const SK: &str = "authorized_keys_serviceauthorizedkeys";
 const SK_COLS: &str = "id, service, key, description, created_at, updated_at";
 
@@ -51,6 +54,38 @@ pub async fn user_key_owner_by_prefix(db: &Db, like: &str) -> sqlx::Result<Optio
     sqlx::query_scalar(&format!("SELECT user_id FROM {UK} WHERE key LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1"))
         .bind(like)
         .fetch_optional(&db.read)
+        .await
+}
+
+/// gateway 用這把金鑰登入成功。`like` 是 `"<type> <base64>"` 的 LIKE 前綴。
+pub async fn touch_last_used(db: &Db, like: &str, ip: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {UK} SET last_used_at = ?, last_used_ip = ? WHERE key LIKE ? ESCAPE '\\'"))
+        .bind(now_db())
+        .bind(ip)
+        .bind(like)
+        .execute(&db.write)
+        .await?;
+    Ok(())
+}
+
+pub async fn user_key_by_any_id(db: &Db, id: i64) -> sqlx::Result<Option<UserKey>> {
+    sqlx::query_as(&format!("SELECT {UK_COLS} FROM {UK} WHERE id = ?")).bind(id).fetch_optional(&db.read).await
+}
+
+/// 有沒有別的使用者金鑰（排除 `except_id`）用同一把公鑰（比對 `"<type> <base64>"`，不看 comment）。
+pub async fn user_key_bare_taken(db: &Db, like: &str, except_id: Option<i64>) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {UK} WHERE key LIKE ? ESCAPE '\\' AND id != ?"))
+        .bind(like)
+        .bind(except_id.unwrap_or(-1))
+        .fetch_one(&db.read)
+        .await?;
+    Ok(n > 0)
+}
+
+/// 所有使用者金鑰連同擁有者帳號（稽核比對用）：(key id, key, 金鑰名, user id, username)。
+pub async fn all_with_owner(db: &Db) -> sqlx::Result<Vec<(i64, String, String, i64, String)>> {
+    sqlx::query_as(&format!("SELECT k.id, k.key, k.host_friendly_name, k.user_id, a.username FROM {UK} k JOIN auth_user a ON a.id = k.user_id"))
+        .fetch_all(&db.read)
         .await
 }
 

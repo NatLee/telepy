@@ -7,6 +7,7 @@ pub mod app;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod device_keys;
 pub mod error;
 pub mod gateway;
 pub mod hub;

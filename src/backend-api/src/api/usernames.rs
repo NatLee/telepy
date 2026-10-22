@@ -88,6 +88,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     }
     let u = db::tunnels::username_create(&state.db, user.id, tunnel.id, &username).await.map_err(|e| if is_unique_violation(&e) { duplicate(&username) } else { ApiError::from(e) })?;
     notify::tunnel_users(&state, &tunnel, "TUNNEL-USERNAMES-UPDATED", &format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name)).await?;
+    state.device_keys.kick(tunnel.id);
     Ok((StatusCode::CREATED, Json(username_json(&u, state.config.tz_offset_minutes))))
 }
 
@@ -120,6 +121,7 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let updated = db::tunnels::username_update(&state.db, id, username.as_deref())
         .await
         .map_err(|e| if is_unique_violation(&e) { duplicate(username.as_deref().unwrap_or_default()) } else { ApiError::from(e) })?;
+    state.device_keys.kick(tunnel.id);
     Ok(Json(username_json(&updated, state.config.tz_offset_minutes)))
 }
 
@@ -140,5 +142,6 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     db::tunnels::username_delete(&state.db, id).await?;
     let details = format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name);
     notify::tunnel_users(&state, &tunnel, "TUNNEL-USERNAMES-UPDATED", &details).await?;
+    state.device_keys.kick(tunnel.id);
     Ok(StatusCode::NO_CONTENT)
 }

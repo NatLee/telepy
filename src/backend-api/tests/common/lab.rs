@@ -1,7 +1,8 @@
 //! SSH 實驗室：把「裝置 → gateway → 後端 / 筆電」整套拓撲搭在本機，給整合測試重複使用。
 //! - gateway：真的 `telepy_server::gateway`（127.0.0.1 隨機埠）
 //! - 裝置的反向隧道：真的 OpenSSH 客戶端 `ssh -NR`（與裝置腳本相同）
-//! - 裝置 / 內網機器上的 sshd：[`Machine`]（russh）。每個 OS 帳號各自的 authorized_keys、記錄每次登入
+//! - 裝置 / 內網機器上的 sshd：[`Machine`]（russh）。每個 OS 帳號各自的 authorized_keys（建立時給的金鑰，
+//!   加上 [`Machine::account_home`] 之後 `<home>/<帳號>/.ssh/authorized_keys` 檔案裡的金鑰）、記錄每次登入
 //!   （帳號 + 用了哪把金鑰），可選擇當跳板（direct-tcpip）。exec 支援 `whoami` / `hostname` / `whereami`
 //!   （`user@machine`）；shell 先印 `login:user@machine` 再 echo；`sftp` 子系統轉給本機 sftp-server（有的話）。
 //! - 後端兩條路（都只一跳到 gateway 的 loopback）：russh（SFTP / 檔案管理）與 OpenSSH（terminal / `ssh -D`）
@@ -42,7 +43,7 @@ pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-fn sftp_server_bin() -> Option<&'static str> {
+pub fn sftp_server_bin() -> Option<&'static str> {
     ["/usr/libexec/sftp-server", "/usr/lib/openssh/sftp-server", "/usr/lib/ssh/sftp-server"].into_iter().find(|p| Path::new(p).exists())
 }
 
@@ -90,11 +91,12 @@ async fn run(cmd: &mut Command) -> Run {
 
 // ------------------------------------------------------------------ device / LAN machine sshd
 
-/// 一次成功登入：OS 帳號 + 金鑰名字（[`LabKey::name`]）。
+/// 一次成功登入：OS 帳號 + 金鑰名字（[`LabKey::name`]；從 authorized_keys 檔案認證的是空字串）+ `type base64`。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Login {
     pub user: String,
     pub key: String,
+    pub bare: String,
 }
 
 /// 一台有 sshd 的機器（裝置本身，或只有裝置連得到的內網機器）。
@@ -112,15 +114,34 @@ impl Machine {
         self.logins.lock().unwrap().clone()
     }
     pub fn logged_in(&self, user: &str, key: &LabKey) -> bool {
-        self.logins().iter().any(|l| l.user == user && l.key == key.name)
+        self.logins().iter().any(|l| l.user == user && (l.key == key.name || l.bare == key.bare()))
     }
     pub fn any_login_with(&self, key: &LabKey) -> bool {
-        self.logins().iter().any(|l| l.key == key.name)
+        self.logins().iter().any(|l| l.key == key.name || l.bare == key.bare())
     }
     /// 幾次以 `user` + `key` 登入（= 幾條 SSH 連線 / 握手）。
     pub fn login_count(&self, user: &str, key: &LabKey) -> usize {
         self.logins().iter().filter(|l| l.user == user && l.key == key.name).count()
     }
+    /// 讓帳號有自己的家目錄 `<home>/<user>`：SFTP 從這裡開始，`.ssh/authorized_keys` 檔案裡的金鑰也算數。
+    pub fn account_home(&self, user: &str) -> PathBuf {
+        let dir = self.home.join(user);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    /// 帳號的 authorized_keys 檔案內容（沒有就空字串）。
+    pub fn authorized_keys(&self, user: &str) -> String {
+        std::fs::read_to_string(self.home.join(user).join(".ssh/authorized_keys")).unwrap_or_default()
+    }
+}
+
+/// 檔案裡有沒有這把金鑰（忽略 options 與註解，只比 `type base64`）。
+fn file_trusts(path: &Path, offered: &str) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else { return false };
+    content.lines().any(|l| {
+        let words: Vec<&str> = l.split_whitespace().collect();
+        words.windows(2).any(|w| format!("{} {}", w[0], w[1]) == offered)
+    })
 }
 
 /// 機器的行為選項。
@@ -149,9 +170,13 @@ struct SshdHandler {
 }
 
 impl SshdHandler {
-    fn key_for(&self, user: &str, key: &PublicKey) -> Option<LabKey> {
+    /// (金鑰名字, `type base64`)：建立時給的金鑰，或帳號家目錄 `.ssh/authorized_keys` 裡的。
+    fn key_for(&self, user: &str, key: &PublicKey) -> Option<(String, String)> {
         let offered = key.to_openssh().ok()?.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-        self.m.accounts.get(user)?.iter().find(|k| k.bare() == offered).cloned()
+        if let Some(k) = self.m.accounts.get(user).and_then(|keys| keys.iter().find(|k| k.bare() == offered)) {
+            return Some((k.name.clone(), offered));
+        }
+        file_trusts(&self.m.home.join(user).join(".ssh/authorized_keys"), &offered).then(|| (String::new(), offered))
     }
 }
 
@@ -163,8 +188,8 @@ impl server::Handler for SshdHandler {
     }
 
     async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        let Some(k) = self.key_for(user, key) else { return Ok(Auth::reject()) };
-        self.m.logins.lock().unwrap().push(Login { user: user.to_string(), key: k.name });
+        let Some((name, bare)) = self.key_for(user, key) else { return Ok(Auth::reject()) };
+        self.m.logins.lock().unwrap().push(Login { user: user.to_string(), key: name, bare });
         self.user = Some(user.to_string());
         Ok(Auth::Accept)
     }
@@ -242,7 +267,9 @@ impl server::Handler for SshdHandler {
             return Ok(());
         };
         session.channel_success(channel)?;
-        let home = self.m.home.clone();
+        // 帳號有自己的家目錄就從那裡開始（authorized_keys 測試用）。/ Per-account home when it exists.
+        let own = self.m.home.join(self.user.clone().unwrap_or_default());
+        let home = if self.user.is_some() && own.is_dir() { own } else { self.m.home.clone() };
         tokio::spawn(async move {
             let Ok(mut child) = Command::new(bin).current_dir(&home).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn() else {
                 return;
