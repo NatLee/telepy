@@ -116,6 +116,7 @@ Sub-commands:
 
 - [遠端瀏覽器架構](./docs/remote-browser.md)
 - [延遲量測深入解析](./docs/latency-deep-dive.md)
+- [後端效能比較：Django vs Rust](./docs/benchmarks.md)
 - [文章](./docs/articles/)
 
 ## 貢獻者

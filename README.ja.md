@@ -116,6 +116,7 @@ Sub-commands:
 
 - [リモートブラウザのアーキテクチャ](./docs/remote-browser.md)
 - [レイテンシ計測の詳解](./docs/latency-deep-dive.md)
+- [バックエンドベンチマーク：Django vs Rust](./docs/benchmarks.md)
 - [記事](./docs/articles/)
 
 ## コントリビューター
