@@ -3,6 +3,8 @@
 # custom
 
 *.txt
+# vendored license texts must ship with the code
+!/src/vendor/**/LICENSE.txt
 
 
 # dependencies
