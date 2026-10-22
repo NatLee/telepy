@@ -97,6 +97,14 @@ Telepy 由 Docker Compose 編排的四個容器組成：
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth 用戶端 ID               |
 | `SERVER_DOMAIN`           | `localhost` | Telepy 伺服器的公開主機名稱          |
 | `INTERNAL_API_TOKEN`      | —           | 內部服務間通訊用的密鑰               |
+| `OPENAPI_ENABLED`         | `true`      | 提供 Swagger UI 與 OpenAPI 規格（見下）|
+
+### API 文件
+
+後端在 `/api/openapi.json` 提供 OpenAPI 3 文件，並在 `/api/__hidden_swagger` 提供 Swagger UI。
+先用 `POST /api/auth/token` 登入，把 `access_token` 貼進 **Authorize**（Bearer），就能在頁面上直接
+試打每個端點。規格由實際路由產生（`utoipa`），永遠與伺服器一致；`telepy-server openapi` 也能從
+CLI 印出同一份文件。設定 `OPENAPI_ENABLED=false` 可同時關閉兩者。
 
 ## CLI 工具
 

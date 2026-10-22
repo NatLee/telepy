@@ -3,8 +3,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::notify;
@@ -15,15 +14,17 @@ use crate::db::{self, tunnels::NewTunnel};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::monitor::find_free_ports;
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{json_str, now_iso_naive};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/issue/token", get(issue_token))
-        .route("/api/reverse/create/key/{token}", post(create_key))
-        .route("/api/reverse/create/key/duplicate/{token}", post(check_duplicate))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(issue_token))
+        .routes(routes!(create_key))
+        .routes(routes!(check_duplicate))
 }
 
+#[utoipa::path(get, path = "/api/reverse/issue/token", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "One-time token (10 minutes) for creating a tunnel key", body = super::schemas::IssuedToken)))]
 async fn issue_token(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let token = state.tokens.issue_token(user.id);
     Ok(Json(json!({
@@ -41,7 +42,8 @@ async fn token_user(state: &AppState, token: &str) -> ApiResult<db::users::User>
     db::users::by_id(&state.db, uid).await?.ok_or_else(|| ApiError::bad_request("Invalid or expired token"))
 }
 
-async fn create_key(State(state): State<AppState>, AuthUser(_): AuthUser, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/reverse/create/key/{token}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("token" = String, Path, description = "Token from /api/reverse/issue/token")), request_body = super::schemas::CreateKeyRequest, responses((status = 200, description = "Tunnel created; reverse_port allocated", body = super::schemas::CreatedKey), (status = 400, description = "Invalid token, name, key or duplicate", body = super::schemas::ErrorBody)))]
+async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let user = token_user(&state, &token).await?;
     let name = json_str(&body, "host_friendly_name").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Host friendly name is required"))?;
     if !name.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
@@ -73,7 +75,8 @@ async fn create_key(State(state): State<AppState>, AuthUser(_): AuthUser, Path(t
     })))
 }
 
-async fn check_duplicate(State(state): State<AppState>, AuthUser(_): AuthUser, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/reverse/create/key/duplicate/{token}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("token" = String, Path, description = "Token from /api/reverse/issue/token")), request_body = super::schemas::DuplicateCheckRequest, responses((status = 200, description = "Name and key are free", body = super::schemas::DuplicateCheck), (status = 400, description = "Name and/or key already used", body = super::schemas::DuplicateCheck)))]
+async fn check_duplicate(State(state): State<AppState>, _user: AuthUser, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let user = token_user(&state, &token).await?;
     let name = json_str(&body, "host_friendly_name").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Host friendly name is required"))?;
     let key = json_str(&body, "key").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Key is required"))?;

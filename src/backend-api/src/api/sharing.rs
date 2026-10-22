@@ -3,8 +3,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::AppJson;
@@ -13,16 +12,17 @@ use crate::db::{self, tunnels::Tunnel};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{db_to_iso_utc_offset, json_i64, json_str};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/tunnels/share/{id}", post(share))
-        .route("/tunnels/unshare/{id}/{uid}", delete(unshare))
-        .route("/tunnels/update-permission/{id}/{uid}", patch(update_permission))
-        .route("/tunnels/shared-users/{id}", get(shared_users))
-        .route("/tunnels/available-users/{id}", get(available_users))
-        .route("/tunnels/share/{id}/{uid}/allowed-usernames", patch(update_allowed_usernames))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(share))
+        .routes(routes!(unshare))
+        .routes(routes!(update_permission))
+        .routes(routes!(shared_users))
+        .routes(routes!(available_users))
+        .routes(routes!(update_allowed_usernames))
 }
 
 fn invalid_permission(raw: &str) -> ApiError {
@@ -34,6 +34,7 @@ async fn tunnel_or_404(state: &AppState, id: i64) -> ApiResult<Tunnel> {
 }
 
 /// `ShareTunnelView` + `TunnelPermissionService.share_tunnel`
+#[utoipa::path(post, path = "/tunnels/share/{id}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::ShareRequest, responses((status = 201, body = super::schemas::Message), (status = 400, body = super::schemas::ErrorBody), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let t = tunnel_or_404(&state, id).await?;
     if !permissions::check_share_access(&state.db, me.id, &t).await? {
@@ -91,6 +92,7 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
 }
 
 /// `UnshareTunnelView` + `unshare_tunnel`：被分享者可自行「離開」。
+#[utoipa::path(delete, path = "/tunnels/unshare/{id}/{uid}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("uid" = i64, Path, description = "User id; your own id leaves the share")), responses((status = 200, body = super::schemas::Message), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, uid)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found or access denied"))?;
     let is_self = me.id == uid;
@@ -132,6 +134,7 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
 }
 
 /// `UpdateSharingPermissionView` + `update_sharing_permission`
+#[utoipa::path(patch, path = "/tunnels/update-permission/{id}/{uid}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("uid" = i64, Path, description = "User id")), request_body = super::schemas::PermissionUpdateRequest, responses((status = 200, body = super::schemas::PermissionUpdated), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, uid)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let raw = json_str(&body, "permission_type").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("permission_type is required"))?;
     let perm = Permission::parse(&raw).ok_or_else(|| invalid_permission(&raw))?;
@@ -176,6 +179,7 @@ async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser
 }
 
 /// `ListSharedUsersView`：有任何存取權的人都能看分享名單。
+#[utoipa::path(get, path = "/tunnels/shared-users/{id}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::SharedUsers), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let t = tunnel_or_404(&state, id).await?;
     if permissions::effective_for(&state.db, me.id, &t).await?.is_none() {
@@ -197,6 +201,7 @@ async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
 }
 
 /// `ListAvailableUsersView`
+#[utoipa::path(get, path = "/tunnels/available-users/{id}", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "Users the tunnel is not shared with yet", body = super::schemas::AvailableUsers), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn available_users(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let t = tunnel_or_404(&state, id).await?;
     if !permissions::check_share_access(&state.db, me.id, &t).await? {
@@ -212,6 +217,7 @@ async fn available_users(State(state): State<AppState>, AuthUser(me): AuthUser, 
 }
 
 /// `UpdateAllowedUsernamesView`：整組取代。
+#[utoipa::path(patch, path = "/tunnels/share/{id}/{uid}/allowed-usernames", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("uid" = i64, Path, description = "User id")), request_body = super::schemas::AllowedUsernamesRequest, responses((status = 200, body = super::schemas::Message), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_allowed_usernames(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, uid)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let t = tunnel_or_404(&state, id).await?;
     if !permissions::check_share_access(&state.db, me.id, &t).await? {

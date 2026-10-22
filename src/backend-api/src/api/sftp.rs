@@ -5,8 +5,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use tokio::io::AsyncWriteExt;
@@ -19,13 +18,14 @@ use crate::permissions::{self, Permission};
 use crate::sftp;
 use crate::ssh::device;
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/sftp/shell/{id}/{username}", get(shell))
-        .route("/api/sftp/list/{id}/{username}", get(list))
-        .route("/api/sftp/download/{id}/{username}", get(download))
-        .route("/api/sftp/upload/{id}/{username}", post(upload))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(shell))
+        .routes(routes!(list))
+        .routes(routes!(download))
+        .routes(routes!(upload))
         .layer(DefaultBodyLimit::disable())
 }
 
@@ -48,12 +48,14 @@ async fn connect(state: &AppState, username: &str, t: &Tunnel) -> ApiResult<(dev
     Ok((conn, sftp))
 }
 
+#[utoipa::path(get, path = "/api/sftp/shell/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), responses((status = 200, body = super::schemas::SftpShell), (status = 400, description = "Username not allowed or device unreachable", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id, username)): Path<(i64, String)>) -> ApiResult<Json<Value>> {
     let t = access(&state, user.id, id, &username).await?;
     let (_conn, sftp) = connect(&state, &username, &t).await?;
     Ok(Json(json!({ "shell": sftp::detect_shell(&sftp).await })))
 }
 
+#[utoipa::path(get, path = "/api/sftp/list/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = Option<String>, Query, description = "Directory; default ~/ (unix) or C:\\ (Windows)")), responses((status = 200, body = super::schemas::SftpListing), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn list(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -76,6 +78,7 @@ async fn list(
     })))
 }
 
+#[utoipa::path(get, path = "/api/sftp/download/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("path" = String, Query, description = "File or directory (directories are zipped)")), responses((status = 200, description = "Streamed file (application/octet-stream) or zip (application/zip) with Content-Disposition", content_type = "application/octet-stream"), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn download(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -133,6 +136,7 @@ async fn download(
     }
 }
 
+#[utoipa::path(post, path = "/api/sftp/upload/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username"), ("destination_path" = String, Query, description = "Directory (file keeps its name) or full target path")), request_body(content = super::schemas::UploadForm, content_type = "multipart/form-data"), responses((status = 200, body = super::schemas::UploadResult), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn upload(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,

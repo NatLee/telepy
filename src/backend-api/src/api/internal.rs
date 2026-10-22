@@ -9,8 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use crate::auth::InternalService;
@@ -18,12 +17,13 @@ use crate::db::{self, tunnels::like_prefix};
 use crate::error::ApiResult;
 use crate::monitor::parse_ss_listen;
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/internal/keys", get(keys))
-        .route("/api/reverse/internal/ss", post(push_ss))
-        .route("/api/reverse/internal/latency", post(push_latency))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(keys))
+        .routes(routes!(push_ss))
+        .routes(routes!(push_latency))
 }
 
 fn plain(body: String) -> Response {
@@ -34,6 +34,7 @@ fn plain(body: String) -> Response {
 /// 1. offered key → 反查擁有者（tunnel key → user key → service key）
 /// 2. 擁有者有自己的隧道或被分享的隧道 → 含其個人金鑰
 /// 3. 永遠附上所有隧道金鑰與服務金鑰，去重後 text/plain 輸出。
+#[utoipa::path(get, path = "/api/reverse/internal/keys", tag = "Internal", security(("internal" = [])), params(("key_type" = String, Query, description = "e.g. ssh-ed25519"), ("key" = String, Query, description = "base64 key blob")), responses((status = 200, description = "Authorized keys for sshd AuthorizedKeysCommand, one per line (empty when none)", content_type = "text/plain", body = String), (status = 403, body = super::schemas::ErrorBody)))]
 async fn keys(State(state): State<AppState>, _auth: InternalService, Query(q): Query<HashMap<String, String>>) -> ApiResult<Response> {
     let key_type = q.get("key_type").cloned().unwrap_or_default();
     let key_blob = q.get("key").cloned().unwrap_or_default();
@@ -77,6 +78,7 @@ async fn keys(State(state): State<AppState>, _auth: InternalService, Query(q): Q
 }
 
 /// Body = `ss -tlnp` 原文（或 JSON `{"ports":[...]}`）。
+#[utoipa::path(post, path = "/api/reverse/internal/ss", tag = "Internal", security(("internal" = [])), request_body(content = String, description = "`ss -tlnp` output, or JSON {\"ports\": [..]}", content_type = "text/plain"), responses((status = 200, body = super::schemas::PushAck), (status = 403, body = super::schemas::ErrorBody)))]
 async fn push_ss(State(state): State<AppState>, _auth: InternalService, body: Bytes) -> Json<Value> {
     let text = String::from_utf8_lossy(&body);
     let ports = match serde_json::from_str::<Value>(&text) {
@@ -89,6 +91,7 @@ async fn push_ss(State(state): State<AppState>, _auth: InternalService, body: By
 }
 
 /// Body = 多行 `port rtt_ms`（或 JSON `{"latency": {"port": rtt}}`）。
+#[utoipa::path(post, path = "/api/reverse/internal/latency", tag = "Internal", security(("internal" = [])), request_body(content = String, description = "Lines `port rtt_ms`, or JSON {\"latency\": {port: rtt}}", content_type = "text/plain"), responses((status = 200, body = super::schemas::PushAck), (status = 403, body = super::schemas::ErrorBody)))]
 async fn push_latency(State(state): State<AppState>, _auth: InternalService, body: Bytes) -> Json<Value> {
     let text = String::from_utf8_lossy(&body);
     let mut map: HashMap<u16, f64> = HashMap::new();

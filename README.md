@@ -97,6 +97,15 @@ Environment variables in `.env`:
 | `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth client ID                       |
 | `SERVER_DOMAIN`           | `localhost` | Public hostname of your Telepy server        |
 | `INTERNAL_API_TOKEN`      | —           | Secret for internal service-to-service calls |
+| `OPENAPI_ENABLED`         | `true`      | Serve Swagger UI + OpenAPI spec (see below)  |
+
+### API docs
+
+The backend publishes its OpenAPI 3 document at `/api/openapi.json` and a Swagger UI at
+`/api/__hidden_swagger`. Log in with `POST /api/auth/token`, paste the `access_token` into
+**Authorize** (Bearer) and every endpoint can be tried from the page. The spec is generated from
+the actual routes (`utoipa`), so it is always in sync with the server; `telepy-server openapi`
+prints the same document from the CLI. Set `OPENAPI_ENABLED=false` to hide both.
 
 ## CLI helper
 

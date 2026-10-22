@@ -5,8 +5,7 @@ use std::collections::BTreeMap;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch};
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 
 use super::notify;
@@ -17,18 +16,19 @@ use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{json_i64, json_str};
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/reverse/server/status/ports", get(status_ports))
-        .route("/api/reverse/server/status/latency", get(status_latency))
-        .route("/api/reverse/server/dashboard", get(dashboard))
-        .route("/api/reverse/server/keys", get(list).post(create))
-        .route("/api/reverse/server/keys/{id}", get(retrieve).put(update).patch(partial_update).delete(destroy))
-        .route("/api/reverse/server/{id}/usernames", get(usernames_for_server))
-        .route("/api/reverse/server/{id}/default-username", patch(set_default_username))
-        .route("/api/reverse/service/keys", get(service_keys))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(status_ports))
+        .routes(routes!(status_latency))
+        .routes(routes!(dashboard))
+        .routes(routes!(list, create))
+        .routes(routes!(retrieve, update, partial_update, destroy))
+        .routes(routes!(usernames_for_server))
+        .routes(routes!(set_default_username))
+        .routes(routes!(service_keys))
 }
 
 /// `{port: bool}`；取樣不可用回 `{}`。/ Port map, `{}` when the sample is unavailable.
@@ -42,11 +42,13 @@ pub fn latency_json(state: &AppState) -> Value {
     Value::Object(map.into_iter().map(|(p, v)| (p.to_string(), json!(v))).collect())
 }
 
-async fn status_ports(State(state): State<AppState>, AuthUser(_): AuthUser) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/reverse/server/status/ports", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "{\"<reverse_port>\": listening} for every tunnel; {} when the status source is unavailable", body = Object)))]
+async fn status_ports(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(ports_json(&state).await?))
 }
 
-async fn status_latency(State(state): State<AppState>, AuthUser(_): AuthUser) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/reverse/server/status/latency", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "{\"<reverse_port>\": rtt_ms}", body = Object)))]
+async fn status_latency(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(latency_json(&state)))
 }
 
@@ -70,6 +72,7 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
     Ok(tunnel_json(t, eff, count, state.config.tz_offset_minutes))
 }
 
+#[utoipa::path(get, path = "/api/reverse/server/dashboard", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "Tunnels visible to the user plus live port status and latency", body = super::schemas::Dashboard)))]
 async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
         "tunnels": list_json(&state, user.id).await?,
@@ -78,6 +81,7 @@ async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser) -> A
     })))
 }
 
+#[utoipa::path(get, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::Tunnel>)))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     Ok(Json(Value::Array(list_json(&state, user.id).await?)))
 }
@@ -137,6 +141,7 @@ fn validate_full(body: &Value) -> Result<(String, String, i64), ApiError> {
     Ok((name.unwrap(), key.unwrap(), port.unwrap()))
 }
 
+#[utoipa::path(post, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::TunnelWrite, responses((status = 201, body = super::schemas::Tunnel), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (name, key, port) = validate_full(&body)?;
     let description = json_str(&body, "description");
@@ -158,6 +163,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     Ok((StatusCode::CREATED, Json(single_json(&state, user.id, &t).await?)))
 }
 
+#[utoipa::path(get, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::Tunnel), (status = 404, body = super::schemas::ErrorBody)))]
 async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let t = visible_tunnel(&state, user.id, id).await?;
     Ok(Json(single_json(&state, user.id, &t).await?))
@@ -193,14 +199,17 @@ async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, part
     Ok(Json(single_json(state, user_id, &updated).await?))
 }
 
+#[utoipa::path(put, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelWrite, responses((status = 200, body = super::schemas::Tunnel), (status = 403, description = "Needs EDIT permission", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     apply_update(&state, user.id, id, body, false).await
 }
 
+#[utoipa::path(patch, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TunnelPatch, responses((status = 200, body = super::schemas::Tunnel), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn partial_update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     apply_update(&state, user.id, id, body, true).await
 }
 
+#[utoipa::path(delete, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 204, description = "Deleted (usernames and shares cascade)"), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
     let t = visible_tunnel(&state, user.id, id).await?;
     if !permissions::check_share_access(&state.db, user.id, &t).await? {
@@ -220,6 +229,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
 }
 
 /// `ReverseServerUsernamesMapServerId`：`{"usernames": [...], "default_username_id": ...}`
+#[utoipa::path(get, path = "/api/reverse/server/{id}/usernames", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "Target usernames the caller may use on this tunnel", body = super::schemas::UsernamesForServer), (status = 404, body = super::schemas::ErrorBody)))]
 async fn usernames_for_server(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let not_found = || ApiError::not_found("Server not found");
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(not_found)?;
@@ -241,6 +251,7 @@ async fn usernames_for_server(State(state): State<AppState>, AuthUser(user): Aut
 }
 
 /// `SetDefaultUsernameView`
+#[utoipa::path(patch, path = "/api/reverse/server/{id}/default-username", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DefaultUsernameRequest, responses((status = 200, body = super::schemas::DefaultUsernameResponse), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn set_default_username(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
     if !permissions::check_access(&state.db, user.id, &t, Permission::Edit).await? {
@@ -272,7 +283,8 @@ async fn set_default_username(State(state): State<AppState>, AuthUser(user): Aut
     }
 }
 
-async fn service_keys(State(state): State<AppState>, AuthUser(_): AuthUser) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/reverse/service/keys", tag = "Service Keys", security(("bearer" = [])), responses((status = 200, description = "Public keys devices must authorize (the backend's own key)", body = Vec<super::schemas::ServiceKey>)))]
+async fn service_keys(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Value>> {
     let keys = db::keys::service_keys(&state.db).await?;
     Ok(Json(Value::Array(
         keys.iter()

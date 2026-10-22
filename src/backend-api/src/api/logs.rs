@@ -8,20 +8,20 @@ use std::collections::HashMap;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Value};
 use sqlx::FromRow;
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::db_to_iso;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/api/log/ssh", get(ssh_logs))
-        .route("/api/log/ssh/events", get(ssh_events))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(ssh_logs))
+        .routes(routes!(ssh_events))
 }
 
 #[derive(Debug, FromRow)]
@@ -70,7 +70,8 @@ fn render_line(e: &GatewayEvent, tz: i32) -> String {
     format!("{ts}  {}", e.message)
 }
 
-async fn ssh_logs(State(state): State<AppState>, AuthUser(_): AuthUser) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/log/ssh", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Last 500 gateway events rendered as sshd-style lines, as one JSON string", body = String), (status = 404, description = "External sshd mode only: log file missing", body = String)))]
+async fn ssh_logs(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Value>> {
     if state.config.gateway_enabled {
         let events = recent_events(&state, 500, None).await?;
         let tz = state.config.tz_offset_minutes;
@@ -85,7 +86,8 @@ async fn ssh_logs(State(state): State<AppState>, AuthUser(_): AuthUser) -> ApiRe
 }
 
 /// `?limit=` (default 200, max 5000) `&tunnel_id=`
-async fn ssh_events(State(state): State<AppState>, AuthUser(_): AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/log/ssh/events", tag = "Logs", security(("bearer" = [])), params(("limit" = Option<i64>, Query, description = "Default 200, max 5000"), ("tunnel_id" = Option<i64>, Query, description = "Only events of this tunnel")), responses((status = 200, body = Vec<super::schemas::GatewayEvent>)))]
+async fn ssh_events(State(state): State<AppState>, _user: AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200);
     let tunnel_id = q.get("tunnel_id").and_then(|v| v.parse().ok());
     let events = recent_events(&state, limit, tunnel_id).await?;

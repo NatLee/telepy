@@ -2,8 +2,7 @@
 //! meta 的 label/description 直接取自 Django model 的 verbose_name/help_text（前端以字典優先、meta 退回）。
 
 use axum::extract::State;
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::Json;
 use serde_json::{json, Map, Value};
 
 use super::AppJson;
@@ -11,9 +10,10 @@ use crate::auth::AuthUser;
 use crate::db::{self, settings::{SettingValue, SiteSettings, FIELDS}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/api/site/settings", get(get_settings).post(update_settings))
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(get_settings, update_settings))
 }
 
 #[derive(Clone, Copy)]
@@ -71,6 +71,7 @@ fn meta_json() -> Value {
     Value::Object(m)
 }
 
+#[utoipa::path(get, path = "/api/site/settings", tag = "Site Settings", security(("bearer" = [])), responses((status = 200, description = "values + meta; empty objects for non-admins", body = super::schemas::SiteSettingsResponse)))]
 async fn get_settings(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
     if !me.is_superuser {
         return Ok(Json(json!({ "values": {}, "meta": {} })));
@@ -105,6 +106,7 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
     }
 }
 
+#[utoipa::path(post, path = "/api/site/settings", tag = "Site Settings", security(("bearer" = [])), request_body(content = Object, description = "Partial update: {field: value, …} using the keys of `values`"), responses((status = 200, body = super::schemas::SiteSettingsResponse), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody)))]
 async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     if !me.is_superuser {
         return Err(ApiError::forbidden("Permission denied. Only administrators can modify system settings."));

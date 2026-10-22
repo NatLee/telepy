@@ -63,6 +63,8 @@ pub struct Config {
     /// terminal / file manager 連線的目標主機：OpenSSH 容器模式是 `reverse`（~/.ssh/config 的雙跳
     /// ProxyCommand），內建 gateway 模式是 `127.0.0.1`（gateway 的 loopback listener，單跳）。
     pub ssh_target_host: String,
+    /// Swagger UI + /api/openapi.json（OPENAPI_ENABLED=false 可關）。
+    pub openapi_enabled: bool,
     // --- in-process SSH gateway ---
     pub gateway_enabled: bool,
     pub gateway_bind: String,
@@ -158,6 +160,7 @@ impl Config {
             ssh_gateway_port: env("SSH_GATEWAY_PORT").and_then(|v| v.parse().ok()).unwrap_or(2222),
             ssh_gateway_user: env("SSH_GATEWAY_USER").unwrap_or_else(|| "telepy".to_string()),
             ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| if gateway_enabled { "127.0.0.1".to_string() } else { "reverse".to_string() }),
+            openapi_enabled: env_bool("OPENAPI_ENABLED", true),
             gateway_enabled,
             gateway_bind: env("GATEWAY_BIND").unwrap_or_else(|| "0.0.0.0:2222".to_string()),
             gateway_host_keys_dir,
