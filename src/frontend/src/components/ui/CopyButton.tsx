@@ -19,9 +19,9 @@ export function CopyButton({ value }: { value: string }) {
             }
             title={t("ui.copyToClipboard")}
             aria-label={t("ui.copyToClipboard")}
-            className="shrink-0 p-2 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            className="shrink-0 grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
         >
-            {copied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+            {copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
         </button>
     );
 }

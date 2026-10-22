@@ -1,6 +1,12 @@
 "use client";
 
+/**
+ * 確認對話框:圖示 + 標題 + 說明 + 兩顆按鈕的精簡版 Modal。危險動作用紅色調。
+ * Confirmation dialog: a compact Modal with an icon, title, message and two buttons; destructive
+ * actions get the red tone.
+ */
 import React from "react";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import { Modal } from "./Modal";
 import { Button } from "./button";
 import { useI18n } from "@/lib/i18n";
@@ -32,9 +38,12 @@ export function ConfirmDialog({
             isOpen={isOpen}
             onClose={onClose}
             title={title}
-            size="sm"
+            description={message}
+            icon={isDestructive ? <TriangleAlert /> : <CircleHelp />}
+            tone={isDestructive ? "danger" : "default"}
+            size="md"
             footer={
-                <div className="flex items-center justify-end gap-2 w-full">
+                <>
                     <Button variant="outline" onClick={onClose}>
                         {cancelText ?? t("common.cancel")}
                     </Button>
@@ -47,10 +56,8 @@ export function ConfirmDialog({
                     >
                         {confirmText ?? t("common.confirm")}
                     </Button>
-                </div>
+                </>
             }
-        >
-            <div className="text-muted-foreground">{message}</div>
-        </Modal>
+        />
     );
 }

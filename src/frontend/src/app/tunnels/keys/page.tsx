@@ -8,9 +8,12 @@ import React from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Plus, Key as KeyIcon, Trash2, Edit3, RefreshCw, Info } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from "@/components/ui/card";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import {
@@ -53,11 +56,12 @@ export default function UserKeysPage() {
 
     return (
         <div className="animate-fade-in-up">
-            <div className="sm:flex sm:items-center sm:justify-between mb-8">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-foreground flex items-center gap-2 tracking-tight">
-                        <KeyIcon className="text-primary animate-float" />
-                        {t("keys.title")}
+            <PageHeader
+                className="mb-8"
+                icon={<KeyIcon />}
+                title={t("keys.title")}
+                titleAddon={
+                    <>
                         <TooltipProvider delayDuration={100}>
                             <Tooltip>
                                 <TooltipTrigger asChild>
@@ -68,37 +72,37 @@ export default function UserKeysPage() {
                                 <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
                                     <p>
                                         {tn("keys.aboutTooltip", {
-                                            rsaPath: <code className="bg-muted text-foreground px-1 rounded">~/.ssh/id_rsa.pub</code>,
-                                            edPath: <code className="bg-muted text-foreground px-1 rounded">id_ed25519.pub</code>,
+                                            rsaPath: <code className="bg-background/15 px-1 rounded font-mono">~/.ssh/id_rsa.pub</code>,
+                                            edPath: <code className="bg-background/15 px-1 rounded font-mono">id_ed25519.pub</code>,
                                         })}
                                     </p>
                                 </TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
                         <WebSocketStatusBadge />
-                    </h1>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                        {tn("keys.subtitle", {
-                            rsa: <code className="bg-muted px-1 rounded text-xs">ssh-rsa</code>,
-                            ed25519: <code className="bg-muted px-1 rounded text-xs">ssh-ed25519</code>,
-                        })}
-                    </p>
-                </div>
-                <div className="mt-4 sm:mt-0 flex gap-2 items-center">
-                    <div className="hidden min-[1200px]:flex items-center">
-                        <ViewToggle value={viewMode} onChange={setViewMode} storageKey="ssh-keys-view" />
-                        <div className="h-5 w-px bg-border mx-2"></div>
-                    </div>
-                    <Button variant="outline" onClick={fetchKeys} disabled={loading} aria-label={t("keys.refreshAria")}>
-                        <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
-                        {t("common.refresh")}
-                    </Button>
-                    <Button onClick={() => setAddModalOpen(true)}>
-                        <Plus size={16} className="-ml-1 mr-2" />
-                        {t("keys.addKey")}
-                    </Button>
-                </div>
-            </div>
+                    </>
+                }
+                description={tn("keys.subtitle", {
+                    rsa: <code className="bg-muted px-1 rounded font-mono text-xs">ssh-rsa</code>,
+                    ed25519: <code className="bg-muted px-1 rounded font-mono text-xs">ssh-ed25519</code>,
+                })}
+                actions={
+                    <>
+                        <div className="hidden min-[1200px]:flex items-center">
+                            <ViewToggle value={viewMode} onChange={setViewMode} storageKey="ssh-keys-view" />
+                            <div className="h-5 w-px bg-border mx-2"></div>
+                        </div>
+                        <Button variant="outline" onClick={fetchKeys} disabled={loading} aria-label={t("keys.refreshAria")}>
+                            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+                            {t("common.refresh")}
+                        </Button>
+                        <Button onClick={() => setAddModalOpen(true)}>
+                            <Plus size={16} />
+                            {t("keys.addKey")}
+                        </Button>
+                    </>
+                }
+            />
 
             {loading ? (
                 <div className="py-12 flex justify-center text-muted-foreground">
@@ -220,58 +224,68 @@ export default function UserKeysPage() {
             )}
 
             {/* Add Key Modal */}
-            <Modal isOpen={addModalOpen} onClose={() => setAddModalOpen(false)} title={t("keys.addModalTitle")} size="lg">
-                <form onSubmit={handleAddKey} className="space-y-4">
+            <Modal
+                isOpen={addModalOpen}
+                onClose={() => setAddModalOpen(false)}
+                title={t("keys.addModalTitle")}
+                icon={<KeyIcon />}
+                size="lg"
+                footer={
+                    <>
+                        <Button variant="outline" onClick={() => setAddModalOpen(false)} disabled={isSubmitting}>{t("common.cancel")}</Button>
+                        <Button type="submit" form="add-key-form" disabled={isSubmitting || !newKeyContent || !newKeyName}>
+                            {isSubmitting ? (
+                                <>
+                                    <RefreshCw className="animate-spin" />
+                                    {t("keys.adding")}
+                                </>
+                            ) : t("keys.addModalTitle")}
+                        </Button>
+                    </>
+                }
+            >
+                <form id="add-key-form" onSubmit={handleAddKey} className="space-y-5">
                     <div className="space-y-2">
-                        <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
+                        <Label htmlFor="add-key-content">
                             {t("keys.sshPublicKey")} <span className="text-destructive">*</span>
-                        </label>
-                        <textarea
+                        </Label>
+                        <Textarea
+                            id="add-key-content"
                             required
+                            autoFocus
                             rows={4}
                             value={newKeyContent}
                             onChange={handleKeyChange}
-                            className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 font-mono"
+                            className="font-mono text-xs leading-relaxed md:text-xs"
                             placeholder="ssh-rsa AAAAB3NzaC1yc... user@machine"
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
+                        <Label htmlFor="add-key-name">
                             {t("keys.hostFriendlyName")} <span className="text-destructive">*</span>
-                        </label>
+                        </Label>
                         <Input
+                            id="add-key-name"
                             type="text"
                             required
                             value={newKeyName}
                             onChange={(e) => setNewKeyName(e.target.value)}
                             placeholder={t("keys.namePlaceholder")}
-                            className="font-mono text-sm"
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-foreground">
-                            {t("common.description")} <span className="text-muted-foreground font-normal">{t("common.optional")}</span>
-                        </label>
+                        <Label htmlFor="add-key-description">
+                            {t("common.description")} <span className="text-muted-foreground">{t("common.optional")}</span>
+                        </Label>
                         <Input
+                            id="add-key-description"
                             type="text"
                             value={newKeyDescription}
                             onChange={(e) => setNewKeyDescription(e.target.value)}
                             placeholder={t("keys.descriptionPlaceholder")}
-                            className="text-sm"
                         />
                     </div>
                 </form>
-                <div className="mt-6 flex justify-end gap-3">
-                    <Button variant="outline" onClick={() => setAddModalOpen(false)} disabled={isSubmitting}>{t("common.cancel")}</Button>
-                    <Button onClick={handleAddKey} disabled={isSubmitting || !newKeyContent || !newKeyName}>
-                        {isSubmitting ? (
-                            <>
-                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                                {t("keys.adding")}
-                            </>
-                        ) : t("keys.addModalTitle")}
-                    </Button>
-                </div>
             </Modal>
 
             {/* View/Edit Key Details Modal */}
@@ -279,27 +293,33 @@ export default function UserKeysPage() {
                 isOpen={detailsModal.isOpen}
                 onClose={() => setDetailsModal({ isOpen: false, key: null })}
                 title={t("keys.detailsTitle")}
+                description={detailsModal.key?.host_friendly_name}
+                icon={<KeyIcon />}
                 size="lg"
+                footer={<Button variant="outline" onClick={() => setDetailsModal({ isOpen: false, key: null })}>{t("common.close")}</Button>}
             >
                 {detailsModal.key && (
-                    <div className="space-y-6">
-                        <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("keys.friendlyName")}</h3>
-                            <p className="font-mono bg-muted/30 p-2 rounded border border-border">{detailsModal.key.host_friendly_name}</p>
-                        </div>
-                        <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("keys.publicKey")}</h3>
+                    <div className="space-y-5">
+                        <div className="space-y-2">
+                            <Label>{t("keys.publicKey")}</Label>
                             <CodeBlock value={detailsModal.key.key || t("keys.noKey")} language="ssh" />
                         </div>
-                        <div>
-                            <h3 className="text-sm font-medium text-muted-foreground mb-1">{t("common.description")}</h3>
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <Label>{t("common.description")}</Label>
+                                {!isEditingDesc && (
+                                    <Button variant="ghost" size="xs" onClick={() => setIsEditingDesc(true)} className="text-primary hover:text-primary">
+                                        <Edit3 /> {t("common.edit")}
+                                    </Button>
+                                )}
+                            </div>
                             {isEditingDesc ? (
-                                <div className="space-y-2 mt-2">
-                                    <textarea
+                                <div className="space-y-2">
+                                    <Textarea
+                                        autoFocus
                                         value={editDescription}
                                         onChange={(e) => setEditDescription(e.target.value)}
                                         rows={3}
-                                        className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                         placeholder={t("keys.addDescriptionPlaceholder")}
                                     />
                                     <div className="flex justify-end gap-2">
@@ -310,21 +330,15 @@ export default function UserKeysPage() {
                                             {t("common.cancel")}
                                         </Button>
                                         <Button size="sm" onClick={() => handleUpdateDescription()} disabled={isUpdating}>
-                                            {isUpdating ? <RefreshCw size={14} className="animate-spin mr-1" /> : t("common.save")}
+                                            {isUpdating ? <RefreshCw className="animate-spin" /> : t("common.save")}
                                         </Button>
                                     </div>
                                 </div>
                             ) : (
-                                <div className="flex justify-between items-start bg-muted/10 p-3 rounded border border-border">
-                                    <p className="text-sm whitespace-pre-wrap flex-1">{detailsModal.key.description || <span className="text-muted-foreground italic">{t("keys.noDescription")}</span>}</p>
-                                    <Button variant="ghost" size="sm" onClick={() => setIsEditingDesc(true)} className="h-6 px-2 text-xs ml-2">
-                                        <Edit3 size={12} className="mr-1" /> {t("common.edit")}
-                                    </Button>
-                                </div>
+                                <p className="whitespace-pre-wrap rounded-xl bg-surface px-3.5 py-3 text-sm ring-1 ring-inset ring-border/80">
+                                    {detailsModal.key.description || <span className="text-muted-foreground">{t("keys.noDescription")}</span>}
+                                </p>
                             )}
-                        </div>
-                        <div className="pt-4 flex justify-end">
-                            <Button variant="outline" onClick={() => setDetailsModal({ isOpen: false, key: null })}>{t("common.close")}</Button>
                         </div>
                     </div>
                 )}

@@ -3,9 +3,10 @@
 import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useTunnelDetailsModal } from "@/hooks/useTunnelDetailsModal";
-import { Copy, Save, Check } from "lucide-react";
+import { Copy, Save, Check, Server, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/lib/i18n";
 
 import { TunnelModalProps } from "@/types/tunnel";
@@ -26,6 +27,8 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
             isOpen={isOpen}
             onClose={onClose}
             title={t("tunnelDetails.title")}
+            description={details?.host_friendly_name}
+            icon={<Server />}
             size="lg"
             isLoading={loading || !details}
             footer={
@@ -44,11 +47,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                                 onClick={handleSaveDescription}
                                 disabled={isSaving}
                             >
-                                {isSaving ? (
-                                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2"></div>
-                                ) : (
-                                    <Save size={16} className="mr-2" />
-                                )}
+                                {isSaving ? <Loader2 className="animate-spin" /> : <Save />}
                                 {t("common.saveChanges")}
                             </Button>
                         )}
@@ -56,59 +55,56 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                 ) : undefined
             }
         >
-            <div className="space-y-6">
+            <div className="space-y-5">
                 {(loading || !details) ? null : (
                     <>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="bg-muted p-4 rounded-lg border border-border">
-                                <p className="text-sm font-medium text-muted-foreground mb-1">{t("tunnelDetails.tunnelId")}</p>
-                                <p className="font-semibold text-foreground">{details.id}</p>
+                        {/* 屬性格:一個外框、四格以細線分隔,取代四塊灰底卡片。
+                            Property grid: one frame split by hairlines instead of four grey boxes. */}
+                        <dl className="grid grid-cols-2 overflow-hidden rounded-xl bg-surface ring-1 ring-inset ring-border/80 [&>div]:p-3.5 [&>div]:sm:p-4">
+                            <div className="border-r border-b border-border/70">
+                                <dt className="text-xs text-muted-foreground">{t("tunnelDetails.tunnelId")}</dt>
+                                <dd className="mt-1 font-mono text-[15px] tabular-nums text-foreground">#{details.id}</dd>
                             </div>
-                            <div className="bg-muted p-4 rounded-lg border border-border">
-                                <p className="text-sm font-medium text-muted-foreground mb-1">{t("tunnelDetails.yourPermission")}</p>
-                                <p className="font-semibold text-foreground capitalize">{details.user_permission || t("tunnels.owner")}</p>
+                            <div className="border-b border-border/70">
+                                <dt className="text-xs text-muted-foreground">{t("tunnelDetails.yourPermission")}</dt>
+                                <dd className="mt-1 text-[15px] capitalize text-foreground">{details.user_permission || t("tunnels.owner")}</dd>
                             </div>
-                            <div className="bg-muted p-4 rounded-lg border border-border">
-                                <p className="text-sm font-medium text-muted-foreground mb-1">{t("tunnelDetails.hostFriendlyName")}</p>
-                                <p className="font-semibold text-foreground">{details.host_friendly_name}</p>
+                            <div className="min-w-0 border-r border-border/70">
+                                <dt className="text-xs text-muted-foreground">{t("tunnelDetails.hostFriendlyName")}</dt>
+                                <dd className="mt-1 truncate text-[15px] text-foreground">{details.host_friendly_name}</dd>
                             </div>
-                            <div className="bg-muted p-4 rounded-lg border border-border">
-                                <p className="text-sm font-medium text-muted-foreground mb-1">{t("tunnelDetails.reversePort")}</p>
-                                <p className="font-semibold text-foreground text-lg text-primary">{details.reverse_port}</p>
+                            <div>
+                                <dt className="text-xs text-muted-foreground">{t("tunnelDetails.reversePort")}</dt>
+                                <dd className="mt-1 font-mono text-[15px] tabular-nums text-primary">:{details.reverse_port}</dd>
                             </div>
-                        </div>
+                        </dl>
 
-                        <div>
-                            <Label className="block mb-2">{t("common.description")}</Label>
-                            <textarea
+                        <div className="space-y-2">
+                            <Label htmlFor="tunnel-details-description">{t("common.description")}</Label>
+                            <Textarea
+                                id="tunnel-details-description"
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 rows={3}
                                 disabled={details.user_permission === 'view'}
-                                className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
                                 placeholder={details.user_permission === 'view' ? t("tunnelDetails.noDescription") : t("tunnelDetails.descriptionPlaceholder")}
                             />
                         </div>
 
-                        <div>
-                            <div className="flex items-center justify-between mb-1">
-                                <Label className="text-sm font-medium text-foreground">{t("tunnels.publicKey")}</Label>
-                                <button
-                                    type="button"
-                                    onClick={copyKey}
-                                    className="text-sm flex items-center gap-1 text-primary hover:text-primary/80 font-medium transition-colors"
-                                >
-                                    {copiedKey ? <Check size={14} /> : <Copy size={14} />}
+                        <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                                <Label>{t("tunnels.publicKey")}</Label>
+                                <Button type="button" variant="ghost" size="xs" onClick={copyKey} className="text-primary hover:text-primary">
+                                    {copiedKey ? <Check /> : <Copy />}
                                     {copiedKey ? t("tunnelDetails.copied") : t("tunnelDetails.copyFullKey")}
-                                </button>
+                                </Button>
                             </div>
-                            <div className="bg-muted/50 border border-border rounded-md p-3 max-h-32 flex overflow-y-auto min-w-0">
-                                <code className="text-xs text-muted-foreground break-all whitespace-pre-wrap font-mono min-w-0">
+                            <div className="flex max-h-32 min-w-0 overflow-y-auto rounded-xl bg-surface p-3 ring-1 ring-inset ring-border/80">
+                                <code className="min-w-0 break-all whitespace-pre-wrap font-mono text-xs leading-relaxed text-muted-foreground">
                                     {details.key || t("tunnelDetails.noKey")}
                                 </code>
                             </div>
                         </div>
-
                     </>
                 )}
             </div>

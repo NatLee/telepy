@@ -293,7 +293,7 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
             open.join(", ")
         ));
     };
-    let conn = device::connect(&state.config, &username, tunnel.reverse_port)
+    let conn = device::connect(&state, &username, tunnel.reverse_port)
         .await
         .map_err(|e| format!("Cannot connect to '{}' as {username}: {e:#}", tunnel.host_friendly_name))?;
     let now = Instant::now();

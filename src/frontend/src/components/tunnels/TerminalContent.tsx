@@ -12,7 +12,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw } from "lucide-react";
+import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw, KeyRound, Loader2 } from "lucide-react";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { ShellTabBar } from "@/components/tunnels/ShellTabBar";
 import type { ShellTab } from "@/hooks/useTerminalPage";
@@ -280,25 +280,25 @@ export function TerminalContent({
                 setExpanded={setKeyboardExpanded}
             />
 
-            <Modal isOpen={serviceKeyModalOpen} onClose={() => setServiceKeyModalOpen(false)} title={t("terminal.serviceKeys")} size="lg">
+            <Modal isOpen={serviceKeyModalOpen} onClose={() => setServiceKeyModalOpen(false)} title={t("terminal.serviceKeys")} icon={<KeyRound />} size="lg">
                 {loadingServiceKeys ? (
                     <div className="flex justify-center py-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+                        <Loader2 className="size-6 animate-spin text-primary" />
                     </div>
                 ) : (serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).length === 0 ? (
                     <p className="text-sm text-muted-foreground text-center py-8">{t("terminal.noServiceKeys")}</p>
                 ) : (
-                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                    <div className="space-y-3 max-h-96 overflow-y-auto">
                         {(serviceKeys as { key?: string; public_key?: string; host_friendly_name?: string; name?: string }[]).map((sk, idx) => (
-                            <div key={idx} className="bg-muted/50 rounded-lg p-4 border border-border min-w-0 overflow-hidden">
-                                <div className="flex items-center justify-between mb-2 gap-2">
-                                    <h4 className="text-sm font-semibold text-foreground">{sk.host_friendly_name || sk.name || t("terminal.serviceKeyN", { n: idx + 1 })}</h4>
-                                    <Button variant="ghost" size="sm" onClick={() => navigator.clipboard.writeText(sk.key || sk.public_key || "")} className="h-7 px-2 text-xs">
-                                        <Copy size={12} className="mr-1" /> {t("common.copy")}
+                            <div key={idx} className="min-w-0 overflow-hidden rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80">
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                    <h4 className="text-sm text-foreground">{sk.host_friendly_name || sk.name || t("terminal.serviceKeyN", { n: idx + 1 })}</h4>
+                                    <Button variant="ghost" size="xs" onClick={() => navigator.clipboard.writeText(sk.key || sk.public_key || "")} className="text-primary hover:text-primary">
+                                        <Copy /> {t("common.copy")}
                                     </Button>
                                 </div>
-                                <div className="bg-background rounded p-2 border border-border/50 max-h-32 overflow-y-auto">
-                                    <code className="text-[10px] leading-tight text-muted-foreground break-all whitespace-pre-wrap font-mono block max-w-full">{sk.key || sk.public_key || "—"}</code>
+                                <div className="max-h-32 overflow-y-auto rounded-lg bg-card p-2.5 ring-1 ring-inset ring-border/60">
+                                    <code className="block max-w-full break-all whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">{sk.key || sk.public_key || "—"}</code>
                                 </div>
                             </div>
                         ))}

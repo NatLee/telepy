@@ -5,7 +5,8 @@
  * Recovery codes are shown once, with copy and download.
  */
 import React from "react";
-import { Copy, Download, ShieldAlert } from "lucide-react";
+import { Copy, Download, LifeBuoy } from "lucide-react";
+import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
@@ -39,6 +40,7 @@ export function RecoveryCodesDialog({ codes, onClose }: { codes: string[]; onClo
             isOpen
             onClose={onClose}
             title={t("security.recoveryTitle")}
+            icon={<LifeBuoy />}
             footer={
                 <Button type="button" onClick={onClose}>
                     {t("security.recoveryDone")}
@@ -46,24 +48,21 @@ export function RecoveryCodesDialog({ codes, onClose }: { codes: string[]; onClo
             }
         >
             <div className="space-y-4">
-                <div className="flex items-start gap-2 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-amber-800 dark:text-amber-200">
-                    <ShieldAlert size={16} className="mt-0.5 shrink-0" />
-                    <span>{t("security.recoveryWarning")}</span>
-                </div>
-                <ul className="grid grid-cols-2 gap-2 font-mono text-sm">
+                <Callout tone="warning">{t("security.recoveryWarning")}</Callout>
+                <ul className="grid grid-cols-2 gap-2 rounded-xl bg-surface p-3 font-mono text-sm ring-1 ring-inset ring-border/80">
                     {codes.map((c) => (
-                        <li key={c} className="rounded-md border border-border bg-muted/40 px-3 py-1.5 text-center select-all">
+                        <li key={c} className="rounded-lg bg-card px-3 py-1.5 text-center tracking-wider ring-1 ring-inset ring-border/60 select-all">
                             {c}
                         </li>
                     ))}
                 </ul>
                 <div className="flex gap-2">
                     <Button type="button" variant="outline" className="flex-1" onClick={copy}>
-                        <Copy size={14} className="mr-2" />
+                        <Copy />
                         {t("security.recoveryCopyAll")}
                     </Button>
                     <Button type="button" variant="outline" className="flex-1" onClick={download}>
-                        <Download size={14} className="mr-2" />
+                        <Download />
                         {t("security.recoveryDownload")}
                     </Button>
                 </div>

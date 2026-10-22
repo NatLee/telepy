@@ -14,6 +14,7 @@ use crate::hub::Hub;
 use crate::mfa::MfaStores;
 use crate::monitor::StatusState;
 use crate::remote_browser::RemoteBrowser;
+use crate::ssh::pool::DevicePool;
 use crate::tokens::TokenStores;
 
 pub struct Inner {
@@ -27,6 +28,8 @@ pub struct Inner {
     pub status: Arc<StatusState>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
+    /// 依「隧道 + OS 帳號」共用的裝置 SSH 連線（SFTP / 檔案管理）。
+    pub pool: Arc<DevicePool>,
     /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
     pub ai: AiSessions,
     /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
@@ -63,6 +66,7 @@ impl AppState {
             http,
             status,
             gateway,
+            pool: Arc::new(DevicePool::default()),
             ai: AiSessions::default(),
             mfa: MfaStores::new(&config.secret_key),
             config,

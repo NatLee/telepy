@@ -25,7 +25,7 @@ use anyhow::{bail, Context};
 use dashmap::DashMap;
 use russh::keys::{load_secret_key, HashAlg, PrivateKey};
 use russh::server::{self, Auth, Config as ServerConfig, Handle, Handler, Msg, Session};
-use russh::{Channel, ChannelOpenFailure, Disconnect, MethodKind, MethodSet};
+use russh::{Channel, ChannelOpenFailure, ChannelStream, Disconnect, MethodKind, MethodSet};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -209,6 +209,23 @@ impl Gateway {
         let mut v: Vec<u16> = self.forwards.iter().map(|e| *e.key()).collect();
         v.sort_unstable();
         v
+    }
+
+    /// 這個 port 現在有裝置連著（有 forward）。
+    pub fn has_forward(&self, port: u16) -> bool {
+        self.forwards.contains_key(&port)
+    }
+
+    /// 後端自己用：直接在裝置的隧道上開一條 forwarded-tcpip 通道（不經 loopback TCP、不占本機 port）。
+    /// Open a forwarded-tcpip channel to the device in-process (no loopback TCP, no local port).
+    pub async fn open_stream(&self, port: u16) -> anyhow::Result<ChannelStream<Msg>> {
+        let fwd = self.forwards.get(&port).map(|f| f.clone()).ok_or_else(|| anyhow::anyhow!("device offline (no tunnel on port {port})"))?;
+        let channel = fwd
+            .handle
+            .channel_open_forwarded_tcpip(fwd.address.clone(), port as u32, "127.0.0.1", 0)
+            .await
+            .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
+        Ok(channel.into_stream())
     }
 
     fn publish_status(&self) {

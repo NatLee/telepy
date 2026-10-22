@@ -16,7 +16,7 @@ use crate::db::{self, tunnels::Tunnel};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::sftp;
-use crate::ssh::device;
+use crate::ssh::pool::PooledSftp;
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -42,16 +42,15 @@ async fn access(state: &AppState, user_id: i64, id: i64, username: &str) -> ApiR
     Ok(t)
 }
 
-async fn connect(state: &AppState, username: &str, t: &Tunnel) -> ApiResult<(device::DeviceConn, russh_sftp::client::SftpSession)> {
-    let conn = device::connect(&state.config, username, t.reverse_port).await.map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let sftp = conn.sftp().await.map_err(|e| ApiError::bad_request(e.to_string()))?;
-    Ok((conn, sftp))
+/// 共用連線池借一條 SFTP channel（同一台、同一個 OS 帳號只握手一次）。
+async fn connect(state: &AppState, username: &str, t: &Tunnel) -> ApiResult<PooledSftp> {
+    state.pool.sftp(state, t.reverse_port, username).await.map_err(|e| ApiError::bad_request(format!("{e:#}")))
 }
 
 #[utoipa::path(get, path = "/api/sftp/shell/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), responses((status = 200, body = super::schemas::SftpShell), (status = 400, description = "Username not allowed or device unreachable", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id, username)): Path<(i64, String)>) -> ApiResult<Json<Value>> {
     let t = access(&state, user.id, id, &username).await?;
-    let (_conn, sftp) = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &username, &t).await?;
     Ok(Json(json!({ "shell": sftp::detect_shell(&sftp).await })))
 }
 
@@ -63,7 +62,7 @@ async fn list(
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Value>> {
     let t = access(&state, user.id, id, &username).await?;
-    let (_conn, sftp) = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
     let raw = q.get("path").cloned().unwrap_or_else(|| if shell == "powershell" { "C:\\".into() } else { "~/".into() });
@@ -87,7 +86,7 @@ async fn download(
 ) -> ApiResult<Response> {
     let t = access(&state, user.id, id, &username).await?;
     let raw = q.get("path").cloned().filter(|p| !p.is_empty()).ok_or_else(|| ApiError::bad_request("path is required"))?;
-    let (conn, sftp) = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let path = sftp::resolve_path(&raw, &home);
     let name = sftp::basename(&path);
@@ -115,9 +114,9 @@ async fn download(
         Ok(resp)
     } else {
         let file = sftp.open(&path).await.map_err(|_| ApiError::bad_request("Failed to download file or directory"))?;
-        // conn/sftp 要活到串流結束。/ Keep the connection alive for the duration of the stream.
+        // SFTP channel（與它的 lease）要活到串流結束。/ Keep the SFTP channel for the duration of the stream.
         let stream = ReaderStream::new(file);
-        let guarded = futures::stream::unfold((stream, Some((conn, sftp))), |(mut s, guard)| async move {
+        let guarded = futures::stream::unfold((stream, Some(sftp)), |(mut s, guard)| async move {
             use futures::StreamExt;
             match s.next().await {
                 Some(item) => Some((item, (s, guard))),
@@ -148,7 +147,7 @@ async fn upload(
     let Some(destination) = q.get("destination_path").cloned().filter(|p| !p.is_empty()) else {
         return Err(ApiError::bad_request("File and destination path required"));
     };
-    let (_conn, sftp) = connect(&state, &username, &t).await?;
+    let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let dest = sftp::resolve_path(&destination, &home);
     // multipart 的 Field 借用 Multipart，所以在迴圈內直接串流寫入。/ Stream the field inside the loop.

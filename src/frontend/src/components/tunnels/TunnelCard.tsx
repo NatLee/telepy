@@ -27,10 +27,10 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
     return (
         <article
             className={cn(
-                "group relative flex flex-col h-full overflow-hidden rounded-2xl border bg-card/85 backdrop-blur-sm shadow-card transition-all duration-300",
+                "group relative flex flex-col h-full overflow-hidden rounded-2xl border bg-card shadow-card transition-[box-shadow,border-color,translate] duration-300",
                 isActive
-                    ? "border-border hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-glow"
-                    : "border-border/80 bg-card/60"
+                    ? "border-border/80 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-glow"
+                    : "border-border/80 hover:shadow-card-hover"
             )}
         >
             {/* 頂部狀態色條 / Status accent bar */}
@@ -47,7 +47,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                     <Server size={18} />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <h3 className="text-base font-semibold text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
+                    <h3 className="text-[17px] text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
                         {tunnel.host_friendly_name}
                     </h3>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

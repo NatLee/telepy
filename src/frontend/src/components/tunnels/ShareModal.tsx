@@ -5,6 +5,7 @@
  * Share tunnel modal: permission matrix, add share, shared list and edit target users.
  */
 import React from "react";
+import { Share2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useShareModal } from "@/hooks/useShareModal";
@@ -40,9 +41,8 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
 
     return (
         <>
-            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} size="3xl" isLoading={loading}>
-                <div className="space-y-6">
-                    <ShareModalPermissionMatrix />
+            <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} icon={<Share2 />} size="2xl" isLoading={loading}>
+                <div className="space-y-5">
 
                     {!readOnly && (
                         <ShareModalShareForm
@@ -71,6 +71,10 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                         onUpdatePermission={handleUpdatePermission}
                         onUnshare={(payload) => setUnshareConfirm({ isOpen: true, userId: payload.userId, username: payload.username })}
                     />
+
+                    {/* 權限對照表收起來放最後;唯讀者(看權限用)預設展開。
+                        The matrix sits last and collapsed; read-only viewers get it open. */}
+                    <ShareModalPermissionMatrix defaultOpen={readOnly} />
                 </div>
             </Modal>
 

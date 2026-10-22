@@ -58,26 +58,21 @@ interface NavContentProps {
     collapsed?: boolean;
 }
 
+/** 目前頁面是浮起的白色膠囊(圖示轉主色),其餘是安靜的灰字。/ The current page is a raised pill with a brand-tinted icon. */
 function navItemClass(active: boolean, collapsed: boolean) {
     return cn(
-        "group relative flex items-center gap-3 py-2 rounded-lg text-sm font-medium transition-colors duration-150",
+        "group relative flex items-center gap-3 py-2 rounded-xl text-sm transition-[color,background-color,box-shadow] duration-150",
         collapsed ? "justify-center px-2" : "px-3",
         active
-            ? "bg-primary/10 text-primary dark:bg-primary/15"
+            ? "bg-card text-foreground shadow-card ring-1 ring-sidebar-border [&>svg]:text-primary"
             : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
     );
-}
-
-/** 目前頁面左側的主色指示條。/ Brand-coloured indicator bar for the current page. */
-function ActiveBar({ active }: { active: boolean }) {
-    if (!active) return null;
-    return <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-primary" aria-hidden />;
 }
 
 function SectionLabel({ children, collapsed }: { children: React.ReactNode; collapsed: boolean }) {
     if (collapsed) return <div className="my-3 mx-2 border-t border-sidebar-border" />;
     return (
-        <p className="px-3 pt-4 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+        <p className="px-3 pt-5 pb-1.5 text-[11px] uppercase tracking-[0.14em] text-muted-foreground/70">
             {children}
         </p>
     );
@@ -120,7 +115,6 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                                     aria-current={active ? "page" : undefined}
                                     className={navItemClass(active, collapsed)}
                                 >
-                                    <ActiveBar active={active} />
                                     {link.icon}
                                     {!collapsed && t(link.key)}
                                 </Link>
@@ -144,7 +138,6 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             aria-current={settingsActive ? "page" : undefined}
                             className={navItemClass(settingsActive, collapsed)}
                         >
-                            <ActiveBar active={settingsActive} />
                             <Settings size={18} />
                             {!collapsed && t("nav.settings")}
                         </Link>
@@ -168,23 +161,24 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 )}
             </nav>
 
-            <div className={`p-3 border-t border-sidebar-border space-y-2 ${className}`}>
-                {/* 語言:四顆並排按鈕,點一下直接切換;收合時是下拉選單。
-                    Language: four inline buttons, one-click switch; a dropdown when collapsed. */}
-                <LanguageSwitcher collapsed={collapsed} />
-
-                {/* 主題:系統/淺色/深色三顆並排按鈕;收合時是下拉選單。
-                    Theme: three inline buttons (system/light/dark); a dropdown when collapsed. */}
-                <ThemeSwitcher collapsed={collapsed} />
+            <div className={`p-3 border-t border-sidebar-border space-y-2.5 ${className}`}>
+                {/* 語言(Auto/EN/繁/日)與主題(系統/淺色/深色)並排成同一列的兩條分段軌道,一鍵切換;
+                    收合時各自變成下拉選單。
+                    Language (Auto/EN/繁/日) and theme (system/light/dark) share one row as two segmented
+                    tracks, one click to switch; each becomes a dropdown when collapsed. */}
+                <div className={collapsed ? "space-y-2" : "flex gap-1.5"}>
+                    <LanguageSwitcher collapsed={collapsed} className="flex-[4]" />
+                    <ThemeSwitcher collapsed={collapsed} className="flex-[3]" />
+                </div>
 
                 {/* 使用者列 + 偏好設定齒輪 + 登出 / User row + preferences gear + logout */}
                 {user && !collapsed && (
-                    <div className="flex items-center gap-2.5 rounded-lg border border-sidebar-border bg-background/60 p-2">
-                        <span className="grid place-items-center w-8 h-8 rounded-full bg-brand-gradient text-white text-sm font-semibold shrink-0 uppercase" aria-hidden>
+                    <div className="flex items-center gap-2.5 rounded-xl bg-card/80 p-2 shadow-card ring-1 ring-sidebar-border">
+                        <span className="grid place-items-center w-8 h-8 rounded-full bg-brand-gradient text-white text-sm shrink-0 uppercase" aria-hidden>
                             {(user.username ?? "?").slice(0, 1)}
                         </span>
                         <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-foreground truncate leading-tight">{user.username}</p>
+                            <p className="text-sm text-foreground truncate leading-tight">{user.username}</p>
                             <p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">{user.is_superuser ? t("nav.roleAdministrator") : t("nav.roleUser")}</p>
                         </div>
                         <button
@@ -192,7 +186,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             onClick={() => setPrefsOpen(true)}
                             title={t("nav.preferences")}
                             aria-label={t("nav.preferences")}
-                            className="p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors shrink-0"
+                            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors shrink-0"
                         >
                             <SlidersHorizontal size={16} />
                         </button>
@@ -201,7 +195,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             onClick={handleLogout}
                             title={t("nav.logout")}
                             aria-label={t("nav.logout")}
-                            className="p-1.5 rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
+                            className="grid size-8 place-items-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors shrink-0"
                         >
                             <LogOut size={16} />
                         </button>

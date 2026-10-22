@@ -28,7 +28,7 @@ const OPTIONS: { value: LanguagePreference; glyph: React.ReactNode; nameKey?: tr
     { value: "ja", glyph: "日" },
 ];
 
-export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean }) {
+export function LanguageSwitcher({ collapsed = false, className = "" }: { collapsed?: boolean; className?: string }) {
     const { language, t, setLanguage } = useI18n();
 
     const optionName = (value: LanguagePreference) =>
@@ -46,7 +46,7 @@ export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean })
                         type="button"
                         title={triggerLabel}
                         aria-label={triggerLabel}
-                        className="flex w-full items-center justify-center px-2 py-2 rounded-md text-sm font-semibold text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors data-[state=open]:bg-secondary/60 data-[state=open]:text-foreground"
+                        className="flex w-full items-center justify-center px-2 py-2 rounded-lg text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
                     >
                         {/* 18px / text-sm:跟收合狀態的齒輪/登出等鄰居一致。
                             18px icon / text-sm glyph to match the collapsed gear/logout neighbors. */}
@@ -76,7 +76,7 @@ export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean })
         <div
             role="group"
             aria-label={t("language.label")}
-            className="grid gap-1 grid-cols-4"
+            className={`grid grid-cols-4 gap-0.5 rounded-lg bg-muted/80 p-0.5 ${className}`}
         >
             {OPTIONS.map((option) => {
                 const isActive = language === option.value;
@@ -89,9 +89,9 @@ export function LanguageSwitcher({ collapsed = false }: { collapsed?: boolean })
                         aria-label={name}
                         aria-pressed={isActive}
                         onClick={() => setLanguage(option.value)}
-                        className={`flex items-center justify-center h-8 rounded-md text-xs font-semibold transition-colors ${isActive
-                                ? "bg-primary/15 text-primary ring-1 ring-primary/40"
-                                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                        className={`flex h-7 items-center justify-center rounded-md text-[13px] transition-[color,background-color,box-shadow] ${isActive
+                            ? "bg-card text-foreground shadow-card [&_svg]:text-primary"
+                            : "text-muted-foreground hover:text-foreground"
                             }`}
                     >
                         {option.glyph}

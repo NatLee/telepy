@@ -1,8 +1,10 @@
-//! 後端 → 裝置的 SSH 連線層：OpenSSH 客戶端的 argv 建構、PTY spawn、非阻塞讀寫、子程序終止。
-//! 內建 gateway（M5）之後只有目標主機從 `reverse`（雙跳 ProxyCommand）換成 `127.0.0.1`（單跳），
-//! 其餘不變。/ SSH client plumbing: argv builders, PTY spawning, non-blocking I/O, process teardown.
+//! 後端 → 裝置的 SSH 連線層：
+//! - `device`：russh 連線（行程內經 gateway 的通道）；`pool`：依「隧道 + OS 帳號」共用連線
+//! - `process`：OpenSSH 客戶端（terminal、`ssh -D`）的 argv、PTY spawn、非阻塞讀寫、子程序終止
+//! SSH client plumbing: russh connections (+ pool) and the OpenSSH client used by the terminal.
 
 pub mod device;
+pub mod pool;
 pub mod process;
 
 pub use process::{PtyChild, SshTarget};

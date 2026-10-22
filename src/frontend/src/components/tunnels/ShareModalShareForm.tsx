@@ -49,16 +49,16 @@ export function ShareModalShareForm({
                     </SelectContent>
                 </Select>
                 <Button type="submit" disabled={!selectedUser}>
-                    <UserPlus size={16} className="mr-2" />
+                    <UserPlus />
                     {t("share.share")}
                 </Button>
             </div>
             {selectedUser && tunnelUsernames.length > 0 && (
-                <div className="bg-muted/30 border border-border rounded-lg p-3">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">{t("share.allowLabel")}</p>
+                <div className="rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80">
+                    <p className="mb-2.5 text-xs text-muted-foreground">{t("share.allowLabel")}</p>
                     <div className="flex flex-wrap gap-2">
                         {tunnelUsernames.map((targetUser) => (
-                            <label key={targetUser.id} className="flex items-center gap-1.5 text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors">
+                            <label key={targetUser.id} className="flex cursor-pointer items-center gap-2 rounded-full bg-card px-3 py-1.5 text-xs ring-1 ring-inset ring-border transition-colors hover:ring-foreground/20 has-checked:bg-primary/10 has-checked:text-primary has-checked:ring-primary/40">
                                 <input
                                     type="checkbox"
                                     checked={selectedAllowedIds.includes(targetUser.id)}
@@ -69,11 +69,11 @@ export function ShareModalShareForm({
                                             setSelectedAllowedIds(prev => prev.filter(id => id !== targetUser.id));
                                         }
                                     }}
-                                    className="rounded"
+                                    className="size-3.5 accent-primary"
                                 />
                                 <code className="font-mono">{targetUser.username}</code>
                                 {targetUser.created_by && (
-                                    <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground border border-border/50">
+                                    <span className="rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
                                         {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                     </span>
                                 )}
