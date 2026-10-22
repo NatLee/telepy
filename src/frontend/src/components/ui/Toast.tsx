@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useMemo, useRef, ReactNode } from "react";
 import { cn, uniqueID } from "@/lib/utils";
-import { X } from "lucide-react";
+import { CircleCheck, CircleX, Info, TriangleAlert, X } from "lucide-react";
 
 export type ToastType = "success" | "error" | "warning" | "info";
 
@@ -17,6 +17,20 @@ interface ToastContextType {
     showError: (message: string) => void;
     showSuccess: (message: string) => void;
 }
+
+const TOAST_ICON: Record<ToastType, typeof Info> = {
+    success: CircleCheck,
+    error: CircleX,
+    warning: TriangleAlert,
+    info: Info,
+};
+
+const TOAST_TONE: Record<ToastType, string> = {
+    success: "bg-success/12 text-success",
+    error: "bg-destructive/12 text-destructive",
+    warning: "bg-warning/15 text-warning",
+    info: "bg-info/12 text-info",
+};
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
@@ -64,28 +78,28 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         <ToastContext.Provider value={contextValue}
         >
             {children}
-            <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2">
-                {toasts.map((t) => (
-                    <div
-                        key={t.id}
-                        className={cn(
-                            "flex items-center justify-between p-4 rounded-lg shadow-lg min-w-[250px] transition-all transform duration-300 animate-in slide-in-from-right-full fade-in",
-                            t.type === "success" && "bg-success text-success-foreground",
-                            t.type === "error" && "bg-destructive text-destructive-foreground",
-                            t.type === "warning" && "bg-warning text-warning-foreground",
-                            t.type === "info" && "bg-primary text-primary-foreground"
-                        )}
-                        role="alert"
-                    >
-                        <div className="text-sm font-medium">{t.message}</div>
-                        <button
-                            onClick={() => removeToast(t.id)}
-                            className="ml-4 opacity-70 hover:opacity-100 hover:rotate-90 hover:scale-110 transition-all duration-200 focus:outline-none"
+            <div className="pointer-events-none fixed top-4 right-4 z-[100] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2">
+                {toasts.map((t) => {
+                    const Icon = TOAST_ICON[t.type];
+                    return (
+                        <div
+                            key={t.id}
+                            className="pointer-events-auto flex items-start gap-3 rounded-xl bg-popover py-3 pr-2.5 pl-3.5 text-popover-foreground shadow-pop animate-toast-in"
+                            role="alert"
                         >
-                            <X size={16} />
-                        </button>
-                    </div>
-                ))}
+                            <span className={cn("mt-px grid size-6 shrink-0 place-items-center rounded-full", TOAST_TONE[t.type])}>
+                                <Icon size={15} aria-hidden />
+                            </span>
+                            <div className="min-w-0 flex-1 pt-0.5 text-sm leading-relaxed break-words">{t.message}</div>
+                            <button
+                                onClick={() => removeToast(t.id)}
+                                className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                            >
+                                <X size={15} />
+                            </button>
+                        </div>
+                    );
+                })}
             </div>
         </ToastContext.Provider>
     );

@@ -36,7 +36,7 @@ export function TunnelFilterTiles({ counts, value, onChange }: TunnelFilterTiles
                         aria-pressed={active}
                         onClick={() => onChange(active && id !== "all" ? "all" : id)}
                         className={cn(
-                            "group flex items-center gap-3 rounded-2xl border bg-card/80 backdrop-blur-sm p-3.5 text-left shadow-card transition-all duration-200",
+                            "group flex items-center gap-3 rounded-2xl border bg-card p-3.5 text-left shadow-card transition-all duration-200",
                             "hover:-translate-y-px hover:border-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             active ? cn("border-transparent ring-2", activeRing) : "border-border"
                         )}
@@ -45,7 +45,7 @@ export function TunnelFilterTiles({ counts, value, onChange }: TunnelFilterTiles
                             <Icon size={18} />
                         </span>
                         <span className="min-w-0">
-                            <span className="block text-2xl font-bold leading-none tabular-nums text-foreground">{counts[id]}</span>
+                            <span className="block text-[1.75rem] leading-none tabular-nums text-foreground">{counts[id]}</span>
                             <span className="mt-1 block text-xs font-medium text-muted-foreground truncate">{t(label)}</span>
                         </span>
                     </button>

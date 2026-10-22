@@ -14,32 +14,25 @@
  */
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import "./huninn.css";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/Toast";
 import { I18nProvider, UserSettingsSync } from "@/lib/i18n";
 
-// WOFF2（由 TTF 轉出，約小 55%）+ display:swap：文字先以系統字型立即顯示、字型到位後再換，
-// 消除舊版 display:block「字型下載完前整頁隱形」的首屏空白（CJK 字型 2.2MB，慢網路差數秒）。
-// 終端機字型不受影響：xterm 初始化前本就自行 await document.fonts.load（見 useTerminalPage）。
-// WOFF2 (~55% smaller than the TTFs) + display:swap: render text immediately with a system
-// fallback and swap when ready, instead of block's invisible-text period on first load.
+// 粉圓(jf-openhuninn)不走 next/font:整顆 2.2MB,會讓每頁都等它下載完才從系統字換過來。改由
+// scripts/subset-huninn.py 切成 unicode-range 子集(huninn.css),瀏覽器只抓頁面上出現的字所在的區塊,
+// 介面文字全在約 230KB 的 "ui" 區塊裡,所以第一次開站也幾乎立刻是粉圓。
+// jf-openhuninn skips next/font: the whole 2.2MB file delayed the swap away from the system font on
+// every first visit. scripts/subset-huninn.py splits it into unicode-range subsets (huninn.css); the
+// browser fetches only the slices a page needs, and all UI text sits in the ~230KB "ui" slice.
 //
-// preload:false：next/font/local 預設會為字型注入 <link rel="preload" as="font">（高優先權），
-// 於是「每個」路由都會在關鍵路徑上搶頻寬去下載 2.18MB 的 CJK 字型 + 976KB 的等寬字型（共 3.13MB），
-// 把「讓頁面可互動」所需的 JS chunk 往後擠——但 display:swap 早就用系統字型立即顯示文字，這個 preload
-// 對首屏毫無幫助（登入頁 / "/" spinner 根本沒有 CJK 字元）。關掉 preload 後字型改為「CSS 真正用到時才
-// 以較低優先權延後載入」，關鍵路徑讓給 JS，頁面更快可互動；字型到位後照常 swap。
-// preload:false — next/font preloads fonts at high priority on every route by default, so 3.13MB of
-// fonts contend with the route JS that gates interactivity. display:swap already paints text with a
-// system fallback, so the preload buys nothing above-the-fold. Load fonts lazily off the critical path.
-const openHunInn = localFont({
-  src: "../fonts/jf-openhuninn-2.1.woff2",
-  variable: "--font-openhuninn",
-  display: "swap",
-  preload: false,
-});
-
+// 等寬字型:WOFF2 + display:swap + preload:false。next/font 預設會在每個路由用高優先權 preload 字型,
+// 跟決定可互動時間的 JS 搶頻寬;swap 已經先用系統字顯示文字,preload 對首屏毫無幫助。終端機在初始化前
+// 會自行 await document.fonts.load(見 useTerminalPage)。
+// Monospace font: WOFF2 + display:swap + preload:false — next/font would otherwise preload it at high
+// priority on every route, competing with the JS that gates interactivity. xterm awaits
+// document.fonts.load itself before initialising (see useTerminalPage).
 const protoNerd = localFont({
   src: "../fonts/0xProtoNerdFont-Regular.woff2",
   variable: "--font-0xproto",
@@ -85,7 +78,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOTSTRAP_SCRIPT }} />
       </head>
-      <body className={`${openHunInn.variable} ${protoNerd.variable} font-sans antialiased`}>
+      <body className={`${protoNerd.variable} font-sans antialiased`}>
         <I18nProvider>
           <ToastProvider>
             <AuthProvider>

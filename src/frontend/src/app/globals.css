@@ -7,7 +7,7 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-openhuninn), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "jf-openhuninn", ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-0xproto), ui-monospace, 'Courier New', monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -46,6 +46,7 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-surface: var(--surface);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -54,8 +55,12 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
 
-  /* 卡片與主色光暈陰影 / Card + brand glow shadows */
-  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.04), 0 6px 20px -8px oklch(0 0 0 / 0.10);
+  /* 陰影層級：卡片 → 浮層（選單 / tooltip）→ 對話框；外加主色光暈。深色模式在 .dark 換成較重的黑影。
+     Shadow scale: card → pop (menus / tooltips) → dialog, plus the brand glow. .dark swaps in heavier black shadows. */
+  --shadow-card: var(--elev-card);
+  --shadow-card-hover: var(--elev-card-hover);
+  --shadow-pop: var(--elev-pop);
+  --shadow-dialog: var(--elev-dialog);
   --shadow-glow: 0 12px 40px -14px color-mix(in oklch, var(--primary) 55%, transparent);
 
   --animate-fade-in-up: fade-in-up 0.6s cubic-bezier(0.4, 0, 0.2, 1);
@@ -73,6 +78,13 @@
   --animate-dialog-overlay-hide: dialog-overlay-hide 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-content-show: dialog-content-show 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-content-hide: dialog-content-hide 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-sheet-up-show: sheet-up-show 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-sheet-up-hide: sheet-up-hide 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+  --animate-sheet-left-show: sheet-left-show 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-sheet-left-hide: sheet-left-hide 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+  --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-pop-out: pop-out 0.12s ease-in forwards;
+  --animate-toast-in: toast-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 
   @keyframes fade-in-up {
     from {
@@ -241,6 +253,44 @@
       scale: 0.96;
     }
   }
+
+  /* 手機版對話框從底部滑上來（bottom sheet）。/ On phones the dialog slides up as a bottom sheet. */
+  @keyframes sheet-up-show {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  @keyframes sheet-up-hide {
+    from { transform: translateY(0); }
+    to { transform: translateY(100%); }
+  }
+
+  /* 手機導覽抽屜從左側滑入。/ The mobile navigation drawer slides in from the left. */
+  @keyframes sheet-left-show {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+  }
+
+  @keyframes sheet-left-hide {
+    from { transform: translateX(0); }
+    to { transform: translateX(-100%); }
+  }
+
+  /* 選單、下拉、tooltip 的淡入縮放。/ Fade-and-scale for menus, selects and tooltips. */
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.96) translateY(-2px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+
+  @keyframes pop-out {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.97); }
+  }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -256,20 +306,22 @@
    Palette: cool-tinted neutrals, Telepy emerald primary, cyan gradient partner; dark mode is deep navy, not pure black. */
 :root {
   --radius: 0.75rem;
-  --background: oklch(0.985 0.003 250);
-  --foreground: oklch(0.2 0.02 260);
+  --background: oklch(0.982 0.004 247);
+  --foreground: oklch(0.21 0.02 262);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.02 260);
+  --card-foreground: oklch(0.21 0.02 262);
+  /* 卡片 / 對話框裡的凹槽底色（欄位群組、程式碼外框、清單）。/ Well colour inside cards and dialogs. */
+  --surface: oklch(0.974 0.005 250);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.02 260);
+  --popover-foreground: oklch(0.21 0.02 262);
   --primary: oklch(0.627 0.15 160);
   /* Emerald green for Telepy */
   --primary-foreground: oklch(0.985 0 0);
   --brand-2: oklch(0.66 0.13 215);
   --secondary: oklch(0.962 0.006 250);
   --secondary-foreground: oklch(0.25 0.02 260);
-  --muted: oklch(0.962 0.006 250);
-  --muted-foreground: oklch(0.52 0.02 260);
+  --muted: oklch(0.958 0.007 250);
+  --muted-foreground: oklch(0.51 0.022 260);
   --success: oklch(0.627 0.15 160);
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.769 0.188 70.08);
@@ -280,9 +332,14 @@
   --accent-foreground: oklch(0.25 0.02 260);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.912 0.008 255);
-  --input: oklch(0.9 0.01 255);
+  --border: oklch(0.918 0.008 255);
+  --input: oklch(0.885 0.01 255);
   --ring: oklch(0.627 0.15 160);
+  --overlay: oklch(0.2 0.025 262 / 0.4);
+  --elev-card: 0 1px 2px oklch(0.25 0.03 260 / 0.05), 0 1px 1px oklch(0.25 0.03 260 / 0.03);
+  --elev-card-hover: 0 2px 4px oklch(0.25 0.03 260 / 0.04), 0 14px 32px -12px oklch(0.25 0.03 260 / 0.16);
+  --elev-pop: 0 0 0 1px oklch(0.25 0.03 260 / 0.07), 0 4px 8px -2px oklch(0.25 0.03 260 / 0.06), 0 16px 32px -8px oklch(0.25 0.03 260 / 0.18);
+  --elev-dialog: 0 0 0 1px oklch(0.25 0.03 260 / 0.06), 0 8px 16px -4px oklch(0.25 0.03 260 / 0.08), 0 32px 64px -16px oklch(0.25 0.03 260 / 0.3);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -303,6 +360,7 @@
   --foreground: oklch(0.965 0.005 250);
   --card: oklch(0.2 0.016 262);
   --card-foreground: oklch(0.965 0.005 250);
+  --surface: oklch(0.225 0.017 262);
   --popover: oklch(0.215 0.018 262);
   --popover-foreground: oklch(0.965 0.005 250);
   --primary: oklch(0.65 0.15 160);
@@ -325,6 +383,11 @@
   --border: oklch(1 0 0 / 9%);
   --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.65 0.15 160);
+  --overlay: oklch(0.08 0.01 262 / 0.62);
+  --elev-card: 0 1px 2px oklch(0 0 0 / 0.3);
+  --elev-card-hover: 0 14px 32px -12px oklch(0 0 0 / 0.6);
+  --elev-pop: 0 0 0 1px oklch(1 0 0 / 0.08), 0 16px 32px -8px oklch(0 0 0 / 0.6);
+  --elev-dialog: 0 0 0 1px oklch(1 0 0 / 0.08), 0 32px 64px -16px oklch(0 0 0 / 0.72);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -347,6 +410,35 @@
 
   body {
     @apply bg-background text-foreground;
+    /* 粉圓只有一個字重(400)。讓瀏覽器「假粗體」會把圓角筆畫糊掉、看起來像系統黑體,所以關掉合成,
+       層級改靠字級與顏色;終端機另外打開(xterm 的粗體需要它)。
+       jf-openhuninn ships a single weight (400). Synthesised bold smears its rounded strokes until it
+       reads like the system font, so weight synthesis is off and hierarchy comes from size and colour;
+       xterm opts back in for its bold cells. */
+    font-synthesis-weight: none;
+  }
+
+  .xterm {
+    font-synthesis-weight: auto;
+  }
+
+  /* 沒有粗體可用,<strong> 改成螢光筆底線式強調(跟著文字顏色)。
+     With no bold to fall back on, <strong> becomes a highlighter mark tinted by the text colour. */
+  strong,
+  b {
+    font-weight: inherit;
+    background-image: linear-gradient(transparent 58%, color-mix(in oklch, currentColor 16%, transparent) 58%);
+    padding-inline: 0.08em;
+  }
+
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 24%, transparent);
+  }
+
+  /* 細而圓的捲軸,深淺色都不搶戲。/ Thin, quiet scrollbars in both themes. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
   }
 }
 

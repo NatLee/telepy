@@ -3,10 +3,12 @@
 import React from "react";
 import { Modal } from "@/components/ui/Modal";
 import { CodeBlock } from "@/components/ui/CodeBlock";
-import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Link2, Loader2 } from "lucide-react";
+import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Link2, Loader2, Rocket, Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
+import { Segmented } from "@/components/ui/segmented";
 
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
@@ -72,17 +74,16 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} size="4xl" isLoading={isInitialLoading}>
-            <div className="flex flex-col flex-1 min-h-0 gap-4">
+        <Modal isOpen={isOpen} onClose={onClose} title={t("scripts.title")} icon={<Rocket />} size="4xl" isLoading={isInitialLoading}>
+            <div className="flex flex-col flex-1 min-h-0 gap-5">
                 {/* Direction Banner */}
-                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
-                    <span className="mt-0.5 shrink-0 text-lg">⚠️</span>
-                    <span>{tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}</span>
-                </div>
+                <Callout tone="warning">
+                    {tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}
+                </Callout>
                 {/* Options Row */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                        <Label className="text-sm font-medium">{t("scripts.targetPort")}</Label>
+                    <div className="space-y-2">
+                        <Label>{t("scripts.targetPort")}</Label>
                         <Input
                             type="number"
                             min={1}
@@ -92,11 +93,11 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                             placeholder="22"
                         />
                         <p className="text-xs text-muted-foreground">
-                            {tn("scripts.targetPortHelper", { port: <code className="bg-muted px-1 rounded">22</code> })}
+                            {tn("scripts.targetPortHelper", { port: <code className="rounded bg-muted px-1 font-mono">22</code> })}
                         </p>
                     </div>
-                    <div className="space-y-1.5">
-                        <Label className="text-sm font-medium">{t("scripts.keyPath")}</Label>
+                    <div className="space-y-2">
+                        <Label>{t("scripts.keyPath")}</Label>
                         <Input
                             type="text"
                             value={keyPath}
@@ -104,19 +105,19 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                             placeholder={t("scripts.keyPathPlaceholder")}
                         />
                         <p className="text-xs text-muted-foreground">
-                            {tn("scripts.keyPathHelper", { path: <code className="bg-muted px-1 rounded">~/.ssh/id_rsa</code> })}
+                            {tn("scripts.keyPathHelper", { path: <code className="rounded bg-muted px-1 font-mono">~/.ssh/id_rsa</code> })}
                         </p>
                     </div>
                 </div>
 
                 {/* Username selector for autossh-service */}
                 {activeTab === "autossh-service" && (
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                         {usernames.length > 0 ? (
                             <>
-                                <Label className="text-sm font-medium">{t("scripts.targetUsername")}</Label>
+                                <Label>{t("scripts.targetUsername")}</Label>
                                 <select
-                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                    className="flex h-9 w-full rounded-lg border border-input bg-card px-3 py-1 text-sm shadow-xs transition-[border-color,box-shadow] hover:border-foreground/20 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 dark:bg-input/30"
                                     value={selectedUsernameId ?? ""}
                                     onChange={(e) => setSelectedUsernameId(Number(e.target.value))}
                                 >
@@ -131,36 +132,22 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                 </p>
                             </>
                         ) : (
-                            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 flex items-start gap-2 text-sm text-amber-800 dark:text-amber-200">
-                                <span className="mt-0.5 shrink-0 text-lg">⚠️</span>
-                                <span>{tn("scripts.noUsernames", { targetServerUsername: <strong>{t("scripts.noUsernamesHighlight")}</strong> })}</span>
-                            </div>
+                            <Callout tone="warning">
+                                {tn("scripts.noUsernames", { targetServerUsername: <strong>{t("scripts.noUsernamesHighlight")}</strong> })}
+                            </Callout>
                         )}
                     </div>
                 )}
 
-                {/* Tabs */}
-                <div className="border-b border-border">
-                    <nav className="-mb-px flex space-x-1 overflow-x-auto pb-1" aria-label={t("scripts.tabsAria")}>
-                        {TABS.map((tab) => {
-                            const Icon = tab.icon;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={cn(
-                                        activeTab === tab.id
-                                            ? "border-primary text-primary bg-primary/5"
-                                            : "border-transparent text-muted-foreground hover:text-foreground hover:border-border",
-                                        "whitespace-nowrap py-2 px-3 border-b-2 font-medium text-sm transition-colors flex items-center gap-1.5 rounded-t-md"
-                                    )}
-                                >
-                                    <Icon size={14} />
-                                    {tab.label}
-                                </button>
-                            );
-                        })}
-                    </nav>
+                {/* Tabs:分段膠囊,手機上橫向捲動。/ Segmented pill tabs; scroll sideways on phones. */}
+                <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
+                    <Segmented
+                        kind="tabs"
+                        aria-label={t("scripts.tabsAria")}
+                        value={activeTab}
+                        onChange={setActiveTab}
+                        options={TABS.map((tab) => ({ value: tab.id, label: tab.label, icon: <tab.icon size={14} /> }))}
+                    />
                 </div>
 
                 {/* Content */}
@@ -175,32 +162,25 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                             <div className="flex-1 min-h-0 max-h-full overflow-auto relative">
                                 <CodeBlock language={langMap[activeTab] || "txt"} value={scriptContent} />
                                 {isFetchingScript && (
-                                    <div className="absolute inset-0 bg-background/50 backdrop-blur-[1px] flex items-center justify-center rounded-md z-10 transition-all duration-200">
+                                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-card/50 backdrop-blur-[1px] transition-all duration-200">
                                         <Loader2 className="w-6 h-6 animate-spin text-primary opacity-70" />
                                     </div>
                                 )}
                             </div>
 
                             {/* One-time curl URL section */}
-                            <div className="mt-4 pt-4 border-t border-border space-y-3">
+                            <div className="mt-5 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80 space-y-3">
                                 <div className="flex flex-col gap-1.5">
-                                    <div className="flex items-center gap-2">
-                                        <button
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                                        <Button
+                                            size="sm"
+                                            variant="soft"
                                             onClick={generateOneTimeUrl}
                                             disabled={generatingCurl || !scriptContent || isFetchingScript}
-                                            className={cn(
-                                                "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors",
-                                                "bg-primary text-primary-foreground hover:bg-primary/90",
-                                                "disabled:opacity-50 disabled:cursor-not-allowed"
-                                            )}
                                         >
-                                            {generatingCurl ? (
-                                                <Loader2 size={14} className="animate-spin" />
-                                            ) : (
-                                                <Link2 size={14} />
-                                            )}
+                                            {generatingCurl ? <Loader2 className="animate-spin" /> : <Link2 />}
                                             {t("scripts.generateUrl")}
-                                        </button>
+                                        </Button>
                                         <span className="text-xs text-muted-foreground">
                                             {t("scripts.generateUrlHelper")}
                                         </span>
@@ -209,8 +189,9 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                                         <div className="space-y-1.5 mt-1">
                                             <CodeBlock language="bash" value={curlCommand} />
                                             {TAB_CURL_HELPERS[activeTab] && (
-                                                <p className="text-xs text-muted-foreground ml-1">
-                                                    ℹ️ {t(TAB_CURL_HELPERS[activeTab])}
+                                                <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                                                    <Info size={13} className="mt-px shrink-0 text-info" aria-hidden />
+                                                    {t(TAB_CURL_HELPERS[activeTab])}
                                                 </p>
                                             )}
                                         </div>

@@ -730,7 +730,6 @@ export const ja: Record<TranslationKey, string> = {
     "keys.descriptionPlaceholder": "例：自宅からの接続用",
     "keys.adding": "追加中...",
     "keys.detailsTitle": "SSH キーの詳細",
-    "keys.friendlyName": "表示名",
     "keys.publicKey": "公開鍵",
     "keys.noKey": "利用できるキーがありません",
     "keys.addDescriptionPlaceholder": "説明を追加...",

@@ -14,8 +14,10 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Bot, Check, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, User as UserIcon } from "lucide-react";
+import { ArrowRight, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
+import { Button } from "@/components/ui/button";
+import { Segmented } from "@/components/ui/segmented";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import {
@@ -41,10 +43,10 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const [fontSize, setFontSizeState] = useState<number>(() => readTerminalFontSize());
     const [tab, setTab] = useState<PrefsTab>("general");
 
-    const tabs: { id: PrefsTab; label: string; icon: React.ReactNode }[] = [
-        { id: "general", label: t("prefs.tabGeneral"), icon: <SlidersHorizontal size={15} /> },
-        { id: "security", label: t("prefs.tabSecurity"), icon: <ShieldCheck size={15} /> },
-        { id: "apps", label: t("prefs.tabApps"), icon: <Bot size={15} /> },
+    const tabs: { value: PrefsTab; label: string; icon: React.ReactNode }[] = [
+        { value: "general", label: t("prefs.tabGeneral"), icon: <SlidersHorizontal size={15} /> },
+        { value: "security", label: t("prefs.tabSecurity"), icon: <ShieldCheck size={15} /> },
+        { value: "apps", label: t("prefs.tabApps"), icon: <Bot size={15} /> },
     ];
 
     const languageOptions: { value: LanguagePreference; label: string }[] = [
@@ -64,76 +66,44 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
         persistUserSetting({ terminal_font_size: next });
     };
 
-    const optionButton = (isActive: boolean) =>
-        `flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${isActive
-            ? "border-primary bg-primary/10 text-primary"
-            : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
-        }`;
-
     return (
         <Modal
             isOpen={isOpen}
             onClose={onClose}
             title={t("prefs.title")}
+            icon={<SlidersHorizontal />}
             size="lg"
             footer={
-                <button
-                    type="button"
-                    onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
-                >
+                <Button type="button" variant="outline" onClick={onClose}>
                     {t("common.close")}
-                </button>
+                </Button>
             }
         >
             {/* 分頁:內容一多(帳號安全、AI app)就不再全部堆成一長串。
                 Tabs keep the modal short as account security and AI apps join the plain preferences. */}
-            <div className="-mt-1 mb-5 border-b border-border flex gap-1 overflow-x-auto" role="tablist">
-                {tabs.map((item) => (
-                    <button
-                        key={item.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={tab === item.id}
-                        onClick={() => setTab(item.id)}
-                        className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${tab === item.id
-                            ? "border-primary text-primary"
-                            : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                            }`}
-                    >
-                        {item.icon}
-                        {item.label}
-                    </button>
-                ))}
-            </div>
+            <Segmented kind="tabs" fullWidth options={tabs} value={tab} onChange={setTab} className="mb-6" />
 
             {tab === "general" && (
                 <div className="space-y-6">
                     {/* 帳號 / Account */}
-                    <section>
-                        <h3 className="text-sm font-semibold flex items-center gap-2 mb-2">
-                            <UserIcon size={15} className="text-primary" />
-                            {t("settings.accountTitle")}
-                        </h3>
-                        <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm flex flex-wrap gap-x-8 gap-y-1">
-                            <span className="font-medium text-foreground truncate">{user?.username}</span>
-                            {user?.email && <span className="text-muted-foreground truncate">{user.email}</span>}
-                            <span className="text-muted-foreground">
-                                {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
-                            </span>
+                    <section className="flex items-center gap-3.5 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80" aria-label={t("settings.accountTitle")}>
+                        <span className="grid size-11 shrink-0 place-items-center rounded-full bg-brand-gradient text-lg text-white uppercase" aria-hidden>
+                            {user?.username?.slice(0, 1)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                            <p className="truncate text-foreground">{user?.username}</p>
+                            {user?.email && <p className="truncate text-xs text-muted-foreground">{user.email}</p>}
                         </div>
+                        <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${user?.is_superuser ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                            {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
+                        </span>
                     </section>
 
                     {/* 語言 / Language */}
-                    <section>
-                        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                            <Globe size={15} className="text-primary" />
-                            {t("settings.languageTitle")}
-                        </h3>
-                        <p className="text-xs text-muted-foreground mb-2">{t("settings.languageDescription")}</p>
-                        {/* 固定 2×2:四欄在這個寬度(max-w-lg)仍放不太下 CJK 標籤(會換行跑版)。
+                    <PrefSection icon={<Globe size={15} />} title={t("settings.languageTitle")} description={t("settings.languageDescription")}>
+                        {/* 固定 2×2:四欄在這個寬度(max-w-lg)仍放不太下 CJK 標籤。
                             Fixed 2×2 — four columns still can't reliably fit CJK labels at max-w-lg. */}
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
                             {languageOptions.map((option) => {
                                 const isActive = language === option.value;
                                 return (
@@ -142,46 +112,22 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                                         type="button"
                                         aria-pressed={isActive}
                                         onClick={() => setLanguage(option.value)}
-                                        className={optionButton(isActive)}
+                                        className={`rounded-lg px-3 py-1.5 text-sm transition-[color,background-color,box-shadow] ${isActive ? "bg-card text-foreground shadow-card" : "text-muted-foreground hover:text-foreground"}`}
                                     >
-                                        {isActive && <Check size={13} />}
                                         {option.label}
                                     </button>
                                 );
                             })}
                         </div>
-                    </section>
+                    </PrefSection>
 
                     {/* 主題 / Theme */}
-                    <section>
-                        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                            <Sun size={15} className="text-primary" />
-                            {t("prefs.theme")}
-                        </h3>
-                        <p className="text-xs text-muted-foreground mb-2">{t("prefs.themeDescription")}</p>
-                        <div className="grid grid-cols-3 gap-2">
-                            {themeOptions.map((option) => (
-                                <button
-                                    key={option.value}
-                                    type="button"
-                                    aria-pressed={theme === option.value}
-                                    onClick={() => changeTheme(option.value)}
-                                    className={optionButton(theme === option.value)}
-                                >
-                                    {option.icon}
-                                    {option.label}
-                                </button>
-                            ))}
-                        </div>
-                    </section>
+                    <PrefSection icon={<Sun size={15} />} title={t("prefs.theme")} description={t("prefs.themeDescription")}>
+                        <Segmented fullWidth options={themeOptions} value={theme} onChange={changeTheme} aria-label={t("prefs.theme")} />
+                    </PrefSection>
 
                     {/* 終端機字型 / Terminal font size */}
-                    <section>
-                        <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                            <TerminalIcon size={15} className="text-primary" />
-                            {t("prefs.terminalFontSize")}
-                        </h3>
-                        <p className="text-xs text-muted-foreground mb-2">{t("prefs.terminalFontSizeDescription")}</p>
+                    <PrefSection icon={<TerminalIcon size={15} />} title={t("prefs.terminalFontSize")} description={t("prefs.terminalFontSizeDescription")}>
                         <div className="flex items-center gap-3">
                             <input
                                 type="range"
@@ -190,12 +136,13 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                                 value={fontSize}
                                 onChange={(e) => changeFontSize(parseInt(e.target.value, 10))}
                                 className="flex-1 accent-primary"
+                                aria-label={t("prefs.terminalFontSize")}
                             />
-                            <span className="w-14 text-center text-sm font-mono border border-border rounded-md py-1 bg-background">
+                            <span className="w-14 rounded-lg bg-muted py-1 text-center font-mono text-sm tabular-nums">
                                 {fontSize}px
                             </span>
                         </div>
-                    </section>
+                    </PrefSection>
                 </div>
             )}
 
@@ -212,17 +159,33 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         href="/tunnels/mcp"
                         prefetch={false}
                         onClick={onClose}
-                        className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm hover:border-primary/50 hover:bg-primary/5 transition-colors"
+                        className="group flex items-center gap-3 rounded-xl bg-surface px-4 py-3 text-sm ring-1 ring-inset ring-border/80 transition-colors hover:bg-primary/5 hover:ring-primary/40"
                     >
-                        <Plug size={16} className="text-primary shrink-0" />
-                        <span className="flex-1 min-w-0">
-                            <span className="block font-medium text-foreground">{t("prefs.mcpSetupTitle")}</span>
+                        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                            <Plug size={16} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block text-foreground">{t("prefs.mcpSetupTitle")}</span>
                             <span className="block text-xs text-muted-foreground">{t("prefs.mcpSetupDescription")}</span>
                         </span>
-                        <ArrowRight size={15} className="text-muted-foreground shrink-0" />
+                        <ArrowRight size={15} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                     </Link>
                 </div>
             )}
         </Modal>
+    );
+}
+
+/** 一個偏好區塊:小圖示標題、說明、控制項。/ One preference block: icon heading, description, control. */
+function PrefSection({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }) {
+    return (
+        <section>
+            <h3 className="flex items-center gap-2 text-sm text-foreground">
+                <span className="text-primary">{icon}</span>
+                {title}
+            </h3>
+            <p className="mt-1 mb-2.5 text-xs leading-relaxed text-muted-foreground">{description}</p>
+            {children}
+        </section>
     );
 }

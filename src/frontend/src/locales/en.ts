@@ -740,7 +740,6 @@ export const en = {
     "keys.descriptionPlaceholder": "e.g. Used for connecting from home office",
     "keys.adding": "Adding...",
     "keys.detailsTitle": "SSH Key Details",
-    "keys.friendlyName": "Friendly Name",
     "keys.publicKey": "Public Key",
     "keys.noKey": "No key available",
     "keys.addDescriptionPlaceholder": "Add a description...",

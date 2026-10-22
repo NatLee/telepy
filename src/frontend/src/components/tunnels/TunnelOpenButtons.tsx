@@ -71,7 +71,7 @@ export function TunnelOpenButtons({ tunnel, online, variant = "tiles" }: TunnelO
                         className={cn(
                             "group/open flex flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2.5 text-xs font-medium transition-all duration-200",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                            !online && "border-dashed border-border text-muted-foreground/80 hover:bg-muted/60",
+                            !online && "border-transparent bg-muted/60 text-muted-foreground/80 hover:bg-muted hover:text-muted-foreground",
                             online && primary && "border-transparent bg-primary text-primary-foreground shadow-glow hover:-translate-y-px hover:bg-primary/90",
                             online && !primary && "border-border bg-background/60 text-foreground hover:-translate-y-px hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
                         )}
