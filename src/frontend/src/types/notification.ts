@@ -22,6 +22,8 @@ export const NOTIFICATION_ACTIONS = {
     LAN_SCAN_PROGRESS: "LAN-SCAN-PROGRESS",
     LAN_SCAN_DONE: "LAN-SCAN-DONE",
     UPDATED_LAN_HOSTS: "UPDATED-LAN-HOSTS",
+    // 一行指令加入裝置的進度（送給發指令的人）。/ One-command join progress (to the ticket owner).
+    JOIN_UPDATED: "JOIN-UPDATED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];
