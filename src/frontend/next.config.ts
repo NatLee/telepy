@@ -44,6 +44,11 @@ const nextConfig: NextConfig = {
           destination: `${BACKEND_URL}/ws/:path*`,
         },
         {
+          // MCP 頁讀 RFC 9728 discovery 取得 MCP 端點網址。/ The MCP page reads the discovery doc for its URL.
+          source: '/.well-known/:path*',
+          destination: `${BACKEND_URL}/.well-known/:path*`,
+        },
+        {
           source: '/tunnels/share/:path*',
           destination: `${BACKEND_URL}/tunnels/share/:path*`,
         },

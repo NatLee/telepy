@@ -1,23 +1,30 @@
 "use client";
 
 /**
- * 設定頁(管理員專用):
- * - 站台設定:全站設定列表,依類別分組。label 與說明優先用前端字典
+ * 設定頁(管理員專用),分頁並以 ?tab= 記在網址(MCP 頁可直接連到 AI 分頁):
+ * - 帳號與註冊 / 遠端瀏覽器 / AI 存取(MCP):站台設定依 key 前綴分到各分頁。label 與說明優先用前端字典
  *   (siteSettings.<key>.label/.description,隨介面語言切換),找不到才退回後端 meta。
+ *   以秒為單位的設定在輸入框下顯示換算後的時間。AI 分頁另外顯示 MCP 端點網址。
  * - 使用者:使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
- * 個人偏好(語言/主題/終端機字型)在 sidebar 左下角的齒輪 modal,不在這裡。
- * Settings page (admin-only): Site Settings (grouped; labels/descriptions come from the
- * frontend dictionaries with backend-meta fallback) and Users (list + manage modal).
- * Personal preferences live in the sidebar gear modal instead.
+ * 個人偏好(語言/主題/終端機字型/已連接的應用程式)在 sidebar 左下角的齒輪 modal,不在這裡。
+ * Settings page (admin-only), tabbed with the tab kept in ?tab= (the MCP page deep-links to
+ * the AI tab): site settings split by key prefix into Account & registration / Remote browser /
+ * AI access (labels from the frontend dictionaries, backend-meta fallback; second-based values
+ * show a readable duration; the AI tab also shows the MCP endpoint), and Users (list + manage
+ * modal). Personal preferences live in the sidebar gear modal instead.
  */
-import React, { useState } from "react";
+import React, { Suspense, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, Info, ShieldAlert, ShieldCheck, Users as UsersIcon, Shield, SlidersHorizontal } from "lucide-react";
+import { Settings, Info, ShieldAlert, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
+import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
 import type { Translate } from "@/lib/i18n";
 import { en } from "@/locales/en";
@@ -43,13 +50,42 @@ function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disab
     );
 }
 
-type TabId = "site" | "users";
+/** 以秒為單位的站台設定(逾時 / 存活時間)。/ Site settings measured in seconds. */
+const SECONDS_KEY = /_(timeout|lifetime)$/;
+
+/** 秒數 → 「10 分鐘」「2 小時」這種好讀的長度(Intl 依語系翻單位)。/ Seconds → a readable, localized duration. */
+function formatDuration(seconds: number, locale: string): string {
+    const [value, unit] =
+        seconds >= 3600 ? [seconds / 3600, "hour"] : seconds >= 60 ? [seconds / 60, "minute"] : [seconds, "second"];
+    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long", maximumFractionDigits: 1 }).format(value);
+}
+
+/** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
+type SiteTabId = "general" | "browser" | "ai";
+type TabId = SiteTabId | "users";
+
+const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_"),
+    browser: (k) => k.startsWith("remote_browser"),
+    ai: (k) => k.startsWith("ai_"),
+};
+
+const TAB_IDS: TabId[] = ["general", "browser", "ai", "users"];
 
 export default function SettingsPage() {
+    // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
+    // useSearchParams needs a Suspense boundary or static generation bails out for the whole page.
+    return (
+        <Suspense fallback={null}>
+            <SettingsPageContent />
+        </Suspense>
+    );
+}
+
+function SettingsPageContent() {
     const { user } = useAuth();
     const { t } = useI18n();
     const isAdmin = !!user?.is_superuser;
-    const [tab, setTab] = useState<TabId>("site");
 
     if (!isAdmin) {
         // 非管理員(直接輸入網址進來):提示個人偏好的新位置。
@@ -66,8 +102,31 @@ export default function SettingsPage() {
         );
     }
 
+    return <AdminSettings />;
+}
+
+function AdminSettings() {
+    const { t } = useI18n();
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    // 站台設定只載入一次,各分頁共用。/ Load site settings once and share them across the tabs.
+    const settings = useSettingsPage();
+
+    const requested = searchParams.get("tab") as TabId | null;
+    const tab: TabId = requested && TAB_IDS.includes(requested) ? requested : "general";
+    const setTab = (next: TabId) => {
+        const params = new URLSearchParams(searchParams.toString());
+        if (next === "general") params.delete("tab");
+        else params.set("tab", next);
+        const qs = params.toString();
+        router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    };
+
     const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-        { id: "site", label: t("settings.tabSite"), icon: <SlidersHorizontal size={16} /> },
+        { id: "general", label: t("settings.groupAccount"), icon: <UserPlus size={16} /> },
+        { id: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={16} /> },
+        { id: "ai", label: t("settings.groupAi"), icon: <Bot size={16} /> },
         { id: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={16} /> },
     ];
 
@@ -82,14 +141,14 @@ export default function SettingsPage() {
                 <p className="mt-2 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
             </div>
 
-            <div className="border-b border-border flex gap-1" role="tablist">
+            <div className="border-b border-border flex gap-1 overflow-x-auto" role="tablist">
                 {tabs.map((item) => (
                     <button
                         key={item.id}
                         role="tab"
                         aria-selected={tab === item.id}
                         onClick={() => setTab(item.id)}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${tab === item.id
+                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${tab === item.id
                                 ? "border-primary text-primary"
                                 : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
                             }`}
@@ -100,21 +159,26 @@ export default function SettingsPage() {
                 ))}
             </div>
 
-            {tab === "site" && <SiteSettingsTab />}
-            {tab === "users" && <UsersTab />}
+            {tab === "users" ? <UsersTab /> : <SiteSettingsTab tab={tab} settings={settings} />}
         </div>
     );
 }
 
 /* ── 站台設定 / Site settings (admin) ───────────────────────────── */
 
-function SiteSettingsTab() {
-    const { t } = useI18n();
-    const { state, actions } = useSettingsPage();
+const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
+    general: "settings.generalBanner",
+    browser: "settings.browserBanner",
+    ai: "settings.aiBanner",
+};
+
+function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnType<typeof useSettingsPage> }) {
+    const { t, locale } = useI18n();
+    const { state, actions } = settings;
     const { settingsObj, meta, loading } = state;
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
-    const entries = Object.entries(settingsObj);
+    const entries = Object.entries(settingsObj).filter(([k]) => SITE_TAB_KEYS[tab](k));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
     // Prefer the frontend dictionary (localized); fall back to backend meta for unknown keys.
@@ -142,19 +206,14 @@ function SiteSettingsTab() {
         }
     };
 
-    // 依 key 前綴分組,讓管理員好找。/ Group by key prefix so admins can scan quickly.
-    const groups: { title: string; keys: [string, unknown][] }[] = [
-        { title: t("settings.groupAccount"), keys: entries.filter(([k]) => !k.startsWith("remote_browser") && !k.startsWith("ai_")) },
-        { title: t("settings.groupRemoteBrowser"), keys: entries.filter(([k]) => k.startsWith("remote_browser")) },
-        { title: t("settings.groupAi"), keys: entries.filter(([k]) => k.startsWith("ai_")) },
-    ].filter((g) => g.keys.length > 0);
-
     return (
         <div className="space-y-6">
             <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
                 <Info size={18} className="mt-0.5 shrink-0" />
-                <span>{t("settings.siteBanner")} {t("settings.siteSubtitle")}</span>
+                <span>{t(SITE_TAB_BANNERS[tab])}</span>
             </div>
+
+            {tab === "ai" && <McpEndpointPanel />}
 
             {loading ? (
                 <div className="bg-card shadow sm:rounded-lg border border-border p-8 text-center text-muted-foreground">
@@ -168,66 +227,98 @@ function SiteSettingsTab() {
                     {t("settings.empty")}
                 </div>
             ) : (
-                groups.map((group) => (
-                    <section key={group.title}>
-                        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2 px-1">
-                            {group.title}
-                        </h2>
-                        <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
-                            <ul className="divide-y divide-border">
-                                {group.keys.map(([key, value]) => {
-                                    const kind = typeOf(key, value);
-                                    const m = meta[key];
-                                    const description = descriptionOf(key, m);
-                                    return (
-                                        <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
-                                            <div className="flex items-start justify-between gap-4">
-                                                <div className="flex-1 min-w-0">
-                                                    <h4 className="text-sm font-medium text-foreground">
-                                                        {labelOf(key, m)}
-                                                    </h4>
-                                                    {description && (
-                                                        <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
-                                                            {description}
-                                                        </p>
+                <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
+                    <ul className="divide-y divide-border">
+                        {entries.map(([key, value]) => {
+                            const kind = typeOf(key, value);
+                            const m = meta[key];
+                            const description = descriptionOf(key, m);
+                            const current = editValues[key] ?? String(value ?? "");
+                            const seconds = kind === "integer" && SECONDS_KEY.test(key) ? parseInt(current, 10) : NaN;
+                            return (
+                                <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex-1 min-w-0">
+                                            <h4 className="text-sm font-medium text-foreground">
+                                                {labelOf(key, m)}
+                                            </h4>
+                                            {description && (
+                                                <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                                                    {description}
+                                                </p>
+                                            )}
+                                            <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">
+                                                {key}
+                                            </p>
+                                        </div>
+                                        <div className="shrink-0 pt-0.5">
+                                            {kind === "boolean" ? (
+                                                <ToggleSwitch checked={!!value} onToggle={() => handleToggle(key, value)} />
+                                            ) : (
+                                                <>
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            type={kind === "integer" ? "number" : "text"}
+                                                            className={`${kind === "integer" ? "w-24" : "w-56"} text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring`}
+                                                            value={current}
+                                                            onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                                                            onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
+                                                            min={kind === "integer" ? 0 : undefined}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
+                                                            onClick={() => commit(key, kind, value)}
+                                                        >
+                                                            {t("common.save")}
+                                                        </button>
+                                                    </div>
+                                                    {seconds >= 60 && (
+                                                        <p className="mt-1 text-xs text-muted-foreground">≈ {formatDuration(seconds, locale)}</p>
                                                     )}
-                                                    <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">
-                                                        {key}
-                                                    </p>
-                                                </div>
-                                                <div className="shrink-0 pt-0.5">
-                                                    {kind === "boolean" ? (
-                                                        <ToggleSwitch checked={!!value} onToggle={() => handleToggle(key, value)} />
-                                                    ) : (
-                                                        <div className="flex items-center gap-2">
-                                                            <input
-                                                                type={kind === "integer" ? "number" : "text"}
-                                                                className={`${kind === "integer" ? "w-24" : "w-56"} text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring`}
-                                                                value={editValues[key] ?? String(value ?? "")}
-                                                                onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
-                                                                onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
-                                                                min={kind === "integer" ? 0 : undefined}
-                                                            />
-                                                            <button
-                                                                type="button"
-                                                                className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
-                                                                onClick={() => commit(key, kind, value)}
-                                                            >
-                                                                {t("common.save")}
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                        </div>
-                    </section>
-                ))
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
             )}
         </div>
+    );
+}
+
+/** AI 分頁:MCP 端點網址(由 PUBLIC_URL 決定)與相關頁面。/ AI tab: the MCP endpoint and related pages. */
+function McpEndpointPanel() {
+    const { t, tn } = useI18n();
+    const serverUrl = useMcpServerUrl();
+    const linkClass =
+        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border hover:border-primary/50 hover:text-primary transition-colors";
+
+    return (
+        <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-4 sm:p-6">
+            <h4 className="text-sm font-medium text-foreground flex items-center gap-2">
+                <Plug size={15} className="text-primary" />
+                {t("settings.mcpEndpoint")}
+            </h4>
+            <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-muted/30 pl-3 pr-1 py-1">
+                <span className="flex-1 min-w-0 truncate font-mono text-sm">{serverUrl ?? "…"}</span>
+                {serverUrl && <CopyButton value={serverUrl} />}
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+                {tn("settings.mcpEndpointHint", { env: <code className="px-1 rounded bg-muted font-mono text-[0.85em]">PUBLIC_URL</code> })}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+                <Link href="/tunnels/mcp" prefetch={false} className={linkClass}>
+                    <Plug size={13} /> {t("nav.mcp")} <ArrowRight size={12} className="opacity-60" />
+                </Link>
+                <Link href="/tunnels/activity" prefetch={false} className={linkClass}>
+                    <Activity size={13} /> {t("nav.activity")} <ArrowRight size={12} className="opacity-60" />
+                </Link>
+            </div>
+        </section>
     );
 }
 
