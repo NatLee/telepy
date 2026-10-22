@@ -287,9 +287,9 @@ pub async fn google_sign_in(state: &AppState, claims: GoogleClaims) -> ApiResult
     if !user.is_active {
         return Err(google_error(StatusCode::FORBIDDEN, "account_disabled", "This account is disabled. Contact an administrator.", json!({})));
     }
+    // last_login 由 complete_login（無第二步）或 mfa_verify（有第二步）更新。/ last_login is touched by complete_login / mfa_verify.
     let result = super::mfa::complete_login(state, &user).await?;
     if result.get("mfa_required").is_none() {
-        db::users::touch_last_login(&state.db, user.id).await?;
         tracing::info!(username = user.username, "[AUTH][3RD] Login success");
     }
     Ok(result)
