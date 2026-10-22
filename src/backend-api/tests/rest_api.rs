@@ -141,6 +141,12 @@ async fn tunnel_lifecycle_and_dashboard() {
     assert!(cfg.contains("Host box-a\n"), "{cfg}");
     assert!(cfg.contains("User ubuntu"), "{cfg}");
     assert_eq!(r.json["usernames"][0]["username"], "ubuntu");
+    // 指令速查用的結構化欄位。/ Structured fields for the command sheet.
+    assert_eq!(r.json["server"]["alias"], "telepy-ssh-server");
+    assert_eq!(r.json["hosts"][0]["alias"], "box-a");
+    assert_eq!(r.json["hosts"][0]["username"], "ubuntu");
+    assert_eq!(r.json["hosts"][0]["username_id"], uname_id);
+    assert_eq!(r.json["reverse_port"], 1024);
 
     let r = app.get(&format!("/tunnels/server/script/ssh/{id}/22"), Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
