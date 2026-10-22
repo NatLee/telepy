@@ -36,14 +36,14 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
             title={`${label}\n${t("tunnels.endpointCopyHint")}`}
             aria-label={label}
             className={cn(
-                "inline-flex max-w-full items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[0.75rem] ring-1 ring-inset whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
+                "inline-flex max-w-full items-center gap-1 rounded-sm border px-1.5 py-px font-mono text-[0.75rem] whitespace-nowrap transition-colors [&>svg]:size-3 [&>svg]:shrink-0",
                 endpoint.live
-                    ? "bg-muted text-foreground/80 ring-border hover:text-primary hover:ring-primary/30"
-                    : "text-muted-foreground ring-border/70 hover:text-foreground",
+                    ? "border-border bg-muted text-foreground/80 hover:border-foreground/30 hover:text-foreground"
+                    : "border-border/70 text-muted-foreground hover:text-foreground",
                 className
             )}
         >
-            {copied ? <Check className="text-emerald-500" /> : <Globe />}
+            {copied ? <Check className="text-success" /> : <Globe />}
             <span className="truncate">{endpoint.ip}</span>
             {!endpoint.live && <span className="font-sans text-muted-foreground/80">· {when}</span>}
         </button>

@@ -27,6 +27,7 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { MiniScene, TunnelScene } from "@/components/cheatsheet/TunnelScene";
@@ -54,7 +55,7 @@ import {
     type RecipeParams,
 } from "@/lib/forwardRecipes";
 
-const CARD = "rounded-2xl border border-border bg-card/85 backdrop-blur-sm shadow-card";
+const CARD = "rounded-xl border border-border bg-card shadow-card";
 
 /** 這些埠多半是網頁服務，「接著」直接給可點的網址。/ Ports that are usually web apps get a clickable URL. */
 const WEB_PORTS = new Set(["80", "443", "3000", "3001", "4200", "5000", "5173", "8000", "8080", "8123", "8443", "8888", "9000"]);
@@ -62,7 +63,7 @@ const WEB_PORTS = new Set(["80", "443", "3000", "3001", "4200", "5000", "5173", 
 function StepHeading({ n, children, className }: { n: number; children: React.ReactNode; className?: string }) {
     return (
         <h2 className={cn("mb-3 flex items-center gap-2.5 text-sm font-semibold text-foreground", className)}>
-            <span className="grid size-6 place-items-center rounded-full bg-brand-gradient text-xs font-bold text-white shadow-glow" aria-hidden>{n}</span>
+            <span className="grid size-5 place-items-center rounded-sm bg-primary font-mono text-xs text-primary-foreground" aria-hidden>{n}</span>
             {children}
         </h2>
     );
@@ -203,27 +204,17 @@ function CheatsheetInner() {
         );
     }
 
-    const header = (
-        <div className="flex items-start gap-4">
-            <div className="hidden sm:grid place-items-center w-12 h-12 rounded-2xl bg-brand-gradient shadow-glow shrink-0" aria-hidden>
-                <SquareTerminal className="text-white" size={22} />
-            </div>
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight text-foreground">{t("sheet.title")}</h1>
-                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("sheet.subtitle")}</p>
-            </div>
-        </div>
-    );
+    const header = <PageHeader icon={<SquareTerminal />} title={t("sheet.title")} description={t("sheet.subtitle")} />;
 
     if (tunnels.length === 0 || !target) {
         return (
             <div className="space-y-6 animate-fade-in-up">
                 {header}
-                <div className="flex flex-col items-center justify-center rounded-3xl border border-dashed border-border bg-card/70 p-16 text-center">
+                <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card p-16 text-center">
                     <SquareTerminal size={40} className="mb-4 text-muted-foreground/60" aria-hidden />
                     <h3 className="text-xl font-semibold tracking-tight text-foreground">{t("sheet.emptyTitle")}</h3>
                     <p className="mt-2 max-w-sm text-sm text-muted-foreground">{t("sheet.emptyBody")}</p>
-                    <Button asChild className="mt-6 shadow-glow">
+                    <Button asChild className="mt-6">
                         <Link href="/tunnels/create" prefetch={false}>
                             <Plus size={16} />
                             {t("tunnels.create")}
@@ -364,12 +355,12 @@ function CheatsheetInner() {
                 <Button
                     variant="outline"
                     onClick={() => setSetupOpen(true)}
-                    className={cn("sm:ml-auto", needsSetup && "border-amber-500/50 text-amber-700 hover:text-amber-700 dark:text-amber-300")}
+                    className={cn("sm:ml-auto", needsSetup && "border-warning/50 text-warning hover:text-warning")}
                 >
                     {needsSetup ? <AlertTriangle size={16} /> : <ListChecks size={16} />}
                     {needsSetup ? t("sheet.setupNeeded") : t("sheet.setupGuide")}
                     {needsSetup && (
-                        <span className="rounded-full bg-amber-500/15 px-1.5 py-px font-mono text-[0.75rem] tabular-nums">
+                        <span className="rounded-sm bg-warning/15 px-1.5 py-px font-mono text-[0.75rem] tabular-nums">
                             {checklist.done}/{checklist.total}
                         </span>
                     )}
@@ -377,7 +368,7 @@ function CheatsheetInner() {
             </div>
 
             {config && !hasTargetUser && (
-                <div className="flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/[0.07] p-3 text-xs text-amber-800 dark:text-amber-200">
+                <div className="flex items-start gap-2 rounded-xl border border-warning/35 bg-warning/[0.07] p-3 text-xs text-warning">
                     <AlertTriangle size={16} className="mt-0.5 shrink-0" aria-hidden />
                     <span>{t("sheet.noTargetUser")}</span>
                 </div>
@@ -396,9 +387,9 @@ function CheatsheetInner() {
                                 aria-pressed={active}
                                 onClick={() => setRecipe(r.id)}
                                 className={cn(
-                                    "relative flex flex-col items-center gap-3 rounded-2xl border px-3 pb-3.5 pt-5 text-center shadow-card backdrop-blur-sm transition-all duration-200",
+                                    "relative flex flex-col items-center gap-3 rounded-xl border px-3 pb-3.5 pt-5 text-center transition-colors duration-150",
                                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                    active ? "border-transparent bg-primary/[0.07] ring-2 ring-primary/60" : "border-border bg-card/85 hover:-translate-y-px hover:border-primary/30"
+                                    active ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card hover:border-foreground/30"
                                 )}
                             >
                                 <code className="absolute right-2 top-2 rounded bg-muted px-1 font-mono text-[0.6875rem] text-muted-foreground">{r.flag}</code>

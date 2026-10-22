@@ -52,7 +52,7 @@ export function ShareModalSharedList({
 
     return (
         <section>
-            <h3 className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+            <h3 className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                 {t("share.currentlySharedWith")}
                 <span className="rounded-full bg-muted px-1.5 py-px tabular-nums normal-case tracking-normal">{sharedUsers.length}</span>
             </h3>
@@ -63,7 +63,7 @@ export function ShareModalSharedList({
                     return (
                         <li key={sharedUser.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3 transition-colors hover:bg-surface">
                             <div className="flex min-w-0 flex-1 items-center gap-3">
-                                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-brand-gradient text-sm text-white uppercase" aria-hidden>
+                                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-foreground text-sm text-background uppercase" aria-hidden>
                                     {sharedUser.username.slice(0, 1)}
                                 </span>
                                 <span className="truncate text-sm text-foreground">{sharedUser.username}</span>

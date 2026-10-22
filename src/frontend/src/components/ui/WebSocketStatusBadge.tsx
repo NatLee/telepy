@@ -15,17 +15,14 @@ export function WebSocketStatusBadge() {
     const { t } = useI18n();
 
     return (
-        <div className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground select-none">
+        <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground select-none">
             <span
-                className={`w-2 h-2 rounded-full shrink-0 ${isConnected
-                        ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
-                        : "bg-destructive"
-                    }`}
+                className={`size-2 rounded-full shrink-0 ${isConnected ? "bg-success" : "bg-destructive"}`}
                 aria-hidden="true"
             />
             {isConnected ? (
                 <>
-                    <Wifi size={12} className="text-emerald-500" />
+                    <Wifi size={12} className="text-success" />
                     <span>{t("ui.live")}</span>
                 </>
             ) : (

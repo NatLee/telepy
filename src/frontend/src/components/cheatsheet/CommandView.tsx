@@ -12,9 +12,9 @@ import { useI18n } from "@/lib/i18n";
 import { SHORT_LABEL, segmentsToString, type Segment, type TokenKind } from "@/lib/forwardRecipes";
 
 const TOKEN_CLASS: Record<TokenKind, string> = {
-    cmd: "text-emerald-400 font-semibold",
+    cmd: "text-success font-semibold",
     flag: "text-sky-400",
-    value: "text-amber-300",
+    value: "text-warning",
     target: "text-violet-300",
     arg: "text-slate-200",
 };
@@ -43,8 +43,8 @@ function CopyButton({ text, big = false }: { text: string; big?: boolean }) {
                 "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg font-medium transition-all",
                 big ? "h-10 px-4 text-sm" : "p-1.5 text-xs",
                 big
-                    ? copied ? "bg-emerald-500 text-white" : "bg-primary text-primary-foreground shadow-glow hover:-translate-y-px hover:bg-primary/90"
-                    : copied ? "bg-emerald-500/15 text-emerald-300" : "bg-white/10 text-slate-200 hover:bg-white/20"
+                    ? copied ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : copied ? "bg-success/15 text-success" : "bg-white/10 text-slate-200 hover:bg-white/20"
             )}
         >
             {copied ? <Check size={big ? 16 : 14} /> : <Copy size={big ? 16 : 14} />}
@@ -75,7 +75,7 @@ function Tokens({ segments }: { segments: Segment[] }) {
 export function CommandBar({ segments }: { segments: Segment[] }) {
     const text = segmentsToString(segments);
     return (
-        <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
             <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap py-1 font-mono text-[1rem] leading-relaxed text-slate-200">
                 <span className="select-none text-slate-500">$ </span>
                 <Tokens segments={segments} />
@@ -111,9 +111,9 @@ export function InlineCommand({ segments }: { segments: Segment[] }) {
 }
 
 const PART_COLORS = [
-    { text: "text-emerald-400", bar: "bg-emerald-400" },
+    { text: "text-success", bar: "bg-success" },
     { text: "text-sky-400", bar: "bg-sky-400" },
-    { text: "text-amber-300", bar: "bg-amber-300" },
+    { text: "text-warning", bar: "bg-warning" },
     { text: "text-violet-300", bar: "bg-violet-300" },
     { text: "text-pink-300", bar: "bg-pink-300" },
     { text: "text-teal-300", bar: "bg-teal-300" },
@@ -126,7 +126,7 @@ const PART_COLORS = [
 export function AnnotatedCommand({ segments }: { segments: Segment[] }) {
     const { t } = useI18n();
     return (
-        <div className="overflow-x-auto rounded-2xl border border-slate-800 bg-[#0b1020] p-4 sm:p-5">
+        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-[#0b1020] p-4 sm:p-5">
             <div className="flex flex-wrap items-start gap-x-4 gap-y-5">
                 {segments.map((seg, i) => {
                     const color = PART_COLORS[i % PART_COLORS.length];

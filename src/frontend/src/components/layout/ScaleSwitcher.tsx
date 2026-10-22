@@ -69,7 +69,7 @@ export function ScaleSwitcher({ collapsed = false, className = "" }: { collapsed
     }
 
     return (
-        <div role="group" aria-label={t("prefs.uiScale")} className={`grid grid-cols-3 gap-0.5 rounded-lg bg-muted/80 p-0.5 ${className}`}>
+        <div role="group" aria-label={t("prefs.uiScale")} className={`grid grid-cols-3 gap-0.5 rounded-md bg-muted p-0.5 ${className}`}>
             {UI_SCALE_PRESET_ORDER.map((preset) => {
                 const isActive = current === preset;
                 const label = `${t(LABEL[preset])} (${UI_SCALE_PRESETS[preset]}%)`;
@@ -81,7 +81,7 @@ export function ScaleSwitcher({ collapsed = false, className = "" }: { collapsed
                         aria-label={label}
                         aria-pressed={isActive}
                         onClick={() => changeScale(UI_SCALE_PRESETS[preset])}
-                        className={`flex h-7 items-center justify-center rounded-md leading-none transition-[color,background-color,box-shadow] ${isActive ? "bg-card text-primary shadow-card" : "text-muted-foreground hover:text-foreground"}`}
+                        className={`flex h-7 items-center justify-center rounded-sm leading-none transition-[color,background-color,box-shadow] ${isActive ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary" : "text-muted-foreground hover:text-foreground"}`}
                     >
                         <span className={GLYPH_CLASS[preset]} aria-hidden>A</span>
                     </button>

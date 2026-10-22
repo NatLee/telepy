@@ -61,10 +61,10 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
 
         const name = item.name.toLowerCase();
         if (name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.rar')) {
-            return <Archive className="text-amber-500" size={16} />;
+            return <Archive className="text-warning" size={16} />;
         }
         if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg')) {
-            return <ImageIcon className="text-emerald-500" size={16} />;
+            return <ImageIcon className="text-success" size={16} />;
         }
         if (name.endsWith('.js') || name.endsWith('.ts') || name.endsWith('.py') || name.endsWith('.json') || name.endsWith('.html')) {
             return <FileCode2 className="text-slate-500 dark:text-slate-400" size={16} />;
@@ -134,7 +134,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath 
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto min-h-0 bg-background/50">
+            <div className="flex-1 overflow-y-auto min-h-0 bg-background">
                 {loading && items.length === 0 ? (
                     <div className="flex justify-center p-8">
                         <RefreshCw className="animate-spin text-muted-foreground" size={24} />

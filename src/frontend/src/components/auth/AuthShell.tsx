@@ -33,7 +33,7 @@ export function AuthShell({ aside, children }: { aside: React.ReactNode; childre
                     </span>
                     {/* 未登入也能切語言與主題（cookie / localStorage；登入後由 UserSettingsSync 同步到帳號）。
                         Language and theme work before sign-in and sync to the account afterwards. */}
-                    <div className="flex items-center gap-1 rounded-xl border border-border bg-card/80 p-1 shadow-card backdrop-blur">
+                    <div className="flex items-center gap-1 rounded-md border border-border bg-card p-1">
                         <div className="w-[8.5rem]">
                             <LanguageSwitcher />
                         </div>
@@ -45,7 +45,7 @@ export function AuthShell({ aside, children }: { aside: React.ReactNode; childre
                 </header>
 
                 <div className="relative flex flex-1 items-center justify-center px-4 pb-16 pt-4 sm:px-6">
-                    <div className="w-full max-w-sm animate-in fade-in slide-in-from-bottom-4 duration-500">{children}</div>
+                    <div className="w-full max-w-sm animate-fade-in-up">{children}</div>
                 </div>
             </main>
         </div>

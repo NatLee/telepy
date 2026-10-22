@@ -113,7 +113,7 @@ export function DeviceMatrix({
 
     if (devices.length === 0) {
         return (
-            <div className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-border bg-card px-6 py-10 text-center">
+            <div className="flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-border bg-card px-6 py-10 text-center">
                 <HardDrive size={32} className="text-muted-foreground/60" aria-hidden />
                 <div>
                     <p className="text-sm text-foreground">{t("keys.matrix.emptyTitle")}</p>
@@ -147,9 +147,9 @@ export function DeviceMatrix({
     return (
         <>
             {/* 桌面：表格 / Desktop: table */}
-            <div className="hidden overflow-x-auto rounded-2xl border border-border/80 bg-card shadow-card md:block">
+            <div className="hidden overflow-x-auto rounded-xl border border-border/80 bg-card shadow-card md:block">
                 <table className="w-full min-w-max text-left">
-                    <thead className="bg-surface text-[0.75rem] uppercase tracking-wider text-muted-foreground">
+                    <thead className="bg-surface text-xs text-muted-foreground">
                         <tr>
                             <th scope="col" className="sticky left-0 z-10 bg-surface px-4 py-2.5 font-normal">{t("keys.matrix.device")}</th>
                             {keys.map((k) => (
@@ -184,7 +184,7 @@ export function DeviceMatrix({
             {/* 手機：卡片 / Phones: cards */}
             <div className="space-y-3 md:hidden">
                 {devices.map((d) => (
-                    <div key={d.tunnel_id} className="rounded-2xl border border-border/80 bg-card p-4 shadow-card">
+                    <div key={d.tunnel_id} className="rounded-xl border border-border/80 bg-card p-4 shadow-card">
                         <div className="flex items-start justify-between gap-3">
                             <DeviceHeading device={d} />
                         </div>

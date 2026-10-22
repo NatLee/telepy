@@ -48,7 +48,7 @@ export function Segmented<T extends string>({
             role={kind === "tabs" ? "tablist" : "group"}
             aria-label={rest["aria-label"]}
             className={cn(
-                "gap-1 rounded-xl bg-muted p-1",
+                "gap-0.5 rounded-md border border-border bg-surface p-0.5",
                 fullWidth ? "grid auto-cols-fr grid-flow-col" : "inline-flex min-w-max",
                 className,
             )}
@@ -63,10 +63,10 @@ export function Segmented<T extends string>({
                         title={option.title ?? (typeof option.label === "string" ? option.label : undefined)}
                         {...(kind === "tabs" ? { role: "tab", "aria-selected": active } : { "aria-pressed": active })}
                         className={cn(
-                            "flex min-w-0 items-center justify-center gap-1.5 rounded-lg transition-[color,background-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:shrink-0",
+                            "flex min-w-0 items-center justify-center gap-1.5 rounded-sm transition-[color,background-color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:shrink-0",
                             size === "sm" ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-sm",
                             fullWidth ? "text-center leading-snug" : "whitespace-nowrap",
-                            active ? "bg-card text-foreground shadow-card [&_svg]:text-primary" : "text-muted-foreground hover:text-foreground",
+                            active ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary [&_svg]:text-primary" : "text-muted-foreground hover:text-foreground",
                         )}
                     >
                         {option.icon}

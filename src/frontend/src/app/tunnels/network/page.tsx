@@ -72,7 +72,7 @@ function NetworkInner() {
                     </div>
                 </div>
             ) : allTunnels.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-border p-10 text-center">
+                <div className="rounded-xl border border-dashed border-border p-10 text-center">
                     <p className="text-muted-foreground">{t("network.noDevices")}</p>
                     <Button asChild className="mt-4">
                         <Link href="/tunnels/create" prefetch={false}>{t("network.createTunnel")}</Link>

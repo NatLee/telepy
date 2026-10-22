@@ -205,18 +205,18 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             {tab === "ai" && <McpEndpointPanel />}
 
             {loading ? (
-                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
+                <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
                     <div className="flex justify-center mb-2">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                     </div>
                     {t("settings.loading")}
                 </div>
             ) : entries.length === 0 ? (
-                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
+                <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
                     {t("settings.empty")}
                 </div>
             ) : (
-                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card">
+                <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
                     <ul className="divide-y divide-border/70">
                         {entries.map(([key, value]) => {
                             const kind = typeOf(key, value);
@@ -283,7 +283,7 @@ function McpEndpointPanel() {
         "inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ring-1 ring-inset ring-border hover:ring-primary/50 hover:text-primary transition-colors";
 
     return (
-        <section className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
+        <section className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
             <SectionHeading icon={<Plug />} title={t("settings.mcpEndpoint")} />
             <div className="mt-3 flex items-center gap-2 rounded-xl bg-surface pl-3.5 pr-1 py-1 ring-1 ring-inset ring-border/80">
                 <span className="flex-1 min-w-0 truncate font-mono text-sm">{serverUrl ?? "…"}</span>
@@ -322,7 +322,7 @@ function UsersTab() {
         <div className="space-y-6">
             <Callout tone="info">{t("settings.usersBanner")}</Callout>
 
-            <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card">
+            <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card">
                 {loading ? (
                     <div className="p-8 text-center text-muted-foreground">
                         <div className="flex justify-center mb-2">
@@ -349,7 +349,7 @@ function UsersTab() {
                                 {users.map((u) => (
                                     <tr key={u.id} className="hover:bg-surface transition-colors">
                                         <td className="px-4 py-3 text-foreground">
-                                            <span className="mr-2.5 inline-grid size-7 place-items-center rounded-full bg-brand-gradient align-middle text-xs text-white uppercase" aria-hidden>
+                                            <span className="mr-2.5 inline-grid size-7 place-items-center rounded-full bg-foreground align-middle text-xs text-background uppercase" aria-hidden>
                                                 {u.username.slice(0, 1)}
                                             </span>
                                             {u.username}
@@ -357,7 +357,7 @@ function UsersTab() {
                                                 <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
                                             )}
                                             {u.mfa_enabled && (
-                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[0.6875rem] bg-success/10 text-success" title={t("security.adminOn")}>
+                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-sm text-[0.6875rem] bg-success/10 text-success" title={t("security.adminOn")}>
                                                     <ShieldCheck size={10} />
                                                     {t("security.badge")}
                                                 </span>
@@ -378,7 +378,7 @@ function UsersTab() {
                                         </td>
                                         <td className="px-4 py-3">
                                             <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${u.is_active
-                                                    ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                                                    ? "bg-success/10 text-success"
                                                     : "bg-destructive/10 text-destructive"
                                                 }`}>
                                                 {u.is_active ? t("settings.statusActive") : t("settings.statusInactive")}

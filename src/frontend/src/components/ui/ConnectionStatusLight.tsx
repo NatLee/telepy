@@ -1,9 +1,23 @@
 "use client";
 
 import React from "react";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
 type ConnectionState = "disconnected" | "connecting" | "connected";
+
+/** 平的實色圓點 + 同色淡環；連線中才呼吸。/ A flat solid dot with a tinted halo; only "connecting" pulses. */
+const STATE_CLASS: Record<ConnectionState, string> = {
+    disconnected: "bg-destructive ring-destructive/20",
+    connecting: "bg-warning ring-warning/25 animate-pulse",
+    connected: "bg-success ring-success/20",
+};
+
+const STATE_LABEL_KEYS: Record<ConnectionState, "ui.stateConnected" | "ui.stateConnecting" | "ui.stateDisconnected"> = {
+    connected: "ui.stateConnected",
+    connecting: "ui.stateConnecting",
+    disconnected: "ui.stateDisconnected",
+};
 
 interface ConnectionStatusLightProps {
     state: ConnectionState;
@@ -11,43 +25,15 @@ interface ConnectionStatusLightProps {
     size?: number;
 }
 
-const STATE_STYLES: Record<ConnectionState, { bg: string; shadow: string; ring: string; animClass: string }> = {
-    disconnected: {
-        bg: "bg-gradient-to-br from-red-400 to-red-600",
-        shadow: "shadow-[0_0_12px_2px_rgba(239,68,68,0.45)]",
-        ring: "ring-red-300/50",
-        animClass: "animate-pulse-glow",
-    },
-    connecting: {
-        bg: "bg-gradient-to-br from-amber-300 to-amber-500",
-        shadow: "shadow-[0_0_16px_3px_rgba(245,158,11,0.5)]",
-        ring: "ring-amber-300/50",
-        animClass: "animate-pulse-glow",
-    },
-    connected: {
-        bg: "bg-gradient-to-br from-emerald-300 to-emerald-500",
-        shadow: "shadow-[0_0_20px_4px_rgba(16,185,129,0.55)]",
-        ring: "ring-emerald-300/60",
-        animClass: "animate-pulse-glow",
-    },
-};
-
 /**
  * A circular "traffic light" indicator for connection status.
  * Three states: disconnected (red), connecting (amber), connected (green).
  */
-const STATE_LABEL_KEYS: Record<ConnectionState, "ui.stateConnected" | "ui.stateConnecting" | "ui.stateDisconnected"> = {
-    connected: "ui.stateConnected",
-    connecting: "ui.stateConnecting",
-    disconnected: "ui.stateDisconnected",
-};
-
 export function ConnectionStatusLight({ state, size = 48 }: ConnectionStatusLightProps) {
     const { t } = useI18n();
-    const s = STATE_STYLES[state];
     return (
         <div
-            className={`rounded-full ring-4 ${s.bg} ${s.shadow} ${s.ring} ${s.animClass}`}
+            className={cn("rounded-full ring-8", STATE_CLASS[state])}
             style={{ width: size, height: size }}
             role="status"
             aria-label={t("ui.connectionStatus", { state: t(STATE_LABEL_KEYS[state]) })}

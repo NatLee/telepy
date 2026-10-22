@@ -40,7 +40,7 @@ const SESSION_RULES: TranslationKey[] = [
 
 function Panel({ icon, title, description, children }: { icon: React.ReactNode; title: string; description?: string; children: React.ReactNode }) {
     return (
-        <section className="rounded-2xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
+        <section className="rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
             <SectionHeading as="h2" icon={icon} title={title} description={description} className="mb-3" />
             {children}
         </section>
@@ -130,7 +130,7 @@ export default function McpPage() {
 
                 <div className="lg:col-span-2 space-y-6 min-w-0">
                     {/* 已連接的應用程式 / Connected apps */}
-                    <section className="rounded-2xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
+                    <section className="rounded-xl border border-border/80 bg-card p-5 text-card-foreground shadow-card">
                         <ConnectedApps />
                     </section>
 
