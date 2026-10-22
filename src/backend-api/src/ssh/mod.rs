@@ -4,6 +4,7 @@
 //! SSH client plumbing: russh connections (+ pool) and the OpenSSH client used by the terminal.
 
 pub mod device;
+pub mod exec;
 pub mod pool;
 pub mod process;
 

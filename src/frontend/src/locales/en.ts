@@ -123,6 +123,8 @@ export const en = {
     "oauth.scope.sshExecDescription": "Open SSH sessions through the tunnels and execute commands.",
     "oauth.scope.sshFiles": "Read and write files on your devices",
     "oauth.scope.sshFilesDescription": "List, download and upload files over SFTP.",
+    "oauth.scope.networkScan": "Discover machines on your devices' networks",
+    "oauth.scope.networkScanDescription": "Scan the private network behind a device (owner / admin tunnels only); nothing is installed on the device.",
     "oauth.needOneScope": "Keep at least one permission, or deny the request.",
     "oauth.tunnels": "Tunnels",
     "oauth.allTunnels": "Allow all tunnels",
@@ -1185,6 +1187,8 @@ export const en = {
     "siteSettings.ai_session_max_lifetime.description": "Hard limit on how long an AI-opened SSH session may stay open, even while busy. Applies to new sessions.",
     "siteSettings.ai_max_sessions_per_user.label": "AI Sessions per User",
     "siteSettings.ai_max_sessions_per_user.description": "How many SSH sessions one user's AI tools may hold open at the same time, across all apps. 0 = AI tools cannot open sessions. Applies to the next session.",
+    "siteSettings.lan_scan_enabled.label": "Allow LAN discovery",
+    "siteSettings.lan_scan_enabled.description": "Let tunnel owners and ADMIN sharees scan the private network behind a device. The device's own sshd makes the connections; nothing is installed on it. When off, jump hosts can only be added by hand. Every scan is recorded in the tunnel's logs.",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "Live",

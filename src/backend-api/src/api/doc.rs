@@ -51,6 +51,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "User Management", description = "Personal settings and user administration"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),
         (name = "Logs", description = "SSH gateway events"),
+        (name = "LAN", description = "Machines on the networks behind each device: discovery through the device's sshd, the jump-host list and the topology view"),
         (name = "Two-Factor", description = "Passkeys (WebAuthn) and authenticator-app (TOTP) sign-in, recovery codes and re-authentication"),
         (name = "AI", description = "SSH sessions opened by AI agents over MCP (/mcp) and their audit trail"),
         (name = "OAuth", description = "OAuth 2.1 authorization server for MCP clients: discovery, dynamic client registration, consent, tokens, connected apps")

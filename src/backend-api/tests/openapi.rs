@@ -44,6 +44,10 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/ai/sessions/{id}", vec!["delete"]),
         ("/api/ai/activity", vec!["get"]),
         ("/api/auth/mfa", vec!["get"]),
+        ("/api/reverse/server/{id}/lan/hosts", vec!["get", "post"]),
+        ("/api/reverse/server/{id}/lan/hosts/{host_id}", vec!["patch", "delete"]),
+        ("/api/reverse/server/{id}/lan/scan", vec!["get", "post"]),
+        ("/api/reverse/lan/topology", vec!["get"]),
         ("/api/auth/passkeys/{id}", vec!["patch", "delete"]),
         ("/api/user/users/{id}/mfa", vec!["delete"]),
     ] {

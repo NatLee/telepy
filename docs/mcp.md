@@ -43,6 +43,7 @@ MCP client ── POST /mcp ─────────────────�
   | `tunnels:read` | `list_tunnels`、`tunnel_status` |
   | `ssh:exec` | `ssh_session_open`、`ssh_exec` |
   | `ssh:files` | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
+  | `network:scan` | `lan_scan`（掃描裝置背後的區網；只限擁有者或 ADMIN 的隧道） |
 
   使用者可以取消勾選任何一項，也可以把 app 限制在部分隧道。
 - access token 是 `token_type: "mcp_access"` 的 JWT，REST API 不接受；網頁的 token 也不能打 `/mcp`。
@@ -62,6 +63,8 @@ MCP client ── POST /mcp ─────────────────�
 | `sftp_list(session_id, path?)` | 列目錄（`~` = 家目錄） |
 | `sftp_read(session_id, path, offset?, max_bytes?)` | 讀檔；文字回 UTF-8，其餘回 base64；可分頁 |
 | `sftp_write(session_id, path, content, encoding?, append?)` | 寫檔或附加（`encoding`: `utf-8` / `base64`） |
+| `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號 |
+| `lan_scan(tunnel_id, username?, subnets?, ports?)` | 經裝置的 sshd 掃描區網（私有網段、最多 1024 個位址、約一分鐘）並存進主機清單；需要 `network:scan` 與擁有者 / ADMIN 權限 |
 
 權限完全照網頁規則：要有該隧道的 VIEW 權限，而且目標 username 必須在允許清單內（被分享的隧道只能用分享時允許的
 username，與 web terminal 相同）。

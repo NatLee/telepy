@@ -929,3 +929,116 @@ pub struct GoogleLoginError {
     pub domain: Option<String>,
     pub username: Option<String>,
 }
+
+// ---------------------------------------------------------------- LAN hosts / discovery (#20)
+
+#[derive(ToSchema)]
+pub struct LanHost {
+    pub id: i64,
+    pub tunnel_id: i64,
+    #[schema(example = "192.168.1.20")]
+    pub address: String,
+    #[schema(example = "nas.lan")]
+    pub hostname: Option<String>,
+    pub mac: Option<String>,
+    /// Ports open at the last scan
+    pub open_ports: Vec<i64>,
+    #[schema(example = "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13")]
+    pub ssh_banner: Option<String>,
+    pub label: Option<String>,
+    /// Default login user on this machine
+    pub username: Option<String>,
+    pub ssh_port: i64,
+    /// `scan` or `manual`
+    pub source: String,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanScanStatus {
+    pub scan_id: String,
+    pub tunnel_id: i64,
+    pub started_by: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    /// connecting | networks | discovery | ports | names | done | failed
+    pub phase: String,
+    #[schema(example = json!(["192.168.1.0/24"]))]
+    pub networks: Vec<String>,
+    pub ports: Vec<i64>,
+    pub probed: i64,
+    pub total: i64,
+    pub hosts_found: i64,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct LanHostList {
+    pub hosts: Vec<LanHost>,
+    pub scan: Option<LanScanStatus>,
+    /// The site switch is on and the user owns the tunnel or has ADMIN
+    pub can_scan: bool,
+    /// The user may add / edit / remove hosts (EDIT)
+    pub can_edit: bool,
+}
+
+#[derive(ToSchema)]
+pub struct LanHostWrite {
+    /// IPv4 address on a private network, or a hostname
+    pub address: String,
+    pub label: Option<String>,
+    pub username: Option<String>,
+    #[schema(example = 22)]
+    pub ssh_port: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct LanHostPatch {
+    pub label: Option<String>,
+    pub username: Option<String>,
+    pub ssh_port: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct LanScanRequest {
+    /// Account on the device used for the scan; omitted = the tunnel's default
+    pub username: Option<String>,
+    /// Private CIDRs (at most 1024 addresses in total); omitted = the device's own networks
+    #[schema(example = json!(["192.168.1.0/24"]))]
+    pub subnets: Option<Vec<String>>,
+    /// Ports to probe; omitted = 22, 80, 443, 445, 3389, 5900, 8080, 8443
+    pub ports: Option<Vec<i64>>,
+}
+
+#[derive(ToSchema)]
+pub struct LanError {
+    pub error: String,
+    #[schema(example = "lan_scan_running")]
+    pub code: String,
+}
+
+#[derive(ToSchema)]
+pub struct LanTopologyTunnel {
+    pub id: i64,
+    pub name: String,
+    pub reverse_port: i64,
+    /// null when the status source is unavailable
+    pub online: Option<bool>,
+    pub rtt_ms: Option<f64>,
+    #[schema(example = "owner")]
+    pub permission: String,
+    pub can_scan: bool,
+    pub can_edit: bool,
+    /// Device accounts the user may use (the first hop of a jump)
+    pub usernames: Vec<String>,
+    pub default_username: Option<String>,
+    pub scan: Option<LanScanStatus>,
+    pub hosts: Vec<LanHost>,
+}
+
+#[derive(ToSchema)]
+pub struct LanTopology {
+    pub tunnels: Vec<LanTopologyTunnel>,
+}

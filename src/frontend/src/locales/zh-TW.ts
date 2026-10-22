@@ -117,6 +117,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "oauth.scope.sshExecDescription": "透過隧道開啟 SSH 工作階段並執行指令。",
     "oauth.scope.sshFiles": "讀寫你裝置上的檔案",
     "oauth.scope.sshFilesDescription": "透過 SFTP 列出、下載與上傳檔案。",
+    "oauth.scope.networkScan": "探索裝置所在區網的機器",
+    "oauth.scope.networkScanDescription": "掃描裝置背後的私有網段（僅限你是擁有者或 ADMIN 的隧道）；不會在裝置上安裝任何東西。",
     "oauth.needOneScope": "至少保留一項權限，或拒絕這個請求。",
     "oauth.tunnels": "隧道",
     "oauth.allTunnels": "允許全部隧道",
@@ -1167,6 +1169,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "siteSettings.ai_session_max_lifetime.description": "AI 開啟的 SSH 工作階段最多可存在多久（秒），即使仍在忙碌也會到期關閉。對新開的工作階段生效。",
     "siteSettings.ai_max_sessions_per_user.label": "每位使用者的 AI 工作階段數",
     "siteSettings.ai_max_sessions_per_user.description": "一位使用者的 AI 工具可同時開著幾個 SSH 工作階段（所有應用程式合計）。0 = 不允許 AI 工具開工作階段。下次開啟時生效。",
+    "siteSettings.lan_scan_enabled.label": "允許區網探索",
+    "siteSettings.lan_scan_enabled.description": "允許隧道擁有者與 ADMIN 分享者掃描裝置背後的私有網段。連線由裝置自己的 sshd 發出，不會在裝置上安裝任何東西。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "連線中",

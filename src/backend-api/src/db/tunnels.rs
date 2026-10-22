@@ -187,6 +187,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
         .bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM tunnels_tunnelsharing WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {U} WHERE reverse_server_id = ?")).bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_lan_host WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_endpoint WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

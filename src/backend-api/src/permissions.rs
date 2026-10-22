@@ -110,6 +110,25 @@ pub async fn allowed_usernames(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx::
     }
 }
 
+/// 從允許的 username 挑一個：指定的必須在清單內；沒指定就用隧道預設（若允許），清單只有一個就用它。
+/// 錯誤訊息直接給人看（列出可用的）。/ Pick a target username: the requested one must be allowed;
+/// otherwise the tunnel default (when allowed) or the only allowed one.
+pub fn choose_username(allowed: &[UsernameWithCreator], default_id: Option<i64>, requested: Option<&str>, tunnel_name: &str) -> Result<String, String> {
+    let names: Vec<&str> = allowed.iter().map(|u| u.username.as_str()).collect();
+    if names.is_empty() {
+        return Err(format!("No target username is available to you on '{tunnel_name}'. Add one in Telepy (tunnel → usernames) first."));
+    }
+    match requested.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(u) if names.contains(&u) => Ok(u.to_string()),
+        Some(u) => Err(format!("Username '{u}' is not allowed on '{tunnel_name}'. Allowed: {}", names.join(", "))),
+        None => match default_id.and_then(|d| allowed.iter().find(|u| u.id == d)) {
+            Some(u) => Ok(u.username.clone()),
+            None if names.len() == 1 => Ok(names[0].to_string()),
+            None => Err(format!("Pick a username for '{tunnel_name}': {}", names.join(", "))),
+        },
+    }
+}
+
 /// 看不看得到裝置的公網 IP：跟著「能不能登入裝置」走，不看 VIEW / EDIT 標籤——能開 terminal、remote browser
 /// 或 MCP exec 的人本來就能 `curl ifconfig.me` 查到，藏起來只是假安全。只看狀態的 sharee（沒有任何允許帳號）看不到。
 /// Device public IP visibility follows the ability to log in to the device (anyone who can run a shell
