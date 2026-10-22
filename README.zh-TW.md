@@ -1,4 +1,4 @@
-# Telepy
+<h1 align="center"><img src="./docs/brand/banner.png" alt="Telepy：從瀏覽器連到每一台裝置" width="100%"></h1>
 
 [English](./README.md) | **繁體中文** | [日本語](./README.ja.md)
 

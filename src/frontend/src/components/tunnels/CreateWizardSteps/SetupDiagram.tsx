@@ -10,7 +10,8 @@
 "use client";
 
 import React from "react";
-import { Cable, CheckCircle2, Cpu, Hourglass, KeyRound, Laptop, Sparkles, User, type LucideIcon } from "lucide-react";
+import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
+import { CheckCircle2, Cpu, Hourglass, KeyRound, Laptop, Sparkles, User, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { WizardStep } from "@/hooks/useCreateTunnelWizard";
@@ -225,7 +226,7 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                     sub={step === 5 && connected ? t("wizard.diagram.accessDetail") : undefined}
                 />
                 <Node
-                    icon={Cable}
+                    icon={TelepyGlyph}
                     title="Telepy"
                     detail={t("wizard.diagram.telepyDetail")}
                     tone="bg-brand-gradient text-white ring-white/25"

@@ -6,7 +6,8 @@
  * three-step setup guide (first run).
  */
 import React from "react";
-import { Cable, Check, FolderTree, Globe, Laptop, Server, SquareTerminal, Users, type LucideIcon } from "lucide-react";
+import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
+import { Check, FolderTree, Globe, Laptop, Server, SquareTerminal, Users, type LucideIcon } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { cn } from "@/lib/utils";
@@ -62,7 +63,7 @@ export function AuthHighlights() {
             <div className="mt-10 flex items-center gap-2" aria-hidden>
                 <DiagramNode Icon={Server} label={t("auth.diagramDevice")} />
                 <DiagramLink label={t("auth.diagramReverseSsh")} />
-                <DiagramNode Icon={Cable} label="Telepy" accent />
+                <DiagramNode Icon={TelepyGlyph} label="Telepy" accent />
                 <DiagramLink label="HTTPS" reverse />
                 <DiagramNode Icon={Laptop} label={t("auth.diagramBrowser")} />
             </div>
