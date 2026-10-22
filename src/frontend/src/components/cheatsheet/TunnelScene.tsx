@@ -9,7 +9,8 @@
  * Layout follows iximiuz's "A Visual Guide to SSH Tunnels": a fixed topology, solid = SSH, dashed = forwarded hop.
  */
 import React from "react";
-import { Cable, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Lock, Plug, type LucideIcon } from "lucide-react";
+import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Lock, Plug, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
@@ -128,7 +129,7 @@ function LinkLabel({ link }: { link: SceneLink }) {
     if (link.kind === "tunnel") {
         return (
             <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-primary/25 bg-card px-2 py-0.5 text-[11px] font-medium text-primary shadow-sm">
-                <span className="grid place-items-center size-4 rounded bg-brand-gradient" aria-hidden><Cable size={10} className="text-white" /></span>
+                <span className="grid place-items-center size-4 rounded bg-brand-gradient" aria-hidden><TelepyGlyph size={11} className="text-white" /></span>
                 <Lock size={10} aria-hidden />
                 {link.label}
             </span>

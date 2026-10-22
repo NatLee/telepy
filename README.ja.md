@@ -1,4 +1,4 @@
-# Telepy
+<h1 align="center"><img src="./docs/brand/banner.png" alt="Telepy：ブラウザからすべてのデバイスへ" width="100%"></h1>
 
 [English](./README.md) | [繁體中文](./README.zh-TW.md) | **日本語**
 
