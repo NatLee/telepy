@@ -100,7 +100,14 @@ export function useTunnelsPage() {
         },
         [NOTIFICATION_ACTIONS.UPDATED_TUNNELS]: () => {
             fetchData();
-        }
+        },
+        // 別人的 AI agent 連上／離開我的隧道時提示（自己的 agent 不吵）。/ Toast when someone else's agent uses my tunnel.
+        [NOTIFICATION_ACTIONS.AI_SESSION_OPENED]: (msg) => {
+            if (msg.details && msg.by && msg.by !== user?.username) showSuccess(msg.details);
+        },
+        [NOTIFICATION_ACTIONS.AI_SESSION_CLOSED]: (msg) => {
+            if (msg.details && msg.by && msg.by !== user?.username) showSuccess(msg.details);
+        },
     });
 
     const handleDelete = async () => {

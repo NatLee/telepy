@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, Shield, BookOpen, SlidersHorizontal, SquareTerminal } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, Shield, BookOpen, SlidersHorizontal, SquareTerminal, Bot } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -21,6 +21,7 @@ export const navLinks: { key: TranslationKey; href: string; icon: React.ReactNod
     { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
     { key: "nav.keys", href: "/tunnels/keys", icon: <Key size={18} /> },
     { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
+    { key: "nav.activity", href: "/tunnels/activity", icon: <Bot size={18} /> },
 ];
 
 /** /tunnels 只比對自己,其他連結比對前綴。/ /tunnels matches exactly; the others match by prefix. */

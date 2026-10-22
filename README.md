@@ -108,7 +108,9 @@ be pointed at `https://<your-host>/mcp`. The first use opens an approval page in
 check the app's redirect address, choose the permissions (see tunnels / run commands / read and write
 files) and the tunnels it may use. Approved apps appear under **Preferences → Connected apps**, where
 revoking stops their access and closes their sessions immediately. Sessions opened by AI tools close on
-their own when idle; the limits are site settings.
+their own when idle; the limits are site settings. **AI activity** in the sidebar shows the open sessions (with
+a close button) and every tool call the agents made; owners of shared tunnels are notified when an agent
+connects. Details: [docs/mcp.md](./docs/mcp.md).
 
 For Claude Code: `claude mcp add --transport http telepy https://<your-host>/mcp`. Tools: `list_tunnels`,
 `tunnel_status`, `ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`, `sftp_list` /
