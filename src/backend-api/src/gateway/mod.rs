@@ -212,6 +212,11 @@ impl Gateway {
     }
 
     /// 這個 port 現在有裝置連著（有 forward）。
+    /// gateway 的 host 公鑰（OpenSSH 格式，給裝置釘在 known_hosts）。/ Host public keys for known_hosts pinning.
+    pub fn host_public_keys(&self) -> Vec<String> {
+        self.server_config.keys.iter().filter_map(|k| k.public_key().to_openssh().ok()).map(|s| s.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).collect()
+    }
+
     pub fn has_forward(&self, port: u16) -> bool {
         self.forwards.contains_key(&port)
     }

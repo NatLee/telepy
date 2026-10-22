@@ -52,6 +52,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "User Management", description = "Personal settings and user administration"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),
         (name = "Logs", description = "SSH gateway events"),
+        (name = "Device join", description = "One-command device join: the web mints a short-lived ticket; the device's install script registers itself, installs the reverse tunnel and waits for a verified login"),
         (name = "LAN", description = "Machines on the networks behind each device: discovery through the device's sshd, the jump-host list and the topology view"),
         (name = "Two-Factor", description = "Passkeys (WebAuthn) and authenticator-app (TOTP) sign-in, recovery codes and re-authentication"),
         (name = "AI", description = "SSH sessions opened by AI agents over MCP (/mcp) and their audit trail"),

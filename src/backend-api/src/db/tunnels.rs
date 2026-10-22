@@ -92,6 +92,12 @@ pub fn like_prefix(prefix: &str) -> String {
     format!("{escaped}%")
 }
 
+/// 名稱全站唯一（UNIQUE）。/ Names are unique across all users.
+pub async fn name_taken(db: &Db, name: &str) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_one(&db.read).await?;
+    Ok(n > 0)
+}
+
 pub async fn exists_name_for_user(db: &Db, user_id: i64, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE user_id = ? AND host_friendly_name = ?"))
         .bind(user_id)

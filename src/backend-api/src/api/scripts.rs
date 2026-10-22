@@ -31,7 +31,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// Django 用 `HTTP_HOST`（去掉 port）當 server_domain，沒有才退回 settings.SERVER_DOMAIN。
-fn server_domain(headers: &HeaderMap, state: &AppState) -> String {
+pub(crate) fn server_domain(headers: &HeaderMap, state: &AppState) -> String {
     headers
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())

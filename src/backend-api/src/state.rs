@@ -12,6 +12,7 @@ use crate::db::Db;
 use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
 use crate::hub::Hub;
+use crate::join::JoinTickets;
 use crate::lan::scan::LanScans;
 use crate::mfa::MfaStores;
 use crate::monitor::StatusState;
@@ -40,6 +41,8 @@ pub struct Inner {
     pub lan_scans: LanScans,
     /// 裝置金鑰清單的同步狀態（kick / 鎖 / 重試）。/ Device key list sync state.
     pub device_keys: DeviceKeys,
+    /// 一行指令加入裝置的票（記憶體）。/ One-command device join tickets (in memory).
+    pub join: JoinTickets,
 }
 
 #[derive(Clone)]
@@ -77,6 +80,7 @@ impl AppState {
             mfa: MfaStores::new(&config.secret_key),
             lan_scans: LanScans::default(),
             device_keys: DeviceKeys::default(),
+            join: JoinTickets::default(),
             config,
             db,
         }))
