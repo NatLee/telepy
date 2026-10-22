@@ -11,7 +11,7 @@
 //! 沒有 ssh / ssh-keygen 的環境 [`Lab::start`] 回 None，測試自行跳過。
 //! Reusable SSH topology for integration tests: gateway, real OpenSSH tunnels and laptops, scriptable device sshd.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -117,12 +117,25 @@ impl Machine {
     pub fn any_login_with(&self, key: &LabKey) -> bool {
         self.logins().iter().any(|l| l.key == key.name)
     }
+    /// 幾次以 `user` + `key` 登入（= 幾條 SSH 連線 / 握手）。
+    pub fn login_count(&self, user: &str, key: &LabKey) -> usize {
+        self.logins().iter().filter(|l| l.user == user && l.key == key.name).count()
+    }
+}
+
+/// 機器的行為選項。
+#[derive(Clone, Copy, Default)]
+pub struct MachineOpts {
+    /// 可以當 ProxyJump 的跳板（接受 direct-tcpip）。
+    pub allow_jump: bool,
+    /// 每條連線同時最多幾個 session channel（= sshd 的 MaxSessions）；None = 不限。
+    pub max_sessions: Option<usize>,
 }
 
 struct MachineState {
     name: String,
     accounts: HashMap<String, Vec<LabKey>>,
-    allow_jump: bool,
+    opts: MachineOpts,
     home: PathBuf,
     logins: Arc<Mutex<Vec<Login>>>,
 }
@@ -131,6 +144,8 @@ struct SshdHandler {
     m: Arc<MachineState>,
     user: Option<String>,
     channels: HashMap<ChannelId, Channel<Msg>>,
+    /// 這條連線上開著的 session channel。
+    sessions: HashSet<ChannelId>,
 }
 
 impl SshdHandler {
@@ -155,9 +170,20 @@ impl server::Handler for SshdHandler {
     }
 
     async fn channel_open_session(&mut self, channel: Channel<Msg>, reply: server::ChannelOpenHandle, _session: &mut Session) -> Result<(), Self::Error> {
+        if self.m.opts.max_sessions.is_some_and(|max| self.sessions.len() >= max) {
+            reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        }
         let id = channel.id();
         reply.accept().await;
+        self.sessions.insert(id);
         self.channels.insert(id, channel);
+        Ok(())
+    }
+
+    async fn channel_close(&mut self, channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
+        self.sessions.remove(&channel);
+        self.channels.remove(&channel);
         Ok(())
     }
 
@@ -248,7 +274,7 @@ impl server::Handler for SshdHandler {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if !self.m.allow_jump {
+        if !self.m.opts.allow_jump {
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         }
@@ -265,8 +291,8 @@ impl server::Handler for SshdHandler {
     }
 }
 
-/// 起一台 sshd：`accounts` = OS 帳號 → 信任的金鑰；`allow_jump` = 可以當 ProxyJump 的跳板。
-pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey])], allow_jump: bool) -> Machine {
+/// 起一台 sshd：`accounts` = OS 帳號 → 信任的金鑰。
+pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey])], opts: MachineOpts) -> Machine {
     let host_key = keygen(dir, &format!("{name}-hostkey"));
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::PublicKey);
@@ -283,7 +309,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
-        allow_jump,
+        opts,
         home: home.clone(),
         logins: logins.clone(),
     });
@@ -293,7 +319,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         while let Ok((stream, _)) = listener.accept().await {
             let (config, m) = (config.clone(), state.clone());
             tokio::spawn(async move {
-                let handler = SshdHandler { m, user: None, channels: HashMap::new() };
+                let handler = SshdHandler { m, user: None, channels: HashMap::new(), sessions: HashSet::new() };
                 if let Ok(session) = server::run_stream(config, stream, handler).await {
                     let _ = session.await;
                 }
@@ -320,6 +346,8 @@ pub struct Device {
     pub name: String,
     pub reverse_port: u16,
     pub target: Machine,
+    /// 裝置自己的隧道金鑰（`reconnect_device` 用它重連）。
+    pub key: LabKey,
 }
 
 /// 筆電的一跳：第一跳必須是 [`Hop::Tunnel`]（經 gateway），之後是 [`Hop::Direct`]（ProxyJump 穿過前一跳）。
@@ -365,7 +393,8 @@ pub struct Lab {
     /// 後端的服務金鑰（`ssh_identity` 與 OpenSSH 包裝程式都用它）。
     pub service: LabKey,
     pub admin_token: String,
-    tunnels: Mutex<Vec<Child>>,
+    /// tunnel id → 裝置那端的 `ssh -NR`。
+    tunnels: Mutex<HashMap<i64, Child>>,
     ws_base: tokio::sync::OnceCell<String>,
 }
 
@@ -411,7 +440,7 @@ impl Lab {
         telepy_server::gateway::start(app.state.gateway.clone(), listener).unwrap();
         db::keys::service_key_upsert(&app.state.db, "web-service", &service.public, "lab").await.unwrap();
 
-        let lab = Lab { app, dir, gw_port, service, admin_token: String::new(), tunnels: Mutex::new(Vec::new()), ws_base: tokio::sync::OnceCell::new() };
+        let lab = Lab { app, dir, gw_port, service, admin_token: String::new(), tunnels: Mutex::new(HashMap::new()), ws_base: tokio::sync::OnceCell::new() };
         // 第一位使用者是 superuser（站台管理員，不參與隧道）。
         let admin_token = lab.account("admin").await.1;
         Some(Lab { admin_token, ..lab })
@@ -437,7 +466,11 @@ impl Lab {
     }
 
     pub async fn machine(&self, name: &str, accounts: &[(&str, &[&LabKey])], allow_jump: bool) -> Machine {
-        start_machine(self.dir.path(), name, accounts, allow_jump).await
+        self.machine_with(name, accounts, MachineOpts { allow_jump, ..Default::default() }).await
+    }
+
+    pub async fn machine_with(&self, name: &str, accounts: &[(&str, &[&LabKey])], opts: MachineOpts) -> Machine {
+        start_machine(self.dir.path(), name, accounts, opts).await
     }
 
     /// 建隧道（owner 的）並讓「裝置」用真的 `ssh -NR` 連上 gateway，等到 forward 註冊好才回來。
@@ -450,11 +483,33 @@ impl Lab {
         )
         .await
         .unwrap();
+        let ssh = self.spawn_tunnel(&key, reverse_port, target.port, name).await;
+        self.tunnels.lock().unwrap().insert(t.id, ssh);
+        Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
+    }
+
+    /// 裝置斷線再連回來（同一把金鑰、同一個 port），等到新的 forward 註冊好。
+    pub async fn reconnect_device(&self, device: &Device) {
+        let old = self.tunnels.lock().unwrap().remove(&device.tunnel_id);
+        if let Some(mut c) = old {
+            let _ = c.kill().await;
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while self.app.state.status.listen_ports().map(|p| p.contains(&device.reverse_port)).unwrap_or(false) {
+            assert!(tokio::time::Instant::now() < deadline, "device {}: forward never released", device.name);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let ssh = self.spawn_tunnel(&device.key, device.reverse_port, device.target.port, &device.name).await;
+        self.tunnels.lock().unwrap().insert(device.tunnel_id, ssh);
+    }
+
+    /// 裝置那端的 `ssh -NR`（與裝置腳本相同的選項），回傳時 forward 已註冊。
+    async fn spawn_tunnel(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str) -> Child {
         let mut ssh = Command::new("ssh")
             .args(["-F", "/dev/null", "-N", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=5", "-o", "LogLevel=ERROR", "-i"])
             .arg(&key.path)
-            .args(["-p", &self.gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{}", target.port), "telepy@127.0.0.1"])
+            .args(["-p", &self.gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -472,8 +527,7 @@ impl Lab {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        self.tunnels.lock().unwrap().push(ssh);
-        Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone() }
+        ssh
     }
 
     /// 以 `as_user` 的身分在隧道上新增目標 OS 帳號；回傳 API 回應（成功時 `json["id"]` 是 username id）。
@@ -499,9 +553,9 @@ impl Lab {
 
     // -------------------------------------------------------------- paths to a device
 
-    /// 後端 russh（SFTP / 檔案管理的路）：一跳到 loopback，服務金鑰登入裝置，exec `cmd` 回 stdout。
+    /// 後端 russh 新連線（AI session 的路；行程內經 gateway 的通道）：服務金鑰登入裝置，exec `cmd` 回 stdout。
     pub async fn backend_exec(&self, device: &Device, os_user: &str, cmd: &str) -> anyhow::Result<String> {
-        let conn = telepy_server::ssh::device::connect(&self.app.state.config, os_user, device.reverse_port as i64).await?;
+        let conn = telepy_server::ssh::device::connect(&self.app.state, os_user, device.reverse_port as i64).await?;
         let mut ch = conn.device.channel_open_session().await?;
         ch.exec(true, cmd).await?;
         let (mut out, mut status) = (Vec::new(), None);
@@ -518,11 +572,9 @@ impl Lab {
         Ok(out)
     }
 
-    /// 後端 russh 開 `sftp` 子系統（檔案管理的路）。連線要留著，SFTP session 才活著。
-    pub async fn backend_sftp(&self, device: &Device, os_user: &str) -> anyhow::Result<(telepy_server::ssh::device::DeviceConn, russh_sftp::client::SftpSession)> {
-        let conn = telepy_server::ssh::device::connect(&self.app.state.config, os_user, device.reverse_port as i64).await?;
-        let sftp = conn.sftp().await?;
-        Ok((conn, sftp))
+    /// 後端連線池借一條 SFTP channel（檔案管理 / SFTP REST 的路）。
+    pub async fn backend_sftp(&self, device: &Device, os_user: &str) -> anyhow::Result<telepy_server::ssh::pool::PooledSftp> {
+        self.app.state.pool.sftp(&self.app.state, device.reverse_port as i64, os_user).await
     }
 
     /// 後端 OpenSSH（terminal / `ssh -D` 的路）：同一支包裝程式、一跳到 loopback。

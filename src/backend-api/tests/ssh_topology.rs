@@ -32,7 +32,7 @@ async fn one_device_many_users() {
     assert!(r.ok, "{r:?}");
     assert_eq!(r.stdout, "ubuntu@box");
     // SFTP 子系統（有 sftp-server 的環境）
-    if let Ok((_conn, sftp)) = lab.backend_sftp(&dev, "ubuntu").await {
+    if let Ok(sftp) = lab.backend_sftp(&dev, "ubuntu").await {
         assert_eq!(sftp.read("marker.txt").await.unwrap(), b"on the device");
     }
 
