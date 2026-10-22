@@ -1,6 +1,7 @@
 //! Telepy backend（Rust）：REST + WebSocket，取代 Django/DRF/Channels。
 //! 模組對應見 docs/rust-migration-plan.md §5。
 
+pub mod ai;
 pub mod api;
 pub mod app;
 pub mod auth;
@@ -9,6 +10,7 @@ pub mod db;
 pub mod error;
 pub mod gateway;
 pub mod hub;
+pub mod mcp;
 pub mod monitor;
 pub mod oauth;
 pub mod permissions;

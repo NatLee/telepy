@@ -173,9 +173,32 @@ const TABLES: &[(&str, &str)] = &[
             "revoked_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：MCP（AI）tool call 的稽核紀錄。/ Audit trail of MCP tool calls.
+    (
+        "telepy_ai_audit_event",
+        r#"CREATE TABLE "telepy_ai_audit_event" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "user_id" integer NOT NULL,
+            "grant_id" integer NULL,
+            "client_name" varchar(200) NOT NULL,
+            "tool" varchar(64) NOT NULL,
+            "tunnel_id" integer NULL,
+            "session_id" varchar(64) NULL,
+            "target_username" varchar(128) NULL,
+            "detail" text NULL,
+            "ok" bool NOT NULL,
+            "exit_code" integer NULL,
+            "duration_ms" integer NULL,
+            "bytes_out" integer NULL,
+            "error" text NULL
+        )"#,
+    ),
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
@@ -205,6 +228,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "remote_browser_kasm_create_timeout", "integer NOT NULL DEFAULT 30"),
     ("site_settings_sitesettings", "remote_browser_homepage", "varchar(512) NOT NULL DEFAULT 'https://www.google.com'"),
     ("site_settings_sitesettings", "remote_browser_language", "varchar(16) NOT NULL DEFAULT 'zh-TW'"),
+    ("site_settings_sitesettings", "ai_session_idle_timeout", "integer NOT NULL DEFAULT 600"),
+    ("site_settings_sitesettings", "ai_session_max_lifetime", "integer NOT NULL DEFAULT 7200"),
+    ("site_settings_sitesettings", "ai_max_sessions_per_user", "integer NOT NULL DEFAULT 3"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
 ];
@@ -253,8 +279,9 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
         "INSERT INTO site_settings_sitesettings (id, allow_registration, valid_register_domains, \
             remote_browser_session_idle_timeout, remote_browser_max_sessions, remote_browser_geometry, \
             remote_browser_ssh_timeout, remote_browser_ssh_attempts, remote_browser_kasm_create_timeout, \
-            remote_browser_homepage, remote_browser_language) \
-         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW' \
+            remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, ai_session_max_lifetime, \
+            ai_max_sessions_per_user) \
+         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3 \
          WHERE NOT EXISTS (SELECT 1 FROM site_settings_sitesettings WHERE id = 1)",
     )
     .execute(pool)

@@ -304,3 +304,12 @@ pub async fn transfer_usernames_to_owner(db: &Db, tunnel_id: i64, owner_id: i64,
     }
     Ok(())
 }
+
+/// 某隧道最近的 gateway 事件 (at, event, message)，新到舊。/ Latest gateway events of a tunnel, newest first.
+pub async fn recent_gateway_events(db: &Db, tunnel_id: i64, limit: i64) -> sqlx::Result<Vec<(String, String, String)>> {
+    sqlx::query_as("SELECT at, event, message FROM telepy_gateway_event WHERE tunnel_id = ? ORDER BY id DESC LIMIT ?")
+        .bind(tunnel_id)
+        .bind(limit)
+        .fetch_all(&db.read)
+        .await
+}

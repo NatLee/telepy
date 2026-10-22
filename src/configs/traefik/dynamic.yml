@@ -64,6 +64,12 @@ http:
       rule: "PathPrefix(`/.well-known/oauth-`)"
       priority: 100
 
+    # MCP（AI 工具）端點；不掛 compress（可能回 SSE 串流）。/ The MCP endpoint; no compression (may stream SSE).
+    backend-mcp:
+      <<: *backendRouterSettings
+      rule: "Path(`/mcp`) || PathPrefix(`/mcp/`)"
+      priority: 100
+
     backend-websocket:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/ws`)"

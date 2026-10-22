@@ -553,7 +553,9 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
 /// Shared revocation path (Connected apps and RFC 7009).
 pub async fn revoke_grant_by_id(state: &AppState, grant_id: i64) -> sqlx::Result<()> {
     db::oauth::grant_revoke(&state.db, grant_id).await?;
-    tracing::info!(grant_id, "OAuth grant revoked");
+    // 這個 app 開著的 SSH session 立即關掉（不等 reaper）。/ Close the app's live SSH sessions right away.
+    let closed = crate::ai::close_for_grant(state, grant_id, crate::ai::CloseReason::Revoked).await;
+    tracing::info!(grant_id, closed_sessions = closed, "OAuth grant revoked");
     Ok(())
 }
 

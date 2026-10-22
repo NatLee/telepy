@@ -41,6 +41,9 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/oauth/authorize", vec!["get", "post"]),
         ("/api/oauth/token", vec!["post"]),
         ("/api/oauth/grants/{id}", vec!["delete"]),
+        ("/api/ai/sessions", vec!["get"]),
+        ("/api/ai/sessions/{id}", vec!["delete"]),
+        ("/api/ai/activity", vec!["get"]),
     ] {
         let item = paths.get(path).unwrap_or_else(|| panic!("missing path {path}"));
         for verb in verbs {

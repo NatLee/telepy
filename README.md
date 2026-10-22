@@ -109,6 +109,11 @@ files) and the tunnels it may use. Approved apps appear under **Preferences → 
 revoking stops their access and closes their sessions immediately. Sessions opened by AI tools close on
 their own when idle; the limits are site settings.
 
+For Claude Code: `claude mcp add --transport http telepy https://<your-host>/mcp`. Tools: `list_tunnels`,
+`tunnel_status`, `ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`, `sftp_list` /
+`sftp_read` / `sftp_write`. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
+someone it is shared with opens an AI session on it. Details: [docs/mcp.md](docs/mcp.md).
+
 ### API docs
 
 The backend publishes its OpenAPI 3 document at `/api/openapi.json` and a Swagger UI at

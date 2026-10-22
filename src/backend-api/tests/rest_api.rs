@@ -368,8 +368,12 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 10);
+    assert_eq!(keys.len(), 13);
     assert_eq!(r.json["meta"]["remote_browser_homepage"]["label"], "Remote Browser Homepage");
+    assert_eq!(r.json["values"]["ai_session_idle_timeout"], 600);
+    assert_eq!(r.json["values"]["ai_session_max_lifetime"], 7200);
+    assert_eq!(r.json["values"]["ai_max_sessions_per_user"], 3);
+    assert_eq!(r.json["meta"]["ai_max_sessions_per_user"]["type"], "integer");
 
     // logs: file missing → 404 "Logs not found"
     let r = app.get("/api/log/ssh", Some(&admin)).await;

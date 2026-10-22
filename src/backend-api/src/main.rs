@@ -113,6 +113,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         }
     }
     tokio::spawn(telepy_server::oauth::run_cleanup(state.db.clone()));
+    tokio::spawn(telepy_server::ai::run_reaper(state.clone(), telepy_server::ai::REAP_INTERVAL));
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));
     }
