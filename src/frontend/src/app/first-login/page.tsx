@@ -1,19 +1,39 @@
 "use client";
 
 /**
- * 首次登入頁：建立管理員帳號（帳密或 Google），僅在 first_time_setup 時顯示。
- * First login page: create admin account (credentials or Google); shown only when first_time_setup.
+ * 首次設定頁：伺服器還沒有任何帳號時建立第一位管理員（帳密或 Google）。
+ * First-run page: create the first administrator (credentials or Google) while the server has no accounts.
  */
 import React from "react";
-import Script from "next/script";
-import { UserPlus, User, Lock, ShieldAlert } from "lucide-react";
 import Link from "next/link";
+import { ArrowRight, Check, Circle, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-import { useFirstLogin } from "@/hooks/useFirstLogin";
+import { Label } from "@/components/ui/label";
+import { AuthDivider, AuthHeading, AuthShell, AuthSpinner } from "@/components/auth/AuthShell";
+import { SetupSteps } from "@/components/auth/AuthPanels";
+import { GoogleSignIn } from "@/components/auth/GoogleSignIn";
+import { PasswordInput } from "@/components/auth/PasswordInput";
+import { MIN_PASSWORD_LENGTH, useFirstLogin } from "@/hooks/useFirstLogin";
 import { useI18n } from "@/lib/i18n";
-import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
+import type { TranslationKey } from "@/locales/en";
+import { cn } from "@/lib/utils";
+
+const STRENGTH: Record<1 | 2 | 3, { label: TranslationKey; bar: string; text: string }> = {
+    1: { label: "firstLogin.strengthWeak", bar: "bg-destructive", text: "text-destructive" },
+    2: { label: "firstLogin.strengthModerate", bar: "bg-warning", text: "text-warning" },
+    3: { label: "firstLogin.strengthStrong", bar: "bg-success", text: "text-success" },
+};
+
+/** 密碼規則的一列：未輸入是灰圈、通過是勾。/ One password rule: grey circle until typed, then a check. */
+function Rule({ ok, touched, children }: { ok: boolean; touched: boolean; children: React.ReactNode }) {
+    return (
+        <li className={cn("flex items-center gap-2 transition-colors", ok ? "text-success" : touched ? "text-foreground" : "text-muted-foreground")}>
+            {ok ? <Check size={14} strokeWidth={2.5} /> : <Circle size={14} className="text-muted-foreground/60" />}
+            {children}
+        </li>
+    );
+}
 
 export default function FirstLoginPage() {
     const { t } = useI18n();
@@ -24,158 +44,141 @@ export default function FirstLoginPage() {
         confirmPassword, setConfirmPassword,
         isSubmitting,
         strength,
+        rules,
+        passwordsMatch,
+        canSubmit,
         googleClientId
     } = state;
-
     const { handleSubmit } = actions;
+    const mismatch = confirmPassword.length > 0 && !passwordsMatch;
 
     return (
-        <>
-            <Script src="https://accounts.google.com/gsi/client" strategy="afterInteractive" />
-            {/* 首次設定也能先選語言。/ Language is switchable during first-time setup too. */}
-            <div className="fixed top-4 right-4 z-10 w-44">
-                <LanguageSwitcher />
-            </div>
-            <div className="min-h-screen flex items-center justify-center bg-background p-4">
-                <div className="w-full max-w-md bg-card text-card-foreground rounded-2xl shadow-2xl p-8 border border-border animate-in fade-in slide-in-from-bottom-8 duration-700">
-                    <div className="text-center mb-6">
-                        <div className="inline-flex items-center justify-center w-16 h-16 bg-primary rounded-xl mb-4 shadow-lg shadow-primary/30">
-                            <UserPlus size={32} className="text-primary-foreground" />
-                        </div>
-                        <h1 className="text-3xl font-bold tracking-tight">{t("firstLogin.title")}</h1>
-                        <p className="text-muted-foreground mt-2">{t("firstLogin.subtitle")}</p>
-                    </div>
+        <AuthShell aside={<SetupSteps />}>
+            <AuthHeading
+                badge={
+                    <span className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                        <Sparkles size={12} />
+                        {t("firstLogin.badge")}
+                    </span>
+                }
+                title={t("firstLogin.title")}
+                description={t("firstLogin.subtitle")}
+            />
 
-                    <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 mb-6 flex items-start">
-                        <ShieldAlert className="text-primary mt-0.5 mr-3 shrink-0" size={18} />
-                        <div className="text-sm text-foreground">
-                            <span className="font-semibold block mb-1">{t("firstLogin.setupLabel")}</span>
-                            {t("firstLogin.setupBody")}
-                        </div>
-                    </div>
-
-                    <form onSubmit={handleSubmit} className="space-y-4">
-                        <div className="space-y-2">
-                            <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("login.username")}</label>
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <User size={18} className="text-muted-foreground" />
-                                </div>
-                                <Input
-                                    type="text"
-                                    required
-                                    value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
-                                    className="pl-10"
-                                    placeholder={t("firstLogin.usernamePlaceholder")}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("login.password")}</label>
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <Lock size={18} className="text-muted-foreground" />
-                                </div>
-                                <Input
-                                    type="password"
-                                    required
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className="pl-10"
-                                    placeholder={t("firstLogin.passwordPlaceholder")}
-                                />
-                            </div>
-                            {password && (
-                                <div className="mt-2 flex items-center gap-2">
-                                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                                        <div className={`h-full ${strength.color} transition-all duration-300 w-full`} />
-                                    </div>
-                                    <span className="text-xs font-medium text-muted-foreground w-16">{strength.text}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-semibold leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("firstLogin.confirmPassword")}</label>
-                            <div className="relative">
-                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                    <Lock size={18} className="text-muted-foreground" />
-                                </div>
-                                <Input
-                                    type="password"
-                                    required
-                                    value={confirmPassword}
-                                    onChange={(e) => setConfirmPassword(e.target.value)}
-                                    className={`pl-10 ${confirmPassword && password !== confirmPassword ? "border-destructive focus-visible:ring-destructive" : ""}`}
-                                    placeholder={t("firstLogin.confirmPasswordPlaceholder")}
-                                />
-                            </div>
-                            {confirmPassword && password !== confirmPassword && (
-                                <div className="text-xs text-destructive mt-1 font-medium">{t("firstLogin.passwordsDoNotMatch")}</div>
-                            )}
-                            {confirmPassword && password === confirmPassword && (
-                                <div className="text-xs text-success mt-1 font-medium">{t("firstLogin.passwordsMatch")}</div>
-                            )}
-                        </div>
-
-                        <Button
-                            type="submit"
-                            disabled={isSubmitting || (password !== confirmPassword) || !username || !password}
-                            className="w-full font-bold mt-2"
-                            size="lg"
-                        >
-                            {isSubmitting ? (
-                                <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin"></div>
-                            ) : (
-                                t("firstLogin.createAccount")
-                            )}
-                        </Button>
-                    </form>
-
-                    {googleClientId && (
-                        <div className="mt-6">
-                            <div className="relative">
-                                <div className="absolute inset-0 flex items-center">
-                                    <div className="w-full border-t border-border" />
-                                </div>
-                                <div className="relative flex justify-center text-sm">
-                                    <span className="px-2 bg-card text-muted-foreground">{t("login.orContinueWith")}</span>
-                                </div>
-                            </div>
-                            <div className="mt-6 flex justify-center">
-                                <div
-                                    id="g_id_onload"
-                                    data-client_id={googleClientId}
-                                    data-context="signin"
-                                    data-ux_mode="popup"
-                                    data-callback="getTokenUsingGoogleCredential"
-                                    data-auto_prompt="false"
-                                ></div>
-                                <div
-                                    className="g_id_signin"
-                                    data-type="standard"
-                                    data-size="large"
-                                    data-theme="outline"
-                                    data-text="sign_in_with"
-                                    data-shape="rectangular"
-                                    data-logo_alignment="left"
-                                ></div>
-                            </div>
-                        </div>
-                    )}
-
-                    <div className="mt-6 text-center">
-                        <Link
-                            href="/login"
-                            className="text-sm font-medium text-muted-foreground hover:text-primary inline-flex items-center transition-colors"
-                        >
-                            {t("firstLogin.alreadyHaveAccount")}
-                        </Link>
-                    </div>
+            <form onSubmit={handleSubmit} className="space-y-5">
+                <div className="space-y-2">
+                    <Label htmlFor="setup-username">{t("login.username")}</Label>
+                    <Input
+                        id="setup-username"
+                        type="text"
+                        required
+                        autoFocus
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        className="h-11"
+                        placeholder={t("firstLogin.usernamePlaceholder")}
+                    />
                 </div>
-            </div>
-        </>
+
+                <div className="space-y-2">
+                    <Label htmlFor="setup-password">{t("login.password")}</Label>
+                    <PasswordInput
+                        id="setup-password"
+                        required
+                        autoComplete="new-password"
+                        aria-describedby="setup-password-rules"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="h-11"
+                        placeholder={t("firstLogin.passwordPlaceholder")}
+                    />
+                    {/* 三格強度條 + 標籤。/ Three-segment strength meter with its label. */}
+                    <div className="flex items-center gap-3 pt-1" aria-live="polite">
+                        <div className="grid flex-1 grid-cols-3 gap-1.5">
+                            {[1, 2, 3].map((level) => (
+                                <span
+                                    key={level}
+                                    className={cn(
+                                        "h-1 rounded-full transition-colors duration-300",
+                                        strength >= level ? STRENGTH[strength as 1 | 2 | 3].bar : "bg-muted"
+                                    )}
+                                />
+                            ))}
+                        </div>
+                        <span className={cn("w-16 text-right text-xs font-medium", strength ? STRENGTH[strength as 1 | 2 | 3].text : "text-muted-foreground")}>
+                            {strength ? t(STRENGTH[strength as 1 | 2 | 3].label) : ""}
+                        </span>
+                    </div>
+                    <ul id="setup-password-rules" className="space-y-1 text-xs">
+                        <Rule ok={rules.length} touched={password.length > 0}>
+                            {t("firstLogin.ruleLength", { n: MIN_PASSWORD_LENGTH })}
+                        </Rule>
+                        <Rule ok={rules.notUsername} touched={password.length > 0}>
+                            {t("firstLogin.ruleNotUsername")}
+                        </Rule>
+                    </ul>
+                </div>
+
+                <div className="space-y-2">
+                    <Label htmlFor="setup-confirm">{t("firstLogin.confirmPassword")}</Label>
+                    <PasswordInput
+                        id="setup-confirm"
+                        required
+                        autoComplete="new-password"
+                        aria-invalid={mismatch || undefined}
+                        aria-describedby="setup-confirm-hint"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        className="h-11"
+                        placeholder={t("firstLogin.confirmPasswordPlaceholder")}
+                    />
+                    <p id="setup-confirm-hint" className="min-h-4 text-xs font-medium" aria-live="polite">
+                        {mismatch && (
+                            <span className="inline-flex items-center gap-1.5 text-destructive">
+                                <X size={14} strokeWidth={2.5} />
+                                {t("firstLogin.passwordsDoNotMatch")}
+                            </span>
+                        )}
+                        {passwordsMatch && (
+                            <span className="inline-flex items-center gap-1.5 text-success">
+                                <Check size={14} strokeWidth={2.5} />
+                                {t("firstLogin.passwordsMatch")}
+                            </span>
+                        )}
+                    </p>
+                </div>
+
+                <Button type="submit" disabled={!canSubmit} className="h-11 w-full font-semibold" size="lg">
+                    {isSubmitting ? (
+                        <>
+                            <AuthSpinner />
+                            {t("firstLogin.creating")}
+                        </>
+                    ) : (
+                        <>
+                            {t("firstLogin.createAccount")}
+                            <ArrowRight size={16} />
+                        </>
+                    )}
+                </Button>
+            </form>
+
+            {googleClientId && (
+                <>
+                    <AuthDivider label={t("auth.or")} />
+                    <GoogleSignIn clientId={googleClientId} text="continue_with" />
+                    <p className="mt-3 text-center text-xs text-muted-foreground">{t("firstLogin.googleHint")}</p>
+                </>
+            )}
+
+            <p className="mt-8 text-center text-sm text-muted-foreground">
+                <Link href="/login" className="font-medium transition-colors hover:text-primary">
+                    {t("firstLogin.alreadyHaveAccount")}
+                </Link>
+            </p>
+        </AuthShell>
     );
 }
