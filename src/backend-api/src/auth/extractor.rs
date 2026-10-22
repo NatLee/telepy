@@ -52,35 +52,3 @@ impl FromRequestParts<AppState> for AuthUser {
         Ok(AuthUser(user_from_access_token(state, &token).await?))
     }
 }
-
-/// 內部服務（sshd 的 AuthorizedKeysCommand、ssh 容器的取樣 push）：Bearer INTERNAL_API_TOKEN。
-/// DRF 在無認證類別 + permission 失敗時回 403。/ Internal-service token check (403 like DRF).
-pub struct InternalService;
-
-impl FromRequestParts<AppState> for InternalService {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        let expected = &state.config.internal_api_token;
-        if expected.is_empty() {
-            tracing::error!("INTERNAL_API_TOKEN env var is not set — denying all internal API requests");
-            return Err(ApiError::detail(StatusCode::FORBIDDEN, "Authentication credentials were not provided."));
-        }
-        match bearer_token(parts) {
-            Some(t) if constant_eq(&t, expected) => Ok(InternalService),
-            Some(_) => {
-                tracing::warn!("Internal API request with invalid token");
-                Err(ApiError::detail(StatusCode::FORBIDDEN, "You do not have permission to perform this action."))
-            }
-            None => {
-                tracing::warn!("Internal API request missing Bearer token");
-                Err(ApiError::detail(StatusCode::FORBIDDEN, "Authentication credentials were not provided."))
-            }
-        }
-    }
-}
-
-fn constant_eq(a: &str, b: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    a.len() == b.len() && a.as_bytes().ct_eq(b.as_bytes()).into()
-}

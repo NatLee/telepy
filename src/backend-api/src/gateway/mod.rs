@@ -1,7 +1,8 @@
 //! 內建 SSH gateway：後端自己終結裝置的反向隧道（取代 OpenSSH 容器 + AuthorizedKeysCommand + ss/探測腳本）。
 //!
 //! 只實作裝置端 `ssh -NR '*:<port>:localhost:22' telepy@server` 需要的最小子集：
-//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰 / 服務金鑰，規則同 InternalKeysView）
+//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰）。後端自己走 loopback、不經 gateway 認證，所以**不接受服務金鑰**：
+//!   那把金鑰在每台裝置的 authorized_keys 裡，若也能登入 gateway，外洩一把就能從外網進所有裝置。
 //! - `tcpip-forward`：記住 port → 連線，並在 **127.0.0.1:<port>** 綁一個 loopback listener，把進來的 TCP
 //!   橋到 `forwarded-tcpip` channel（= sshd 在 GatewayPorts no 下的行為），所以 OpenSSH 客戶端（terminal、
 //!   `ssh -D`）與 russh（SFTP）都能用 `127.0.0.1:<port>` 單跳到裝置。
@@ -33,12 +34,11 @@ use crate::config::Config;
 use crate::db::{self, tunnels::like_prefix, Db};
 use crate::monitor::StatusState;
 
-/// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）、服務金鑰（後端自己）。
+/// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
 #[derive(Debug, Clone)]
 pub enum Identity {
     Tunnel { tunnel_id: i64, user_id: i64, reverse_port: i64 },
     User { user_id: i64 },
-    Service { name: String },
 }
 
 pub struct Forward {
@@ -202,7 +202,7 @@ impl Gateway {
         self.status.set_listen_ports(self.forwards.iter().map(|e| *e.key()).collect());
     }
 
-    /// 金鑰 → 身分（InternalKeysView 的規則）。
+    /// 金鑰 → 身分（InternalKeysView 的規則，但不含服務金鑰）。
     async fn identify(&self, bare: &str) -> anyhow::Result<Option<Identity>> {
         let like = like_prefix(bare);
         if let Some(t) = db::tunnels::by_key_prefix(&self.db, &like).await? {
@@ -217,18 +217,15 @@ impl Gateway {
             tracing::info!(user_id = uid, "gateway: user key owner has no tunnels and no shares; rejected");
             return Ok(None);
         }
-        if db::keys::service_key_matches_prefix(&self.db, &like).await? {
-            return Ok(Some(Identity::Service { name: "web-service".into() }));
-        }
         Ok(None)
     }
 
-    /// 誰可以要求在 port 上做 reverse forward。
+    /// 誰可以要求在 port 上做 reverse forward：隧道金鑰只能開自己的 port；使用者金鑰只能開自己擁有的隧道。
+    /// 被分享的人不行，否則裝置離線時可以佔住該 port 冒充裝置（後端連裝置不驗 host key）。
     async fn may_forward(&self, id: &Identity, port: u16) -> anyhow::Result<bool> {
         Ok(match id {
             Identity::Tunnel { reverse_port, .. } => *reverse_port == port as i64,
-            Identity::Service { .. } => !db::tunnels::by_port(&self.db, port as i64).await?.is_empty(),
-            Identity::User { user_id } => self.user_can_reach(*user_id, port).await?,
+            Identity::User { user_id } => db::tunnels::by_port(&self.db, port as i64).await?.iter().any(|t| t.user_id == *user_id),
         })
     }
 
@@ -247,7 +244,6 @@ impl Gateway {
             return Ok(false);
         }
         Ok(match id {
-            Identity::Service { .. } => true,
             Identity::User { user_id } => self.user_can_reach(*user_id, port).await?,
             Identity::Tunnel { .. } => false,
         })
@@ -516,7 +512,6 @@ impl Drop for GatewayHandler {
         let who = match identity {
             Some(Identity::Tunnel { tunnel_id, .. }) => format!(" (tunnel {tunnel_id})"),
             Some(Identity::User { user_id }) => format!(" (user {user_id})"),
-            Some(Identity::Service { name }) => format!(" (service {name})"),
             None => String::new(),
         };
         let authed = self.authed.load(Ordering::SeqCst);

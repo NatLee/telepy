@@ -12,7 +12,6 @@
 use std::collections::HashMap;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 use sqlx::FromRow;
@@ -39,13 +38,6 @@ pub struct GatewayEvent {
     pub port: Option<i64>,
     pub tunnel_id: Option<i64>,
     pub message: String,
-}
-
-/// Python：`'\n'.join(f.readlines()[-500:])`（每行自帶換行，所以是雙換行分隔）。
-pub fn tail_joined(content: &str, n: usize) -> String {
-    let lines: Vec<&str> = content.split_inclusive('\n').collect();
-    let start = lines.len().saturating_sub(n);
-    lines[start..].join("\n")
 }
 
 /// 使用者看得到哪些隧道的事件。/ Which tunnels' events a user may see.
@@ -100,20 +92,13 @@ fn render_line(e: &GatewayEvent, tz: i32) -> String {
     format!("{ts}  {}", e.message)
 }
 
-#[utoipa::path(get, path = "/api/log/ssh", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Last 500 gateway events visible to the user (admins: all; others: their own and shared tunnels) rendered as sshd-style lines, as one JSON string", body = String), (status = 404, description = "External sshd mode only: log file missing", body = String)))]
+#[utoipa::path(get, path = "/api/log/ssh", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Last 500 gateway events visible to the user (admins: all; others: their own and shared tunnels) rendered as sshd-style lines, as one JSON string", body = String)))]
 async fn ssh_logs(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
-    if state.config.gateway_enabled {
-        let scope = scope_for(&state, &user).await?;
-        let events = recent_events(&state, 500, None, &scope).await?;
-        let tz = state.config.tz_offset_minutes;
-        let text = events.iter().map(|e| render_line(e, tz)).collect::<Vec<_>>().join("\n");
-        return Ok(Json(Value::String(text)));
-    }
-    let path = state.config.ssh_logs_path.clone();
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => Ok(Json(Value::String(tail_joined(&content, 500)))),
-        Err(_) => Err(ApiError::new(StatusCode::NOT_FOUND, Value::String("Logs not found".into()))),
-    }
+    let scope = scope_for(&state, &user).await?;
+    let events = recent_events(&state, 500, None, &scope).await?;
+    let tz = state.config.tz_offset_minutes;
+    let text = events.iter().map(|e| render_line(e, tz)).collect::<Vec<_>>().join("\n");
+    Ok(Json(Value::String(text)))
 }
 
 /// `?limit=` (default 200, max 5000) `&tunnel_id=`
@@ -138,16 +123,4 @@ async fn ssh_events(State(state): State<AppState>, AuthUser(user): AuthUser, Que
             }))
             .collect(),
     )))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tail_matches_python_join() {
-        assert_eq!(tail_joined("a\nb\nc\n", 2), "b\n\nc\n");
-        assert_eq!(tail_joined("a\nb", 5), "a\n\nb");
-        assert_eq!(tail_joined("", 5), "");
-    }
 }

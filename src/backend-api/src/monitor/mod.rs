@@ -1,6 +1,6 @@
 //! 隧道狀態來源：哪些 reverse port 正在被監聽、每個 port 的 RTT。
-//! Django 版從 Redis 讀 ssh 容器的取樣；這裡由內建 SSH gateway（M5）直接餵入，或在過渡期由
-//! push 端點餵入。`None` = 本輪取樣不可用（與舊版語意相同：不可誤判為全部離線）。
+//! Django 版從 Redis 讀 ssh 容器的取樣；這裡由內建 SSH gateway 直接餵入。
+//! `None` = 狀態不可用（gateway 沒啟動；與舊版語意相同：不可誤判為全部離線）。
 //! Tunnel status source (listening ports + per-port RTT), fed by the in-process gateway.
 
 pub mod ports;
@@ -26,12 +26,6 @@ pub struct StatusState {
     inner: RwLock<Inner>,
     /// 取樣超過這個時間沒更新就視為不可用（None = 事件驅動來源，永不過期）。
     max_age: Option<Duration>,
-}
-
-impl Default for StatusState {
-    fn default() -> Self {
-        Self::new(Some(Duration::from_secs(15)))
-    }
 }
 
 impl StatusState {
@@ -111,12 +105,6 @@ pub fn find_free_ports(used: &HashSet<i64>, count: usize) -> Result<Vec<i64>, St
     Ok(free)
 }
 
-/// `ss -tlnp` 原文 → LISTEN 埠集合（127.0.0.1 / 0.0.0.0）。保留給 push 來源與測試用。
-pub fn parse_ss_listen(output: &str) -> HashSet<u16> {
-    let re = regex::Regex::new(r"(?:127\.0\.0\.1|0\.0\.0\.0):(\d+)").unwrap();
-    re.captures_iter(output).filter_map(|c| c[1].parse::<u16>().ok()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,14 +113,6 @@ mod tests {
     fn free_ports_skip_used() {
         let used: HashSet<i64> = [1024, 1025].into_iter().collect();
         assert_eq!(find_free_ports(&used, 2).unwrap(), vec![1026, 1027]);
-    }
-
-    #[test]
-    fn ss_parse() {
-        let out = "State Recv-Q Send-Q Local Address:Port Peer Address:Port\nLISTEN 0 128 127.0.0.1:12345 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 127.0.0.11:35123 0.0.0.0:*";
-        let ports = parse_ss_listen(out);
-        assert!(ports.contains(&12345) && ports.contains(&2222));
-        assert!(!ports.contains(&35123));
     }
 
     #[test]

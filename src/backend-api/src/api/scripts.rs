@@ -79,11 +79,16 @@ async fn config(
         out.push_str(CLIENT_STEM);
     }
     let multi = selected.len() > 1;
+    // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
+    // Structured fields for the frontend command sheet (commands must use the exact Host aliases above).
+    let mut hosts: Vec<Value> = Vec::with_capacity(selected.len());
     for u in selected {
         let alias = if multi { format!("{}-{}", t.host_friendly_name, u.username) } else { t.host_friendly_name.clone() };
         out.push_str(&scripts::render_client_config(&alias, &u.username, t.reverse_port));
+        hosts.push(json!({ "alias": scripts::sanitize_host_alias(&alias), "username": u.username, "username_id": u.id }));
     }
-    Ok(Json(json!({ "config": out, "usernames": usernames_list })))
+    let server = json!({ "alias": "telepy-ssh-server", "host": domain, "port": state.config.reverse_server_ssh_port });
+    Ok(Json(json!({ "config": out, "usernames": usernames_list, "server": server, "hosts": hosts, "reverse_port": t.reverse_port })))
 }
 
 /// 六種腳本的共用渲染：autossh-service 需要目標使用者名稱（username_id 可指定）。

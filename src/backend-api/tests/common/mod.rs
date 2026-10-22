@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod lab;
+
 use axum::body::Body;
 use axum::http::{header, Method, Request, StatusCode};
 use axum::Router;

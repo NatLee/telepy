@@ -1,15 +1,16 @@
 "use client";
 
 /**
- * 桌面版側邊欄:可收合(w-64 ⇄ w-16),狀態存 localStorage 跨頁記住。
+ * 桌面版側邊欄:可收合(w-64 ⇄ w-[4.5rem]),狀態存 localStorage 跨頁記住。
  * 收合時導覽只顯示 icon(hover 有 title 提示),語言切換器與登出也縮成 icon。
- * Desktop sidebar: collapsible (w-64 ⇄ w-16); the state persists in localStorage.
+ * Desktop sidebar: collapsible (w-64 ⇄ w-[4.5rem]); the state persists in localStorage.
  * When collapsed, nav items render icon-only with title tooltips.
  */
 import React, { useSyncExternalStore } from "react";
 import Link from "next/link";
-import { Terminal, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { NavContent } from "./NavContent";
+import { BrandMark } from "./BrandMark";
 import { useI18n } from "@/lib/i18n";
 
 const COLLAPSED_STORAGE_KEY = "telepy.sidebarCollapsed";
@@ -39,18 +40,11 @@ export function Sidebar() {
 
     return (
         <aside
-            className={`hidden md:flex flex-col ${collapsed ? "w-16" : "w-64"} border-r border-border bg-sidebar shrink-0 h-screen sticky top-0 transition-[width] duration-200`}
+            className={`hidden md:flex flex-col ${collapsed ? "w-[4.5rem]" : "w-64"} relative z-20 border-r border-sidebar-border bg-sidebar/85 backdrop-blur-xl shrink-0 h-screen sticky top-0 transition-[width] duration-200`}
         >
-            <div className={`h-16 flex items-center border-b border-border ${collapsed ? "justify-center px-2" : "justify-between px-4"}`}>
-                <Link href="/tunnels" className="flex items-center gap-2 min-w-0">
-                    <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
-                        <Terminal size={18} className="text-primary-foreground" />
-                    </div>
-                    {!collapsed && (
-                        <span className="text-xl font-bold text-foreground tracking-wide truncate">
-                            Telepy
-                        </span>
-                    )}
+            <div className={`h-16 flex items-center border-b border-sidebar-border ${collapsed ? "justify-center px-2" : "justify-between pl-4 pr-3"}`}>
+                <Link href="/tunnels" className="min-w-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <BrandMark collapsed={collapsed} />
                 </Link>
                 {!collapsed && (
                     <button
@@ -58,7 +52,7 @@ export function Sidebar() {
                         onClick={toggle}
                         title={t("nav.collapseSidebar")}
                         aria-label={t("nav.collapseSidebar")}
-                        className="p-1.5 rounded-md text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors shrink-0"
+                        className="p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors shrink-0"
                     >
                         <ChevronsLeft size={16} />
                     </button>
@@ -71,7 +65,7 @@ export function Sidebar() {
                     onClick={toggle}
                     title={t("nav.expandSidebar")}
                     aria-label={t("nav.expandSidebar")}
-                    className="mx-2 mt-2 p-1.5 rounded-md text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors flex justify-center"
+                    className="mx-3 mt-3 p-1.5 rounded-md text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors flex justify-center"
                 >
                     <ChevronsRight size={16} />
                 </button>

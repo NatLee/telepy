@@ -59,12 +59,7 @@ pub struct Config {
     pub ssh_binary: String,
     /// russh 原生連線用的私鑰（預設 ~/.ssh/id_rsa，與 ssh 客戶端同一把）。
     pub ssh_identity: PathBuf,
-    /// 雙跳模式的第一跳（OpenSSH 容器）：telepy@ssh:2222。
-    pub ssh_gateway_host: String,
-    pub ssh_gateway_port: u16,
-    pub ssh_gateway_user: String,
-    /// terminal / file manager 連線的目標主機：OpenSSH 容器模式是 `reverse`（~/.ssh/config 的雙跳
-    /// ProxyCommand），內建 gateway 模式是 `127.0.0.1`（gateway 的 loopback listener，單跳）。
+    /// terminal / file manager / `ssh -D` 連線的目標主機：內建 gateway 的 loopback listener（單跳）。
     pub ssh_target_host: String,
     /// Swagger UI + /api/openapi.json，登入後可見（OPENAPI_ENABLED=false 可關）。/ Login-gated API docs.
     pub openapi_enabled: bool,
@@ -121,7 +116,7 @@ impl Config {
             .or_else(|| ["/config/ssh_host_keys"].iter().find(|p| Path::new(p).is_dir()).map(PathBuf::from));
         let ssh_logs_path = env("SSH_LOGS_PATH").map(PathBuf::from);
         let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
-        let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| if gateway_enabled { log_root.join("ssh-gateway.log") } else { PathBuf::from("/ssh-logs/openssh/current") });
+        let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -160,10 +155,7 @@ impl Config {
             ssh_home: PathBuf::from(format!("{home}/.ssh")),
             ssh_binary: env("SSH_BINARY").unwrap_or_else(|| "ssh".to_string()),
             ssh_identity: env("SSH_IDENTITY").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("{home}/.ssh/id_rsa"))),
-            ssh_gateway_host: env("SSH_GATEWAY_HOST").unwrap_or_else(|| "ssh".to_string()),
-            ssh_gateway_port: env("SSH_GATEWAY_PORT").and_then(|v| v.parse().ok()).unwrap_or(2222),
-            ssh_gateway_user: env("SSH_GATEWAY_USER").unwrap_or_else(|| "telepy".to_string()),
-            ssh_target_host: env("SSH_TARGET_HOST").unwrap_or_else(|| if gateway_enabled { "127.0.0.1".to_string() } else { "reverse".to_string() }),
+            ssh_target_host: "127.0.0.1".to_string(),
             openapi_enabled: env_bool("OPENAPI_ENABLED", true),
             gateway_enabled,
             gateway_bind: env("GATEWAY_BIND").unwrap_or_else(|| "0.0.0.0:2222".to_string()),

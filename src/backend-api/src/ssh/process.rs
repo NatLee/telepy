@@ -187,15 +187,15 @@ mod tests {
 
     #[test]
     fn terminal_argv_matches_django() {
-        let t = SshTarget { user: "ubuntu".into(), host: "reverse".into(), port: 12345 };
+        let t = SshTarget { user: "ubuntu".into(), host: "127.0.0.1".into(), port: 12345 };
         let args = terminal_args(&t);
         assert_eq!(args.last().unwrap(), "12345");
         assert!(args.contains(&"ControlPath=/tmp/ssh_term_%r@%h:%p".to_string()));
-        assert!(args.contains(&"ubuntu@reverse".to_string()));
+        assert!(args.contains(&"ubuntu@127.0.0.1".to_string()));
         assert!(!args.iter().any(|a| a.contains(' ')), "no shell quoting needed: {args:?}");
         let fm = filemanager_exec_args(&t, "ls -la ~/");
         assert_eq!(fm.last().unwrap(), "ls -la ~/");
-        assert!(filemanager_master_args(&t).ends_with(&["ubuntu@reverse".to_string(), "cat".to_string()]));
+        assert!(filemanager_master_args(&t).ends_with(&["ubuntu@127.0.0.1".to_string(), "cat".to_string()]));
     }
 
     #[tokio::test]

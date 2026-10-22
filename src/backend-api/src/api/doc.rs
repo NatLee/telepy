@@ -52,8 +52,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "Site Settings", description = "Site-wide settings (admins)"),
         (name = "Logs", description = "SSH gateway events"),
         (name = "AI", description = "SSH sessions opened by AI agents over MCP (/mcp) and their audit trail"),
-        (name = "OAuth", description = "OAuth 2.1 authorization server for MCP clients: discovery, dynamic client registration, consent, tokens, connected apps"),
-        (name = "Internal", description = "Service-to-service endpoints (Bearer INTERNAL_API_TOKEN)")
+        (name = "OAuth", description = "OAuth 2.1 authorization server for MCP clients: discovery, dynamic client registration, consent, tokens, connected apps")
     )
 )]
 pub struct ApiDoc;
@@ -66,10 +65,6 @@ impl Modify for SecurityAddon {
         components.add_security_scheme(
             "bearer",
             SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).bearer_format("JWT").build()),
-        );
-        components.add_security_scheme(
-            "internal",
-            SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).bearer_format("INTERNAL_API_TOKEN").build()),
         );
     }
 }
