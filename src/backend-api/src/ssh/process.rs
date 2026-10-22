@@ -52,6 +52,44 @@ pub fn terminal_args(t: &SshTarget) -> Vec<String> {
     .collect()
 }
 
+/// 單引號跳脫一個 shell 參數（`ProxyCommand` 會交給 `/bin/sh -c`）。/ Single-quote one shell word.
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 區網機器的登入帳號：英數與 `._-`，1–64 字、不以 `-` 開頭。/ A safe login name for a LAN host.
+pub fn valid_login(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// 經裝置跳到它區網裡的機器（#20）：第一跳是平常的裝置連線（服務金鑰、`-W` 由裝置 sshd 轉送），
+/// 最後一跳允許密碼 / 鍵盤互動登入，提示直接出現在網頁終端機裡。
+/// Through the device to a machine on its LAN: the device hop is the usual key login and forwards with
+/// `-W`; the final hop also allows password / keyboard-interactive prompts, shown in the web terminal.
+pub fn lan_terminal_args(ssh_binary: &str, device: &SshTarget, lan_user: &str, lan_host: &str, lan_port: i64) -> Vec<String> {
+    let proxy = format!(
+        "{} -o GSSAPIAuthentication=no -o BatchMode=yes -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p -p {} {}",
+        shell_quote(ssh_binary),
+        device.port,
+        shell_quote(&device.userhost())
+    );
+    [
+        "-o", "GSSAPIAuthentication=no",
+        "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "Compression=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-o",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .chain([format!("ProxyCommand={proxy}"), "-l".into(), lan_user.to_string(), "-p".into(), lan_port.to_string(), lan_host.to_string()])
+    .collect()
+}
+
 const FM_COMMON: [&str; 6] = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"];
 
 /// FileManagerConsumer 的常駐連線：`ssh … cat`（ControlMaster=yes）。
@@ -183,6 +221,19 @@ pub async fn terminate_child(child: &mut Child, grace: Duration) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn lan_hop_arguments_are_quoted() {
+        let device = SshTarget { user: "o'brien".into(), host: "127.0.0.1".into(), port: 40001 };
+        let args = lan_terminal_args("/usr/bin/ssh", &device, "admin", "192.168.1.20", 2222);
+        let proxy = args.iter().find(|a| a.starts_with("ProxyCommand=")).unwrap();
+        assert!(proxy.contains("-W %h:%p -p 40001 'o'\\''brien@127.0.0.1'"), "{proxy}");
+        assert!(proxy.starts_with("ProxyCommand='/usr/bin/ssh' "), "{proxy}");
+        assert_eq!(&args[args.len() - 5..], &["-l", "admin", "-p", "2222", "192.168.1.20"]);
+        assert!(args.contains(&"PreferredAuthentications=publickey,keyboard-interactive,password".to_string()));
+        assert!(valid_login("admin") && valid_login("svc.backup_01"));
+        assert!(!valid_login("-oProxyCommand=x") && !valid_login("a b") && !valid_login("a;b") && !valid_login(""));
+    }
     use super::*;
 
     #[test]

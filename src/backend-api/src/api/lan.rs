@@ -150,6 +150,17 @@ fn optional_text(body: &Value, key: &str, max: usize) -> Result<Option<Option<St
     }
 }
 
+/// 登入帳號：網頁終端機會把它交給 ssh，只收安全字元。/ The login name goes to ssh: safe characters only.
+fn login_name(body: &Value) -> Result<Option<Option<String>>, ApiError> {
+    let v = optional_text(body, "username", 64)?;
+    if let Some(Some(u)) = &v {
+        if !crate::ssh::process::valid_login(u) {
+            return Err(ApiError::field("username", "Use letters, digits, '.', '_' or '-' (not starting with '-')."));
+        }
+    }
+    Ok(v)
+}
+
 fn ssh_port(body: &Value) -> Result<Option<i64>, ApiError> {
     match body.get("ssh_port") {
         None | Some(Value::Null) => Ok(None),
@@ -173,7 +184,7 @@ async fn add_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path(
     let t = editable(&state, user.id, id).await?;
     let address = valid_address(&json_str(&body, "address").unwrap_or_default())?;
     let label = optional_text(&body, "label", 100)?.flatten();
-    let username = optional_text(&body, "username", 128)?.flatten();
+    let username = login_name(&body)?.flatten();
     let port = ssh_port(&body)?.unwrap_or(22);
     let h = db::lan::create_manual(&state.db, t.id, &address, label.as_deref(), username.as_deref(), port).await.map_err(|e| {
         if is_unique_violation(&e) {
@@ -195,7 +206,7 @@ async fn update_host(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     let t = editable(&state, user.id, id).await?;
     let h = own_host(&state, t.id, host_id).await?;
     let label = optional_text(&body, "label", 100)?;
-    let username = optional_text(&body, "username", 128)?;
+    let username = login_name(&body)?;
     let port = ssh_port(&body)?;
     db::lan::update(
         &state.db,

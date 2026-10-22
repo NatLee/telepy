@@ -9,15 +9,20 @@ export type TerminalMainView = "terminal" | "browser" | "files";
 /**
  * Build the URL for the terminal page.
  * @param tunnel - Object with tunnel id and reverse_port.
- * @param options - Optional mainView to open a specific tab.
+ * @param options - Optional mainView to open a specific tab; `lanHost` (+ `lanUser`) opens the
+ *   shell on a machine of the device's LAN, reached through the device.
  */
 export function getTerminalPageUrl(
     tunnel: { id: number; reverse_port: number },
-    options?: { mainView?: TerminalMainView }
+    options?: { mainView?: TerminalMainView; lanHost?: number; lanUser?: string }
 ): string {
-    const base = `/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`;
+    let url = `/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`;
     if (options?.mainView && options.mainView !== "terminal") {
-        return `${base}&mainView=${options.mainView}`;
+        url += `&mainView=${options.mainView}`;
     }
-    return base;
+    if (options?.lanHost !== undefined) {
+        url += `&lanHost=${options.lanHost}`;
+        if (options.lanUser) url += `&lanUser=${encodeURIComponent(options.lanUser)}`;
+    }
+    return url;
 }
