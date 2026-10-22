@@ -209,7 +209,7 @@ hardcode display text in components, hooks, or lib error builders.
 4. Backend-provided text (server error `detail` fields, log lines) is NOT frontend-translated —
    it renders verbatim. Exceptions with a mapping layer: site-setting labels/descriptions use
    the `siteSettings.<field>.*` keys (fallback = backend meta), and remote-browser start
-   errors with a machine-readable `code` (e.g. `device_offline`) map to `browser.*` keys.
+   errors with a machine-readable `code` (e.g. `device_offline`) map to `browser.*` keys, Google-login errors (`google_*`, `registration_closed`, `account_disabled`; `lib/loginErrors.ts`) map to `login.*` keys, and two-factor errors (`lib/mfa.ts`) map to `security.*` keys.
 5. Locale-aware formatting: use `useI18n().locale` for `Date.toLocaleString()` /
    `Intl.DateTimeFormat` instead of hardcoding `'en-US'`.
 6. `metadata` in `app/layout.tsx` deliberately stays English (localizing it would force dynamic

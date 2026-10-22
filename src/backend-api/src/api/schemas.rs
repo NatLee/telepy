@@ -900,3 +900,16 @@ pub struct RecoveryCodes {
     #[schema(example = json!(["abcd-efgh-jkmn"]))]
     pub recovery_codes: Option<Vec<String>>,
 }
+
+#[derive(ToSchema)]
+#[schema(description = "Google sign-in error; `code` is one of google_invalid, google_expired, google_no_email, google_domain_not_allowed (with `domain`), registration_closed, google_account_conflict (with `username`), account_disabled, google_not_configured, google_client_mismatch, google_unreachable")]
+pub struct GoogleLoginError {
+    #[schema(example = "error")]
+    pub status: String,
+    /// English fallback text
+    pub detail: String,
+    #[schema(example = "google_domain_not_allowed")]
+    pub code: String,
+    pub domain: Option<String>,
+    pub username: Option<String>,
+}

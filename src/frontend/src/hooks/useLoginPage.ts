@@ -11,6 +11,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { mfaErrorMessage, type MfaMethod } from "@/lib/mfa";
+import { loginErrorMessage } from "@/lib/loginErrors";
 import { conditionalMediationAvailable, getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
 
 /**
@@ -82,7 +83,7 @@ export function useLoginPage() {
                 setMfaMethod(methods.includes("totp") ? "totp" : "recovery_code");
                 setMfaCode("");
             } else {
-                showError(responseError(res, data, t(failKey)));
+                showError(loginErrorMessage(t, data) ?? responseError(res, data, t(failKey)));
             }
         },
         [finish, showError, stopAutofill, t]
