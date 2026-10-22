@@ -22,10 +22,13 @@ export default function TerminalPage() {
     const searchParams = useSearchParams();
     const serverId = searchParams.get("serverId");
     const port = searchParams.get("port");
+    // 區網主機（經裝置跳過去）。/ Optional LAN host reached through the device.
+    const lanHostId = searchParams.get("lanHost");
+    const lanUser = searchParams.get("lanUser");
     const router = useRouter();
     const { accessToken } = useAuth();
 
-    const { refs, state, actions } = useTerminalPage(serverId, accessToken);
+    const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanHostId ? { hostId: lanHostId, username: lanUser } : null);
 
     // 「伺服器→裝置」的 kernel RTT：訂閱該隧道的 tunnel_connection socket（首屏帶入 + 每 ~5s 更新）。
     const { status: connStatus } = useTunnelConnectionWebSocket(serverId);
@@ -48,6 +51,7 @@ export default function TerminalPage() {
         loadingServiceKeys,
         username, setUsername,
         availableUsernames,
+        lanHost,
     } = state;
     const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab } = actions;
 
@@ -119,6 +123,7 @@ export default function TerminalPage() {
                     setShowFiles={setShowFiles}
                     isBrowserActive={isBrowserActive}
                     onLoadServiceKeys={fetchServiceKeys}
+                    lan={lanHostId ? { host: lanHost, login: lanUser || lanHost?.username || null } : null}
                 />
 
                 <TerminalContent

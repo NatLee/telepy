@@ -40,6 +40,22 @@ export interface TerminalUsername {
     created_by_id?: number;
 }
 
+/** 經裝置跳到區網主機（#20）。/ A LAN host reached through the device. */
+export interface TerminalLanTarget {
+    hostId: string;
+    /** 覆寫主機記錄的預設帳號。/ Overrides the host's default login. */
+    username?: string | null;
+}
+
+/** 區網主機資訊（顯示用）。/ LAN host details for display. */
+export interface TerminalLanHost {
+    id: number;
+    address: string;
+    label: string | null;
+    username: string | null;
+    ssh_port: number;
+}
+
 export type ShellTabStatus = "connecting" | "connected" | "closed";
 
 export interface ShellTab {
@@ -125,8 +141,10 @@ const TERMINAL_THEME = {
     brightWhite: "#ffffff",
 };
 
-export function useTerminalPage(serverId: string | null, accessToken: string | null) {
+export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null) {
     const { t } = useI18n();
+    const lanHostId = lan?.hostId ?? null;
+    const lanUsername = lan?.username ?? null;
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
     const xtermRef = useRef<any>(null);
@@ -274,6 +292,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 token: typeof window !== "undefined" ? localStorage.getItem("accessToken") : null,
                 server_id: serverId,
                 username: s.username,
+                // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
+                ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
             }));
             updateTab(s.id, { status: "connected" });
             // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋，首個 PTY 輸出會覆蓋此行。
@@ -310,7 +330,13 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             updateTab(s.id, { status: "closed" });
 
             const code = event.code;
-            if (code === 4004) {
+            if (lanHostId && code === 4004) {
+                setPermissionDenied(t("terminal.lanHostMissingCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.lanHostMissingXterm")}\x1b[0m\r\n`);
+            } else if (lanHostId && code === 4003) {
+                setPermissionDenied(t("terminal.lanLoginInvalidCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.lanLoginInvalidXterm")}\x1b[0m\r\n`);
+            } else if (code === 4004) {
                 setPermissionDenied(t("terminal.permissionDeniedCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.permissionDeniedXterm")}\x1b[0m\r\n`);
             } else if (code === 4003) {
@@ -348,7 +374,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 s.term.write(`\r\n\x1b[31m${t("terminal.disconnectedCodeXterm", { code })}\x1b[0m\r\n`);
             }
         };
-    }, [serverId, updateTab, fitAndResize, t]);
+    }, [serverId, lanHostId, lanUsername, updateTab, fitAndResize, t]);
 
     /** 建立新分頁（含 xterm 實例與 WS 連線），並切換為作用中。/ Create + activate a new tab. */
     const createSession = useCallback(async (sessionUsername: string) => {
@@ -516,6 +542,23 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 setNoUsers(true);
             });
     }, [serverId, accessToken]);
+
+    // 區網主機資訊（標頭顯示用；連線本身只靠 id）。/ LAN host details for the header.
+    const [lanHostState, setLanHost] = useState<TerminalLanHost | null>(null);
+    const lanHost = lanHostId && lanHostState && String(lanHostState.id) === lanHostId ? lanHostState : null;
+    useEffect(() => {
+        if (!serverId || !accessToken || !lanHostId) return;
+        let cancelled = false;
+        apiFetch(`/api/reverse/server/${serverId}/lan/hosts`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (cancelled) return;
+                const hosts: TerminalLanHost[] = data?.hosts ?? [];
+                setLanHost(hosts.find(h => String(h.id) === lanHostId) ?? null);
+            })
+            .catch(() => { /* 只影響標頭顯示 / header only */ });
+        return () => { cancelled = true; };
+    }, [serverId, accessToken, lanHostId]);
 
     // 卸載 / 換 server：銷毀所有 session（所有 WS 關閉 → 後端殺掉所有 shell）。
     // Unmount / server switch: destroy every session (all shells killed server-side).
@@ -719,6 +762,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             loadingServiceKeys, setLoadingServiceKeys,
             username, setUsername,
             availableUsernames, setAvailableUsernames,
+            lanHost,
         },
         actions: {
             fetchServiceKeys,

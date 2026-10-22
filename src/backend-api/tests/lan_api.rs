@@ -168,6 +168,7 @@ async fn lan_discovery_through_the_device() {
     assert_eq!(app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "8.8.8.8"})).await.status, StatusCode::BAD_REQUEST);
     assert_eq!(app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "NAS.local", "ssh_port": 2222})).await.json["address"], "nas.local");
     assert_eq!(app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "x.lan", "ssh_port": 70000})).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "y.lan", "username": "-oProxyCommand=x"})).await.json["username"][0], "Use letters, digits, '.', '_' or '-' (not starting with '-').");
     assert_eq!(app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&bob.token), json!({"address": "192.168.1.51"})).await.status, StatusCode::FORBIDDEN);
     assert_eq!(app.delete(&format!("/api/reverse/server/{id}/lan/hosts/{printer}"), Some(&bob.token)).await.status, StatusCode::FORBIDDEN);
     assert_eq!(app.delete(&format!("/api/reverse/server/{id}/lan/hosts/{printer}"), Some(&alice.token)).await.status, StatusCode::NO_CONTENT);
@@ -201,4 +202,54 @@ async fn lan_discovery_through_the_device() {
     assert_eq!(app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await.status, StatusCode::NO_CONTENT);
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_lan_host").fetch_one(&app.state.db.read).await.unwrap();
     assert_eq!(n, 0);
+}
+
+/// 網頁終端機經裝置跳到區網主機（裝置那跳用服務金鑰 + `-W`）。/ The web terminal through the device to a LAN host.
+#[tokio::test]
+async fn web_terminal_to_a_lan_host() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], true).await;
+    let nas = lab.machine("nas", &[("admin", &[&lab.service]), ("backup", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let id = dev.tunnel_id;
+    let token = alice.token.as_str();
+    let host = |body: Value| async move {
+        let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(token), body).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+        r.json["id"].as_i64().unwrap()
+    };
+    let nas_id = host(json!({"address": "127.0.0.1", "label": "nas", "username": "admin", "ssh_port": nas.port})).await;
+    let anon = host(json!({"address": "localhost", "ssh_port": nas.port})).await;
+
+    // 預設帳號，或指定別的帳號。/ The host's default login, or another one.
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.expect("LAN terminal");
+    t.expect("login:admin@nas").await;
+    t.input("ping-lan\n").await;
+    t.expect("ping-lan").await;
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id.to_string(), "lan_username": "backup"})).await.expect("LAN terminal");
+    t.expect("login:backup@nas").await;
+    let r = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "lan_terminal" && e["message"].as_str().unwrap().contains("backup@127.0.0.1")), "{}", r.text);
+
+    // 不安全的帳號、沒有帳號 → 4003；不是這條隧道的主機 → 4004。/ Unsafe or missing login → 4003; foreign host → 4004.
+    // 存進資料庫前就擋過了，這裡模擬舊資料。/ The API rejects these already; simulate a legacy row.
+    sqlx::query("UPDATE telepy_lan_host SET username = 'x y' WHERE id = ?").bind(anon).execute(&app.state.db.write).await.unwrap();
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": anon})).await.err(), Some(4003));
+    sqlx::query("UPDATE telepy_lan_host SET username = NULL WHERE id = ?").bind(anon).execute(&app.state.db.write).await.unwrap();
+    for bad in ["-oProxyCommand=touch /tmp/x", "a b", "root;id"] {
+        assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "lan_username": bad})).await.err(), Some(4003), "{bad}");
+    }
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": anon})).await.err(), Some(4003));
+    let other = lab.device(&bob, "other", &boxm).await;
+    let r = app.post(&format!("/api/reverse/server/{}/lan/hosts", other.tunnel_id), Some(&bob.token), json!({"address": "127.0.0.1", "username": "admin", "ssh_port": nas.port})).await;
+    let foreign = r.json["id"].as_i64().unwrap();
+    for hid in [json!(foreign), json!(999_999), json!("nope")] {
+        assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": hid})).await.err(), Some(4004), "{hid}");
+    }
+    // 裝置那跳的權限照舊。/ Device access is checked as before.
+    assert_eq!(lab.terminal_with(&bob, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.err(), Some(4004));
 }

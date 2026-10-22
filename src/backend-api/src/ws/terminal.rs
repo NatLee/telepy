@@ -1,5 +1,6 @@
 //! `/ws/terminal/`：網頁終端機（TerminalConsumer）。
-//! - 第一則訊息 `{type:"auth", token, server_id, username}`；關閉碼沿用：
+//! - 第一則訊息 `{type:"auth", token, server_id, username[, lan_host_id, lan_username]}`；帶 `lan_host_id` 時
+//!   經裝置（`username` 是裝置上的帳號）跳到它區網裡的那台機器（#20），`lan_username` 預設為主機記錄的帳號。關閉碼沿用：
 //!   4000 缺欄位、4004 無存取權/隧道不存在、4002 無 reverse_port、4006 無目標使用者、4003 username 不允許、4005 ssh 起不來。
 //! - 之後：`{action:"pty_input", payload:{input}}`、`{action:"pty_resize", payload:{size:{rows,cols,height,width}}}`、
 //!   `{action:"ping"}` → **binary** `pong`（前端把所有 text frame 寫進 xterm，pong 必須是 binary）。
@@ -15,7 +16,7 @@ use serde_json::Value;
 use super::{auth, close, send_text};
 use crate::db;
 use crate::permissions::{self, Permission};
-use crate::ssh::process::{spawn_in_pty, terminal_args};
+use crate::ssh::process::{lan_terminal_args, spawn_in_pty, terminal_args, valid_login};
 use crate::ssh::SshTarget;
 use crate::state::AppState;
 
@@ -105,7 +106,39 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
     };
 
     let target = SshTarget::new(&state.config, &username, reverse_port);
-    let args = terminal_args(&target);
+    // 區網主機（經裝置跳過去）：主機要屬於這條隧道，帳號要是安全字元。/ A LAN host behind the device.
+    let args = match auth::id_field(&msg, "lan_host_id") {
+        None => terminal_args(&target),
+        Some(raw) => {
+            let tunnel_id: i64 = server_id.parse().unwrap_or(0);
+            let host = match raw.parse::<i64>() {
+                Ok(hid) => db::lan::host_by_id(&state.db, hid).await.ok().flatten().filter(|h| h.tunnel_id == tunnel_id),
+                Err(_) => None,
+            };
+            let Some(host) = host else {
+                tracing::error!(user = %user.username, server_id, lan_host = %raw, "LAN host not found for this tunnel");
+                close(&mut socket, 4004).await;
+                return;
+            };
+            let login = msg.get("lan_username").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).or(host.username.clone());
+            let Some(login) = login.filter(|l| valid_login(l)) else {
+                tracing::error!(user = %user.username, lan_host = host.id, "LAN terminal without a valid login name");
+                close(&mut socket, 4003).await;
+                return;
+            };
+            state
+                .gateway
+                .event(
+                    "lan_terminal",
+                    None,
+                    None,
+                    Some(tunnel_id),
+                    format!("Web terminal by {} to {}@{}:{} through {}@device", user.username, login, host.address, host.ssh_port, username),
+                )
+                .await;
+            lan_terminal_args(&state.config.ssh_binary, &target, &login, &host.address, host.ssh_port)
+        }
+    };
     let mut pty = match spawn_in_pty(&state.config.ssh_binary, &args) {
         Ok(p) => p,
         Err(e) => {

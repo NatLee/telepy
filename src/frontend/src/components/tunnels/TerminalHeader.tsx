@@ -6,8 +6,8 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay } from "lucide-react";
-import { TerminalUsername } from "@/hooks/useTerminalPage";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network } from "lucide-react";
+import { TerminalLanHost, TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { TerminalLatencyBadge } from "@/components/tunnels/TerminalLatencyBadge";
 import { useRouter } from "next/navigation";
@@ -32,6 +32,21 @@ interface TerminalHeaderProps {
     setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
     onLoadServiceKeys: () => void | Promise<void>;
+    /** 殼開在裝置區網裡的機器上（帳號選單是裝置那一跳）。/ Shell on a LAN host; the user picker is the device hop. */
+    lan?: { host: TerminalLanHost | null; login: string | null } | null;
+}
+
+/** 區網主機徽章。/ LAN host badge. */
+function LanBadge({ lan }: { lan: { host: TerminalLanHost | null; login: string | null } }) {
+    const { t } = useI18n();
+    const name = lan.host ? (lan.host.label || lan.host.address) : t("terminal.lanHostFallback");
+    const where = lan.host ? `${lan.host.address}:${lan.host.ssh_port}` : "";
+    return (
+        <Badge variant="outline" className="gap-1 px-2 py-0.5 font-mono text-xs max-w-[220px]" title={t("terminal.lanTargetTitle", { host: where || name })}>
+            <Network size={11} className="shrink-0" />
+            <span className="truncate">{lan.login ? `${lan.login}@${name}` : name}</span>
+        </Badge>
+    );
 }
 
 export function TerminalHeader({
@@ -53,6 +68,7 @@ export function TerminalHeader({
     setShowFiles,
     isBrowserActive,
     onLoadServiceKeys,
+    lan = null,
 }: TerminalHeaderProps) {
     const router = useRouter();
     const { t } = useI18n();
@@ -102,9 +118,11 @@ export function TerminalHeader({
                             connecting={connecting}
                         />
 
+                        {lan && <LanBadge lan={lan} />}
+
                         {/* Username Switcher */}
                         {availableUsernames.length > 1 && (
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5" title={lan ? t("terminal.lanDeviceUserTitle") : undefined}>
                                 <UserIcon size={12} className="text-muted-foreground" />
                                 <select
                                     value={username || ''}
@@ -120,7 +138,7 @@ export function TerminalHeader({
                             </div>
                         )}
                         {availableUsernames.length === 1 && username && (
-                            <Badge variant="secondary" className="gap-1 px-2 py-0.5 font-mono text-xs">
+                            <Badge variant="secondary" className="gap-1 px-2 py-0.5 font-mono text-xs" title={lan ? t("terminal.lanDeviceUserTitle") : undefined}>
                                 <UserIcon size={11} /> {username}
                             </Badge>
                         )}
@@ -213,6 +231,12 @@ export function TerminalHeader({
                                 <Server size={12} className="shrink-0" />
                                 <span className="truncate">{t("terminal.portLabel")} {port || t("common.notAvailable")}</span>
                             </div>
+                            {lan && (
+                                <div className="flex items-center justify-between gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
+                                    <span>{t("terminal.lanHostLabel")}</span>
+                                    <LanBadge lan={lan} />
+                                </div>
+                            )}
                             {(connected || connecting) && (
                                 <div className="flex items-center justify-between gap-1.5 bg-muted/50 p-1.5 rounded border border-border/50">
                                     <span>{t("terminal.latency")}</span>

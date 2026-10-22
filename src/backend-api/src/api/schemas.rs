@@ -989,6 +989,7 @@ pub struct LanHostWrite {
     /// IPv4 address on a private network, or a hostname
     pub address: String,
     pub label: Option<String>,
+    /// Default login on this machine (letters, digits, `.`, `_`, `-`; up to 64)
     pub username: Option<String>,
     #[schema(example = 22)]
     pub ssh_port: Option<i64>,
@@ -997,6 +998,7 @@ pub struct LanHostWrite {
 #[derive(ToSchema)]
 pub struct LanHostPatch {
     pub label: Option<String>,
+    /// Default login on this machine (letters, digits, `.`, `_`, `-`; up to 64)
     pub username: Option<String>,
     pub ssh_port: Option<i64>,
 }
