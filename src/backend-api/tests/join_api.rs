@@ -118,7 +118,7 @@ async fn one_command_join() {
     lab.connect_joined(tunnel_id, &device_key, reverse_port, &pi, &host_keys).await;
     wait_phase(app, &token, "verified").await;
     let r = app.get(&format!("/api/reverse/join/{id}"), Some(&alice.token)).await;
-    assert_eq!((r.json["phase"].as_str(), r.json["tunnel_id"].as_i64(), r.json["hostname"].as_str()), (Some("verified"), Some(tunnel_id), Some("raspberrypi")), "{}", r.text);
+    assert_eq!((r.json["phase"].as_str(), r.json["tunnel_id"].as_i64(), r.json["hostname"].as_str(), r.json["ssh_port"].as_i64()), (Some("verified"), Some(tunnel_id), Some("raspberrypi"), Some(22)), "{}", r.text);
     let mut phases = Vec::new();
     while let Ok(msg) = rx.try_recv() {
         let v: Value = serde_json::from_str(&msg).unwrap();

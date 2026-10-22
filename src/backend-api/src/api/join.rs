@@ -166,6 +166,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     if !crate::ssh::process::valid_login(&username) {
         return Err(bad("username must use letters, digits, '.', '_' or '-'"));
     }
+    let ssh_port = crate::util::json_i64(body, "ssh_port").filter(|p| (1..=65535).contains(p)).unwrap_or(22);
     let hostname = join::clean_hostname(&json_str(body, "hostname").unwrap_or_default());
     let os: String = json_str(body, "os").unwrap_or_default().chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ' ')).take(64).collect();
     let requested = json_str(body, "name").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -213,7 +214,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     }
     let gateway_port = Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string();
 
-    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), hostname: hostname.clone(), os: os.clone() };
+    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), ssh_port, hostname: hostname.clone(), os: os.clone() };
     if let Some(updated) = state.join.registered(&t.token_hash, reg) {
         notify_owner(state, &updated);
     }

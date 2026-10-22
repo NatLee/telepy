@@ -1232,6 +1232,7 @@ pub struct JoinTicket {
     pub tunnel_name: Option<String>,
     pub reverse_port: Option<i64>,
     pub username: Option<String>,
+    pub ssh_port: Option<i64>,
     pub hostname: Option<String>,
     pub os: Option<String>,
     pub created_at: String,

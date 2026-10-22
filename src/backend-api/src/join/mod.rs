@@ -56,6 +56,8 @@ pub struct Ticket {
     pub reverse_port: Option<i64>,
     /// Telepy 登入裝置用的帳號。/ The device account Telepy logs in to.
     pub username: Option<String>,
+    /// 裝置自己的 SSH port（隧道另一端接到這裡）。/ The device's own SSH port.
+    pub ssh_port: Option<i64>,
     pub hostname: Option<String>,
     pub os: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -80,6 +82,7 @@ pub struct Registration {
     pub tunnel_name: String,
     pub reverse_port: i64,
     pub username: String,
+    pub ssh_port: i64,
     pub hostname: String,
     pub os: String,
 }
@@ -124,6 +127,7 @@ impl JoinTickets {
             tunnel_name: None,
             reverse_port: None,
             username: None,
+            ssh_port: None,
             hostname: None,
             os: None,
             created_at: now,
@@ -166,6 +170,7 @@ impl JoinTickets {
         t.tunnel_name = Some(r.tunnel_name);
         t.reverse_port = Some(r.reverse_port);
         t.username = Some(r.username);
+        t.ssh_port = Some(r.ssh_port);
         t.hostname = Some(r.hostname);
         t.os = Some(r.os);
         t.deadline = Instant::now() + STATUS_TTL;
@@ -310,7 +315,7 @@ mod tests {
         assert_eq!(s.claim(&token).unwrap_err(), TakeError::Used, "one registration per ticket");
         s.release(&claimed.token_hash);
         assert!(s.claim(&token).is_ok(), "a failed registration can be retried");
-        s.registered(&claimed.token_hash, Registration { tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), hostname: "pi".into(), os: "Linux".into() });
+        s.registered(&claimed.token_hash, Registration { tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), ssh_port: 22, hostname: "pi".into(), os: "Linux".into() });
         assert_eq!(s.by_token(&token).unwrap().tunnel_id, Some(7));
         assert!(s.begin_verify(&claimed.token_hash));
         assert!(!s.begin_verify(&claimed.token_hash), "one check at a time");

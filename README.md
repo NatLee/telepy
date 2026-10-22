@@ -8,6 +8,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 
 - **Tunnel dashboard** — live online/offline status and per-hop latency (you → Telepy → device), in list or card view.
 - **Guided tunnel creation** — a five-step wizard issues keys and generates ready-to-run connection scripts: plain SSH, AutoSSH, systemd service, PowerShell, Docker Run, and Docker Compose, plus a single-use `curl` URL for fetching the script on the target machine.
+- **One-command device join** — on Linux or macOS, paste one `curl … | sudo sh` command on the device: it creates the tunnel key, registers the device, authorizes Telepy, pins Telepy's host key, installs the tunnel as a systemd/launchd service and waits until Telepy has logged in through it. The command works once and expires after 30 minutes; the create page follows each step live.
 - **Web terminal** — multi-tab xterm.js terminal over WebSocket, with per-user sessions and live latency readout.
 - **File manager** — SFTP-based file browser alongside the terminal for uploading and downloading files on the device.
 - **Remote proxy browser** — launch a real Chromium desktop (KasmVNC) whose traffic is tunneled through the target device, so external requests appear to come from that machine.
