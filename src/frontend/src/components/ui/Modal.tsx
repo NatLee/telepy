@@ -16,9 +16,15 @@
  * On open, focus lands on the panel itself instead of the first tabbable (the close button), so no
  * focus ring flashes on open; Tab still walks in order. Forms that want typing right away put
  * autoFocus on the field — Radix leaves an already-focused descendant alone.
+ *
+ * 內容區是對話框裡唯一會捲動的地方:不要在裡面再放固定高度的捲動框(看不出來能捲,內容像被切掉)。
+ * 內容超出時,底部會浮出「往下還有」提示,點一下捲到底。
+ * The body is the only scrolling area in a dialog: never nest a fixed-height scroll box inside it (it
+ * doesn't read as scrollable and the content looks cut off). When the body overflows, a "More below"
+ * cue floats at the bottom; clicking it scrolls to the end.
  */
-import React, { useRef } from "react";
-import { Loader2, X } from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { ChevronDown, Loader2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -57,6 +63,49 @@ const SIZE_CLASS: Record<ModalSize, string> = {
     "3xl": "sm:max-w-[min(48rem,calc(100%-2rem))]",
     "4xl": "sm:max-w-[min(56rem,calc(100%-2rem))]",
 };
+
+/**
+ * 內容區底部的哨兵:看不到它(內容還沒捲到底)時顯示淡出遮罩 + 「往下還有」。sticky 的 -bottom-5 抵銷內容區的 py-5。
+ * A sentinel at the end of the body: while it is out of view, show a fade and a "More below" pill.
+ * The sticky -bottom-5 offsets the body's py-5.
+ */
+function MoreBelow() {
+    const { t } = useI18n();
+    const end = useRef<HTMLDivElement>(null);
+    const [cut, setCut] = useState(false);
+    useEffect(() => {
+        const el = end.current;
+        if (!el || typeof IntersectionObserver === "undefined") return;
+        const io = new IntersectionObserver(([e]) => setCut(!e.isIntersecting));
+        io.observe(el);
+        return () => io.disconnect();
+    }, []);
+    return (
+        <>
+            <div ref={end} className="h-px shrink-0" aria-hidden />
+            <div
+                aria-hidden
+                className={cn(
+                    "pointer-events-none sticky -bottom-5 z-20 -mt-16 flex h-16 shrink-0 items-end justify-center bg-gradient-to-t from-card via-card/85 to-transparent pb-1 transition-opacity duration-200",
+                    cut ? "opacity-100" : "opacity-0",
+                )}
+            >
+                <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => end.current?.scrollIntoView({ behavior: "smooth", block: "end" })}
+                    className={cn(
+                        "inline-flex items-center gap-1 rounded-full bg-card px-3 py-1 text-xs text-muted-foreground shadow-pop ring-1 ring-border hover:text-foreground",
+                        cut && "pointer-events-auto",
+                    )}
+                >
+                    <ChevronDown size={13} className="animate-bounce" aria-hidden />
+                    {t("ui.moreBelow")}
+                </button>
+            </div>
+        </>
+    );
+}
 
 export function Modal({
     isOpen,
@@ -152,6 +201,7 @@ export function Modal({
                                 </div>
                             )}
                             {children}
+                            <MoreBelow />
                         </div>
                     )}
 

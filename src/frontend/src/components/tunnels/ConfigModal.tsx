@@ -57,11 +57,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
                     </div>
                 )}
 
-                {loading ? null : (
-                    <div className="max-h-[50vh] overflow-auto">
-                        <CodeBlock language="txt" value={configContent} />
-                    </div>
-                )}
+                {loading ? null : <CodeBlock language="txt" value={configContent} />}
             </div>
         </Modal>
     );

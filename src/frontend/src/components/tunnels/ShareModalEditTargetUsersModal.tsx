@@ -47,7 +47,7 @@ export function ShareModalEditTargetUsersModal({
                 </>
             }
         >
-            <div className="flex max-h-[300px] flex-col divide-y divide-border/70 overflow-y-auto rounded-xl ring-1 ring-inset ring-border/80">
+            <div className="flex flex-col divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
                 {tunnelUsernames.map((targetUser) => {
                     const selfCreated = !!targetUser.created_by && targetUser.created_by === username;
                     return (

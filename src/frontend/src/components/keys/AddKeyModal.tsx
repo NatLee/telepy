@@ -147,7 +147,7 @@ export function AddKeyModal({
                     <fieldset className="space-y-2">
                         <legend className="text-sm text-foreground">{t("keys.installOn")}</legend>
                         <p className="text-xs text-muted-foreground">{t("keys.installOnHint")}</p>
-                        <div className="grid max-h-56 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                        <div className="grid gap-1.5 sm:grid-cols-2">
                             {devices.map((d) => (
                                 <label
                                     key={d.tunnel_id}
