@@ -12,14 +12,14 @@
 //! SSH sessions opened by AI agents over MCP: one russh connection per session, reused by every command, with
 //! idle / lifetime / revocation / permission based expiry.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
 use dashmap::DashMap;
-use russh::{ChannelMsg, Disconnect, Sig};
+use russh::Disconnect;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use serde_json::json;
@@ -46,8 +46,6 @@ pub const MAX_LIST_ENTRIES: usize = 1000;
 pub const MAX_CONCURRENT_COMMANDS: usize = 4;
 /// agent 能要求的最短 idle / lifetime。/ Shortest idle / lifetime an agent may ask for.
 pub const MIN_TIMEOUT: Duration = Duration::from_secs(10);
-/// 收到 exit-status 後等 channel close 的時間。/ How long to wait for the close after the exit status.
-const EXIT_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
@@ -262,19 +260,7 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
         return Err("This tunnel has no reverse port configured.".into());
     }
     let allowed = permissions::allowed_usernames(&state.db, p.user.id, &tunnel).await.map_err(db_err)?;
-    let names: Vec<&str> = allowed.iter().map(|u| u.username.as_str()).collect();
-    if names.is_empty() {
-        return Err(format!("No target username is available to you on '{}'. Add one in Telepy (tunnel → usernames) first.", tunnel.host_friendly_name));
-    }
-    let username = match req.username.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
-        Some(u) if names.contains(&u) => u.to_string(),
-        Some(u) => return Err(format!("Username '{u}' is not allowed on '{}'. Allowed: {}", tunnel.host_friendly_name, names.join(", "))),
-        None => match tunnel.default_username_id.and_then(|d| allowed.iter().find(|u| u.id == d)) {
-            Some(u) => u.username.clone(),
-            None if names.len() == 1 => names[0].to_string(),
-            None => return Err(format!("Pick a username for '{}': {}", tunnel.host_friendly_name, names.join(", "))),
-        },
-    };
+    let username = permissions::choose_username(&allowed, tunnel.default_username_id, req.username.as_deref(), &tunnel.host_friendly_name)?;
     if let Some(listen) = state.status.listen_ports() {
         if !u16::try_from(tunnel.reverse_port).map(|port| listen.contains(&port)).unwrap_or(false) {
             return Err(format!("The device '{}' is offline (its reverse tunnel is not connected).", tunnel.host_friendly_name));
@@ -442,62 +428,7 @@ pub async fn audit(state: &AppState, e: db::ai_audit::NewEvent<'_>) {
 
 // ---------------------------------------------------------------- exec
 
-/// 保留開頭 1/4 與結尾 3/4 的輸出（log 的結尾通常最有用），中間丟掉並註明。
-/// Keeps the first quarter and the last three quarters of a stream within the budget.
-pub struct HeadTail {
-    cap_head: usize,
-    cap_tail: usize,
-    head: Vec<u8>,
-    tail: VecDeque<u8>,
-    total: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Captured {
-    pub text: String,
-    pub bytes: u64,
-    pub truncated: bool,
-}
-
-impl HeadTail {
-    pub fn new(budget: usize) -> Self {
-        let cap_head = budget / 4;
-        Self { cap_head, cap_tail: budget - cap_head, head: Vec::new(), tail: VecDeque::new(), total: 0 }
-    }
-    pub fn push(&mut self, mut data: &[u8]) {
-        self.total += data.len() as u64;
-        if self.head.len() < self.cap_head {
-            let n = (self.cap_head - self.head.len()).min(data.len());
-            self.head.extend_from_slice(&data[..n]);
-            data = &data[n..];
-        }
-        self.tail.extend(data);
-        while self.tail.len() > self.cap_tail {
-            let excess = self.tail.len() - self.cap_tail;
-            self.tail.drain(..excess);
-        }
-    }
-    pub fn finish(self) -> Captured {
-        let kept = (self.head.len() + self.tail.len()) as u64;
-        let truncated = self.total > kept;
-        let mut bytes = self.head;
-        if truncated {
-            bytes.extend_from_slice(format!("\n[… {} bytes omitted …]\n", self.total - kept).as_bytes());
-        }
-        bytes.extend(self.tail);
-        Captured { text: String::from_utf8_lossy(&bytes).into_owned(), bytes: self.total, truncated }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExecResult {
-    pub exit_code: Option<u32>,
-    pub signal: Option<String>,
-    pub timed_out: bool,
-    pub duration: Duration,
-    pub stdout: Captured,
-    pub stderr: Captured,
-}
+pub use crate::ssh::exec::{Captured, ExecResult, HeadTail};
 
 /// 在 session 上開一個 exec channel 跑指令（無 PTY）。逾時送 KILL 並關 channel。
 /// Run a command on its own exec channel (no PTY); on timeout send KILL and close the channel.
@@ -505,48 +436,7 @@ pub async fn exec(s: &AiSession, command: &str, timeout: Duration, max_output: u
     let _slot = s.slots.acquire().await.context("session is closing")?;
     let _busy = s.begin();
     s.commands.fetch_add(1, Ordering::SeqCst);
-    let started = Instant::now();
-    let mut ch = s.conn.device.channel_open_session().await.context("open a channel (is the device still connected?)")?;
-    ch.exec(true, command.as_bytes()).await.context("send the command")?;
-    let mut out = HeadTail::new(max_output);
-    let mut err = HeadTail::new(max_output);
-    let (mut exit_code, mut signal, mut timed_out) = (None, None, false);
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
-    loop {
-        tokio::select! {
-            msg = ch.wait() => match msg {
-                Some(ChannelMsg::Data { data }) => out.push(&data),
-                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => err.push(&data),
-                Some(ChannelMsg::ExitStatus { exit_status }) => {
-                    exit_code = Some(exit_status);
-                    let grace = tokio::time::Instant::now() + EXIT_GRACE;
-                    if grace < deadline.deadline() {
-                        deadline.as_mut().reset(grace);
-                    }
-                }
-                Some(ChannelMsg::ExitSignal { signal_name, .. }) => {
-                    signal = Some(format!("{signal_name:?}"));
-                    let grace = tokio::time::Instant::now() + EXIT_GRACE;
-                    if grace < deadline.deadline() {
-                        deadline.as_mut().reset(grace);
-                    }
-                }
-                Some(ChannelMsg::Failure) => bail!("the device refused to run the command"),
-                Some(ChannelMsg::Close) | None => break,
-                Some(_) => {}
-            },
-            _ = &mut deadline => {
-                if exit_code.is_none() && signal.is_none() {
-                    timed_out = true;
-                    let _ = ch.signal(Sig::KILL).await;
-                }
-                let _ = ch.close().await;
-                break;
-            }
-        }
-    }
-    Ok(ExecResult { exit_code, signal, timed_out, duration: started.elapsed(), stdout: out.finish(), stderr: err.finish() })
+    crate::ssh::exec::run(&s.conn.device, command, timeout, max_output).await
 }
 
 // ---------------------------------------------------------------- sftp
@@ -663,6 +553,7 @@ mod tests {
             ai_session_idle_timeout: 600,
             ai_session_max_lifetime: 7200,
             ai_max_sessions_per_user: 3,
+            lan_scan_enabled: true,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;
@@ -670,23 +561,6 @@ mod tests {
         s.ai_max_sessions_per_user = -1;
         let l = Limits::from_settings(&s);
         assert_eq!((l.idle_timeout, l.max_lifetime, l.max_sessions_per_user), (Duration::from_secs(600), MIN_TIMEOUT, 0));
-    }
-
-    #[test]
-    fn head_tail_truncation() {
-        let mut h = HeadTail::new(8);
-        h.push(b"abc");
-        assert_eq!(h.finish(), Captured { text: "abc".into(), bytes: 3, truncated: false });
-        let mut h = HeadTail::new(8); // head 2, tail 6
-        h.push(b"0123456789");
-        h.push(b"ABCDEFGHIJ");
-        let c = h.finish();
-        assert!(c.truncated);
-        assert_eq!(c.bytes, 20);
-        assert_eq!(c.text, "01\n[… 12 bytes omitted …]\nEFGHIJ");
-        let mut h = HeadTail::new(8);
-        h.push(b"01234567");
-        assert!(!h.finish().truncated, "exactly the budget is not truncated");
     }
 
     #[test]

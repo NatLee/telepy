@@ -208,6 +208,27 @@ const TABLES: &[(&str, &str)] = &[
             "created_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：隧道背後的區網主機（跳板機表，#20）。/ LAN hosts behind a tunnel (jump-host table).
+    (
+        "telepy_lan_host",
+        r#"CREATE TABLE "telepy_lan_host" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "address" varchar(255) NOT NULL,
+            "hostname" varchar(255) NULL,
+            "mac" varchar(32) NULL,
+            "open_ports" text NOT NULL DEFAULT '[]',
+            "ssh_banner" varchar(255) NULL,
+            "label" varchar(100) NULL,
+            "username" varchar(128) NULL,
+            "ssh_port" integer NOT NULL DEFAULT 22,
+            "source" varchar(16) NOT NULL,
+            "first_seen" datetime NULL,
+            "last_seen" datetime NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：MCP（AI）tool call 的稽核紀錄。/ Audit trail of MCP tool calls.
     (
         "telepy_ai_audit_event",
@@ -240,6 +261,7 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
@@ -276,6 +298,7 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "ai_session_idle_timeout", "integer NOT NULL DEFAULT 600"),
     ("site_settings_sitesettings", "ai_session_max_lifetime", "integer NOT NULL DEFAULT 7200"),
     ("site_settings_sitesettings", "ai_max_sessions_per_user", "integer NOT NULL DEFAULT 3"),
+    ("site_settings_sitesettings", "lan_scan_enabled", "bool NOT NULL DEFAULT 1"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
 ];
@@ -325,8 +348,8 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             remote_browser_session_idle_timeout, remote_browser_max_sessions, remote_browser_geometry, \
             remote_browser_ssh_timeout, remote_browser_ssh_attempts, remote_browser_kasm_create_timeout, \
             remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, ai_session_max_lifetime, \
-            ai_max_sessions_per_user) \
-         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3 \
+            ai_max_sessions_per_user, lan_scan_enabled) \
+         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3, 1 \
          WHERE NOT EXISTS (SELECT 1 FROM site_settings_sitesettings WHERE id = 1)",
     )
     .execute(pool)

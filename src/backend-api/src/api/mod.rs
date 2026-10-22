@@ -4,6 +4,7 @@
 pub mod ai;
 pub mod auth;
 pub mod doc;
+pub mod lan;
 pub mod logs;
 pub mod mfa;
 pub mod notify;

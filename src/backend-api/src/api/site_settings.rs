@@ -43,6 +43,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "remote_browser_language", kind: Kind::Str(16), label: "Remote Browser Language", description: "代理瀏覽器的介面語系與 Accept-Language,格式如 zh-TW、en-US、ja-JP。也影響反爬蟲的navigator.languages(空語系是機器人特徵)。下次開啟瀏覽器時生效。" },
     FieldMeta { name: "ai_session_idle_timeout", kind: Kind::Int, label: "AI Session Idle Timeout (seconds)", description: "AI 工具（MCP）開的 SSH session 閒置多久沒有指令就自動關閉(秒)。執行中的指令不算閒置。變更後對新開的 session 生效。" },
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
+    FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許隧道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
 ];
 
@@ -61,6 +62,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_session_idle_timeout".into(), json!(s.ai_session_idle_timeout));
     m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
+    m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
     Value::Object(m)
 }
 

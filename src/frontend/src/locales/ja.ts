@@ -117,6 +117,8 @@ export const ja: Record<TranslationKey, string> = {
     "oauth.scope.sshExecDescription": "トンネル経由で SSH セッションを開き、コマンドを実行します。",
     "oauth.scope.sshFiles": "デバイスのファイルの読み書き",
     "oauth.scope.sshFilesDescription": "SFTP でファイルの一覧取得・ダウンロード・アップロードを行います。",
+    "oauth.scope.networkScan": "デバイスのネットワーク上の機器を探す",
+    "oauth.scope.networkScanDescription": "デバイスの背後にあるプライベートネットワークをスキャンします（所有者または ADMIN のトンネルのみ）。デバイスには何もインストールしません。",
     "oauth.needOneScope": "少なくとも 1 つの権限を残すか、リクエストを拒否してください。",
     "oauth.tunnels": "トンネル",
     "oauth.allTunnels": "すべてのトンネルを許可",
@@ -1164,6 +1166,8 @@ export const ja: Record<TranslationKey, string> = {
     "siteSettings.ai_session_max_lifetime.description": "AI が開いた SSH セッションを開いたままにできる上限（秒）。使用中でも期限で閉じられます。新しいセッションに適用されます。",
     "siteSettings.ai_max_sessions_per_user.label": "ユーザーあたりの AI セッション数",
     "siteSettings.ai_max_sessions_per_user.description": "1 人のユーザーの AI ツールが同時に開ける SSH セッション数(全アプリ合計)。0 = AI ツールはセッションを開けません。次にセッションを開くときから反映されます。",
+    "siteSettings.lan_scan_enabled.label": "LAN 探索を許可",
+    "siteSettings.lan_scan_enabled.description": "トンネルの所有者と ADMIN 共有ユーザーが、デバイスの背後にあるプライベートネットワークをスキャンできるようにします。接続はデバイス自身の sshd が行い、デバイスには何もインストールしません。無効にすると踏み台は手動でのみ追加できます。スキャンはすべてトンネルのログに記録されます。",
 
     // ── 共通 UI コンポーネント / Shared UI components ──────────────
     "ui.live": "ライブ",
