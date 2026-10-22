@@ -26,6 +26,7 @@ import {
     Share2,
     Trash2,
     Users,
+    Waypoints,
     type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ export function TunnelActions({
     onLogs,
     onCommands,
     onKeys,
+    onNetwork,
     onUsers,
     onShare,
     onLeave,
@@ -122,6 +124,12 @@ export function TunnelActions({
                         label={t("tunnelActions.deviceKeys")}
                         hint={t("tunnelActions.deviceKeysHint")}
                         onSelect={() => onKeys(tunnel.id)}
+                    />
+                    <ActionItem
+                        icon={Waypoints}
+                        label={t("tunnelActions.network")}
+                        hint={t("tunnelActions.networkHint")}
+                        onSelect={() => onNetwork(tunnel.id)}
                     />
                 </DropdownMenuGroup>
 

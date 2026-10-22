@@ -91,6 +91,7 @@ export default function TunnelsPage() {
         onLogs: (tunnelId) => router.push(`/tunnels/logs?tunnel=${tunnelId}`),
         onKeys: (tunnelId) => router.push(`/tunnels/keys?device=${tunnelId}`),
         onCommands: (tunnelId) => router.push(`/tunnels/cheatsheet?tunnel=${tunnelId}`),
+        onNetwork: (tunnelId) => router.push(`/tunnels/network?tunnel=${tunnelId}`),
         onUsers: (tunnelId, readOnly) => setUsersModal({ isOpen: true, tunnelId, readOnly }),
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),

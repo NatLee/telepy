@@ -17,6 +17,11 @@ export const NOTIFICATION_ACTIONS = {
     AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
     // 裝置金鑰清單同步完（送給隧道擁有者與被分享者）。/ A device's key list was synced (tunnel audience).
     DEVICE_KEYS_UPDATED: "DEVICE-KEYS-UPDATED",
+    // 區網掃描（#20）：進度 / 完成只送給發起的人，主機表更新送給看得到隧道的人。
+    // LAN scan progress / done go to the scanner; host-list updates go to the tunnel's audience.
+    LAN_SCAN_PROGRESS: "LAN-SCAN-PROGRESS",
+    LAN_SCAN_DONE: "LAN-SCAN-DONE",
+    UPDATED_LAN_HOSTS: "UPDATED-LAN-HOSTS",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];
