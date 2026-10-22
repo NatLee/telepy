@@ -303,6 +303,21 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("tunnel_id", "username")
         )"#,
     ),
+    // Rust 自有：登入紀錄（成功與失敗；帶 IP，保留 90 天）。/ Sign-in history (carries IPs; 90 days).
+    (
+        "telepy_sign_in_event",
+        r#"CREATE TABLE "telepy_sign_in_event" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "user_id" integer NOT NULL,
+            "ok" bool NOT NULL,
+            "method" varchar(32) NOT NULL,
+            "second_factor" varchar(32) NULL,
+            "ip" varchar(64) NULL,
+            "user_agent" varchar(512) NULL,
+            "reason" varchar(64) NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -318,6 +333,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_sign_in_event_user_id" ON "telepy_sign_in_event" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_sign_in_event_at" ON "telepy_sign_in_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,

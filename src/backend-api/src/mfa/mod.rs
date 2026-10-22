@@ -45,11 +45,13 @@ pub const LOCKOUT_WINDOW: Duration = Duration::from_secs(900);
 pub struct LoginChallenge {
     pub user_id: i64,
     pub attempts: Arc<AtomicU32>,
+    /// 第一關是什麼（password / google），登入紀錄用。/ The first factor, for the sign-in history.
+    pub first_factor: &'static str,
 }
 
 impl LoginChallenge {
-    pub fn new(user_id: i64) -> Self {
-        Self { user_id, attempts: Arc::new(AtomicU32::new(0)) }
+    pub fn new(user_id: i64, first_factor: &'static str) -> Self {
+        Self { user_id, attempts: Arc::new(AtomicU32::new(0)), first_factor }
     }
     /// 記一次失敗，回傳累計次數。/ Record a failure; returns the new total.
     pub fn fail(&self) -> u32 {
@@ -302,7 +304,7 @@ mod tests {
 
     #[test]
     fn login_challenge_counts_failures_in_place() {
-        let ch = LoginChallenge::new(7);
+        let ch = LoginChallenge::new(7, "password");
         let clone = ch.clone();
         for n in 1..CHALLENGE_ATTEMPTS {
             assert_eq!(clone.fail(), n);

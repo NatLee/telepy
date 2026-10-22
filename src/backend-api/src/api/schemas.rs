@@ -159,6 +159,26 @@ pub struct TunnelEndpoint {
     pub last_seen_at: Option<String>,
 }
 
+/// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
+#[derive(ToSchema)]
+pub struct SignInEvent {
+    pub id: i64,
+    #[schema(example = "2026-10-23T01:02:03.123456Z")]
+    pub at: String,
+    pub ok: bool,
+    /// password / google / passkey
+    #[schema(example = "password")]
+    pub method: String,
+    /// totp / recovery_code / passkey; null without a second step
+    pub second_factor: Option<String>,
+    /// 依 X-Forwarded-For（`TRUSTED_PROXY_HOPS`）或 `CLIENT_IP_HEADER` 判定。/ Resolved from the proxy chain.
+    #[schema(example = "198.51.100.7")]
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+    /// bad_password / inactive / mfa_failed / google_account_conflict
+    pub reason: Option<String>,
+}
+
 #[derive(ToSchema)]
 pub struct TunnelWrite {
     pub host_friendly_name: String,
