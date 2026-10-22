@@ -1,160 +1,69 @@
 "use client";
 
 /**
- * 建立新通道精靈頁：步驟導引與表單組合。
- * Create new tunnel wizard page: step indicator and form composition.
+ * 建立新通道精靈頁：進度列 + 活拓撲圖（目前在做什麼）+ 步驟內容 + 「為什麼」說明卡。
+ * Create-tunnel wizard page: progress, a live topology (what is happening now), the step itself and a "why" card.
  */
 import React from "react";
-import { useToast } from "@/components/ui/Toast";
-import { Check, Terminal, Key, Users, Activity, CheckCircle2 } from "lucide-react";
+import { Cable } from "lucide-react";
 import { useCreateTunnelWizard } from "@/hooks/useCreateTunnelWizard";
-import { Step1BasicConfig } from "@/components/tunnels/CreateWizardSteps/Step1BasicConfig";
-import { Step2ServerKeys } from "@/components/tunnels/CreateWizardSteps/Step2ServerKeys";
-import { Step3ServerUsers } from "@/components/tunnels/CreateWizardSteps/Step3ServerUsers";
-import { Step4TestConnection } from "@/components/tunnels/CreateWizardSteps/Step4TestConnection";
-import { Step5Completion } from "@/components/tunnels/CreateWizardSteps/Step5Completion";
-import { KeyViewModal } from "@/components/tunnels/CreateWizardSteps/KeyViewModal";
+import { WizardStepper } from "@/components/tunnels/CreateWizardSteps/WizardStepper";
+import { SetupDiagram } from "@/components/tunnels/CreateWizardSteps/SetupDiagram";
+import { WhyPanel } from "@/components/tunnels/CreateWizardSteps/WhyPanel";
+import { StepDevice } from "@/components/tunnels/CreateWizardSteps/StepDevice";
+import { StepAccounts } from "@/components/tunnels/CreateWizardSteps/StepAccounts";
+import { StepAuthorize } from "@/components/tunnels/CreateWizardSteps/StepAuthorize";
+import { StepConnect } from "@/components/tunnels/CreateWizardSteps/StepConnect";
+import { StepVerify } from "@/components/tunnels/CreateWizardSteps/StepVerify";
 import { useI18n } from "@/lib/i18n";
+
+const CARD = "rounded-2xl border border-border bg-card/85 backdrop-blur-sm shadow-card";
 
 export default function CreateTunnelWizard() {
     const { t } = useI18n();
-    const { showSuccess } = useToast();
-    const { state, actions } = useCreateTunnelWizard();
-
-    const STEPS = [
-        { id: 1, title: t("wizard.stepBasicConfig"), icon: <Terminal size={18} /> },
-        { id: 2, title: t("wizard.stepServerKeys"), icon: <Key size={18} /> },
-        { id: 3, title: t("wizard.stepServerUsers"), icon: <Users size={18} /> },
-        { id: 4, title: t("wizard.stepTestConnection"), icon: <Activity size={18} /> },
-        { id: 5, title: t("wizard.stepCompletion"), icon: <CheckCircle2 size={18} /> },
-    ];
-    const {
-        currentStep,
-        setCurrentStep,
-        isProcessing,
-        sshKey,
-        hostName,
-        setHostName,
-        endpointSshPort,
-        setEndpointSshPort,
-        sshPort,
-        createdHostName,
-        userKeys,
-        serviceKeys,
-        users,
-        newUsername,
-        setNewUsername,
-        sshScriptContent,
-        autosshScriptContent,
-        status,
-        keyModalOpen,
-        setKeyModalOpen,
-        keyModalContent,
-        keyModalTitle,
-        setKeyModalTitle,
-        setKeyModalContent,
-        configContent,
-        configLoading,
-    } = state;
-    const { handleKeyChange, handleStep1Submit, handleAddUser, handleDeleteUser } = actions;
-
-    const openKeyModal = (title: string, content: string) => {
-        setKeyModalTitle(title);
-        setKeyModalContent(content);
-        setKeyModalOpen(true);
-    };
+    const wizard = useCreateTunnelWizard();
+    const { step, created } = wizard;
+    const deviceName = created?.name ?? wizard.device.hostName.trim();
 
     return (
-        <div className="max-w-4xl mx-auto pb-12 animate-fade-in-up">
-            <div className="mb-8">
-                <h1 className="text-2xl font-bold text-foreground">{t("wizard.title")}</h1>
-                <p className="mt-1 text-sm text-muted-foreground">{t("wizard.subtitle")}</p>
-            </div>
-
-            <div className="mb-8 overflow-hidden rounded-lg bg-card shadow ring-1 ring-border">
-                <div className="flex bg-muted/50 border-b border-border divide-x divide-border">
-                    {STEPS.map((step) => {
-                        const isActive = step.id === currentStep;
-                        const isCompleted = step.id < currentStep;
-                        return (
-                            <div
-                                key={step.id}
-                                className={`flex-1 relative py-4 px-2 text-center text-sm font-medium ${isActive ? "bg-card text-green-600 dark:text-green-400 after:absolute after:bottom-0 after:left-0 after:w-full after:h-[2px] after:bg-green-600 dark:after:bg-green-400 after:origin-left after:animate-progress-fill" : isCompleted ? "text-foreground" : "text-muted-foreground"}`}
-                            >
-                                <div className="flex flex-col items-center justify-center gap-2">
-                                    <div
-                                        className={`flex justify-center items-center w-8 h-8 rounded-full ${isActive ? "bg-green-100 dark:bg-green-500/20 ring-4 ring-green-100/50 dark:ring-green-500/10 animate-pulse-glow" : isCompleted ? "bg-green-500 text-white" : "bg-muted"}`}
-                                    >
-                                        {isCompleted ? <Check size={16} /> : <span className={isActive ? "animate-pulse-step block flex items-center justify-center" : ""}>{step.icon}</span>}
-                                    </div>
-                                    <span className="hidden sm:block">{step.title}</span>
-                                </div>
-                            </div>
-                        );
-                    })}
+        <div className="mx-auto max-w-5xl space-y-6 pb-12 animate-fade-in-up">
+            <header className="flex items-start gap-4">
+                <div className="hidden size-12 shrink-0 place-items-center rounded-2xl bg-brand-gradient shadow-glow sm:grid" aria-hidden>
+                    <Cable className="text-white" size={22} />
                 </div>
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight text-foreground">{t("wizard.title")}</h1>
+                    <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("wizard.subtitle")}</p>
+                </div>
+            </header>
 
-                {currentStep === 1 && (
-                    <Step1BasicConfig
-                        sshKey={sshKey}
-                        onKeyChange={handleKeyChange}
-                        hostName={hostName}
-                        onHostNameChange={setHostName}
-                        endpointSshPort={endpointSshPort}
-                        onEndpointSshPortChange={setEndpointSshPort}
-                        isProcessing={isProcessing}
-                        onSubmit={handleStep1Submit}
-                    />
-                )}
-                {currentStep === 2 && (
-                    <Step2ServerKeys
-                        serviceKeys={serviceKeys}
-                        userKeys={userKeys}
-                        onViewKey={openKeyModal}
-                        onBack={() => setCurrentStep(1)}
-                        onNext={() => setCurrentStep(3)}
-                    />
-                )}
-                {currentStep === 3 && (
-                    <Step3ServerUsers
-                        users={users}
-                        newUsername={newUsername}
-                        onNewUsernameChange={setNewUsername}
-                        isProcessing={isProcessing}
-                        onAddUser={handleAddUser}
-                        onDeleteUser={handleDeleteUser}
-                        onBack={() => setCurrentStep(2)}
-                        onNext={() => setCurrentStep(4)}
-                    />
-                )}
-                {currentStep === 4 && (
-                    <Step4TestConnection
-                        sshScriptContent={sshScriptContent}
-                        autosshScriptContent={autosshScriptContent}
-                        status={status}
-                        createdHostName={createdHostName}
-                        sshPort={sshPort ?? 22}
-                        onBack={() => setCurrentStep(3)}
-                        onNext={() => setCurrentStep(5)}
-                    />
-                )}
-                {currentStep === 5 && (
-                    <Step5Completion
-                        createdHostName={createdHostName}
-                        sshPort={sshPort ?? 22}
-                        configContent={configContent}
-                        configLoading={configLoading}
-                    />
-                )}
+            <section className={`${CARD} space-y-6 p-4 sm:p-6`}>
+                <WizardStepper step={step} maxStep={wizard.maxStep} canLeaveFirst={!!created} onSelect={wizard.goTo} />
+                <SetupDiagram
+                    step={step}
+                    deviceName={deviceName}
+                    sshPort={wizard.device.sshPort}
+                    reversePort={created?.reversePort ?? null}
+                    accounts={wizard.accounts.list.map((a) => a.username)}
+                    connected={wizard.connected}
+                    rttMs={wizard.rttMs}
+                    allLoginsOk={wizard.verify.allLoginsOk}
+                />
+            </section>
+
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
+                <section key={step} className={`${CARD} p-4 animate-fade-in-up sm:p-6`} aria-live="off">
+                    {step === 1 && <StepDevice wizard={wizard} />}
+                    {step === 2 && <StepAccounts wizard={wizard} />}
+                    {step === 3 && <StepAuthorize wizard={wizard} />}
+                    {step === 4 && <StepConnect wizard={wizard} />}
+                    {step === 5 && <StepVerify wizard={wizard} />}
+                </section>
+                {/* 手機上「為什麼」放在步驟內容上方；桌面在右側並跟著捲動。/ Above the step on phones; a sticky side card on desktop. */}
+                <div className="order-first lg:order-none lg:sticky lg:top-6">
+                    <WhyPanel step={step} />
+                </div>
             </div>
-
-            <KeyViewModal
-                isOpen={keyModalOpen}
-                title={keyModalTitle}
-                content={keyModalContent}
-                onClose={() => setKeyModalOpen(false)}
-                onCopySuccess={() => showSuccess(t("wizard.keyCopied"))}
-            />
         </div>
     );
 }
