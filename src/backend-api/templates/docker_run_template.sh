@@ -1,29 +1,41 @@
 #!/bin/bash
+# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port} (reverse port ${reverse_port})
+set -e
 
 command -v docker >/dev/null 2>&1 || { echo 'docker not found. Please install Docker first.'; exit 1; }
 
-echo "[+] Docker AutoSSH Script start"
+echo "[+] Telepy Docker tunnel start"
 
-# Create authorized_keys file with Telepy public key
-mkdir -p ~/.ssh
-cat > ~/.ssh/authorized_keys << 'EOF'
-${telepy_public_key}
-EOF
+# Let the Telepy web terminal reach this machine: append the service key (keeps existing keys).
+TELEPY_KEY='${telepy_public_key}'
+if [ -n "$TELEPY_KEY" ]; then
+    mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    grep -qxF "$TELEPY_KEY" ~/.ssh/authorized_keys 2>/dev/null || echo "$TELEPY_KEY" >> ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+fi
 
-# Run AutoSSH in Docker container
+# Private key whose public key is registered in Telepy.
+KEY_FILE=${key_path}
+[ -f "$KEY_FILE" ] || { echo "Private key not found: $KEY_FILE"; exit 1; }
+
+# The container reaches this machine's sshd through host.docker.internal (Docker 20.10+ / Docker Desktop).
+docker rm -f telepy-tunnel >/dev/null 2>&1 || true
 docker run -d \
   --name telepy-tunnel \
   --restart unless-stopped \
-  -p ${reverse_port}:${reverse_port}${key_mount} \
-  alpine/autossh:latest \
-  autossh \
-  -M 0 \
-  -o "ServerAliveInterval 30" \
-  -o "ServerAliveCountMax 3" \
-  -o "StrictHostKeyChecking=no" \
-  -o "UserKnownHostsFile=/dev/null"${key_option} \
-  -p ${reverse_server_ssh_port} \
-  -NR '*:${reverse_port}:localhost:${ssh_port}' \
-  telepy@${server_domain}
+  --add-host host.docker.internal:host-gateway \
+  -v "$KEY_FILE":/id_rsa:ro \
+  -e SSH_REMOTE_USER=telepy \
+  -e SSH_REMOTE_HOST=${server_domain} \
+  -e SSH_REMOTE_PORT=${reverse_server_ssh_port} \
+  -e SSH_MODE=-R \
+  -e 'SSH_BIND_IP=*' \
+  -e SSH_TUNNEL_PORT=${reverse_port} \
+  -e SSH_TARGET_HOST=host.docker.internal \
+  -e SSH_TARGET_PORT=${ssh_port} \
+  -e SSH_SERVER_ALIVE_INTERVAL=30 \
+  -e SSH_SERVER_ALIVE_COUNT_MAX=3 \
+  -e AUTOSSH_GATETIME=0 \
+  jnovack/autossh:latest
 
-echo "[+] Docker container started. Check logs with: docker logs telepy-tunnel"
+echo "[+] Container started. Logs: docker logs -f telepy-tunnel"

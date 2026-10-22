@@ -180,15 +180,15 @@ export function useServerScriptModal(tunnelId: number | null, defaultSshPort: nu
                 const data = await res.json();
 
                 let cmd = "";
-                if (activeTab === "ssh" || activeTab === "autossh" || activeTab === "docker-run") {
-                    cmd = `curl -fsSL '${data.url}' | bash`;
-                } else if (activeTab === "docker-compose") {
-                    cmd = `curl -fsSL '${data.url}' -o telepy-docker-compose.yml && docker compose up -d`;
-                } else if (activeTab === "autossh-service") {
-                    cmd = `curl -fsSL '${data.url}' | bash`;
+                if (activeTab === "docker-compose") {
+                    // compose 只認 compose.yaml / docker-compose.yml，自訂檔名要 -f。/ Custom file name needs -f.
+                    cmd = `curl -fsSL '${data.url}' -o telepy-docker-compose.yml && docker compose -f telepy-docker-compose.yml up -d`;
                 } else if (activeTab === "powershell") {
-                    cmd = `powershell -Command "Invoke-WebRequest -UseBasicParsing '${data.url}' -OutFile 'telepy-tunnel.ps1'; .\\telepy-tunnel.ps1"`;
+                    // Bypass 只影響這個 powershell 行程，否則預設的 Restricted 政策會擋下載下來的腳本。
+                    // Process-scoped Bypass; the default Restricted policy would refuse the downloaded script.
+                    cmd = `powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing '${data.url}' -OutFile 'telepy-tunnel.ps1'; & '.\\telepy-tunnel.ps1'"`;
                 } else {
+                    // ssh / autossh / autossh-service / docker-run 都是 bash 腳本。/ All the others are bash scripts.
                     cmd = `curl -fsSL '${data.url}' | bash`;
                 }
 
