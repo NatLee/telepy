@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::db::Db;
 use crate::gateway::Gateway;
 use crate::hub::Hub;
+use crate::lan::scan::LanScans;
 use crate::mfa::MfaStores;
 use crate::monitor::StatusState;
 use crate::remote_browser::RemoteBrowser;
@@ -34,6 +35,8 @@ pub struct Inner {
     pub ai: AiSessions,
     /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
     pub mfa: MfaStores,
+    /// 區網掃描的進度 / 最近結果（每條隧道一筆）。/ LAN scan status per tunnel.
+    pub lan_scans: LanScans,
 }
 
 #[derive(Clone)]
@@ -69,6 +72,7 @@ impl AppState {
             pool: Arc::new(DevicePool::default()),
             ai: AiSessions::default(),
             mfa: MfaStores::new(&config.secret_key),
+            lan_scans: LanScans::default(),
             config,
             db,
         }))

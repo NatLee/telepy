@@ -19,6 +19,7 @@ const SCOPE_LABELS: Record<string, { label: TranslationKey; description: Transla
     "tunnels:read": { label: "oauth.scope.tunnelsRead", description: "oauth.scope.tunnelsReadDescription" },
     "ssh:exec": { label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription" },
     "ssh:files": { label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription" },
+    "network:scan": { label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription" },
 };
 
 function ConsentInner() {

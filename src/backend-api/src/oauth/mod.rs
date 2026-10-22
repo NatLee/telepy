@@ -23,6 +23,7 @@ pub const SCOPES: &[(&str, &str)] = &[
     ("tunnels:read", "List your tunnels and see whether they are online"),
     ("ssh:exec", "Open SSH sessions to your devices and run commands"),
     ("ssh:files", "Read and write files on your devices over SFTP"),
+    ("network:scan", "Discover the machines on the local networks behind your devices"),
 ];
 
 /// MCP 端點路徑（protected resource = `<issuer>/mcp`）。/ Path of the MCP endpoint.

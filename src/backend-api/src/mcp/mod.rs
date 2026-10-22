@@ -102,6 +102,18 @@ pub struct TunnelArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct LanScanArgs {
+    /// Tunnel id from list_tunnels
+    pub tunnel_id: i64,
+    /// Device account used for the scan; omit for the tunnel's default
+    pub username: Option<String>,
+    /// Private CIDRs to scan (at most 1024 addresses), e.g. ["192.168.1.0/24"]; omit to scan the device's own networks
+    pub subnets: Option<Vec<String>>,
+    /// Ports to probe; omit for 22, 80, 443, 445, 3389, 5900, 8080, 8443
+    pub ports: Option<Vec<i64>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OpenArgs {
     /// Tunnel id from list_tunnels
     pub tunnel_id: i64,
@@ -331,6 +343,57 @@ impl TelepyMcp {
             "rtt_ms": self.rtt(tunnel.reverse_port),
             "recent_events": events,
         })))
+    }
+
+    #[tool(description = "Machines on the local network behind a tunnel's device, from earlier scans and manual entries: address, hostname, open ports, SSH banner, label and the login user to use. Reach them with ssh_exec on the device (e.g. `ssh -o BatchMode=yes user@address …`) or let the user open a web terminal.", annotations(title = "LAN hosts", read_only_hint = true, open_world_hint = false))]
+    async fn lan_hosts(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("tunnels:read") {
+            return Ok(missing_scope("tunnels:read"));
+        }
+        let db = &self.state.db;
+        let tunnel = match db::tunnels::by_id(db, args.tunnel_id).await {
+            Ok(Some(t)) if p.tunnel_allowed(t.id) && permissions::effective_for(db, p.user.id, &t).await.ok().flatten().is_some() => t,
+            _ => return Ok(fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id))),
+        };
+        let tz = self.state.config.tz_offset_minutes;
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz)).collect();
+        self.audit(&p, "lan_hosts", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(format!("{} hosts", hosts.len())), ..Default::default() }).await;
+        Ok(CallToolResult::structured(json!({ "tunnel": { "id": tunnel.id, "name": tunnel.host_friendly_name }, "hosts": hosts, "last_scan": self.state.lan_scans.get(tunnel.id) })))
+    }
+
+    #[tool(description = "Scan the local network behind a tunnel's device for machines and open ports. The device's own sshd makes the connections (nothing is installed on it); only private networks, at most 1024 addresses; it can take about a minute. Requires owner or ADMIN on the tunnel. Results are saved to the tunnel's LAN host list.", annotations(title = "Scan LAN", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
+    async fn lan_scan(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<LanScanArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("network:scan") {
+            return Ok(missing_scope("network:scan"));
+        }
+        let db = &self.state.db;
+        let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
+        if !p.tunnel_allowed(args.tunnel_id) {
+            return Ok(not_found());
+        }
+        let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
+        let Some(eff) = permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten() else { return Ok(not_found()) };
+        let req = match crate::api::lan::prepare_scan(&self.state, &p.user, &tunnel, eff, args.username.as_deref(), args.subnets, args.ports).await {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = e.body.get("error").or(e.body.get("detail")).and_then(Value::as_str).unwrap_or("The scan could not start.").to_string();
+                self.audit(&p, "lan_scan", started, Audit { tunnel_id: Some(tunnel.id), error: Some(msg.clone()), ..Default::default() }).await;
+                return Ok(fail(msg));
+            }
+        };
+        let summary = crate::lan::scan::execute(self.state.clone(), req).await;
+        let tz = self.state.config.tz_offset_minutes;
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz)).collect();
+        let detail = format!("{} — {} host(s)", summary.status.networks.join(", "), summary.status.hosts_found);
+        self.audit(&p, "lan_scan", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), error: summary.status.error.clone(), ..Default::default() }).await;
+        if let Some(e) = &summary.status.error {
+            return Ok(fail(format!("The scan failed: {e}")));
+        }
+        Ok(CallToolResult::structured(json!({ "scan": summary.status, "new_hosts": summary.inserted, "hosts": hosts })))
     }
 
     #[tool(description = "Open an SSH session to a tunnel's device as one of its usernames. Returns a session_id for ssh_exec and sftp_*. The session closes itself when idle or at its maximum lifetime; close it with ssh_session_close when you are done.", annotations(title = "Open SSH session", read_only_hint = false, destructive_hint = false, open_world_hint = false))]

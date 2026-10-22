@@ -10,6 +10,7 @@ pub mod db;
 pub mod error;
 pub mod gateway;
 pub mod hub;
+pub mod lan;
 pub mod mcp;
 pub mod mfa;
 pub mod monitor;
