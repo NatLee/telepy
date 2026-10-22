@@ -492,12 +492,6 @@ pub struct RemoteBrowserError {
     pub code: Option<String>,
 }
 
-#[derive(ToSchema)]
-pub struct PushAck {
-    pub status: String,
-    pub ports: i64,
-}
-
 // ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)
 
 #[derive(ToSchema)]

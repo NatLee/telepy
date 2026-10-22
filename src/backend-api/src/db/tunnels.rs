@@ -64,10 +64,6 @@ pub async fn all_ports(db: &Db) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(&format!("SELECT reverse_port FROM {T}")).fetch_all(&db.read).await
 }
 
-pub async fn all_keys(db: &Db) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar(&format!("SELECT key FROM {T}")).fetch_all(&db.read).await
-}
-
 pub async fn keys_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(&format!("SELECT key FROM {T} WHERE user_id = ?")).bind(user_id).fetch_all(&db.read).await
 }
@@ -81,14 +77,6 @@ pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<Vec<Tunnel>> {
     .bind(user_id)
     .fetch_all(&db.read)
     .await
-}
-
-/// 找出「以 offered key 開頭」的隧道（sshd AuthorizedKeysCommand 的反查）。
-pub async fn owner_by_key_prefix(db: &Db, prefix: &str) -> sqlx::Result<Option<i64>> {
-    sqlx::query_scalar(&format!("SELECT user_id FROM {T} WHERE key LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1"))
-        .bind(like_prefix(prefix))
-        .fetch_optional(&db.read)
-        .await
 }
 
 /// 以 `type base64` 前綴找隧道（gateway 的公鑰認證）。/ Tunnel whose key starts with the offered key.

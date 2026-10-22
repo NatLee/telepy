@@ -19,11 +19,7 @@ async fn tunnel(app: &common::TestApp, user_id: i64, name: &str, port: i64) -> i
 
 #[tokio::test]
 async fn events_are_scoped_to_visible_tunnels() {
-    let mut app = common::spawn().await;
-    let mut config = app.state.config.clone();
-    config.gateway_enabled = true; // DB-backed /api/log/ssh
-    app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
-    app.router = telepy_server::app::build(app.state.clone());
+    let app = common::spawn().await;
     let admin = app.login("admin", "pw").await; // first user = superuser
     // 之後的註冊要先開放。/ Registration is closed after the first user; open it for bob and carol.
     let r = app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;

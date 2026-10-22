@@ -72,34 +72,10 @@ async fn tunnel_lifecycle_and_dashboard() {
     assert_eq!(r.json["tunnels"].as_array().unwrap().len(), 1);
     assert_eq!(r.json["ports"], json!({}));
 
-    // push a sample through the internal endpoint → ports map keyed by string
-    let req = axum::http::Request::builder()
-        .method("POST")
-        .uri("/api/reverse/internal/ss")
-        .header("authorization", "Bearer internal-secret")
-        .body(axum::body::Body::from("LISTEN 0 128 127.0.0.1:1024 0.0.0.0:*\n"))
-        .unwrap();
-    let resp = tower::ServiceExt::oneshot(app.router.clone(), req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    // the gateway reports a live forward → ports map keyed by string
+    app.state.status.set_listen_ports([1024u16].into_iter().collect());
     let r = app.get("/api/reverse/server/status/ports", Some(&admin)).await;
     assert_eq!(r.json, json!({"1024": true}));
-
-    // internal endpoint rejects a bad token with 403
-    let req = axum::http::Request::builder().method("GET").uri("/api/reverse/internal/keys?key_type=ssh-ed25519&key=AAAA").header("authorization", "Bearer nope").body(axum::body::Body::empty()).unwrap();
-    let resp = tower::ServiceExt::oneshot(app.router.clone(), req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-
-    // internal keys: offered tunnel key → owner's keys + all tunnel keys + service keys
-    let req = axum::http::Request::builder()
-        .method("GET")
-        .uri("/api/reverse/internal/keys?key_type=ssh-ed25519&key=AAAAC3NzaC1lZDI1NTE5AAAAIGq4u5n7tS1kO6o4m3yQ0tYQd6v7Jc5Zq8Hh3n5Vt7Wk")
-        .header("authorization", "Bearer internal-secret")
-        .body(axum::body::Body::empty())
-        .unwrap();
-    let resp = tower::ServiceExt::oneshot(app.router.clone(), req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
-    assert_eq!(String::from_utf8_lossy(&body), format!("{KEY_A}\n"));
 
     // patch description (details modal)
     let r = app.patch(&format!("/api/reverse/server/keys/{id}"), Some(&admin), json!({"description": "hello"})).await;
@@ -371,8 +347,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(keys.len(), 10);
     assert_eq!(r.json["meta"]["remote_browser_homepage"]["label"], "Remote Browser Homepage");
 
-    // logs: file missing → 404 "Logs not found"
+    // logs: no gateway events yet → 200 with an empty string
     let r = app.get("/api/log/ssh", Some(&admin)).await;
-    assert_eq!(r.status, StatusCode::NOT_FOUND);
-    assert_eq!(r.json, json!("Logs not found"));
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json, json!(""));
 }

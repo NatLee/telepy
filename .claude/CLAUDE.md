@@ -25,8 +25,8 @@ src/
       config.rs       # env → Config (same variable names as before: DEBUG, SECRET_KEY, REVERSE_SERVER_SSH_PORT, …)
       app.rs          # axum Router: REST (+compression) merged with /ws routes, CORS mirror, tracing
       db/             # sqlx over the Django-named tables; schema.rs = idempotent DDL (creates missing tables/columns, never alters existing)
-      auth/           # jwt.rs, password.rs (Django pbkdf2_sha256), google.rs (JWKS), extractor.rs (Bearer → AuthUser, InternalService)
-      api/            # REST handlers per former Django app: auth, tunnels, usernames, user_keys, reverse_keys, scripts, sharing, users, site_settings, logs, sftp, remote_browser, internal
+      auth/           # jwt.rs, password.rs (Django pbkdf2_sha256), google.rs (JWKS), extractor.rs (Bearer → AuthUser)
+      api/            # REST handlers per former Django app: auth, tunnels, usernames, user_keys, reverse_keys, scripts, sharing, users, site_settings, logs, sftp, remote_browser
       ws/             # WebSockets: auth.rs (first-message JWT), notifications, tunnel_connection, terminal (PTY), filemanager (SFTP), remote_browser (KasmVNC relay)
       gateway/        # in-process SSH server: pubkey auth from DB, tcpip-forward → 127.0.0.1:<port> loopback bridge, direct-tcpip, status + latency probes, sshd-style log
       monitor/        # StatusState (listening ports / latency), ports.rs (debounce + latency throttle), runner.rs (5 s cycle → notifications)
@@ -104,7 +104,7 @@ Copy `.env.example` to `.env` and configure:
 - `REVERSE_SERVER_SSH_PORT` — port devices connect their reverse SSH to (default: `24242`, published to the gateway's 2222)
 - `SOCIAL_GOOGLE_CLIENT_ID` — Google OAuth client ID
 - `SERVER_DOMAIN` — server hostname (default: `localhost`)
-- `INTERNAL_API_TOKEN` — secret for backend ↔ kasm-browser session-manager calls (and the internal endpoints)
+- `INTERNAL_API_TOKEN` — secret for backend → kasm-browser session-manager calls
 
 ## Architecture Notes
 
@@ -123,7 +123,6 @@ Copy `.env.example` to `.env` and configure:
 - **Tunnels list data:** `GET /api/reverse/server/dashboard` returns `{tunnels, ports, latency}` in one round-trip; the list serializer uses a precomputed permission map + share counts (no per-row queries).
 - **Logging:** `tracing` → stdout + daily rolling `/logs/telepy.log` and `/logs/error.log` (a bare `LOG_LEVEL=debug` silences sqlx/hyper/russh internals; pass a full EnvFilter directive to override). Gateway events (accepted / forward / disconnect / refused …) go to the `telepy_gateway_event` table (capped at 100k rows) and are also appended sshd-style to `/logs/ssh-gateway.log`; `/api/log/ssh/events?limit=&tunnel_id=` returns them as JSON (what the Logs page uses; oldest first) and `/api/log/ssh` renders the last 500 as sshd-style text (200 with an empty string when there are none). **Both are scoped:** admins (`is_superuser`) see every event, other users only events of tunnels they own or that are shared with them (tunnel-less events such as `listening` are admin-only; a foreign `tunnel_id` is a 404). The Logs page (`/tunnels/logs?tunnel=<id>`) keeps the tunnel filter in the URL and the tunnel actions menu deep-links to it; event badges key off the structured `event` field (`logs.event.*` i18n keys), not message text.
 - **Compatibility rules:** JSON shapes, status codes and error strings mirror the former DRF views (the frontend parses `{detail}` / `{error}` / `{field: [...]}`); keep them unless the frontend is changed in the same PR. DB datetimes are stored as naive UTC with microseconds (Django format) and serialised as `+08:00` ISO (DRF field) or `…Z` (DRF encoder) exactly where the old code did.
-- **Rollback:** `git checkout a622634` (last commit with the Python stack) restores the Django compose; the SQLite file and `SECRET_KEY` are shared, so switching either way keeps users logged in.
 
 ## Fonts
 
