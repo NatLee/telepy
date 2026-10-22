@@ -12,7 +12,7 @@ use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::NewTunnel};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
-use crate::monitor::find_free_ports;
+use crate::monitor::{find_free_port, loopback_bindable};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{json_str, now_iso_naive};
@@ -55,7 +55,7 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
     }
     let description = json_str(&body, "description").unwrap_or_default();
     let used = state.status.used_ports(&state.db).await?;
-    let port = find_free_ports(&used, 1).map_err(ApiError::bad_request)?[0];
+    let port = find_free_port(&used, loopback_bindable).map_err(ApiError::bad_request)?;
     let t = db::tunnels::create(
         &state.db,
         NewTunnel { user_id: user.id, host_friendly_name: &name, key: &key, reverse_port: port, description: Some(&description), default_username_id: None },
