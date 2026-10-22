@@ -68,8 +68,6 @@ export interface RecipeDef {
     /** 情境卡片上的旗標徽章（-L / -D …）。/ Flag badge shown on the recipe tile. */
     flag: string;
     title: TranslationKey;
-    hint: TranslationKey;
-    description: TranslationKey;
     fields: FieldDef[];
     defaults: RecipeParams;
     /** 是否為長駐轉發（可加 -f / keep-alive 等選項）。/ Long-running forward that accepts -f / keep-alive options. */
@@ -81,8 +79,6 @@ export const RECIPES: RecipeDef[] = [
         id: "local",
         flag: "-L",
         title: "sheet.recipe.local.title",
-        hint: "sheet.recipe.local.hint",
-        description: "sheet.recipe.local.description",
         fields: [
             { key: "remotePort", label: "sheet.field.devicePort", kind: "port" },
             { key: "localPort", label: "sheet.field.localPort", kind: "port" },
@@ -94,8 +90,6 @@ export const RECIPES: RecipeDef[] = [
         id: "lan",
         flag: "-L",
         title: "sheet.recipe.lan.title",
-        hint: "sheet.recipe.lan.hint",
-        description: "sheet.recipe.lan.description",
         fields: [
             { key: "lanHost", label: "sheet.field.lanHost", kind: "text" },
             { key: "lanPort", label: "sheet.field.lanPort", kind: "port" },
@@ -108,8 +102,6 @@ export const RECIPES: RecipeDef[] = [
         id: "socks",
         flag: "-D",
         title: "sheet.recipe.socks.title",
-        hint: "sheet.recipe.socks.hint",
-        description: "sheet.recipe.socks.description",
         fields: [{ key: "localPort", label: "sheet.field.proxyPort", kind: "port" }],
         defaults: { localPort: "1080" },
         forwarding: true,
@@ -118,8 +110,6 @@ export const RECIPES: RecipeDef[] = [
         id: "remote",
         flag: "-R",
         title: "sheet.recipe.remote.title",
-        hint: "sheet.recipe.remote.hint",
-        description: "sheet.recipe.remote.description",
         fields: [
             { key: "localPort", label: "sheet.field.yourServicePort", kind: "port" },
             { key: "devicePort", label: "sheet.field.deviceListenPort", kind: "port" },
@@ -131,8 +121,6 @@ export const RECIPES: RecipeDef[] = [
         id: "jump",
         flag: "-J",
         title: "sheet.recipe.jump.title",
-        hint: "sheet.recipe.jump.hint",
-        description: "sheet.recipe.jump.description",
         fields: [
             { key: "lanUser", label: "sheet.field.lanUser", kind: "text" },
             { key: "lanHost", label: "sheet.field.lanHost", kind: "text" },
@@ -145,8 +133,6 @@ export const RECIPES: RecipeDef[] = [
         id: "copy",
         flag: "scp",
         title: "sheet.recipe.copy.title",
-        hint: "sheet.recipe.copy.hint",
-        description: "sheet.recipe.copy.description",
         fields: [
             {
                 key: "direction",
@@ -376,6 +362,38 @@ export function buildSegments(id: RecipeId, params: RecipeParams, target: Connec
         }
     }
 }
+
+/**
+ * 每段長說明對應的「短標籤」：註解式指令（像 explainshell）在每段底下只放幾個字，長說明留給 hover。
+ * Short label for each long explanation: the annotated command (explainshell-style) shows a few words under
+ * every part and keeps the long sentence for hover.
+ */
+export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
+    "sheet.explain.ssh": "sheet.part.ssh",
+    "sheet.explain.noShell": "sheet.part.noShell",
+    "sheet.explain.background": "sheet.part.background",
+    "sheet.explain.keepAlive": "sheet.part.keepAlive",
+    "sheet.explain.exitOnFailure": "sheet.part.exitOnFailure",
+    "sheet.explain.localForward": "sheet.part.localForward",
+    "sheet.explain.dynamicForward": "sheet.part.dynamicForward",
+    "sheet.explain.remoteForward": "sheet.part.remoteForward",
+    "sheet.explain.alias": "sheet.part.alias",
+    "sheet.explain.jumpServer": "sheet.part.jumpServer",
+    "sheet.explain.directTarget": "sheet.part.directTarget",
+    "sheet.explain.jumpDevice": "sheet.part.jumpDevice",
+    "sheet.explain.jumpChain": "sheet.part.jumpChain",
+    "sheet.explain.lanPort": "sheet.part.lanPort",
+    "sheet.explain.lanTarget": "sheet.part.lanTarget",
+    "sheet.explain.scp": "sheet.part.scp",
+    "sheet.explain.scpPort": "sheet.part.scpPort",
+    "sheet.explain.rsync": "sheet.part.rsync",
+    "sheet.explain.rsyncShell": "sheet.part.rsyncShell",
+    "sheet.explain.copyFromLocal": "sheet.part.copyFromLocal",
+    "sheet.explain.copyToLocal": "sheet.part.copyToLocal",
+    "sheet.explain.copyToDevice": "sheet.part.copyToDevice",
+    "sheet.explain.copyFromDevice": "sheet.part.copyFromDevice",
+    "sheet.explain.remoteCommand": "sheet.part.remoteCommand",
+};
 
 export function segmentsToString(segments: Segment[]): string {
     return segments.flatMap((s) => s.tokens.map((t) => t.text)).join(" ");
