@@ -66,6 +66,8 @@ export interface TunnelActionHandlers {
     onCommands: (tunnelId: number) => void;
     /** 這台裝置的金鑰清單（/tunnels/keys?device=<id>）。/ This device's key list. */
     onKeys: (tunnelId: number) => void;
+    /** 裝置背後的區網主機（/tunnels/network?tunnel=<id>）。/ The LAN hosts behind this device. */
+    onNetwork: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;

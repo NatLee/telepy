@@ -10,6 +10,7 @@
  */
 import React, { Suspense, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
     AlertTriangle,
     ArrowRight,
@@ -153,10 +154,24 @@ function CheatsheetInner() {
     const { state, actions } = useCheatsheetPage();
     const { tunnels, loadingTunnels, portsMap, selected, online, keyCount, config, usernameId, hasTargetUser, target, mode } = state;
 
-    const [recipe, setRecipe] = useState<RecipeId>("local");
-    const [paramsById, setParamsById] = useState<Record<RecipeId, RecipeParams>>(
-        () => Object.fromEntries(RECIPES.map((r) => [r.id, { ...r.defaults }])) as Record<RecipeId, RecipeParams>
-    );
+    // 深連結：?recipe=<id> 選定任務，該任務的欄位可用同名參數帶入（例如網路拓撲頁的 jump + lanHost/lanUser/lanPort）。
+    // Deep link: ?recipe=<id> picks the task and same-named params prefill its fields (e.g. jump from the network page).
+    const searchParams = useSearchParams();
+    const [recipe, setRecipe] = useState<RecipeId>(() => {
+        const r = searchParams.get("recipe");
+        return r && r in RECIPE_BY_ID ? (r as RecipeId) : "local";
+    });
+    const [paramsById, setParamsById] = useState<Record<RecipeId, RecipeParams>>(() => {
+        const all = Object.fromEntries(RECIPES.map((r) => [r.id, { ...r.defaults }])) as Record<RecipeId, RecipeParams>;
+        const r = searchParams.get("recipe");
+        if (r && r in RECIPE_BY_ID) {
+            for (const f of RECIPE_BY_ID[r as RecipeId].fields) {
+                const v = searchParams.get(f.key);
+                if (v) all[r as RecipeId][f.key] = v;
+            }
+        }
+        return all;
+    });
     const [options, setOptions] = useState<ForwardOptions>({ background: false, keepAlive: false, exitOnFailure: false });
     const [setupOpen, setSetupOpen] = useState(false);
 
