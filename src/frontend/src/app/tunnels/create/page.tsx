@@ -66,15 +66,19 @@ export default function CreateTunnelWizard() {
             />
 
             {showModes && (
-                <Segmented<Mode>
-                    kind="tabs"
-                    value={mode}
-                    onChange={setMode}
-                    options={[
-                        { value: "command", label: t("join.mode.command"), icon: <Terminal size={14} /> },
-                        { value: "steps", label: t("join.mode.steps"), icon: <ListChecks size={14} /> },
-                    ]}
-                />
+                // 分段切換不會縮（min-w-max）：窄螢幕讓它在自己這一列裡捲動，整頁不會被撐寬。
+                // The segmented control never shrinks (min-w-max): on narrow screens it scrolls in its own row instead of widening the page.
+                <div className="max-w-full overflow-x-auto [scrollbar-width:none]">
+                    <Segmented<Mode>
+                        kind="tabs"
+                        value={mode}
+                        onChange={setMode}
+                        options={[
+                            { value: "command", label: t("join.mode.command"), icon: <Terminal size={14} /> },
+                            { value: "steps", label: t("join.mode.steps"), icon: <ListChecks size={14} /> },
+                        ]}
+                    />
+                </div>
             )}
 
             {mode === "command" ? (
@@ -103,7 +107,7 @@ export default function CreateTunnelWizard() {
             ) : (
             <>
             <section className={`${CARD} space-y-6 p-4 sm:p-6`}>
-                <WizardStepper step={step} maxStep={wizard.maxStep} canLeaveFirst={!!created} onSelect={wizard.goTo} />
+                <WizardStepper wizard={wizard} />
                 <SetupDiagram
                     step={step}
                     deviceName={deviceName}

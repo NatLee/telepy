@@ -33,11 +33,11 @@ import { Code, Disclosure, StepFooter, StepHeading } from "./parts";
 type RowState = "ok" | "wait" | "running" | "fail" | "warn";
 
 const ROW_ICON: Record<RowState, { icon: LucideIcon; className: string }> = {
-    ok: { icon: CheckCircle2, className: "text-emerald-500" },
+    ok: { icon: CheckCircle2, className: "text-success" },
     wait: { icon: CircleDashed, className: "text-muted-foreground" },
     running: { icon: Loader2, className: "animate-spin text-primary" },
     fail: { icon: XCircle, className: "text-destructive" },
-    warn: { icon: AlertTriangle, className: "text-amber-500" },
+    warn: { icon: AlertTriangle, className: "text-warning" },
 };
 
 function CheckRow({ state, title, detail, action }: { state: RowState; title: React.ReactNode; detail?: React.ReactNode; action?: React.ReactNode }) {
@@ -66,8 +66,8 @@ function NextTile({ href, icon: Icon, title, desc, primary }: { href: string; ic
             href={href}
             prefetch={false}
             className={cn(
-                "group flex items-start gap-3 rounded-xl border p-3.5 transition-all duration-200 hover:-translate-y-px",
-                primary ? "border-transparent bg-brand-gradient text-white shadow-glow" : "border-border bg-background/60 hover:border-primary/40 hover:bg-primary/5"
+                "group flex items-start gap-3 rounded-xl border p-3.5 transition-all duration-200",
+                primary ? "border-transparent bg-primary text-primary-foreground" : "border-border bg-background/60 hover:border-primary/40 hover:bg-primary/5"
             )}
         >
             <span className={cn("grid size-9 shrink-0 place-items-center rounded-lg", primary ? "bg-white/20" : "bg-primary/10 text-primary")} aria-hidden>
@@ -106,8 +106,8 @@ export function StepVerify({ wizard }: { wizard: CreateTunnelWizard }) {
     return (
         <div className="space-y-6">
             {v.allLoginsOk ? (
-                <div className="flex items-center gap-4 rounded-2xl border border-emerald-500/30 bg-gradient-to-r from-emerald-500/[0.10] to-transparent p-4 animate-fade-in-up sm:p-5">
-                    <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-emerald-500 text-white shadow-[0_0_24px_rgba(16,185,129,0.45)]" aria-hidden>
+                <div className="flex items-center gap-4 rounded-xl border border-success/30 bg-success/[0.10] p-4 animate-fade-in-up sm:p-5">
+                    <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-success text-white" aria-hidden>
                         <PartyPopper size={24} />
                     </span>
                     <StepHeading title={t("wizard.verify.readyTitle", { name: created.name })} subtitle={t("wizard.verify.readyBody")} />
@@ -116,7 +116,7 @@ export function StepVerify({ wizard }: { wizard: CreateTunnelWizard }) {
                 <StepHeading title={t("wizard.verify.title")} subtitle={t("wizard.verify.subtitle", { name: created.name })} />
             )}
 
-            <div className="overflow-hidden rounded-2xl border border-border bg-background/50">
+            <div className="overflow-hidden rounded-xl border border-border bg-background/50">
                 <ol className="divide-y divide-border">
                     <CheckRow state="ok" title={t("wizard.verify.created")} detail={t("wizard.verify.createdDetail", { port: created.reversePort })} />
                     <CheckRow
