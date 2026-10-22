@@ -149,7 +149,7 @@ function UserKeysPage() {
                 keyItem={details}
                 placements={details ? (page.placements.get(details.id) ?? []) : []}
                 onClose={() => setDetailsId(null)}
-                onSave={page.updateDescription}
+                onSave={page.updateKey}
                 onManageDevice={(d) => {
                     setDetailsId(null);
                     page.openDevice(d.tunnel_id);

@@ -83,7 +83,7 @@ export function TerminalHeader({
                                 <TerminalIcon className="text-primary" size={18} />
                             </div>
                             <h1 className="text-sm md:text-base font-bold text-foreground flex items-center">
-                                {t("common.terminal")} <Badge variant="secondary" className="ml-2 font-mono text-[10px] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
+                                {t("common.terminal")} <Badge variant="secondary" className="ml-2 font-mono text-[0.6875rem] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
                             </h1>
 
                             {/* Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見 */}

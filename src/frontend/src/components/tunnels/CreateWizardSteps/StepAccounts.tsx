@@ -61,7 +61,7 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
                                 className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-2.5 py-0.5 font-mono text-xs text-foreground/80 transition-colors hover:border-primary/50 hover:bg-primary/5 hover:text-primary disabled:opacity-50"
                             >
                                 <Plus size={11} aria-hidden /> {s}
-                                {s === fromKey && <span className="font-sans text-[10px] text-muted-foreground">· {t("wizard.accounts.fromKey")}</span>}
+                                {s === fromKey && <span className="font-sans text-[0.6875rem] text-muted-foreground">· {t("wizard.accounts.fromKey")}</span>}
                             </button>
                         ))}
                     </div>
@@ -87,7 +87,7 @@ export function StepAccounts({ wizard }: { wizard: CreateTunnelWizard }) {
                             </span>
                             <span className="min-w-0 flex-1">
                                 <span className="block truncate font-mono text-sm font-medium text-foreground">{acc.username}</span>
-                                <span className="block truncate text-[11px] text-muted-foreground">{acc.username}@{name}</span>
+                                <span className="block truncate text-[0.75rem] text-muted-foreground">{acc.username}@{name}</span>
                             </span>
                             <Button
                                 type="button"

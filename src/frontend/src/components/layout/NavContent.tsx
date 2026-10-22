@@ -9,6 +9,7 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { ScaleSwitcher } from "./ScaleSwitcher";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { UserPreferencesModal } from "./UserPreferencesModal";
 
@@ -73,7 +74,7 @@ function navItemClass(active: boolean, collapsed: boolean) {
 function SectionLabel({ children, collapsed }: { children: React.ReactNode; collapsed: boolean }) {
     if (collapsed) return <div className="my-3 mx-2 border-t border-sidebar-border" />;
     return (
-        <p className="px-3 pt-5 pb-1.5 text-[11px] uppercase tracking-[0.14em] text-muted-foreground/70">
+        <p className="px-3 pt-5 pb-1.5 text-[0.75rem] uppercase tracking-[0.14em] text-muted-foreground/70">
             {children}
         </p>
     );
@@ -163,13 +164,17 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
             </nav>
 
             <div className={`p-3 border-t border-sidebar-border space-y-2.5 ${className}`}>
-                {/* 語言(Auto/EN/繁/日)與主題(系統/淺色/深色)並排成同一列的兩條分段軌道,一鍵切換;
-                    收合時各自變成下拉選單。
-                    Language (Auto/EN/繁/日) and theme (system/light/dark) share one row as two segmented
-                    tracks, one click to switch; each becomes a dropdown when collapsed. */}
-                <div className={collapsed ? "space-y-2" : "flex gap-1.5"}>
-                    <LanguageSwitcher collapsed={collapsed} className="flex-[4]" />
-                    <ThemeSwitcher collapsed={collapsed} className="flex-[3]" />
+                {/* 語言(Auto/EN/繁/日)一列,主題(系統/淺色/深色)與顯示大小(小/中/大)並排第二列,
+                    都是一鍵切換的分段軌道;收合時各自變成下拉選單。
+                    Language (Auto/EN/繁/日) on one row, theme (system/light/dark) and display size
+                    (S/M/L) side by side on the next, all one-click segmented tracks; each becomes a
+                    dropdown when collapsed. */}
+                <div className={collapsed ? "space-y-2" : "space-y-1.5"}>
+                    <LanguageSwitcher collapsed={collapsed} />
+                    <div className={collapsed ? "space-y-2" : "grid grid-cols-2 gap-1.5"}>
+                        <ThemeSwitcher collapsed={collapsed} />
+                        <ScaleSwitcher collapsed={collapsed} />
+                    </div>
                 </div>
 
                 {/* 使用者列 + 偏好設定齒輪 + 登出 / User row + preferences gear + logout */}
@@ -180,7 +185,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                         </span>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm text-foreground truncate leading-tight">{user.username}</p>
-                            <p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">{user.is_superuser ? t("nav.roleAdministrator") : t("nav.roleUser")}</p>
+                            <p className="text-[0.75rem] text-muted-foreground truncate leading-tight mt-0.5">{user.is_superuser ? t("nav.roleAdministrator") : t("nav.roleUser")}</p>
                         </div>
                         <button
                             type="button"

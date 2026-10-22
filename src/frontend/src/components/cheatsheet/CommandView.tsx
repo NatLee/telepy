@@ -76,7 +76,7 @@ export function CommandBar({ segments }: { segments: Segment[] }) {
     const text = segmentsToString(segments);
     return (
         <div className="flex flex-col gap-3 rounded-2xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
-            <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap py-1 font-mono text-[15px] leading-relaxed text-slate-200">
+            <pre className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap py-1 font-mono text-[1rem] leading-relaxed text-slate-200">
                 <span className="select-none text-slate-500">$ </span>
                 <Tokens segments={segments} />
             </pre>
@@ -136,7 +136,7 @@ export function AnnotatedCommand({ segments }: { segments: Segment[] }) {
                             <span className={cn("whitespace-nowrap font-mono text-sm", color.text)}>{seg.tokens.map((tk) => tk.text).join(" ")}</span>
                             <span className={cn("mt-1.5 h-[3px] w-full min-w-6 rounded-full", color.bar)} aria-hidden />
                             {short && (
-                                <span className="mt-1.5 max-w-[11rem] text-center text-[11px] leading-snug text-slate-300">
+                                <span className="mt-1.5 max-w-[11rem] text-center text-[0.75rem] leading-snug text-slate-300">
                                     {t(short, seg.explain!.vars)}
                                 </span>
                             )}

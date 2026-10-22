@@ -43,7 +43,7 @@ function Column({ step, title, children, className }: { step: number; title: str
     return (
         <div className={cn("flex min-w-0 flex-col gap-2 rounded-xl bg-card p-3 ring-1 ring-border shadow-card", className)}>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="grid size-5 place-items-center rounded-full bg-muted font-mono text-[11px] text-foreground">{step}</span>
+                <span className="grid size-5 place-items-center rounded-full bg-muted font-mono text-[0.75rem] text-foreground">{step}</span>
                 {title}
             </div>
             {children}
@@ -89,18 +89,18 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
             {/* 示意圖 / Diagram */}
             <div className="flex flex-col gap-2 lg:flex-row lg:items-stretch" role="img" aria-label={t("keys.how.diagramAria")}>
                 <Column step={1} title={t("keys.how.colKeys")} className="lg:w-[13rem]">
-                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <div className="flex items-center gap-1.5 text-[0.75rem] text-muted-foreground">
                         <Laptop size={13} aria-hidden /> alice
                     </div>
                     <div className="flex flex-col items-start gap-1.5">
                         <KeyChip who="owner" label="macbook" ticked />
                         <KeyChip who="owner" label="desktop" ticked={false} />
                     </div>
-                    <p className="text-[11px] leading-snug text-muted-foreground">{t("keys.how.colKeysNote")}</p>
+                    <p className="text-[0.75rem] leading-snug text-muted-foreground">{t("keys.how.colKeysNote")}</p>
                 </Column>
                 <Flow />
                 <Column step={2} title={t("keys.how.colList")} className="lg:w-[15rem]">
-                    <div className="font-mono text-[11px] text-muted-foreground">pi-lab</div>
+                    <div className="font-mono text-[0.75rem] text-muted-foreground">pi-lab</div>
                     <div className="flex flex-col items-start gap-1.5">
                         <KeyChip who="owner" label="alice/macbook" />
                         <KeyChip who="sharee" label="bob/laptop" />
@@ -109,33 +109,33 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
                             <Scissors size={13} className="text-destructive" aria-hidden />
                         </span>
                     </div>
-                    <p className="text-[11px] leading-snug text-muted-foreground">{t("keys.how.colListNote")}</p>
+                    <p className="text-[0.75rem] leading-snug text-muted-foreground">{t("keys.how.colListNote")}</p>
                 </Column>
                 <Flow />
                 <Column step={3} title={t("keys.how.colDevice")} className="flex-1">
                     <div className="grid gap-2 sm:grid-cols-2">
                         <div className="rounded-lg bg-surface p-2 ring-1 ring-border">
-                            <div className="mb-1.5 font-mono text-[11px] text-foreground">ubuntu <span className="text-muted-foreground">~/.ssh/authorized_keys</span></div>
+                            <div className="mb-1.5 font-mono text-[0.75rem] text-foreground">ubuntu <span className="text-muted-foreground">~/.ssh/authorized_keys</span></div>
                             <div className="flex flex-col items-start gap-1">
                                 <KeyChip who="owner" label="alice/macbook" />
                                 <KeyChip who="sharee" label="bob/laptop" />
                             </div>
                         </div>
                         <div className="rounded-lg bg-surface p-2 ring-1 ring-border">
-                            <div className="mb-1.5 font-mono text-[11px] text-foreground">root <span className="text-muted-foreground">~/.ssh/authorized_keys</span></div>
+                            <div className="mb-1.5 font-mono text-[0.75rem] text-foreground">root <span className="text-muted-foreground">~/.ssh/authorized_keys</span></div>
                             <div className="flex flex-col items-start gap-1">
                                 <KeyChip who="owner" label="alice/macbook" />
                             </div>
                         </div>
                     </div>
-                    <p className="text-[11px] leading-snug text-muted-foreground">
+                    <p className="text-[0.75rem] leading-snug text-muted-foreground">
                         {tn("keys.how.colDeviceNote", { bob: <span className="text-brand-2">bob</span>, ubuntu: <code className="font-mono">ubuntu</code> })}
                     </p>
                 </Column>
             </div>
 
             {/* 圖例 / Legend */}
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.75rem] text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-primary/60" aria-hidden />{t("keys.how.legendOwner")}</span>
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-brand-2/70" aria-hidden />{t("keys.how.legendSharee")}</span>
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-muted-foreground/40" aria-hidden />{t("keys.how.legendRevoked")}</span>

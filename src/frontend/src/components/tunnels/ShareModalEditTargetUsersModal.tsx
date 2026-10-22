@@ -70,7 +70,7 @@ export function ShareModalEditTargetUsersModal({
                             />
                             <code className="font-mono text-foreground">{targetUser.username}</code>
                             {targetUser.created_by && (
-                                <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">
                                     {t("common.byUserTag", { user: targetUser.created_by, id: targetUser.created_by_id ?? "" })}
                                 </span>
                             )}

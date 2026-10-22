@@ -13,6 +13,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Segmented } from "@/components/ui/segmented";
+import { SectionHeading } from "@/components/ui/section";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -32,12 +33,7 @@ const KIND: Record<AuditKind, { label: TranslationKey; className: string }> = {
 };
 
 function SectionTitle({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) {
-    return (
-        <div className="mb-2">
-            <h3 className="text-sm text-foreground">{children}</h3>
-            {hint && <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>}
-        </div>
-    );
+    return <SectionHeading title={children} description={hint} className="mb-2.5" />;
 }
 
 export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: number | null; onClose: () => void; onChanged: () => void }) {
@@ -73,6 +69,21 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             icon={<HardDrive />}
             size="3xl"
             isLoading={dk.loading}
+            toolbar={
+                d?.can_manage ? (
+                    <Segmented
+                        kind="tabs"
+                        fullWidth
+                        value={tab}
+                        onChange={openAudit}
+                        aria-label={t("keys.device.tabsAria")}
+                        options={[
+                            { value: "list", label: t("keys.device.tabList"), icon: <KeyRound size={15} /> },
+                            { value: "audit", label: t("keys.device.tabAudit"), icon: <FileSearch size={15} /> },
+                        ]}
+                    />
+                ) : undefined
+            }
             footer={
                 <>
                     <Button variant="outline" onClick={close}>{t("common.close")}</Button>
@@ -87,19 +98,6 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             {dk.notFound && <Callout tone="danger">{t("keys.device.notFound")}</Callout>}
             {d && (
                 <div className="space-y-5">
-                    {d.can_manage && (
-                        <Segmented
-                            kind="tabs"
-                            fullWidth
-                            value={tab}
-                            onChange={openAudit}
-                            aria-label={t("keys.device.tabsAria")}
-                            options={[
-                                { value: "list", label: t("keys.device.tabList"), icon: <KeyRound size={15} /> },
-                                { value: "audit", label: t("keys.device.tabAudit"), icon: <FileSearch size={15} /> },
-                            ]}
-                        />
-                    )}
                     {!d.tunnel.online && tab === "list" && (
                         <Callout tone="warning" icon={<WifiOff size={17} className="mt-0.5 shrink-0 text-warning" aria-hidden />}>
                             {t("keys.device.offline")}
@@ -142,7 +140,7 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                                                     )}
                                                     <span className="min-w-0">
                                                         <span className="block truncate text-sm text-foreground">{k.name}</span>
-                                                        <span className="block truncate font-mono text-[11px] text-muted-foreground" title={k.fingerprint ?? ""}>
+                                                        <span className="block truncate font-mono text-[0.75rem] text-muted-foreground" title={k.fingerprint ?? ""}>
                                                             {k.key_type ?? "?"} · {shortFingerprint(k.fingerprint)}
                                                         </span>
                                                     </span>
@@ -178,10 +176,10 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                                                 <div className="min-w-0 space-y-1">
                                                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                         <span className="truncate text-sm text-foreground">{e.name}</span>
-                                                        <span className={cn("rounded-full px-1.5 py-px text-[10px] ring-1 ring-inset", e.mine ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
+                                                        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", e.mine ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
                                                             {e.mine ? t("keys.device.you") : e.owner.username}
                                                         </span>
-                                                        <span className="font-mono text-[11px] text-muted-foreground" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
+                                                        <span className="font-mono text-[0.75rem] text-muted-foreground" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
                                                     </div>
                                                     <TargetChips targets={e.targets} online={d.tunnel.online} />
                                                 </div>
@@ -275,7 +273,7 @@ function AuditTab({ dk, onRemove }: { dk: ReturnType<typeof useDeviceKeys>; onRe
                         <span className="font-mono text-sm text-foreground">
                             {a.username} <span className="text-xs text-muted-foreground">~/.ssh/authorized_keys</span>
                         </span>
-                        {a.ok && <span className="text-[11px] text-muted-foreground">{t("keys.audit.lineCount", { count: a.lines.length })}</span>}
+                        {a.ok && <span className="text-[0.75rem] text-muted-foreground">{t("keys.audit.lineCount", { count: a.lines.length })}</span>}
                     </header>
                     <div className="p-3">
                         {!a.ok ? (
@@ -293,17 +291,17 @@ function AuditTab({ dk, onRemove }: { dk: ReturnType<typeof useDeviceKeys>; onRe
                                         <li key={l.line_no} className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between">
                                             <div className="min-w-0 space-y-1">
                                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                                    <span className={cn("rounded-full px-2 py-px text-[11px] ring-1 ring-inset", kind.className)}>
+                                                    <span className={cn("rounded-full px-2 py-px text-[0.75rem] ring-1 ring-inset", kind.className)}>
                                                         {t(kind.label)}
                                                         {l.owner ? ` · ${l.owner}` : ""}
                                                     </span>
-                                                    {l.key_type && <span className="font-mono text-[11px] text-muted-foreground">{l.key_type}{l.bits ? ` · ${l.bits}` : ""}</span>}
-                                                    {l.comment && <span className="truncate font-mono text-[11px] text-foreground/80">{l.comment}</span>}
+                                                    {l.key_type && <span className="font-mono text-[0.75rem] text-muted-foreground">{l.key_type}{l.bits ? ` · ${l.bits}` : ""}</span>}
+                                                    {l.comment && <span className="truncate font-mono text-[0.75rem] text-foreground/80">{l.comment}</span>}
                                                 </div>
-                                                <div className="truncate font-mono text-[11px] text-muted-foreground" title={l.fingerprint ?? l.raw ?? ""}>
+                                                <div className="truncate font-mono text-[0.75rem] text-muted-foreground" title={l.fingerprint ?? l.raw ?? ""}>
                                                     {l.fingerprint ?? l.raw}
                                                 </div>
-                                                {l.options && <div className="truncate font-mono text-[11px] text-warning" title={l.options}>{t("keys.audit.options", { options: l.options })}</div>}
+                                                {l.options && <div className="truncate font-mono text-[0.75rem] text-warning" title={l.options}>{t("keys.audit.options", { options: l.options })}</div>}
                                             </div>
                                             {removable && (
                                                 <Button

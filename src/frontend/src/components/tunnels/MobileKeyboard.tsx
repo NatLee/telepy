@@ -98,7 +98,7 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
                                     aria-pressed={mode === "accessory"}
                                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setMode("accessory"); }}
                                     className={cn(
-                                        "h-6 px-2.5 rounded flex items-center gap-1 text-[11px] font-medium transition-colors",
+                                        "h-6 px-2.5 rounded flex items-center gap-1 text-[0.75rem] font-medium transition-colors",
                                         mode === "accessory" ? "bg-background shadow text-foreground" : "text-muted-foreground"
                                     )}
                                 >
@@ -109,7 +109,7 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
                                     aria-pressed={mode === "full"}
                                     onPointerDown={(e) => { e.preventDefault(); triggerHaptic(); setMode("full"); }}
                                     className={cn(
-                                        "h-6 px-2.5 rounded flex items-center gap-1 text-[11px] font-medium transition-colors",
+                                        "h-6 px-2.5 rounded flex items-center gap-1 text-[0.75rem] font-medium transition-colors",
                                         mode === "full" ? "bg-background shadow text-foreground" : "text-muted-foreground"
                                     )}
                                 >

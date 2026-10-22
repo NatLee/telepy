@@ -25,7 +25,7 @@ function Step({ n, state, title, children, last = false }: { n: number; state: S
             {!last && <span className="absolute left-4 top-9 bottom-1 w-px bg-border" aria-hidden />}
             <span
                 className={cn(
-                    "relative grid size-8 shrink-0 place-items-center rounded-full text-sm font-semibold ring-1 ring-inset",
+                    "relative grid size-8 shrink-0 place-items-center rounded-full text-sm ring-1 ring-inset",
                     state === "done" && "bg-emerald-500/12 text-emerald-600 ring-emerald-500/30 dark:text-emerald-400",
                     state === "todo" && "bg-amber-500/12 text-amber-600 ring-amber-500/35 dark:text-amber-400",
                     state === "info" && "bg-primary/10 text-primary ring-primary/25"
@@ -34,7 +34,7 @@ function Step({ n, state, title, children, last = false }: { n: number; state: S
                 {n}
             </span>
             <div className="min-w-0 flex-1 space-y-2 pt-1">
-                <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                <p className="flex items-center gap-2 text-base text-foreground">
                     {title}
                     <Icon
                         size={15}

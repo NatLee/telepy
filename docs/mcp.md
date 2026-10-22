@@ -92,7 +92,7 @@ username，與 web terminal 相同）。
 - MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是 OAuth grant（哪個 app），不是 MCP 連線；
   不同 app 互相看不到彼此的 session。
 
-三個上限都在 **設定 → AI 存取（MCP）** 分頁（`/tunnels/settings?tab=ai`，同頁也顯示 MCP 端點網址），變更後對新開的 session 生效。
+三個上限都在管理員的 **網站設定 → AI 存取（MCP）** 分頁（`/tunnels/settings?tab=ai`，同頁也顯示 MCP 端點網址），變更後對新開的 session 生效。
 
 ## 通知與稽核
 

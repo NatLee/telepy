@@ -81,7 +81,7 @@ export function ThemeSwitcher({ collapsed = false, className = "" }: { collapsed
                         aria-label={label}
                         aria-pressed={isActive}
                         onClick={() => changeTheme(value)}
-                        className={`flex h-7 items-center justify-center rounded-md text-[13px] transition-[color,background-color,box-shadow] ${isActive
+                        className={`flex h-7 items-center justify-center rounded-md text-[0.875rem] transition-[color,background-color,box-shadow] ${isActive
                             ? "bg-card text-foreground shadow-card [&_svg]:text-primary"
                             : "text-muted-foreground hover:text-foreground"
                             }`}

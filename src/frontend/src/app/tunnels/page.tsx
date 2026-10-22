@@ -28,7 +28,7 @@ import { useViewMode } from "@/hooks/useViewMode";
 import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
-const TH = "px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap";
+const TH = "px-4 py-3 text-left text-[0.75rem] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap";
 
 export default function TunnelsPage() {
     const { t } = useI18n();

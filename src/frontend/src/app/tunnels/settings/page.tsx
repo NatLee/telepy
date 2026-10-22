@@ -28,6 +28,8 @@ import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
 import { Segmented } from "@/components/ui/segmented";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Chip, SectionHeading } from "@/components/ui/section";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
 import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
@@ -135,7 +137,12 @@ function AdminSettings() {
             <PageHeader
                 icon={<Settings />}
                 title={t("settings.title")}
-                titleAddon={<WebSocketStatusBadge />}
+                titleAddon={
+                    <>
+                        <Chip tone="primary"><Shield /> {t("common.adminOnly")}</Chip>
+                        <WebSocketStatusBadge />
+                    </>
+                }
                 description={t("settings.subtitle")}
             />
 
@@ -220,7 +227,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                 <li key={key} className="p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex-1 min-w-0">
-                                            <h4 className="text-[15px] text-foreground">
+                                            <h4 className="text-[1rem] text-foreground">
                                                 {labelOf(key, m)}
                                             </h4>
                                             {description && (
@@ -228,7 +235,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                     {description}
                                                 </p>
                                             )}
-                                            <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-[11px] text-muted-foreground/80">
+                                            <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-xs text-muted-foreground/80">
                                                 {key}
                                             </p>
                                         </div>
@@ -276,10 +283,7 @@ function McpEndpointPanel() {
 
     return (
         <section className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
-            <h4 className="text-[15px] text-foreground flex items-center gap-2">
-                <Plug size={15} className="text-primary" />
-                {t("settings.mcpEndpoint")}
-            </h4>
+            <SectionHeading icon={<Plug />} title={t("settings.mcpEndpoint")} />
             <div className="mt-3 flex items-center gap-2 rounded-xl bg-surface pl-3.5 pr-1 py-1 ring-1 ring-inset ring-border/80">
                 <span className="flex-1 min-w-0 truncate font-mono text-sm">{serverUrl ?? "…"}</span>
                 {serverUrl && <CopyButton value={serverUrl} />}
@@ -352,7 +356,7 @@ function UsersTab() {
                                                 <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
                                             )}
                                             {u.mfa_enabled && (
-                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-500/10 text-green-600 dark:text-green-400" title={t("security.adminOn")}>
+                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[0.6875rem] bg-success/10 text-success" title={t("security.adminOn")}>
                                                     <ShieldCheck size={10} />
                                                     {t("security.badge")}
                                                 </span>
@@ -484,8 +488,7 @@ function UserEditModal({
                 {/* 介面語言 / Interface language */}
                 <div>
                     <p className="text-sm text-foreground mb-2">{t("settings.userLanguageLabel")}</p>
-                    <select
-                        className="flex h-9 w-full rounded-lg border border-input bg-card px-3 py-1 text-sm text-foreground shadow-xs transition-[border-color,box-shadow] hover:border-foreground/20 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 dark:bg-input/30"
+                    <NativeSelect
                         value={user.language ?? ""}
                         disabled={saving}
                         onChange={(e) => {
@@ -503,7 +506,7 @@ function UserEditModal({
                                 {option.label}
                             </option>
                         ))}
-                    </select>
+                    </NativeSelect>
                 </div>
 
                 {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}

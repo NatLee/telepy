@@ -97,17 +97,17 @@ function HostChip({ host, onOpen }: { host: LanHost; onOpen: (h: LanHost) => voi
             <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5">
                     <span className="truncate text-sm text-foreground">{name}</span>
-                    {host.source === "manual" && <span className="shrink-0 text-[10px] text-muted-foreground">{t("network.manualTag")}</span>}
+                    {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
                 </span>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     {name !== host.address && <span className="truncate font-mono">{host.address}</span>}
                     {shown.map((p) => (
-                        <span key={p} className={cn("rounded px-1 font-mono text-[10px] leading-4", p === host.ssh_port && hasSsh(host) ? "bg-success/12 text-success" : "bg-muted")}>
+                        <span key={p} className={cn("rounded px-1 font-mono text-[0.6875rem] leading-4", p === host.ssh_port && hasSsh(host) ? "bg-success/12 text-success" : "bg-muted")}>
                             {p}
                         </span>
                     ))}
-                    {more > 0 && <span className="text-[10px]">+{more}</span>}
-                    {host.open_ports.length === 0 && <span className="text-[10px]">{t("network.noOpenPorts")}</span>}
+                    {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
+                    {host.open_ports.length === 0 && <span className="text-[0.6875rem]">{t("network.noOpenPorts")}</span>}
                 </span>
             </span>
         </button>
@@ -134,7 +134,7 @@ function ScanProgress({ tn }: { tn: TopologyTunnel }) {
                     style={pct === null ? undefined : { width: `${pct}%` }}
                 />
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">{t("network.foundSoFar", { count: s.hosts_found, by: s.started_by })}</p>
+            <p className="mt-1 text-[0.75rem] text-muted-foreground">{t("network.foundSoFar", { count: s.hosts_found, by: s.started_by })}</p>
         </div>
     );
 }
@@ -162,7 +162,7 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
                     <span className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <p className="truncate text-[15px] text-foreground">{tn.name}</p>
+                    <p className="truncate text-[1rem] text-foreground">{tn.name}</p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}</span>
                         <span>·</span>
@@ -170,7 +170,7 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
                     </p>
                 </div>
                 {permission && tn.permission !== "owner" && (
-                    <Badge variant="outline" className="shrink-0 text-[10px]">{t(permission)}</Badge>
+                    <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
                 )}
             </div>
             {(tn.can_scan || tn.can_edit) && (
@@ -257,7 +257,7 @@ export function TopologyTree({ tunnels, isOnline, focusTunnel, onOpenHost, onSca
                     <Cloud size={20} />
                 </span>
                 <div>
-                    <p className="text-[15px] text-foreground">Telepy</p>
+                    <p className="text-[1rem] text-foreground">Telepy</p>
                     <p className="text-xs text-muted-foreground">{t("network.serverNode")}</p>
                 </div>
             </div>

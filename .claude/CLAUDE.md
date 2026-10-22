@@ -190,15 +190,22 @@ hardcode display text in components, hooks, or lib error builders.
   via Settings → Users → Manage modal (`/api/user/users`, `/api/user/users/<id>`).
 - **Other user preferences** (`lib/userPrefs.ts` + the `user_management_usersettings` row): `theme`
   (system/light/dark; class-based Tailwind dark mode, applied pre-paint by the same inline
-  script from localStorage `telepy.theme`) and `terminal_font_size` (localStorage
+  script from localStorage `telepy.theme`), `terminal_font_size` (localStorage
   `telepy.terminalFontSize`; xterm reads it at init and live-applies via the
-  `telepy:terminal-font-size` CustomEvent). Both sync server-side via `/api/user/settings`.
+  `telepy:terminal-font-size` CustomEvent) and `ui_scale` (display size in percent, 85–130, step 5;
+  localStorage `telepy.uiScale`; applied pre-paint as the `<html>` `font-size` so every rem-based size
+  scales together while Tailwind's rem breakpoints stay put; presets small/medium/large = 90/100/115 in
+  the sidebar footer `ScaleSwitcher`, the finer slider in the preferences modal; `hooks/useUiScale.ts`
+  mirrors `useThemePreference`). All three sync server-side via `/api/user/settings`.
+- **Type scale:** `globals.css` overrides Tailwind's `--text-*` tokens so every step is 1px larger than
+  stock (xs 13 / sm 15 / base 17 / lg 19 / xl 21 / 2xl 25) — jf-openhuninn reads small. Never use
+  `text-[Npx]` for UI text: px ignores the display scale; use the tokens or `text-[Nrem]`.
 - **Site-setting labels/descriptions:** the settings page prefers dictionary keys
   `siteSettings.<field>.label` / `siteSettings.<field>.description` (localized), falling back
   to the backend `meta` (label/description embedded in `api/site_settings.rs`). **When adding a
   site setting, add the column in `db/schema.rs`, the field in `db/settings.rs` + `api/site_settings.rs`,
   and these two keys to all three dictionaries.**
-- The Settings page (`/tunnels/settings`) is admin-only, tabbed by `?tab=`: Account & registration
+- The Settings page (`/tunnels/settings`, labelled **Site settings** / 網站設定 in the nav and title, with an "Admins only" chip) is admin-only, tabbed by `?tab=`: Account & registration
   (default) / Remote browser (`remote_browser_*`) / AI access (`ai_*`, + MCP endpoint) / Users. Site
   settings land in a tab by key prefix, so a new key needs no page change; integer keys ending in
   `_timeout` / `_lifetime` are seconds and show a localized duration under the input. Personal
@@ -233,5 +240,5 @@ hardcode display text in components, hooks, or lib error builders.
 - **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**
 - Comments are mixed English and Traditional Chinese
 - Frontend components follow Shadcn/Radix patterns with `class-variance-authority`
-- **UI building blocks** (use these instead of hand-rolling): every dialog is `components/ui/Modal.tsx` (`title`, optional `description` / `icon` / `tone="danger"`, `footer` for the buttons; it focuses the panel on open instead of the close button, and becomes a bottom sheet on phones) and confirmations are `ConfirmDialog`; notices are `components/ui/callout.tsx` (`tone` info / tip / warning / danger — no more `bg-blue-50` / 💡 boxes); tabs and small single-choice toggles are `components/ui/segmented.tsx`; form fields are `Input` / `Textarea` / `Label`; every page starts with `components/layout/PageHeader.tsx` (gradient icon tile, title + addon, description, actions)
+- **UI building blocks** (use these instead of hand-rolling): every dialog is `components/ui/Modal.tsx` (`title`, optional `description` / `icon` / `tone="danger"`, `toolbar` for tabs / filters — a fixed row between header and body, **never put tabs inside the scrolling body** (they get squashed when the body is a shrinking flex child), `footer` for the buttons; sizes sm…4xl incl. `xl`; it focuses the panel on open instead of the close button, and becomes a bottom sheet on phones) and confirmations are `ConfirmDialog`; notices are `components/ui/callout.tsx` (`tone` info / tip / warning / danger — no more `bg-blue-50` / 💡 boxes); tabs and small single-choice toggles are `components/ui/segmented.tsx` (`fullWidth` labels wrap instead of truncating; `size="sm"` for in-form toggles); form fields are `components/ui/field.tsx` `Field` (label + control + hint / error, wires `aria-invalid`) around `Input` / `Textarea` / `NativeSelect` (`components/ui/native-select.tsx`, styled `<select>`); section titles, `label : value` lists and small pills are `components/ui/section.tsx` (`Section` / `SectionHeading`, `PropertyList` / `Property`, `Chip`) — the details dialogs (tunnel, key), the preferences modal, Connected apps, Security and the MCP / settings panels all use them; every page starts with `components/layout/PageHeader.tsx` (gradient icon tile, title + addon, description, actions)
 - Design tokens live in `globals.css`: surfaces `bg-card` (raised) / `bg-surface` (wells inside cards and dialogs) / `bg-muted` (tracks, chips), shadows `shadow-card` / `shadow-card-hover` / `shadow-pop` (menus, selects, tooltips, toasts) / `shadow-dialog`, overlay `bg-(--overlay)`; animations `animate-pop-in/out`, `animate-sheet-*`, `animate-toast-in` (there is no tw-animate plugin — `animate-in` / `slide-in-from-*` classes do nothing)

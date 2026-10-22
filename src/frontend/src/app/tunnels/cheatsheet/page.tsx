@@ -388,7 +388,7 @@ function CheatsheetInner() {
                                     active ? "border-transparent bg-primary/[0.07] ring-2 ring-primary/60" : "border-border bg-card/85 hover:-translate-y-px hover:border-primary/30"
                                 )}
                             >
-                                <code className="absolute right-2 top-2 rounded bg-muted px-1 font-mono text-[10px] text-muted-foreground">{r.flag}</code>
+                                <code className="absolute right-2 top-2 rounded bg-muted px-1 font-mono text-[0.6875rem] text-muted-foreground">{r.flag}</code>
                                 <MiniScene items={MINI_SCENES[r.id]} active={active} />
                                 <span className="text-sm font-semibold leading-tight text-foreground">{t(r.title)}</span>
                             </button>
@@ -416,11 +416,11 @@ function CheatsheetInner() {
                             )}
                         </div>
                         <div className="rounded-xl border border-border bg-muted/30 px-4 py-2.5">
-                            <p className="text-[15px] leading-9 text-foreground">{sentence}</p>
+                            <p className="text-[1rem] leading-9 text-foreground">{sentence}</p>
                             {anyInvalid && <p className="pb-1 text-xs text-destructive">{t("sheet.field.invalidPort")}</p>}
                             {recipe === "local" && (
                                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5 pb-0.5">
-                                    <span className="mr-0.5 text-[11px] text-muted-foreground">{t("sheet.presets")}</span>
+                                    <span className="mr-0.5 text-[0.75rem] text-muted-foreground">{t("sheet.presets")}</span>
                                     {LOCAL_PRESETS.map((p) => {
                                         const active = resolved.remotePort === p.remotePort && resolved.localPort === p.localPort;
                                         return (
@@ -430,7 +430,7 @@ function CheatsheetInner() {
                                                 aria-pressed={active}
                                                 onClick={() => setParamsById((prev) => ({ ...prev, local: { remotePort: p.remotePort, localPort: p.localPort } }))}
                                                 className={cn(
-                                                    "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                                                    "rounded-full border px-2 py-0.5 text-[0.75rem] transition-colors",
                                                     active ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
                                                 )}
                                             >

@@ -4,6 +4,28 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 字級：整體比 Tailwind 預設大 1px(xs 13 / sm 15 / base 17 / lg 19 / xl 21 / 2xl 25),行高跟著微調。
+   粉圓字面偏小,預設尺寸讀起來吃力;加上使用者可在偏好設定調「顯示大小」(見下方 html 的 font-size)。
+   Type scale: every step is 1px larger than Tailwind's default (xs 13 / sm 15 / base 17 / lg 19 / xl 21 /
+   2xl 25), with line-heights retuned. jf-openhuninn has a small x-height, so the stock sizes read too
+   small; on top of this users pick a display size in Preferences (the root font-size below). */
+@theme {
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: calc(1.125 / 0.8125);
+  --text-sm: 0.9375rem;
+  --text-sm--line-height: calc(1.375 / 0.9375);
+  --text-base: 1.0625rem;
+  --text-base--line-height: calc(1.625 / 1.0625);
+  --text-lg: 1.1875rem;
+  --text-lg--line-height: calc(1.75 / 1.1875);
+  --text-xl: 1.3125rem;
+  --text-xl--line-height: calc(1.875 / 1.3125);
+  --text-2xl: 1.5625rem;
+  --text-2xl--line-height: calc(2.125 / 1.5625);
+  --text-3xl: 1.9375rem;
+  --text-3xl--line-height: calc(2.375 / 1.9375);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -406,6 +428,17 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+
+  /* 顯示大小:偏好設定的「小 / 中 / 大」與細調滑桿把 <html> 的 font-size 設成 85%–130%
+     (layout.tsx 的繪製前 script 會先套 localStorage 的值)。所有 rem 尺寸——字級、間距、元件高度——
+     一起縮放,版面比例不變;Tailwind 的斷點是 rem 但媒體查詢的 rem 固定取瀏覽器預設 16px,所以斷點不會跟著跑。
+     Display size: the S / M / L presets and the fine slider in Preferences set the root font-size to
+     85%–130% (the pre-paint script in layout.tsx applies the stored value first). Every rem-based size
+     scales together, so proportions hold; Tailwind breakpoints use rem too, but rem inside media queries
+     is always the browser default (16px), so breakpoints stay put. */
+  html {
+    font-size: 100%;
   }
 
   body {

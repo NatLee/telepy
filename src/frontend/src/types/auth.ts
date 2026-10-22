@@ -15,6 +15,8 @@ export interface UserProfile {
     theme?: "system" | "light" | "dark";
     /** 終端機字型大小(px, 10–24)。/ Web terminal font size. */
     terminal_font_size?: number;
+    /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
+    ui_scale?: number;
 }
 
 export interface AuthContextType {

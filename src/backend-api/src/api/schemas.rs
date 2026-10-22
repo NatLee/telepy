@@ -442,6 +442,8 @@ pub struct UserSettings {
     pub language: Option<String>,
     pub theme: String,
     pub terminal_font_size: i64,
+    /// UI display scale in percent (85–130).
+    pub ui_scale: i64,
 }
 
 #[derive(ToSchema)]
@@ -451,6 +453,8 @@ pub struct UserSettingsPatch {
     #[schema(example = "dark")]
     pub theme: Option<String>,
     pub terminal_font_size: Option<i64>,
+    #[schema(example = 100)]
+    pub ui_scale: Option<i64>,
 }
 
 #[derive(ToSchema)]

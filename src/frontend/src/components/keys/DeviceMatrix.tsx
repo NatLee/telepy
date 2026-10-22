@@ -24,7 +24,7 @@ const ROLE_KEY: Record<TunnelRole, TranslationKey> = {
 export function OnlineDot({ online }: { online: boolean }) {
     const { t } = useI18n();
     return (
-        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1 text-[0.75rem] text-muted-foreground">
             <span className={cn("size-2 rounded-full", online ? "bg-success shadow-[0_0_0_3px] shadow-success/15" : "bg-muted-foreground/40")} aria-hidden />
             {online ? t("keys.online") : t("keys.offline")}
         </span>
@@ -34,7 +34,7 @@ export function OnlineDot({ online }: { online: boolean }) {
 export function RoleBadge({ role }: { role: TunnelRole }) {
     const { t } = useI18n();
     return (
-        <span className={cn("rounded-full px-1.5 py-px text-[10px] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
+        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
             {t(ROLE_KEY[role])}
         </span>
     );
@@ -50,7 +50,7 @@ function DeviceHeading({ device }: { device: KeyDevice }) {
                 <RoleBadge role={device.role} />
                 <OnlineDot online={device.online} />
             </div>
-            <div className="mt-1 text-[11px] text-muted-foreground">
+            <div className="mt-1 text-[0.75rem] text-muted-foreground">
                 {device.accounts.length > 0 ? (
                     <>
                         {t("keys.matrix.accounts")} <span className="font-mono text-foreground/80">{device.accounts.join(", ")}</span>
@@ -149,13 +149,13 @@ export function DeviceMatrix({
             {/* 桌面：表格 / Desktop: table */}
             <div className="hidden overflow-x-auto rounded-2xl border border-border/80 bg-card shadow-card md:block">
                 <table className="w-full min-w-max text-left">
-                    <thead className="bg-surface text-[11px] uppercase tracking-wider text-muted-foreground">
+                    <thead className="bg-surface text-[0.75rem] uppercase tracking-wider text-muted-foreground">
                         <tr>
                             <th scope="col" className="sticky left-0 z-10 bg-surface px-4 py-2.5 font-normal">{t("keys.matrix.device")}</th>
                             {keys.map((k) => (
                                 <th key={k.id} scope="col" className="max-w-[14rem] px-4 py-2.5 font-normal normal-case tracking-normal">
                                     <span className="block truncate text-xs text-foreground" title={k.host_friendly_name}>{k.host_friendly_name}</span>
-                                    <span className="font-mono text-[10px] text-muted-foreground">{k.key_type ?? "?"}</span>
+                                    <span className="font-mono text-[0.6875rem] text-muted-foreground">{k.key_type ?? "?"}</span>
                                 </th>
                             ))}
                             <th scope="col" className="px-4 py-2.5 text-right font-normal"><span className="sr-only">{t("keys.thActions")}</span></th>

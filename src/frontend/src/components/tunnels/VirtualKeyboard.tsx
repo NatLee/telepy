@@ -57,7 +57,7 @@ export function VirtualKeyboard({ controller, isExpanded = true, onToggleExpand 
                 aria-label={t("kbd.keyChar", { char: display })}
                 className={cn(
                     "h-9 px-0 min-w-0 bg-secondary active:bg-secondary/80 active:scale-[0.95] active:opacity-90 text-secondary-foreground",
-                    "rounded shadow-[0_1px_1px_rgba(0,0,0,0.5)] select-none flex items-center justify-center m-0.5 text-[17px] transition-all duration-75 font-sans",
+                    "rounded shadow-[0_1px_1px_rgba(0,0,0,0.5)] select-none flex items-center justify-center m-0.5 text-[1.125rem] transition-all duration-75 font-sans",
                     widthClass
                 )}
                 onPointerDown={(e) => { e.preventDefault(); handleChar(output); }}

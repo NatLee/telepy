@@ -60,7 +60,7 @@ export function CodeBlock({ language, value }: CodeBlockProps) {
                     {copied ? t("common.copied") : t("common.copy")}
                 </button>
             </div>
-            <div className="text-[13px] leading-relaxed overflow-x-auto">
+            <div className="text-[0.875rem] leading-relaxed overflow-x-auto">
                 <SyntaxHighlighter
                     language={language}
                     style={vscDarkPlus}

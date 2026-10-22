@@ -83,7 +83,7 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
                                         </span>
                                         <span className="truncate font-mono text-sm text-foreground">{user.username}</span>
                                         {user.created_by && (
-                                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[0.75rem] text-muted-foreground">
                                                 {t("common.byUserTag", { user: user.created_by, id: user.created_by_id ?? "" })}
                                             </span>
                                         )}

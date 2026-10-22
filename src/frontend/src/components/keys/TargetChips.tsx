@@ -36,7 +36,7 @@ export function TargetChip({ target, online = true }: { target: KeyTarget; onlin
                     <span
                         tabIndex={0}
                         className={cn(
-                            "inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] ring-1 ring-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                            "inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[0.75rem] ring-1 ring-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
                             STYLE[target.status]
                         )}
                     >
@@ -55,7 +55,7 @@ export function TargetChip({ target, online = true }: { target: KeyTarget; onlin
 export function TargetChips({ targets, online, className }: { targets: KeyTarget[]; online: boolean; className?: string }) {
     const { t } = useI18n();
     if (targets.length === 0) {
-        return <span className={cn("text-[11px] text-muted-foreground", className)}>{t("keys.status.noAccounts")}</span>;
+        return <span className={cn("text-[0.75rem] text-muted-foreground", className)}>{t("keys.status.noAccounts")}</span>;
     }
     return (
         <div className={cn("flex flex-wrap gap-1", className)}>

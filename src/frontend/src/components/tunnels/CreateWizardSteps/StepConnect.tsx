@@ -96,7 +96,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                             <span className="min-w-0 text-sm font-medium leading-tight text-foreground">{t(title)}</span>
                             {tag && (
                                 <span className={cn(
-                                    "absolute -top-2 right-2 rounded-full px-1.5 py-px text-[10px] font-semibold",
+                                    "absolute -top-2 right-2 rounded-full px-1.5 py-px text-[0.6875rem] font-semibold",
                                     id === "autossh-service" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground ring-1 ring-border"
                                 )}>
                                     {t(tag)}
@@ -158,7 +158,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                                 <Loader2 size={18} className="animate-spin" aria-label={t("common.loading")} />
                             </div>
                         )}
-                        <p className="text-[11px] leading-relaxed text-muted-foreground">{t("wizard.connect.linkHint")}</p>
+                        <p className="text-[0.75rem] leading-relaxed text-muted-foreground">{t("wizard.connect.linkHint")}</p>
                     </div>
                 )}
 

@@ -68,7 +68,7 @@ export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleL
                 title={t("tunnels.deleteTitle")}
                 message={
                     <span>
-                        {tn("tunnels.deleteMessage", { name: <strong className="font-semibold">{deleteConfirm.name}</strong> })}
+                        {tn("tunnels.deleteMessage", { name: <strong>{deleteConfirm.name}</strong> })}
                     </span>
                 }
                 confirmText={t("common.delete")}
@@ -86,7 +86,7 @@ export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleL
                 title={t("tunnels.leaveTitle")}
                 message={
                     <span>
-                        {tn("tunnels.leaveMessage", { name: <strong className="font-semibold">{leaveConfirm.name}</strong> })}
+                        {tn("tunnels.leaveMessage", { name: <strong>{leaveConfirm.name}</strong> })}
                     </span>
                 }
                 confirmText={t("tunnels.leave")}

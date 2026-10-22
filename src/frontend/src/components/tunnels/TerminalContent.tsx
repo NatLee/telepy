@@ -298,7 +298,7 @@ export function TerminalContent({
                                     </Button>
                                 </div>
                                 <div className="max-h-32 overflow-y-auto rounded-lg bg-card p-2.5 ring-1 ring-inset ring-border/60">
-                                    <code className="block max-w-full break-all whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">{sk.key || sk.public_key || "—"}</code>
+                                    <code className="block max-w-full break-all whitespace-pre-wrap font-mono text-[0.75rem] leading-relaxed text-muted-foreground">{sk.key || sk.public_key || "—"}</code>
                                 </div>
                             </div>
                         ))}

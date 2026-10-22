@@ -17,13 +17,13 @@ export function KeyTypeBadge({ type, bits }: { type: string | null; bits: number
     const { t } = useI18n();
     if (!type) {
         return (
-            <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[11px] text-warning ring-1 ring-inset ring-warning/30">
+            <span className="inline-flex items-center gap-1 rounded-full bg-warning/10 px-2 py-0.5 text-[0.75rem] text-warning ring-1 ring-inset ring-warning/30">
                 <TriangleAlert size={12} aria-hidden /> {t("keys.unrecognized")}
             </span>
         );
     }
     return (
-        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-mono text-[0.75rem] text-muted-foreground">
             {type}
             {bits ? ` · ${bits}` : ""}
         </span>
@@ -51,15 +51,15 @@ export function KeyCard({
                 </span>
                 <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <h3 className="truncate text-[15px] text-foreground" title={keyItem.host_friendly_name}>{keyItem.host_friendly_name}</h3>
+                        <h3 className="truncate text-[1rem] text-foreground" title={keyItem.host_friendly_name}>{keyItem.host_friendly_name}</h3>
                         <KeyTypeBadge type={keyItem.key_type} bits={keyItem.bits} />
                     </div>
-                    {keyItem.comment && <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={keyItem.comment}>{keyItem.comment}</p>}
+                    {keyItem.comment && <p className="mt-0.5 truncate font-mono text-[0.75rem] text-muted-foreground" title={keyItem.comment}>{keyItem.comment}</p>}
                 </div>
             </div>
 
             <div className="mx-4 flex items-center gap-1 rounded-lg bg-surface py-1 pl-2.5 pr-1 ring-1 ring-border">
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground" title={keyItem.fingerprint ?? ""}>
+                <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] text-muted-foreground" title={keyItem.fingerprint ?? ""}>
                     {keyItem.fingerprint ?? t("keys.noFingerprint")}
                 </span>
                 {keyItem.fingerprint && <CopyButton value={keyItem.fingerprint} />}

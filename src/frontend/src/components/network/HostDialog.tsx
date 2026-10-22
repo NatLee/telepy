@@ -18,6 +18,7 @@ import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Segmented } from "@/components/ui/segmented";
+import { Section } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
@@ -122,8 +123,8 @@ function HostDialogBody({ host, tunnel, online, onClose, loadConnectTarget, upda
                 description={t("network.hostOn", { address: host.ssh_port === 22 ? host.address : `${host.address}:${host.ssh_port}`, device: tunnel.name })}
                 icon={<Terminal />}
                 size="2xl"
+                toolbar={<Segmented options={tabs} value={tab} onChange={setTab} kind="tabs" />}
             >
-                <Segmented options={tabs} value={tab} onChange={setTab} kind="tabs" className="mb-4" />
 
                 {tab === "connect" && (
                     <div className="space-y-4">
@@ -163,17 +164,11 @@ function HostDialogBody({ host, tunnel, online, onClose, loadConnectTarget, upda
                         </div>
                         <p className="text-xs text-muted-foreground">{t("network.terminalHint")}</p>
 
-                        <section className="space-y-2">
-                            <h3 className="text-sm text-foreground">{t("network.oneLinerTitle")}</h3>
-                            <p className="text-xs text-muted-foreground">{t("network.oneLinerHint")}</p>
+                        <Section title={t("network.oneLinerTitle")} description={t("network.oneLinerHint")}>
                             {target ? <CodeBlock language="bash" value={lanOneLiner(target, host, cleanLogin)} /> : <Loader2 size={16} className="animate-spin text-muted-foreground" />}
-                        </section>
+                        </Section>
 
-                        <section className="space-y-2">
-                            <h3 className="text-sm text-foreground">{t("network.configTitle")}</h3>
-                            <p className="text-xs text-muted-foreground">
-                                {tn("network.configHint", { alias: <code className="font-mono">{target?.alias ?? "…"}</code> })}
-                            </p>
+                        <Section title={t("network.configTitle")} description={tn("network.configHint", { alias: <code className="font-mono">{target?.alias ?? "…"}</code> })}>
                             {target && (
                                 <>
                                     <CodeBlock language="ssh" value={lanSshConfig(target.alias, host, cleanLogin)} />
@@ -182,7 +177,7 @@ function HostDialogBody({ host, tunnel, online, onClose, loadConnectTarget, upda
                                     </p>
                                 </>
                             )}
-                        </section>
+                        </Section>
                     </div>
                 )}
 
@@ -194,7 +189,7 @@ function HostDialogBody({ host, tunnel, online, onClose, loadConnectTarget, upda
                         <Row label={t("network.field.openPorts")}>
                             {host.open_ports.length ? (
                                 <span className="flex flex-wrap gap-1">
-                                    {host.open_ports.map((p) => <Badge key={p} variant="outline" className="font-mono text-[11px]">{p}</Badge>)}
+                                    {host.open_ports.map((p) => <Badge key={p} variant="outline" className="font-mono text-[0.75rem]">{p}</Badge>)}
                                 </span>
                             ) : t("network.noOpenPorts")}
                         </Row>
