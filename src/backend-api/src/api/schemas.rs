@@ -281,6 +281,32 @@ pub struct DuplicateCheck {
 pub struct ConfigResponse {
     pub config: String,
     pub usernames: Vec<UsernameEntry>,
+    /// `Host telepy-ssh-server` 的連線資訊。/ Where `Host telepy-ssh-server` points.
+    pub server: ConfigServer,
+    /// config 裡每個裝置 Host 區塊（依 username_id 篩選後）。/ One entry per device Host stanza in `config`.
+    pub hosts: Vec<ConfigHost>,
+    #[schema(example = 10022)]
+    pub reverse_port: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ConfigServer {
+    #[schema(example = "telepy-ssh-server")]
+    pub alias: String,
+    #[schema(example = "telepy.example.com")]
+    pub host: String,
+    /// REVERSE_SERVER_SSH_PORT（未設定時是空字串）。/ REVERSE_SERVER_SSH_PORT (empty string when unset).
+    #[schema(example = "24242")]
+    pub port: String,
+}
+
+#[derive(ToSchema)]
+pub struct ConfigHost {
+    #[schema(example = "my-pi")]
+    pub alias: String,
+    #[schema(example = "root")]
+    pub username: String,
+    pub username_id: i64,
 }
 
 #[derive(ToSchema)]

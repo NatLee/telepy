@@ -1,112 +1,66 @@
+/**
+ * 隧道表格列（≥1200px 的清單檢視）：名稱 + 說明、狀態 + 延遲、埠、存取關係、帶標籤的開啟按鈕與「更多」選單。
+ * Tunnel table row (list view, ≥1200px): name + description, status + latency, port, access, labelled open
+ * buttons and the grouped "More" menu.
+ */
 import React from "react";
-import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { MonitorPlay, Share2, TerminalSquare } from "lucide-react";
-import { Tunnel } from "@/types/tunnel";
+import { Server } from "lucide-react";
+import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
-import { Button } from "@/components/ui/button";
+import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
+import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
-import { getTerminalPageUrl } from "@/lib/tunnelUrls";
-import { useI18n } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
-interface TunnelTableRowProps {
+interface TunnelTableRowProps extends TunnelActionHandlers {
     tunnel: Tunnel;
     isActive: boolean;
     latencyMs: number | null;
     sharedCount: number;
-    getStatus: (port: number) => React.ReactNode;
-    onDetails: (tunnelId: number) => void;
-    onConfig: (tunnelId: number) => void;
-    onScript: (tunnelId: number) => void;
-    onLogs: (tunnelId: number) => void;
-    onUsers: (tunnelId: number, readOnly: boolean) => void;
-    onShare: (tunnelId: number) => void;
-    onLeave: (tunnelId: number, name: string) => void;
-    onDelete: (tunnelId: number, name: string) => void;
 }
 
-export function TunnelTableRow({
-    tunnel,
-    isActive,
-    latencyMs,
-    sharedCount,
-    getStatus,
-    onDetails,
-    onConfig,
-    onScript,
-    onLogs,
-    onUsers,
-    onShare,
-    onLeave,
-    onDelete,
-}: TunnelTableRowProps) {
-    const { t } = useI18n();
+export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelTableRowProps) {
     return (
-        <tr className="hover:bg-muted/50 transition-colors">
-            <td className="px-4 py-3 text-sm font-medium text-foreground whitespace-nowrap">
-                {tunnel.host_friendly_name}
+        <tr className="group hover:bg-primary/[0.03] transition-colors">
+            <td className="px-4 py-3">
+                <div className="flex items-center gap-3 min-w-0">
+                    <div
+                        className={cn(
+                            "grid place-items-center w-8 h-8 rounded-lg shrink-0 ring-1 ring-inset",
+                            isActive ? "bg-primary/10 text-primary ring-primary/20" : "bg-muted text-muted-foreground ring-border"
+                        )}
+                        aria-hidden
+                    >
+                        <Server size={15} />
+                    </div>
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground truncate max-w-[18rem]" title={tunnel.host_friendly_name}>
+                            {tunnel.host_friendly_name}
+                        </p>
+                        {tunnel.description && (
+                            <p className="text-xs text-muted-foreground truncate max-w-[18rem]" title={tunnel.description}>
+                                {tunnel.description}
+                            </p>
+                        )}
+                    </div>
+                </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <div className="flex items-center gap-2 text-sm">
-                    <span className="font-mono">{tunnel.reverse_port}</span>
-                    {getStatus(tunnel.reverse_port)}
+                <div className="flex items-center gap-2.5">
+                    <TunnelStatusPill online={isActive} />
                     {isActive && <LatencyIndicator rttMs={latencyMs} online={isActive} size="xs" />}
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <div className="bg-muted/50 rounded px-2 py-1 font-mono text-[11px] truncate text-muted-foreground max-w-[150px]" title={tunnel.key ?? ''}>
-                    {tunnel.key ? `${tunnel.key.substring(0, 15)}...` : '—'}
-                </div>
+                <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <div className="flex items-center gap-1">
-                    {!tunnel.is_owner && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300">
-                            <Share2 size={10} /> {t("tunnels.sharedWithYou")}
-                        </Badge>
-                    )}
-                    {tunnel.is_owner && tunnel.can_share && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300">
-                            <Share2 size={10} /> {t("tunnels.owner")}
-                        </Badge>
-                    )}
-                    {tunnel.is_owner && sharedCount > 0 && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 gap-1 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300">
-                            <Share2 size={10} /> {sharedCount === 1 ? "1" : sharedCount}
-                        </Badge>
-                    )}
-                    {tunnel.is_owner && !tunnel.can_share && sharedCount === 0 && (
-                        <span className="text-muted-foreground text-xs">—</span>
-                    )}
-                </div>
+                <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
-                <div className="flex items-center justify-end gap-0.5">
-                    {/* prefetch={false}：見 TunnelCard —— terminal 是重頁，每列 2 條連結，N 列 = 2N 次
-                        prefetch，載入時湧出塞爆連線、拖慢真正在等的 dashboard/profile。點了才載入。
-                        Don't prefetch the heavy terminal route per row (2N prefetch storm). */}
-                    <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
-                        <Link href={getTerminalPageUrl(tunnel)} prefetch={false}>
-                            <TerminalSquare size={14} className="mr-1.5" /> {t("common.terminal")}
-                        </Link>
-                    </Button>
-                    <Button asChild variant="ghost" size="sm" className={`h-8 px-2 text-xs transition-colors mr-0.5 ${isActive ? "text-primary hover:text-primary hover:bg-primary/10" : "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 opacity-60"}`}>
-                        <Link href={getTerminalPageUrl(tunnel, { mainView: "browser" })} prefetch={false}>
-                            <MonitorPlay size={14} className="mr-1.5" /> {t("common.browser")}
-                        </Link>
-                    </Button>
-
-                    <TunnelActions
-                        tunnel={tunnel}
-                        onDetails={onDetails}
-                        onConfig={onConfig}
-                        onScript={onScript}
-                        onLogs={onLogs}
-                        onUsers={onUsers}
-                        onShare={onShare}
-                        onLeave={onLeave}
-                        onDelete={onDelete}
-                    />
+                <div className="flex items-center justify-end gap-2">
+                    <TunnelOpenButtons tunnel={tunnel} online={isActive} variant="compact" />
+                    <TunnelActions tunnel={tunnel} {...actions} />
                 </div>
             </td>
         </tr>

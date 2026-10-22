@@ -40,3 +40,21 @@ export interface TunnelModalProps {
     onClose: () => void;
     tunnelId: number | null;
 }
+
+/**
+ * 隧道列表的動作回呼（卡片 / 表格列 / 動作選單共用）。
+ * Tunnel list action callbacks, shared by the card, the table row and the actions menu.
+ */
+export interface TunnelActionHandlers {
+    onDetails: (tunnelId: number) => void;
+    onConfig: (tunnelId: number) => void;
+    onScript: (tunnelId: number) => void;
+    /** 這條隧道的 gateway 日誌（/tunnels/logs?tunnel=<id>）。/ This tunnel's gateway log. */
+    onLogs: (tunnelId: number) => void;
+    /** 指令速查：埠轉發等指令（/tunnels/cheatsheet?tunnel=<id>）。/ Command sheet for this tunnel. */
+    onCommands: (tunnelId: number) => void;
+    onUsers: (tunnelId: number, readOnly: boolean) => void;
+    onShare: (tunnelId: number) => void;
+    onLeave: (tunnelId: number, name: string) => void;
+    onDelete: (tunnelId: number, name: string) => void;
+}

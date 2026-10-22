@@ -41,10 +41,13 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return (
         <NotificationWsContext.Provider value={{ isConnected }}>
             <div className="flex min-h-screen w-full bg-background font-sans">
+                {/* 裝飾背景（光暈 + 點陣）；terminal 頁不畫，避免干擾 xterm / VNC 畫面。
+                    Decorative backdrop (glow + dot grid); skipped on the terminal page so it never sits behind xterm / VNC. */}
+                {!isTerminalPage && <div className="app-backdrop" aria-hidden />}
                 <Sidebar />
-                <div className="flex flex-col flex-1 w-full min-w-0">
+                <div className="relative z-10 flex flex-col flex-1 w-full min-w-0">
                     <Header />
-                    <main className={`flex-1 w-full ${isTerminalPage ? 'p-0 flex flex-col' : 'px-4 sm:px-6 lg:px-8 py-8'}`}>
+                    <main className={`flex-1 w-full ${isTerminalPage ? 'p-0 flex flex-col' : 'mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8 py-6 sm:py-8'}`}>
                         {children}
                     </main>
                 </div>

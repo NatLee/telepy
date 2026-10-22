@@ -1,199 +1,186 @@
+/**
+ * 隧道「更多」動作選單：卡片與表格共用同一份，依用途分組，每一項都有一行說明，看得出是在哪一端做什麼。
+ * The tunnel "More" menu — one menu for both card and table, grouped by purpose, every item with a one-line hint
+ * so it is obvious which side (your computer / the device) it acts on.
+ */
 import React from "react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
     DropdownMenuContent,
+    DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-    Share2,
-    FileText,
-    Settings,
-    Terminal,
-    Users,
-    MoreHorizontal,
+    ArrowLeftRight,
+    ChevronDown,
+    FileCode2,
+    Info,
     LogOut,
+    Rocket,
+    ScrollText,
+    Share2,
     Trash2,
-    ScrollText
+    Users,
+    type LucideIcon,
 } from "lucide-react";
-import { Tunnel } from "@/types/tunnel";
+import { cn } from "@/lib/utils";
+import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 
-interface TunnelActionsProps {
+interface TunnelActionsProps extends TunnelActionHandlers {
     tunnel: Tunnel;
-    variant?: "table" | "card";
-    onDetails: (tunnelId: number) => void;
-    onConfig: (tunnelId: number) => void;
-    onScript: (tunnelId: number) => void;
-    /** 這條隧道的 gateway 日誌（/tunnels/logs?tunnel=<id>）。/ This tunnel's gateway log. */
-    onLogs: (tunnelId: number) => void;
-    onUsers: (tunnelId: number, readOnly: boolean) => void;
-    onShare: (tunnelId: number) => void;
-    onLeave: (tunnelId: number, name: string) => void;
-    onDelete: (tunnelId: number, name: string) => void;
+    className?: string;
+}
+
+function ActionItem({
+    icon: Icon,
+    label,
+    hint,
+    onSelect,
+    destructive = false,
+}: {
+    icon: LucideIcon;
+    label: string;
+    hint?: string;
+    onSelect: () => void;
+    destructive?: boolean;
+}) {
+    return (
+        <DropdownMenuItem
+            onClick={onSelect}
+            variant={destructive ? "destructive" : "default"}
+            className="items-start gap-3 py-1.5 rounded-md"
+        >
+            <Icon className="mt-0.5" />
+            <span className="flex flex-col min-w-0 gap-0.5">
+                <span className="font-medium leading-tight">{label}</span>
+                {hint && <span className="text-[11px] leading-snug text-muted-foreground whitespace-normal">{hint}</span>}
+            </span>
+        </DropdownMenuItem>
+    );
+}
+
+function GroupLabel({ children }: { children: React.ReactNode }) {
+    return (
+        <DropdownMenuLabel className="px-2 pt-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80">
+            {children}
+        </DropdownMenuLabel>
+    );
 }
 
 export function TunnelActions({
     tunnel,
-    variant = "table",
+    className,
     onDetails,
     onConfig,
     onScript,
     onLogs,
+    onCommands,
     onUsers,
     onShare,
     onLeave,
     onDelete,
 }: TunnelActionsProps) {
     const { t } = useI18n();
-    // ─── Card mode: single "More" dropdown with all actions ───
-    if (variant === "card") {
-        return (
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground" aria-label={t("tunnelActions.aria")}>
-                        <MoreHorizontal size={16} />
-                    </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
-                    <DropdownMenuLabel>{t("common.actions")}</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => onDetails(tunnel.id)}>
-                        <FileText className="mr-2 h-4 w-4" /> {t("common.details")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onConfig(tunnel.id)}>
-                        <Settings className="mr-2 h-4 w-4" /> {t("tunnelActions.config")}
-                    </DropdownMenuItem>
-                    {tunnel.is_owner && (
-                        <DropdownMenuItem onClick={() => onScript(tunnel.id)}>
-                            <Terminal className="mr-2 h-4 w-4" /> {t("tunnelActions.scripts")}
-                        </DropdownMenuItem>
-                    )}
-                    <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
-                        <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onUsers(tunnel.id, !tunnel.can_edit)}>
-                        <Users className="mr-2 h-4 w-4" /> {tunnel.can_edit ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewUsers")}
-                    </DropdownMenuItem>
-                    {tunnel.can_share && (
-                        <DropdownMenuItem onClick={() => onShare(tunnel.id)}>
-                            <Share2 className="mr-2 h-4 w-4" /> {tunnel.is_owner ? t("tunnelActions.shareTunnel") : t("tunnelActions.manageSharing")}
-                        </DropdownMenuItem>
-                    )}
-                    {(tunnel.can_delete || !tunnel.is_owner) && <DropdownMenuSeparator />}
-                    {!tunnel.is_owner && (
-                        <DropdownMenuItem
-                            onClick={() => onLeave(tunnel.id, tunnel.host_friendly_name)}
-                            className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                        >
-                            <LogOut className="mr-2 h-4 w-4" /> {t("tunnelActions.leaveTunnel")}
-                        </DropdownMenuItem>
-                    )}
-                    {tunnel.can_delete && (
-                        <DropdownMenuItem
-                            onClick={() => onDelete(tunnel.id, tunnel.host_friendly_name)}
-                            className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                        >
-                            <Trash2 className="mr-2 h-4 w-4" /> {t("common.delete")}
-                        </DropdownMenuItem>
-                    )}
-                </DropdownMenuContent>
-            </DropdownMenu>
-        );
-    }
 
-    // ─── Table mode (default): inline icon buttons + overflow dropdown ───
     return (
-        <div className="flex items-center gap-0.5 shrink-0">
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onDetails(tunnel.id)} title={t("common.details")} aria-label={t("common.details")}>
-                <FileText size={15} />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onConfig(tunnel.id)} title={t("tunnelActions.config")} aria-label={t("tunnelActions.config")}>
-                <Settings size={15} />
-            </Button>
-            {tunnel.is_owner && (
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onScript(tunnel.id)} title={t("tunnelActions.scripts")} aria-label={t("tunnelActions.scripts")}>
-                    <Terminal size={15} />
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn("gap-1 data-[state=open]:bg-accent", className)}
+                    aria-label={t("tunnelActions.aria")}
+                >
+                    {t("tunnelActions.more")}
+                    <ChevronDown size={14} className="opacity-60" />
                 </Button>
-            )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" collisionPadding={12} className="w-[22rem] max-w-[calc(100vw-1.5rem)] p-1.5 rounded-xl">
+                <GroupLabel>{t("tunnelActions.groupConnect")}</GroupLabel>
+                <DropdownMenuGroup>
+                    <ActionItem
+                        icon={ArrowLeftRight}
+                        label={t("tunnelActions.portForwarding")}
+                        hint={t("tunnelActions.portForwardingHint")}
+                        onSelect={() => onCommands(tunnel.id)}
+                    />
+                    <ActionItem
+                        icon={FileCode2}
+                        label={t("tunnelActions.sshConfig")}
+                        hint={t("tunnelActions.sshConfigHint")}
+                        onSelect={() => onConfig(tunnel.id)}
+                    />
+                </DropdownMenuGroup>
 
-            {!tunnel.is_owner && (
-                <>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary transition-colors hover:bg-primary/10" onClick={() => onUsers(tunnel.id, !tunnel.can_edit)} title={tunnel.can_edit ? t("tunnelActions.manageTargetUsers") : t("tunnelActions.viewTargetUsers")} aria-label={tunnel.can_edit ? t("tunnelActions.manageTargetUsers") : t("tunnelActions.viewTargetUsers")}>
-                        <Users size={15} />
-                    </Button>
-
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-                                <span className="sr-only">{t("tunnelActions.openMenu")}</span>
-                                <MoreHorizontal size={15} />
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-56">
-                            <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
-                                <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
-                            </DropdownMenuItem>
-                            {tunnel.can_share && (
-                                <DropdownMenuItem onClick={() => onShare(tunnel.id)}>
-                                    <Share2 className="mr-2 h-4 w-4" /> {t("tunnelActions.manageSharing")}
-                                </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                                onClick={() => onLeave(tunnel.id, tunnel.host_friendly_name)}
-                                className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                            >
-                                <LogOut className="mr-2 h-4 w-4" /> {t("tunnelActions.leaveTunnel")}
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                </>
-            )}
-
-            {tunnel.is_owner && (tunnel.can_edit || tunnel.can_share || tunnel.can_delete) && (
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-                            <span className="sr-only">{t("tunnelActions.openMenu")}</span>
-                            <MoreHorizontal size={15} />
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56">
-                        <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
+                {tunnel.is_owner && (
+                    <>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
-                            <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
-                        </DropdownMenuItem>
-                        {tunnel.can_edit && (
-                            <DropdownMenuItem onClick={() => onUsers(tunnel.id, false)}>
-                                <Users className="mr-2 h-4 w-4" /> {t("tunnelActions.targetServerUsers")}
-                            </DropdownMenuItem>
-                        )}
-                        {tunnel.can_share && (
-                            <DropdownMenuItem onClick={() => onShare(tunnel.id)}>
-                                <Share2 className="mr-2 h-4 w-4" /> {t("tunnelActions.shareTunnel")}
-                            </DropdownMenuItem>
-                        )}
-                        {tunnel.can_delete && (
-                            <>
-                                {(tunnel.can_edit || tunnel.can_share) && <DropdownMenuSeparator />}
-                                <DropdownMenuItem
-                                    onClick={() => onDelete(tunnel.id, tunnel.host_friendly_name)}
-                                    className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
-                                >
-                                    <Trash2 className="mr-2 h-4 w-4" /> {t("common.delete")}
-                                </DropdownMenuItem>
-                            </>
-                        )}
-                    </DropdownMenuContent>
-                </DropdownMenu>
-            )}
-        </div>
+                        <GroupLabel>{t("tunnelActions.groupDevice")}</GroupLabel>
+                        <ActionItem
+                            icon={Rocket}
+                            label={t("tunnelActions.installScript")}
+                            hint={t("tunnelActions.installScriptHint")}
+                            onSelect={() => onScript(tunnel.id)}
+                        />
+                    </>
+                )}
+
+                <DropdownMenuSeparator />
+                <GroupLabel>{t("tunnelActions.groupManage")}</GroupLabel>
+                <DropdownMenuGroup>
+                    <ActionItem
+                        icon={Info}
+                        label={t("tunnelActions.details")}
+                        hint={t("tunnelActions.detailsHint")}
+                        onSelect={() => onDetails(tunnel.id)}
+                    />
+                    <ActionItem
+                        icon={Users}
+                        label={tunnel.can_edit ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewTargetUsers")}
+                        hint={t("tunnelActions.targetServerUsersHint")}
+                        onSelect={() => onUsers(tunnel.id, !tunnel.can_edit)}
+                    />
+                    {tunnel.can_share && (
+                        <ActionItem
+                            icon={Share2}
+                            label={tunnel.is_owner ? t("tunnelActions.shareTunnel") : t("tunnelActions.manageSharing")}
+                            hint={t("tunnelActions.shareHint")}
+                            onSelect={() => onShare(tunnel.id)}
+                        />
+                    )}
+                    <ActionItem
+                        icon={ScrollText}
+                        label={t("tunnelActions.logs")}
+                        hint={t("tunnelActions.logsHint")}
+                        onSelect={() => onLogs(tunnel.id)}
+                    />
+                </DropdownMenuGroup>
+
+                {(tunnel.can_delete || !tunnel.is_owner) && <DropdownMenuSeparator />}
+                {!tunnel.is_owner && (
+                    <ActionItem
+                        icon={LogOut}
+                        label={t("tunnelActions.leaveTunnel")}
+                        hint={t("tunnelActions.leaveHint")}
+                        onSelect={() => onLeave(tunnel.id, tunnel.host_friendly_name)}
+                        destructive
+                    />
+                )}
+                {tunnel.can_delete && (
+                    <ActionItem
+                        icon={Trash2}
+                        label={t("tunnelActions.deleteTunnel")}
+                        hint={t("tunnelActions.deleteHint")}
+                        onSelect={() => onDelete(tunnel.id, tunnel.host_friendly_name)}
+                        destructive
+                    />
+                )}
+            </DropdownMenuContent>
+        </DropdownMenu>
     );
 }

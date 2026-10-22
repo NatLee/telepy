@@ -31,6 +31,9 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-brand-2: var(--brand-2);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -51,12 +54,21 @@
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
 
+  /* 卡片與主色光暈陰影 / Card + brand glow shadows */
+  --shadow-card: 0 1px 2px oklch(0 0 0 / 0.04), 0 6px 20px -8px oklch(0 0 0 / 0.10);
+  --shadow-glow: 0 12px 40px -14px color-mix(in oklch, var(--primary) 55%, transparent);
+
   --animate-fade-in-up: fade-in-up 0.6s cubic-bezier(0.4, 0, 0.2, 1);
   --animate-float: float 3s ease-in-out infinite;
   --animate-pulse-glow: pulse-glow 2s infinite;
   --animate-pulse-step: pulse-step 2s infinite;
   --animate-progress-fill: progress-fill 0.5s ease-out forwards;
   --animate-latency-flow: latency-flow 1.6s ease-in-out infinite;
+  --animate-flow-x: flow-x 1.8s linear infinite;
+  --animate-flow-x-rev: flow-x-rev 1.8s linear infinite;
+  --animate-flow-y: flow-y 1.8s linear infinite;
+  --animate-flow-y-rev: flow-y-rev 1.8s linear infinite;
+  --animate-status-ping: status-ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
   --animate-dialog-overlay-show: dialog-overlay-show 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-overlay-hide: dialog-overlay-hide 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   --animate-dialog-content-show: dialog-content-show 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
@@ -146,6 +158,42 @@
     }
   }
 
+  /* 指令速查流程圖的封包：沿連線移動（水平 / 垂直、正向 / 反向）。
+     Command-sheet diagram packets travelling along a link (horizontal / vertical, both directions). */
+  @keyframes flow-x {
+    0% { left: 0%; opacity: 0; }
+    12% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { left: calc(100% - 8px); opacity: 0; }
+  }
+
+  @keyframes flow-x-rev {
+    0% { left: calc(100% - 8px); opacity: 0; }
+    12% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { left: 0%; opacity: 0; }
+  }
+
+  @keyframes flow-y {
+    0% { top: 0%; opacity: 0; }
+    12% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { top: calc(100% - 8px); opacity: 0; }
+  }
+
+  @keyframes flow-y-rev {
+    0% { top: calc(100% - 8px); opacity: 0; }
+    12% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { top: 0%; opacity: 0; }
+  }
+
+  /* 線上狀態點外圈的擴散光環。/ Expanding ring around the online status dot. */
+  @keyframes status-ping {
+    0% { transform: scale(1); opacity: 0.6; }
+    80%, 100% { transform: scale(2.4); opacity: 0; }
+  }
+
   @keyframes dialog-overlay-show {
     from {
       opacity: 0;
@@ -204,84 +252,92 @@
   }
 }
 
+/* 色票：微冷調中性色 + Telepy 翠綠主色 + 青色漸層副色；深色模式是深藍灰而非純黑。
+   Palette: cool-tinted neutrals, Telepy emerald primary, cyan gradient partner; dark mode is deep navy, not pure black. */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --radius: 0.75rem;
+  --background: oklch(0.985 0.003 250);
+  --foreground: oklch(0.2 0.02 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.2 0.02 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.2 0.02 260);
   --primary: oklch(0.627 0.15 160);
   /* Emerald green for Telepy */
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  --brand-2: oklch(0.66 0.13 215);
+  --secondary: oklch(0.962 0.006 250);
+  --secondary-foreground: oklch(0.25 0.02 260);
+  --muted: oklch(0.962 0.006 250);
+  --muted-foreground: oklch(0.52 0.02 260);
   --success: oklch(0.627 0.15 160);
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.769 0.188 70.08);
   --warning-foreground: oklch(0.145 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --info: oklch(0.6 0.15 250);
+  --info-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.955 0.008 250);
+  --accent-foreground: oklch(0.25 0.02 260);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.912 0.008 255);
+  --input: oklch(0.9 0.01 255);
+  --ring: oklch(0.627 0.15 160);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar: oklch(0.975 0.004 250);
+  --sidebar-foreground: oklch(0.2 0.02 260);
+  --sidebar-primary: oklch(0.627 0.15 160);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-accent: oklch(0.945 0.01 250);
+  --sidebar-accent-foreground: oklch(0.2 0.02 260);
+  --sidebar-border: oklch(0.912 0.008 255);
+  --sidebar-ring: oklch(0.627 0.15 160);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.627 0.15 160);
+  --background: oklch(0.16 0.014 262);
+  --foreground: oklch(0.965 0.005 250);
+  --card: oklch(0.2 0.016 262);
+  --card-foreground: oklch(0.965 0.005 250);
+  --popover: oklch(0.215 0.018 262);
+  --popover-foreground: oklch(0.965 0.005 250);
+  --primary: oklch(0.65 0.15 160);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --success: oklch(0.627 0.15 160);
+  --brand-2: oklch(0.7 0.12 215);
+  --secondary: oklch(0.26 0.018 262);
+  --secondary-foreground: oklch(0.965 0.005 250);
+  --muted: oklch(0.25 0.017 262);
+  --muted-foreground: oklch(0.71 0.018 255);
+  --success: oklch(0.65 0.15 160);
   --success-foreground: oklch(0.985 0 0);
   --warning: oklch(0.769 0.188 70.08);
   --warning-foreground: oklch(0.145 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --info: oklch(0.68 0.14 250);
+  --info-foreground: oklch(0.985 0 0);
+  --accent: oklch(0.27 0.02 262);
+  --accent-foreground: oklch(0.965 0.005 250);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.65 0.15 160);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar: oklch(0.18 0.015 262);
+  --sidebar-foreground: oklch(0.965 0.005 250);
+  --sidebar-primary: oklch(0.65 0.15 160);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-accent: oklch(0.25 0.018 262);
+  --sidebar-accent-foreground: oklch(0.965 0.005 250);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.65 0.15 160);
 }
 
 @layer base {
@@ -291,5 +347,40 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  /* App 外殼背景：主色與青色的柔光 + 頂部淡出的點陣。純裝飾（pointer-events: none）。
+     App-shell backdrop: soft emerald / cyan glows plus a dot grid that fades out downwards. Decorative only. */
+  .app-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(56rem 28rem at 88% -12%, color-mix(in oklch, var(--primary) 13%, transparent), transparent 70%),
+      radial-gradient(44rem 26rem at 8% 112%, color-mix(in oklch, var(--brand-2) 10%, transparent), transparent 70%);
+  }
+
+  .app-backdrop::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(color-mix(in oklch, var(--foreground) 8%, transparent) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: linear-gradient(to bottom, black, transparent 55%);
+  }
+
+  /* 品牌漸層（翠綠 → 青）：logo、主要強調。/ Brand gradient (emerald → cyan) for the logo and key highlights. */
+  .bg-brand-gradient {
+    background-image: linear-gradient(135deg, var(--primary), var(--brand-2));
+  }
+
+  .text-brand-gradient {
+    background-image: linear-gradient(135deg, var(--primary), var(--brand-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
   }
 }
