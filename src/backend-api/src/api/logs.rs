@@ -2,7 +2,12 @@
 //! - gateway 模式（預設）：從 `telepy_gateway_event` 渲染最後 500 筆成 sshd 風格文字行（JSON 字串，前端 unwrap），
 //!   沒有事件時回空字串（200），不再 404。
 //! - 外接 sshd 模式：讀 `SSH_LOGS_PATH` 的文字檔最後 500 行（舊行為）。
-//! `/api/log/ssh/events`：結構化事件（JSON 陣列），給新版 Logs 頁與自動化用。
+//! `/api/log/ssh/events`：結構化事件（JSON 陣列），給 Logs 頁與自動化用；`?tunnel_id=` 只看某條隧道。
+//!
+//! 可見範圍：管理員看全部（含 listening / preauth 這類沒有隧道的事件）；一般使用者只看自己擁有或被分享的
+//! 隧道的事件，指定別人的 tunnel_id 回 404。
+//! Scope: admins see everything (including tunnel-less events such as listening / preauth); other users only
+//! see events of tunnels they own or that are shared with them, and asking for another tunnel is a 404.
 
 use std::collections::HashMap;
 
@@ -13,10 +18,11 @@ use serde_json::{json, Value};
 use sqlx::FromRow;
 
 use crate::auth::AuthUser;
+use crate::db::{self, users::User};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::db_to_iso;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -42,19 +48,43 @@ pub fn tail_joined(content: &str, n: usize) -> String {
     lines[start..].join("\n")
 }
 
-async fn recent_events(state: &AppState, limit: i64, tunnel_id: Option<i64>) -> sqlx::Result<Vec<GatewayEvent>> {
+/// 使用者看得到哪些隧道的事件。/ Which tunnels' events a user may see.
+enum Scope {
+    All,
+    Tunnels(Vec<i64>),
+}
+
+async fn scope_for(state: &AppState, user: &User) -> sqlx::Result<Scope> {
+    if user.is_superuser {
+        return Ok(Scope::All);
+    }
+    Ok(Scope::Tunnels(db::tunnels::visible_to(&state.db, user.id).await?.into_iter().map(|t| t.id).collect()))
+}
+
+async fn recent_events(state: &AppState, limit: i64, tunnel_id: Option<i64>, scope: &Scope) -> ApiResult<Vec<GatewayEvent>> {
     let limit = limit.clamp(1, 5000);
-    let rows: Vec<GatewayEvent> = match tunnel_id {
-        Some(t) => sqlx::query_as("SELECT id, at, event, peer, port, tunnel_id, message FROM telepy_gateway_event WHERE tunnel_id = ? ORDER BY id DESC LIMIT ?")
-            .bind(t)
-            .bind(limit)
-            .fetch_all(&state.db.read)
-            .await?,
-        None => sqlx::query_as("SELECT id, at, event, peer, port, tunnel_id, message FROM telepy_gateway_event ORDER BY id DESC LIMIT ?")
-            .bind(limit)
-            .fetch_all(&state.db.read)
-            .await?,
+    // 只有整數進 SQL（tunnel id），不會有注入問題。/ Only integers reach the SQL text.
+    let filter = match (tunnel_id, scope) {
+        (Some(t), Scope::All) => format!("WHERE tunnel_id = {t}"),
+        (Some(t), Scope::Tunnels(ids)) => {
+            if !ids.contains(&t) {
+                return Err(ApiError::not_found("Reverse server keys not found"));
+            }
+            format!("WHERE tunnel_id = {t}")
+        }
+        (None, Scope::All) => String::new(),
+        (None, Scope::Tunnels(ids)) => {
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            format!("WHERE tunnel_id IN ({})", ids.iter().map(i64::to_string).collect::<Vec<_>>().join(","))
+        }
     };
+    let rows: Vec<GatewayEvent> =
+        sqlx::query_as(&format!("SELECT id, at, event, peer, port, tunnel_id, message FROM telepy_gateway_event {filter} ORDER BY id DESC LIMIT ?"))
+            .bind(limit)
+            .fetch_all(&state.db.read)
+            .await?;
     Ok(rows.into_iter().rev().collect())
 }
 
@@ -70,10 +100,11 @@ fn render_line(e: &GatewayEvent, tz: i32) -> String {
     format!("{ts}  {}", e.message)
 }
 
-#[utoipa::path(get, path = "/api/log/ssh", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Last 500 gateway events rendered as sshd-style lines, as one JSON string", body = String), (status = 404, description = "External sshd mode only: log file missing", body = String)))]
-async fn ssh_logs(State(state): State<AppState>, _user: AuthUser) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/log/ssh", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Last 500 gateway events visible to the user (admins: all; others: their own and shared tunnels) rendered as sshd-style lines, as one JSON string", body = String), (status = 404, description = "External sshd mode only: log file missing", body = String)))]
+async fn ssh_logs(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     if state.config.gateway_enabled {
-        let events = recent_events(&state, 500, None).await?;
+        let scope = scope_for(&state, &user).await?;
+        let events = recent_events(&state, 500, None, &scope).await?;
         let tz = state.config.tz_offset_minutes;
         let text = events.iter().map(|e| render_line(e, tz)).collect::<Vec<_>>().join("\n");
         return Ok(Json(Value::String(text)));
@@ -86,11 +117,12 @@ async fn ssh_logs(State(state): State<AppState>, _user: AuthUser) -> ApiResult<J
 }
 
 /// `?limit=` (default 200, max 5000) `&tunnel_id=`
-#[utoipa::path(get, path = "/api/log/ssh/events", tag = "Logs", security(("bearer" = [])), params(("limit" = Option<i64>, Query, description = "Default 200, max 5000"), ("tunnel_id" = Option<i64>, Query, description = "Only events of this tunnel")), responses((status = 200, body = Vec<super::schemas::GatewayEvent>)))]
-async fn ssh_events(State(state): State<AppState>, _user: AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/log/ssh/events", tag = "Logs", security(("bearer" = [])), params(("limit" = Option<i64>, Query, description = "Default 200, max 5000"), ("tunnel_id" = Option<i64>, Query, description = "Only events of this tunnel (must be visible to you)")), responses((status = 200, description = "Oldest first; admins see every event, other users only those of tunnels they own or that are shared with them", body = Vec<super::schemas::GatewayEvent>), (status = 404, description = "tunnel_id is not a tunnel you can see", body = super::schemas::ErrorBody)))]
+async fn ssh_events(State(state): State<AppState>, AuthUser(user): AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(200);
     let tunnel_id = q.get("tunnel_id").and_then(|v| v.parse().ok());
-    let events = recent_events(&state, limit, tunnel_id).await?;
+    let scope = scope_for(&state, &user).await?;
+    let events = recent_events(&state, limit, tunnel_id, &scope).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(Json(Value::Array(
         events

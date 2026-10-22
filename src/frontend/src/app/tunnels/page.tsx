@@ -6,6 +6,7 @@
  */
 import React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { Plus, Server, Info, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import { useI18n } from "@/lib/i18n";
 
 export default function TunnelsPage() {
     const { t } = useI18n();
+    const router = useRouter();
     const {
         tunnels,
         portsMap,
@@ -141,6 +143,7 @@ export default function TunnelsPage() {
                                 onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}
                                 onConfig={(tunnelId: number) => setConfigModal({ isOpen: true, tunnelId })}
                                 onScript={(tunnelId: number) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 })}
+                                onLogs={(tunnelId: number) => router.push(`/tunnels/logs?tunnel=${tunnelId}`)}
                                 onUsers={(tunnelId: number, readOnly: boolean) => setUsersModal({ isOpen: true, tunnelId, readOnly })}
                                 onShare={(tunnelId: number) => setShareModal({ isOpen: true, tunnelId })}
                                 onLeave={(tunnelId: number, name: string) => setLeaveConfirm({ isOpen: true, tunnelId, name })}
@@ -177,6 +180,7 @@ export default function TunnelsPage() {
                                         onDetails={(tunnelId: number) => setDetailsModal({ isOpen: true, tunnelId })}
                                         onConfig={(tunnelId: number) => setConfigModal({ isOpen: true, tunnelId })}
                                         onScript={(tunnelId: number) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 })}
+                                        onLogs={(tunnelId: number) => router.push(`/tunnels/logs?tunnel=${tunnelId}`)}
                                         onUsers={(tunnelId: number, readOnly: boolean) => setUsersModal({ isOpen: true, tunnelId, readOnly })}
                                         onShare={(tunnelId: number) => setShareModal({ isOpen: true, tunnelId })}
                                         onLeave={(tunnelId: number, name: string) => setLeaveConfirm({ isOpen: true, tunnelId, name })}
