@@ -143,8 +143,9 @@ function SiteSettingsTab() {
 
     // 依 key 前綴分組,讓管理員好找。/ Group by key prefix so admins can scan quickly.
     const groups: { title: string; keys: [string, unknown][] }[] = [
-        { title: t("settings.groupAccount"), keys: entries.filter(([k]) => !k.startsWith("remote_browser")) },
+        { title: t("settings.groupAccount"), keys: entries.filter(([k]) => !k.startsWith("remote_browser") && !k.startsWith("ai_")) },
         { title: t("settings.groupRemoteBrowser"), keys: entries.filter(([k]) => k.startsWith("remote_browser")) },
+        { title: t("settings.groupAi"), keys: entries.filter(([k]) => k.startsWith("ai_")) },
     ].filter((g) => g.keys.length > 0);
 
     return (

@@ -100,6 +100,15 @@ Environment variables in `.env`:
 | `INTERNAL_API_TOKEN`      | —           | Secret for internal service-to-service calls |
 | `OPENAPI_ENABLED`         | `true`      | Serve Swagger UI + OpenAPI spec (see below)  |
 
+### AI tools (MCP)
+
+Telepy is its own OAuth 2.1 authorization server, so any MCP-capable AI tool (Claude, Cursor, …) can
+be pointed at `https://<your-host>/mcp`. The first use opens an approval page in your browser where you
+check the app's redirect address, choose the permissions (see tunnels / run commands / read and write
+files) and the tunnels it may use. Approved apps appear under **Preferences → Connected apps**, where
+revoking stops their access and closes their sessions immediately. Sessions opened by AI tools close on
+their own when idle; the limits are site settings.
+
 ### API docs
 
 The backend publishes its OpenAPI 3 document at `/api/openapi.json` and a Swagger UI at

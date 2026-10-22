@@ -16,6 +16,20 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['radix-ui'],
   },
 
+  // 同意頁不准被嵌進 iframe（clickjacking）。/ The consent page must never be framed.
+  async headers() {
+    return [
+      {
+        source: '/oauth/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+        ],
+      },
+    ];
+  },
+
   // Only proxy to backend in dev mode.
   // In production, Traefik handles routing of /api and /ws to the backend.
   ...(isDev && {
@@ -52,6 +66,19 @@ const nextConfig: NextConfig = {
         {
           source: '/tunnels/server/:path*',
           destination: `${BACKEND_URL}/tunnels/server/:path*`,
+        },
+        // OAuth discovery + MCP endpoint (Traefik does the same in production).
+        {
+          source: '/.well-known/:path*',
+          destination: `${BACKEND_URL}/.well-known/:path*`,
+        },
+        {
+          source: '/mcp',
+          destination: `${BACKEND_URL}/mcp`,
+        },
+        {
+          source: '/mcp/:path*',
+          destination: `${BACKEND_URL}/mcp/:path*`,
         },
       ];
     },
