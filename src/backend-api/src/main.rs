@@ -122,7 +122,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let app = telepy_server::app::build(state);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     tracing::info!(addr = %config.bind, "listening");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+    // ConnectInfo：沒有 X-Forwarded-For 時（直接連後端）用 socket 對端當來源 IP。/ Peer address for `ClientMeta`.
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 

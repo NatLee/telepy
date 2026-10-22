@@ -11,6 +11,7 @@ pub mod pool;
 pub mod schema;
 pub mod settings;
 pub mod sharing;
+pub mod sign_ins;
 pub mod tunnel_endpoints;
 pub mod tunnels;
 pub mod users;

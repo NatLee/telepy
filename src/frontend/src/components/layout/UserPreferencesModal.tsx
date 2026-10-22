@@ -31,6 +31,7 @@ import {
 import { useThemePreference } from "@/hooks/useThemePreference";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
+import { SignInHistory } from "./SignInHistory";
 
 type PrefsTab = "general" | "security" | "apps";
 
@@ -146,8 +147,13 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                 </div>
             )}
 
-            {/* 登入安全性 / Sign-in security (passkeys, authenticator app, recovery codes) */}
-            {tab === "security" && <SecuritySettings />}
+            {/* 登入安全性 + 最近的登入 / Sign-in security (passkeys, authenticator app, recovery codes) + recent sign-ins */}
+            {tab === "security" && (
+                <div className="space-y-6">
+                    <SecuritySettings />
+                    <SignInHistory endpoint="/api/auth/sign-ins" description={t("security.signInsDescription")} />
+                </div>
+            )}
 
             {tab === "apps" && (
                 <div className="space-y-6">

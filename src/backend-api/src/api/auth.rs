@@ -5,10 +5,12 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 
+use super::sign_ins::{self, Attempt};
 use super::{body_object, AppJson};
 use crate::auth::password::{check_password, make_password, unusable_password};
 use crate::auth::google::{GoogleClaims, GoogleError};
 use crate::auth::{AuthUser, TokenType};
+use crate::client_ip::ClientMeta;
 use crate::db::{self, users::NewUser};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
@@ -62,7 +64,7 @@ fn required_fields_error(body: &Value, fields: &[&str]) -> Option<ApiError> {
 
 /// simplejwt TokenObtainPairView（MyTokenObtainPairSerializer 改名為 access_token/refresh_token）。
 #[utoipa::path(post, path = "/api/auth/token", tag = "Login", request_body = super::schemas::LoginRequest, responses((status = 200, body = super::schemas::LoginResponse), (status = 400, description = "Missing fields: {field: [message]}", body = Object), (status = 401, description = "Bad credentials or inactive account", body = super::schemas::ErrorBody)))]
-async fn obtain_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn obtain_token(State(state): State<AppState>, meta: ClientMeta, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["username", "password"]) {
         return Err(e);
@@ -76,10 +78,12 @@ async fn obtain_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     if !ok || !user.is_active {
+        let reason = if ok { "inactive" } else { "bad_password" };
+        sign_ins::record(&state, user.id, &meta, Attempt::failed("password", None, reason)).await;
         return Err(denied());
     }
     // 有第二因素 → 回登入挑戰（mfa_required），否則直接發 token。/ Second factor → challenge, else tokens.
-    Ok(Json(super::mfa::complete_login(&state, &user).await?))
+    Ok(Json(super::mfa::complete_login(&state, &user, "password", &meta).await?))
 }
 
 fn token_not_valid() -> ApiError {
@@ -215,7 +219,7 @@ fn google_verify_error(e: &GoogleError) -> ApiError {
     (status = 500, description = "google_not_configured / google_client_mismatch (server configuration)", body = super::schemas::GoogleLoginError),
     (status = 502, description = "google_unreachable", body = super::schemas::GoogleLoginError),
 ))]
-async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn google_login(State(state): State<AppState>, meta: ClientMeta, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["credential"]) {
         return Err(e);
@@ -225,12 +229,12 @@ async fn google_login(State(state): State<AppState>, AppJson(body): AppJson<Valu
         tracing::error!(error = %e, "[AUTH][GOOGLE] id_token verification failed");
         google_verify_error(&e)
     })?;
-    Ok(Json(google_sign_in(&state, claims).await?))
+    Ok(Json(google_sign_in(&state, claims, &meta).await?))
 }
 
 /// id_token 驗過之後：網域白名單 → 找 / 建帳號 → 檢查 → 發 token 或 2FA 挑戰。拆出來以便直接測試各種錯誤。
 /// After the id_token is verified: domain allow-list, find or create the account, checks, tokens or a 2FA challenge.
-pub async fn google_sign_in(state: &AppState, claims: GoogleClaims) -> ApiResult<Value> {
+pub async fn google_sign_in(state: &AppState, claims: GoogleClaims, meta: &ClientMeta) -> ApiResult<Value> {
     let Some(email) = claims.email.filter(|e| e.contains('@')) else {
         tracing::error!("[AUTH][GOOGLE] Token has no `email` claim");
         return Err(google_error(StatusCode::BAD_REQUEST, "google_no_email", "Your Google account did not share an email address.", json!({})));
@@ -277,6 +281,7 @@ pub async fn google_sign_in(state: &AppState, claims: GoogleClaims) -> ApiResult
     // The username belongs to a password account without a Google link: say how to sign in instead of a 500.
     if db::users::social_for(&state.db, user.id, "google").await?.is_none() {
         tracing::warn!(username = user.username, "[AUTH][GOOGLE] username belongs to an account without a Google link");
+        sign_ins::record(state, user.id, meta, Attempt::failed("google", None, "google_account_conflict")).await;
         return Err(google_error(
             StatusCode::CONFLICT,
             "google_account_conflict",
@@ -285,10 +290,11 @@ pub async fn google_sign_in(state: &AppState, claims: GoogleClaims) -> ApiResult
         ));
     }
     if !user.is_active {
+        sign_ins::record(state, user.id, meta, Attempt::failed("google", None, "inactive")).await;
         return Err(google_error(StatusCode::FORBIDDEN, "account_disabled", "This account is disabled. Contact an administrator.", json!({})));
     }
     // last_login 由 complete_login（無第二步）或 mfa_verify（有第二步）更新。/ last_login is touched by complete_login / mfa_verify.
-    let result = super::mfa::complete_login(state, &user).await?;
+    let result = super::mfa::complete_login(state, &user, "google", meta).await?;
     if result.get("mfa_required").is_none() {
         tracing::info!(username = user.username, "[AUTH][3RD] Login success");
     }

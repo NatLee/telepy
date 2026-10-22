@@ -7,6 +7,7 @@ use serde_json::json;
 
 use telepy_server::api::auth::google_sign_in;
 use telepy_server::auth::google::GoogleClaims;
+use telepy_server::client_ip::ClientMeta;
 use telepy_server::db;
 
 fn claims(email: Option<&str>, sub: &str) -> GoogleClaims {
@@ -19,24 +20,24 @@ async fn google_sign_in_outcomes() {
     let err = |e: telepy_server::error::ApiError| (e.status, e.body);
 
     // 第一位使用者（註冊永遠開放）→ 建立並拿到 token。/ The first user is created and gets tokens.
-    let ok = google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1")).await.unwrap();
+    let ok = google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1"), &ClientMeta::default()).await.unwrap();
     assert!(ok["access_token"].is_string(), "{ok}");
     let ada = db::users::by_username(&app.state.db, "ada").await.unwrap().unwrap();
     assert_eq!(ada.email, "ada@gmail.com");
     // 再次登入同一個帳號。/ Signing in again.
-    assert!(google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1")).await.unwrap()["access_token"].is_string());
+    assert!(google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1"), &ClientMeta::default()).await.unwrap()["access_token"].is_string());
 
     // 沒有 email。/ No email.
-    let (status, body) = err(google_sign_in(&app.state, claims(None, "g-2")).await.unwrap_err());
+    let (status, body) = err(google_sign_in(&app.state, claims(None, "g-2"), &ClientMeta::default()).await.unwrap_err());
     assert_eq!((status, body["code"].as_str()), (StatusCode::BAD_REQUEST, Some("google_no_email")));
 
     // 網域不在白名單（預設只有 gmail.com）。/ Domain not on the allow-list.
-    let (status, body) = err(google_sign_in(&app.state, claims(Some("bob@corp.example"), "g-3")).await.unwrap_err());
+    let (status, body) = err(google_sign_in(&app.state, claims(Some("bob@corp.example"), "g-3"), &ClientMeta::default()).await.unwrap_err());
     assert_eq!((status, body["code"].as_str(), body["domain"].as_str()), (StatusCode::FORBIDDEN, Some("google_domain_not_allowed"), Some("corp.example")));
     assert_eq!(body["detail"], "Accounts from corp.example cannot sign in to this server.");
 
     // 註冊關閉（已有使用者、allow_registration 預設 false）。/ Registration closed.
-    let (status, body) = err(google_sign_in(&app.state, claims(Some("carol@gmail.com"), "g-4")).await.unwrap_err());
+    let (status, body) = err(google_sign_in(&app.state, claims(Some("carol@gmail.com"), "g-4"), &ClientMeta::default()).await.unwrap_err());
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("registration_closed")));
     assert!(db::users::by_username(&app.state.db, "carol").await.unwrap().is_none());
 
@@ -49,11 +50,11 @@ async fn google_sign_in_outcomes() {
         .execute(&app.state.db.write)
         .await
         .unwrap();
-    let (status, body) = err(google_sign_in(&app.state, claims(Some("dave@gmail.com"), "g-5")).await.unwrap_err());
+    let (status, body) = err(google_sign_in(&app.state, claims(Some("dave@gmail.com"), "g-5"), &ClientMeta::default()).await.unwrap_err());
     assert_eq!((status, body["code"].as_str(), body["username"].as_str()), (StatusCode::CONFLICT, Some("google_account_conflict"), Some("dave")));
 
     // 停用的帳號。/ A disabled account.
     sqlx::query("UPDATE auth_user SET is_active = 0 WHERE username = 'ada'").execute(&app.state.db.write).await.unwrap();
-    let (status, body) = err(google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1")).await.unwrap_err());
+    let (status, body) = err(google_sign_in(&app.state, claims(Some("ada@gmail.com"), "g-1"), &ClientMeta::default()).await.unwrap_err());
     assert_eq!((status, body["code"].as_str()), (StatusCode::FORBIDDEN, Some("account_disabled")));
 }

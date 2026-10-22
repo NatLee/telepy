@@ -20,9 +20,11 @@ use axum::Json;
 use serde_json::{json, Value};
 use webauthn_rs::prelude::{DiscoverableKey, Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Uuid, Webauthn};
 
+use super::sign_ins::{self, Attempt};
 use super::AppJson;
 use crate::api::auth::token_pair;
 use crate::auth::AuthUser;
+use crate::client_ip::ClientMeta;
 use crate::db::{self, users::User};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::mfa::passkey::{credential_id_b64, relying_party, Ceremony, Purpose, MAX_NAME_CHARS};
@@ -98,16 +100,18 @@ pub async fn factors(state: &AppState, user_id: i64) -> sqlx::Result<Factors> {
     Ok(Factors { totp, passkeys })
 }
 
-/// 帳密 / Google 第一關通過後：沒有 2FA → token pair；有 → 登入挑戰。/ After the first factor.
-pub async fn complete_login(state: &AppState, user: &User) -> ApiResult<Value> {
+/// 帳密 / Google 第一關通過後：沒有 2FA → token pair；有 → 登入挑戰。`first_factor` = password / google。
+/// After the first factor (password / google): tokens, or a challenge when the account has 2FA.
+pub async fn complete_login(state: &AppState, user: &User, first_factor: &'static str, meta: &ClientMeta) -> ApiResult<Value> {
     let f = factors(state, user.id).await?;
     if !f.any() {
         // 沒有第二步，這裡就是登入完成（有第二步時由 mfa_verify 記）。/ No second step: the login completes here.
         db::users::touch_last_login(&state.db, user.id).await?;
+        sign_ins::record(state, user.id, meta, Attempt::ok(first_factor, None)).await;
         return Ok(token_pair(state, user.id));
     }
     let token = crate::oauth::random_token("");
-    state.mfa.challenges.insert(token.clone(), LoginChallenge::new(user.id));
+    state.mfa.challenges.insert(token.clone(), LoginChallenge::new(user.id, first_factor));
     Ok(json!({ "mfa_required": true, "mfa_token": token, "methods": f.methods() }))
 }
 
@@ -229,7 +233,7 @@ async fn recovery_after_change(state: &AppState, user_id: i64, had_any: bool) ->
 // ---------------------------------------------------------------- login (public)
 
 #[utoipa::path(post, path = "/api/auth/mfa/verify", tag = "Two-Factor", request_body = super::schemas::MfaVerifyRequest, responses((status = 200, body = super::schemas::TokenPair), (status = 400, description = "Missing fields, mfa_invalid or mfa_expired (never 401: the web client logs out on any 401)", body = super::schemas::MfaError), (status = 429, description = "mfa_locked", body = super::schemas::MfaError)))]
-async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, meta: ClientMeta, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let expired = || mfa_error(StatusCode::BAD_REQUEST, "mfa_expired", "The sign-in attempt expired. Log in again.");
     let token = body.get("mfa_token").and_then(Value::as_str).unwrap_or_default().to_string();
     let Some(ch) = state.mfa.challenges.get(&token) else { return Err(expired()) };
@@ -243,10 +247,13 @@ async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, AppJson(b
             state.mfa.challenges.invalidate(&token);
             let user = db::users::by_id(&state.db, ch.user_id).await?.filter(|u| u.is_active).ok_or_else(expired)?;
             db::users::touch_last_login(&state.db, user.id).await?;
+            sign_ins::record(&state, user.id, &meta, Attempt::ok(ch.first_factor, Some(method))).await;
             tracing::info!(username = %user.username, method, "[AUTH][2FA] Login success");
             Ok(Json(token_pair(&state, user.id)))
         }
         Err(e) => {
+            let attempted = body.get("method").and_then(Value::as_str);
+            sign_ins::record(&state, ch.user_id, &meta, Attempt::failed(ch.first_factor, attempted, "mfa_failed")).await;
             // 原地累加，不重新 insert（那會把挑戰的 5 分鐘重算）；用完次數就直接作廢。
             // Count in place (re-inserting would reset the TTL); drop the challenge once the attempts are used up.
             if ch.fail() >= mfa::CHALLENGE_ATTEMPTS {
@@ -284,7 +291,7 @@ async fn passkey_login_options(State(state): State<AppState>, headers: HeaderMap
 }
 
 #[utoipa::path(post, path = "/api/auth/passkey/login", tag = "Two-Factor", request_body = super::schemas::PasskeyCredentialRequest, responses((status = 200, description = "Signed in (a passkey is two factors on its own)", body = super::schemas::TokenPair), (status = 400, description = "passkey_failed", body = super::schemas::MfaError)))]
-async fn passkey_login(State(state): State<AppState>, headers: HeaderMap, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn passkey_login(State(state): State<AppState>, headers: HeaderMap, meta: ClientMeta, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let failed = || mfa_error(StatusCode::BAD_REQUEST, "passkey_failed", "Passkey sign-in failed.");
     let challenge_id = body.get("challenge_id").and_then(Value::as_str).unwrap_or_default();
     let Some(Ceremony::Login(st)) = state.mfa.ceremonies.take(challenge_id) else { return Err(failed()) };
@@ -303,6 +310,7 @@ async fn passkey_login(State(state): State<AppState>, headers: HeaderMap, AppJso
     }
     let user = db::users::by_id(&state.db, row.user_id).await?.filter(|u| u.is_active).ok_or_else(failed)?;
     db::users::touch_last_login(&state.db, user.id).await?;
+    sign_ins::record(&state, user.id, &meta, Attempt::ok("passkey", None)).await;
     tracing::info!(username = %user.username, "[AUTH][PASSKEY] Login success");
     Ok(Json(token_pair(&state, user.id)))
 }

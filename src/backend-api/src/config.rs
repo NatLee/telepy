@@ -71,6 +71,14 @@ pub struct Config {
     pub gateway_max_connections: usize,
     pub gateway_login_grace: Duration,
     pub gateway_probe_interval: Duration,
+    // --- client IP (sign-in history, presence) ---
+    /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
+    /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
+    /// Trusted reverse proxies in front of the backend, Traefik included (1 = Traefik only, 2 = plus an
+    /// upstream TLS proxy). Too high lets clients spoof their address.
+    pub trusted_proxy_hops: usize,
+    /// 直接採用這個標頭當來源 IP（例 `CF-Connecting-IP`）；只在上游一定會覆寫它時設定。/ Trusted client-IP header.
+    pub client_ip_header: Option<String>,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -164,6 +172,8 @@ impl Config {
             gateway_max_connections: env("GATEWAY_MAX_CONNECTIONS").and_then(|v| v.parse().ok()).unwrap_or(4096),
             gateway_login_grace: Duration::from_secs(env("GATEWAY_LOGIN_GRACE_SECS").and_then(|v| v.parse().ok()).unwrap_or(60)),
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
+            trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
+            client_ip_header: env("CLIENT_IP_HEADER"),
         }
     }
 
