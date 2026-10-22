@@ -58,7 +58,7 @@ async fn device_ip_on_the_tunnel_list() {
     )
     .await
     .unwrap();
-    let dev = Device { tunnel_id: t.id, name: "box".into(), reverse_port: port, target: boxm.clone() };
+    let dev = Device { tunnel_id: t.id, name: "box".into(), reverse_port: port, target: boxm.clone(), key };
     let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
     lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
     lab.share(&alice, &dev, &carol, "edit", &[]).await;
@@ -66,7 +66,7 @@ async fn device_ip_on_the_tunnel_list() {
     // 從沒連過：沒有資料。/ Never connected.
     assert_eq!(endpoint(&lab, &alice.token, t.id).await, Value::Null);
 
-    let mut ssh = tunnel_ssh(&lab, &key, port, &boxm);
+    let mut ssh = tunnel_ssh(&lab, &dev.key, port, &boxm);
     let status = lab.app.state.status.clone();
     wait_for("forward", async || status.listen_ports().is_some_and(|p| p.contains(&port))).await;
 
