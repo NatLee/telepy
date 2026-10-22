@@ -89,11 +89,12 @@ pub async fn check_share_access(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx:
     check_access(db, user_id, tunnel, Permission::Admin).await
 }
 
-/// `TunnelPermissionService.get_allowed_usernames`：
-/// - owner / ADMIN → 該隧道全部 usernames
+/// 能用哪些目標 OS 帳號（terminal / 檔案 / SFTP / 遠端瀏覽器 / 腳本 / MCP 全部走這裡）：
+/// - owner / ADMIN → 該隧道全部 usernames（也只有他們能新增 / 改 / 刪 OS 帳號）
+/// - VIEW / EDIT 分享 → 只有 owner / ADMIN 指派的允許清單；清單空 = 一個都沒有
 /// - 未分享 → 無
-/// - 已分享且有限制清單 → 清單內的 ∪ 自己建立的
-/// - 已分享但清單為空 → 只有自己建立的
+/// 自己建立的不會自動算進去：裝置分不出是哪位 Telepy 使用者（大家都用同一把服務金鑰），所以允許清單是唯一的關卡。
+/// Usable target accounts: everything for owner / ADMIN, exactly the allow-list for other sharees.
 pub async fn allowed_usernames(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx::Result<Vec<UsernameWithCreator>> {
     let all = db::tunnels::usernames_for_tunnel(db, tunnel.id).await?;
     let eff = effective_for(db, user_id, tunnel).await?;
@@ -103,18 +104,14 @@ pub async fn allowed_usernames(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx::
             let sharing = db::sharing::get(db, tunnel.id, user_id).await?;
             let Some(sharing) = sharing else { return Ok(vec![]) };
             let allowed = db::sharing::allowed_username_ids(db, sharing.id).await?;
-            Ok(filter_allowed(all, user_id, &allowed))
+            Ok(filter_allowed(all, &allowed))
         }
         None => Ok(vec![]),
     }
 }
 
-pub fn filter_allowed(all: Vec<UsernameWithCreator>, user_id: i64, allowed: &[i64]) -> Vec<UsernameWithCreator> {
-    if allowed.is_empty() {
-        all.into_iter().filter(|u| u.user_id == user_id).collect()
-    } else {
-        all.into_iter().filter(|u| allowed.contains(&u.id) || u.user_id == user_id).collect()
-    }
+pub fn filter_allowed(all: Vec<UsernameWithCreator>, allowed: &[i64]) -> Vec<UsernameWithCreator> {
+    all.into_iter().filter(|u| allowed.contains(&u.id)).collect()
 }
 
 #[cfg(test)]
@@ -146,12 +143,10 @@ mod tests {
 
     #[test]
     fn allowed_filtering() {
+        // rows 2 and 3 were created by the sharee (user 20): creating a row grants nothing
         let all = vec![u(1, 10), u(2, 20), u(3, 20)];
-        // empty allow-list → only self-created
-        let r = filter_allowed(all.clone(), 20, &[]);
-        assert_eq!(r.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2, 3]);
-        // allow-list → listed ∪ self-created
-        let r = filter_allowed(all, 30, &[1]);
+        assert!(filter_allowed(all.clone(), &[]).is_empty(), "empty allow-list → nothing");
+        let r = filter_allowed(all, &[1]);
         assert_eq!(r.iter().map(|x| x.id).collect::<Vec<_>>(), vec![1]);
     }
 }

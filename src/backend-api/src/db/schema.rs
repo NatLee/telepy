@@ -1,8 +1,8 @@
 //! 冪等 schema：以 Django 的表名/欄名建表（新安裝），並對既有 DB 補齊缺少的欄位（舊 DB）。
-//! 不動既有欄位、不刪任何東西 —— 切回 Django image 永遠可行。
+//! 不動既有欄位。規則改變需要清資料時用一次性的 data migration（記在 `telepy_data_migration`，每個只跑一次）。
 //! Idempotent schema reconciliation against the Django-named tables: creates missing tables on a
-//! fresh install and adds missing columns on an older DB. Never alters or drops existing columns,
-//! so rolling back to the Django image stays possible.
+//! fresh install and adds missing columns on an older DB; never alters or drops existing columns.
+//! One-off data fixes run once each and are recorded in `telepy_data_migration`.
 
 use sqlx::SqlitePool;
 
@@ -229,6 +229,14 @@ const TABLES: &[(&str, &str)] = &[
             "error" text NULL
         )"#,
     ),
+    // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
+    (
+        "telepy_data_migration",
+        r#"CREATE TABLE "telepy_data_migration" (
+            "name" varchar(128) NOT NULL PRIMARY KEY,
+            "applied_at" datetime NOT NULL
+        )"#,
+    ),
 ];
 
 const INDEXES: &[&str] = &[
@@ -323,6 +331,38 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+    run_data_migrations(pool).await
+}
+
+/// 只有擁有者 / ADMIN 能管理 OS 帳號之後，非 ADMIN 被分享者以前自己建的 username 一律失效（連同允許清單與預設值）。
+pub const DROP_SHAREE_USERNAMES: &str = "2026-10-22-drop-usernames-created-by-non-admin-sharees";
+
+/// 依序套用還沒跑過的一次性 data migration（同一個 transaction 裡寫入完成紀錄）。
+pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
+    let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(DROP_SHAREE_USERNAMES).fetch_one(pool).await?;
+    if applied > 0 {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let victims: Vec<i64> = sqlx::query_scalar(
+        "SELECT u.id FROM authorized_keys_reverseserverusernames u \
+         JOIN authorized_keys_reverseserverauthorizedkeys t ON t.id = u.reverse_server_id \
+         WHERE u.user_id <> t.user_id AND NOT EXISTS ( \
+             SELECT 1 FROM tunnels_tunnelsharing s \
+             WHERE s.tunnel_id = t.id AND s.shared_with_id = u.user_id AND LOWER(s.permission_type) = 'admin')",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for id in &victims {
+        sqlx::query("DELETE FROM tunnels_tunnelsharingallowedusername WHERE reverse_server_username_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET default_username_id = NULL WHERE default_username_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM authorized_keys_reverseserverusernames WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(DROP_SHAREE_USERNAMES).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    if !victims.is_empty() {
+        tracing::info!(removed = victims.len(), "data migration: dropped target usernames created by non-admin sharees");
+    }
     Ok(())
 }
 

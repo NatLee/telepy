@@ -108,11 +108,10 @@ async fn multi_hop_paths() {
     assert_eq!(edge.logins().len(), before);
 }
 
-/// 已知漏洞（使用者名稱設計待定）：被分享 EDIT 的人可以自己新增 OS 帳號，馬上就能用那個帳號開網頁終端機，
-/// 繞過擁有者給他的允許清單。修好後拿掉 `#[ignore]`。
+/// 被分享 EDIT 的人不能自己加 OS 帳號來繞過允許清單；就算擁有者自己有 root，不在他清單上就用不到。
+/// 以前（Django 起）EDIT 自己建的 username 會自動算進允許清單，猜到 `root` 就拿到 root shell。
 #[tokio::test]
-#[ignore = "username design pending: an EDIT-shared user can add an OS username and use it right away"]
-async fn edit_share_cannot_self_grant_os_usernames() {
+async fn sharees_only_get_their_allow_list() {
     let Some(lab) = Lab::start().await else { return };
     let alice = lab.user("alice").await;
     let dave = lab.user("dave").await;
@@ -121,8 +120,18 @@ async fn edit_share_cannot_self_grant_os_usernames() {
     let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
     lab.share(&alice, &dev, &dave, "edit", &[ubuntu]).await;
 
-    // dave 猜 root 並自己加上去
-    let _ = lab.add_username(&dave, &dev, "root").await;
+    // dave 猜 root 並想自己加上去 → 403
+    let r = lab.add_username(&dave, &dev, "root").await;
+    assert_eq!(r.status, axum::http::StatusCode::FORBIDDEN, "{}", r.text);
+    // alice 自己有 root，但不在 dave 的清單上：每條路都拒絕
+    lab.username(&alice, &dev, "root").await;
     assert_eq!(lab.terminal(&dave, &dev, "root").await.err(), Some(4003), "dave must not get a root shell");
+    let r = lab.app.get(&format!("/api/sftp/list/{}/root", dev.tunnel_id), Some(&dave.token)).await;
+    assert_eq!(r.status, axum::http::StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = lab.app.get(&format!("/api/reverse/server/{}/usernames", dev.tunnel_id), Some(&dave.token)).await;
+    assert_eq!(r.json["usernames"].as_array().unwrap().iter().map(|u| u["username"].as_str().unwrap()).collect::<Vec<_>>(), vec!["ubuntu"]);
     assert!(!boxm.logged_in("root", &lab.service));
+    // 清單上的照常可用
+    let mut t = lab.terminal(&dave, &dev, "ubuntu").await.unwrap();
+    t.expect("login:ubuntu@box").await;
 }

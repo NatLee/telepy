@@ -139,11 +139,12 @@ export function TunnelActions({
                         hint={t("tunnelActions.detailsHint")}
                         onSelect={() => onDetails(tunnel.id)}
                     />
+                    {/* 只有擁有者 / ADMIN 能管理目標 OS 帳號（與分享同一級）；其他人只看得到自己被允許的 */}
                     <ActionItem
                         icon={Users}
-                        label={tunnel.can_edit ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewTargetUsers")}
+                        label={tunnel.can_share ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewTargetUsers")}
                         hint={t("tunnelActions.targetServerUsersHint")}
-                        onSelect={() => onUsers(tunnel.id, !tunnel.can_edit)}
+                        onSelect={() => onUsers(tunnel.id, !tunnel.can_share)}
                     />
                     {tunnel.can_share && (
                         <ActionItem

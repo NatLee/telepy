@@ -55,7 +55,7 @@ export function ShareModalShareForm({
             </div>
             {selectedUser && tunnelUsernames.length > 0 && (
                 <div className="bg-muted/30 border border-border rounded-lg p-3">
-                    <p className="text-xs font-medium text-muted-foreground mb-2">{t("share.restrictLabel")}</p>
+                    <p className="text-xs font-medium text-muted-foreground mb-2">{t("share.allowLabel")}</p>
                     <div className="flex flex-wrap gap-2">
                         {tunnelUsernames.map((targetUser) => (
                             <label key={targetUser.id} className="flex items-center gap-1.5 text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors">
