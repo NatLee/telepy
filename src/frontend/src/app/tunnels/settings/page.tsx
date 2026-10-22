@@ -13,9 +13,10 @@
 import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, Info, ShieldAlert, Users as UsersIcon, Shield, SlidersHorizontal } from "lucide-react";
+import { Settings, Info, ShieldAlert, ShieldCheck, Users as UsersIcon, Shield, SlidersHorizontal } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { Modal } from "@/components/ui/Modal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
 import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
 import type { Translate } from "@/lib/i18n";
@@ -235,7 +236,7 @@ function SiteSettingsTab() {
 function UsersTab() {
     const { user: currentUser } = useAuth();
     const { t, locale } = useI18n();
-    const { users, loading, updateUser } = useUserManagement(true);
+    const { users, loading, updateUser, resetMfa } = useUserManagement(true);
     const [editing, setEditing] = useState<ManagedUser | null>(null);
 
     // modal 內容跟著列表資料走,更新後即時反映。/ Keep the modal in sync with the list data.
@@ -281,6 +282,12 @@ function UsersTab() {
                                             {u.username}
                                             {u.id === currentUser?.id && (
                                                 <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
+                                            )}
+                                            {u.mfa_enabled && (
+                                                <span className="ml-2 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-500/10 text-green-600 dark:text-green-400" title={t("security.adminOn")}>
+                                                    <ShieldCheck size={10} />
+                                                    {t("security.badge")}
+                                                </span>
                                             )}
                                         </td>
                                         <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">{u.email || "—"}</td>
@@ -328,6 +335,7 @@ function UsersTab() {
                     isSelf={editingUser.id === currentUser?.id}
                     onClose={() => setEditing(null)}
                     updateUser={updateUser}
+                    resetMfa={resetMfa}
                     t={t}
                 />
             )}
@@ -342,15 +350,18 @@ function UserEditModal({
     isSelf,
     onClose,
     updateUser,
+    resetMfa,
     t,
 }: {
     user: ManagedUser;
     isSelf: boolean;
     onClose: () => void;
     updateUser: (userId: number, patch: ManagedUserPatch) => Promise<boolean>;
+    resetMfa: (userId: number, username: string) => Promise<boolean>;
     t: Translate;
 }) {
     const [saving, setSaving] = useState(false);
+    const [confirmReset, setConfirmReset] = useState(false);
 
     const apply = async (patch: ManagedUserPatch) => {
         setSaving(true);
@@ -440,7 +451,39 @@ function UserEditModal({
                         ))}
                     </select>
                 </div>
+
+                {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <p className="text-sm font-medium text-foreground">{t("security.adminTitle")}</p>
+                        <p className="text-sm text-muted-foreground">{user.mfa_enabled ? t("security.adminOn") : t("security.adminOff")}</p>
+                    </div>
+                    {user.mfa_enabled && (
+                        <button
+                            type="button"
+                            disabled={saving}
+                            onClick={() => setConfirmReset(true)}
+                            className="shrink-0 text-xs px-3 py-1.5 rounded-md border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors font-medium"
+                        >
+                            {t("security.adminReset")}
+                        </button>
+                    )}
+                </div>
             </div>
+            <ConfirmDialog
+                isOpen={confirmReset}
+                onClose={() => setConfirmReset(false)}
+                onConfirm={async () => {
+                    setConfirmReset(false);
+                    setSaving(true);
+                    await resetMfa(user.id, user.username);
+                    setSaving(false);
+                }}
+                title={t("security.adminReset")}
+                message={t("security.adminResetConfirm", { user: user.username })}
+                confirmText={t("security.adminReset")}
+                isDestructive
+            />
         </Modal>
     );
 }

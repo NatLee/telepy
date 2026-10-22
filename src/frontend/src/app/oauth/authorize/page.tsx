@@ -23,8 +23,8 @@ const SCOPE_LABELS: Record<string, { label: TranslationKey; description: Transla
 
 function ConsentInner() {
     const { t, tn } = useI18n();
-    const { state, actions } = useOAuthConsent();
-    const { info, error, loading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove } = state;
+    const { state, actions, reauthDialog } = useOAuthConsent();
+    const { info, error, loading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove, stepUpError } = state;
 
     const shell = (children: React.ReactNode) => (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -146,6 +146,8 @@ function ConsentInner() {
             </section>
 
             <p className="text-xs text-muted-foreground">{t("oauth.sessionNote")}</p>
+            {info.reauth?.required && <p className="text-xs text-muted-foreground">{t("oauth.reauthHint")}</p>}
+            {stepUpError && <p className="text-sm text-destructive">{stepUpError}</p>}
 
             <div className="flex gap-3">
                 <Button variant="outline" className="flex-1" disabled={submitting} onClick={actions.deny}>
@@ -155,6 +157,7 @@ function ConsentInner() {
                     {submitting ? <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : (<><Check size={16} className="mr-2" /> {t("oauth.approve")}</>)}
                 </Button>
             </div>
+            {reauthDialog}
         </div>
     );
 }
