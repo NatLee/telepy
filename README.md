@@ -117,6 +117,7 @@ Sub-commands:
 - [Remote browser architecture](./docs/remote-browser.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
 - [Rust backend migration plan](./docs/rust-migration-plan.md)
+- [Backend benchmark: Django vs Rust](./docs/benchmarks.md)
 - [Articles](./docs/articles/)
 
 ## Contributors
