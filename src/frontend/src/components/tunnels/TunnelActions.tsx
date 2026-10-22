@@ -16,7 +16,8 @@ import {
     Users,
     MoreHorizontal,
     LogOut,
-    Trash2
+    Trash2,
+    ScrollText
 } from "lucide-react";
 import { Tunnel } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
@@ -27,6 +28,8 @@ interface TunnelActionsProps {
     onDetails: (tunnelId: number) => void;
     onConfig: (tunnelId: number) => void;
     onScript: (tunnelId: number) => void;
+    /** 這條隧道的 gateway 日誌（/tunnels/logs?tunnel=<id>）。/ This tunnel's gateway log. */
+    onLogs: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
@@ -39,6 +42,7 @@ export function TunnelActions({
     onDetails,
     onConfig,
     onScript,
+    onLogs,
     onUsers,
     onShare,
     onLeave,
@@ -68,6 +72,9 @@ export function TunnelActions({
                             <Terminal className="mr-2 h-4 w-4" /> {t("tunnelActions.scripts")}
                         </DropdownMenuItem>
                     )}
+                    <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
+                        <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
+                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => onUsers(tunnel.id, !tunnel.can_edit)}>
                         <Users className="mr-2 h-4 w-4" /> {tunnel.can_edit ? t("tunnelActions.targetServerUsers") : t("tunnelActions.viewUsers")}
                     </DropdownMenuItem>
@@ -129,14 +136,15 @@ export function TunnelActions({
                         <DropdownMenuContent align="end" className="w-56">
                             <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
                             <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
+                                <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
+                            </DropdownMenuItem>
                             {tunnel.can_share && (
-                                <>
-                                    <DropdownMenuItem onClick={() => onShare(tunnel.id)}>
-                                        <Share2 className="mr-2 h-4 w-4" /> {t("tunnelActions.manageSharing")}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                </>
+                                <DropdownMenuItem onClick={() => onShare(tunnel.id)}>
+                                    <Share2 className="mr-2 h-4 w-4" /> {t("tunnelActions.manageSharing")}
+                                </DropdownMenuItem>
                             )}
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem
                                 onClick={() => onLeave(tunnel.id, tunnel.host_friendly_name)}
                                 className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
@@ -159,6 +167,9 @@ export function TunnelActions({
                     <DropdownMenuContent align="end" className="w-56">
                         <DropdownMenuLabel>{t("tunnelActions.moreActions")}</DropdownMenuLabel>
                         <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => onLogs(tunnel.id)}>
+                            <ScrollText className="mr-2 h-4 w-4" /> {t("tunnelActions.logs")}
+                        </DropdownMenuItem>
                         {tunnel.can_edit && (
                             <DropdownMenuItem onClick={() => onUsers(tunnel.id, false)}>
                                 <Users className="mr-2 h-4 w-4" /> {t("tunnelActions.targetServerUsers")}

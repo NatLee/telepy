@@ -1,111 +1,168 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 
-interface LogEntry {
+/**
+ * SSH gateway 事件（/api/log/ssh/events 的一筆）。後端已依權限過濾：管理員全看，其他人只看自己擁有／被分享的隧道。
+ * One gateway event from /api/log/ssh/events; the backend scopes them (admins: all, others: own + shared tunnels).
+ */
+export interface GatewayEvent {
     id: number;
-    time: string;
+    at: string;
+    event: string;
+    peer: string | null;
+    port: number | null;
+    tunnel_id: number | null;
     message: string;
-    originalTime?: string;
-    parsedAt?: Date | null;
 }
 
+export interface LogEntry {
+    id: number;
+    /** 依 locale 格式化的時間。/ Locale-formatted time. */
+    time: string;
+    at: string;
+    event: string;
+    message: string;
+    tunnelId: number | null;
+    port: number | null;
+}
+
+export interface TunnelOption {
+    id: number;
+    host_friendly_name: string;
+    reverse_port: number;
+}
+
+/** 隧道篩選的「全部」值（URL 上不帶 ?tunnel=）。/ The "all tunnels" filter value (no ?tunnel= in the URL). */
+export const ALL_TUNNELS = "all";
+
+const PAGE_LIMIT = 500;
+
 export function useLogsPage() {
+    const router = useRouter();
+    const pathname = usePathname();
+    const searchParams = useSearchParams();
+    // 篩選狀態放在 URL（?tunnel=<id>），隧道列表的「日誌」動作可以直接深連結過來。
+    // The filter lives in the URL (?tunnel=<id>) so the tunnel actions menu can deep-link here.
+    const tunnelFilter = searchParams.get("tunnel") ?? ALL_TUNNELS;
+
     const [logs, setLogs] = useState<LogEntry[]>([]);
+    const [tunnels, setTunnels] = useState<TunnelOption[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const { showError } = useToast();
     const { t, locale } = useI18n();
 
+    const setTunnelFilter = useCallback(
+        (value: string) => {
+            const params = new URLSearchParams(searchParams.toString());
+            if (value === ALL_TUNNELS) params.delete("tunnel");
+            else params.set("tunnel", value);
+            const qs = params.toString();
+            router.replace(qs ? `${pathname}?${qs}` : pathname);
+        },
+        [router, pathname, searchParams]
+    );
+
+    // 篩選用的隧道清單（後端只回看得到的）。/ Tunnels for the filter (the backend returns only visible ones).
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await apiFetch("/api/reverse/server/keys");
+                if (!res.ok || cancelled) return;
+                const data: TunnelOption[] = await res.json();
+                setTunnels(data.map((x) => ({ id: x.id, host_friendly_name: x.host_friendly_name, reverse_port: x.reverse_port })));
+            } catch {
+                /* the filter simply stays empty */
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
     const fetchLogs = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await apiFetch("/api/log/ssh");
-            if (res.ok) {
-                let raw = await res.text();
-                // DRF Response() wraps the string in JSON quotes — try to unwrap
-                try {
-                    const parsed = JSON.parse(raw);
-                    if (typeof parsed === 'string') raw = parsed;
-                } catch (_) { /* not JSON, use raw text as-is */ }
-                const lines = raw.split("\n").filter(l => l.trim() !== "");
-                const parsedLogs = lines.map((line, idx) => {
-                    let time = "";
-                    let message = line;
-                    let parsedAt: Date | null = null;
-
-                    const dateMatch = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)(?:\s+(.*))?/);
-                    if (dateMatch) {
-                        time = dateMatch[1].split('.')[0];
-                        message = dateMatch[2] || "";
-                        parsedAt = new Date(time.replace(' ', 'T') + 'Z');
-                    } else {
-                        const altMatch = line.match(/^([A-Z][a-z]{2}\s+\d+\s+\d{2}:\d{2}:\d{2})(?:\s+(.*))?/);
-                        if (altMatch) {
-                            time = altMatch[1];
-                            message = altMatch[2] || "";
-                        } else {
-                            const parts = line.split(" ");
-                            if (parts.length > 2 && (parts[0].includes("-") || parts[0].includes("/"))) {
-                                time = parts[0] + " " + parts[1];
-                                message = parts.slice(2).join(" ");
-                                const potentialDate = new Date(time.replace(' ', 'T') + 'Z');
-                                if (!isNaN(potentialDate.getTime())) {
-                                    parsedAt = potentialDate;
-                                }
-                            }
-                        }
-                    }
-
-                    let timeText = time;
-                    if (parsedAt && !isNaN(parsedAt.getTime())) {
-                        timeText = new Intl.DateTimeFormat(locale, {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                            hour12: false
-                        }).format(parsedAt);
-                    }
-
-                    return { id: idx, time: timeText, originalTime: time, message, parsedAt };
-                });
-
-                setLogs(parsedLogs.reverse());
-            } else {
+            const qs = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+            if (tunnelFilter !== ALL_TUNNELS) qs.set("tunnel_id", tunnelFilter);
+            const res = await apiFetch(`/api/log/ssh/events?${qs.toString()}`);
+            if (!res.ok) {
+                setLogs([]);
                 showError(t("logs.fetchFailed"));
+                return;
             }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (e: any) {
-            showError(e.message || t("logs.fetchFailed"));
+            const events: GatewayEvent[] = await res.json();
+            const fmt = new Intl.DateTimeFormat(locale, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false,
+            });
+            // 後端回舊→新，頁面要新的在上。/ The API is oldest-first; the page shows newest first.
+            setLogs(
+                events
+                    .map((e) => {
+                        const d = new Date(e.at);
+                        return {
+                            id: e.id,
+                            at: e.at,
+                            time: isNaN(d.getTime()) ? e.at : fmt.format(d),
+                            event: e.event,
+                            message: e.message,
+                            tunnelId: e.tunnel_id,
+                            port: e.port,
+                        };
+                    })
+                    .reverse()
+            );
+        } catch (e) {
+            showError(e instanceof Error ? e.message : t("logs.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [showError, t, locale]);
+    }, [tunnelFilter, showError, t, locale]);
 
     useEffect(() => {
         fetchLogs();
     }, [fetchLogs]);
 
     const filteredLogs = useMemo(() => {
-        return logs.filter(log =>
-            log.message.toLowerCase().includes(search.toLowerCase()) ||
-            log.time.toLowerCase().includes(search.toLowerCase()) ||
-            (log.originalTime && log.originalTime.toLowerCase().includes(search.toLowerCase()))
+        const q = search.trim().toLowerCase();
+        if (!q) return logs;
+        return logs.filter(
+            (log) =>
+                log.message.toLowerCase().includes(q) ||
+                log.event.includes(q) ||
+                log.time.toLowerCase().includes(q) ||
+                log.at.toLowerCase().includes(q)
         );
     }, [logs, search]);
+
+    const selectedTunnel = useMemo(
+        () => tunnels.find((x) => String(x.id) === tunnelFilter) ?? null,
+        [tunnels, tunnelFilter]
+    );
 
     return {
         state: {
             logs,
             filteredLogs,
             loading,
-            search, setSearch
+            search,
+            setSearch,
+            tunnels,
+            tunnelFilter,
+            selectedTunnel,
         },
         actions: {
-            fetchLogs
-        }
+            fetchLogs,
+            setTunnelFilter,
+        },
     };
 }

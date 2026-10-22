@@ -18,6 +18,7 @@ interface TunnelTableRowProps {
     onDetails: (tunnelId: number) => void;
     onConfig: (tunnelId: number) => void;
     onScript: (tunnelId: number) => void;
+    onLogs: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
@@ -33,6 +34,7 @@ export function TunnelTableRow({
     onDetails,
     onConfig,
     onScript,
+    onLogs,
     onUsers,
     onShare,
     onLeave,
@@ -99,6 +101,7 @@ export function TunnelTableRow({
                         onDetails={onDetails}
                         onConfig={onConfig}
                         onScript={onScript}
+                        onLogs={onLogs}
                         onUsers={onUsers}
                         onShare={onShare}
                         onLeave={onLeave}

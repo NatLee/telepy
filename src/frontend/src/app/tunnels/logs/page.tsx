@@ -1,46 +1,51 @@
 "use client";
 
 /**
- * SSH 伺服器日誌頁：載入日誌、關鍵字篩選與關鍵字標籤。
- * SSH server logs page: load logs, keyword filter and keyword badges.
+ * SSH gateway 日誌頁：結構化事件、隧道篩選（?tunnel=<id>，可從隧道列表深連結）、關鍵字搜尋、事件種類標籤。
+ * SSH gateway logs page: structured events, tunnel filter (?tunnel=<id>, deep-linkable from the tunnel list),
+ * keyword search and event-kind badges.
  */
-import React from "react";
-import { Search, FileText, AlertCircle, RefreshCw, Info } from "lucide-react";
+import React, { Suspense } from "react";
+import { Search, FileText, AlertCircle, RefreshCw, Info, Filter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { useLogsPage } from "@/hooks/useLogsPage";
+import { ALL_TUNNELS, useLogsPage } from "@/hooks/useLogsPage";
 import { useI18n } from "@/lib/i18n";
+import type { TranslationKey } from "@/locales/en";
 
-export default function LogsPage() {
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
+// 標籤依 gateway 的 `event` 欄位決定（不是比對訊息字串），所以可以翻譯。
+// Badges key off the gateway's `event` field (not message text), so their labels are translatable.
+const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant }> = {
+    listening: { key: "logs.event.listening", variant: "outline" },
+    accepted: { key: "logs.event.accepted", variant: "default" },
+    forward: { key: "logs.event.forward", variant: "default" },
+    forward_released: { key: "logs.event.forward_released", variant: "secondary" },
+    disconnect: { key: "logs.event.disconnect", variant: "secondary" },
+    refused_forward: { key: "logs.event.refused_forward", variant: "destructive" },
+    refused_direct: { key: "logs.event.refused_direct", variant: "destructive" },
+    failed_publickey: { key: "logs.event.failed_publickey", variant: "destructive" },
+    invalid_user: { key: "logs.event.invalid_user", variant: "destructive" },
+    preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
+};
+
+function LogsPageInner() {
     const { t } = useI18n();
     const { state, actions } = useLogsPage();
-    const {
-        logs,
-        filteredLogs,
-        loading,
-        search, setSearch
-    } = state;
+    const { logs, filteredLogs, loading, search, setSearch, tunnels, tunnelFilter, selectedTunnel } = state;
+    const { fetchLogs, setTunnelFilter } = actions;
 
-    const { fetchLogs } = actions;
-
-    const getKeywordBadge = (message: string) => {
-        const keywords = [
-            { text: "Server listening", variant: "default" as const },
-            { text: "Connection closed", variant: "destructive" as const },
-            { text: "Accepted publickey", variant: "default" as const },
-            { text: "Disconnected", variant: "secondary" as const },
-            { text: "error", variant: "destructive" as const },
-            { text: "warning", variant: "outline" as const },
-        ];
-
-        for (const kw of keywords) {
-            if (message.toLowerCase().includes(kw.text.toLowerCase())) {
-                return <Badge variant={kw.variant} className="mr-2 text-[10px] leading-none py-0.5">{kw.text}</Badge>;
-            }
-        }
-        return null;
+    const eventBadge = (event: string) => {
+        const known = EVENT_BADGES[event];
+        return (
+            <Badge variant={known?.variant ?? "outline"} className="text-[10px] leading-none py-0.5 whitespace-nowrap">
+                {known ? t(known.key) : event}
+            </Badge>
+        );
     };
 
     return (
@@ -68,18 +73,45 @@ export default function LogsPage() {
                 <span>{t("logs.banner")}</span>
             </div>
 
-            <div className="mb-4 shrink-0 relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <Search size={18} className="text-muted-foreground" />
+            <div className="mb-4 shrink-0 flex flex-col sm:flex-row gap-2">
+                <div className="flex items-center gap-2 sm:w-72">
+                    <Filter size={16} className="text-muted-foreground shrink-0" aria-hidden />
+                    <Select value={tunnelFilter} onValueChange={setTunnelFilter}>
+                        <SelectTrigger className="h-10 flex-1 text-sm" aria-label={t("logs.tunnelFilter")}>
+                            <SelectValue placeholder={t("logs.tunnelFilter")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={ALL_TUNNELS}>{t("logs.allTunnels")}</SelectItem>
+                            {tunnels.map((tunnel) => (
+                                <SelectItem key={tunnel.id} value={String(tunnel.id)}>
+                                    {tunnel.host_friendly_name} · {tunnel.reverse_port}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
                 </div>
-                <Input
-                    type="text"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder={t("logs.searchPlaceholder")}
-                    className="pl-10"
-                />
+                <div className="relative flex-1">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Search size={18} className="text-muted-foreground" />
+                    </div>
+                    <Input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder={t("logs.searchPlaceholder")}
+                        className="pl-10"
+                    />
+                </div>
             </div>
+
+            {selectedTunnel && (
+                <div className="mb-4 shrink-0 flex items-center justify-between gap-2 text-sm text-muted-foreground">
+                    <span>{t("logs.showingTunnel", { name: selectedTunnel.host_friendly_name, port: selectedTunnel.reverse_port })}</span>
+                    <Button variant="ghost" size="sm" className="gap-1 h-7" onClick={() => setTunnelFilter(ALL_TUNNELS)}>
+                        <X size={14} /> {t("logs.showAll")}
+                    </Button>
+                </div>
+            )}
 
             <div className="flex-1 bg-card text-card-foreground border border-border rounded-lg shadow-sm overflow-hidden flex flex-col min-h-0">
                 {loading ? (
@@ -101,7 +133,8 @@ export default function LogsPage() {
                         <table className="min-w-full divide-y divide-border border-collapse">
                             <thead className="bg-muted/50 sticky top-0 border-b border-border shadow-sm z-10">
                                 <tr>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-48 border-r border-border/50">{t("logs.thTime")}</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-44 border-r border-border/50">{t("logs.thTime")}</th>
+                                    <th scope="col" className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-36 border-r border-border/50">{t("logs.thEvent")}</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider">{t("logs.thMessage")}</th>
                                 </tr>
                             </thead>
@@ -111,17 +144,17 @@ export default function LogsPage() {
                                         <td className="px-6 py-2 whitespace-nowrap text-xs text-muted-foreground border-r border-border/50 group-hover:bg-muted/30">
                                             {log.time}
                                         </td>
+                                        <td className="px-4 py-2 whitespace-nowrap text-xs border-r border-border/50 group-hover:bg-muted/30">
+                                            {eventBadge(log.event)}
+                                        </td>
                                         <td className="px-6 py-2 text-xs text-foreground break-words group-hover:bg-muted/30">
-                                            <div className="flex items-center flex-wrap gap-1">
-                                                {getKeywordBadge(log.message)}
-                                                <span className="leading-relaxed whitespace-pre-wrap break-all">{log.message}</span>
-                                            </div>
+                                            <span className="leading-relaxed whitespace-pre-wrap break-all">{log.message}</span>
                                         </td>
                                     </tr>
                                 ))}
                                 {filteredLogs.length === 0 && (
                                     <tr>
-                                        <td colSpan={2} className="px-6 py-8 text-center text-sm text-muted-foreground">
+                                        <td colSpan={3} className="px-6 py-8 text-center text-sm text-muted-foreground">
                                             {t("logs.noMatch")}
                                         </td>
                                     </tr>
@@ -132,5 +165,15 @@ export default function LogsPage() {
                 )}
             </div>
         </div>
+    );
+}
+
+export default function LogsPage() {
+    // useSearchParams 需要 Suspense 邊界，否則靜態產生會整頁退回 client render。
+    // useSearchParams needs a Suspense boundary or static generation bails out for the whole page.
+    return (
+        <Suspense fallback={null}>
+            <LogsPageInner />
+        </Suspense>
     );
 }

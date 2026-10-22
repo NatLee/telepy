@@ -12,7 +12,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **File manager** — SFTP-based file browser alongside the terminal for uploading and downloading files on the device.
 - **Remote proxy browser** — launch a real Chromium desktop (KasmVNC) whose traffic is tunneled through the target device, so external requests appear to come from that machine.
 - **Sharing & permissions** — share tunnels with other users under hierarchical VIEW / EDIT / ADMIN permissions.
-- **Keys & logs** — manage authorized keys and inspect SSH server logs from the UI.
+- **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels).
 - **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser.
 - **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
 
