@@ -730,7 +730,6 @@ export const zhTW: Record<TranslationKey, string> = {
     "keys.descriptionPlaceholder": "例如：在家工作時連線使用",
     "keys.adding": "新增中...",
     "keys.detailsTitle": "SSH 金鑰詳細資訊",
-    "keys.friendlyName": "別名",
     "keys.publicKey": "公鑰",
     "keys.noKey": "沒有可用的金鑰",
     "keys.addDescriptionPlaceholder": "加上描述...",

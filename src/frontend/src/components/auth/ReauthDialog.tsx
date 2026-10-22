@@ -6,7 +6,7 @@
  * "Confirm it's you" dialog for sensitive actions: a passkey, an authenticator code or a recovery code.
  */
 import React, { useState } from "react";
-import { KeyRound } from "lucide-react";
+import { KeyRound, ShieldCheck } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,29 +53,26 @@ export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone
             isOpen
             onClose={() => onDone(null)}
             title={t("security.reauthTitle")}
-            size="sm"
+            description={t("security.reauthDescription")}
+            icon={<ShieldCheck />}
+            size="md"
             footer={
-                <button
-                    type="button"
-                    onClick={() => onDone(null)}
-                    className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
-                >
+                <Button type="button" variant="outline" onClick={() => onDone(null)}>
                     {t("common.cancel")}
-                </button>
+                </Button>
             }
         >
             <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">{t("security.reauthDescription")}</p>
                 {canPasskey && (
                     <Button type="button" className="w-full" disabled={busy} onClick={usePasskey}>
-                        <KeyRound size={16} className="mr-2" />
+                        <KeyRound />
                         {t("security.reauthUsePasskey")}
                     </Button>
                 )}
                 {codeMethods.length > 0 && (
-                    <form onSubmit={submitCode} className="space-y-2">
+                    <form onSubmit={submitCode} className="space-y-2.5">
                         {codeMethods.length > 1 && (
-                            <div className="grid grid-cols-2 gap-2">
+                            <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1">
                                 {codeMethods.map((m) => (
                                     <button
                                         key={m}
@@ -85,7 +82,7 @@ export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone
                                             setCodeMethod(m);
                                             setCode("");
                                         }}
-                                        className={`px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${codeMethod === m ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}
+                                        className={`rounded-lg px-3 py-1.5 text-xs transition-[color,background-color,box-shadow] ${codeMethod === m ? "bg-card text-foreground shadow-card" : "text-muted-foreground hover:text-foreground"}`}
                                     >
                                         {m === "totp" ? t("security.reauthTotp") : t("security.reauthRecovery")}
                                     </button>
@@ -100,7 +97,7 @@ export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone
                                 inputMode={codeMethod === "totp" ? "numeric" : "text"}
                                 autoComplete="one-time-code"
                                 placeholder={codeMethod === "totp" ? "123456" : "xxxx-xxxx-xxxx"}
-                                className="font-mono"
+                                className="font-mono tracking-wider"
                             />
                             <Button type="submit" variant="outline" disabled={busy || !code.trim()}>
                                 {t("security.reauthConfirm")}

@@ -18,11 +18,16 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, Info, ShieldAlert, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog } from "lucide-react";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Callout } from "@/components/ui/callout";
+import { Segmented } from "@/components/ui/segmented";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { useSettingsPage, SettingMeta } from "@/hooks/useSettingsPage";
 import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import { useUserManagement, ManagedUser, ManagedUserPatch } from "@/hooks/useUserManagement";
@@ -41,11 +46,11 @@ function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disab
             type="button"
             onClick={() => !disabled && onToggle()}
             disabled={disabled}
-            className={`${checked ? "bg-primary" : "bg-muted"} relative inline-flex h-6 w-11 shrink-0 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2`}
+            className={`${checked ? "bg-primary" : "bg-foreground/15"} relative inline-flex h-6 w-11 shrink-0 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40`}
             role="switch"
             aria-checked={checked}
         >
-            <span aria-hidden="true" className={`${checked ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-primary-foreground shadow ring-0 transition duration-200 ease-in-out`} />
+            <span aria-hidden="true" className={`${checked ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-[0_1px_3px_oklch(0_0_0/0.2)] ring-0 transition duration-200 ease-in-out`} />
         </button>
     );
 }
@@ -92,12 +97,7 @@ function SettingsPageContent() {
         // Non-admins (deep link): point at the preferences modal's new home.
         return (
             <div className="animate-fade-in-up">
-                <div className="bg-warning/10 border-l-4 border-warning p-4 rounded-r-md flex items-start">
-                    <ShieldAlert className="text-warning mr-3 shrink-0 mt-0.5" size={20} />
-                    {/* text-warning-foreground 是給實心 bg-warning 用的(近黑),在半透明底上會消失 → 用可讀的琥珀色。
-                        text-warning-foreground (near-black) is for solid bg-warning; on this tint it vanishes → readable amber. */}
-                    <p className="text-sm text-amber-800 dark:text-amber-200">{t("settings.adminOnly")}</p>
-                </div>
+                <Callout tone="warning">{t("settings.adminOnly")}</Callout>
             </div>
         );
     }
@@ -123,40 +123,24 @@ function AdminSettings() {
         router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     };
 
-    const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-        { id: "general", label: t("settings.groupAccount"), icon: <UserPlus size={16} /> },
-        { id: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={16} /> },
-        { id: "ai", label: t("settings.groupAi"), icon: <Bot size={16} /> },
-        { id: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={16} /> },
+    const tabs: { value: TabId; label: string; icon: React.ReactNode }[] = [
+        { value: "general", label: t("settings.groupAccount"), icon: <UserPlus size={15} /> },
+        { value: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={15} /> },
+        { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
+        { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
     ];
 
     return (
         <div className="animate-fade-in-up space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                    <Settings className="text-primary animate-float" />
-                    {t("settings.title")}
-                    <WebSocketStatusBadge />
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">{t("settings.subtitle")}</p>
-            </div>
+            <PageHeader
+                icon={<Settings />}
+                title={t("settings.title")}
+                titleAddon={<WebSocketStatusBadge />}
+                description={t("settings.subtitle")}
+            />
 
-            <div className="border-b border-border flex gap-1 overflow-x-auto" role="tablist">
-                {tabs.map((item) => (
-                    <button
-                        key={item.id}
-                        role="tab"
-                        aria-selected={tab === item.id}
-                        onClick={() => setTab(item.id)}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${tab === item.id
-                                ? "border-primary text-primary"
-                                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                            }`}
-                    >
-                        {item.icon}
-                        {item.label}
-                    </button>
-                ))}
+            <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
+                <Segmented kind="tabs" options={tabs} value={tab} onChange={setTab} />
             </div>
 
             {tab === "users" ? <UsersTab /> : <SiteSettingsTab tab={tab} settings={settings} />}
@@ -208,27 +192,24 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
     return (
         <div className="space-y-6">
-            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
-                <Info size={18} className="mt-0.5 shrink-0" />
-                <span>{t(SITE_TAB_BANNERS[tab])}</span>
-            </div>
+            <Callout tone="info">{t(SITE_TAB_BANNERS[tab])}</Callout>
 
             {tab === "ai" && <McpEndpointPanel />}
 
             {loading ? (
-                <div className="bg-card shadow sm:rounded-lg border border-border p-8 text-center text-muted-foreground">
+                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
                     <div className="flex justify-center mb-2">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                     </div>
                     {t("settings.loading")}
                 </div>
             ) : entries.length === 0 ? (
-                <div className="bg-card shadow sm:rounded-lg border border-border p-8 text-center text-muted-foreground">
+                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
                     {t("settings.empty")}
                 </div>
             ) : (
-                <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
-                    <ul className="divide-y divide-border">
+                <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card">
+                    <ul className="divide-y divide-border/70">
                         {entries.map(([key, value]) => {
                             const kind = typeOf(key, value);
                             const m = meta[key];
@@ -236,10 +217,10 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                             const current = editValues[key] ?? String(value ?? "");
                             const seconds = kind === "integer" && SECONDS_KEY.test(key) ? parseInt(current, 10) : NaN;
                             return (
-                                <li key={key} className="p-4 sm:p-6 hover:bg-muted/50 transition-colors">
+                                <li key={key} className="p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex-1 min-w-0">
-                                            <h4 className="text-sm font-medium text-foreground">
+                                            <h4 className="text-[15px] text-foreground">
                                                 {labelOf(key, m)}
                                             </h4>
                                             {description && (
@@ -247,7 +228,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                     {description}
                                                 </p>
                                             )}
-                                            <p className="mt-1.5 text-[11px] text-muted-foreground/70 font-mono bg-muted inline-block px-1 rounded border border-border">
+                                            <p className="mt-2 inline-block rounded-md bg-muted px-1.5 py-px font-mono text-[11px] text-muted-foreground/80">
                                                 {key}
                                             </p>
                                         </div>
@@ -257,21 +238,17 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                             ) : (
                                                 <>
                                                     <div className="flex items-center gap-2">
-                                                        <input
+                                                        <Input
                                                             type={kind === "integer" ? "number" : "text"}
-                                                            className={`${kind === "integer" ? "w-24" : "w-56"} text-sm border border-border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring`}
+                                                            className={`${kind === "integer" ? "w-24" : "w-56"} h-8`}
                                                             value={current}
                                                             onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
                                                             onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
                                                             min={kind === "integer" ? 0 : undefined}
                                                         />
-                                                        <button
-                                                            type="button"
-                                                            className="text-xs px-2 py-1 bg-primary text-primary-foreground rounded hover:bg-primary/90 transition-colors"
-                                                            onClick={() => commit(key, kind, value)}
-                                                        >
+                                                        <Button type="button" size="sm" variant="soft" onClick={() => commit(key, kind, value)}>
                                                             {t("common.save")}
-                                                        </button>
+                                                        </Button>
                                                     </div>
                                                     {seconds >= 60 && (
                                                         <p className="mt-1 text-xs text-muted-foreground">≈ {formatDuration(seconds, locale)}</p>
@@ -295,15 +272,15 @@ function McpEndpointPanel() {
     const { t, tn } = useI18n();
     const serverUrl = useMcpServerUrl();
     const linkClass =
-        "inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border hover:border-primary/50 hover:text-primary transition-colors";
+        "inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg ring-1 ring-inset ring-border hover:ring-primary/50 hover:text-primary transition-colors";
 
     return (
-        <section className="bg-card text-card-foreground shadow sm:rounded-lg border border-border p-4 sm:p-6">
-            <h4 className="text-sm font-medium text-foreground flex items-center gap-2">
+        <section className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
+            <h4 className="text-[15px] text-foreground flex items-center gap-2">
                 <Plug size={15} className="text-primary" />
                 {t("settings.mcpEndpoint")}
             </h4>
-            <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-muted/30 pl-3 pr-1 py-1">
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-surface pl-3.5 pr-1 py-1 ring-1 ring-inset ring-border/80">
                 <span className="flex-1 min-w-0 truncate font-mono text-sm">{serverUrl ?? "…"}</span>
                 {serverUrl && <CopyButton value={serverUrl} />}
             </div>
@@ -338,12 +315,9 @@ function UsersTab() {
 
     return (
         <div className="space-y-6">
-            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
-                <Info size={18} className="mt-0.5 shrink-0" />
-                <span>{t("settings.usersBanner")}</span>
-            </div>
+            <Callout tone="info">{t("settings.usersBanner")}</Callout>
 
-            <div className="bg-card text-card-foreground shadow overflow-hidden sm:rounded-lg border border-border">
+            <div className="overflow-hidden rounded-2xl border border-border/80 bg-card text-card-foreground shadow-card">
                 {loading ? (
                     <div className="p-8 text-center text-muted-foreground">
                         <div className="flex justify-center mb-2">
@@ -355,21 +329,24 @@ function UsersTab() {
                     <div className="p-8 text-center text-muted-foreground">{t("settings.usersEmpty")}</div>
                 ) : (
                     <div className="overflow-x-auto">
-                        <table className="min-w-full divide-y divide-border text-sm">
-                            <thead className="bg-muted/50">
+                        <table className="min-w-full divide-y divide-border/70 text-sm">
+                            <thead className="bg-surface">
                                 <tr>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thUsername")}</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden sm:table-cell">{t("settings.thEmail")}</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thRole")}</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground">{t("settings.thStatus")}</th>
-                                    <th className="px-4 py-3 text-left font-medium text-muted-foreground hidden md:table-cell">{t("settings.thLastLogin")}</th>
-                                    <th className="px-4 py-3 text-right font-medium text-muted-foreground">{t("settings.thActions")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thUsername")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden sm:table-cell">{t("settings.thEmail")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thRole")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground">{t("settings.thStatus")}</th>
+                                    <th className="px-4 py-3 text-left text-xs text-muted-foreground hidden md:table-cell">{t("settings.thLastLogin")}</th>
+                                    <th className="px-4 py-3 text-right text-xs text-muted-foreground">{t("settings.thActions")}</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-border">
+                            <tbody className="divide-y divide-border/70">
                                 {users.map((u) => (
-                                    <tr key={u.id} className="hover:bg-muted/50 transition-colors">
-                                        <td className="px-4 py-3 font-medium text-foreground">
+                                    <tr key={u.id} className="hover:bg-surface transition-colors">
+                                        <td className="px-4 py-3 text-foreground">
+                                            <span className="mr-2.5 inline-grid size-7 place-items-center rounded-full bg-brand-gradient align-middle text-xs text-white uppercase" aria-hidden>
+                                                {u.username.slice(0, 1)}
+                                            </span>
                                             {u.username}
                                             {u.id === currentUser?.id && (
                                                 <span className="ml-2 text-xs text-muted-foreground">({t("settings.you")})</span>
@@ -404,13 +381,9 @@ function UsersTab() {
                                         </td>
                                         <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{formatDate(u.last_login)}</td>
                                         <td className="px-4 py-3 text-right">
-                                            <button
-                                                type="button"
-                                                onClick={() => setEditing(u)}
-                                                className="text-xs px-3 py-1.5 bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors font-medium"
-                                            >
+                                            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(u)}>
                                                 {t("settings.manage")}
-                                            </button>
+                                            </Button>
                                         </td>
                                     </tr>
                                 ))}
@@ -470,32 +443,22 @@ function UserEditModal({
             isOpen
             onClose={onClose}
             title={`${t("settings.userModalTitle")} — ${user.username}`}
+            description={user.email || undefined}
+            icon={<UserCog />}
             isLoading={saving}
             footer={
-                <button
-                    type="button"
-                    onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-md hover:bg-secondary/80 transition-colors"
-                >
+                <Button type="button" variant="outline" onClick={onClose}>
                     {t("common.close")}
-                </button>
+                </Button>
             }
         >
             <div className="space-y-6">
-                <div className="text-sm text-muted-foreground">
-                    {user.email || "—"}
-                </div>
-
-                {isSelf && (
-                    <div className="bg-warning/10 border-l-4 border-warning p-3 rounded-r-md text-sm text-amber-800 dark:text-amber-200">
-                        {t("settings.selfEditNote")}
-                    </div>
-                )}
+                {isSelf && <Callout tone="warning">{t("settings.selfEditNote")}</Callout>}
 
                 {/* 帳號啟用 / Account enabled */}
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <p className="text-sm font-medium text-foreground">{t("settings.userActiveLabel")}</p>
+                        <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
                         <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
                     </div>
                     <ToggleSwitch
@@ -508,7 +471,7 @@ function UserEditModal({
                 {/* 管理員角色 / Administrator role */}
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <p className="text-sm font-medium text-foreground">{t("settings.userSuperuserLabel")}</p>
+                        <p className="text-sm text-foreground">{t("settings.userSuperuserLabel")}</p>
                         <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
                     </div>
                     <ToggleSwitch
@@ -520,9 +483,9 @@ function UserEditModal({
 
                 {/* 介面語言 / Interface language */}
                 <div>
-                    <p className="text-sm font-medium text-foreground mb-1">{t("settings.userLanguageLabel")}</p>
+                    <p className="text-sm text-foreground mb-2">{t("settings.userLanguageLabel")}</p>
                     <select
-                        className="w-full text-sm border border-border rounded-md px-3 py-2 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                        className="flex h-9 w-full rounded-lg border border-input bg-card px-3 py-1 text-sm text-foreground shadow-xs transition-[border-color,box-shadow] hover:border-foreground/20 focus-visible:outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/25 dark:bg-input/30"
                         value={user.language ?? ""}
                         disabled={saving}
                         onChange={(e) => {
@@ -546,18 +509,20 @@ function UserEditModal({
                 {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}
                 <div className="flex items-start justify-between gap-4">
                     <div>
-                        <p className="text-sm font-medium text-foreground">{t("security.adminTitle")}</p>
+                        <p className="text-sm text-foreground">{t("security.adminTitle")}</p>
                         <p className="text-sm text-muted-foreground">{user.mfa_enabled ? t("security.adminOn") : t("security.adminOff")}</p>
                     </div>
                     {user.mfa_enabled && (
-                        <button
+                        <Button
                             type="button"
+                            size="sm"
+                            variant="outline"
                             disabled={saving}
                             onClick={() => setConfirmReset(true)}
-                            className="shrink-0 text-xs px-3 py-1.5 rounded-md border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors font-medium"
+                            className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
                         >
                             {t("security.adminReset")}
-                        </button>
+                        </Button>
                     )}
                 </div>
             </div>

@@ -6,8 +6,10 @@
  * keyword search and event-kind badges.
  */
 import React, { Suspense } from "react";
-import { Search, FileText, AlertCircle, RefreshCw, Info, Filter, X } from "lucide-react";
+import { Search, FileText, AlertCircle, RefreshCw, Filter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/callout";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -50,28 +52,20 @@ function LogsPageInner() {
 
     return (
         <div className="flex flex-col h-[calc(100vh-8rem)] animate-fade-in-up">
-            <div className="mb-6 shrink-0 sm:flex sm:items-center sm:justify-between">
-                <div>
-                    <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                        <FileText className="text-primary animate-float" />
-                        {t("logs.title")}
-                    </h1>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                        {t("logs.subtitle")}
-                    </p>
-                </div>
-                <div className="mt-4 sm:mt-0 flex gap-2">
-                    <Button onClick={fetchLogs} variant="outline" className="gap-2">
+            <PageHeader
+                className="mb-6 shrink-0"
+                icon={<FileText />}
+                title={t("logs.title")}
+                description={t("logs.subtitle")}
+                actions={
+                    <Button onClick={fetchLogs} variant="outline">
                         <RefreshCw size={16} />
                         {t("common.refresh")}
                     </Button>
-                </div>
-            </div>
+                }
+            />
 
-            <div className="mb-4 shrink-0 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3 text-sm text-blue-800 dark:text-blue-200">
-                <Info size={18} className="mt-0.5 shrink-0" />
-                <span>{t("logs.banner")}</span>
-            </div>
+            <Callout tone="info" className="mb-4 shrink-0">{t("logs.banner")}</Callout>
 
             <div className="mb-4 shrink-0 flex flex-col sm:flex-row gap-2">
                 <div className="flex items-center gap-2 sm:w-72">

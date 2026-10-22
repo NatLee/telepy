@@ -9,6 +9,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Activity, ArrowRight, KeyRound, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -64,13 +65,7 @@ export default function McpPage() {
 
     return (
         <div className="animate-fade-in-up space-y-6">
-            <div>
-                <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-                    <Plug className="text-primary animate-float" />
-                    {t("mcp.title")}
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground max-w-3xl">{t("mcp.subtitle")}</p>
-            </div>
+            <PageHeader icon={<Plug />} title={t("mcp.title")} description={t("mcp.subtitle")} />
 
             <div className="grid gap-6 lg:grid-cols-5 items-start">
                 <div className="lg:col-span-3 space-y-6 min-w-0">

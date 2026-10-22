@@ -27,7 +27,7 @@ const THEME_META: Record<Theme, { Icon: LucideIcon; labelKey: TranslationKey }> 
     dark: { Icon: Moon, labelKey: "prefs.themeDark" },
 };
 
-export function ThemeSwitcher({ collapsed = false }: { collapsed?: boolean }) {
+export function ThemeSwitcher({ collapsed = false, className = "" }: { collapsed?: boolean; className?: string }) {
     const { t } = useI18n();
     const [theme, changeTheme] = useThemePreference();
 
@@ -43,7 +43,7 @@ export function ThemeSwitcher({ collapsed = false }: { collapsed?: boolean }) {
                         type="button"
                         title={triggerLabel}
                         aria-label={triggerLabel}
-                        className="flex w-full items-center justify-center px-2 py-2 rounded-md text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors data-[state=open]:bg-secondary/60 data-[state=open]:text-foreground"
+                        className="flex w-full items-center justify-center px-2 py-2 rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground transition-colors data-[state=open]:bg-sidebar-accent data-[state=open]:text-foreground"
                     >
                         {/* 18px:跟收合狀態的齒輪/登出等鄰居一致。/ 18px matches the collapsed gear/logout neighbors. */}
                         <Icon size={18} />
@@ -68,7 +68,7 @@ export function ThemeSwitcher({ collapsed = false }: { collapsed?: boolean }) {
     }
 
     return (
-        <div role="group" aria-label={t("prefs.theme")} className="grid grid-cols-3 gap-1">
+        <div role="group" aria-label={t("prefs.theme")} className={`grid grid-cols-3 gap-0.5 rounded-lg bg-muted/80 p-0.5 ${className}`}>
             {THEMES.map((value) => {
                 const { Icon, labelKey } = THEME_META[value];
                 const isActive = theme === value;
@@ -81,9 +81,9 @@ export function ThemeSwitcher({ collapsed = false }: { collapsed?: boolean }) {
                         aria-label={label}
                         aria-pressed={isActive}
                         onClick={() => changeTheme(value)}
-                        className={`flex items-center justify-center h-8 rounded-md text-xs font-semibold transition-colors ${isActive
-                            ? "bg-primary/15 text-primary ring-1 ring-primary/40"
-                            : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                        className={`flex h-7 items-center justify-center rounded-md text-[13px] transition-[color,background-color,box-shadow] ${isActive
+                            ? "bg-card text-foreground shadow-card [&_svg]:text-primary"
+                            : "text-muted-foreground hover:text-foreground"
                             }`}
                     >
                         <Icon size={15} />

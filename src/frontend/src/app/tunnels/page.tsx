@@ -8,6 +8,7 @@ import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Plus, Network, Info, RefreshCw, Search, X, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -103,45 +104,39 @@ export default function TunnelsPage() {
     return (
         <div className="space-y-6 animate-fade-in-up">
             {/* 標題列 / Page header */}
-            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-                <div className="flex items-start gap-4">
-                    <div className="hidden sm:grid place-items-center w-12 h-12 rounded-2xl bg-brand-gradient shadow-glow shrink-0" aria-hidden>
-                        <Network className="text-white" size={22} />
-                    </div>
-                    <div>
-                        <h1 className="text-3xl font-bold text-foreground flex items-center gap-2 tracking-tight">
-                            {t("tunnels.title")}
-                            <TooltipProvider delayDuration={100}>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label={t("tunnels.aboutAria")}>
-                                            <Info size={18} />
-                                        </button>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
-                                        <p>{t("tunnels.aboutTooltip")}</p>
-                                    </TooltipContent>
-                                </Tooltip>
-                            </TooltipProvider>
-                        </h1>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                            {t("tunnels.subtitle")}
-                        </p>
-                    </div>
-                </div>
-                <div className="flex gap-2 items-center">
-                    <Button variant="outline" onClick={fetchData} disabled={loading} aria-label={t("tunnels.refreshAria")}>
-                        <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-                        {t("common.refresh")}
-                    </Button>
-                    <Button asChild className="shadow-glow">
-                        <Link href="/tunnels/create" prefetch={false}>
-                            <Plus size={16} />
-                            {t("tunnels.create")}
-                        </Link>
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                icon={<Network />}
+                title={t("tunnels.title")}
+                titleAddon={
+                    <TooltipProvider delayDuration={100}>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <button className="text-muted-foreground hover:text-primary transition-colors focus:outline-none" aria-label={t("tunnels.aboutAria")}>
+                                    <Info size={18} />
+                                </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs text-sm" sideOffset={8}>
+                                <p>{t("tunnels.aboutTooltip")}</p>
+                            </TooltipContent>
+                        </Tooltip>
+                    </TooltipProvider>
+                }
+                description={t("tunnels.subtitle")}
+                actions={
+                    <>
+                        <Button variant="outline" onClick={fetchData} disabled={loading} aria-label={t("tunnels.refreshAria")}>
+                            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+                            {t("common.refresh")}
+                        </Button>
+                        <Button asChild className="shadow-glow">
+                            <Link href="/tunnels/create" prefetch={false}>
+                                <Plus size={16} />
+                                {t("tunnels.create")}
+                            </Link>
+                        </Button>
+                    </>
+                }
+            />
 
             {loading && tunnels.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-12 text-muted-foreground">

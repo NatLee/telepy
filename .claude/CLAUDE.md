@@ -45,7 +45,7 @@ src/
   frontend/           # Next.js app (unchanged by the backend rewrite)
     src/app/          # Pages: login, first-login, tunnels (create/index/terminal/settings/logs/keys/cheatsheet/mcp/activity); root page.tsx redirects by auth state
     src/components/   # UI components (Shadcn-style + Radix)
-    src/fonts/        # Local font files (loaded via next/font/local)
+    src/fonts/        # Local font files: huninn unicode-range subsets (src/app/huninn.css) + 0xProto (next/font/local)
     src/hooks/        # Custom React hooks (WebSocket, notifications, etc.)
     src/lib/          # API client, auth, WebSocket, i18n, utilities
     src/locales/      # i18n dictionaries: en.ts (key source of truth), zh-TW.ts, ja.ts
@@ -133,12 +133,14 @@ Copy `.env.example` to `.env` and configure:
 
 ## Fonts
 
-- **Chinese (CJK):** jf-openhuninn (`src/frontend/src/fonts/jf-openhuninn-2.1.woff2`, converted from the TTF) — used as primary `font-sans`
-- **Terminal / Monospace:** 0xProto Nerd Font (`src/frontend/src/fonts/0xProtoNerdFont-Regular.woff2`) — used as primary `font-mono` and xterm.js terminal font
-- Source TTF files kept alongside the woff2 in `src/frontend/src/fonts/`; regenerate woff2 with `fonttools` (`font.flavor = "woff2"`)
-- Loaded via `next/font/local` in `layout.tsx` with `display: "swap"` **and `preload: false`** (text renders immediately with a system fallback, then swaps — do NOT switch back to `block`, it blanks all text until the 2.2MB CJK font finishes downloading). `preload: false` is deliberate: `next/font` otherwise injects a high-priority `<link rel="preload">` for BOTH fonts (~3.1MB, incl. the 2.18MB CJK) on **every** route, stealing bandwidth from the JS that gates interactivity; `swap` already paints text instantly, so preloading buys nothing above-the-fold. Fonts now load lazily off the critical path.
-- Tailwind CSS variables `--font-sans` / `--font-mono` reference the custom fonts first, then generic system fonts as fallback (`ui-sans-serif, system-ui, sans-serif` for sans; `ui-monospace, 'Courier New', monospace` for mono — see `globals.css`). No Geist dependency.
+- **Sans (CJK + Latin):** jf-openhuninn 2.1 / 粉圓 (justfont, SIL OFL; source `src/frontend/src/fonts/jf-openhuninn-2.1.ttf`) — the whole UI font, family name `"jf-openhuninn"` in `--font-sans`
+- **Terminal / Monospace:** 0xProto Nerd Font (`src/frontend/src/fonts/0xProtoNerdFont-Regular.woff2`) — `font-mono` and the xterm.js terminal font
+- **Huninn is split into `unicode-range` subsets** by `src/frontend/scripts/subset-huninn.py` (needs `pip install fonttools brotli`; run from `src/frontend`): `src/fonts/huninn/ui.woff2` (~230KB: Latin, punctuation and every non-ASCII character found in `src/**/*.ts(x)` — i.e. all UI text) plus `cjk-NN` / `misc-NN` slices for the rest, and the generated `src/app/huninn.css` (`@font-face` rules, imported by `layout.tsx`; Next bundles the `url()`s as hashed, immutable assets). The browser downloads only the slices a page actually shows, so huninn appears almost immediately instead of after the old 2.2MB file. **Re-run the script after adding UI text with new CJK characters** (unlisted characters still render — they just come from a cjk slice). `ui` is declared last on purpose: with overlapping ranges the last face wins.
+- 0xProto still loads via `next/font/local` in `layout.tsx` with `display: "swap"` **and `preload: false`** (next/font would otherwise preload it on every route and compete with the JS that gates interactivity). Never use `display: block` — it blanks text until the font arrives.
+- **Huninn has a single weight (400). `body` sets `font-synthesis-weight: none`** because faux bold smears its rounded strokes until it looks like the system font (this was the "it isn't huninn" complaint). Build hierarchy from size and colour, not `font-semibold`/`font-bold` (they render as regular). `<strong>` is styled as a highlighter mark instead of bold. `.xterm` opts back into synthesis for bold terminal cells.
+- `--font-mono` keeps `ui-monospace, 'Courier New', monospace` as fallback; `--font-sans` falls back to `ui-sans-serif, system-ui, sans-serif`. No Geist dependency.
 - xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and explicitly awaits `document.fonts.load()` for the mono font (1.5s timeout guard) before terminal initialization — it does not depend on the CJK font
+- If a change to `globals.css`'s `@theme` seems ignored in `next dev`, delete `src/frontend/.next` — Turbopack can keep serving the previously compiled Tailwind theme.
 
 ## Favicon
 
@@ -226,3 +228,5 @@ hardcode display text in components, hooks, or lib error builders.
 - **All frontend UI strings go through i18n (`useI18n().t` / `tn`) — see the i18n section above**
 - Comments are mixed English and Traditional Chinese
 - Frontend components follow Shadcn/Radix patterns with `class-variance-authority`
+- **UI building blocks** (use these instead of hand-rolling): every dialog is `components/ui/Modal.tsx` (`title`, optional `description` / `icon` / `tone="danger"`, `footer` for the buttons; it focuses the panel on open instead of the close button, and becomes a bottom sheet on phones) and confirmations are `ConfirmDialog`; notices are `components/ui/callout.tsx` (`tone` info / tip / warning / danger — no more `bg-blue-50` / 💡 boxes); tabs and small single-choice toggles are `components/ui/segmented.tsx`; form fields are `Input` / `Textarea` / `Label`; every page starts with `components/layout/PageHeader.tsx` (gradient icon tile, title + addon, description, actions)
+- Design tokens live in `globals.css`: surfaces `bg-card` (raised) / `bg-surface` (wells inside cards and dialogs) / `bg-muted` (tracks, chips), shadows `shadow-card` / `shadow-card-hover` / `shadow-pop` (menus, selects, tooltips, toasts) / `shadow-dialog`, overlay `bg-(--overlay)`; animations `animate-pop-in/out`, `animate-sheet-*`, `animate-toast-in` (there is no tw-animate plugin — `animate-in` / `slide-in-from-*` classes do nothing)
