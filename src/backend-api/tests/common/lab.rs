@@ -530,10 +530,28 @@ impl Lab {
         self.tunnels.lock().unwrap().insert(device.tunnel_id, ssh);
     }
 
+    /// 一行指令加入的裝置：用 join 腳本的選項（釘住 gateway host key）把隧道連上來。`host_keys` 是 `type base64` 行。
+    /// A device that joined with the install script: connect with its options (pinned gateway host keys).
+    pub async fn connect_joined(&self, tunnel_id: i64, key: &LabKey, reverse_port: u16, target: &Machine, host_keys: &[String]) {
+        let alias = format!("telepy-127.0.0.1-{}", self.gw_port);
+        let known = self.dir.path().join(format!("known-{tunnel_id}"));
+        std::fs::write(&known, host_keys.iter().map(|k| format!("{alias} {k}\n")).collect::<String>()).unwrap();
+        let pin = ["-o".to_string(), "StrictHostKeyChecking=yes".into(), "-o".into(), format!("UserKnownHostsFile={}", known.display()), "-o".into(), format!("HostKeyAlias={alias}")];
+        let ssh = self.spawn_tunnel_with(key, reverse_port, target.port, &format!("joined-{tunnel_id}"), &pin).await;
+        self.tunnels.lock().unwrap().insert(tunnel_id, ssh);
+    }
+
     /// 裝置那端的 `ssh -NR`（與裝置腳本相同的選項），回傳時 forward 已註冊。
     async fn spawn_tunnel(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str) -> Child {
+        let no_pin = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"].map(String::from);
+        self.spawn_tunnel_with(key, reverse_port, target_port, name, &no_pin).await
+    }
+
+    async fn spawn_tunnel_with(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str, host_key_opts: &[String]) -> Child {
         let mut ssh = Command::new("ssh")
-            .args(["-F", "/dev/null", "-N", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
+            .args(["-F", "/dev/null", "-N"])
+            .args(host_key_opts)
+            .args(["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=5", "-o", "LogLevel=ERROR", "-i"])
             .arg(&key.path)
             .args(["-p", &self.gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])

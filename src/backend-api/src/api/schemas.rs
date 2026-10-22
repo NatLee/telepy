@@ -1209,3 +1209,64 @@ pub struct KeyDevice {
     /// Your keys that are in this device's list
     pub keys: Vec<KeyDeviceKey>,
 }
+
+#[derive(ToSchema)]
+pub struct JoinRequest {
+    /// Tunnel name to use (default: the device's hostname)
+    pub name: Option<String>,
+    /// "mine" seeds the new device's key list with your keys; "empty" (default) leaves it empty
+    #[schema(example = "mine")]
+    pub key_list: Option<String>,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "A join ticket as the owner sees it; the token itself is only returned once, on creation")]
+pub struct JoinTicket {
+    pub id: String,
+    pub name: Option<String>,
+    pub key_list_mine: bool,
+    /// waiting | registered | connected | verified | failed
+    pub phase: String,
+    pub detail: Option<String>,
+    pub tunnel_id: Option<i64>,
+    pub tunnel_name: Option<String>,
+    pub reverse_port: Option<i64>,
+    pub username: Option<String>,
+    pub hostname: Option<String>,
+    pub os: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct JoinTicketCreated {
+    #[schema(inline)]
+    pub ticket: JoinTicket,
+    /// Single-use secret for the device (`tpj_…`)
+    pub token: String,
+    pub install_url: String,
+    /// `curl -fsSL '<install_url>' | sudo sh -s -- --token <token>`
+    pub command: String,
+    /// The same without sudo (user-level service)
+    pub command_no_sudo: String,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "Sent by the install script")]
+pub struct JoinRegistration {
+    pub public_key: String,
+    pub hostname: Option<String>,
+    /// Account on the device that Telepy logs in to
+    pub username: String,
+    #[schema(example = 22)]
+    pub ssh_port: Option<i64>,
+    pub os: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct JoinError {
+    pub error: String,
+    /// too_many_join_tokens
+    pub code: String,
+}

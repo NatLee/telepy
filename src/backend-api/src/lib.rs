@@ -11,6 +11,7 @@ pub mod device_keys;
 pub mod error;
 pub mod gateway;
 pub mod hub;
+pub mod join;
 pub mod lan;
 pub mod mcp;
 pub mod mfa;
