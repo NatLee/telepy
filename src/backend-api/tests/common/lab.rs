@@ -21,7 +21,7 @@ use futures::{SinkExt, StreamExt};
 use russh::keys::{load_secret_key, PublicKey};
 use russh::server::{self, Auth, Msg, Session};
 use russh::{Channel, ChannelId, ChannelMsg, ChannelOpenFailure, MethodKind, MethodSet};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
@@ -629,6 +629,11 @@ impl Lab {
 
     /// 網頁終端機：Telepy 拒絕（權限 / 帳號不允許）時回關閉碼；否則回已開始的終端機。
     pub async fn terminal(&self, user: &LabUser, device: &Device, os_user: &str) -> Result<Terminal, u16> {
+        self.terminal_with(user, device, os_user, json!({})).await
+    }
+
+    /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `lan_host_id`）。/ Same, with extra auth-message fields.
+    pub async fn terminal_with(&self, user: &LabUser, device: &Device, os_user: &str, extra: Value) -> Result<Terminal, u16> {
         let base = self
             .ws_base
             .get_or_init(|| async {
@@ -640,7 +645,10 @@ impl Lab {
             })
             .await;
         let (mut ws, _) = connect_async(format!("{base}/ws/terminal/")).await.unwrap();
-        let auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        let mut auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        if let (Some(a), Some(e)) = (auth.as_object_mut(), extra.as_object()) {
+            a.extend(e.clone());
+        }
         ws.send(Message::Text(auth.to_string().into())).await.unwrap();
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("no terminal frame") {
             Some(Ok(Message::Close(Some(f)))) => Err(u16::from(f.code)),
