@@ -57,9 +57,9 @@ const CARD = "rounded-2xl border border-border bg-card/85 backdrop-blur-sm shado
 /** 這些埠多半是網頁服務，「接著」直接給可點的網址。/ Ports that are usually web apps get a clickable URL. */
 const WEB_PORTS = new Set(["80", "443", "3000", "3001", "4200", "5000", "5173", "8000", "8080", "8123", "8443", "8888", "9000"]);
 
-function StepHeading({ n, children }: { n: number; children: React.ReactNode }) {
+function StepHeading({ n, children, className }: { n: number; children: React.ReactNode; className?: string }) {
     return (
-        <h2 className="mb-3 flex items-center gap-2.5 text-sm font-semibold text-foreground">
+        <h2 className={cn("mb-3 flex items-center gap-2.5 text-sm font-semibold text-foreground", className)}>
             <span className="grid size-6 place-items-center rounded-full bg-brand-gradient text-xs font-bold text-white shadow-glow" aria-hidden>{n}</span>
             {children}
         </h2>
@@ -97,7 +97,7 @@ function Blank({ field, value, onChange }: { field: FieldDef; value: string; onC
     const { t } = useI18n();
     const trimmed = value.trim();
     const invalid = trimmed !== "" && ((field.kind === "port" && !isValidPort(trimmed)) || (field.key === "lanHost" && !isValidHost(trimmed)));
-    const width = Math.min(Math.max(value.length, field.kind === "port" ? 3 : 4), 26) + 2;
+    const width = Math.min(Math.max(value.length, field.kind === "port" ? 3 : 4), 26) + 2.5;
     return (
         <input
             value={value}
@@ -110,9 +110,9 @@ function Blank({ field, value, onChange }: { field: FieldDef; value: string; onC
             autoComplete="off"
             style={{ width: `${width}ch` }}
             className={cn(
-                "mx-1 inline-block rounded-lg border-2 border-dashed px-1 py-0.5 text-center align-baseline font-mono font-semibold transition-colors",
-                "focus:border-solid focus:outline-none focus:ring-2 focus:ring-ring/40",
-                invalid ? "border-destructive bg-destructive/5 text-destructive" : "border-primary/45 bg-primary/5 text-primary hover:border-primary"
+                "mx-0.5 inline-block h-7 rounded-md border border-dashed px-1.5 text-center align-middle font-mono text-sm font-semibold shadow-xs transition-colors",
+                "focus:border-solid focus:outline-none focus:ring-2 focus:ring-ring/30",
+                invalid ? "border-destructive bg-destructive/5 text-destructive" : "border-primary/50 bg-background text-primary hover:border-primary"
             )}
         />
     );
@@ -217,8 +217,8 @@ function CheatsheetInner() {
     const field = (key: string) => def.fields.find((f) => f.key === key)!;
     const blank = (key: string) => <Blank field={field(key)} value={params[key] ?? ""} onChange={(v) => setParam(key, v)} />;
     const device = (
-        <span className="mx-1 inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2 py-0.5 align-baseline font-semibold text-primary">
-            <Cpu size={16} aria-hidden />{alias}
+        <span className="mx-0.5 inline-flex h-7 items-center gap-1 rounded-md bg-primary/10 px-2 align-middle text-sm font-semibold text-primary">
+            <Cpu size={14} aria-hidden />{alias}
         </span>
     );
     const upload = resolved.direction !== "download";
@@ -227,10 +227,10 @@ function CheatsheetInner() {
             type="button"
             onClick={() => setParam("tool", resolved.tool === "rsync" ? "scp" : "rsync")}
             title={t("sheet.field.tool")}
-            className="mx-1 inline-flex items-center gap-1 rounded-lg border-2 border-dashed border-primary/45 bg-primary/5 px-2 py-0.5 align-baseline font-mono font-semibold text-primary hover:border-primary"
+            className="mx-0.5 inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-primary/50 bg-background px-2 align-middle font-mono text-sm font-semibold text-primary shadow-xs hover:border-primary"
         >
             {resolved.tool}
-            <Repeat size={14} aria-hidden />
+            <Repeat size={12} aria-hidden />
         </button>
     );
 
@@ -386,9 +386,9 @@ function CheatsheetInner() {
             {scene && (
                 <section className={cn(CARD, "space-y-6 p-4 sm:p-6")}>
                     <div>
-                        <StepHeading n={2}>{t("sheet.step2")}</StepHeading>
-                        {recipe === "copy" && (
-                            <div className="mb-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <StepHeading n={2} className="mb-0">{t("sheet.step2")}</StepHeading>
+                            {recipe === "copy" && (
                                 <Segmented
                                     value={upload ? "upload" : "download"}
                                     onChange={(v) => setParam("direction", v)}
@@ -398,32 +398,34 @@ function CheatsheetInner() {
                                         { value: "download", label: t("sheet.field.download") },
                                     ]}
                                 />
-                            </div>
-                        )}
-                        <p className="text-lg leading-[2.6] text-foreground sm:text-xl">{sentence}</p>
-                        {anyInvalid && <p className="mt-1 text-xs text-destructive">{t("sheet.field.invalidPort")}</p>}
-                        {recipe === "local" && (
-                            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                                <span className="mr-1 text-xs text-muted-foreground">{t("sheet.presets")}</span>
-                                {LOCAL_PRESETS.map((p) => {
-                                    const active = resolved.remotePort === p.remotePort && resolved.localPort === p.localPort;
-                                    return (
-                                        <button
-                                            key={p.label}
-                                            type="button"
-                                            aria-pressed={active}
-                                            onClick={() => setParamsById((prev) => ({ ...prev, local: { remotePort: p.remotePort, localPort: p.localPort } }))}
-                                            className={cn(
-                                                "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                                                active ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background/60 text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                                            )}
-                                        >
-                                            {p.label}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        )}
+                            )}
+                        </div>
+                        <div className="rounded-xl border border-border bg-muted/30 px-4 py-2.5">
+                            <p className="text-[15px] leading-9 text-foreground">{sentence}</p>
+                            {anyInvalid && <p className="pb-1 text-xs text-destructive">{t("sheet.field.invalidPort")}</p>}
+                            {recipe === "local" && (
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-border/70 pt-2.5 pb-0.5">
+                                    <span className="mr-0.5 text-[11px] text-muted-foreground">{t("sheet.presets")}</span>
+                                    {LOCAL_PRESETS.map((p) => {
+                                        const active = resolved.remotePort === p.remotePort && resolved.localPort === p.localPort;
+                                        return (
+                                            <button
+                                                key={p.label}
+                                                type="button"
+                                                aria-pressed={active}
+                                                onClick={() => setParamsById((prev) => ({ ...prev, local: { remotePort: p.remotePort, localPort: p.localPort } }))}
+                                                className={cn(
+                                                    "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                                                    active ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                                                )}
+                                            >
+                                                {p.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     <TunnelScene nodes={scene.nodes} links={scene.links} file={scene.file} caption={caption} />
