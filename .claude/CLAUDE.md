@@ -139,6 +139,12 @@ Copy `.env.example` to `.env` and configure:
 - Tailwind CSS variables `--font-sans` / `--font-mono` reference the custom fonts first, then generic system fonts as fallback (`ui-sans-serif, system-ui, sans-serif` for sans; `ui-monospace, 'Courier New', monospace` for mono — see `globals.css`). No Geist dependency.
 - xterm.js reads the terminal font name from CSS variable `--font-0xproto` via `getComputedStyle(document.body)` and explicitly awaits `document.fonts.load()` for the mono font (1.5s timeout guard) before terminal initialization — it does not depend on the CJK font
 
+## Favicon
+
+- `src/frontend/src/app/icon.svg` is the source: brand-gradient tile (`--primary` → `--brand-2`, light theme, as hex) + a white "reverse tunnel" hairpin (dot → out → U-turn → arrow back). 64-unit grid, stroke 8, horizontal strokes on multiples of 4 so 16/32px stay pixel-sharp. Next.js file conventions emit the `<link>` tags.
+- `favicon.ico` (16/32/48 PNG entries) and `apple-icon.png` (180×180, full-bleed — iOS masks the corners) are rendered from it with `sharp` (in the frontend's `node_modules`); re-render both whenever the SVG or the brand colours change. Never put a double hyphen inside the SVG comment (invalid XML → broken icon).
+- The Swagger shell (`api/doc.rs`) links the same `/favicon.ico` + `/icon.svg`. The sidebar `BrandMark` still uses lucide `Cable`.
+
 ## Internationalization (i18n) — REQUIRED for all frontend UI text
 
 The frontend is fully internationalized (English / 繁體中文 / 日本語, default = browser language).
