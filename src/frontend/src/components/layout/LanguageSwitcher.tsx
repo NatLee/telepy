@@ -76,7 +76,7 @@ export function LanguageSwitcher({ collapsed = false, className = "" }: { collap
         <div
             role="group"
             aria-label={t("language.label")}
-            className={`grid grid-cols-4 gap-0.5 rounded-lg bg-muted/80 p-0.5 ${className}`}
+            className={`grid grid-cols-4 gap-0.5 rounded-md bg-muted p-0.5 ${className}`}
         >
             {OPTIONS.map((option) => {
                 const isActive = language === option.value;
@@ -89,8 +89,8 @@ export function LanguageSwitcher({ collapsed = false, className = "" }: { collap
                         aria-label={name}
                         aria-pressed={isActive}
                         onClick={() => setLanguage(option.value)}
-                        className={`flex h-7 items-center justify-center rounded-md text-[0.875rem] transition-[color,background-color,box-shadow] ${isActive
-                            ? "bg-card text-foreground shadow-card [&_svg]:text-primary"
+                        className={`flex h-7 items-center justify-center rounded-sm text-[0.875rem] transition-[color,background-color,box-shadow] ${isActive
+                            ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary [&_svg]:text-primary"
                             : "text-muted-foreground hover:text-foreground"
                             }`}
                     >

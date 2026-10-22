@@ -69,7 +69,7 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
         { icon: Clock3, title: t("keys.how.rule4Title"), body: t("keys.how.rule4Body") },
     ];
     return (
-        <section aria-labelledby="keys-how-title" className="rounded-2xl bg-surface p-4 ring-1 ring-border sm:p-5">
+        <section aria-labelledby="keys-how-title" className="rounded-xl bg-surface p-4 ring-1 ring-border sm:p-5">
             <div className="mb-4 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                     <h2 id="keys-how-title" className="text-base text-foreground">{t("keys.how.title")}</h2>

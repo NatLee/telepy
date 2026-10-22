@@ -29,10 +29,10 @@ function ConsentInner() {
 
     const shell = (children: React.ReactNode) => (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
-            <div className="w-full max-w-lg bg-card text-card-foreground rounded-2xl shadow-2xl p-8 border border-border animate-in fade-in slide-in-from-bottom-8 duration-500">
+            <div className="w-full max-w-lg bg-card text-card-foreground rounded-xl shadow-dialog p-8 border border-border animate-fade-in-up">
                 <div className="text-center mb-6">
-                    <div className="inline-flex items-center justify-center w-14 h-14 bg-primary rounded-xl mb-3 shadow-lg shadow-primary/30">
-                        <Bot size={28} className="text-primary-foreground" />
+                    <div className="inline-flex items-center justify-center size-12 rounded-lg border border-border bg-surface text-muted-foreground mb-3">
+                        <Bot size={24} />
                     </div>
                     <h1 className="text-2xl font-bold tracking-tight">{t("oauth.title")}</h1>
                 </div>

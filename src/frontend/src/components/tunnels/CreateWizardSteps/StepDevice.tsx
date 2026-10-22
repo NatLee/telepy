@@ -30,8 +30,8 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
         return (
             <form onSubmit={d.submitDevice} className="space-y-6">
                 <StepHeading title={t("wizard.device.createdTitle")} subtitle={t("wizard.device.createdBody")} />
-                <div className="flex items-start gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-4">
-                    <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-emerald-500" aria-hidden />
+                <div className="flex items-start gap-3 rounded-xl border border-success/25 bg-success/[0.06] p-4">
+                    <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-success" aria-hidden />
                     <dl className="grid min-w-0 flex-1 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
                         <dt className="text-muted-foreground">{t("wizard.device.name")}</dt>
                         <dd className="truncate font-medium text-foreground">{created.name}</dd>
@@ -100,9 +100,9 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                 />
                 <div id="wizard-key-status" className="min-h-5">
                     {kc.kind === "valid" && !d.errors.key && (
-                        <p className="flex flex-wrap items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-300">
+                        <p className="flex flex-wrap items-center gap-1.5 text-xs text-success">
                             <CheckCircle2 size={14} aria-hidden />
-                            <span className="rounded bg-emerald-500/12 px-1.5 py-0.5 font-mono font-semibold">{kc.algo}</span>
+                            <span className="rounded bg-success/12 px-1.5 py-0.5 font-mono font-semibold">{kc.algo}</span>
                             {kc.comment && <span className="font-mono text-foreground/80">{kc.comment}</span>}
                             <span className="font-mono text-muted-foreground">…{kc.tail}</span>
                         </p>
@@ -114,7 +114,7 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                         </p>
                     )}
                     {kc.kind === "invalid" && !d.errors.key && (
-                        <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                        <p className="flex items-center gap-1.5 text-xs text-warning">
                             <AlertTriangle size={14} aria-hidden /> {t("wizard.device.keyInvalid")}
                         </p>
                     )}
@@ -192,7 +192,7 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
             </fieldset>
 
             <StepFooter>
-                <Button type="submit" disabled={d.creating || kc.kind === "private"} className="shadow-glow">
+                <Button type="submit" disabled={d.creating || kc.kind === "private"} className="">
                     {d.creating ? <Loader2 className="animate-spin" /> : null}
                     {d.creating ? t("wizard.device.creating") : t("wizard.device.create")}
                     {!d.creating && <ChevronRight />}

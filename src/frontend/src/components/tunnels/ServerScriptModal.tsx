@@ -148,7 +148,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
                         <div className="relative">
                             <CodeBlock language={LANG[activeTab] || "txt"} value={scriptContent} />
                             {isFetchingScript && (
-                                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-card/50 backdrop-blur-[1px] transition-all duration-200">
+                                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-card/60 transition-all duration-200">
                                     <Loader2 className="size-6 animate-spin text-primary opacity-70" />
                                 </div>
                             )}

@@ -99,7 +99,7 @@ export function SignInHistory({ endpoint, description }: { endpoint: string; des
                         {shown!.map((e) => (
                             <li key={e.id} className="px-3 py-2 flex items-start gap-2.5">
                                 {e.ok ? (
-                                    <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label={t("security.signInOk")} />
+                                    <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-success" aria-label={t("security.signInOk")} />
                                 ) : (
                                     <XCircle size={15} className="mt-0.5 shrink-0 text-destructive" aria-label={t("security.signInFailed")} />
                                 )}

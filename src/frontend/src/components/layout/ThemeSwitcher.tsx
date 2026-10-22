@@ -68,7 +68,7 @@ export function ThemeSwitcher({ collapsed = false, className = "" }: { collapsed
     }
 
     return (
-        <div role="group" aria-label={t("prefs.theme")} className={`grid grid-cols-3 gap-0.5 rounded-lg bg-muted/80 p-0.5 ${className}`}>
+        <div role="group" aria-label={t("prefs.theme")} className={`grid grid-cols-3 gap-0.5 rounded-md bg-muted p-0.5 ${className}`}>
             {THEMES.map((value) => {
                 const { Icon, labelKey } = THEME_META[value];
                 const isActive = theme === value;
@@ -81,8 +81,8 @@ export function ThemeSwitcher({ collapsed = false, className = "" }: { collapsed
                         aria-label={label}
                         aria-pressed={isActive}
                         onClick={() => changeTheme(value)}
-                        className={`flex h-7 items-center justify-center rounded-md text-[0.875rem] transition-[color,background-color,box-shadow] ${isActive
-                            ? "bg-card text-foreground shadow-card [&_svg]:text-primary"
+                        className={`flex h-7 items-center justify-center rounded-sm text-[0.875rem] transition-[color,background-color,box-shadow] ${isActive
+                            ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary [&_svg]:text-primary"
                             : "text-muted-foreground hover:text-foreground"
                             }`}
                     >

@@ -28,7 +28,7 @@ import { useViewMode } from "@/hooks/useViewMode";
 import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
-const TH = "px-4 py-3 text-left text-[0.75rem] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap";
+const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
 
 export default function TunnelsPage() {
     const { t } = useI18n();
@@ -130,7 +130,7 @@ export default function TunnelsPage() {
                             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
                             {t("common.refresh")}
                         </Button>
-                        <Button asChild className="shadow-glow">
+                        <Button asChild>
                             <Link href="/tunnels/create" prefetch={false}>
                                 <Plus size={16} />
                                 {t("tunnels.create")}
@@ -142,18 +142,18 @@ export default function TunnelsPage() {
 
             {loading && tunnels.length === 0 ? (
                 <div className="flex flex-col items-center justify-center p-12 text-muted-foreground">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
+                    <div className="mb-4 size-8 animate-spin rounded-full border-2 border-border border-t-primary" aria-hidden></div>
                     {t("tunnels.loading")}
                 </div>
             ) : tunnels.length === 0 ? (
-                <div className="relative overflow-hidden flex flex-col items-center justify-center p-16 border border-dashed border-border rounded-3xl bg-card/70 backdrop-blur-sm text-center">
-                    <div className="grid place-items-center w-16 h-16 rounded-2xl bg-brand-gradient shadow-glow mb-5 animate-float" aria-hidden>
-                        <Network size={28} className="text-white" />
+                <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-input bg-card p-16 text-center">
+                    <div className="mb-5 grid size-12 place-items-center rounded-lg border border-border bg-surface text-muted-foreground" aria-hidden>
+                        <Network size={22} />
                     </div>
-                    <h3 className="text-xl font-semibold text-foreground tracking-tight">{t("tunnels.emptyTitle")}</h3>
+                    <h3 className="text-lg text-foreground tracking-tight">{t("tunnels.emptyTitle")}</h3>
                     <p className="mt-2 text-sm text-muted-foreground max-w-sm">{t("tunnels.emptyBody")}</p>
                     <div className="mt-6">
-                        <Button asChild className="shadow-glow">
+                        <Button asChild>
                             <Link href="/tunnels/create" prefetch={false}>
                                 <Plus size={16} />
                                 {t("tunnels.new")}
@@ -174,7 +174,7 @@ export default function TunnelsPage() {
                                 onChange={(e) => setQuery(e.target.value)}
                                 placeholder={t("tunnels.searchPlaceholder")}
                                 aria-label={t("tunnels.searchPlaceholder")}
-                                className="pl-9 pr-9 h-10 bg-card/80 backdrop-blur-sm"
+                                className="pl-9 pr-9 h-9"
                             />
                             {query && (
                                 <button
@@ -196,7 +196,7 @@ export default function TunnelsPage() {
                     </div>
 
                     {visible.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center gap-3 p-12 rounded-2xl border border-dashed border-border bg-card/60 text-center">
+                        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-input bg-card p-12 text-center">
                             <SearchX size={32} className="text-muted-foreground/60" aria-hidden />
                             <p className="text-sm text-muted-foreground">{t("tunnels.noMatch")}</p>
                             <Button variant="outline" size="sm" onClick={clearFilters}>{t("tunnels.clearFilters")}</Button>
@@ -215,9 +215,9 @@ export default function TunnelsPage() {
                             ))}
                         </div>
                     ) : (
-                        <div className="border border-border rounded-2xl overflow-x-auto bg-card/85 backdrop-blur-sm shadow-card">
+                        <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card">
                             <table className="min-w-full divide-y divide-border">
-                                <thead className="bg-muted/40">
+                                <thead className="bg-surface">
                                     <tr>
                                         <th scope="col" className={TH}>{t("tunnels.thName")}</th>
                                         <th scope="col" className={TH}>{t("tunnels.thStatus")}</th>

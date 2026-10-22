@@ -1,7 +1,9 @@
 /**
- * 隧道卡片：狀態（頂部色條 + 膠囊 + 延遲）、名稱 / 埠 / 存取關係、三顆「開啟」方塊，底部是埠轉發捷徑與「更多」選單。
- * Tunnel card: status (top accent + pill + latency), name / port / access, three labelled "open" tiles, and a
- * footer with the port-forwarding shortcut plus the grouped "More" menu.
+ * 隧道卡片：狀態（圓點 + 文字 + 延遲）、名稱 / 埠 / 存取關係、三顆「開啟」按鈕，底部是埠轉發捷徑與「更多」選單。
+ * 平的卡片：髮絲線邊框、hover 只加深邊框，沒有色條、光暈或位移。
+ * Tunnel card: status (dot + text + latency), name / port / access, three labelled "open" buttons, and a footer
+ * with the port-forwarding shortcut plus the grouped "More" menu. Flat: hairline border, hover only firms the
+ * border — no accent bar, glow or lift.
  */
 import React from "react";
 import { ArrowLeftRight, Server } from "lucide-react";
@@ -27,32 +29,24 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
     const { t } = useI18n();
     return (
         <article
-            className={cn(
-                "group relative flex flex-col h-full overflow-hidden rounded-2xl border bg-card shadow-card transition-[box-shadow,border-color,translate] duration-300",
-                isActive
-                    ? "border-border/80 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-glow"
-                    : "border-border/80 hover:shadow-card-hover"
-            )}
+            className="group relative flex flex-col h-full overflow-hidden rounded-xl border border-border bg-card shadow-card transition-[border-color] duration-150 hover:border-foreground/25"
         >
-            {/* 頂部狀態色條 / Status accent bar */}
-            <div className={cn("h-1 w-full", isActive ? "bg-brand-gradient" : "bg-muted-foreground/15")} aria-hidden />
-
             <div className="flex items-start gap-3 p-4 pb-3">
                 <div
                     className={cn(
-                        "grid place-items-center w-10 h-10 rounded-xl shrink-0 ring-1 ring-inset transition-colors",
-                        isActive ? "bg-primary/10 text-primary ring-primary/20" : "bg-muted text-muted-foreground ring-border"
+                        "grid place-items-center size-9 rounded-md shrink-0 border transition-colors",
+                        isActive ? "border-success/25 bg-success/10 text-success" : "border-border bg-surface text-muted-foreground"
                     )}
                     aria-hidden
                 >
-                    <Server size={18} />
+                    <Server size={17} />
                 </div>
                 <div className="min-w-0 flex-1">
                     <h3 className="text-[1.125rem] text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
                         {tunnel.host_friendly_name}
                     </h3>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                        <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.75rem] text-foreground/80" title={t("tunnels.portTitle")}>
+                        <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80" title={t("tunnels.portTitle")}>
                             :{tunnel.reverse_port}
                         </span>
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
@@ -82,7 +76,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                     <Button
                         variant="ghost"
                         size="sm"
-                        className="flex-1 justify-start text-muted-foreground hover:text-primary hover:bg-primary/8"
+                        className="flex-1 justify-start text-muted-foreground hover:text-foreground"
                         onClick={() => actions.onCommands(tunnel.id)}
                         title={t("tunnelActions.portForwardingHint")}
                     >

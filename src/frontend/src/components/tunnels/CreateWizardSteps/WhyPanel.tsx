@@ -77,11 +77,11 @@ export function WhyPanel({ step }: { step: WizardStep }) {
     return (
         <aside
             key={step}
-            className="relative overflow-hidden rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-500/[0.07] via-transparent to-transparent p-4 animate-fade-in-up sm:p-5"
+            className="relative overflow-hidden rounded-xl border border-warning/25 bg-warning/[0.07] p-4 animate-fade-in-up sm:p-5"
             aria-labelledby="wizard-why-title"
         >
             <div className="flex items-center gap-2.5">
-                <span className="grid size-8 place-items-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400" aria-hidden>
+                <span className="grid size-8 place-items-center rounded-lg bg-warning/15 text-warning" aria-hidden>
                     <Lightbulb size={16} />
                 </span>
                 <h3 id="wizard-why-title" className="text-sm font-semibold text-foreground">{t("wizard.why.title")}</h3>
@@ -90,7 +90,7 @@ export function WhyPanel({ step }: { step: WizardStep }) {
             <ul className="mt-4 space-y-3">
                 {why.points.map(({ icon: Icon, text }) => (
                     <li key={text} className="flex gap-2.5 text-xs leading-relaxed text-muted-foreground">
-                        <Icon size={14} className="mt-0.5 shrink-0 text-amber-600/80 dark:text-amber-400/80" aria-hidden />
+                        <Icon size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden />
                         <span>{t(text)}</span>
                     </li>
                 ))}

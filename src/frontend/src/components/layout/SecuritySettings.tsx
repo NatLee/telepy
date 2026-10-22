@@ -53,7 +53,7 @@ export function SecuritySettings() {
         }
     };
 
-    const subheading = "text-xs uppercase tracking-wide text-muted-foreground flex items-center gap-1.5";
+    const subheading = "text-xs text-muted-foreground flex items-center gap-1.5";
 
     return (
         <section className="space-y-3">
