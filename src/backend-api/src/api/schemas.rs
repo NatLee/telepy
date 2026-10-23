@@ -153,6 +153,24 @@ pub struct Tunnel {
     /// 只有列表帶：離線時最後一次有連線的時間（UTC，`…Z`）；連著或從沒連過時 null。不含 IP，所有人都看得到。
     /// List / dashboard only: when the tunnel was last connected (UTC); null while connected or if it never was.
     pub last_seen_at: Option<String>,
+    /// 只有列表帶：我有沒有釘選（每個人自己的）。/ List / dashboard only: whether I pinned it (per user).
+    pub pinned: Option<bool>,
+    /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
+    #[schema(example = json!(["home", "env=prod"]))]
+    pub labels: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct PinState {
+    pub pinned: bool,
+}
+
+/// 小寫英數開頭，可含 `. _ - =`，最多 32 字元、12 個；送進來的會被整理（小寫、去重複、排序）。
+/// Lowercase letters / digits first, then `. _ - =`; up to 32 characters and 12 labels; normalised on save.
+#[derive(ToSchema)]
+pub struct LabelsRequest {
+    #[schema(example = json!(["home", "env=prod"]))]
+    pub labels: Vec<String>,
 }
 
 #[derive(ToSchema)]

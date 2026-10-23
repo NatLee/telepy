@@ -30,6 +30,8 @@ const EXAMPLES: { term: string; key: TranslationKey }[] = [
     { term: "port:2000-3000", key: "tunnels.q.port" },
     { term: "ip:203.0.113", key: "tunnels.q.ip" },
     { term: "user:alice", key: "tunnels.q.user" },
+    { term: "label:prod", key: "tunnels.q.label" },
+    { term: "pinned:yes", key: "tunnels.q.pinned" },
     { term: "-status:never", key: "tunnels.q.negate" },
 ];
 

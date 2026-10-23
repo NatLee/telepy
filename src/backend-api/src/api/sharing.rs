@@ -105,6 +105,8 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
 
     db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, uid).await?;
     db::sharing::delete(&state.db, sharing.id).await?;
+    // 看不到了，他的釘選也沒意義。/ They can't see it any more, so their pin goes too.
+    db::tunnel_tags::set_pin(&state.db, uid, t.id, false).await?;
     // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
     db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
     state.device_keys.kick(t.id);

@@ -14,6 +14,7 @@ import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } fro
 import { liveHealth } from "@/lib/tunnelHealth";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
+import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { Button } from "@/components/ui/button";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
@@ -44,9 +45,12 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                     <Server size={17} />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <h3 className="text-[1.125rem] text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
-                        {tunnel.host_friendly_name}
-                    </h3>
+                    <div className="flex min-w-0 items-center gap-1">
+                        <h3 className="text-[1.125rem] text-foreground truncate leading-tight" title={tunnel.host_friendly_name}>
+                            {tunnel.host_friendly_name}
+                        </h3>
+                        <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} />
+                    </div>
                     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                         <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px font-mono text-[0.75rem] text-foreground/80" title={t("tunnels.portTitle")}>
                             :{tunnel.reverse_port}
@@ -54,6 +58,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
                         <TunnelPresenceButton presence={tunnel.presence} />
+                        <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} />
                     </div>
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">

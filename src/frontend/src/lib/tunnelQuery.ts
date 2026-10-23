@@ -12,12 +12,14 @@
  *   lastseen:>3h | lastseen:<1d | lastseen:never    最後上線多久以前（m/h/d/w）；連著的算「現在」
  *   ip:203.0.113                                    裝置公網 IP 的前綴
  *   user:alice                                      現在正在用這條隧道的人（看得到細節時）
+ *   label:prod | tag:prod                           標籤（tag 是別名）
+ *   pinned:yes|no                                   我有沒有釘選
  *
  * 純函式、不依賴 React，`tunnelQuery.test.ts` 有測試。/ Pure functions; tested in tunnelQuery.test.ts.
  */
 import type { Tunnel, TunnelHealth } from "../types/tunnel";
 
-export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user"] as const;
+export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned"] as const;
 export type QueryKey = (typeof QUERY_KEYS)[number];
 
 export interface QueryFilter {
@@ -67,7 +69,10 @@ function validValue(key: QueryKey, v: string): boolean {
             return v === "never" || /^[<>]\d+[mhdw]$/.test(v);
         case "ip":
         case "user":
+        case "label":
             return v.length > 0;
+        case "pinned":
+            return v === "yes" || v === "no";
     }
 }
 
@@ -75,7 +80,8 @@ export function parseQuery(input: string): ParsedQuery {
     const parsed: ParsedQuery = { text: [], filters: [], invalid: [] };
     for (const token of tokenize(input)) {
         const m = /^(-?)([a-z]+):(.*)$/i.exec(token);
-        const key = m?.[2].toLowerCase();
+        // tag: 是 label: 的別名。/ tag: is an alias of label:.
+        const key = m?.[2].toLowerCase() === "tag" ? "label" : m?.[2].toLowerCase();
         if (!m) {
             parsed.text.push(token.toLowerCase());
             continue;
@@ -147,6 +153,10 @@ function matchOne(f: QueryFilter, v: string, t: Tunnel, ctx: MatchContext): bool
             return (t.endpoint?.ip ?? "").toLowerCase().startsWith(v);
         case "user":
             return (t.presence?.sessions ?? []).some((s) => s.user.toLowerCase().includes(v));
+        case "label":
+            return (t.labels ?? []).includes(v);
+        case "pinned":
+            return (v === "yes") === !!t.pinned;
     }
 }
 
@@ -157,6 +167,7 @@ function matchText(term: string, t: Tunnel): boolean {
         String(t.reverse_port),
         t.endpoint?.ip ?? "",
         ...(t.presence?.sessions ?? []).map((s) => s.user),
+        ...(t.labels ?? []),
     ];
     return hay.some((h) => h.toLowerCase().includes(term));
 }
@@ -170,6 +181,11 @@ export function matchTunnel(t: Tunnel, q: ParsedQuery, ctx: MatchContext): boole
         if (hit === f.negate) return false;
     }
     return true;
+}
+
+/** 釘選的永遠在最前面（任何排序方式之下）。/ Pinned tunnels always come first, under any sort. */
+export function pinnedFirst(a: Tunnel, b: Tunnel): number {
+    return Number(!!b.pinned) - Number(!!a.pinned);
 }
 
 export type TunnelSort = "name" | "status" | "lastseen" | "port";

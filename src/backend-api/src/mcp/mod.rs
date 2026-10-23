@@ -284,7 +284,7 @@ impl TelepyMcp {
 
 #[tool_router]
 impl TelepyMcp {
-    #[tool(description = "List the tunnels (devices) you can reach: id, name, whether the device is online, latency, your permission, the target usernames you may log in as, and your open sessions.", annotations(title = "List tunnels", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "List the tunnels (devices) you can reach: id, name, labels, whether the device is online, its health (degraded = the tunnel is up but the device's SSH server does not answer), latency, your permission, the target usernames you may log in as, and your open sessions.", annotations(title = "List tunnels", read_only_hint = true, open_world_hint = false))]
     async fn list_tunnels(&self, Extension(parts): Extension<axum::http::request::Parts>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -296,6 +296,7 @@ impl TelepyMcp {
             let tunnels = db::tunnels::visible_to(db, p.user.id).await?;
             let (mine, _) = db::sharing::permission_context(db, p.user.id).await?;
             let sessions = self.state.ai.list();
+            let labels = db::tunnel_tags::labels_visible_to(db, p.user.id).await?;
             let mut out = Vec::new();
             for t in tunnels.iter().filter(|t| p.tunnel_allowed(t.id)) {
                 let allowed = permissions::allowed_usernames(db, p.user.id, t).await?;
@@ -305,7 +306,9 @@ impl TelepyMcp {
                     "id": t.id,
                     "name": t.host_friendly_name,
                     "description": t.description,
+                    "labels": labels.get(&t.id).cloned().unwrap_or_default(),
                     "online": self.online(t.reverse_port),
+                    "health": self.health(t.reverse_port),
                     "rtt_ms": self.rtt(t.reverse_port),
                     "permission": eff.map(|e| e.label()),
                     "usernames": allowed.iter().map(|u| u.username.clone()).collect::<Vec<_>>(),
