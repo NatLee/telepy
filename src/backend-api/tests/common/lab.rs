@@ -111,6 +111,7 @@ pub struct Machine {
     logins: Arc<Mutex<Vec<Login>>>,
     ptys: Arc<Mutex<Vec<PtyState>>>,
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+    resolves: Arc<Mutex<Vec<String>>>,
 }
 
 impl Machine {
@@ -145,6 +146,10 @@ impl Machine {
     pub fn resizes(&self) -> Vec<(u32, u32)> {
         self.resizes.lock().unwrap().clone()
     }
+    /// pretend_darwin：後端請裝置解析過的名稱。/ Names resolved on the (fake) macOS device.
+    pub fn resolves(&self) -> Vec<String> {
+        self.resolves.lock().unwrap().clone()
+    }
 }
 
 /// 檔案裡有沒有這把金鑰（忽略 options 與註解，只比 `type base64`）。
@@ -166,6 +171,10 @@ pub struct MachineOpts {
     /// 沒有 `sftp` 子系統（像沒裝 sftp-server 的裝置）；exec 認不得的指令交給本機 `sh -c`，在機器的 home 跑。
     /// No sftp subsystem; unknown exec commands run under the local `sh -c` in the machine's home.
     pub shell_without_sftp: bool,
+    /// 假裝是 macOS：`uname -s` 回 `Darwin`、`dscacheutil -q host -a name X` 在本機解析 X；
+    /// 而且像 Apple 的 sshd-session 一樣，**名稱**的 direct-tcpip 讓整條連線斷掉（IP 才正常）。
+    /// Pretend to be macOS, including the sshd-session crash on hostname direct-tcpip targets.
+    pub pretend_darwin: bool,
 }
 
 struct MachineState {
@@ -178,6 +187,8 @@ struct MachineState {
     ptys: Arc<Mutex<Vec<PtyState>>>,
     /// 每次 window-change 的 (cols, rows)。/ Every window change seen.
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+    /// pretend_darwin 時被要求解析過的名稱。/ Names the backend asked the (fake) macOS device to resolve.
+    resolves: Arc<Mutex<Vec<String>>>,
 }
 
 /// 一個 session channel 的 PTY 狀態（term + 視窗大小），`tty` 指令與 shell 的 `tty` 行會印出來。
@@ -314,6 +325,17 @@ impl server::Handler for SshdHandler {
             "hostname" => (format!("{}\n", self.m.name), String::new(), 0),
             "whereami" => (format!("{user}@{}\n", self.m.name), String::new(), 0),
             c if c.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).is_some() => (String::new(), String::new(), 0),
+            "uname -s" if self.m.opts.pretend_darwin => ("Darwin\n".to_string(), String::new(), 0),
+            c if self.m.opts.pretend_darwin && c.contains("dscacheutil -q host -a name ") => {
+                let name = c.rsplit("dscacheutil -q host -a name ").next().unwrap_or_default().trim_matches('\'').to_string();
+                self.m.resolves.lock().unwrap().push(name.clone());
+                use std::net::ToSocketAddrs;
+                let ip = (name.as_str(), 0).to_socket_addrs().ok().and_then(|mut a| a.find(|a| a.is_ipv4())).map(|a| a.ip().to_string());
+                match ip {
+                    Some(ip) => (format!("name: {name}\nip_address: {ip}\n"), String::new(), 0),
+                    None => (String::new(), String::new(), 0),
+                }
+            }
             _ if self.m.opts.shell_without_sftp => {
                 let o = std::process::Command::new("sh").arg("-c").arg(&cmd).current_dir(&self.m.home).env("HOME", &self.m.home).output().unwrap();
                 (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned(), o.status.code().unwrap_or(1) as u32)
@@ -381,6 +403,10 @@ impl server::Handler for SshdHandler {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.m.opts.pretend_darwin && host_to_connect.parse::<std::net::IpAddr>().is_err() {
+            // Apple sshd-session：getaddrinfo 在 fork 後的 privsep 子行程裡 abort → 整條連線斷。
+            anyhow::bail!("sshd-session crashed resolving {host_to_connect}");
+        }
         if !self.m.opts.allow_jump {
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
@@ -415,6 +441,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let logins = Arc::new(Mutex::new(Vec::new()));
     let ptys = Arc::new(Mutex::new(Vec::new()));
     let resizes = Arc::new(Mutex::new(Vec::new()));
+    let resolves = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
@@ -423,6 +450,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         logins: logins.clone(),
         ptys: ptys.clone(),
         resizes: resizes.clone(),
+        resolves: resolves.clone(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -437,7 +465,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
             });
         }
     });
-    Machine { name: name.to_string(), port, home, logins, ptys, resizes }
+    Machine { name: name.to_string(), port, home, logins, ptys, resizes, resolves }
 }
 
 // ------------------------------------------------------------------ lab

@@ -10,6 +10,7 @@ pub mod device;
 pub mod exec;
 pub mod pool;
 pub mod process;
+pub mod resolve;
 pub mod socks;
 pub mod terminal;
 

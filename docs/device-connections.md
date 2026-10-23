@@ -68,6 +68,17 @@
 - **終端機**：分頁 = channel，關分頁只關那條 channel。以前 killpg 殺到 ControlMaster、把所有分頁一起踢掉的
   那一類問題不存在了。裝置離線時直接回 4005，不必等逾時。
 - **sftp 子系統被拒**：等裝置的回覆，一被拒就馬上退回 exec，不再等 SFTP 初始化的 10 秒逾時。
+- **macOS 裝置與名稱（`ssh::resolve`）**：Apple 的 `sshd-session` 收到目標是**名稱**的 direct-tcpip 時，
+  privsep 子行程在 fork 之後呼叫 getaddrinfo 會 abort，整條 SSH 連線跟著斷。Chromium 經 SOCKS 一律送名稱，
+  所以遠端瀏覽器一開頁就會觸發；在共用連線上，同一台同一帳號的終端機分頁與檔案管理也會一起斷。因此
+  SOCKS 與區網那一跳開 direct-tcpip 之前：
+  - 每條連線問一次 OS（`uname -s`）。
+  - Darwin：用 `/usr/bin/dscacheutil` 在**裝置上**把名稱解析成 IP（IPv4 優先，內網與 `.local` 名稱照常），
+    再對 IP 開 channel。
+    - 同一個名稱同時查只跑一次；同時最多 2 個查詢（每個都占一條 session channel）。
+    - 快取：查得到 60 秒、查不到 10 秒。
+    - 查不到就讓那個 CONNECT 失敗，**絕不**把名稱交給 Apple 的 sshd。
+  - 其他 OS：照舊把名稱交給裝置解析（與 `ssh -D` 相同）。
 - **效果**：同一台、同一帳號，從第二個操作起就不再握手。測試量到的數字：
   - 連續 5 次列目錄：1 次登入
   - 同時 12 個請求：最多 2 次登入
@@ -88,8 +99,11 @@
   - 分頁共用一次登入；MaxSessions 2 時第三個分頁也開得起來
   - 裝置斷線時分頁被關、重連後再開；離線直接 4005
   - 區網主機那一跳；檔案管理的 SFTP 與 exec 備援共用連線
-- `tests/socks_e2e.rs`：真正的 SOCKS5 CONNECT 經裝置連到它區網裡的服務，含同時多條 CONNECT、連不到的目標，
-  stop 後代理埠關閉、離線時回 `device_offline`。
+- `tests/socks_e2e.rs`：
+  - 真正的 SOCKS5 CONNECT 經裝置連到它區網裡的服務，含同時多條 CONNECT、連不到的目標
+  - stop 後代理埠關閉；離線時回 `device_offline`
+  - 假 macOS 裝置（lab 的 `pretend_darwin` 對名稱的 direct-tcpip 會斷線，模擬 Apple 的 crash）：用名稱
+    CONNECT 也能通，同一條連線上的終端機分頁仍然活著
 - `tests/device_pool.rs`：連線共用（數裝置 sshd 的登入紀錄）、MaxSessions 比 8 小時改開第二條、裝置重連、
   閒置回收、使用中的連線不會被收。
 - `tests/ssh_topology.rs`：同一台多使用者、多 OS 帳號，以及多跳路徑。

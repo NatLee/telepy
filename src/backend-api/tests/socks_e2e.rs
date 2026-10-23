@@ -166,3 +166,50 @@ async fn socks_start_on_an_offline_device_reports_device_offline() {
     assert_eq!(body["code"], "device_offline", "{body}");
     assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// macOS 裝置：Apple 的 sshd-session 對**名稱**的 direct-tcpip 會 crash、整條連線斷掉（lab 的 pretend_darwin
+/// 照做）。Chromium 一律送名稱，所以 SOCKS 先在裝置上解析成 IP；同一條共用連線上的終端機分頁必須活著。
+/// macOS devices: hostname CONNECTs are resolved on the device first, so the shared connection (and the
+/// terminal tab on it) survives what would otherwise crash Apple's sshd-session.
+#[tokio::test]
+async fn socks_on_a_macos_device_resolves_names_and_keeps_the_connection() {
+    let Some(mut lab) = Lab::start().await else { return };
+    let kasm = KasmLog::default();
+    let kasm_base = mock_kasm(kasm.clone()).await;
+    lab.reconfigure(|c| {
+        c.kasm_api = kasm_base;
+        c.kasm_host = "127.0.0.1".into();
+        c.hostname = "127.0.0.1".into();
+        c.remote_browser_gc = false;
+    });
+    let alice = lab.user("alice").await;
+    let web = lan_service("HTTP/1.0 200 mac-web\r\n\r\n").await;
+    let mac = lab.machine_with("mac", &[("ubuntu", &[&lab.service])], common::lab::MachineOpts { allow_jump: true, pretend_darwin: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "mac", &mac).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+
+    // 終端機分頁開在同一條共用連線上。/ A terminal tab on the same shared connection.
+    let mut tab = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    tab.expect("login:ubuntu@mac").await;
+
+    let (status, body) = start_session(&lab, &alice, &dev, "ubuntu").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let proxy_url = kasm.0.lock().unwrap().last().cloned().unwrap();
+    let proxy_port: u16 = proxy_url.rsplit(':').next().unwrap().parse().unwrap();
+
+    // 用名稱 CONNECT（瀏覽器的做法）。/ CONNECT by name, like a browser.
+    for _ in 0..2 {
+        let mut s = socks_connect(proxy_port, "localhost", web).await.expect("CONNECT by name through a macOS device");
+        let mut banner = [0u8; 23];
+        s.read_exact(&mut banner).await.unwrap();
+        assert_eq!(&banner, b"HTTP/1.0 200 mac-web\r\n\r");
+    }
+    assert_eq!(mac.resolves(), vec!["localhost".to_string()], "resolved on the device once, then cached");
+    // 名稱解析不到 → CONNECT 失敗，但連線還在。/ An unknown name fails the CONNECT only.
+    assert!(socks_connect(proxy_port, "no-such-host.invalid", web).await.is_err());
+
+    // 分頁還活著：同一條連線沒被帶走。/ The tab survived: the shared connection is intact.
+    tab.input("still-here\r").await;
+    tab.expect("still-here").await;
+    assert_eq!(mac.login_count("ubuntu", &lab.service), 1, "one connection the whole time: {:?}", mac.logins());
+}

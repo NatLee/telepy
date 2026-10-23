@@ -11,6 +11,7 @@ use anyhow::Context;
 use tokio::net::TcpListener;
 
 use super::pool::Lease;
+use super::resolve::Resolver;
 
 /// 沒人來連的話多久關掉。/ How long to wait for the client.
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -26,7 +27,15 @@ pub async fn one_shot(lease: Lease, host: String, port: u16) -> anyhow::Result<u
         };
         drop(listener);
         let _ = tcp.set_nodelay(true);
-        let channel = match lease.device().channel_open_direct_tcpip(host.as_str(), u32::from(port), peer.ip().to_string(), u32::from(peer.port())).await {
+        // 名稱（例如 nas.local）先經 resolve：macOS 裝置上不能把名稱交給 sshd-session。
+        let target = match Resolver::default().target(lease.device(), &host).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::info!(%host, error = format!("{e:#}"), "bridge: cannot resolve the LAN host on the device");
+                return;
+            }
+        };
+        let channel = match lease.device().channel_open_direct_tcpip(target.as_str(), u32::from(port), peer.ip().to_string(), u32::from(peer.port())).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::info!(%host, port, error = %e, "bridge: the device could not reach the target");
