@@ -1181,6 +1181,8 @@ pub struct MyKeyChoice {
 #[derive(ToSchema)]
 pub struct DeviceKeys {
     pub tunnel: DeviceKeyTunnel,
+    /// Per-account merged view: the list × what Telepy installed × the file as last read
+    pub view: DeviceKeyView,
     /// Owner or ADMIN sharee
     pub can_manage: bool,
     /// OS accounts the caller may use here (their keys go into exactly these)
@@ -1190,6 +1192,48 @@ pub struct DeviceKeys {
     pub removals: Vec<DeviceKeyRemoval>,
     pub sync: Vec<DeviceKeySync>,
     pub my_keys: Vec<MyKeyChoice>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyView {
+    pub accounts: Vec<DeviceKeyViewAccount>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyViewAccount {
+    pub username: String,
+    /// When Telepy last read this account's authorized_keys (null = never; "sync" re-reads)
+    pub checked_at: Option<String>,
+    /// Whether the file exists (null until read)
+    pub exists: Option<bool>,
+    /// Last sync or read error of this account
+    pub error: Option<String>,
+    pub rows: Vec<DeviceKeyViewRow>,
+}
+
+/// One key in one account. Owners / ADMIN sharees see every row; other users only their own keys.
+#[derive(ToSchema)]
+pub struct DeviceKeyViewRow {
+    /// service / installed / pending / error / removing / manual (a Telepy user's key added by hand) / unknown / invalid
+    pub state: String,
+    /// Seen in the file at `checked_at`
+    pub verified: bool,
+    /// On the device's key list
+    pub on_list: bool,
+    /// The viewer's own key
+    pub mine: bool,
+    pub user_key_id: Option<i64>,
+    pub name: Option<String>,
+    pub owner: Option<String>,
+    pub fingerprint: Option<String>,
+    pub key_type: Option<String>,
+    pub bits: Option<u32>,
+    pub comment: Option<String>,
+    pub options: Option<String>,
+    pub line_no: Option<i64>,
+    pub error: Option<String>,
+    /// First 120 characters of an unreadable line
+    pub raw: Option<String>,
 }
 
 #[derive(ToSchema)]

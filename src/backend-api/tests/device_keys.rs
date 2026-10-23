@@ -24,6 +24,25 @@ fn targets(entry: &Value) -> Vec<(String, String)> {
     entry["targets"].as_array().unwrap().iter().map(|t| (t["username"].as_str().unwrap().to_string(), t["status"].as_str().unwrap().to_string())).collect()
 }
 
+/// 合併檢視裡某帳號的每一列：(state, 擁有者, verified)。/ Rows of one account in the merged view.
+fn view_rows(device: &Value, account: &str) -> Vec<(String, String, bool)> {
+    let acct = device["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == account).unwrap_or_else(|| panic!("no {account} in {device}"));
+    acct["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["state"].as_str().unwrap().to_string(), r["owner"].as_str().unwrap_or("").to_string(), r["verified"].as_bool().unwrap()))
+        .collect()
+}
+
+fn view_accounts(device: &Value) -> Vec<String> {
+    device["view"]["accounts"].as_array().unwrap().iter().map(|a| a["username"].as_str().unwrap().to_string()).collect()
+}
+
+fn rows(v: &[(&str, &str, bool)]) -> Vec<(String, String, bool)> {
+    v.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), *c)).collect()
+}
+
 fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
     v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
 }
@@ -65,6 +84,10 @@ async fn device_key_list_installs_and_revokes() {
     let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(targets(&r.json["entries"][0]), pairs(&[("root", "installed"), ("ubuntu", "installed")]));
+    // 合併檢視：同步時寫過 / 讀過檔，所以是「在裝置上看到了」。/ Merged view: verified on the device by the sync.
+    assert_eq!(view_accounts(&r.json), vec!["root", "ubuntu"]);
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true)]));
+    assert!(r.json["view"]["accounts"][1]["checked_at"].is_string(), "{}", r.text);
     let ak = boxm.authorized_keys("ubuntu");
     assert!(ak.starts_with("# written by hand\n"), "{ak}");
     assert!(ak.contains(&format!("{} telepy:alice/alice-laptop", alice.key.bare())), "{ak}");
@@ -90,6 +113,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(r.json["entries"][0]["mine"], true);
     let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&bob.token), json!({})).await;
     assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]));
+    // 被分享者：只有自己能用的帳號、只有自己的金鑰。/ A sharee: only their accounts and their own keys.
+    assert_eq!(view_accounts(&r.json), vec!["ubuntu"]);
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "bob", true)]));
     assert!(boxm.authorized_keys("ubuntu").contains(&bob.key.bare()));
     assert!(!boxm.authorized_keys("root").contains(&bob.key.bare()));
     assert_eq!(lab.laptop_exec(&bob, &to_ubuntu, "whereami").await.stdout, "ubuntu@box");
@@ -115,7 +141,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
     assert_eq!(r.json["removals"][0]["owner"], "bob", "{}", r.text);
-    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true), ("removing", "bob", true)]));
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true)]));
     assert!(!boxm.authorized_keys("ubuntu").contains(&bob.key.bare()));
     assert!(!lab.laptop_exec(&bob, &to_ubuntu, "whoami").await.ok);
     lab.app.patch(&allowed, Some(&alice.token), json!({"allowed_target_username_ids": [ubuntu]})).await;
@@ -142,6 +170,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(acct["lines"][0]["owner"], "alice");
     assert_eq!(acct["lines"][0]["in_list"], true);
     assert_eq!(acct["lines"][2]["options"], "no-pty");
+    // 讀過檔，合併檢視也看得到服務金鑰與清單外的那把。/ After that read the merged view shows them too.
+    let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("service", "", true), ("installed", "alice", true), ("unknown", "", true)]));
     let fp = |i: usize| acct["lines"][i]["fingerprint"].as_str().unwrap().to_string();
     let remove = format!("/api/reverse/server/{}/authorized-keys/remove", dev.tunnel_id);
     let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(1)})).await;

@@ -145,7 +145,9 @@ function UserKeysPage() {
 
             <KeyDetailsModal
                 keyItem={details}
-                placements={details ? (page.placements.get(details.id) ?? []) : []}
+                devices={page.devices}
+                pending={page.pending}
+                onToggle={page.toggle}
                 onClose={() => setDetailsId(null)}
                 onSave={page.updateKey}
                 onManageDevice={(d) => {

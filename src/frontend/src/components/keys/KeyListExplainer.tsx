@@ -15,7 +15,7 @@ type Who = "owner" | "sharee" | "revoked";
 
 const CHIP: Record<Who, string> = {
     owner: "bg-primary/8 text-foreground ring-primary/25 [&>svg]:text-primary",
-    sharee: "bg-brand-2/10 text-foreground ring-brand-2/30 [&>svg]:text-brand-2",
+    sharee: "bg-info/10 text-foreground ring-info/30 [&>svg]:text-info",
     revoked: "bg-muted text-muted-foreground ring-border line-through decoration-destructive/70 [&>svg]:text-muted-foreground",
 };
 
@@ -129,7 +129,7 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
                         </div>
                     </div>
                     <p className="text-[0.75rem] leading-snug text-muted-foreground">
-                        {tn("keys.how.colDeviceNote", { bob: <span className="text-brand-2">bob</span>, ubuntu: <code className="font-mono">ubuntu</code> })}
+                        {tn("keys.how.colDeviceNote", { bob: <span className="text-info">bob</span>, ubuntu: <code className="font-mono">ubuntu</code> })}
                     </p>
                 </Column>
             </div>
@@ -137,7 +137,7 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
             {/* 圖例 / Legend */}
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[0.75rem] text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-primary/60" aria-hidden />{t("keys.how.legendOwner")}</span>
-                <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-brand-2/70" aria-hidden />{t("keys.how.legendSharee")}</span>
+                <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-info/70" aria-hidden />{t("keys.how.legendSharee")}</span>
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-muted-foreground/40" aria-hidden />{t("keys.how.legendRevoked")}</span>
             </div>
 

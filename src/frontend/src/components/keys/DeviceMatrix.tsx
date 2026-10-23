@@ -13,6 +13,7 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, TunnelRole, UserKey } from "@/types/keys";
 import { TargetChips } from "./TargetChips";
+import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
 
 const ROLE_KEY: Record<TunnelRole, TranslationKey> = {
     owner: "keys.role.owner",
@@ -34,7 +35,7 @@ export function OnlineDot({ online }: { online: boolean }) {
 export function RoleBadge({ role }: { role: TunnelRole }) {
     const { t } = useI18n();
     return (
-        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
+        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-info/10 text-info ring-info/30")}>
             {t(ROLE_KEY[role])}
         </span>
     );
@@ -110,6 +111,12 @@ export function DeviceMatrix({
     onManage: (device: KeyDevice) => void;
 }) {
     const { t } = useI18n();
+    // 裝置多時：搜尋、只看有我的金鑰的、只看需要處理的。/ Many devices: search and buckets.
+    const filter = useDeviceFilter(devices, {
+        device: (d) => d,
+        isOn: (d) => d.keys.length > 0,
+        isProblem: (d) => d.keys.some((k) => needsAttention(k.targets, d.online)),
+    });
 
     if (devices.length === 0) {
         return (
@@ -145,7 +152,8 @@ export function DeviceMatrix({
     );
 
     return (
-        <>
+        <div className="space-y-3">
+            <DeviceFilterBar filter={filter} onLabel={t("keys.filter.withMine")} modes={["all", "on", "problems"]} />
             {/* 桌面：表格 / Desktop: table */}
             <div className="hidden overflow-x-auto rounded-xl border border-border/80 bg-card shadow-card md:block">
                 <table className="w-full min-w-max text-left">
@@ -162,7 +170,7 @@ export function DeviceMatrix({
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border/70">
-                        {devices.map((d) => (
+                        {filter.visible.map((d) => (
                             <tr key={d.tunnel_id} className="align-top transition-colors hover:bg-muted/30">
                                 <th scope="row" className="sticky left-0 z-10 max-w-[18rem] bg-card px-4 py-3 font-normal">
                                     <DeviceHeading device={d} />
@@ -183,7 +191,7 @@ export function DeviceMatrix({
 
             {/* 手機：卡片 / Phones: cards */}
             <div className="space-y-3 md:hidden">
-                {devices.map((d) => (
+                {filter.visible.map((d) => (
                     <div key={d.tunnel_id} className="rounded-xl border border-border/80 bg-card p-4 shadow-card">
                         <div className="flex items-start justify-between gap-3">
                             <DeviceHeading device={d} />
@@ -200,6 +208,7 @@ export function DeviceMatrix({
                     </div>
                 ))}
             </div>
-        </>
+            <DeviceFilterFooter filter={filter} />
+        </div>
     );
 }
