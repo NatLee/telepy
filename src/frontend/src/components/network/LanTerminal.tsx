@@ -5,13 +5,16 @@
  * `username` 是裝置那一跳）。協定、關閉碼與終端機頁相同；隱藏時保留狀態，顯示時重新 fit。
  * An embedded LAN-host terminal: one xterm and one `/ws/terminal/` socket. Same protocol and close codes as
  * the terminal page; hidden sessions keep their state and refit when shown.
+ * 外觀(字型 / 字級 / 配色)跟終端機頁一樣:個人預設 + 這台裝置(隧道)的覆寫,改了即時套用。
+ * Appearance follows the terminal page: personal default + this device's (tunnel's) override, applied live.
  */
-import React, { useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import "xterm/css/xterm.css";
 import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
-import { readTerminalFontSize, TERMINAL_FONT_SIZE_EVENT } from "@/lib/userPrefs";
-import { ensureMonoFont, loadXtermDeps, TERMINAL_THEME } from "@/lib/xterm";
+import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { terminalFontFamily } from "@/lib/terminalAppearance";
+import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { translate } from "@/lib/translate";
 import type { TranslationKey } from "@/locales/en";
 import type { LanTerminalSession, LanTerminalStatus } from "@/hooks/useLanTerminals";
@@ -37,8 +40,12 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
     const termRef = useRef<{ term: any; fit: any } | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const { key, tunnelId, hostId, login, deviceUser, attempt } = session;
+    const { resolved } = useTerminalAppearance(String(tunnelId));
+    // xterm 是 async 建的,要讀建立當下最新的外觀。/ The xterm is created asynchronously; read the latest look.
+    const resolvedRef = useRef(resolved);
+    useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
 
-    const sendResize = () => {
+    const sendResize = useCallback(() => {
         const x = termRef.current;
         const ws = wsRef.current;
         if (!x) return;
@@ -46,16 +53,30 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ action: "pty_resize", payload: { size: { rows: x.term.rows, cols: x.term.cols, height: x.term.rows * 20, width: x.term.cols * 9 } } }));
         }
-    };
+    }, []);
+
+    // 外觀變更即時套用。/ Apply appearance changes live.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const forEachTerm = useCallback((fn: (term: any) => void) => {
+        if (termRef.current) fn(termRef.current.term);
+    }, []);
+    useLiveTerminalLook(resolved, forEachTerm, sendResize);
 
     // xterm 一個 session 只建一次。/ One xterm per session.
     useEffect(() => {
         let disposed = false;
         let cleanup = () => {};
         (async () => {
-            const [{ Terminal, FitAddon }, fontFamily] = await Promise.all([loadXtermDeps(), ensureMonoFont()]);
+            const [{ Terminal, FitAddon }] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font)]);
             if (disposed || !hostRef.current) return;
-            const term = new Terminal({ cursorBlink: true, theme: TERMINAL_THEME, fontFamily, fontSize: readTerminalFontSize(), lineHeight: 1.2 });
+            const look = resolvedRef.current;
+            const term = new Terminal({
+                cursorBlink: true,
+                theme: look.scheme.theme,
+                fontFamily: terminalFontFamily(look.font, resolveCssVar),
+                fontSize: look.fontSize,
+                lineHeight: 1.2,
+            });
             const fit = new FitAddon();
             term.loadAddon(fit);
             term.open(hostRef.current);
@@ -64,18 +85,9 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                 const ws = wsRef.current;
                 if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "pty_input", payload: { input: data } }));
             });
-            const onFont = (e: Event) => {
-                const size = (e as CustomEvent<number>).detail;
-                if (typeof size === "number") {
-                    term.options.fontSize = size;
-                    sendResize();
-                }
-            };
-            window.addEventListener(TERMINAL_FONT_SIZE_EVENT, onFont);
             const ro = new ResizeObserver(() => sendResize());
             ro.observe(hostRef.current);
             cleanup = () => {
-                window.removeEventListener(TERMINAL_FONT_SIZE_EVENT, onFont);
                 ro.disconnect();
                 try { term.dispose(); } catch { /* noop */ }
                 termRef.current = null;
@@ -86,7 +98,7 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
             disposed = true;
             cleanup();
         };
-    }, []);
+    }, [sendResize]);
 
     // 連線（attempt 變了就重連）。/ (Re)connect whenever `attempt` changes.
     useEffect(() => {
@@ -161,7 +173,7 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
             try { wsRef.current?.close(); } catch { /* noop */ }
             wsRef.current = null;
         };
-    }, [attempt, key, tunnelId, hostId, login, deviceUser, onStatus]);
+    }, [attempt, key, tunnelId, hostId, login, deviceUser, onStatus, sendResize]);
 
     // 顯示時 fit + 聚焦（桌機）。/ Refit (and focus on desktop) when shown.
     useEffect(() => {
@@ -170,7 +182,8 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
             sendResize();
             if (window.innerWidth >= 768) termRef.current?.term.focus();
         });
-    }, [visible]);
+    }, [visible, sendResize]);
 
-    return <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ display: visible ? "block" : "none" }} />;
+    // 外框跟著配色的背景色(淺色配色不會留一圈黑邊)。/ The padding follows the scheme background (no black ring on light schemes).
+    return <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ display: visible ? "block" : "none", background: resolved.scheme.theme.background }} />;
 }

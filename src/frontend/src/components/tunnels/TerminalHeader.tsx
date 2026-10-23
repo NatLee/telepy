@@ -1,12 +1,12 @@
 /**
- * 終端機頁面標題列：連線狀態、使用者切換、路徑、Terminal/Browser tabs、Files toggle、Service Keys。
- * Terminal page header: connection status, username switcher, path, Terminal/Browser tabs, Files toggle, service keys.
+ * 終端機頁面標題列：連線狀態、使用者切換、路徑、Terminal/Browser tabs、Files toggle、外觀、Service Keys。
+ * Terminal page header: connection status, username switcher, path, Terminal/Browser tabs, Files toggle, appearance, service keys.
  */
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network, Palette } from "lucide-react";
 import { TerminalLanHost, TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { TerminalLatencyBadge } from "@/components/tunnels/TerminalLatencyBadge";
@@ -32,6 +32,9 @@ interface TerminalHeaderProps {
     setShowFiles: (show: boolean) => void;
     isBrowserActive: boolean;
     onLoadServiceKeys: () => void | Promise<void>;
+    /** 打開終端機外觀對話框;appearanceCustomized = 這台裝置有自己的外觀。/ Opens the appearance dialog; customized = this device has its own look. */
+    onOpenAppearance: () => void;
+    appearanceCustomized: boolean;
     /** 殼開在裝置區網裡的機器上（帳號選單是裝置那一跳）。/ Shell on a LAN host; the user picker is the device hop. */
     lan?: { host: TerminalLanHost | null; login: string | null } | null;
 }
@@ -68,6 +71,8 @@ export function TerminalHeader({
     setShowFiles,
     isBrowserActive,
     onLoadServiceKeys,
+    onOpenAppearance,
+    appearanceCustomized,
     lan = null,
 }: TerminalHeaderProps) {
     const router = useRouter();
@@ -207,6 +212,17 @@ export function TerminalHeader({
                         <Button
                             variant="outline"
                             size="sm"
+                            onClick={onOpenAppearance}
+                            title={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
+                            aria-label={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
+                            className="relative h-8 w-8 p-0"
+                        >
+                            <Palette size={14} />
+                            {appearanceCustomized && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary ring-2 ring-card" aria-hidden />}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
                             onClick={() => onLoadServiceKeys()}
                             className="h-8 text-xs gap-1.5"
                         >
@@ -280,7 +296,17 @@ export function TerminalHeader({
                             </button>
                         )}
 
-                        <div className="grid grid-cols-2 gap-2 mt-1">
+                        <div className="grid grid-cols-3 gap-2 mt-1">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={onOpenAppearance}
+                                title={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
+                                className="relative h-10 text-xs gap-1.5"
+                            >
+                                <Palette size={14} /> {t("terminal.appearance")}
+                                {appearanceCustomized && <span className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary" aria-hidden />}
+                            </Button>
                             <Button
                                 variant="outline"
                                 size="sm"

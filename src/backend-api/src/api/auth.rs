@@ -114,7 +114,7 @@ async fn verify_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
     Ok(Json(json!({})))
 }
 
-/// UserProfileView：基本資料 + 個人設定（language/theme/terminal_font_size）。
+/// UserProfileView：基本資料 + 個人設定（language / theme / terminal_* / ui_scale）。
 #[utoipa::path(get, path = "/api/auth/user/profile", tag = "Authentication", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserProfile), (status = 401, body = super::schemas::ErrorBody)))]
 async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let settings = db::users::settings_for(&state.db, user.id).await?;
@@ -133,6 +133,8 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> Api
         "theme": settings.as_ref().map(|s| s.theme.clone()).unwrap_or_else(|| "system".into()),
         "terminal_font_size": settings.as_ref().map(|s| s.terminal_font_size).unwrap_or(14),
         "ui_scale": settings.as_ref().map(|s| s.ui_scale).unwrap_or(100),
+        "terminal_font": settings.as_ref().map(|s| s.terminal_font.clone()).unwrap_or_else(|| "hack".into()),
+        "terminal_scheme": settings.as_ref().map(|s| s.terminal_scheme.clone()).unwrap_or_else(|| "telepy".into()),
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
     })))
 }

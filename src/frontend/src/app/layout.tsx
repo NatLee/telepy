@@ -15,6 +15,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./huninn.css";
+import "./terminal-fonts.css";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/Toast";

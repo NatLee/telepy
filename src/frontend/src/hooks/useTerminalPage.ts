@@ -23,8 +23,9 @@ import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
-import { readTerminalFontSize, TERMINAL_FONT_SIZE_EVENT } from "@/lib/userPrefs";
-import { ensureMonoFont, loadXtermDeps, TERMINAL_THEME } from "@/lib/xterm";
+import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { terminalFontFamily, type ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
+import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
 
@@ -85,6 +86,11 @@ type Session = {
 
 export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null) {
     const { t } = useI18n();
+    const appearance = useTerminalAppearance(serverId);
+    const { resolved, ready: appearanceReady } = appearance;
+    // createSession 是 async,要讀「建立當下」最新的外觀。/ createSession is async and needs the latest look.
+    const resolvedRef = useRef<ResolvedTerminalAppearance>(resolved);
+    useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
     const lanHostId = lan?.hostId ?? null;
     const lanUsername = lan?.username ?? null;
     const terminalRef = useRef<HTMLDivElement>(null);
@@ -98,6 +104,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     // 世代計數：unmount / server 切換時 +1，讓仍在 await 的 createSession 自我作廢。
     // Generation counter: bumped on unmount so in-flight async creates abort themselves.
     const generationRef = useRef(0);
+    // 正在建立、還在 await 字型 / xterm、尚未進 sessionsRef 的分頁數。沒有它的話,這段期間任何讓「開第一個分頁」
+    // effect 重跑的變更(例如語言同步換了 t)都會再開一個 shell。
+    // Tabs being created that are still awaiting xterm / the font and not yet in sessionsRef. Without it, any
+    // re-run of the first-tab effect during that wait (e.g. the language sync changing t) opened a second shell.
+    const pendingCreatesRef = useRef(0);
     const usernameRef = useRef<string | null>(null);
 
     const [tabs, setTabs] = useState<ShellTab[]>([]);
@@ -320,13 +331,18 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
     /** 建立新分頁（含 xterm 實例與 WS 連線），並切換為作用中。/ Create + activate a new tab. */
     const createSession = useCallback(async (sessionUsername: string) => {
-        if (!serverId || sessionsRef.current.size >= MAX_SHELL_TABS) return;
+        if (!serverId || sessionsRef.current.size + pendingCreatesRef.current >= MAX_SHELL_TABS) return;
         const generation = generationRef.current;
 
-        const [{ Terminal, FitAddon }, termFontFamily] = await Promise.all([
-            loadXtermDeps(),
-            ensureMonoFont(),
-        ]);
+        pendingCreatesRef.current += 1;
+        let deps: { Terminal: any; FitAddon: any };
+        try {
+            [deps] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font)]);
+        } finally {
+            // 卸載時計數已歸零,作廢的建立不再扣。/ Unmount already reset the count; an aborted create doesn't subtract.
+            if (generation === generationRef.current) pendingCreatesRef.current -= 1;
+        }
+        const { Terminal, FitAddon } = deps;
 
         // async 期間可能已 unmount / 換 server。/ May have unmounted while awaiting.
         if (generation !== generationRef.current) return;
@@ -338,13 +354,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         el.className = "absolute inset-0";
         host.appendChild(el);
 
+        // 等待期間外觀可能變了,用最新的;之後的變更由下方的外觀 effect 即時套用到所有分頁。
+        // Use the latest look (it may have changed while awaiting); later changes reach every tab via the effects below.
+        const look = resolvedRef.current;
         const term = new Terminal({
             cursorBlink: true,
-            theme: TERMINAL_THEME,
-            fontFamily: termFontFamily,
-            // 使用者偏好(左下齒輪 modal),即時變更由下方的 TERMINAL_FONT_SIZE_EVENT 監聽套用。
-            // User preference (gear modal); live changes arrive via TERMINAL_FONT_SIZE_EVENT below.
-            fontSize: readTerminalFontSize(),
+            theme: look.scheme.theme,
+            fontFamily: terminalFontFamily(look.font, resolveCssVar),
+            fontSize: look.fontSize,
             lineHeight: 1.2,
         });
         const fit = new FitAddon();
@@ -508,6 +525,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         if (!serverId || !accessToken) return;
         return () => {
             generationRef.current += 1;
+            pendingCreatesRef.current = 0;
             const ids = Array.from(sessionsRef.current.keys());
             ids.forEach(id => {
                 const s = sessionsRef.current.get(id);
@@ -530,10 +548,12 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     // username 就緒 → 開第一個分頁；之後切換 username → 只重連「作用中」分頁（其他分頁保留原 user）。
     // Username ready → first tab; switching username later reconnects only the ACTIVE tab.
     useEffect(() => {
-        if (!serverId || !accessToken || username === null) return;
+        // 等外觀(這台裝置的覆寫)就緒,第一個 shell 才不會先用預設字型再換一次。
+        // Wait for the appearance (device override) so the first shell doesn't open in the default font and switch.
+        if (!serverId || !accessToken || username === null || !appearanceReady) return;
         usernameRef.current = username;
         if (sessionsRef.current.size === 0) {
-            void createSession(username);
+            if (pendingCreatesRef.current === 0) void createSession(username);
             return;
         }
         const activeId = activeIdRef.current;
@@ -541,7 +561,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         if (active && active.username !== username) {
             respawnSession(active.id, username);
         }
-    }, [serverId, accessToken, username, createSession, respawnSession]);
+    }, [serverId, accessToken, username, appearanceReady, createSession, respawnSession]);
 
     // 視窗 / 容器尺寸變化 → refit 作用中分頁。/ Window & container resize → refit the active tab.
     useEffect(() => {
@@ -587,24 +607,18 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         return () => clearTimeout(timer);
     }, [showFiles, mainView, fitAndResize]);
 
-    // 偏好設定 modal 調整字型大小時，即時套用到所有開著的分頁並 refit。
-    // Live-apply terminal font size changes from the preferences modal to every open tab.
-    useEffect(() => {
-        const applyFontSize = (event: Event) => {
-            const size = (event as CustomEvent<number>).detail;
-            if (typeof size !== "number") return;
-            for (const s of sessionsRef.current.values()) {
-                try {
-                    s.term.options.fontSize = size;
-                } catch { /* noop */ }
-            }
-            const id = activeIdRef.current;
-            const active = id !== null ? sessionsRef.current.get(id) : undefined;
-            if (active) fitAndResize(active);
-        };
-        window.addEventListener(TERMINAL_FONT_SIZE_EVENT, applyFontSize);
-        return () => window.removeEventListener(TERMINAL_FONT_SIZE_EVENT, applyFontSize);
+    // 外觀變更(偏好設定 modal、終端機的外觀對話框、別的分頁、登入同步)即時套用到所有開著的分頁。
+    // Appearance changes (preferences, the terminal's appearance dialog, other tabs, login sync) reach every open tab.
+    const refitActive = useCallback(() => {
+        const id = activeIdRef.current;
+        const active = id !== null ? sessionsRef.current.get(id) : undefined;
+        if (active) fitAndResize(active);
     }, [fitAndResize]);
+
+    const forEachTerm = useCallback((fn: (term: any) => void) => {
+        for (const s of sessionsRef.current.values()) fn(s.term);
+    }, []);
+    useLiveTerminalLook(resolved, forEachTerm, refitActive);
 
     // 僅在「完整虛擬鍵盤」模式抑制原生鍵盤；套用到所有分頁的 helper textarea。
     // Suppress the native keyboard only in "full" mode; applied to every tab's helper textarea.
@@ -705,6 +719,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             username, setUsername,
             availableUsernames, setAvailableUsernames,
             lanHost,
+            appearance,
         },
         actions: {
             fetchServiceKeys,
