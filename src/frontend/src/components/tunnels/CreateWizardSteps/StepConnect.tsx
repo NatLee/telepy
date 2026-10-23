@@ -7,6 +7,7 @@
 
 import React from "react";
 import { ChevronRight, Container, FileCode, FileText, Loader2, Monitor, Power, RefreshCw, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodeBlock } from "@/components/ui/CodeBlock";
@@ -102,10 +103,10 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                 </div>
 
                 {c.needsAccount && accounts.length === 0 ? (
-                    <p className="rounded-xl border border-warning/35 bg-warning/[0.07] p-3 text-sm text-foreground/85">
+                    <Callout tone="warning">
                         {t("wizard.connect.needsAccount")}{" "}
-                        <button type="button" onClick={() => wizard.goTo(2)} className="font-medium underline underline-offset-2">{t("wizard.connect.addAccount")}</button>
-                    </p>
+                        <button type="button" onClick={() => wizard.goTo(2)} className="underline underline-offset-2 hover:text-foreground">{t("wizard.connect.addAccount")}</button>
+                    </Callout>
                 ) : (
                     <div className="space-y-2">
                         <div className="flex items-center justify-between gap-2">
@@ -117,7 +118,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                         {c.oneTime?.command ? (
                             <CodeBlock language={c.method === "powershell" ? "powershell" : "bash"} value={c.oneTime.command} />
                         ) : c.oneTime?.error ? (
-                            <p className="rounded-xl border border-destructive/40 bg-destructive/[0.07] p-3 text-sm text-destructive">{c.oneTime.error}</p>
+                            <Callout tone="danger" role="alert">{c.oneTime.error}</Callout>
                         ) : (
                             <div className="flex h-[88px] items-center justify-center rounded-md bg-muted/60 text-muted-foreground">
                                 <Loader2 size={18} className="animate-spin" aria-label={t("common.loading")} />

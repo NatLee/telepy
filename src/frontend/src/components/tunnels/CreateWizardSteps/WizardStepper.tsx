@@ -13,6 +13,7 @@
 import React from "react";
 import { AlertTriangle, Cable, Check, ChevronRight, Cpu, KeyRound, Pencil, ShieldCheck, Users, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Callout } from "@/components/ui/callout";
 import { useI18n, type Translate } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { CreateTunnelWizard, ReviewReason, WizardStep } from "@/hooks/useCreateTunnelWizard";
@@ -193,14 +194,15 @@ export function WizardStepper({ wizard }: { wizard: CreateTunnelWizard }) {
 
             {/* 有步驟需要重看：直接列出，點了就過去。/ Steps to review: listed, one tap away. */}
             {pending.length > 0 ? (
-                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-warning/35 bg-warning/[0.07] px-3 py-2 text-xs text-foreground/85" role="status">
-                    <AlertTriangle size={14} className="shrink-0" aria-hidden />
-                    {pending.map((s) => (
-                        <button key={s.id} type="button" onClick={() => wizard.goTo(s.id)} className="rounded-full border border-warning/40 bg-card px-2 py-0.5 hover:border-warning">
-                            {t("wizard.stepN", { n: s.id })} · {reviewText(t, review[s.id]!)}
-                        </button>
-                    ))}
-                </div>
+                <Callout tone="warning" role="status" className="mt-3 items-center py-2.5">
+                    <div className="flex flex-wrap gap-2 text-xs">
+                        {pending.map((s) => (
+                            <button key={s.id} type="button" onClick={() => wizard.goTo(s.id)} className="rounded-sm bg-card px-2 py-0.5 ring-1 ring-inset ring-warning/40 transition-colors hover:ring-warning">
+                                {t("wizard.stepN", { n: s.id })} · {reviewText(t, review[s.id]!)}
+                            </button>
+                        ))}
+                    </div>
+                </Callout>
             ) : maxStep > 1 && created ? (
                 <p className="mt-2.5 flex items-center justify-center gap-1.5 text-[0.75rem] text-muted-foreground @min-[640px]:justify-end">
                     <Pencil size={11} aria-hidden /> {t("wizard.stepper.editHint")}

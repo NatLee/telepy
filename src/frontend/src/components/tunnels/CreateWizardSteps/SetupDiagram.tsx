@@ -206,7 +206,7 @@ function Marker({ l, p, className, children }: { l: Layout; p: Pt; className: st
     );
 }
 
-function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, above, children }: {
+function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, above, roomy, children }: {
     l: Layout;
     at: Pt;
     icon?: LucideIcon;
@@ -216,6 +216,8 @@ function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, ab
     active: boolean;
     online?: boolean | null;
     above?: boolean;
+    /** 標籤可以寬一點（Telepy 與裝置旁邊有空間）。/ A wider label (Telepy and the device have room). */
+    roomy?: boolean;
     children?: React.ReactNode;
 }) {
     return (
@@ -236,7 +238,7 @@ function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, ab
                 <div
                     className={cn(
                         "absolute left-1/2 flex -translate-x-1/2 flex-col items-center gap-0.5 text-center",
-                        l.tall ? "w-32" : "w-40",
+                        l.tall ? "w-32" : roomy ? "w-52" : "w-40",
                         above ? "bottom-full mb-2" : "top-full mt-2"
                     )}
                 >
@@ -415,10 +417,10 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
 
             {/* 節點 / Nodes */}
             <SceneNode l={l} at={l.you} icon={Laptop} title={t("wizard.scene.you")} detail={t("wizard.scene.youDetail")} active={view.active.you} above={l.labelAbove.you} />
-            <SceneNode l={l} at={l.telepy} glyph title="Telepy" detail={t("wizard.scene.telepyDetail")} active={view.active.telepy} above={l.labelAbove.telepy}>
+            <SceneNode l={l} at={l.telepy} glyph roomy title="Telepy" detail={t("wizard.scene.telepyDetail")} active={view.active.telepy} above={l.labelAbove.telepy}>
                 {reversePort !== null && <Chip mono title={t("wizard.scene.reservedPort")}>:{reversePort}</Chip>}
             </SceneNode>
-            <SceneNode l={l} at={l.device} icon={Server} title={name} detail={t("wizard.scene.deviceDetail")} active={view.active.device} online={created ? connected : null}>
+            <SceneNode l={l} at={l.device} icon={Server} roomy title={name} detail={t("wizard.scene.deviceDetail")} active={view.active.device} online={created ? connected : null}>
                 <Chip mono title={t("wizard.scene.sshdPort")}>sshd :{sshPort || "22"}</Chip>
                 {step >= 2 && shown.map((a) => <Chip key={a} mono><User aria-hidden />{a}</Chip>)}
                 {step >= 2 && more > 0 && <Chip>+{more}</Chip>}
