@@ -111,6 +111,13 @@ export function useTunnelsPage() {
             setTunnels(prev => prev.map(tn => (tn.id === id ? { ...tn, health } : tn)));
             if (health === "degraded" && tunnel) showToast(t("tunnels.degradedToast", { name: tunnel.host_friendly_name }), "warning");
         },
+        [NOTIFICATION_ACTIONS.TUNNEL_IP_CHANGED]: (msg) => {
+            // 可能是浮動 IP，也可能是金鑰外流：提醒一下，並刷新列表上的 IP。/ Dynamic IP or a leaked key: tell the owner.
+            if (typeof msg.ip === "string" && typeof msg.previous_ip === "string") {
+                showToast(t("tunnels.ipChangedToast", { name: String(msg.tunnel_name ?? ""), ip: msg.ip, previous: msg.previous_ip }), "warning");
+            }
+            reloadSoon();
+        },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_PRESENCE]: (msg) => {
             // 人數直接換；看得到細節（誰 / IP）的隧道再靜默重抓一次列表。/ Update the count; refetch when details are visible.
             const id = msg.tunnel_id;

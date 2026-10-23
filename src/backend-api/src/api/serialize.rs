@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use crate::db::keys::UserKey;
 use crate::db::tunnel_endpoints::LastEndpoint;
 use crate::db::tunnels::{Tunnel, Username};
+use crate::geoip::GeoIp;
 use crate::monitor::Endpoint;
 use crate::presence::{self, Entry};
 use crate::permissions::{Effective, Permission};
@@ -37,8 +38,10 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
 
 /// 裝置的公網來源：連著就用 gateway 現在看到的，離線就用最後一次記下的；都沒有回 null。
 /// Device source address: the live one while connected, else the last recorded one, else null.
-pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Value {
-    match (live, last) {
+/// `geo` = 位址範圍 + 國家 / ISP（有 GeoIP 資料庫時）；`previous_ip` / `changed_at` = 最近一次換 IP。
+/// `geo` = scope plus country / network owner; `previous_ip` / `changed_at` = the latest address change.
+pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: &GeoIp) -> Value {
+    let mut v = match (live, last) {
         (Some(e), _) => json!({"ip": e.ip, "live": true, "connected_at": db_to_iso_utc_z(&e.since), "last_seen_at": null}),
         (None, Some(l)) => json!({
             "ip": l.ip,
@@ -46,17 +49,30 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>) -> Va
             "connected_at": db_to_iso_utc_z(&l.connected_at),
             "last_seen_at": db_to_iso_utc_z(&l.last_seen_at),
         }),
-        (None, None) => Value::Null,
-    }
+        (None, None) => return Value::Null,
+    };
+    v["geo"] = geo.json(v["ip"].as_str());
+    v["previous_ip"] = json!(last.and_then(|l| l.previous_ip.clone()));
+    v["changed_at"] = json!(last.and_then(|l| l.changed_at.as_deref()).map(db_to_iso_utc_z));
+    v
 }
 
 /// 誰在用：人數給所有看得到隧道的人；`sessions`（誰、哪種連線、IP、多久）只在 `details` 時帶，否則 null。
 /// Presence: the count for everyone, the sessions only with `details`.
-pub fn presence_json(entries: &[Entry], details: bool) -> Value {
+pub fn presence_json(entries: &[Entry], details: bool, geo: &GeoIp) -> Value {
     let sessions = details.then(|| {
         entries
             .iter()
-            .map(|e| json!({ "user": e.username, "kind": e.kind.as_str(), "ip": e.ip, "since": db_to_iso_utc_z(&e.since), "client": e.client }))
+            .map(|e| {
+                json!({
+                    "user": e.username,
+                    "kind": e.kind.as_str(),
+                    "ip": e.ip,
+                    "geo": geo.json(e.ip.as_deref()),
+                    "since": db_to_iso_utc_z(&e.since),
+                    "client": e.client,
+                })
+            })
             .collect::<Vec<_>>()
     });
     json!({ "count": presence::distinct_users(entries), "sessions": sessions })

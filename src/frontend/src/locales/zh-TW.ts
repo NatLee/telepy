@@ -350,6 +350,11 @@ export const zhTW: Record<TranslationKey, string> = {
     "tunnels.endpointLive": "裝置公網 IP {ip} · {time}連上",
     "tunnels.endpointLast": "最後的公網 IP {ip} · {time}還在線上",
     "tunnels.endpointCopyHint": "點一下複製 IP",
+    "tunnels.endpointHidden": "Telepy 看到的是私有位址：SSH 埠前面的代理、負載平衡器或 Docker 轉發把裝置真正的公網 IP 遮住了。",
+    "tunnels.endpointChanged": "{time}從 {previous} 換過來",
+    "tunnels.ipChangedToast": "{name} 現在從 {ip} 連線（原本是 {previous}）。",
+    "geo.private": "私有網路",
+    "geo.attribution": "IP 地理資訊來源：{source}",
     "tunnels.presenceCount": "{count} 人使用中",
     "tunnels.presenceTitle": "目前連線中",
     "tunnels.presenceShow": "查看誰在連線",
@@ -1379,6 +1384,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "logs.event.preauth_close": "認證前關閉",
     "logs.event.degraded": "SSH 無回應",
     "logs.event.recovered": "SSH 已恢復",
+    "logs.event.ip_changed": "IP 變更",
 
     // ── 指令速查 / Command sheet ───────────────────────────────────
     "sheet.title": "指令速查",

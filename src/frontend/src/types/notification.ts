@@ -9,6 +9,8 @@ export const NOTIFICATION_ACTIONS = {
     UPDATE_TUNNEL_LATENCY: "UPDATE-TUNNEL-LATENCY",
     // 誰在用某條隧道變了：{tunnel_id, count}（送給看得到它的人）。/ Presence count changed (tunnel audience).
     UPDATE_TUNNEL_PRESENCE: "UPDATE-TUNNEL-PRESENCE",
+    // 裝置從新的 IP 連上來：{tunnel_id, tunnel_name, ip, previous_ip}（送給擁有者與 ADMIN）。/ Device IP changed (owner + ADMIN).
+    TUNNEL_IP_CHANGED: "TUNNEL-IP-CHANGED",
     // 隧道降級 / 恢復：{tunnel_id, port, health}（送給看得到它的人）。/ Degraded / recovered (tunnel audience).
     UPDATE_TUNNEL_HEALTH: "UPDATE-TUNNEL-HEALTH",
     TUNNEL_SHARED: "TUNNEL-SHARED",

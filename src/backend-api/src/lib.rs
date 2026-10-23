@@ -11,6 +11,7 @@ pub mod db;
 pub mod device_keys;
 pub mod error;
 pub mod gateway;
+pub mod geoip;
 pub mod hub;
 pub mod join;
 pub mod lan;

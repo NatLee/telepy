@@ -2,6 +2,7 @@
  * 通道與反向代理相關型別 / Tunnel and Reverse Proxy types
  * Defines shapes for tunnels, users, and files associated with them.
  */
+import type { IpGeo } from "@/lib/geo";
 
 export interface Tunnel {
     id: number;
@@ -45,6 +46,7 @@ export interface PresenceSession {
     /** terminal / files / browser / ssh / ai */
     kind: string;
     ip: string | null;
+    geo?: IpGeo | null;
     since: string;
     /** AI session 的 app。/ The app behind an AI session. */
     client: string | null;
@@ -57,6 +59,11 @@ export interface TunnelEndpoint {
     live: boolean;
     connected_at: string;
     last_seen_at: string | null;
+    /** 位址範圍與（有 GeoIP 時的）國家 / 業者。/ Scope plus country / network owner. */
+    geo?: IpGeo | null;
+    /** 最近一次換 IP 之前的位址與換的時間。/ The address before the latest change, and when it changed. */
+    previous_ip?: string | null;
+    changed_at?: string | null;
 }
 
 export interface ReverseServerUsername {

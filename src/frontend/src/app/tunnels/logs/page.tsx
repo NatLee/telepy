@@ -35,6 +35,7 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
     degraded: { key: "logs.event.degraded", variant: "warning" },
     recovered: { key: "logs.event.recovered", variant: "success" },
+    ip_changed: { key: "logs.event.ip_changed", variant: "warning" },
 };
 
 function LogsPageInner() {

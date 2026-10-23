@@ -219,6 +219,7 @@ pub struct PresenceSession {
     pub kind: String,
     #[schema(example = "198.51.100.7")]
     pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
     #[schema(example = "2026-10-23T01:02:03.123456Z")]
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
@@ -236,6 +237,28 @@ pub struct TunnelEndpoint {
     pub connected_at: String,
     /// 離線時：forward 釋放的時間；連著時 null。/ When the forward went away; null while live.
     pub last_seen_at: Option<String>,
+    pub geo: Option<IpGeo>,
+    /// 最近一次換 IP 之前的位址（從沒換過是 null）。/ The address before the latest change; null if it never changed.
+    #[schema(example = "198.51.100.20")]
+    pub previous_ip: Option<String>,
+    pub changed_at: Option<String>,
+}
+
+/// IP 的位址範圍與（有離線 GeoIP 資料庫時的）國家 / 網路業者。/ Address scope plus country / network owner when a GeoIP database is installed.
+#[derive(ToSchema)]
+pub struct IpGeo {
+    /// public / private / loopback / link_local / shared_nat / reserved —— 裝置是非 public 通常代表前面有 proxy 吃掉了真實來源。
+    #[schema(example = "public")]
+    pub scope: String,
+    /// ISO 3166-1 alpha-2
+    #[schema(example = "TW")]
+    pub country: Option<String>,
+    #[schema(example = "Chunghwa Telecom Co., Ltd.")]
+    pub org: Option<String>,
+    #[schema(example = 3462)]
+    pub asn: Option<i64>,
+    /// DB-IP / MaxMind（顯示出處用）。/ Data source, for attribution.
+    pub source: Option<String>,
 }
 
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
@@ -253,6 +276,7 @@ pub struct SignInEvent {
     /// 依 X-Forwarded-For（`TRUSTED_PROXY_HOPS`）或 `CLIENT_IP_HEADER` 判定。/ Resolved from the proxy chain.
     #[schema(example = "198.51.100.7")]
     pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
     pub user_agent: Option<String>,
     /// bad_password / inactive / mfa_failed / google_account_conflict
     pub reason: Option<String>,
