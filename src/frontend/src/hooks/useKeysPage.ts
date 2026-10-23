@@ -15,7 +15,7 @@ import type { KeyDevice, UserKey } from "@/types/keys";
 import { deviceKeyError } from "@/lib/deviceKeyErrors";
 
 /** 金鑰可改的欄位(PATCH 只送有改的)。/ Editable key fields (PATCH sends only what changed). */
-export type KeyPatch = Partial<{ host_friendly_name: string; key: string; description: string }>;
+export type KeyPatch = Partial<{ host_friendly_name: string; key: string; description: string; expires_at: string | null }>;
 export type KeyPatchErrors = Partial<Record<keyof KeyPatch, string>>;
 
 export interface NewKey {
@@ -24,6 +24,8 @@ export interface NewKey {
     description: string;
     /** 建好後要放進哪些裝置的清單。/ Devices whose key list gets the new key. */
     deviceIds: number[];
+    /** undefined = 用站台預設。/ undefined = the site default. */
+    expiresAt?: string;
 }
 
 export function useKeysPage() {
@@ -112,7 +114,7 @@ export function useKeysPage() {
             try {
                 const res = await apiFetch("/api/reverse/user/keys", {
                     method: "POST",
-                    body: JSON.stringify({ key: k.key.trim(), host_friendly_name: k.name.trim(), description: k.description }),
+                    body: JSON.stringify({ key: k.key.trim(), host_friendly_name: k.name.trim(), description: k.description, ...(k.expiresAt ? { expires_at: k.expiresAt } : {}) }),
                 });
                 const body = await readJson<UserKey>(res);
                 if (!res.ok || !body) {
@@ -172,11 +174,11 @@ export function useKeysPage() {
                 if (res.ok && body) {
                     setKeys((prev) => prev.map((k) => (k.id === key.id ? (body as unknown as UserKey) : k)));
                     showSuccess(t("keys.updated"));
-                    if (patch.key !== undefined) void fetchDevices();
+                    if (patch.key !== undefined || patch.expires_at !== undefined) void fetchDevices();
                     return null;
                 }
                 const errors: KeyPatchErrors = {};
-                for (const field of ["host_friendly_name", "key", "description"] as const) {
+                for (const field of ["host_friendly_name", "key", "description", "expires_at"] as const) {
                     const v = body?.[field];
                     const msg = Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
                     if (!msg) continue;

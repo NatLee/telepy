@@ -108,6 +108,8 @@ pub fn user_key_json(k: &UserKey, tz: i32) -> Value {
         "comment": parsed.as_ref().map(|p| p.comment.clone()).filter(|c| !c.is_empty()),
         "last_used_at": opt_db_to_iso(&k.last_used_at, tz),
         "last_used_ip": k.last_used_ip,
+        "expires_at": opt_db_to_iso(&k.expires_at, tz),
+        "expired": k.expired(),
     })
 }
 

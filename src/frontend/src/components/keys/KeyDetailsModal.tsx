@@ -25,6 +25,9 @@ import { KeyTypeBadge } from "./KeyCard";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { TargetChips } from "./TargetChips";
 import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
+import { ExpiryPicker } from "@/components/keys/ExpiryPicker";
+import { KeyExpiryText } from "@/components/keys/KeyCard";
+import { expiryValue, localDate, type ExpiryPreset } from "@/lib/keyExpiry";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
     invalid: "keys.problem.invalid",
@@ -146,6 +149,9 @@ function KeyDetailsBody({
 } & DevicesProps) {
     const { t, locale } = useI18n();
     const [form, setForm] = useState({ host_friendly_name: keyItem.host_friendly_name, key: keyItem.key, description: keyItem.description ?? "" });
+    // 效期：null = 沒動。/ Expiry: null = untouched.
+    const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset | null>(null);
+    const [expiryDate, setExpiryDate] = useState("");
     const [serverErrors, setServerErrors] = useState<KeyPatchErrors>({});
     const [saving, setSaving] = useState(false);
 
@@ -166,8 +172,12 @@ function KeyDetailsBody({
         if (form.host_friendly_name.trim() !== keyItem.host_friendly_name) p.host_friendly_name = form.host_friendly_name.trim();
         if (form.key.trim() !== keyItem.key.trim()) p.key = form.key.trim();
         if (form.description !== (keyItem.description ?? "")) p.description = form.description;
+        if (expiryPreset !== null) {
+            const v = expiryValue(expiryPreset, expiryDate, "update");
+            if (v !== undefined) p.expires_at = v;
+        }
         return p;
-    }, [form, keyItem]);
+    }, [form, keyItem, expiryPreset, expiryDate]);
     const dirty = Object.keys(patch).length > 0;
     const keyChanged = patch.key !== undefined;
 
@@ -239,6 +249,9 @@ function KeyDetailsBody({
                     {keyItem.comment && (
                         <Property label={t("keys.comment")} mono><span className="text-xs">{keyItem.comment}</span></Property>
                     )}
+                    <Property label={t("keys.expiry.label")}>
+                        <KeyExpiryText expiresAt={keyItem.expires_at} />
+                    </Property>
                     <Property label={t("keys.created")}>{fmt(keyItem.created_at)}</Property>
                     <Property label={t("keys.lastUsed")}>
                         {keyItem.last_used_at ? (
@@ -286,6 +299,21 @@ function KeyDetailsBody({
                         </div>
                     )}
                     {keyChanged && !errors.key && <Callout tone="warning">{t("keys.keyChangedHint")}</Callout>}
+                    <Field id="key-details-expiry" label={t("keys.expiry.change")} error={errors.expires_at} hint={!errors.expires_at ? t("keys.expiry.changeHint") : undefined}>
+                        <ExpiryPicker
+                            id="key-details-expiry"
+                            preset={expiryPreset ?? (keyItem.expires_at ? "custom" : "never")}
+                            customDate={expiryPreset === null && keyItem.expires_at ? localDate(new Date(keyItem.expires_at)) : expiryDate}
+                            onPreset={(p) => {
+                                setExpiryPreset(p);
+                                if (p === "custom" && !expiryDate && keyItem.expires_at) setExpiryDate(localDate(new Date(keyItem.expires_at)));
+                            }}
+                            onCustomDate={(d) => {
+                                setExpiryPreset("custom");
+                                setExpiryDate(d);
+                            }}
+                        />
+                    </Field>
                 </Section>
 
                 {/* 在哪些裝置上（勾選立即生效，與上面的儲存無關）/ Devices (ticks apply right away, separate from Save) */}

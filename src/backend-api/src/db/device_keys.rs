@@ -17,6 +17,8 @@ pub struct Entry {
     pub key: String,
     pub added_by_id: i64,
     pub created_at: String,
+    /// 金鑰的到期時間：到期的不再裝到裝置上（已裝的會被移除）。/ Key expiry: expired keys leave the device.
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -39,7 +41,7 @@ pub struct SyncStatus {
 }
 
 const ENTRY_SELECT: &str = "SELECT e.tunnel_id, e.user_key_id, e.user_id, a.username AS owner_username, k.host_friendly_name AS name, k.key, \
-     e.added_by_id, e.created_at FROM telepy_device_key e \
+     e.added_by_id, e.created_at, k.expires_at FROM telepy_device_key e \
      JOIN authorized_keys_userauthorizedkeys k ON k.id = e.user_key_id JOIN auth_user a ON a.id = e.user_id";
 
 pub async fn entries_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Entry>> {

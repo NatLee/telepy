@@ -110,6 +110,10 @@ pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
     let mut allowed: HashMap<i64, Vec<String>> = HashMap::new();
     let mut out = Desired::new();
     for e in entries {
+        // 到期的金鑰不該在裝置上：從期望狀態拿掉，同步就會把它移除。/ Expired keys drop out, so sync removes them.
+        if db::keys::is_expired(e.expires_at.as_deref()) {
+            continue;
+        }
         let Some(parsed) = parse_public_key(&e.key) else { continue };
         if !allowed.contains_key(&e.user_id) {
             let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| u.username).collect();

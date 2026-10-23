@@ -376,6 +376,9 @@ pub struct UserKey {
     /// Last successful SSH gateway login with this key
     pub last_used_at: Option<String>,
     pub last_used_ip: Option<String>,
+    /// 到期時間；null = 不到期。到期後 gateway 拒絕它、裝置清單把它移除。/ Expiry; null = never. Expired keys are refused and removed from devices.
+    pub expires_at: Option<String>,
+    pub expired: bool,
 }
 
 #[derive(ToSchema)]
@@ -383,11 +386,17 @@ pub struct UserKeyWrite {
     pub host_friendly_name: String,
     pub key: String,
     pub description: Option<String>,
+    /// RFC 3339 時間或 `YYYY-MM-DD`（那天 UTC 結束）；null = 不到期。沒給時用站台的 `user_key_max_days`（0 = 不到期）。
+    /// RFC 3339 or `YYYY-MM-DD` (end of that day, UTC); null = never. Omitted = the site's `user_key_max_days` (0 = never).
+    #[schema(example = "2026-12-31")]
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
 pub struct UserKeyPatch {
     pub description: Option<String>,
+    /// 續期或改到期時間（null = 不到期，站台有上限時不允許）。/ Renew or change the expiry (null = never, refused under a site limit).
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
