@@ -33,6 +33,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(service_keys))
         .routes(routes!(pin, unpin))
         .routes(routes!(set_labels))
+        .routes(routes!(connections))
 }
 
 /// `{port: bool}`；取樣不可用回 `{}`。/ Port map, `{}` when the sample is unavailable.
@@ -500,4 +501,38 @@ async fn set_labels(State(state): State<AppState>, AuthUser(user): AuthUser, Pat
     db::tunnel_tags::replace_labels(&state.db, t.id, &labels).await?;
     notify::tunnel_updated(&state, &t).await?;
     Ok(Json(json!({ "labels": labels })))
+}
+
+// ---------------------------------------------------------------- connection history
+
+/// 連線紀錄與在線率（看得到隧道就能看）。IP 依 [`permissions::can_see_endpoint`]：能登入裝置的人才有，其他人是 null。
+/// Connection history and uptime for anyone who can see the tunnel; IPs follow `can_see_endpoint`.
+#[utoipa::path(get, path = "/api/reverse/server/{id}/connections", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::TunnelConnections), (status = 404, body = super::schemas::ErrorBody)))]
+async fn connections(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(&state, user.id, id).await?;
+    let eff = permissions::effective_for(&state.db, user.id, &t).await?;
+    let with_accounts = db::sharing::tunnels_with_allowed_usernames(&state.db, user.id).await?.contains(&t.id);
+    let show_ip = permissions::can_see_endpoint(eff, with_accounts, user.is_superuser);
+    let summary = db::tunnel_sessions::summary(&state.db, t.id).await?;
+    let now = chrono::Utc::now().timestamp();
+    let sessions: Vec<Value> = db::tunnel_sessions::recent(&state.db, t.id, 20)
+        .await?
+        .into_iter()
+        .map(|r| {
+            let start = db::tunnel_sessions::unix(&r.connected_at);
+            let end = r.disconnected_at.as_deref().and_then(db::tunnel_sessions::unix).unwrap_or(now);
+            json!({
+                "ip": if show_ip { Value::String(r.ip) } else { Value::Null },
+                "connected_at": crate::util::db_to_iso_utc_z(&r.connected_at),
+                "disconnected_at": r.disconnected_at.as_deref().map(crate::util::db_to_iso_utc_z),
+                "seconds": start.map(|s| (end - s).max(0)),
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "tracked_since": summary.tracked_since.as_deref().map(crate::util::db_to_iso_utc_z),
+        "uptime": { "h24": summary.h24, "d7": summary.d7 },
+        "hourly": summary.hourly,
+        "sessions": sessions,
+    })))
 }

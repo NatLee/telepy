@@ -10,6 +10,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useTunnelDetailsModal } from "@/hooks/useTunnelDetailsModal";
+import { useTunnelConnections } from "@/hooks/useTunnelConnections";
+import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -65,6 +67,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
         state: { details, loading, form, labelsText, labels, errors, canEdit, dirty, keyChanged, valid, isSaving },
         actions: { setField, setLabelsText, save },
     } = useTunnelDetailsModal(tunnelId, isOpen, onUpdate, onClose);
+    const connections = useTunnelConnections(tunnelId, isOpen);
 
     const role = details?.user_permission ?? "owner";
 
@@ -166,6 +169,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                         <KeyPreview value={form.key} />
                         {keyChanged && !errors.key && <Callout tone="warning">{t("tunnelDetails.keyChanged")}</Callout>}
                     </Section>
+
+                    {/* 連線紀錄 / Connection history */}
+                    <TunnelConnectionsSection data={connections.data} failed={connections.failed} />
                 </form>
             )}
         </Modal>

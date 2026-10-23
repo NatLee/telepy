@@ -331,7 +331,7 @@ impl TelepyMcp {
         }
     }
 
-    #[tool(description = "Status of one tunnel: online, health (online, degraded = the tunnel is up but the device's SSH server does not answer, offline), latency and the latest SSH gateway events (connects, disconnects, forwards, degraded, recovered).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "Status of one tunnel: online, health (online, degraded = the tunnel is up but the device's SSH server does not answer, offline), latency, uptime over the last 24 hours (0..1, null without history) and the latest SSH gateway events (connects, disconnects, forwards, degraded, recovered).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
     async fn tunnel_status(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -357,6 +357,7 @@ impl TelepyMcp {
             "online": self.online(tunnel.reverse_port),
             "health": self.health(tunnel.reverse_port),
             "rtt_ms": self.rtt(tunnel.reverse_port),
+            "uptime_24h": db::tunnel_sessions::summary(db, tunnel.id).await.ok().and_then(|s| s.h24),
             "recent_events": events,
         })))
     }

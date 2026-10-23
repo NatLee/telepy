@@ -264,6 +264,9 @@ impl Gateway {
         if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
         }
+        if let Err(e) = db::tunnel_sessions::open(&self.db, port, &ep.ip, &ep.since).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record tunnel session");
+        }
     }
 
     /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。
@@ -276,8 +279,12 @@ impl Gateway {
     }
 
     async fn remember_release(&self, port: u16) {
-        if let Err(e) = db::tunnel_endpoints::record_released(&self.db, port, &crate::util::now_db()).await {
+        let now = crate::util::now_db();
+        if let Err(e) = db::tunnel_endpoints::record_released(&self.db, port, &now).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel release");
+        }
+        if let Err(e) = db::tunnel_sessions::close(&self.db, port, &now).await {
+            tracing::warn!(port, error = %e, "gateway: cannot close tunnel session");
         }
     }
 
