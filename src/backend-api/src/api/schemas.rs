@@ -800,6 +800,46 @@ pub struct OAuthGrant {
     pub expires_at: Option<String>,
 }
 
+#[derive(ToSchema)]
+pub struct OAuthGrantClient {
+    pub redirect_uris: Vec<String>,
+    /// Hosts the app sends you back to (registration is open, so the name alone proves nothing)
+    pub redirect_hosts: Vec<String>,
+    pub logo_uri: Option<String>,
+    /// Public client (PKCE only, no secret)
+    pub public: bool,
+    pub registered_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantStats {
+    pub calls: i64,
+    pub failed: i64,
+    pub last_call_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantDetail {
+    pub id: i64,
+    pub client_id: String,
+    pub client_name: String,
+    pub client_uri: Option<String>,
+    pub scopes: Vec<String>,
+    /// null = every tunnel
+    pub tunnels: Option<Vec<OAuthGrantTunnel>>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+    /// Who authorized it (admins can open other users' grants)
+    pub user: AiUserRef,
+    pub client: OAuthGrantClient,
+    /// Open AI sessions of this app
+    pub sessions: Vec<AiSession>,
+    pub stats: OAuthGrantStats,
+    /// The latest tool calls, newest first
+    pub activity: Vec<AiActivity>,
+}
+
 // ---------------------------------------------------------------- AI sessions (MCP)
 
 #[derive(ToSchema)]
@@ -1322,4 +1362,85 @@ pub struct JoinError {
     pub error: String,
     /// too_many_join_tokens
     pub code: String,
+}
+
+// ---------------------------------------------------------------- tunnel delete
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteTunnel {
+    pub id: i64,
+    pub name: String,
+    pub reverse_port: i64,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteSharee {
+    pub id: i64,
+    pub username: String,
+    #[schema(example = "view")]
+    pub permission: String,
+}
+
+/// A key Telepy installed on the device (from the device key list)
+#[derive(ToSchema)]
+pub struct TunnelDeleteKey {
+    #[schema(example = "SHA256:…")]
+    pub fingerprint: String,
+    pub owner: Option<String>,
+    /// Key name; null when the key already left the list (pending removal)
+    pub name: Option<String>,
+    pub in_list: bool,
+    /// Login accounts it is installed in
+    pub accounts: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteGrant {
+    pub id: i64,
+    pub client_name: String,
+    pub user: AiUserRef,
+    pub mine: bool,
+    /// `only` = restricted to this tunnel alone, `shared` = this and `other_tunnels` more, `all` = every tunnel
+    #[schema(example = "only")]
+    pub coverage: String,
+    pub other_tunnels: i64,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteCheck {
+    pub tunnel: TunnelDeleteTunnel,
+    pub online: bool,
+    /// Login accounts (target usernames) of the tunnel
+    pub accounts: Vec<String>,
+    pub sharees: Vec<TunnelDeleteSharee>,
+    /// People using the tunnel right now (distinct users)
+    pub in_use: i64,
+    pub lan_hosts: i64,
+    pub device_keys: Vec<TunnelDeleteKey>,
+    pub grants: Vec<TunnelDeleteGrant>,
+    pub ai_sessions: Vec<AiSession>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteAccount {
+    pub account: String,
+    /// Telepy-managed keys removed from authorized_keys
+    pub removed: i64,
+    pub service_key_removed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteReport {
+    pub deleted: bool,
+    /// The device was online, so its accounts could be cleaned
+    pub online: bool,
+    pub accounts: Vec<TunnelDeleteAccount>,
+    /// Keys Telepy installed that are still on the device (offline, failed or kept)
+    pub keys_left: i64,
+    pub grants_revoked: i64,
+    /// Authorizations that keep other tunnels; this one was dropped from their list
+    pub grants_detached: i64,
+    pub ai_sessions_closed: i64,
+    pub device_disconnected: bool,
 }

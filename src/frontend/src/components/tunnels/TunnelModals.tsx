@@ -4,6 +4,7 @@ import { ServerScriptModal } from "@/components/tunnels/ServerScriptModal";
 import { ManageUsersModal } from "@/components/tunnels/ManageUsersModal";
 import { TunnelDetailsModal } from "@/components/tunnels/TunnelDetailsModal";
 import { ShareModal } from "@/components/tunnels/ShareModal";
+import { DeleteTunnelDialog } from "@/components/tunnels/DeleteTunnelDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tunnel } from "@/types/tunnel";
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
@@ -13,11 +14,10 @@ interface TunnelModalsProps {
     modals: ReturnType<typeof useTunnelsPage>["modals"];
     tunnels: Tunnel[];
     fetchData: () => void;
-    handleDelete: () => void;
     handleLeaveTunnel: (tunnelId: number, name: string) => void;
 }
 
-export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleLeaveTunnel }: TunnelModalsProps) {
+export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel }: TunnelModalsProps) {
     const { t, tn } = useI18n();
     const {
         configModal, setConfigModal,
@@ -61,18 +61,15 @@ export function TunnelModals({ modals, tunnels, fetchData, handleDelete, handleL
                 readOnly={shareModal.tunnelId ? !tunnels.find(t => t.id === shareModal.tunnelId)?.is_owner : false}
             />
 
-            <ConfirmDialog
+            {/* 關閉時保留 id / 名稱，關閉動畫期間內容不會消失；換一條隧道就重新掛載（選項與結果重來）。
+                Keep id / name while closing so the content survives the close animation; remount per tunnel. */}
+            <DeleteTunnelDialog
+                key={deleteConfirm.tunnelId ?? "none"}
                 isOpen={deleteConfirm.isOpen}
-                onClose={() => setDeleteConfirm({ isOpen: false, tunnelId: null, name: "" })}
-                onConfirm={handleDelete}
-                title={t("tunnels.deleteTitle")}
-                message={
-                    <span>
-                        {tn("tunnels.deleteMessage", { name: <strong>{deleteConfirm.name}</strong> })}
-                    </span>
-                }
-                confirmText={t("common.delete")}
-                isDestructive={true}
+                tunnelId={deleteConfirm.tunnelId}
+                name={deleteConfirm.name}
+                onClose={() => setDeleteConfirm({ ...deleteConfirm, isOpen: false })}
+                onDeleted={fetchData}
             />
             <ConfirmDialog
                 isOpen={leaveConfirm.isOpen}

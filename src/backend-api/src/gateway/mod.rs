@@ -237,6 +237,23 @@ impl Gateway {
         Ok(channel.into_stream())
     }
 
+    /// 隧道刪除：斷開這條隧道金鑰的連線（forward 跟著釋放；裝置重連會因金鑰已刪而被拒）。回傳斷開的連線數。
+    /// 只看有 forward 的連線：沒 forward 的連線碰不到任何東西，下次重連一樣會被拒。
+    /// Tunnel deleted: drop the device's connections (their forwards go with them; it cannot reconnect).
+    pub async fn disconnect_tunnel(&self, tunnel_id: i64) -> usize {
+        let mut handles: HashMap<u64, Handle> = HashMap::new();
+        for f in self.forwards.iter() {
+            let is_tunnel = self.conns.get(&f.conn_id).is_some_and(|c| matches!(c.identity, Identity::Tunnel { tunnel_id: t, .. } if t == tunnel_id));
+            if is_tunnel {
+                handles.entry(f.conn_id).or_insert_with(|| f.handle.clone());
+            }
+        }
+        for h in handles.values() {
+            let _ = h.disconnect(Disconnect::ByApplication, "tunnel deleted".into(), String::new()).await;
+        }
+        handles.len()
+    }
+
     fn publish_status(&self) {
         self.status.set_listen_ports(self.forwards.iter().map(|e| *e.key()).collect());
         let endpoints = self.forwards.iter().filter_map(|f| self.conns.get(&f.conn_id).map(|c| (*f.key(), c.endpoint()))).collect();

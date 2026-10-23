@@ -245,9 +245,60 @@ pub fn append_query(uri: &str, params: &[(&str, &str)]) -> String {
     }
 }
 
+/// 一個 grant 怎麼涵蓋某條隧道（刪隧道前的檢查與刪除時的處理）。/ How a grant covers one tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    /// 不限隧道（使用者看得到的全部）：刪掉一條不影響其他的。/ Unrestricted: keeps every other tunnel.
+    All,
+    /// 只限這一條：刪掉之後這個授權什麼都碰不到。/ Restricted to this tunnel alone: useless afterwards.
+    Only,
+    /// 這條加上其他 n 條：刪除時把這條從清單拿掉。/ This tunnel plus `n` others: it is dropped from the list.
+    Shared(usize),
+}
+
+impl Coverage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Coverage::All => "all",
+            Coverage::Only => "only",
+            Coverage::Shared(_) => "shared",
+        }
+    }
+}
+
+/// `tunnel_ids`：None = 不限隧道。沒涵蓋這條隧道回 None。/ None when the grant does not cover the tunnel.
+pub fn coverage(tunnel_ids: Option<&[i64]>, tunnel_id: i64) -> Option<Coverage> {
+    let ids = match tunnel_ids {
+        None => return Some(Coverage::All),
+        Some(ids) => ids,
+    };
+    if !ids.contains(&tunnel_id) {
+        return None;
+    }
+    let others: std::collections::BTreeSet<i64> = ids.iter().copied().filter(|&i| i != tunnel_id).collect();
+    Some(if others.is_empty() { Coverage::Only } else { Coverage::Shared(others.len()) })
+}
+
+/// 把隧道從限制清單拿掉。/ Drop a tunnel from a restriction list.
+pub fn without_tunnel(ids: &[i64], tunnel_id: i64) -> Vec<i64> {
+    ids.iter().copied().filter(|&i| i != tunnel_id).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grant_coverage_of_a_tunnel() {
+        assert_eq!(coverage(None, 3), Some(Coverage::All));
+        assert_eq!(coverage(Some(&[3]), 3), Some(Coverage::Only));
+        assert_eq!(coverage(Some(&[3, 3]), 3), Some(Coverage::Only));
+        assert_eq!(coverage(Some(&[1, 3, 5, 5]), 3), Some(Coverage::Shared(2)));
+        assert_eq!(coverage(Some(&[1, 5]), 3), None);
+        assert_eq!(coverage(Some(&[]), 3), None);
+        assert_eq!(without_tunnel(&[1, 3, 5, 3], 3), vec![1, 5]);
+        assert_eq!(Coverage::Shared(1).as_str(), "shared");
+    }
 
     #[test]
     fn scopes_parse_in_canonical_order() {

@@ -22,6 +22,11 @@
  * The body is the only scrolling area in a dialog: never nest a fixed-height scroll box inside it (it
  * doesn't read as scrollable and the content looks cut off). When the body overflows, a "More below"
  * cue floats at the bottom; clicking it scrolls to the end.
+ *
+ * 設定類的分頁對話框用 `nav`(桌面在內容左側的一欄、手機在內容上方的一列,不跟著內容捲)加 `fixedHeight`:
+ * 切換分頁時對話框大小不變,內容多的分頁自己在內容區捲動。
+ * Settings-style tabbed dialogs use `nav` (a rail left of the body from `sm` up, a row above it on phones;
+ * it never scrolls with the body) plus `fixedHeight`, so switching tabs never resizes the dialog.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, X } from "lucide-react";
@@ -44,6 +49,10 @@ interface ModalProps {
     tone?: ModalTone;
     /** 標題列下方、內容上方的固定列(分頁、篩選)。/ Fixed row between header and body (tabs, filters). */
     toolbar?: React.ReactNode;
+    /** 側欄導覽(見 NavTabs):桌面在內容左側、手機在內容上方。/ Side navigation: left rail on desktop, a row on phones. */
+    nav?: React.ReactNode;
+    /** 高度固定(不隨內容伸縮),分頁切換時不會跳動。/ Fixed height, so switching tabs doesn't resize the dialog. */
+    fixedHeight?: boolean;
     children?: React.ReactNode;
     footer?: React.ReactNode;
     size?: ModalSize;
@@ -115,6 +124,8 @@ export function Modal({
     icon,
     tone = "default",
     toolbar,
+    nav,
+    fixedHeight = false,
     children,
     footer,
     size = "md",
@@ -125,6 +136,20 @@ export function Modal({
     const contentRef = useRef<HTMLDivElement>(null);
     const hasBody = children !== undefined && children !== null && children !== false;
     const hasToolbar = toolbar !== undefined && toolbar !== null && toolbar !== false;
+    const hasNav = nav !== undefined && nav !== null && nav !== false;
+
+    const body = hasBody && (
+        <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}>
+            {isLoading && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/70">
+                    <Loader2 className="size-6 animate-spin text-primary" />
+                    <span className="sr-only">{t("common.loading")}</span>
+                </div>
+            )}
+            {children}
+            <MoreBelow />
+        </div>
+    );
 
     return (
         <DialogPrimitive.Root open={isOpen} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -147,11 +172,20 @@ export function Modal({
                         "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-xl",
                         "max-sm:data-[state=open]:animate-sheet-up-show max-sm:data-[state=closed]:animate-sheet-up-hide",
                         SIZE_CLASS[size],
+                        fixedHeight && "sm:h-[min(90dvh,46rem)] max-sm:h-[92dvh]",
                     )}
                 >
                     <div className="sm:hidden mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
 
-                    <div className={cn("flex shrink-0 items-start gap-3.5 px-5 sm:px-6 pt-4 sm:pt-5", hasToolbar ? "pb-3" : "pb-4", hasBody && !hasToolbar && "border-b border-border/70")}>
+                    <div
+                        className={cn(
+                            "flex shrink-0 items-start gap-3.5 px-5 sm:px-6 pt-4 sm:pt-5",
+                            hasToolbar || hasNav ? "pb-3" : "pb-4",
+                            hasBody && !hasToolbar && !hasNav && "border-b border-border/70",
+                            // 側欄:桌面上標題列和下面兩欄用細線分開;手機上導覽列自己有底線。/ Desktop: hairline above the rail + body.
+                            hasNav && "sm:pb-4 sm:border-b sm:border-border/70",
+                        )}
+                    >
                         {icon && (
                             <span
                                 aria-hidden
@@ -194,17 +228,16 @@ export function Modal({
                         </div>
                     )}
 
-                    {hasBody && (
-                        <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}>
-                            {isLoading && (
-                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/70">
-                                    <Loader2 className="size-6 animate-spin text-primary" />
-                                    <span className="sr-only">{t("common.loading")}</span>
-                                </div>
-                            )}
-                            {children}
-                            <MoreBelow />
+                    {hasNav ? (
+                        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+                            <div className="shrink-0 border-b border-border/70 px-5 pb-3 sm:w-52 sm:overflow-y-auto sm:border-b-0 sm:border-r sm:bg-surface sm:px-3 sm:py-4">
+                                {/* 手機上橫向捲動,不會被壓扁。/ Scrolls sideways on phones instead of squashing. */}
+                                <div className="-mx-1 overflow-x-auto px-1 py-0.5 sm:m-0 sm:overflow-visible sm:p-0">{nav}</div>
+                            </div>
+                            {body}
                         </div>
+                    ) : (
+                        body
                     )}
 
                     {footer && (

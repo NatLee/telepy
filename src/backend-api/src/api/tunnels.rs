@@ -3,9 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::notify;
@@ -26,6 +27,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(dashboard))
         .routes(routes!(list, create))
         .routes(routes!(retrieve, update, partial_update, destroy))
+        .routes(routes!(delete_check))
         .routes(routes!(usernames_for_server))
         .routes(routes!(set_default_username))
         .routes(routes!(service_keys))
@@ -228,15 +230,98 @@ async fn partial_update(State(state): State<AppState>, AuthUser(user): AuthUser,
     apply_update(&state, user.id, id, body, true).await
 }
 
-#[utoipa::path(delete, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 204, description = "Deleted (usernames and shares cascade)"), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
-    let t = visible_tunnel(&state, user.id, id).await?;
-    if !permissions::check_share_access(&state.db, user.id, &t).await? {
+/// 刪除前的檢查與刪除本身都要 owner / ADMIN。/ Both the check and the delete need owner / ADMIN.
+async fn deletable_tunnel(state: &AppState, user_id: i64, id: i64) -> ApiResult<Tunnel> {
+    let t = visible_tunnel(state, user_id, id).await?;
+    if !permissions::check_share_access(&state.db, user_id, &t).await? {
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to delete this tunnel."));
     }
+    Ok(t)
+}
+
+/// 刪隧道前給使用者看的清單：誰會失去存取、裝置上 Telepy 裝過哪些金鑰、哪些 MCP 授權 / AI session 受影響。
+/// 只讀 DB 與記憶體狀態（不連裝置），所以開對話框很快。
+/// What deleting the tunnel touches: people, keys Telepy installed on the device, MCP grants and AI sessions.
+/// DB and in-memory state only (no device round-trip), so the dialog opens fast.
+#[utoipa::path(get, path = "/api/reverse/server/{id}/delete-check", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "What a delete would affect", body = super::schemas::TunnelDeleteCheck), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn delete_check(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = deletable_tunnel(&state, user.id, id).await?;
+    let accounts: Vec<String> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| u.username).collect();
+    let sharees = db::sharing::for_tunnel(&state.db, t.id).await?;
     let audience = notify::tunnel_audience(&state, &t).await?;
-    crate::device_keys::forget_tunnel(&state, &t).await;
+    let using = state.presence.for_tunnel(t.id);
+    let lan_hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?.len();
+    let keys = crate::device_keys::installed_summary(&state.db, t.id).await?;
+    // 不限隧道的授權只算看得到這條隧道的人的（其他人的授權本來就碰不到它）。
+    // Unrestricted grants count only for people who can see this tunnel.
+    let grants: Vec<Value> = db::oauth::active_grant_overview(&state.db)
+        .await?
+        .into_iter()
+        .filter_map(|g| {
+            let coverage = crate::oauth::coverage(g.tunnel_id_list().as_deref(), t.id)?;
+            if coverage == crate::oauth::Coverage::All && !audience.contains(&g.user_id) {
+                return None;
+            }
+            let others = match coverage {
+                crate::oauth::Coverage::Shared(n) => n,
+                _ => 0,
+            };
+            Some(json!({
+                "id": g.id,
+                "client_name": g.client_name,
+                "user": { "id": g.user_id, "username": g.username },
+                "mine": g.user_id == user.id,
+                "coverage": coverage.as_str(),
+                "other_tunnels": others,
+            }))
+        })
+        .collect();
+    let tz = state.config.tz_offset_minutes;
+    let sessions: Vec<Value> = state.ai.list().iter().filter(|s| s.tunnel_id == t.id).map(|s| super::ai::session_json(s, tz)).collect();
+    Ok(Json(json!({
+        "tunnel": { "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port },
+        "online": crate::device_keys::online(&state, t.reverse_port),
+        "accounts": accounts,
+        "sharees": sharees.iter().map(|s| json!({ "id": s.shared_with_id, "username": s.username, "permission": s.permission_type })).collect::<Vec<_>>(),
+        "in_use": crate::presence::distinct_users(&using),
+        "lan_hosts": lan_hosts,
+        "device_keys": keys,
+        "grants": grants,
+        "ai_sessions": sessions,
+    })))
+}
+
+/// 刪除選項（query string）；沒帶 = 舊行為：移除 Telepy 裝過的金鑰、保留服務金鑰、不撤銷授權。
+/// Delete options; omitted = the old behaviour (remove installed keys, keep the service key, keep grants).
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct DeleteOptions {
+    remove_device_keys: Option<bool>,
+    remove_service_key: Option<bool>,
+    revoke_grants: Option<bool>,
+}
+
+#[utoipa::path(delete, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(
+    ("id" = i64, Path, description = "Tunnel id"),
+    ("remove_device_keys" = Option<bool>, Query, description = "Remove the keys Telepy installed on the device (default true; needs the device online)"),
+    ("remove_service_key" = Option<bool>, Query, description = "Also remove Telepy's service key from every login account of the tunnel (default false; needs the device online)"),
+    ("revoke_grants" = Option<bool>, Query, description = "Revoke the MCP authorizations restricted to this tunnel alone (default false; the tunnel is always dropped from restricted authorizations)"),
+), responses((status = 200, description = "Deleted (usernames, shares, LAN hosts cascade; AI sessions closed; the device is disconnected). Body = what was cleaned up", body = super::schemas::TunnelDeleteReport), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, Query(opts): Query<DeleteOptions>) -> ApiResult<Json<Value>> {
+    let t = deletable_tunnel(&state, user.id, id).await?;
+    let audience = notify::tunnel_audience(&state, &t).await?;
+    let accounts: Vec<String> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| u.username).collect();
+    // 裝置上的金鑰要趁隧道還連著時清（之後裝置就被踢掉了）。/ Clean the device while the tunnel is still up.
+    let cleanup_opts = crate::device_keys::CleanupOptions {
+        device_keys: opts.remove_device_keys.unwrap_or(true),
+        service_key: opts.remove_service_key.unwrap_or(false),
+    };
+    let cleanup = crate::device_keys::forget_tunnel(&state, &t, cleanup_opts, &accounts).await;
+    let ai_closed = crate::ai::close_for_tunnel(&state, t.id, crate::ai::CloseReason::TunnelDeleted).await;
     db::tunnels::delete(&state.db, id).await?;
+    let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false)).await?;
+    let disconnected = state.gateway.disconnect_tunnel(t.id).await;
+    tracing::info!(tunnel = t.id, name = %t.host_friendly_name, keys_left = cleanup.keys_left, revoked, detached, ai_closed, disconnected, "tunnel deleted");
     state.hub.notify_users(
         audience,
         &json!({
@@ -245,7 +330,16 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
             "tunnel_id": t.id,
         }),
     );
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({
+        "deleted": true,
+        "online": cleanup.online,
+        "accounts": cleanup.accounts,
+        "keys_left": cleanup.keys_left,
+        "grants_revoked": revoked,
+        "grants_detached": detached,
+        "ai_sessions_closed": ai_closed,
+        "device_disconnected": disconnected > 0,
+    })))
 }
 
 /// `ReverseServerUsernamesMapServerId`：`{"usernames": [...], "default_username_id": ...}`
