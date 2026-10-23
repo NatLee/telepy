@@ -1461,7 +1461,15 @@ export const zhTW: Record<TranslationKey, string> = {
     "siteSettings.lan_scan_enabled.description": "允許隧道擁有者與 ADMIN 分享者掃描裝置背後的私有網段。連線由裝置自己的 sshd 發出，不會在裝置上安裝任何東西。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
-    "ui.live": "連線中",
+    "ui.live": "即時更新",
+    "ui.wsLiveHint": "即時更新已開啟：通道狀態與通知會自動更新。",
+    "ui.wsConnectingHint": "正在連上即時更新…",
+    "ui.wsRetryIn": "{seconds} 秒後重新連線",
+    "ui.wsReconnecting": "重新連線中…",
+    "ui.wsRetryHint": "即時更新暫停中，連線恢復前通道狀態不會自動更新。點一下立即重試。",
+    "ui.wsOffline": "已中斷",
+    "ui.wsOfflineHint": "即時更新已停止，不會再自動重試。點一下重新連線，或重新整理頁面。",
+    "ui.wsReconnectNow": "立即重新連線",
     "ui.viewToggle": "檢視切換",
     "ui.cardView": "卡片檢視",
     "ui.listView": "列表檢視",

@@ -1462,6 +1462,14 @@ export const ja: Record<TranslationKey, string> = {
 
     // ── 共通 UI コンポーネント / Shared UI components ──────────────
     "ui.live": "ライブ",
+    "ui.wsLiveHint": "リアルタイム更新が有効です。トンネルの状態と通知は自動で更新されます。",
+    "ui.wsConnectingHint": "リアルタイム更新に接続しています…",
+    "ui.wsRetryIn": "{seconds} 秒後に再接続",
+    "ui.wsReconnecting": "再接続しています…",
+    "ui.wsRetryHint": "リアルタイム更新が一時停止しています。接続が戻るまでトンネルの状態は更新されません。クリックで今すぐ再試行します。",
+    "ui.wsOffline": "オフライン",
+    "ui.wsOfflineHint": "リアルタイム更新が停止し、自動では再試行しません。クリックで再接続するか、ページを再読み込みしてください。",
+    "ui.wsReconnectNow": "今すぐ再接続",
     "ui.viewToggle": "表示切り替え",
     "ui.cardView": "カード表示",
     "ui.listView": "リスト表示",

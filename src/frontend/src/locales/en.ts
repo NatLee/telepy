@@ -1480,6 +1480,14 @@ export const en = {
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "Live",
+    "ui.wsLiveHint": "Live updates are on: tunnel status and notifications refresh by themselves.",
+    "ui.wsConnectingHint": "Connecting to live updates…",
+    "ui.wsRetryIn": "Reconnecting in {seconds}s",
+    "ui.wsReconnecting": "Reconnecting…",
+    "ui.wsRetryHint": "Live updates are paused, so tunnel status won't refresh until the connection is back. Click to retry now.",
+    "ui.wsOffline": "Offline",
+    "ui.wsOfflineHint": "Live updates stopped and won't retry by themselves. Click to reconnect, or reload the page.",
+    "ui.wsReconnectNow": "reconnect now",
     "ui.viewToggle": "View toggle",
     "ui.cardView": "Card view",
     "ui.listView": "List view",
