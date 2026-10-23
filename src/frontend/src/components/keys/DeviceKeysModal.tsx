@@ -4,12 +4,13 @@
  * - 「你的金鑰」：勾選 = 放進這台裝置的清單。
  * - 每個帳號一張卡：檔案裡的每把金鑰 × 清單狀態（已在裝置上 / 安裝中 / 失敗 / 移除中 / 服務金鑰 / 手動加的 / 非 Telepy），
  *   在同一列直接處理（移出清單、加入清單、從裝置移除）。
+ * - 列很多時（authorized_keys 可能有幾百把）：toolbar 裡的搜尋 / 帳號 / 分類、每張卡先顯示幾列、勾選後一次從裝置移除（KeyRowFilter）。
  * One device's key panel with the list and the device's actual authorized_keys in one view: a fixed status
  * bar with the single "sync now" (apply the list + re-read every account), your keys to tick, and one card per
  * account where every key shows both its list state and what is on the device, with its action on the row.
+ * Long files (hundreds of keys) get search / account / buckets in the toolbar, paged cards and bulk removal.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
     CircleAlert,
     CircleCheck,
@@ -17,7 +18,6 @@ import {
     Clock3,
     FileWarning,
     HardDrive,
-    KeyRound,
     Loader2,
     Lock,
     Plus,
@@ -39,7 +39,10 @@ import { shortFingerprint } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
 import { oldestCheck, useDeviceKeys } from "@/hooks/useDeviceKeys";
 import type { DeviceKeys, RowState, ViewAccount, ViewRow } from "@/types/keys";
+import { isRemovable } from "@/lib/keyRows";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
+import { MyKeysOnDevice } from "./MyKeysOnDevice";
+import { RowFilterBar, RowsMore, SelectAllRemovable, useRowFilter, useRowLimit, useRowSelection, type RowFilterState, type RowSelection } from "./KeyRowFilter";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "primary";
 
@@ -160,6 +163,7 @@ function KeyRowView({
     onRemoveFromList,
     onAddToList,
     onRemoveFromDevice,
+    selection,
 }: {
     row: ViewRow;
     account: string;
@@ -170,6 +174,8 @@ function KeyRowView({
     onRemoveFromList: (row: ViewRow) => void;
     onAddToList: (row: ViewRow) => void;
     onRemoveFromDevice: (account: string, row: ViewRow) => void;
+    /** 擁有者 / ADMIN 才有：勾選後一次移除。/ Owners / ADMIN only: bulk selection. */
+    selection?: RowSelection;
 }) {
     const { t } = useI18n();
     // 服務金鑰：標籤已寫「Telepy 服務」，標題用它自己的註解。/ The badge already says "Telepy service"; title it by its comment.
@@ -177,14 +183,35 @@ function KeyRowView({
     const canRemoveFromList = row.on_list && row.user_key_id !== null && (row.mine || d.can_manage);
     const canAddToList = !row.on_list && row.mine && row.user_key_id !== null && row.state === "manual";
     const canRemoveFromDevice = d.can_manage && (row.state === "manual" || row.state === "unknown") && !!row.fingerprint;
-    const rowBusy = busy === `entry:${row.user_key_id}` || busy === `key:${row.user_key_id}` || busy === `line:${account}:${row.fingerprint}`;
+    const rowBusy = busy === `entry:${row.user_key_id}` || busy === `key:${row.user_key_id}` || busy === `line:${account}:${row.fingerprint}` || (busy === "bulk" && !!selection?.isSelected(account, row));
+    const selectable = !!selection && canRemoveFromDevice && isRemovable(row);
     return (
-        <li className="flex flex-col gap-2 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <li className={cn("flex flex-col gap-2 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between", selectable && selection.isSelected(account, row) && "bg-destructive/[0.04]")}>
+            <div className="flex min-w-0 items-start gap-2.5">
+                {selection && (
+                    <span className="flex w-4 shrink-0 justify-center pt-1">
+                        {selectable && (
+                            <input
+                                type="checkbox"
+                                className="size-4 cursor-pointer accent-primary"
+                                checked={selection.isSelected(account, row)}
+                                disabled={busy === "bulk"}
+                                onChange={(e) => selection.toggle(account, [row], e.target.checked)}
+                                aria-label={t("keys.rows.select", { key: title })}
+                            />
+                        )}
+                    </span>
+                )}
             <div className="min-w-0 space-y-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <StateBadge row={row} online={d.tunnel.online} />
                     <span className="min-w-0 truncate text-sm text-foreground">{row.state === "invalid" ? t("keys.row.invalidLine", { line: row.line_no ?? "?" }) : title}</span>
                     {row.owner && row.state !== "service" && <Chip tone={row.mine ? "primary" : "neutral"}>{row.mine ? t("keys.device.you") : row.owner}</Chip>}
+                    {row.line_count > 1 && (
+                        <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
+                            {t("keys.rows.lines", { count: row.line_count })}
+                        </Chip>
+                    )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 font-mono text-xs text-muted-foreground">
                     {row.state === "invalid" ? (
@@ -199,6 +226,7 @@ function KeyRowView({
                 </div>
                 {row.options && <div className="truncate font-mono text-xs text-warning" title={row.options}>{t("keys.row.options", { options: row.options })}</div>}
                 {row.error && row.error !== accountError && (row.state === "error" || row.state === "removing") && <div className="break-words text-xs text-destructive">{row.error}</div>}
+            </div>
             </div>
             <div className="flex shrink-0 items-center gap-1 self-start sm:self-center">
                 {rowBusy && <Loader2 size={14} className="animate-spin text-muted-foreground" aria-hidden />}
@@ -229,18 +257,39 @@ function KeyRowView({
     );
 }
 
-function AccountCard({ account, d, now, children }: { account: ViewAccount; d: DeviceKeys; now: number; children: React.ReactNode }) {
+function AccountCard({
+    account,
+    rows,
+    d,
+    now,
+    filter,
+    selection,
+    renderRow,
+}: {
+    account: ViewAccount;
+    /** 符合篩選的列。/ Rows matching the filter. */
+    rows: ViewRow[];
+    d: DeviceKeys;
+    now: number;
+    filter: RowFilterState;
+    selection?: RowSelection;
+    renderRow: (row: ViewRow, i: number) => React.ReactNode;
+}) {
     const { t, locale } = useI18n();
+    const limit = useRowLimit(rows.length, filter.resetKey, filter.filtering);
     return (
         <section className="overflow-hidden rounded-xl ring-1 ring-inset ring-border">
             <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border/70 bg-surface px-3.5 py-2">
                 <span className="font-mono text-sm text-foreground">
                     {account.username} <span className="text-xs text-muted-foreground">~/.ssh/authorized_keys</span>
                 </span>
-                <span className="text-xs text-muted-foreground">
-                    {account.checked_at
-                        ? t("keys.device.accountChecked", { count: account.rows.length, when: ago(account.checked_at, now, locale) })
-                        : t("keys.device.accountNotChecked")}
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {selection && <SelectAllRemovable username={account.username} rows={rows} selection={selection} />}
+                    <span className="text-xs text-muted-foreground">
+                        {account.checked_at
+                            ? t("keys.device.accountChecked", { count: account.rows.length, when: ago(account.checked_at, now, locale) })
+                            : t("keys.device.accountNotChecked")}
+                    </span>
                 </span>
             </header>
             {account.error && (
@@ -248,8 +297,13 @@ function AccountCard({ account, d, now, children }: { account: ViewAccount; d: D
                     <Callout tone="danger">{t("keys.device.accountError", { error: account.error })}</Callout>
                 </div>
             )}
-            {account.rows.length > 0 ? (
-                <ul className="divide-y divide-border/70">{children}</ul>
+            {rows.length > 0 ? (
+                <>
+                    <ul className="divide-y divide-border/70">{rows.slice(0, limit.shown).map(renderRow)}</ul>
+                    <RowsMore shown={limit.shown} total={rows.length} onMore={limit.more} onAll={limit.all} />
+                </>
+            ) : account.rows.length > 0 ? (
+                <p className="px-3.5 py-3 text-sm text-muted-foreground">{t("keys.rows.noMatch")}</p>
             ) : (
                 <p className="px-3.5 py-3 text-sm text-muted-foreground">
                     {account.exists === false ? t("keys.device.noFile") : account.checked_at ? (d.can_manage ? t("keys.device.emptyFile") : t("keys.device.noneOfMine")) : t("keys.device.notReadYet")}
@@ -259,12 +313,23 @@ function AccountCard({ account, d, now, children }: { account: ViewAccount; d: D
     );
 }
 
+const NO_ACCOUNTS: ViewAccount[] = [];
+
 export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: number | null; onClose: () => void; onChanged: () => void }) {
     const { t } = useI18n();
     const dk = useDeviceKeys(tunnelId, onChanged);
     const [confirm, setConfirm] = useState<{ username: string; row: ViewRow } | null>(null);
     const now = useNow(15_000);
     const d = dk.data;
+    const [bulkConfirm, setBulkConfirm] = useState(false);
+    const accounts = d?.view.accounts ?? NO_ACCOUNTS;
+    const filter = useRowFilter(accounts, !!d?.tunnel.online);
+    const selection = useRowSelection(accounts);
+    // 篩選時，沒有符合列的帳號收起來（「需要處理」時有錯誤的帳號照樣顯示）。
+    // While filtering, accounts without matches fold away (failing accounts stay under "needs attention").
+    const shownAccounts = filter.filtering ? filter.accounts.filter((a) => a.rows.length > 0 || (filter.bucket === "attention" && a.account.error)) : filter.accounts;
+    const foldedAccounts = filter.accounts.length - shownAccounts.length;
+    const bulkSummary = useMemo(() => [...selection.groups].map(([user, fps]) => `${user} (${fps.length})`).join(", "), [selection.groups]);
 
     // 在清單上、卻沒有任何帳號能裝的（擁有者還沒給帳號）。/ On the list but in no account yet.
     const unplaced = useMemo(() => (d ? d.entries.filter((e) => e.targets.length === 0) : []), [d]);
@@ -285,65 +350,38 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             icon={<HardDrive />}
             size="3xl"
             isLoading={dk.loading && !d}
-            toolbar={d ? <StatusBar d={d} syncing={dk.syncing} onSync={() => dk.sync()} now={now} /> : undefined}
-            footer={<Button variant="outline" onClick={onClose}>{t("common.close")}</Button>}
+            toolbar={
+                d ? (
+                    <div className="space-y-2.5">
+                        <StatusBar d={d} syncing={dk.syncing} onSync={() => dk.sync()} now={now} />
+                        <RowFilterBar filter={filter} />
+                    </div>
+                ) : undefined
+            }
+            footer={
+                <>
+                    {d?.can_manage && selection.count > 0 && (
+                        <span className="mr-auto flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-sm text-foreground">{t("keys.rows.selected", { count: selection.count })}</span>
+                            <Button variant="ghost" size="sm" onClick={selection.clear} disabled={dk.busy === "bulk"}>
+                                {t("keys.rows.clearSelection")}
+                            </Button>
+                        </span>
+                    )}
+                    <Button variant="outline" onClick={onClose}>{t("common.close")}</Button>
+                    {d?.can_manage && selection.count > 0 && (
+                        <Button variant="destructive" onClick={() => setBulkConfirm(true)} disabled={dk.busy === "bulk" || !d.tunnel.online}>
+                            {dk.busy === "bulk" ? <Loader2 className="animate-spin" /> : <Trash2 />} {t("keys.rows.removeSelected", { count: selection.count })}
+                        </Button>
+                    )}
+                </>
+            }
         >
             {dk.notFound && <Callout tone="danger">{t("keys.device.notFound")}</Callout>}
             {d && (
                 <div className="space-y-6">
-                    {/* 你的金鑰 / Your keys */}
-                    <section>
-                        <SectionHeading
-                            title={t("keys.device.myKeys")}
-                            description={
-                                d.accounts.length > 0
-                                    ? t("keys.device.myKeysHint", { accounts: d.accounts.join(", ") })
-                                    : d.can_manage
-                                      ? t("keys.matrix.noAccountsOwner")
-                                      : t("keys.matrix.noAccountsSharee")
-                            }
-                            className="mb-2.5"
-                        />
-                        {d.my_keys.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">
-                                {t("keys.device.noMyKeys")}{" "}
-                                <Link href="/tunnels/keys" onClick={onClose} className="text-primary hover:underline">{t("keys.addKey")}</Link>
-                            </p>
-                        ) : (
-                            <div className="flex flex-wrap gap-1.5">
-                                {d.my_keys.map((k) => {
-                                    const busy = dk.busy === `key:${k.id}` || dk.busy === "all";
-                                    return (
-                                        <label
-                                            key={k.id}
-                                            className="inline-flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 ring-1 ring-inset ring-border transition-colors hover:bg-muted/50 has-[:checked]:bg-primary/6 has-[:checked]:ring-primary/35"
-                                            title={k.fingerprint ?? ""}
-                                        >
-                                            {busy ? (
-                                                <Loader2 size={16} className="animate-spin text-primary" aria-hidden />
-                                            ) : (
-                                                <input type="checkbox" checked={k.in_list} onChange={(e) => dk.toggleMine(k.id, e.target.checked)} className="size-4 accent-primary" />
-                                            )}
-                                            <KeyRound size={14} className="text-muted-foreground" aria-hidden />
-                                            <span className="text-sm text-foreground">{k.name}</span>
-                                            <span className="font-mono text-xs text-muted-foreground">{k.key_type ?? "?"}</span>
-                                        </label>
-                                    );
-                                })}
-                                {d.my_keys.some((k) => !k.in_list) && d.my_keys.length > 1 && (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="text-primary hover:text-primary"
-                                        disabled={dk.busy === "all"}
-                                        onClick={() => dk.addAllMine(d.my_keys.filter((k) => !k.in_list).map((k) => k.id))}
-                                    >
-                                        <Plus /> {t("keys.device.addAllMine")}
-                                    </Button>
-                                )}
-                            </div>
-                        )}
-                    </section>
+                    {/* 你的金鑰（篩選帳號裡的列時收起來，讓結果在最上面）/ Your keys (hidden while filtering rows so matches come first) */}
+                    {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onNavigate={onClose} />}
 
                     {/* 每個帳號：清單 × 裝置上實際內容 / Each account: the list × what is on the device */}
                     <section className="space-y-3">
@@ -351,27 +389,45 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                         {d.view.accounts.length === 0 ? (
                             <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm text-muted-foreground">{t("keys.device.noAccounts")}</p>
                         ) : (
-                            d.view.accounts.map((a) => (
-                                <AccountCard key={a.username} account={a} d={d} now={now}>
-                                    {a.rows.map((r, i) => (
-                                        <KeyRowView
-                                            key={`${r.state}:${r.fingerprint ?? r.line_no ?? i}`}
-                                            row={r}
-                                            account={a.username}
-                                            accountError={a.error}
-                                            d={d}
-                                            busy={dk.busy}
-                                            onRemoveFromList={(row) => row.user_key_id !== null && dk.removeEntry(row.user_key_id)}
-                                            onAddToList={(row) => row.user_key_id !== null && dk.toggleMine(row.user_key_id, true)}
-                                            onRemoveFromDevice={(username, row) => setConfirm({ username, row })}
-                                        />
-                                    ))}
-                                </AccountCard>
-                            ))
+                            <>
+                                {shownAccounts.map(({ account: a, rows }) => (
+                                    <AccountCard
+                                        key={a.username}
+                                        account={a}
+                                        rows={rows}
+                                        d={d}
+                                        now={now}
+                                        filter={filter}
+                                        selection={d.can_manage ? selection : undefined}
+                                        renderRow={(r, i) => (
+                                            <KeyRowView
+                                                key={`${r.state}:${r.fingerprint ?? r.line_no ?? i}`}
+                                                row={r}
+                                                account={a.username}
+                                                accountError={a.error}
+                                                d={d}
+                                                busy={dk.busy}
+                                                onRemoveFromList={(row) => row.user_key_id !== null && dk.removeEntry(row.user_key_id)}
+                                                onAddToList={(row) => row.user_key_id !== null && dk.toggleMine(row.user_key_id, true)}
+                                                onRemoveFromDevice={(username, row) => setConfirm({ username, row })}
+                                                selection={d.can_manage ? selection : undefined}
+                                            />
+                                        )}
+                                    />
+                                ))}
+                                {filter.filtering && (shownAccounts.length === 0 || foldedAccounts > 0) && (
+                                    <p className="flex flex-wrap items-center justify-center gap-x-2 rounded-xl border border-dashed border-border px-4 py-3 text-center text-sm text-muted-foreground">
+                                        {shownAccounts.length === 0 ? t("keys.rows.noMatch") : t("keys.rows.otherAccounts", { count: foldedAccounts })}
+                                        <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={filter.reset}>
+                                            {t("keys.rows.clearFilter")}
+                                        </Button>
+                                    </p>
+                                )}
+                            </>
                         )}
                     </section>
 
-                    {unplaced.length > 0 && (
+                    {unplaced.length > 0 && !filter.filtering && (
                         <section>
                             <SectionHeading title={t("keys.device.unplaced")} description={t("keys.device.unplacedHint")} className="mb-2.5" />
                             <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border">
@@ -413,6 +469,18 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                     account: confirm?.username ?? "",
                 })}
                 confirmText={t("keys.row.removeFromDevice")}
+                isDestructive
+            />
+            <ConfirmDialog
+                isOpen={bulkConfirm}
+                onClose={() => setBulkConfirm(false)}
+                onConfirm={async () => {
+                    if (await dk.removeLines(selection.groups)) selection.clear();
+                    setBulkConfirm(false);
+                }}
+                title={t("keys.rows.removeSelectedTitle", { count: selection.count })}
+                message={t("keys.rows.removeSelectedMessage", { accounts: bulkSummary })}
+                confirmText={t("keys.rows.removeSelected", { count: selection.count })}
                 isDestructive
             />
         </Modal>

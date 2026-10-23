@@ -94,6 +94,8 @@ export interface ViewRow {
     comment: string | null;
     options: string | null;
     line_no: number | null;
+    /** 這把金鑰在檔案裡佔幾行（重複貼上時 > 1）。/ Lines holding this key (> 1 for duplicates). */
+    line_count: number;
     error: string | null;
     raw: string | null;
 }

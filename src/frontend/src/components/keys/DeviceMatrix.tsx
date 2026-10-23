@@ -4,7 +4,7 @@
  * My keys × the devices I can use: a tick puts the key on that device's list; each cell shows the
  * per-account install state. A table on desktop (scrolls sideways with many keys), cards on phones.
  */
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { HardDrive, Loader2, Plus, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, TunnelRole, UserKey } from "@/types/keys";
 import { TargetChips } from "./TargetChips";
 import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
+import { MATRIX_COLUMNS } from "@/lib/userKeyList";
 
 const ROLE_KEY: Record<TunnelRole, TranslationKey> = {
     owner: "keys.role.owner",
@@ -95,7 +96,8 @@ function Cell({ device, keyItem, busy, onToggle }: { device: KeyDevice; keyItem:
 
 export function DeviceMatrix({
     devices,
-    keys,
+    keys: allKeys,
+    totalKeys,
     pending,
     syncing,
     onToggle,
@@ -103,7 +105,10 @@ export function DeviceMatrix({
     onManage,
 }: {
     devices: KeyDevice[];
+    /** 要當欄位的金鑰（已依「我的金鑰」的篩選排好）。/ Keys to show as columns (filtered and sorted by "My keys"). */
     keys: UserKey[];
+    /** 我全部的金鑰數（篩選時提示用）。/ How many keys I have in all. */
+    totalKeys?: number;
     pending: Set<string>;
     syncing: Set<number>;
     onToggle: (device: KeyDevice, key: UserKey, on: boolean) => void;
@@ -111,6 +116,11 @@ export function DeviceMatrix({
     onManage: (device: KeyDevice) => void;
 }) {
     const { t } = useI18n();
+    // 金鑰多時先只顯示幾欄（其餘在「我的金鑰」篩選，或全部展開）。/ Many keys: a few columns first.
+    const [allColumns, setAllColumns] = useState(false);
+    const capped = !allColumns && allKeys.length > MATRIX_COLUMNS + 1;
+    const keys = capped ? allKeys.slice(0, MATRIX_COLUMNS) : allKeys;
+    const total = totalKeys ?? allKeys.length;
     // 裝置多時：搜尋、只看有我的金鑰的、只看需要處理的。/ Many devices: search and buckets.
     const filter = useDeviceFilter(devices, {
         device: (d) => d,
@@ -154,6 +164,24 @@ export function DeviceMatrix({
     return (
         <div className="space-y-3">
             <DeviceFilterBar filter={filter} onLabel={t("keys.filter.withMine")} modes={["all", "on", "problems"]} />
+            {(keys.length < total || allColumns) && (
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <span>{t("keys.matrix.columns", { shown: keys.length, total })}</span>
+                    {keys.length < total && <span>{t("keys.matrix.columnsHint")}</span>}
+                    {capped ? (
+                        <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={() => setAllColumns(true)}>
+                            {t("keys.matrix.allColumns", { count: allKeys.length })}
+                        </Button>
+                    ) : (
+                        allColumns &&
+                        allKeys.length > MATRIX_COLUMNS + 1 && (
+                            <Button variant="ghost" size="xs" onClick={() => setAllColumns(false)}>
+                                {t("keys.matrix.fewerColumns")}
+                            </Button>
+                        )
+                    )}
+                </p>
+            )}
             {/* 桌面：表格 / Desktop: table */}
             <div className="hidden overflow-x-auto rounded-xl border border-border/80 bg-card shadow-card md:block">
                 <table className="w-full min-w-max text-left">

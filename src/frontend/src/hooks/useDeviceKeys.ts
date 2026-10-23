@@ -27,7 +27,7 @@ export function oldestCheck(d: DeviceKeys | null): number | null {
 }
 
 export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
-    const { showError } = useToast();
+    const { showError, showSuccess } = useToast();
     const { t } = useI18n();
     const [data, setData] = useState<DeviceKeys | null>(null);
     const [loading, setLoading] = useState(false);
@@ -189,5 +189,42 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
         [base, run, t]
     );
 
-    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, removeLine };
+    /**
+     * 一次移除很多把（帳號 → 指紋）：每個帳號一個請求、檔案只改寫一次；不能移的（服務金鑰 / 清單上的 / 已不在）後端會略過。
+     * Bulk removal: one request per account, each rewriting the file once; the backend skips keys it must keep.
+     */
+    const removeLines = useCallback(
+        async (groups: Map<string, string[]>) => {
+            if (!base || groups.size === 0) return false;
+            setBusy("bulk");
+            let keys = 0;
+            let skipped = 0;
+            let failed: string | null = null;
+            try {
+                for (const [username, fingerprints] of groups) {
+                    const res = await apiFetch(`${base}/authorized-keys/remove`, { method: "POST", body: JSON.stringify({ username, fingerprints }) });
+                    const body = await readJson(res);
+                    if (!res.ok) {
+                        failed = deviceKeyError(res, body, t("keys.row.removeFailed"));
+                        break;
+                    }
+                    const r = body as { keys?: number; skipped?: unknown[] } | null;
+                    keys += r?.keys ?? 0;
+                    skipped += r?.skipped?.length ?? 0;
+                }
+            } catch (e) {
+                failed = e instanceof Error ? e.message : t("keys.row.removeFailed");
+            } finally {
+                setBusy(null);
+            }
+            await load();
+            onChanged?.();
+            if (failed) showError(failed);
+            if (keys > 0 || !failed) showSuccess(skipped > 0 ? t("keys.rows.removedSkipped", { count: keys, skipped }) : t("keys.rows.removedToast", { count: keys }));
+            return !failed;
+        },
+        [base, load, onChanged, showError, showSuccess, t]
+    );
+
+    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, removeLine, removeLines };
 }
