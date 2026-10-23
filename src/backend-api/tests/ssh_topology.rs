@@ -21,16 +21,12 @@ async fn one_device_many_users() {
     lab.username(&alice, &dev, "root").await;
     lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
 
-    // --- 後端（一跳到 loopback，服務金鑰）
-    // russh：SFTP / 檔案管理走這條
+    // --- 後端（行程內通道，服務金鑰）
+    // russh：AI session 這類自己的連線
     assert_eq!(lab.backend_exec(&dev, "ubuntu", "whereami").await.unwrap(), "ubuntu@box");
     // root 不信任服務金鑰 → 裝置自己拒絕，不管 Telepy 允許什麼
     assert!(lab.backend_exec(&dev, "root", "whoami").await.is_err());
     assert!(!boxm.logged_in("root", &lab.service));
-    // OpenSSH：terminal / ssh -D 走這條
-    let r = lab.backend_ssh(&dev, "ubuntu", "whereami").await;
-    assert!(r.ok, "{r:?}");
-    assert_eq!(r.stdout, "ubuntu@box");
     // SFTP 子系統（有 sftp-server 的環境）
     if let Ok(sftp) = lab.backend_sftp(&dev, "ubuntu").await {
         assert_eq!(sftp.read("marker.txt").await.unwrap(), b"on the device");

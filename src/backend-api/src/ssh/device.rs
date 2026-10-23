@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use russh::client::{self, Handle, Handler};
+use russh::{Channel, ChannelMsg};
 use russh::keys::{load_secret_key, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 
@@ -85,7 +86,32 @@ impl DeviceConn {
     /// 開 `sftp` subsystem。/ Open an SFTP subsystem channel.
     pub async fn sftp(&self) -> anyhow::Result<SftpSession> {
         let channel = self.device.channel_open_session().await?;
-        channel.request_subsystem(true, "sftp").await?;
-        Ok(SftpSession::new(channel.into_stream()).await?)
+        start_sftp(channel).await
     }
+}
+
+/// 等裝置回覆 `sftp` 子系統要求的時間。/ How long to wait for the subsystem reply.
+const SUBSYSTEM_REPLY: Duration = Duration::from_secs(10);
+
+/// 在 session channel 上要 `sftp` 子系統並**等裝置回覆**：沒有這個子系統的裝置回 failure，立刻報錯，
+/// 不必等 SFTP 初始化逾時（檔案管理因此能馬上退回 exec）。
+/// Request the sftp subsystem and wait for the reply, so a device without it fails fast.
+pub async fn start_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<SftpSession> {
+    channel.request_subsystem(true, "sftp").await.context("request the sftp subsystem")?;
+    let reply = tokio::time::timeout(SUBSYSTEM_REPLY, async {
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => return Ok(()),
+                Some(ChannelMsg::Failure) => bail!("the device has no sftp subsystem"),
+                Some(ChannelMsg::Close) | Some(ChannelMsg::Eof) | None => bail!("the device closed the channel"),
+                Some(_) => {}
+            }
+        }
+    })
+    .await;
+    match reply {
+        Ok(r) => r?,
+        Err(_) => bail!("the device did not answer the sftp request"),
+    }
+    SftpSession::new(channel.into_stream()).await.context("start SFTP")
 }

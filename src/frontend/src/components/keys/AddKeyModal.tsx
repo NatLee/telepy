@@ -18,6 +18,7 @@ import type { KeyDevice } from "@/types/keys";
 import type { NewKey } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyCard";
 import { OnlineDot } from "./DeviceMatrix";
+import { DeviceFilterBar, DeviceFilterFooter, useDeviceFilter } from "./DeviceFilter";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
     invalid: "keys.problem.invalid",
@@ -69,6 +70,9 @@ export function AddKeyModal({
         setDeviceIds([]);
         onClose();
     };
+
+    // 裝置多時可搜尋；已勾的不會因為篩選而被取消。/ Searchable when there are many; ticks survive filtering.
+    const filter = useDeviceFilter(devices, { device: (d) => d });
 
     const toggleDevice = (id: number) => setDeviceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
@@ -145,10 +149,14 @@ export function AddKeyModal({
                 </div>
                 {devices.length > 0 && (
                     <fieldset className="space-y-2">
-                        <legend className="text-sm text-foreground">{t("keys.installOn")}</legend>
+                        <legend className="text-sm text-foreground">
+                            {t("keys.installOn")}
+                            {deviceIds.length > 0 && <span className="ml-2 text-xs text-muted-foreground">{t("keys.installOnSelected", { count: deviceIds.length })}</span>}
+                        </legend>
                         <p className="text-xs text-muted-foreground">{t("keys.installOnHint")}</p>
-                        <div className="grid gap-1.5 sm:grid-cols-2">
-                            {devices.map((d) => (
+                        <DeviceFilterBar filter={filter} modes={["all"]} />
+                        <div className="grid gap-1.5 p-px sm:grid-cols-2">
+                            {filter.visible.map((d) => (
                                 <label
                                     key={d.tunnel_id}
                                     className="flex cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 ring-1 ring-border transition-colors hover:bg-muted/40 has-[:checked]:bg-primary/6 has-[:checked]:ring-primary/30"
@@ -167,6 +175,7 @@ export function AddKeyModal({
                                 </label>
                             ))}
                         </div>
+                        <DeviceFilterFooter filter={filter} />
                     </fieldset>
                 )}
             </form>

@@ -13,6 +13,7 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { describeUserAgent } from "@/lib/userAgent";
 import { cn } from "@/lib/utils";
+import { SectionHeading } from "@/components/ui/section";
 
 export interface SignInEvent {
     id: number;
@@ -81,12 +82,8 @@ export function SignInHistory({ endpoint, description }: { endpoint: string; des
     const shown = events && !expanded ? events.slice(0, COLLAPSED) : events;
 
     return (
-        <section>
-            <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                <History size={15} className="text-primary" />
-                {t("security.signIns")}
-            </h3>
-            <p className="text-xs text-muted-foreground mb-2">{description}</p>
+        <section className="space-y-3">
+            <SectionHeading icon={<History />} title={t("security.signIns")} description={description} />
             {failed ? (
                 <p className="text-xs text-destructive">{t("security.signInsLoadFailed")}</p>
             ) : !events ? (
