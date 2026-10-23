@@ -1,8 +1,8 @@
 /**
  * 隧道表格列（≥1200px 的清單檢視）：名稱 + 說明、狀態 + 延遲、埠、存取關係、帶標籤的開啟按鈕與「更多」選單。
- * （埠那一欄下方是裝置的公網 IP。）
- * Tunnel table row (list view, ≥1200px): name + description, status + latency, port (+ device IP), access, labelled open
- * buttons and the grouped "More" menu.
+ * （埠那一欄下方是裝置的公網 IP；存取標籤旁是「N 人使用中」按鈕，點開才列出誰在用。）
+ * Tunnel table row (list view, ≥1200px): name + description, status + latency, port (+ device IP), access (+ the
+ * "N using" button that opens who is connected), labelled open buttons and the grouped "More" menu.
  */
 import React from "react";
 import { Server } from "lucide-react";
@@ -11,7 +11,7 @@ import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
-import { TunnelPresenceChip } from "@/components/tunnels/TunnelPresence";
+import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
 import { cn } from "@/lib/utils";
 
@@ -61,9 +61,9 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
-                <div className="flex flex-col items-start gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                     <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
-                    <TunnelPresenceChip presence={tunnel.presence} />
+                    <TunnelPresenceButton presence={tunnel.presence} />
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
