@@ -28,10 +28,12 @@ import {
     KeyRound,
     Laptop,
     Maximize2,
+    MonitorSmartphone,
     Pause,
     Play,
     PlayCircle,
     Server,
+    ShieldCheck,
     ShieldHalf,
     User,
     X,
@@ -57,6 +59,8 @@ interface Layout {
     you: Pt;
     telepy: Pt;
     device: Pt;
+    /** 網路上的其他裝置：直接連進來會被擋。/ Other devices on the internet: their direct connection is blocked. */
+    others: Pt;
     lan: { x: number; y: number; w: number; h: number };
     wall: { x: number; y: number; w: number; h: number };
     gate: Pt;
@@ -65,27 +69,29 @@ interface Layout {
     tunnel: string;
     access: string;
     /** 標籤在節點上方（直式時，線從節點下方出去）。/ Labels above the node (portrait, where lines leave below). */
-    labelAbove: { you: boolean; telepy: boolean };
+    labelAbove: { you: boolean; telepy: boolean; others: boolean };
     at: Record<"internet" | "lan" | "tunnel" | "access" | "gate" | "block" | "firewall", { p: Pt; a: Anchor }>;
 }
 
-// 橫向：Telepy ─ 牆的缺口 ─ 裝置 一列；「你」在下一列，往上一個直角接到 Telepy，往右直直撞牆。
-// Landscape: Telepy ─ gap ─ device on one row; "you" on the row below, one right angle up to Telepy, straight into the wall.
+// 橫向：你 ─ Telepy ─ 牆的缺口 ─ 裝置 一條直線；下一列是網路上的其他裝置，直直撞上牆（內網隔離）。
+// Landscape: you ─ Telepy ─ gap ─ device on one straight line; the row below holds other devices on the internet,
+// running straight into the wall (the private network's isolation).
 const WIDE: Layout = {
     w: 800,
     h: 272,
     tall: false,
-    you: { x: 96, y: 198 },
+    you: { x: 96, y: 82 },
     telepy: { x: 340, y: 82 },
     device: { x: 686, y: 82 },
+    others: { x: 96, y: 198 },
     lan: { x: 566, y: 12, w: 222, h: 248 },
     wall: { x: 554, y: 20, w: 12, h: 232 },
     gate: { x: 560, y: 82 },
     block: { x: 560, y: 198 },
     direct: "M 96 198 L 560 198",
     tunnel: "M 686 82 L 340 82",
-    access: "M 96 198 L 96 82 L 340 82",
-    labelAbove: { you: false, telepy: false },
+    access: "M 96 82 L 340 82",
+    labelAbove: { you: false, telepy: false, others: false },
     at: {
         internet: { p: { x: 24, y: 24 }, a: "left" },
         lan: { p: { x: 582, y: 30 }, a: "left" },
@@ -97,8 +103,9 @@ const WIDE: Layout = {
     },
 };
 
-// 直式：Telepy 與裝置上下一直線穿過橫牆；「你」在左上，往右接 Telepy，往下直直撞牆。
-// Portrait: Telepy and the device in one vertical line through the horizontal wall; "you" top-left, right to Telepy, straight down into the wall.
+// 直式：你 ─ Telepy 在上面一列，Telepy 與裝置上下一直線穿過橫牆；左邊的其他裝置往下直直撞牆。
+// Portrait: you ─ Telepy on the top row, Telepy and the device in one vertical line through the horizontal wall;
+// other devices on the left run straight down into the wall.
 const TALL: Layout = {
     w: 360,
     h: 560,
@@ -106,14 +113,15 @@ const TALL: Layout = {
     you: { x: 80, y: 130 },
     telepy: { x: 264, y: 130 },
     device: { x: 264, y: 440 },
+    others: { x: 80, y: 240 },
     lan: { x: 10, y: 334, w: 340, h: 216 },
     wall: { x: 16, y: 322, w: 328, h: 12 },
     gate: { x: 264, y: 328 },
     block: { x: 80, y: 328 },
-    direct: "M 80 130 L 80 328",
+    direct: "M 80 240 L 80 328",
     tunnel: "M 264 440 L 264 130",
     access: "M 80 130 L 264 130",
-    labelAbove: { you: true, telepy: true },
+    labelAbove: { you: true, telepy: true, others: true },
     at: {
         internet: { p: { x: 16, y: 20 }, a: "left" },
         lan: { p: { x: 24, y: 360 }, a: "left" },
@@ -143,13 +151,16 @@ interface View {
     blockedActive: boolean;
     /** 沿通道走的鑰匙：out = 裝置 → Telepy，in = Telepy → 裝置。/ Key travelling along the tunnel. */
     token: null | "out" | "in";
-    active: { you: boolean; telepy: boolean; device: boolean };
+    active: { you: boolean; telepy: boolean; device: boolean; others: boolean };
 }
 
+// ① 內網把裝置隔離起來：其他裝置連不進去（你也一樣）② 裝置往外撥 ③ 你經通道進來，其他裝置仍然擋在外面。
+// ① The private network isolates the device: other devices can't get in (nor can you) ② the device dials out
+// ③ you come in through the tunnel while other devices are still kept out.
 const STORY: View[] = [
-    { tunnel: "off", access: "off", gate: "idle", blockedActive: true, token: null, active: { you: true, telepy: false, device: true } },
-    { tunnel: "pending", access: "off", gate: "open", blockedActive: false, token: "out", active: { you: false, telepy: true, device: true } },
-    { tunnel: "live", access: "live", gate: "open", blockedActive: false, token: null, active: { you: true, telepy: true, device: true } },
+    { tunnel: "off", access: "off", gate: "idle", blockedActive: true, token: null, active: { you: false, telepy: false, device: true, others: true } },
+    { tunnel: "pending", access: "off", gate: "open", blockedActive: false, token: "out", active: { you: false, telepy: true, device: true, others: false } },
+    { tunnel: "live", access: "live", gate: "open", blockedActive: true, token: null, active: { you: true, telepy: true, device: true, others: false } },
 ];
 
 const STORY_TEXT: { title: TranslationKey; body: TranslationKey }[] = [
@@ -168,7 +179,7 @@ function liveView(step: WizardStep, created: boolean, connected: boolean): View 
         gate: connected ? "open" : tunnel === "pending" ? "pending" : "idle",
         blockedActive: false,
         token: step === 3 ? "in" : null,
-        active: { you: step === 5, telepy: step !== 2, device: true },
+        active: { you: step === 5, telepy: step !== 2, device: true, others: false },
     };
 }
 
@@ -391,7 +402,7 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
                 <X size={12} strokeWidth={3} aria-hidden />
             </Marker>
             <Tag l={l} at={l.at.block} className="border-destructive/30 text-destructive">
-                <X strokeWidth={3} aria-hidden /> {t("wizard.scene.blocked")}
+                <ShieldCheck aria-hidden /> {t("wizard.scene.blocked")}
             </Tag>
             <Marker
                 l={l}
@@ -416,6 +427,7 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
             )}
 
             {/* 節點 / Nodes */}
+            <SceneNode l={l} at={l.others} icon={MonitorSmartphone} title={t("wizard.scene.others")} detail={t("wizard.scene.othersDetail")} active={view.active.others} above={l.labelAbove.others} />
             <SceneNode l={l} at={l.you} icon={Laptop} title={t("wizard.scene.you")} detail={t("wizard.scene.youDetail")} active={view.active.you} above={l.labelAbove.you} />
             <SceneNode l={l} at={l.telepy} glyph roomy title="Telepy" detail={t("wizard.scene.telepyDetail")} active={view.active.telepy} above={l.labelAbove.telepy}>
                 {reversePort !== null && <Chip mono title={t("wizard.scene.reservedPort")}>:{reversePort}</Chip>}
