@@ -92,6 +92,10 @@ switch ($Command) {
         Invoke-DevScript "dev-backend-debug" $Arguments
         break
     }
+    "geoip" {
+        Invoke-DevScript "dev-geoip" $Arguments
+        break
+    }
     default {
         Write-ColorMessage $Colors.Yellow "Usage: .\telepy.ps1 <sub-command> [args]"
         Write-ColorMessage $Colors.Blue "Sub-commands:"
@@ -100,6 +104,7 @@ switch ($Command) {
         Write-ColorMessage $Colors.Green "  shell: Open a shell in the backend container."
         Write-ColorMessage $Colors.Green "  migration: Reconcile the database schema (also runs automatically on start)."
         Write-ColorMessage $Colors.Green "  backend-debug: Recreate the backend container and follow its logs."
+        Write-ColorMessage $Colors.Green "  geoip: Download the offline IP geolocation databases (DB-IP Lite; re-run monthly)."
         break
     }
 }

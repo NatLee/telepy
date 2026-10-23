@@ -350,6 +350,11 @@ export const ja: Record<TranslationKey, string> = {
     "tunnels.endpointLive": "デバイスのパブリック IP {ip} · {time}に接続",
     "tunnels.endpointLast": "最後のパブリック IP {ip} · {time}まで接続",
     "tunnels.endpointCopyHint": "クリックで IP をコピー",
+    "tunnels.endpointHidden": "Telepy から見えているのはプライベートアドレスです。SSH ポートの手前にあるプロキシ、ロードバランサー、または Docker のポート転送が、デバイスの本当のパブリック IP を隠しています。",
+    "tunnels.endpointChanged": "{time}に {previous} から変わりました",
+    "tunnels.ipChangedToast": "{name} の接続元が {ip} に変わりました（以前は {previous}）。",
+    "geo.private": "プライベートネットワーク",
+    "geo.attribution": "IP 位置情報：{source}",
     "tunnels.presenceCount": "{count} 人が使用中",
     "tunnels.presenceTitle": "現在接続中",
     "tunnels.presenceShow": "接続中のユーザーを表示",
@@ -1379,6 +1384,7 @@ export const ja: Record<TranslationKey, string> = {
     "logs.event.preauth_close": "認証前に切断",
     "logs.event.degraded": "SSH 応答なし",
     "logs.event.recovered": "SSH 復旧",
+    "logs.event.ip_changed": "IP 変更",
 
     // ── コマンド早見表 / Command sheet ─────────────────────────────
     "sheet.title": "コマンド早見表",

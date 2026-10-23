@@ -32,6 +32,7 @@ use tokio::sync::Mutex;
 use crate::config::Config;
 use crate::db::{self, tunnels::like_prefix, Db};
 use crate::monitor::{Endpoint, StatusState};
+use crate::hub::Hub;
 use crate::presence::{self, Presence, PresenceGuard};
 
 /// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
@@ -68,6 +69,7 @@ pub struct Gateway {
     db: Db,
     status: Arc<StatusState>,
     presence: Arc<Presence>,
+    hub: Arc<Hub>,
     forwards: DashMap<u16, Arc<Forward>>,
     /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
@@ -142,7 +144,7 @@ fn bare_key(key: &russh::keys::PublicKey) -> anyhow::Result<String> {
 }
 
 impl Gateway {
-    pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>) -> Self {
+    pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>, hub: Arc<Hub>) -> Self {
         let keys = config.gateway_host_keys_dir.as_deref().map(load_host_keys).unwrap_or_default();
         let host_keys_loaded = keys.len();
         Self {
@@ -151,6 +153,7 @@ impl Gateway {
             db,
             status,
             presence,
+            hub,
             forwards: DashMap::new(),
             conns: DashMap::new(),
             live: AtomicUsize::new(0),
@@ -207,6 +210,11 @@ impl Gateway {
         }
     }
 
+    /// gateway 用的通知 hub（AppState 共用同一個）。/ The notification hub, shared with AppState.
+    pub fn hub(&self) -> Arc<Hub> {
+        self.hub.clone()
+    }
+
     pub fn active_ports(&self) -> Vec<u16> {
         let mut v: Vec<u16> = self.forwards.iter().map(|e| *e.key()).collect();
         v.sort_unstable();
@@ -259,14 +267,39 @@ impl Gateway {
     }
 
     /// forward 註冊好之後：記下這條隧道最後一次從哪裡連上來（離線時 tunnel list 顯示「最後 IP」）。
+    /// IP 跟上次不同時記 `ip_changed` 事件，並通知擁有者與 ADMIN sharee（可能是金鑰外流，也可能只是浮動 IP）。
+    /// On an address change, log `ip_changed` and tell the owner and ADMIN sharees (a leaked key, or just a dynamic IP).
     async fn remember_endpoint(&self, conn_id: u64, port: u16) {
-        let Some(ep) = self.conns.get(&conn_id).map(|c| c.endpoint()) else { return };
-        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
-            tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
-        }
+        let Some((ep, peer)) = self.conns.get(&conn_id).map(|c| (c.endpoint(), c.peer)) else { return };
+        let change = match db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+                None
+            }
+        };
+        // 連線歷史每次都記（不管 IP 有沒有換）。/ The connection history records every connect.
         if let Err(e) = db::tunnel_sessions::open(&self.db, port, &ep.ip, &ep.since).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel session");
         }
+        let Some(ch) = change else { return };
+        let message = format!("Tunnel {} now connects from {} (was {})", ch.tunnel_name, ep.ip, ch.previous);
+        self.event("ip_changed", Some(peer), Some(port), Some(ch.tunnel_id), message.clone()).await;
+        let mut users = vec![ch.owner_id];
+        users.extend(db::sharing::admin_sharee_ids(&self.db, ch.tunnel_id).await.unwrap_or_default());
+        self.hub.notify_users(
+            users,
+            &serde_json::json!({
+                "action": "TUNNEL-IP-CHANGED",
+                "tunnel_id": ch.tunnel_id,
+                "tunnel_name": ch.tunnel_name,
+                "ip": ep.ip,
+                "previous_ip": ch.previous,
+                "details": message,
+            }),
+        );
+        // 站台設定了 webhook 時也送過去（沒設就立刻返回）。/ Also to the site webhook when one is set.
+        crate::monitor::alerts::send_ip_change(&self.db, self.config.public_url.as_deref(), ch.tunnel_id, &ch.tunnel_name, i64::from(port), &ch.previous, &ep.ip).await;
     }
 
     /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。

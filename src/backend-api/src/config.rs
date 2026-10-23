@@ -79,6 +79,8 @@ pub struct Config {
     pub trusted_proxy_hops: usize,
     /// 直接採用這個標頭當來源 IP（例 `CF-Connecting-IP`）；只在上游一定會覆寫它時設定。/ Trusted client-IP header.
     pub client_ip_header: Option<String>,
+    /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
+    pub geoip_dir: PathBuf,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -125,6 +127,7 @@ impl Config {
         let ssh_logs_path = env("SSH_LOGS_PATH").map(PathBuf::from);
         let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
         let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
+        let geoip_dir = env("GEOIP_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("geoip"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -174,6 +177,7 @@ impl Config {
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
+            geoip_dir,
         }
     }
 

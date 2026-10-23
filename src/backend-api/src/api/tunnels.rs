@@ -81,12 +81,12 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             let mut v = tunnel_json(t, eff, counts.get(&t.id).copied().unwrap_or(0), tz);
             v["endpoint"] = if permissions::can_see_endpoint(eff, with_accounts.contains(&t.id), is_superuser) {
                 let port = u16::try_from(t.reverse_port).ok();
-                endpoint_json(port.and_then(|p| live.get(&p)), last.get(&t.id))
+                endpoint_json(port.and_then(|p| live.get(&p)), last.get(&t.id), &state.geoip)
             } else {
                 Value::Null
             };
             let entries = using.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
-            v["presence"] = presence_json(entries, permissions::can_see_presence_details(eff, is_superuser));
+            v["presence"] = presence_json(entries, permissions::can_see_presence_details(eff, is_superuser), &state.geoip);
             let port = u16::try_from(t.reverse_port).ok();
             let listening = port.is_some_and(|p| listen.contains(&p));
             let failures = port.map(|p| state.status.probe_failures(p)).unwrap_or(0);

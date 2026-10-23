@@ -260,7 +260,9 @@ const TABLES: &[(&str, &str)] = &[
             "tunnel_id" integer NOT NULL PRIMARY KEY,
             "ip" varchar(64) NOT NULL,
             "connected_at" datetime NOT NULL,
-            "last_seen_at" datetime NOT NULL
+            "last_seen_at" datetime NOT NULL,
+            "previous_ip" varchar(64) NULL,
+            "changed_at" datetime NULL
         )"#,
     ),
     // Rust 自有：隧道連線紀錄（一個 forward 一列），給連線紀錄與在線率。/ Connection history, one row per forward.
@@ -391,6 +393,8 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    ("telepy_tunnel_endpoint", "previous_ip", "varchar(64) NULL"),
+    ("telepy_tunnel_endpoint", "changed_at", "datetime NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),

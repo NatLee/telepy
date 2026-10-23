@@ -356,6 +356,11 @@ export const en = {
     "tunnels.endpointLive": "Device public IP {ip} · connected {time}",
     "tunnels.endpointLast": "Last public IP {ip} · last seen {time}",
     "tunnels.endpointCopyHint": "Click to copy the IP",
+    "tunnels.endpointHidden": "Telepy sees a private address: a proxy, load balancer or Docker's port forwarding in front of the SSH port is hiding the device's real public IP.",
+    "tunnels.endpointChanged": "Changed from {previous} {time}",
+    "tunnels.ipChangedToast": "{name} now connects from {ip} (was {previous}).",
+    "geo.private": "Private network",
+    "geo.attribution": "IP geolocation by {source}",
     "tunnels.presenceCount": "{count} using",
     "tunnels.presenceTitle": "Connected now",
     "tunnels.presenceShow": "Show who is connected",
@@ -1389,6 +1394,7 @@ export const en = {
     "logs.event.preauth_close": "Closed before auth",
     "logs.event.degraded": "SSH not answering",
     "logs.event.recovered": "SSH answering again",
+    "logs.event.ip_changed": "IP changed",
 
     // ── 指令速查 / Command sheet ───────────────────────────────────
     "sheet.title": "Command Sheet",
