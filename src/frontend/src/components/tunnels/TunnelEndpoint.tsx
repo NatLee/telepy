@@ -45,7 +45,6 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
         >
             {copied ? <Check className="text-success" /> : <Globe />}
             <span className="truncate">{endpoint.ip}</span>
-            {!endpoint.live && <span className="font-sans text-muted-foreground/80">· {when}</span>}
         </button>
     );
 }

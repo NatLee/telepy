@@ -9,7 +9,8 @@ import { Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
-import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { liveHealth } from "@/lib/tunnelHealth";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
@@ -23,6 +24,7 @@ interface TunnelTableRowProps extends TunnelActionHandlers {
 }
 
 export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelTableRowProps) {
+    const health = liveHealth(tunnel, isActive);
     return (
         <tr className="group hover:bg-surface transition-colors">
             <td className="px-4 py-3">
@@ -30,7 +32,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     <div
                         className={cn(
                             "grid place-items-center size-8 rounded-md shrink-0 border",
-                            isActive ? "border-success/25 bg-success/10 text-success" : "border-border bg-surface text-muted-foreground"
+                            HEALTH_TILE[health]
                         )}
                         aria-hidden
                     >
@@ -50,9 +52,10 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex items-center gap-2.5">
-                    <TunnelStatusPill online={isActive} />
+                    <TunnelStatusPill health={health} lastSeenAt={tunnel.last_seen_at} />
                     {isActive && <LatencyIndicator rttMs={latencyMs} online={isActive} size="xs" />}
                 </div>
+                {health === "offline" && <TunnelLastSeen at={tunnel.last_seen_at} className="mt-0.5 block" />}
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex flex-col items-start gap-1">
@@ -68,7 +71,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap text-right">
                 <div className="flex items-center justify-end gap-2">
-                    <TunnelOpenButtons tunnel={tunnel} online={isActive} variant="compact" />
+                    <TunnelOpenButtons tunnel={tunnel} online={isActive} degraded={health === "degraded"} variant="compact" />
                     <TunnelActions tunnel={tunnel} {...actions} />
                 </div>
             </td>

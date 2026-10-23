@@ -253,6 +253,14 @@ impl TelepyMcp {
         Some(u16::try_from(reverse_port).map(|p| listen.contains(&p)).unwrap_or(false))
     }
 
+    /// online / degraded（forward 在但 sshd 連續沒回應）/ offline；狀態不可用時 None。
+    /// online, degraded (forward up, device sshd not answering) or offline; None when status is unavailable.
+    fn health(&self, reverse_port: i64) -> Option<&'static str> {
+        let listening = self.online(reverse_port)?;
+        let failures = u16::try_from(reverse_port).map(|p| self.state.status.probe_failures(p)).unwrap_or(0);
+        Some(crate::monitor::health(listening, failures, true).as_str())
+    }
+
     fn rtt(&self, reverse_port: i64) -> Option<f64> {
         let lat = self.state.status.latency()?;
         u16::try_from(reverse_port).ok().and_then(|p| lat.get(&p).copied())
@@ -320,7 +328,7 @@ impl TelepyMcp {
         }
     }
 
-    #[tool(description = "Status of one tunnel: online, latency and the latest SSH gateway events (connects, disconnects, forwards).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "Status of one tunnel: online, health (online, degraded = the tunnel is up but the device's SSH server does not answer, offline), latency and the latest SSH gateway events (connects, disconnects, forwards, degraded, recovered).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
     async fn tunnel_status(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -344,6 +352,7 @@ impl TelepyMcp {
             "id": tunnel.id,
             "name": tunnel.host_friendly_name,
             "online": self.online(tunnel.reverse_port),
+            "health": self.health(tunnel.reverse_port),
             "rtt_ms": self.rtt(tunnel.reverse_port),
             "recent_events": events,
         })))

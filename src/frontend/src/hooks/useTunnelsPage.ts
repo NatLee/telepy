@@ -26,7 +26,7 @@ export function useTunnelsPage() {
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
     const [leaveConfirm, setLeaveConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
 
-    const { showSuccess, showError } = useToast();
+    const { showSuccess, showError, showToast } = useToast();
     const { user } = useAuth();
 
     // silent = 背景重抓（不轉圈、失敗不吵）。/ silent = background refresh: no spinner, no error toast.
@@ -101,6 +101,15 @@ export function useTunnelsPage() {
             if (latency && typeof latency === "object") {
                 setLatencyMap(prev => ({ ...prev, ...latency }));
             }
+        },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_HEALTH]: (msg) => {
+            // 降級 / 恢復：直接換這條的 health；變成降級時提醒一次。/ Degraded / recovered: patch it; warn once when it degrades.
+            const id = msg.tunnel_id;
+            const health = msg.health;
+            if (id === undefined || (health !== "online" && health !== "degraded" && health !== "offline")) return;
+            const tunnel = tunnelsRef.current.find(tn => tn.id === id);
+            setTunnels(prev => prev.map(tn => (tn.id === id ? { ...tn, health } : tn)));
+            if (health === "degraded" && tunnel) showToast(t("tunnels.degradedToast", { name: tunnel.host_friendly_name }), "warning");
         },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_PRESENCE]: (msg) => {
             // 人數直接換；看得到細節（誰 / IP）的隧道再靜默重抓一次列表。/ Update the count; refetch when details are visible.

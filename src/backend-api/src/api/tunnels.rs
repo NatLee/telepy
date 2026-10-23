@@ -55,6 +55,8 @@ async fn status_latency(State(state): State<AppState>, _user: AuthUser) -> ApiRe
 /// 列表序列化：以預先算好的表避免每列查詢（`tunnel_permission_context`）。
 /// 列表多一個 `endpoint`（裝置的公網 IP）：只給 [`permissions::can_see_endpoint`] 允許的人，其他人是 null；
 /// 和 `presence`（誰在用：人數給大家，細節給 [`permissions::can_see_presence_details`]）。
+/// `health`（online / degraded / offline / never，見 [`crate::monitor::Health`]）與 `last_seen_at`（離線時最後
+/// 一次有連線的時間，連著時 null）不含 IP，所以給所有看得到隧道的人。
 async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiResult<Vec<Value>> {
     let tunnels = db::tunnels::visible_to(&state.db, user_id).await?;
     let (my_shares, counts) = db::sharing::permission_context(&state.db, user_id).await?;
@@ -62,6 +64,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let last = db::tunnel_endpoints::visible_to(&state.db, user_id).await?;
     let live = state.status.endpoints();
     let using = state.presence.by_tunnel();
+    let seen = db::tunnel_endpoints::last_seen_visible_to(&state.db, user_id).await?;
+    let listen = state.status.listen_ports().unwrap_or_default();
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -76,6 +80,15 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             };
             let entries = using.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
             v["presence"] = presence_json(entries, permissions::can_see_presence_details(eff, is_superuser));
+            let port = u16::try_from(t.reverse_port).ok();
+            let listening = port.is_some_and(|p| listen.contains(&p));
+            let failures = port.map(|p| state.status.probe_failures(p)).unwrap_or(0);
+            let health = crate::monitor::health(listening, failures, listening || seen.contains_key(&t.id));
+            v["health"] = json!(health.as_str());
+            v["last_seen_at"] = match (listening, seen.get(&t.id)) {
+                (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
+                _ => Value::Null,
+            };
             v
         })
         .collect())

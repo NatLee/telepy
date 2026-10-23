@@ -46,6 +46,27 @@ pub async fn record_released(db: &Db, port: u16, at: &str) -> sqlx::Result<()> {
     Ok(())
 }
 
+/// 看得到的隧道最後一次有連線活動的時間（DB 格式）：endpoint 表的 last_seen_at，加上 gateway 的 forward /
+/// disconnect 事件（endpoint 表是 #121 才有的，更早連過的隧道只在事件裡）。有值 = 曾經連上過。
+/// 只有時間、沒有 IP，所以給所有看得到隧道的人。
+/// Last connection activity per visible tunnel: the endpoint row plus forward / disconnect events (the endpoint
+/// table is newer than some tunnels). Present = the tunnel has connected at least once. Time only, no IP.
+pub async fn last_seen_visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, String>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!(
+        "SELECT tunnel_id, MAX(at) FROM ( \
+           SELECT tunnel_id, last_seen_at AS at FROM {E} \
+           UNION ALL \
+           SELECT tunnel_id, at FROM telepy_gateway_event WHERE event IN ('forward', 'disconnect') AND tunnel_id IS NOT NULL \
+         ) WHERE tunnel_id IN (SELECT id FROM {T} WHERE user_id = ? UNION SELECT tunnel_id FROM tunnels_tunnelsharing WHERE shared_with_id = ?) \
+         GROUP BY tunnel_id"
+    ))
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(&db.read)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// 使用者看得到的隧道（owned ∪ shared）的最後已知來源，以 tunnel id 為鍵。
 pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, LastEndpoint>> {
     let rows: Vec<LastEndpoint> = sqlx::query_as(&format!(

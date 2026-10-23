@@ -203,6 +203,12 @@ export const ja: Record<TranslationKey, string> = {
     "tunnels.emptyBody": "新しいリバースプロキシトンネルを作成して、ローカルサービスを安全に公開しましょう。",
     "tunnels.online": "オンライン",
     "tunnels.offline": "オフライン",
+    "tunnels.degraded": "低下",
+    "tunnels.never": "未接続",
+    "tunnels.degradedHint": "トンネルはつながっていますが、デバイスの SSH サーバーが応答しません。デバイスで sshd が動いているか確認してください。",
+    "tunnels.neverHint": "このトンネルはまだ一度も接続していません。デバイスでセットアップのコマンドを実行してください。",
+    "tunnels.lastSeen": "最終接続 {time}",
+    "tunnels.degradedToast": "{name}：トンネルはつながっていますが、デバイスの SSH サーバーが応答しません。",
     "tunnels.thName": "名前",
     "tunnels.thActions": "操作",
     "tunnels.sharedWithYou": "共有されています",
@@ -1068,6 +1074,8 @@ export const ja: Record<TranslationKey, string> = {
     "logs.event.failed_publickey": "鍵拒否",
     "logs.event.invalid_user": "無効なユーザー",
     "logs.event.preauth_close": "認証前に切断",
+    "logs.event.degraded": "SSH 応答なし",
+    "logs.event.recovered": "SSH 復旧",
 
     // ── コマンド早見表 / Command sheet ─────────────────────────────
     "sheet.title": "コマンド早見表",
