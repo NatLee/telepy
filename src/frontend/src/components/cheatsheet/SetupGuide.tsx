@@ -3,53 +3,29 @@
 /**
  * 第一次使用的設定（對話框）：照相依順序的四步清單——登記金鑰 → 裝置在線 → 金鑰裝到裝置 → ~/.ssh/config。
  * 上方進度條一眼看出還差幾步；第一個沒完成的步驟自動展開並加框標成「下一步」，完成的收成一行摘要，
- * 做完一步就自動跳到下一步。~/.ssh/config 兩段分開顯示、整段展開（不在對話框裡再套一層捲動）。
+ * 做完一步就自動跳到下一步。~/.ssh/config 那步用共用的 SshConfigInstall：一行指令寫進去，或手動貼上逐行註解的兩段。
  * First-time setup (dialog): a four-step checklist in dependency order — register a key → device online → key on
  * the device → ~/.ssh/config. A progress bar shows what's left; the first unfinished step opens by itself and is
  * framed as "next", finished steps collapse to a one-line summary, and finishing a step moves on to the next.
- * The two ~/.ssh/config blocks are shown separately and in full (no scroll box nested inside the dialog).
+ * The ~/.ssh/config step uses the shared SshConfigInstall: one command writes it, or paste the two annotated blocks.
  */
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, ChevronDown, CircleAlert, Clock3, KeyRound, ListChecks, Loader2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
-import { CodeBlock } from "@/components/ui/CodeBlock";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { TargetChip } from "@/components/keys/TargetChips";
+import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { ConnectMode } from "@/lib/forwardRecipes";
+import { parseStanzas, type ConfigStanza } from "@/lib/sshConfig";
 import type { SetupChecklist, SetupStepId, SetupStepState } from "@/hooks/useSetupChecklist";
 
-/**
- * 後端的 config = 「Reverse Server Configuration」段 + 「Endpoint Configuration」段；拆開才能說明伺服器那段每台電腦只加一次。
- * 認不出分界就回 null（整段顯示）。
- * The backend config is a server section followed by an endpoint section; split it so the UI can say the server
- * block is added once per computer. Returns null when the boundary isn't found (shown as one block).
- */
-function splitConfig(text: string): [string, string] | null {
-    const lines = text.split("\n");
-    const i = lines.findIndex((l) => l.trim() === "# Endpoint Configuration");
-    if (i < 1) return null;
-    const start = lines[i - 1].startsWith("# ===") ? i - 1 : i;
-    // 開頭的 # ==== 標題註解拿掉：畫面上已有各段的標題，區塊短一點就不用捲。
-    // Drop the leading "# ====" banner comments: the UI labels each block, and shorter blocks need less scrolling.
-    const body = (part: string[]) => {
-        const first = part.findIndex((l) => l.trim() !== "" && !l.trim().startsWith("#"));
-        return first < 0 ? "" : part.slice(first).join("\n").trim();
-    };
-    const server = body(lines.slice(0, start));
-    const device = body(lines.slice(start));
-    return server && device ? [`${server}\n`, `${device}\n`] : null;
-}
+/** 裝置區塊都經 ProxyCommand 跳過伺服器區塊。/ Device stanzas hop through the server one via ProxyCommand. */
+const isDevice = (s: ConfigStanza) => s.options.some((o) => o.key.toLowerCase() === "proxycommand");
 
-/**
- * 對話框內容被截掉時，在底部疊一層漸層和「往下還有」按鈕（點了捲到底）；看得到結尾就隱藏。
- * -bottom-5 抵掉 Modal 內容區的 py-5，漸層才會貼齊捲動區下緣。
- * When the dialog body is cut off, overlay a fade and a "more below" pill at the bottom (click = scroll to the end);
- * hidden once the end is visible. -bottom-5 cancels the Modal body's py-5 so the fade sits on the scrollport edge.
- */
 function StepBadge({ n, state, current }: { n: number; state: SetupStepState; current: boolean }) {
     const base = "grid size-7 shrink-0 place-items-center rounded-full text-xs font-bold";
     if (state === "done") {
@@ -296,7 +272,7 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
 
     const configStep = () => {
         const isDone = stateOf("config") === "done";
-        const parts = configText ? splitConfig(configText) : null;
+        const stanzas = configText ? parseStanzas(configText) : [];
         if (mode === "direct") {
             return {
                 summary: t("sheet.setup.directSummary"),
@@ -313,23 +289,14 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
             body: (
                 <>
                     <p>{tn("sheet.setup.configBody", { path: code("~/.ssh/config"), cmd: code(`ssh ${alias}`) })}</p>
-                    {configText && (parts ? (
-                        <div className="space-y-3">
-                            <div className="space-y-1.5">
-                                <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
-                                    <span className="text-foreground">{t("sheet.setup.configServer")}</span>
-                                    <span>{t("sheet.setup.configServerHint")}</span>
-                                </p>
-                                <CodeBlock language="ssh" value={parts[0]} />
-                            </div>
-                            <div className="space-y-1.5">
-                                <p className="text-xs text-foreground">{t("sheet.setup.configDevice", { alias })}</p>
-                                <CodeBlock language="ssh" value={parts[1]} />
-                            </div>
-                        </div>
-                    ) : (
-                        <CodeBlock language="ssh" value={configText} />
-                    ))}
+                    {configText && (
+                        <SshConfigInstall
+                            serverStanza={stanzas.find((st) => !isDevice(st)) ?? null}
+                            deviceStanzas={stanzas.filter(isDevice)}
+                            active={null}
+                            onActive={() => {}}
+                        />
+                    )}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border/70 pt-3">
                         {isDone ? (
                             <Button size="sm" variant="outline" onClick={() => checklist.markConfig(false)} disabled={!username}>
