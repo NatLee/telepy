@@ -565,17 +565,25 @@ pub async fn revoke_grant_by_id(state: &AppState, grant_id: i64) -> sqlx::Result
     Ok(())
 }
 
-/// 隧道刪除：把它從每個 grant 的限制清單拿掉（隧道 id 不會被別的隧道重用，但清單不留死 id）；
-/// `revoke_orphans` 時，清單因此變空的有效 grant 直接撤銷。回傳（撤銷數, 拿掉隧道但仍保留的數）。
-/// Tunnel deleted: drop it from every grant's restriction list and, with `revoke_orphans`, revoke the
-/// active grants left with no tunnel. Returns (revoked, detached).
-pub async fn detach_tunnel(state: &AppState, tunnel_id: i64, revoke_orphans: bool) -> sqlx::Result<(usize, usize)> {
+/// 隧道刪除：先撤銷使用者選的整個 grant（`revoke`，呼叫端已檢查過可以撤銷），再把隧道從每個 grant 的限制清單拿掉
+/// （隧道 id 不會被別的隧道重用，但清單不留死 id）；`revoke_orphans` 時，清單因此變空的有效 grant 也撤銷。
+/// 回傳（撤銷數, 拿掉隧道但仍保留的數）。
+/// Tunnel deleted: revoke the grants the user picked (`revoke`, already checked by the caller), drop the
+/// tunnel from every restriction list and, with `revoke_orphans`, revoke the active grants left with no
+/// tunnel. Returns (revoked, detached).
+pub async fn detach_tunnel(state: &AppState, tunnel_id: i64, revoke_orphans: bool, revoke: &std::collections::HashSet<i64>) -> sqlx::Result<(usize, usize)> {
     let now = crate::util::now_db();
     let (mut revoked, mut detached) = (0, 0);
+    for &id in revoke {
+        if db::oauth::grant_by_id(&state.db, id).await?.is_some_and(|g| g.is_active(&now)) {
+            revoke_grant_by_id(state, id).await?;
+            revoked += 1;
+        }
+    }
     for g in db::oauth::grants_naming_tunnel(&state.db, tunnel_id).await? {
         let rest = oauth::without_tunnel(&g.tunnel_id_list().unwrap_or_default(), tunnel_id);
         db::oauth::grant_set_tunnels(&state.db, g.id, &rest).await?;
-        if !g.is_active(&now) {
+        if revoke.contains(&g.id) || !g.is_active(&now) {
             continue;
         }
         if rest.is_empty() && revoke_orphans {

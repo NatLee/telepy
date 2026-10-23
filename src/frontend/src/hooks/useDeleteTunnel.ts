@@ -1,7 +1,7 @@
 /**
  * 刪除隧道對話框的邏輯:開啟時讀 `GET /api/reverse/server/{id}/delete-check`(誰失去存取、Telepy 在裝置上裝過
- * 哪些金鑰、哪些 MCP 授權 / AI session 受影響),讓使用者選要不要移除金鑰 / 服務金鑰、撤銷只限這條隧道的授權,
- * 再以 query 帶選項 DELETE;回來的報告(每個帳號清掉什麼、還留下什麼)顯示在同一個對話框。
+ * 哪些金鑰、哪些 MCP 授權 / AI session 受影響),讓使用者選要不要移除金鑰 / 服務金鑰,以及每個 app 的處理方式
+ * (只拿掉這條隧道,或整個撤銷),再以 query 帶選項 DELETE;回來的報告顯示在同一個對話框。
  * Delete-tunnel dialog logic: load the delete check on open, let the user pick what to clean up, DELETE with
  * those options as query parameters and keep the returned report to show what was cleaned.
  */
@@ -27,6 +27,16 @@ export interface DeleteCheckGrant {
     /** only = 只限這條;shared = 這條 + 其他;all = 不限隧道。/ only / shared / all tunnels. */
     coverage: "only" | "shared" | "all";
     other_tunnels: number;
+    /** 能不能整個撤銷(自己的、管理員,或只限這條)。/ Whether the whole grant may be revoked here. */
+    can_revoke: boolean;
+}
+
+/** 每個 app 怎麼處理:revoke = 整個撤銷;keep = 只拿掉這條隧道(其他照舊)。/ Per-app choice. */
+export type GrantChoice = "revoke" | "keep";
+
+/** 預設:只限這條的撤銷(留著也沒用),其他的只拿掉這條。/ Default: revoke single-tunnel grants, keep the rest. */
+export function defaultGrantChoice(g: DeleteCheckGrant): GrantChoice {
+    return g.coverage === "only" && g.can_revoke ? "revoke" : "keep";
 }
 
 export interface DeleteCheck {
@@ -41,6 +51,24 @@ export interface DeleteCheck {
     ai_sessions: AiSession[];
 }
 
+/** 裝置端移除腳本回報的一行。/ One line reported by the device-side removal script. */
+export interface ServiceItem {
+    kind: string;
+    what: string;
+    detail: string;
+}
+
+/** 把隧道服務從裝置移除的結果(每個登入帳號一份)。/ Removing the tunnel service from the device. */
+export interface ServiceRemoval {
+    accounts: { account: string; platform: "posix" | "windows" | null; os: string | null; items: ServiceItem[]; error: string | null }[];
+    found: boolean;
+    launched: boolean;
+    /** 裝置自己斷線了(真的停了)。/ The device dropped the tunnel by itself. */
+    stopped: boolean;
+    /** 停了又連回來(還有東西在重啟它)。/ It came back: something still restarts it. */
+    came_back: boolean;
+}
+
 export interface DeleteReport {
     deleted: boolean;
     online: boolean;
@@ -50,18 +78,23 @@ export interface DeleteReport {
     grants_detached: number;
     ai_sessions_closed: number;
     device_disconnected: boolean;
+    /** null = 沒要求或裝置離線。/ null = not asked for, or the device was offline. */
+    service: ServiceRemoval | null;
 }
 
 export interface DeleteOptions {
     removeDeviceKeys: boolean;
     removeServiceKey: boolean;
-    revokeGrants: boolean;
+    /** 把裝置上跑這條隧道的服務也移除。/ Also remove what runs the tunnel on the device. */
+    removeService: boolean;
 }
 
 export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDeleted: () => void) {
     const { t } = useI18n();
     const [check, setCheck] = useState<{ id: number; data: DeleteCheck | null; error: string | null } | null>(null);
-    const [options, setOptions] = useState<DeleteOptions>({ removeDeviceKeys: true, removeServiceKey: false, revokeGrants: true });
+    const [options, setOptions] = useState<DeleteOptions>({ removeDeviceKeys: true, removeServiceKey: false, removeService: true });
+    // 使用者改過的 app 選擇;沒改過的用預設。/ Per-app choices the user changed; the rest use the default.
+    const [grantChoices, setGrantChoices] = useState<Record<number, GrantChoice>>({});
     const [deleting, setDeleting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [report, setReport] = useState<DeleteReport | null>(null);
@@ -88,6 +121,9 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
     const current = check && check.id === tunnelId ? check : null;
     const data = current?.data ?? null;
 
+    const choiceFor = useCallback((g: DeleteCheckGrant): GrantChoice => (g.can_revoke ? (grantChoices[g.id] ?? defaultGrantChoice(g)) : "keep"), [grantChoices]);
+    const setGrantChoice = useCallback((id: number, choice: GrantChoice) => setGrantChoices((c) => ({ ...c, [id]: choice })), []);
+
     const submit = useCallback(async () => {
         if (tunnelId === null || !data) return;
         setDeleting(true);
@@ -96,7 +132,9 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         const qs = new URLSearchParams({
             remove_device_keys: String(data.online && options.removeDeviceKeys),
             remove_service_key: String(data.online && options.removeServiceKey),
-            revoke_grants: String(options.revokeGrants),
+            remove_service: String(data.online && options.removeService),
+            revoke_grants: "false",
+            revoke_grant_ids: data.grants.filter((g) => choiceFor(g) === "revoke").map((g) => g.id).join(","),
         });
         try {
             const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}?${qs.toString()}`, { method: "DELETE" });
@@ -112,7 +150,7 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         } finally {
             setDeleting(false);
         }
-    }, [tunnelId, data, options, onDeleted, t]);
+    }, [tunnelId, data, options, choiceFor, onDeleted, t]);
 
     const setOption = useCallback(<K extends keyof DeleteOptions>(key: K, value: DeleteOptions[K]) => setOptions((o) => ({ ...o, [key]: value })), []);
 
@@ -122,6 +160,8 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
         loading: isOpen && tunnelId !== null && current === null,
         options,
         setOption,
+        choiceFor,
+        setGrantChoice,
         deleting,
         error,
         report,

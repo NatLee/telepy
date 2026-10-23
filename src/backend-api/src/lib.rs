@@ -26,5 +26,6 @@ pub mod sftp;
 pub mod ssh;
 pub mod state;
 pub mod tokens;
+pub mod tunnel_service;
 pub mod util;
 pub mod ws;

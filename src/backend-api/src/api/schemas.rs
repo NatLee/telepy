@@ -1404,6 +1404,9 @@ pub struct TunnelDeleteGrant {
     #[schema(example = "only")]
     pub coverage: String,
     pub other_tunnels: i64,
+    /// The caller may revoke the whole authorization here (own grant, admin, or limited to this tunnel);
+    /// otherwise deleting only drops this tunnel from it
+    pub can_revoke: bool,
 }
 
 #[derive(ToSchema)]
@@ -1443,4 +1446,43 @@ pub struct TunnelDeleteReport {
     pub grants_detached: i64,
     pub ai_sessions_closed: i64,
     pub device_disconnected: bool,
+    /// Removal of the tunnel's service from the device (null unless remove_service and the device was online)
+    pub service: Option<TunnelServiceRemoval>,
+}
+
+/// One result line of the device-side removal script
+#[derive(ToSchema)]
+pub struct TunnelServiceItem {
+    /// platform / found / removed / scheduled / needs_root / kept / note / failed / stopscript / launched / done
+    #[schema(example = "found")]
+    pub kind: String,
+    /// What it is about: systemd, systemd-user, launchd, cron, loop, docker, process, script, task, service, run-key, startup, file, unit, key, log, stop…
+    #[schema(example = "systemd")]
+    pub what: String,
+    /// Path, unit name, command line, or the command to run by hand (needs_root)
+    pub detail: String,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelServiceAccount {
+    pub account: String,
+    #[schema(example = "posix")]
+    pub platform: Option<String>,
+    #[schema(example = "Linux")]
+    pub os: Option<String>,
+    pub items: Vec<TunnelServiceItem>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelServiceRemoval {
+    pub accounts: Vec<TunnelServiceAccount>,
+    /// At least one install method or running process was found
+    pub found: bool,
+    /// A stop script was started on the device
+    pub launched: bool,
+    /// The device dropped the tunnel by itself afterwards (the service really stopped)
+    pub stopped: bool,
+    /// …and it came back: something still restarts it
+    pub came_back: bool,
 }

@@ -99,8 +99,8 @@ async fn delete_check_and_cleanup_on_a_live_device() {
     }
     let g_only = grant(&lab, &alice, "c-only", Some(&[dev.tunnel_id])).await;
     let g_shared = grant(&lab, &alice, "c-shared", Some(&[dev.tunnel_id, other.id])).await;
-    grant(&lab, &alice, "c-all", None).await;
-    grant(&lab, &bob, "c-all", None).await;
+    let g_all = grant(&lab, &alice, "c-all", None).await;
+    let g_bob = grant(&lab, &bob, "c-all", None).await;
     // carol 看不到這條隧道：她不限隧道的授權跟它無關。/ Carol cannot see the tunnel; her grant is unrelated.
     grant(&lab, &carol, "c-all", None).await;
 
@@ -123,22 +123,30 @@ async fn delete_check_and_cleanup_on_a_live_device() {
     );
     assert_eq!(c["grants"][1]["other_tunnels"], 1);
     assert_eq!(c["grants"][3]["mine"], false);
+    // 自己的都能整個撤銷；bob 不限隧道的授權不行（只會少了這一條）。/ Alice may revoke her own; not bob's unrestricted one.
+    let can: Vec<bool> = c["grants"].as_array().unwrap().iter().map(|g| g["can_revoke"].as_bool().unwrap()).collect();
+    assert_eq!(can, vec![true, true, true, false]);
 
-    // --- 刪除：移除金鑰 + 服務金鑰、撤銷只限這條的授權
-    let r = lab.app.delete(&format!("/api/reverse/server/keys/{}?remove_device_keys=true&remove_service_key=true&revoke_grants=true", dev.tunnel_id), Some(&alice.token)).await;
+    // --- 刪除：移除金鑰 + 服務金鑰、撤銷只限這條的授權，再加上 alice 選的整個撤銷（bob 的那個會被忽略）
+    let r = lab
+        .app
+        .delete(&format!("/api/reverse/server/keys/{}?remove_device_keys=true&remove_service_key=true&revoke_grants=true&revoke_grant_ids={g_all},{g_bob}", dev.tunnel_id), Some(&alice.token))
+        .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let rep = r.json;
     assert_eq!((rep["deleted"].as_bool(), rep["online"].as_bool(), rep["keys_left"].as_i64()), (Some(true), Some(true), Some(0)), "{rep}");
     for a in rep["accounts"].as_array().unwrap() {
         assert_eq!((a["removed"].as_i64(), a["service_key_removed"].as_bool(), a["error"].clone()), (Some(1), Some(true), Value::Null), "{rep}");
     }
-    assert_eq!((rep["grants_revoked"].as_i64(), rep["grants_detached"].as_i64()), (Some(1), Some(1)), "{rep}");
+    assert_eq!((rep["grants_revoked"].as_i64(), rep["grants_detached"].as_i64()), (Some(2), Some(1)), "{rep}");
     assert_eq!(rep["device_disconnected"], true);
     for account in ["ubuntu", "root"] {
         assert_eq!(boxm.authorized_keys(account), "# by hand\n", "{account}");
     }
     let only = db::oauth::grant_by_id(&lab.app.state.db, g_only).await.unwrap().unwrap();
     assert!(only.revoked_at.is_some());
+    assert!(db::oauth::grant_by_id(&lab.app.state.db, g_all).await.unwrap().unwrap().revoked_at.is_some());
+    assert!(db::oauth::grant_by_id(&lab.app.state.db, g_bob).await.unwrap().unwrap().revoked_at.is_none());
     let shared = db::oauth::grant_by_id(&lab.app.state.db, g_shared).await.unwrap().unwrap();
     assert_eq!((shared.revoked_at.is_none(), shared.tunnel_id_list()), (true, Some(vec![other.id])));
     // 裝置被踢掉，forward 釋放。/ The device was dropped and its forward released.
@@ -204,4 +212,66 @@ async fn offline_delete_keeps_grants_by_default_and_app_details() {
     let grants = lab.app.get("/api/oauth/grants", Some(&alice.token)).await.json;
     assert_eq!(grants[0]["tunnels"], json!([]), "{grants}");
     assert!(db::device_keys::installed_for_tunnel(&lab.app.state.db, t.id).await.unwrap().is_empty());
+}
+
+/// 刪除時連裝置上的隧道服務一起移除：裝置是真的 `/bin/sh`（HOME 在暫存目錄），隧道本身就是 lab 的 `ssh -NR`。
+/// 放一份「一行指令安裝」的背景迴圈檔案 + 下載的腳本 + 不相干的檔案；刪完要：檔案沒了、不相干的還在、
+/// 裝置自己斷線（停止腳本殺掉了 ssh）而且沒再連回來。
+/// The tunnel service goes too: a real shell device whose own `ssh -NR` must be stopped, join files removed,
+/// unrelated files kept, and the gateway sees the device drop by itself without coming back.
+#[tokio::test]
+async fn delete_removes_the_tunnel_service_from_the_device() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let home = boxm.account_home("pi");
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "pi").await;
+    let (id, port) = (dev.tunnel_id, dev.reverse_port);
+    let ssh = home.join(".ssh");
+    std::fs::create_dir_all(&ssh).unwrap();
+    let write = |name: &str, body: String| std::fs::write(home.join(name), body).unwrap();
+    write(&format!(".ssh/telepy-tunnel-{id}.sh"), format!("#!/bin/sh\nwhile :; do\n    ssh -NT -R {port}:localhost:22 telepy@gw\n    sleep 10\ndone\n"));
+    write(&format!(".ssh/telepy-tunnel-{id}.log"), "connected\n".into());
+    write(&format!(".ssh/telepy-uninstall-{id}.sh"), format!("#!/bin/sh\n# Stops and removes the Telepy tunnel box (#{id}) installed by the join script.\n"));
+    write(".ssh/telepy_tunnel_ed25519", "private\n".into());
+    write(".ssh/telepy_tunnel_ed25519.pub", format!("{}\n", dev.key.public));
+    write(".ssh/telepy_tunnel_other", "private\n".into());
+    write(".ssh/telepy_tunnel_other.pub", "ssh-ed25519 AAAAother other\n".into());
+    write(".ssh/telepy_known_hosts", "telepy-gw-1 ssh-ed25519 AAAAhost\n".into());
+    write("telepy-ssh.sh", format!("ssh -NR '*:{port}:localhost:22' telepy@gw\n"));
+    write("other.sh", format!("ssh -NR '*:{}:localhost:22' telepy@gw\n", port as u32 + 1));
+
+    let r = lab.app.delete(&format!("/api/reverse/server/keys/{id}?remove_device_keys=true&remove_service=true"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let svc = &r.json["service"];
+    let items: Vec<(String, String, String)> = svc["accounts"][0]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["kind"].as_str().unwrap().to_string(), i["what"].as_str().unwrap().to_string(), i["detail"].as_str().unwrap().to_string()))
+        .collect();
+    let has = |kind: &str, what: &str, detail: &str| items.iter().any(|(k, w, d)| k == kind && w == what && d.contains(detail));
+    assert_eq!(svc["accounts"][0]["platform"], "posix", "{svc}");
+    assert!(has("found", "process", &format!(":{port}:")), "the running ssh was found: {items:?}");
+    assert!(has("found", "loop", &format!("telepy-tunnel-{id}.sh")), "{items:?}");
+    assert!(has("removed", "key", "telepy_tunnel_ed25519.pub"), "{items:?}");
+    assert!(has("kept", "key", "telepy_tunnel_other"), "{items:?}");
+    assert!(items.iter().any(|(k, _, _)| k == "launched"), "{items:?}");
+    assert_eq!((svc["found"].as_bool(), svc["launched"].as_bool(), svc["stopped"].as_bool(), svc["came_back"].as_bool()), (Some(true), Some(true), Some(true), Some(false)), "{svc}");
+
+    // 檔案：這條隧道的都沒了（log 由停止腳本在停掉之後刪），其他的還在。/ Files: this tunnel's are gone, the rest stay.
+    let gone = [format!(".ssh/telepy-tunnel-{id}.sh"), format!(".ssh/telepy-uninstall-{id}.sh"), ".ssh/telepy_tunnel_ed25519".into(), ".ssh/telepy_tunnel_ed25519.pub".into(), ".ssh/telepy_known_hosts".into(), "telepy-ssh.sh".into(), format!(".ssh/telepy-tunnel-{id}.log")];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while gone.iter().any(|f| home.join(f).exists()) {
+        assert!(tokio::time::Instant::now() < deadline, "left behind: {:?}", gone.iter().filter(|f| home.join(f).exists()).collect::<Vec<_>>());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    for kept in [".ssh/telepy_tunnel_other", ".ssh/telepy_tunnel_other.pub", "other.sh"] {
+        assert!(home.join(kept).exists(), "{kept} must stay");
+    }
+    // 停止腳本刪掉了自己。/ The stop script deleted itself.
+    let leftovers: Vec<_> = std::fs::read_dir(home.join("tmp")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }

@@ -230,6 +230,19 @@ async fn partial_update(State(state): State<AppState>, AuthUser(user): AuthUser,
     apply_update(&state, user.id, id, body, true).await
 }
 
+/// 碰得到這條隧道的有效 grant。不限隧道的只算看得到這條隧道的人的（其他人的授權本來就碰不到它）。
+/// Active grants that reach the tunnel; unrestricted ones only for people who can see it.
+async fn affected_grants(state: &AppState, t: &Tunnel, audience: &[i64]) -> ApiResult<Vec<(db::oauth::GrantOverview, crate::oauth::Coverage)>> {
+    Ok(db::oauth::active_grant_overview(&state.db)
+        .await?
+        .into_iter()
+        .filter_map(|g| {
+            let coverage = crate::oauth::coverage(g.tunnel_id_list().as_deref(), t.id)?;
+            (coverage != crate::oauth::Coverage::All || audience.contains(&g.user_id)).then_some((g, coverage))
+        })
+        .collect())
+}
+
 /// 刪除前的檢查與刪除本身都要 owner / ADMIN。/ Both the check and the delete need owner / ADMIN.
 async fn deletable_tunnel(state: &AppState, user_id: i64, id: i64) -> ApiResult<Tunnel> {
     let t = visible_tunnel(state, user_id, id).await?;
@@ -252,28 +265,23 @@ async fn delete_check(State(state): State<AppState>, AuthUser(user): AuthUser, P
     let using = state.presence.for_tunnel(t.id);
     let lan_hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?.len();
     let keys = crate::device_keys::installed_summary(&state.db, t.id).await?;
-    // 不限隧道的授權只算看得到這條隧道的人的（其他人的授權本來就碰不到它）。
-    // Unrestricted grants count only for people who can see this tunnel.
-    let grants: Vec<Value> = db::oauth::active_grant_overview(&state.db)
+    let grants: Vec<Value> = affected_grants(&state, &t, &audience)
         .await?
         .into_iter()
-        .filter_map(|g| {
-            let coverage = crate::oauth::coverage(g.tunnel_id_list().as_deref(), t.id)?;
-            if coverage == crate::oauth::Coverage::All && !audience.contains(&g.user_id) {
-                return None;
-            }
-            let others = match coverage {
-                crate::oauth::Coverage::Shared(n) => n,
-                _ => 0,
-            };
-            Some(json!({
+        .map(|(g, coverage)| {
+            let mine = g.user_id == user.id;
+            json!({
                 "id": g.id,
                 "client_name": g.client_name,
                 "user": { "id": g.user_id, "username": g.username },
-                "mine": g.user_id == user.id,
+                "mine": mine,
                 "coverage": coverage.as_str(),
-                "other_tunnels": others,
-            }))
+                "other_tunnels": match coverage {
+                    crate::oauth::Coverage::Shared(n) => n,
+                    _ => 0,
+                },
+                "can_revoke": crate::oauth::may_revoke_whole(mine, user.is_superuser, coverage),
+            })
         })
         .collect();
     let tz = state.config.tz_offset_minutes;
@@ -299,6 +307,10 @@ struct DeleteOptions {
     remove_device_keys: Option<bool>,
     remove_service_key: Option<bool>,
     revoke_grants: Option<bool>,
+    /// 逗號分隔的 grant id：整個撤銷（不只拿掉這條隧道）。/ Comma-separated grant ids to revoke entirely.
+    revoke_grant_ids: Option<String>,
+    /// 也把裝置上跑這條隧道的服務移除（每種安裝方式都試）。/ Also remove the tunnel's service from the device.
+    remove_service: Option<bool>,
 }
 
 #[utoipa::path(delete, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(
@@ -306,20 +318,41 @@ struct DeleteOptions {
     ("remove_device_keys" = Option<bool>, Query, description = "Remove the keys Telepy installed on the device (default true; needs the device online)"),
     ("remove_service_key" = Option<bool>, Query, description = "Also remove Telepy's service key from every login account of the tunnel (default false; needs the device online)"),
     ("revoke_grants" = Option<bool>, Query, description = "Revoke the MCP authorizations restricted to this tunnel alone (default false; the tunnel is always dropped from restricted authorizations)"),
+    ("revoke_grant_ids" = Option<String>, Query, description = "Comma-separated grant ids from the delete check to revoke entirely; only those with can_revoke (your own, admins, or limited to this tunnel) are honoured"),
+    ("remove_service" = Option<bool>, Query, description = "Also remove what runs the tunnel on the device (one-command install, systemd, launchd, cron / background loop, Docker, ssh / autossh scripts, Windows tasks / services / loops) with its files and logs; every login account is tried, root first (default false; needs the device online)"),
 ), responses((status = 200, description = "Deleted (usernames, shares, LAN hosts cascade; AI sessions closed; the device is disconnected). Body = what was cleaned up", body = super::schemas::TunnelDeleteReport), (status = 403, description = "Needs ADMIN / owner", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, Query(opts): Query<DeleteOptions>) -> ApiResult<Json<Value>> {
     let t = deletable_tunnel(&state, user.id, id).await?;
     let audience = notify::tunnel_audience(&state, &t).await?;
     let accounts: Vec<String> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| u.username).collect();
+    // 要整個撤銷的 grant：只接受碰得到這條隧道、而且這個人可以撤銷的。/ Only grants that reach the tunnel and may be revoked.
+    let requested: std::collections::HashSet<i64> = opts.revoke_grant_ids.as_deref().unwrap_or("").split(',').filter_map(|v| v.trim().parse().ok()).collect();
+    let revoke: std::collections::HashSet<i64> = affected_grants(&state, &t, &audience)
+        .await?
+        .into_iter()
+        .filter(|(g, c)| requested.contains(&g.id) && crate::oauth::may_revoke_whole(g.user_id == user.id, user.is_superuser, *c))
+        .map(|(g, _)| g.id)
+        .collect();
     // 裝置上的金鑰要趁隧道還連著時清（之後裝置就被踢掉了）。/ Clean the device while the tunnel is still up.
     let cleanup_opts = crate::device_keys::CleanupOptions {
         device_keys: opts.remove_device_keys.unwrap_or(true),
         service_key: opts.remove_service_key.unwrap_or(false),
     };
+    // 裝置上的服務：先找出並刪檔（連線留著，等一下服務金鑰可能被移掉），金鑰清完再停它、看它有沒有真的停。
+    // The device service: files first (keeping the sessions, the service key may go next), stop it after the keys.
+    let service_prep = if opts.remove_service.unwrap_or(false) && crate::device_keys::online(&state, t.reverse_port) {
+        Some(crate::tunnel_service::prepare(&state, &t, &accounts).await)
+    } else {
+        None
+    };
     let cleanup = crate::device_keys::forget_tunnel(&state, &t, cleanup_opts, &accounts).await;
+    let service = match service_prep {
+        Some(p) => Some(crate::tunnel_service::finish(&state, &t, p).await),
+        None => None,
+    };
     let ai_closed = crate::ai::close_for_tunnel(&state, t.id, crate::ai::CloseReason::TunnelDeleted).await;
     db::tunnels::delete(&state.db, id).await?;
-    let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false)).await?;
+    let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false), &revoke).await?;
     let disconnected = state.gateway.disconnect_tunnel(t.id).await;
     tracing::info!(tunnel = t.id, name = %t.host_friendly_name, keys_left = cleanup.keys_left, revoked, detached, ai_closed, disconnected, "tunnel deleted");
     state.hub.notify_users(
@@ -339,6 +372,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         "grants_detached": detached,
         "ai_sessions_closed": ai_closed,
         "device_disconnected": disconnected > 0,
+        "service": service,
     })))
 }
 
