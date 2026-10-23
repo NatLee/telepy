@@ -17,7 +17,9 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
+import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
 import { NavTabs } from "@/components/ui/nav-tabs";
 import { Segmented } from "@/components/ui/segmented";
@@ -63,6 +65,12 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const [scale, changeScale] = useUiScale();
     const [fontSize, setFontSizeState] = useState<number>(() => readTerminalFontSize());
     const [tab, setTab] = useState<PrefsTab>("general");
+    const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
+    const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
+    const changeDesktopNotify = async (value: "on" | "off") => {
+        const r = await setDesktopNotify(value === "on");
+        setNotifyProblem(r === "denied" || r === "unsupported" ? r : null);
+    };
 
     const tabs = [
         { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
@@ -206,6 +214,22 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                             />
                             <span className="w-14 shrink-0 rounded-lg bg-muted py-1 text-center font-mono text-sm tabular-nums">{fontSize}px</span>
                         </div>
+                    </Section>
+
+                    {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}
+                    <Section icon={<Bell />} title={t("prefs.desktopNotify")} description={t("prefs.desktopNotifyDescription")}>
+                        <Segmented
+                            fullWidth
+                            options={[
+                                { value: "off" as const, label: t("prefs.desktopNotifyOff"), icon: <BellOff size={15} /> },
+                                { value: "on" as const, label: t("prefs.desktopNotifyOn"), icon: <Bell size={15} /> },
+                            ]}
+                            value={desktopNotify ? "on" : "off"}
+                            onChange={(v) => void changeDesktopNotify(v)}
+                            aria-label={t("prefs.desktopNotify")}
+                        />
+                        {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
+                        {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
                     </Section>
                 </div>
             )}
