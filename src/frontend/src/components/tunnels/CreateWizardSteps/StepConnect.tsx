@@ -110,7 +110,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                 ) : (
                     <div className="space-y-2">
                         <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("wizard.connect.pasteOnDevice")}</span>
+                            <span className="text-sm text-foreground">{t("wizard.connect.pasteOnDevice")}</span>
                             <Button type="button" variant="ghost" size="xs" onClick={c.generateOneTime} disabled={!c.scriptReady || c.oneTime?.loading}>
                                 <RefreshCw className={cn(c.oneTime?.loading && "animate-spin")} /> {t("wizard.connect.newLink")}
                             </Button>

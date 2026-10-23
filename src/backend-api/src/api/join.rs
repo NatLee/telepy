@@ -18,7 +18,7 @@ use crate::auth::AuthUser;
 use crate::db::{self, tunnels::NewTunnel};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::join::{self, Phase, Registration, TakeError, Ticket};
-use crate::monitor::{find_free_port, loopback_bindable};
+use crate::monitor::find_free_port;
 use crate::state::AppState;
 use crate::util::json_str;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -257,7 +257,7 @@ async fn create_tunnel(state: &AppState, user_id: i64, base: &str, key: &str, de
         }
         let name = name.ok_or((StatusCode::CONFLICT, "Every variant of this tunnel name is taken; pass --name.".to_string()))?;
         let used = state.status.used_ports(&state.db).await.map_err(internal)?;
-        let port = find_free_port(&used, loopback_bindable).map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
+        let port = find_free_port(&used).map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
         match db::tunnels::create(&state.db, NewTunnel { user_id, host_friendly_name: &name, key, reverse_port: port, description: Some(description), default_username_id: None }).await {
             Ok(t) => return Ok(t),
             Err(e) if is_unique_violation(&e) => continue,
