@@ -115,7 +115,7 @@ export function WizardStepper({ wizard }: { wizard: CreateTunnelWizard }) {
                                     >
                                         {st === "done" ? <Check size={15} strokeWidth={3} /> : st === "review" ? <AlertTriangle size={14} strokeWidth={2.5} /> : <Icon size={15} />}
                                     </span>
-                                    <span className={cn("text-[0.75rem] uppercase tracking-wider", st === "current" ? "text-primary" : "text-muted-foreground")}>
+                                    <span className={cn("text-xs", st === "current" ? "text-primary" : "text-muted-foreground")}>
                                         {t("wizard.stepN", { n: id })}
                                     </span>
                                     {can && (

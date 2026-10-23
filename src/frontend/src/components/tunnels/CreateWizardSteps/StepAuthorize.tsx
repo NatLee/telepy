@@ -159,7 +159,7 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
             </div>
 
             <div className="space-y-2">
-                <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <h3 className="flex items-center gap-1.5 text-sm text-foreground [&>svg]:text-muted-foreground">
                     <KeyRound size={13} aria-hidden /> {t("wizard.authorize.keysIncluded", { n: k.authorizedKeys.length })}
                 </h3>
                 <ul className="space-y-2">
