@@ -160,6 +160,35 @@ pub struct Tunnel {
     pub labels: Option<Vec<String>>,
 }
 
+/// 連線紀錄與在線率。在線率是 0..1，從第一筆紀錄算起；沒有紀錄時是 null。
+/// Connection history and uptime (0..1, counted from the first recorded session; null without data).
+#[derive(ToSchema)]
+pub struct TunnelConnections {
+    /// 第一筆紀錄的時間（UTC）。/ When the history begins (UTC).
+    pub tracked_since: Option<String>,
+    pub uptime: UptimePair,
+    /// 最近 24 小時每小時的在線率（舊到新）；紀錄開始前是 null。/ Last 24 hours, hour by hour, oldest first.
+    pub hourly: Vec<Option<f64>>,
+    /// 最近 20 次連線（新到舊）。/ The latest 20 sessions, newest first.
+    pub sessions: Vec<ConnectionSession>,
+}
+
+#[derive(ToSchema)]
+pub struct UptimePair {
+    pub h24: Option<f64>,
+    pub d7: Option<f64>,
+}
+
+#[derive(ToSchema)]
+pub struct ConnectionSession {
+    /// 只給能登入裝置的人（同 `endpoint`）。/ Only for people who can log in to the device (like `endpoint`).
+    pub ip: Option<String>,
+    pub connected_at: String,
+    /// 連著時是 null。/ null while connected.
+    pub disconnected_at: Option<String>,
+    pub seconds: Option<i64>,
+}
+
 #[derive(ToSchema)]
 pub struct PinState {
     pub pinned: bool,
