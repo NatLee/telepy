@@ -9,9 +9,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Plus, Network, Info, RefreshCw, Search, X, SearchX } from "lucide-react";
+import { Plus, Network, Info, RefreshCw, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
     Tooltip,
     TooltipContent,
@@ -21,10 +20,14 @@ import {
 import { TunnelCard } from "@/components/tunnels/TunnelCard";
 import { TunnelTableRow } from "@/components/tunnels/TunnelTableRow";
 import { TunnelFilterTiles, type TunnelFilter } from "@/components/tunnels/TunnelFilterTiles";
+import { TunnelSearchBar } from "@/components/tunnels/TunnelSearchBar";
 import { ViewToggle } from "@/components/ui/ViewToggle";
 
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { liveHealth } from "@/lib/tunnelHealth";
+import { compareTunnels, matchTunnel, parseQuery, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
 import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
@@ -67,21 +70,24 @@ export default function TunnelsPage() {
         };
     }, [tunnels, portsMap]);
 
+    const [sort, setSort] = useStoredChoice("telepy.tunnelSort", TUNNEL_SORTS, "name");
+    const parsed = useMemo(() => parseQuery(query), [query]);
+
+    // 方塊篩選 AND 搜尋語法（lib/tunnelQuery），再依選的方式排序。/ Tile filter AND the query, then sorted.
     const visible = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        return tunnels.filter((tn) => {
-            const online = portsMap[String(tn.reverse_port)] === true;
-            if (filter === "online" && !online) return false;
-            if (filter === "offline" && online) return false;
-            if (filter === "shared" && tn.is_owner) return false;
-            if (!q) return true;
-            return (
-                tn.host_friendly_name.toLowerCase().includes(q) ||
-                String(tn.reverse_port).includes(q) ||
-                (tn.description ?? "").toLowerCase().includes(q)
-            );
-        });
-    }, [tunnels, portsMap, filter, query]);
+        const now = Date.now();
+        const ctx = (tn: Tunnel): MatchContext => ({ health: liveHealth(tn, isOnline(tn)), now });
+        return tunnels
+            .filter((tn) => {
+                const online = isOnline(tn);
+                if (filter === "online" && !online) return false;
+                if (filter === "offline" && online) return false;
+                if (filter === "shared" && tn.is_owner) return false;
+                return matchTunnel(tn, parsed, ctx(tn));
+            })
+            .sort((a, b) => compareTunnels(a, b, sort, ctx));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tunnels, portsMap, filter, parsed, sort]);
 
     const actions: TunnelActionHandlers = {
         onDetails: (tunnelId) => setDetailsModal({ isOpen: true, tunnelId }),
@@ -164,35 +170,21 @@ export default function TunnelsPage() {
                 <>
                     <TunnelFilterTiles counts={counts} value={filter} onChange={setFilter} />
 
-                    {/* 搜尋 + 檢視切換 / Search + view toggle */}
-                    <div className="flex items-center gap-2">
-                        <div className="relative flex-1 max-w-md">
-                            <Search size={16} className="absolute left-3 top-1/2 z-10 -translate-y-1/2 text-muted-foreground pointer-events-none" aria-hidden />
-                            <Input
-                                value={query}
-                                onChange={(e) => setQuery(e.target.value)}
-                                placeholder={t("tunnels.searchPlaceholder")}
-                                aria-label={t("tunnels.searchPlaceholder")}
-                                className="pl-9 pr-9 h-9"
-                            />
-                            {query && (
-                                <button
-                                    type="button"
-                                    onClick={() => setQuery("")}
-                                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
-                                    aria-label={t("tunnels.clearSearch")}
-                                >
-                                    <X size={14} />
-                                </button>
-                            )}
-                        </div>
-                        <span className="hidden sm:inline text-xs text-muted-foreground tabular-nums">
-                            {t("tunnels.showingCount", { shown: visible.length, total: tunnels.length })}
-                        </span>
-                        <div className="ml-auto hidden min-[1200px]:flex items-center">
-                            <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
-                        </div>
-                    </div>
+                    {/* 搜尋（含篩選語法）+ 排序 + 檢視切換 / Search (with filter syntax) + sort + view toggle */}
+                    <TunnelSearchBar
+                        query={query}
+                        onQueryChange={setQuery}
+                        invalid={parsed.invalid}
+                        sort={sort}
+                        onSortChange={setSort}
+                        shown={visible.length}
+                        total={tunnels.length}
+                        viewToggle={
+                            <div className="hidden min-[1200px]:flex items-center">
+                                <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
+                            </div>
+                        }
+                    />
 
                     {visible.length === 0 ? (
                         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-input bg-card p-12 text-center">
