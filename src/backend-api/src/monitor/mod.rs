@@ -3,6 +3,7 @@
 //! `None` = 狀態不可用（gateway 沒啟動；與舊版語意相同：不可誤判為全部離線）。
 //! Tunnel status source (listening ports + per-port RTT), fed by the in-process gateway.
 
+pub mod alerts;
 pub mod ports;
 pub mod runner;
 

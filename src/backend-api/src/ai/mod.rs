@@ -580,6 +580,8 @@ mod tests {
             ai_session_max_lifetime: 7200,
             ai_max_sessions_per_user: 3,
             lan_scan_enabled: true,
+            notify_webhook_url: String::new(),
+            notify_down_delay: 60,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

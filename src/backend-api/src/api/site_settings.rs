@@ -13,7 +13,7 @@ use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_settings, update_settings))
+    OpenApiRouter::new().routes(routes!(get_settings, update_settings)).routes(routes!(notify_test))
 }
 
 #[derive(Clone, Copy)]
@@ -21,6 +21,8 @@ enum Kind {
     Bool,
     Int,
     Str(usize),
+    /// 可以空白（= 關閉）；有值就必須是 http(s) 網址。/ May be blank (= off); otherwise an http(s) URL.
+    Url(usize),
 }
 
 struct FieldMeta {
@@ -44,6 +46,8 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_idle_timeout", kind: Kind::Int, label: "AI Session Idle Timeout (seconds)", description: "AI 工具（MCP）開的 SSH session 閒置多久沒有指令就自動關閉(秒)。執行中的指令不算閒置。變更後對新開的 session 生效。" },
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許隧道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。" },
+    FieldMeta { name: "notify_webhook_url", kind: Kind::Url(512), label: "Status alert webhook", description: "隧道離線、恢復、降級(連著但 SSH 沒回應)時 POST 到這個網址。內容同時有 text(Slack、Google Chat、Mattermost)與 content(Discord)欄位,另附 event / tunnel 等結構化欄位。留空 = 關閉。只有管理員能設定,伺服器會從自己這裡連到這個網址。" },
+    FieldMeta { name: "notify_down_delay", kind: Kind::Int, label: "Alert delay (seconds)", description: "狀況要持續多久才發告警(秒);在這之前恢復就什麼都不發,所以裝置閃斷不會洗版。只有發過「離線」的隧道,回來時才會發「恢復」。設 0 = 立刻通知。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
 ];
 
@@ -63,6 +67,8 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
+    m.insert("notify_webhook_url".into(), json!(s.notify_webhook_url));
+    m.insert("notify_down_delay".into(), json!(s.notify_down_delay));
     Value::Object(m)
 }
 
@@ -73,6 +79,7 @@ fn meta_json() -> Value {
             Kind::Bool => "boolean",
             Kind::Int => "integer",
             Kind::Str(_) => "string",
+            Kind::Url(_) => "url",
         };
         m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
     }
@@ -111,6 +118,15 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             Value::Null => Err(ApiError::field(f.name, "This field may not be null.")),
             other => Ok(SettingValue::Str(other.to_string())),
         },
+        Kind::Url(max) => match v {
+            Value::String(s) if s.trim().is_empty() => Ok(SettingValue::Str(String::new())),
+            Value::String(s) if s.chars().count() > max => Err(ApiError::field(f.name, format!("Ensure this field has no more than {max} characters."))),
+            Value::String(s) => match reqwest::Url::parse(s.trim()) {
+                Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => Ok(SettingValue::Str(s.trim().to_string())),
+                _ => Err(ApiError::field(f.name, "Enter a valid http:// or https:// URL, or leave it blank.")),
+            },
+            _ => Err(ApiError::field(f.name, "Enter a valid http:// or https:// URL, or leave it blank.")),
+        },
     }
 }
 
@@ -131,4 +147,32 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     }
     let s = db::settings::get_solo(&state.db).await?;
     Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+}
+
+/// 用目前存的 webhook 網址送一則測試告警，回傳結果（管理員）。/ Send a test alert to the saved webhook (admins).
+#[utoipa::path(post, path = "/api/site/settings/notify-test", tag = "Site Settings", security(("bearer" = [])), responses((status = 200, description = "{\"ok\": bool, \"status\": http status | null, \"error\": message | null}", body = Object), (status = 400, description = "No webhook URL saved", body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody)))]
+async fn notify_test(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+    if !me.is_superuser {
+        return Err(ApiError::forbidden("Permission denied. Only administrators can modify system settings."));
+    }
+    let s = db::settings::get_solo(&state.db).await?;
+    if s.notify_webhook_url.trim().is_empty() {
+        return Err(ApiError::bad_request("Save a webhook URL first."));
+    }
+    let mut body = crate::monitor::alerts::payload(
+        crate::monitor::alerts::Alert::Online,
+        0,
+        "test-tunnel",
+        0,
+        state.config.public_url.as_deref(),
+        &crate::util::db_to_iso_utc_z(&crate::util::now_db()),
+    );
+    let text = format!("[Telepy] Test alert from {}: the webhook works.", me.username);
+    body["text"] = json!(text);
+    body["content"] = json!(text);
+    body["event"] = json!("test");
+    Ok(Json(match crate::monitor::alerts::deliver(&state.http, &s.notify_webhook_url, &body).await {
+        Ok(status) => json!({ "ok": true, "status": status, "error": null }),
+        Err(e) => json!({ "ok": false, "status": null, "error": e }),
+    }))
 }

@@ -1583,6 +1583,12 @@ export const en = {
     "prefs.themeDark": "Dark",
     "prefs.terminalFontSize": "Terminal Font Size",
     "prefs.terminalFontSizeDescription": "Font size (px) for the web terminal. Applies to open terminals immediately.",
+    "prefs.desktopNotify": "Desktop notifications",
+    "prefs.desktopNotifyDescription": "While Telepy is open in a background tab, show a system notification when a tunnel you can see goes offline, comes back or stops answering SSH. This browser only.",
+    "prefs.desktopNotifyOn": "On",
+    "prefs.desktopNotifyOff": "Off",
+    "prefs.desktopNotifyDenied": "The browser blocked notifications for this site. Allow them in the site settings (the icon left of the address bar), then turn this on again.",
+    "prefs.desktopNotifyUnsupported": "This browser can't show notifications from a web page.",
     "prefs.uiScale": "Display size",
     "prefs.uiScaleDescription": "Scales text, spacing and controls together across the whole interface. The terminal has its own font size below.",
     "prefs.uiScaleSmall": "Small",
@@ -1737,6 +1743,15 @@ export const en = {
     "settings.generalBanner": "Who can create an account. Changes apply immediately.",
     "settings.browserBanner": "Proxy browser sessions (KasmVNC). Changes take effect the next time a browser is opened; toggles apply immediately.",
     "settings.aiBanner": "Limits for the SSH sessions that AI tools open through MCP. Changes apply to sessions opened afterwards.",
+    "settings.groupNotify": "Notifications",
+    "settings.notifyBanner": "Tell a chat room or your own service when a tunnel goes offline, comes back or stops answering SSH. Short outages are not reported.",
+    "settings.notifyTestTitle": "Send a test alert",
+    "settings.notifyTestBody": "Posts a test message to the saved webhook so you can check it reaches the right channel. Slack, Discord, Google Chat and Mattermost all show it.",
+    "settings.notifyTestButton": "Send test alert",
+    "settings.notifyTestNeedsUrl": "Save a webhook URL first.",
+    "settings.notifyTestOk": "Test alert sent.",
+    "settings.notifyTestFailed": "The webhook didn't accept the test alert: {error}",
+    "settings.notifyDesktopNote": "Everyone can also turn on desktop notifications for the tunnels they can see, in Preferences → General.",
     "settings.mcpEndpoint": "MCP endpoint",
     "settings.mcpEndpointHint": "AI tools connect to this address. It comes from {env} in .env; without it the address follows whatever host the request came in on, so set it in production.",
     "settings.loading": "Loading settings...",
@@ -1807,6 +1822,10 @@ export const en = {
     "siteSettings.ai_max_sessions_per_user.description": "How many SSH sessions one user's AI tools may hold open at the same time, across all apps. 0 = AI tools cannot open sessions. Applies to the next session.",
     "siteSettings.lan_scan_enabled.label": "Allow LAN discovery",
     "siteSettings.lan_scan_enabled.description": "Let tunnel owners and ADMIN sharees scan the private network behind a device. The device's own sshd makes the connections; nothing is installed on it. When off, jump hosts can only be added by hand. Every scan is recorded in the tunnel's logs.",
+    "siteSettings.notify_webhook_url.label": "Status alert webhook",
+    "siteSettings.notify_webhook_url.description": "Telepy POSTs here when a tunnel goes offline, comes back or is connected but its SSH server doesn't answer. The body has text (Slack, Google Chat, Mattermost) and content (Discord) plus structured event and tunnel fields. Leave blank to turn alerts off. The server connects to this URL itself.",
+    "siteSettings.notify_down_delay.label": "Alert delay (seconds)",
+    "siteSettings.notify_down_delay.description": "How long a problem must last before it is reported. If the tunnel recovers sooner nothing is sent, so a device that blips doesn't flood the channel. \"Back online\" is only sent for tunnels that were reported offline. 0 = report right away.",
 
     // ── 共用 UI 元件 / Shared UI components ────────────────────────
     "ui.live": "Live",
@@ -1996,6 +2015,11 @@ export const en = {
     "join.why.point1": "The command works once and expires after 30 minutes; it can only add a device to your account.",
     "join.why.point2": "The script only appends to authorized_keys and checks Telepy's host key; read it first with View the script.",
     "join.why.point3": "The device only dials out to Telepy; no inbound port is opened.",
+
+    // ── 桌面通知 / Desktop notifications ──
+    "notify.offline": "{name} is offline.",
+    "notify.online": "{name} is back online.",
+    "notify.degraded": "{name} is connected, but its SSH server isn't answering.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
