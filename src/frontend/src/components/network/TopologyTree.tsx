@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * 拓撲樹：Telepy → 裝置 → 區網主機。手機上主機縮排在裝置下方，寬螢幕（lg）主機排在裝置右邊；連線用細線畫，
- * 線上的裝置是實線、離線是虛線。
- * The topology tree: Telepy → devices → LAN hosts. Hosts sit under the device on phones and to its right
- * from `lg`; links are hairlines, solid for online devices and dashed for offline ones.
+ * 拓撲樹：Telepy → 裝置 → 區網主機。樹本身窄（手機、或旁邊開著主機面板）時主機縮排在裝置下方，夠寬（容器
+ * ≥ 48rem）時排在裝置右邊；連線用細線畫，線上的裝置是實線、離線是虛線。選到的主機用 primary 框起來。
+ * The topology tree: Telepy → devices → LAN hosts. Hosts sit under the device while the tree itself is
+ * narrow (phones, or beside the host panel) and to its right once it is ≥ 48rem wide (container query);
+ * links are hairlines, solid for online devices and dashed for offline ones. The selected host is outlined.
  */
 import React, { useEffect, useRef, useState } from "react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
@@ -68,7 +69,7 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
 }) {
     return (
         <li className="relative pl-7 pt-2">
-            <span aria-hidden className={cn("absolute left-0 top-0 w-px bg-border", first && hideFirstStubOnWide && "lg:hidden")} style={{ height: tickTop }} />
+            <span aria-hidden className={cn("absolute left-0 top-0 w-px bg-border", first && hideFirstStubOnWide && "@3xl:hidden")} style={{ height: tickTop }} />
             {!last && <span aria-hidden className="absolute left-0 bottom-0 w-px bg-border" style={{ top: tickTop }} />}
             <span
                 aria-hidden
@@ -80,7 +81,7 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
     );
 }
 
-function HostChip({ host, onOpen }: { host: LanHost; onOpen: (h: LanHost) => void }) {
+function HostChip({ host, selected, onOpen }: { host: LanHost; selected: boolean; onOpen: (h: LanHost) => void }) {
     const { t } = useI18n();
     const kind = hostKind(host);
     const name = hostName(host);
@@ -90,7 +91,11 @@ function HostChip({ host, onOpen }: { host: LanHost; onOpen: (h: LanHost) => voi
         <button
             type="button"
             onClick={() => onOpen(host)}
-            className="group flex w-full items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-left transition-[background-color,box-shadow] hover:bg-card hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:w-80"
+            aria-current={selected ? "true" : undefined}
+            className={cn(
+                "group flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-[background-color,box-shadow] hover:bg-card hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @3xl:w-80",
+                selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
+            )}
         >
             <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset", KIND_TONE[kind])} aria-hidden>
                 {KIND_ICON[kind]}
@@ -153,7 +158,7 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
     return (
         <div
             className={cn(
-                "w-full rounded-xl border bg-card p-3 shadow-card lg:w-80",
+                "w-full rounded-xl border bg-card p-3 shadow-card @3xl:w-80",
                 focused ? "border-primary ring-2 ring-primary/30" : "border-border"
             )}
         >
@@ -193,12 +198,13 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
     );
 }
 
-function DeviceBranch({ tn, online, last, first, focused, onOpenHost, onScan, onAdd }: {
+function DeviceBranch({ tn, online, last, first, focused, selectedHostId, onOpenHost, onScan, onAdd }: {
     tn: TopologyTunnel;
     online: boolean;
     last: boolean;
     first: boolean;
     focused: boolean;
+    selectedHostId: number | null;
     onOpenHost: (h: LanHost) => void;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
@@ -209,19 +215,21 @@ function DeviceBranch({ tn, online, last, first, focused, onOpenHost, onScan, on
     useEffect(() => {
         if (focused) ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, [focused]);
-    const hosts = expanded ? tn.hosts : tn.hosts.slice(0, HOSTS_COLLAPSED);
+    // 選到的主機就算在收合範圍外也要看得到。/ Keep the selected host visible even when collapsed.
+    const selectedHidden = tn.hosts.findIndex((h) => h.id === selectedHostId) >= HOSTS_COLLAPSED;
+    const hosts = expanded || selectedHidden ? tn.hosts : tn.hosts.slice(0, HOSTS_COLLAPSED);
     const hidden = tn.hosts.length - hosts.length;
     return (
         <Branch last={last} first={first} tickTop={40} solid={online}>
-            <div ref={ref} className="flex flex-col lg:flex-row lg:items-start">
+            <div ref={ref} className="flex flex-col @3xl:flex-row @3xl:items-start">
                 <DeviceCard tn={tn} online={online} onScan={onScan} onAdd={onAdd} focused={focused} />
                 {/* 裝置 → 主機的橫線（只在寬螢幕）。/ Device → hosts connector on wide screens. */}
-                <span aria-hidden className={cn("mt-8 hidden w-6 shrink-0 border-t lg:block", online ? "border-success/60" : "border-dashed border-muted-foreground/40")} />
+                <span aria-hidden className={cn("mt-8 hidden w-6 shrink-0 border-t @3xl:block", online ? "border-success/60" : "border-dashed border-muted-foreground/40")} />
                 {tn.hosts.length > 0 ? (
-                    <ul className="ml-5 lg:ml-0">
+                    <ul className="ml-5 @3xl:ml-0">
                         {hosts.map((h, i) => (
                             <Branch key={h.id} last={i === hosts.length - 1 && hidden === 0} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
-                                <HostChip host={h} onOpen={onOpenHost} />
+                                <HostChip host={h} selected={h.id === selectedHostId} onOpen={onOpenHost} />
                             </Branch>
                         ))}
                         {hidden > 0 && (
@@ -233,7 +241,7 @@ function DeviceBranch({ tn, online, last, first, focused, onOpenHost, onScan, on
                         )}
                     </ul>
                 ) : (
-                    <div className="ml-5 mt-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground lg:ml-0 lg:mt-3 lg:w-80">
+                    <div className="ml-5 mt-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground @3xl:ml-0 @3xl:mt-3 @3xl:w-80">
                         {tn.can_scan ? t("network.noHostsScan") : tn.can_edit ? t("network.noHostsAdd") : t("network.noHostsView")}
                     </div>
                 )}
@@ -242,17 +250,19 @@ function DeviceBranch({ tn, online, last, first, focused, onOpenHost, onScan, on
     );
 }
 
-export function TopologyTree({ tunnels, isOnline, focusTunnel, onOpenHost, onScan, onAdd }: {
+export function TopologyTree({ tunnels, isOnline, focusTunnel, selectedHostId = null, onOpenHost, onScan, onAdd }: {
     tunnels: TopologyTunnel[];
     isOnline: (tn: TopologyTunnel) => boolean;
     focusTunnel: string | null;
+    selectedHostId?: number | null;
     onOpenHost: (h: LanHost) => void;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
 }) {
     const { t } = useI18n();
     return (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card p-4 shadow-card sm:p-6">
+        // 版面依「樹自己的寬度」切換（旁邊開著主機面板時會窄）。/ Layout follows the tree's own width (narrower beside the host panel).
+        <div className="@container overflow-x-auto rounded-xl border border-border bg-card p-4 shadow-card sm:p-6">
             <div className="flex items-center gap-3">
                 <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-brand-gradient text-white" aria-hidden>
                     <TelepyGlyph size={20} />
@@ -271,6 +281,7 @@ export function TopologyTree({ tunnels, isOnline, focusTunnel, onOpenHost, onSca
                         first={i === 0}
                         last={i === tunnels.length - 1}
                         focused={focusTunnel === String(tn.id)}
+                        selectedHostId={selectedHostId}
                         onOpenHost={onOpenHost}
                         onScan={onScan}
                         onAdd={onAdd}
