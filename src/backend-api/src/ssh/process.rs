@@ -1,7 +1,7 @@
-//! OpenSSH 客戶端子程序。保留 Django 版的所有連線參數與終止語意：
-//! - terminal：ControlMaster=auto 多工重用、只殺「直屬子程序」（絕不 killpg，見 docs 與 consumers.py 註解）
-//! - file manager：一條 `ssh … cat` 當 ControlMaster，之後每個指令走同一個 ControlPath
-//! OpenSSH client subprocesses with the same options and teardown rules as the Django consumers.
+//! OpenSSH 客戶端子程序：只剩區網主機那一跳（最後一跳要能在 PTY 裡問密碼 / 鍵盤互動）。裝置本身的終端機、
+//! 檔案管理、遠端瀏覽器都改走連線池（russh），不再 spawn ssh。
+//! 終止語意不變：只殺直屬子程序（SIGTERM → SIGKILL），絕不 killpg。
+//! The OpenSSH client is only used for the LAN host hop now (password / keyboard-interactive prompts in a PTY).
 
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -15,65 +15,16 @@ use nix::unistd::Pid;
 use tokio::io::unix::AsyncFd;
 use tokio::process::{Child, Command};
 
-use crate::config::Config;
-
-/// `user@host -p port`
-#[derive(Debug, Clone)]
-pub struct SshTarget {
-    pub user: String,
-    pub host: String,
-    pub port: i64,
-}
-
-impl SshTarget {
-    pub fn new(config: &Config, username: &str, reverse_port: i64) -> Self {
-        Self { user: username.to_string(), host: config.ssh_target_host.clone(), port: reverse_port }
-    }
-    pub fn userhost(&self) -> String {
-        format!("{}@{}", self.user, self.host)
-    }
-}
-
-/// TerminalConsumer 的 ssh 參數：關 GSSAPI、只用公鑰、壓縮、ControlMaster 多工（省掉重複 handshake）。
-pub fn terminal_args(t: &SshTarget) -> Vec<String> {
-    [
-        "-o", "GSSAPIAuthentication=no",
-        "-o", "PreferredAuthentications=publickey",
-        "-o", "ServerAliveInterval=15",
-        "-o", "ServerAliveCountMax=3",
-        "-o", "Compression=yes",
-        "-o", "ControlMaster=auto",
-        "-o", "ControlPersist=600",
-        "-o", "ControlPath=/tmp/ssh_term_%r@%h:%p",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .chain([t.userhost(), "-p".to_string(), t.port.to_string()])
-    .collect()
-}
-
-/// 單引號跳脫一個 shell 參數（`ProxyCommand` 會交給 `/bin/sh -c`）。/ Single-quote one shell word.
-pub fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 /// 區網機器的登入帳號：英數與 `._-`，1–64 字、不以 `-` 開頭。/ A safe login name for a LAN host.
 pub fn valid_login(s: &str) -> bool {
     (1..=64).contains(&s.len()) && !s.starts_with('-') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// 經裝置跳到它區網裡的機器（#20）：第一跳是平常的裝置連線（服務金鑰、`-W` 由裝置 sshd 轉送），
-/// 最後一跳允許密碼 / 鍵盤互動登入，提示直接出現在網頁終端機裡。
-/// Through the device to a machine on its LAN: the device hop is the usual key login and forwards with
-/// `-W`; the final hop also allows password / keyboard-interactive prompts, shown in the web terminal.
-pub fn lan_terminal_args(ssh_binary: &str, device: &SshTarget, lan_user: &str, lan_host: &str, lan_port: i64) -> Vec<String> {
-    let proxy = format!(
-        "{} -o GSSAPIAuthentication=no -o BatchMode=yes -o PreferredAuthentications=publickey -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p -p {} {}",
-        shell_quote(ssh_binary),
-        device.port,
-        shell_quote(&device.userhost())
-    );
-    [
+/// 經裝置跳到它區網裡的機器（#20）的最後一跳：連 `ssh::bridge` 開在 `127.0.0.1:<local_port>` 的一次性入口
+/// （第一跳由連線池那條裝置連線的 direct-tcpip 負責）。允許密碼 / 鍵盤互動登入，提示直接出現在網頁終端機裡；
+/// `HostKeyAlias` 用區網主機的位址。/ The final hop to a LAN host, dialing the bridge's loopback entry point.
+pub fn lan_terminal_args(lan_user: &str, lan_host: &str, local_port: u16) -> Vec<String> {
+    let mut v: Vec<String> = [
         "-o", "GSSAPIAuthentication=no",
         "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
         "-o", "ServerAliveInterval=15",
@@ -82,31 +33,11 @@ pub fn lan_terminal_args(ssh_binary: &str, device: &SshTarget, lan_user: &str, l
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "LogLevel=ERROR",
-        "-o",
     ]
     .iter()
     .map(|s| s.to_string())
-    .chain([format!("ProxyCommand={proxy}"), "-l".into(), lan_user.to_string(), "-p".into(), lan_port.to_string(), lan_host.to_string()])
-    .collect()
-}
-
-const FM_COMMON: [&str; 6] = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR"];
-
-/// FileManagerConsumer 的常駐連線：`ssh … cat`（ControlMaster=yes）。
-pub fn filemanager_master_args(t: &SshTarget) -> Vec<String> {
-    let mut v: Vec<String> = vec!["-p".into(), t.port.to_string(), "-o".into(), "ControlMaster=yes".into(), "-o".into(), "ControlPath=/tmp/ssh_fm_%r@%h:%p".into(), "-o".into(), "ControlPersist=600".into()];
-    v.extend(FM_COMMON.iter().map(|s| s.to_string()));
-    v.push(t.userhost());
-    v.push("cat".into());
-    v
-}
-
-/// FileManagerConsumer 的單次指令（重用 master 的 ControlPath）。
-pub fn filemanager_exec_args(t: &SshTarget, command: &str) -> Vec<String> {
-    let mut v: Vec<String> = vec!["-p".into(), t.port.to_string(), "-o".into(), "ControlPath=/tmp/ssh_fm_%r@%h:%p".into()];
-    v.extend(FM_COMMON.iter().map(|s| s.to_string()));
-    v.push(t.userhost());
-    v.push(command.to_string());
+    .collect();
+    v.extend(["-o".into(), format!("HostKeyAlias={lan_host}"), "-l".into(), lan_user.to_string(), "-p".into(), local_port.to_string(), "127.0.0.1".into()]);
     v
 }
 
@@ -221,32 +152,17 @@ pub async fn terminate_child(child: &mut Child, grace: Duration) {
 
 #[cfg(test)]
 mod tests {
-
-    #[test]
-    fn lan_hop_arguments_are_quoted() {
-        let device = SshTarget { user: "o'brien".into(), host: "127.0.0.1".into(), port: 40001 };
-        let args = lan_terminal_args("/usr/bin/ssh", &device, "admin", "192.168.1.20", 2222);
-        let proxy = args.iter().find(|a| a.starts_with("ProxyCommand=")).unwrap();
-        assert!(proxy.contains("-W %h:%p -p 40001 'o'\\''brien@127.0.0.1'"), "{proxy}");
-        assert!(proxy.starts_with("ProxyCommand='/usr/bin/ssh' "), "{proxy}");
-        assert_eq!(&args[args.len() - 5..], &["-l", "admin", "-p", "2222", "192.168.1.20"]);
-        assert!(args.contains(&"PreferredAuthentications=publickey,keyboard-interactive,password".to_string()));
-        assert!(valid_login("admin") && valid_login("svc.backup_01"));
-        assert!(!valid_login("-oProxyCommand=x") && !valid_login("a b") && !valid_login("a;b") && !valid_login(""));
-    }
     use super::*;
 
     #[test]
-    fn terminal_argv_matches_django() {
-        let t = SshTarget { user: "ubuntu".into(), host: "127.0.0.1".into(), port: 12345 };
-        let args = terminal_args(&t);
-        assert_eq!(args.last().unwrap(), "12345");
-        assert!(args.contains(&"ControlPath=/tmp/ssh_term_%r@%h:%p".to_string()));
-        assert!(args.contains(&"ubuntu@127.0.0.1".to_string()));
-        assert!(!args.iter().any(|a| a.contains(' ')), "no shell quoting needed: {args:?}");
-        let fm = filemanager_exec_args(&t, "ls -la ~/");
-        assert_eq!(fm.last().unwrap(), "ls -la ~/");
-        assert!(filemanager_master_args(&t).ends_with(&["ubuntu@127.0.0.1".to_string(), "cat".to_string()]));
+    fn lan_hop_arguments() {
+        let args = lan_terminal_args("admin", "192.168.1.20", 40123);
+        assert_eq!(&args[args.len() - 5..], &["-l", "admin", "-p", "40123", "127.0.0.1"]);
+        assert!(args.windows(2).any(|w| w == ["-o", "HostKeyAlias=192.168.1.20"]), "{args:?}");
+        assert!(args.contains(&"PreferredAuthentications=publickey,keyboard-interactive,password".to_string()));
+        assert!(!args.iter().any(|a| a.contains("ProxyCommand")), "the first hop is the pool bridge now");
+        assert!(valid_login("admin") && valid_login("svc.backup_01"));
+        assert!(!valid_login("-oProxyCommand=x") && !valid_login("a b") && !valid_login("a;b") && !valid_login(""));
     }
 
     #[tokio::test]

@@ -44,7 +44,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
             default.or_else(|| allowed.first()).map(|a| a.username.clone()).unwrap()
         }
     };
-    match state.remote_browser.start(&state.config, &state.db, &username, tunnel.reverse_port, id).await {
+    match state.remote_browser.start(&state, &username, tunnel.reverse_port, id).await {
         Ok(v) => Ok(Json(v)),
         Err(StartError::Coded { message, code }) => Err(ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": message, "code": code }))),
         Err(StartError::Other(message)) => Err(ApiError::internal(message)),

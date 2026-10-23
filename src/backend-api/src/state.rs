@@ -60,16 +60,21 @@ impl Deref for AppState {
 
 impl AppState {
     pub fn new(config: Config, db: Db) -> Self {
+        // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
+        let status = Arc::new(StatusState::new(None));
+        let presence = Arc::new(Presence::default());
+        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
+        Self::with_gateway(config, db, gateway, status, presence)
+    }
+
+    /// 沿用一個已經在跑的 gateway（測試改設定時用）。/ Reuse a running gateway (tests that reconfigure).
+    pub fn with_gateway(config: Config, db: Db, gateway: Arc<Gateway>, status: Arc<StatusState>, presence: Arc<Presence>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
-        // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
-        let status = Arc::new(StatusState::new(None));
-        let presence = Arc::new(Presence::default());
-        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
         Self(Arc::new(Inner {
             remote_browser,
             google: GoogleVerifier::new(http.clone()),
