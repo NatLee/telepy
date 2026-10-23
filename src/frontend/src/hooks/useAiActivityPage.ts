@@ -32,6 +32,8 @@ export interface AiActivityRow {
     at: string;
     user: { id: number | null; username: string | null };
     client_name: string | null;
+    /** 哪個已連接的應用程式(OAuth grant)。/ The connected app (OAuth grant) behind the call. */
+    grant_id?: number | null;
     tool: string;
     tunnel: { id: number; name: string | null } | null;
     session_id: string | null;
@@ -181,7 +183,7 @@ export function useAiActivityPage() {
     );
 
     return {
-        state: { sessions, rows, loading, isAdmin, me: user?.username ?? null, tunnelFilter, userFilter, tunnels, users },
+        state: { sessions, rows, loading, isAdmin, me: user?.username ?? null, meId: user?.id ?? null, tunnelFilter, userFilter, tunnels, users },
         actions: { refresh, closeSession, setTunnelFilter, setUserFilter, formatTime },
     };
 }

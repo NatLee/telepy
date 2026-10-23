@@ -25,6 +25,7 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
+import { Callout } from "@/components/ui/callout";
 import type { TranslationKey } from "@/locales/en";
 import type { WizardStep } from "@/hooks/useCreateTunnelWizard";
 
@@ -75,26 +76,23 @@ export function WhyPanel({ step }: { step: WizardStep }) {
     const { t } = useI18n();
     const why = WHY[step];
     return (
-        <aside
-            key={step}
-            className="relative overflow-hidden rounded-xl border border-warning/25 bg-warning/[0.07] p-4 animate-fade-in-up sm:p-5"
-            aria-labelledby="wizard-why-title"
-        >
-            <div className="flex items-center gap-2.5">
-                <span className="grid size-8 place-items-center rounded-lg bg-warning/15 text-warning" aria-hidden>
-                    <Lightbulb size={16} />
-                </span>
-                <h3 id="wizard-why-title" className="text-sm font-semibold text-foreground">{t("wizard.why.title")}</h3>
-            </div>
-            <p className="mt-3 text-sm leading-relaxed text-foreground/85">{t(why.body)}</p>
-            <ul className="mt-4 space-y-3">
-                {why.points.map(({ icon: Icon, text }) => (
-                    <li key={text} className="flex gap-2.5 text-xs leading-relaxed text-muted-foreground">
-                        <Icon size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden />
-                        <span>{t(text)}</span>
-                    </li>
-                ))}
-            </ul>
+        <aside key={step} className="animate-fade-in-up" aria-label={t("wizard.why.title")}>
+            <Callout
+                tone="info"
+                icon={<Lightbulb size={17} className="mt-0.5 shrink-0" aria-hidden />}
+                title={t("wizard.why.title")}
+                className="p-4 sm:p-5"
+            >
+                <p>{t(why.body)}</p>
+                <ul className="mt-3 space-y-2.5">
+                    {why.points.map(({ icon: Icon, text }) => (
+                        <li key={text} className="flex gap-2.5 text-xs leading-relaxed text-muted-foreground">
+                            <Icon size={14} className="mt-0.5 shrink-0 text-info" aria-hidden />
+                            <span>{t(text)}</span>
+                        </li>
+                    ))}
+                </ul>
+            </Callout>
         </aside>
     );
 }

@@ -52,8 +52,8 @@ export function useTunnelsPage() {
             } else if (!silent) {
                 showError(t("tunnels.fetchFailed"));
             }
-        } catch (e: any) {
-            if (!silent) showError(e.message || t("tunnels.fetchFailed"));
+        } catch (e) {
+            if (!silent) showError((e instanceof Error && e.message) || t("tunnels.fetchFailed"));
         } finally {
             if (!silent) setLoading(false);
         }
@@ -148,25 +148,6 @@ export function useTunnelsPage() {
         },
     });
 
-    const handleDelete = async () => {
-        if (!deleteConfirm.tunnelId) return;
-        try {
-            const res = await apiFetch(`/api/reverse/server/keys/${deleteConfirm.tunnelId}`, {
-                method: "DELETE"
-            });
-            if (res.ok) {
-                showSuccess(t("tunnels.deleted", { name: deleteConfirm.name }));
-                fetchData();
-            } else {
-                showError(t("tunnels.deleteFailed"));
-            }
-        } catch (e: any) {
-            showError(e.message || t("tunnels.deleteFailed"));
-        } finally {
-            setDeleteConfirm({ isOpen: false, tunnelId: null, name: "" });
-        }
-    };
-
     const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {
         if (!user?.id) { showError(t("tunnels.getCurrentUserFailed")); return; }
         try {
@@ -177,8 +158,8 @@ export function useTunnelsPage() {
             } else {
                 showError(t("tunnels.leaveFailed"));
             }
-        } catch (e: any) {
-            showError(e.message || t("tunnels.leaveFailed"));
+        } catch (e) {
+            showError((e instanceof Error && e.message) || t("tunnels.leaveFailed"));
         }
     };
 
@@ -188,7 +169,6 @@ export function useTunnelsPage() {
         latencyMap,
         loading,
         fetchData,
-        handleDelete,
         handleLeaveTunnel,
         modals: {
             configModal, setConfigModal,

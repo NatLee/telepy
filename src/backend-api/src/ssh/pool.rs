@@ -7,6 +7,8 @@
 //! - 沒有 lease 且閒置超過 [`IDLE`] 的連線由 reaper 關掉；裝置斷線時連線自己失效（`is_closed`），下次取用重連。
 //! - 權限由呼叫端先檢查（`permissions::allowed_usernames`）。連線只是傳輸：不同 Telepy 使用者共用同一條時，
 //!   各自是獨立的 channel（裝置端本來就只看得到同一把服務金鑰）。
+//! - 誰在用：SFTP REST、檔案管理（含 exec 備援）、網頁終端機（一個分頁一條 PTY channel）、遠端瀏覽器的 SOCKS 與
+//!   區網主機那一跳（direct-tcpip；MaxSessions 只限 session channel，不限 direct-tcpip，所以它們只占一個 lease）。
 //! Device SSH connections shared per (tunnel port, OS account): one handshake, then one channel per operation.
 
 use std::ops::Deref;
@@ -16,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use dashmap::DashMap;
-use russh::client::Handle;
-use russh::Disconnect;
+use russh::client::{Handle, Msg};
+use russh::{Channel, Disconnect};
 use russh_sftp::client::SftpSession;
 
 use crate::ssh::device::{self, ClientHandler, DeviceConn};
@@ -135,8 +137,15 @@ impl DevicePool {
     }
 
     /// 借一條連線並開 `sftp` 子系統（用完 drop 即關 channel、還 lease）。
-    /// 裝置拒絕再開 channel（MaxSessions）時，把那條的額度降到目前用量並換一條新連線重試一次。
     pub async fn sftp(&self, state: &AppState, reverse_port: i64, username: &str) -> anyhow::Result<PooledSftp> {
+        let (lease, channel) = self.session_channel(state, reverse_port, username).await?;
+        let sftp = device::start_sftp(channel).await?;
+        Ok(PooledSftp { sftp, _lease: lease })
+    }
+
+    /// 借一條連線並在上面開一條 session channel（shell / exec / subsystem 用）。
+    /// 裝置拒絕再開 channel（MaxSessions）時，把那條的額度降到目前用量並換一條新連線重試一次。
+    pub async fn session_channel(&self, state: &AppState, reverse_port: i64, username: &str) -> anyhow::Result<(Lease, Channel<Msg>)> {
         let mut retried = false;
         loop {
             let lease = self.acquire(state, reverse_port, username).await?;
@@ -156,9 +165,7 @@ impl DevicePool {
                     continue;
                 }
             };
-            channel.request_subsystem(true, "sftp").await.context("request the sftp subsystem")?;
-            let sftp = SftpSession::new(channel.into_stream()).await.context("start SFTP")?;
-            return Ok(PooledSftp { sftp, _lease: lease });
+            return Ok((lease, channel));
         }
     }
 

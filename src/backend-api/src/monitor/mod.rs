@@ -183,16 +183,10 @@ impl StatusState {
     }
 }
 
-/// 新隧道的 reverse port：1024..65535 之間最小、沒被用（DB / 現有 forward）而且 `usable` 的埠。
-/// `usable` 在正式環境是 [`loopback_bindable`]：後端自己也在聽一些 port（gateway 2222、API 8000、遠端瀏覽器的
-/// SOCKS…），只看 DB 會把它們發給隧道，裝置的 forward 就永遠綁不起來。
-pub fn find_free_port(used: &HashSet<i64>, usable: impl Fn(i64) -> bool) -> Result<i64, String> {
-    (1024..65535).find(|p| !used.contains(p) && usable(*p)).ok_or_else(|| "Not enough free ports available.".to_string())
-}
-
-/// 這個 port 現在在 127.0.0.1 綁得起來（gateway 之後就是綁在這裡）。
-pub fn loopback_bindable(port: i64) -> bool {
-    u16::try_from(port).map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).is_ok()).unwrap_or(false)
+/// 新隧道的 reverse port：1024..65535 之間最小、沒被用（DB / 現有 forward）的號碼。gateway 不綁本機 port，
+/// 所以它只是識別號碼，不必在主機上空著。/ The smallest unused number; the gateway binds nothing for it.
+pub fn find_free_port(used: &HashSet<i64>) -> Result<i64, String> {
+    (1024..65535).find(|p| !used.contains(p)).ok_or_else(|| "Not enough free ports available.".to_string())
 }
 
 #[cfg(test)]
@@ -200,15 +194,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn free_port_skips_used_and_unusable() {
+    fn free_port_skips_used() {
         let used: HashSet<i64> = [1024, 1025].into_iter().collect();
-        assert_eq!(find_free_port(&used, |_| true).unwrap(), 1026);
-        // 1026 is taken by something else on the host (e.g. the gateway's own listener)
-        assert_eq!(find_free_port(&used, |p| p != 1026).unwrap(), 1027);
-        assert!(find_free_port(&used, |_| false).is_err());
-        // a port held by a live listener is not bindable
-        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        assert!(!loopback_bindable(held.local_addr().unwrap().port() as i64));
+        assert_eq!(find_free_port(&used).unwrap(), 1026);
+        let all: HashSet<i64> = (1024..65535).collect();
+        assert!(find_free_port(&all).is_err());
     }
 
     #[test]
