@@ -59,7 +59,7 @@ pub struct Config {
     pub ssh_binary: String,
     /// russh 原生連線用的私鑰（預設 ~/.ssh/id_rsa，與 ssh 客戶端同一把）。
     pub ssh_identity: PathBuf,
-    /// terminal / file manager / `ssh -D` 連線的目標主機：內建 gateway 的 loopback listener（單跳）。
+    /// gateway 沒啟用時（開發環境、自帶 sshd 的測試）russh 直連裝置用的主機；有 gateway 時不用（行程內開通道）。
     pub ssh_target_host: String,
     /// Swagger UI + /api/openapi.json，登入後可見（OPENAPI_ENABLED=false 可關）。/ Login-gated API docs.
     pub openapi_enabled: bool,

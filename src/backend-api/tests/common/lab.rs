@@ -5,10 +5,12 @@
 //!   加上 [`Machine::account_home`] 之後 `<home>/<帳號>/.ssh/authorized_keys` 檔案裡的金鑰）、記錄每次登入
 //!   （帳號 + 用了哪把金鑰），可選擇當跳板（direct-tcpip）。exec 支援 `whoami` / `hostname` / `whereami`
 //!   （`user@machine`）；shell 先印 `login:user@machine` 再 echo；`sftp` 子系統轉給本機 sftp-server（有的話）。
-//! - 後端兩條路（都只一跳到 gateway 的 loopback）：russh（SFTP / 檔案管理）與 OpenSSH（terminal / `ssh -D`）
+//! - 後端：russh 在行程內經 gateway 開通道。連線池（SFTP / 檔案管理 / 終端機 / SOCKS）見 `backend_sftp`，
+//!   自己的一條連線（AI session、區網掃描）見 `backend_exec`
 //! - 筆電：真的 OpenSSH 客戶端。第一跳 `ProxyCommand ssh -W %h:%p telepy-ssh-server`（gateway + 裝置兩層），
 //!   之後每一跳 ProxyJump 穿過前一台。
-//! - 網頁終端機：真的 `/ws/terminal/`（Telepy 的權限）→ PTY → OpenSSH → 裝置。
+//! - 網頁終端機：真的 `/ws/terminal/`（Telepy 的權限）→ 池子連線上的 PTY channel → 裝置；區網主機那一跳由
+//!   OpenSSH（下面的包裝程式）連 `ssh::bridge` 的一次性入口。檔案管理：`filemanager`。
 //! 沒有 ssh / ssh-keygen 的環境 [`Lab::start`] 回 None，測試自行跳過。
 //! Reusable SSH topology for integration tests: gateway, real OpenSSH tunnels and laptops, scriptable device sshd.
 
@@ -559,8 +561,8 @@ impl Lab {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gw_port = listener.local_addr().unwrap().port();
 
-        // 後端的 OpenSSH（terminal / ssh -D）：不讀開發者的 ~/.ssh、只用服務金鑰。命令列「先出現的值優先」，
-        // 所以這裡的 ControlPath / ControlPersist 會蓋過 terminal_args，多工 socket 不會殘留。
+        // 後端的 OpenSSH（只剩區網主機那一跳）：不讀開發者的 ~/.ssh、只用服務金鑰。
+        // The backend's OpenSSH client (only the LAN hop now): no developer ~/.ssh, only the service key.
         let wrapper = dir.path().join("backend-ssh");
         std::fs::write(
             &wrapper,
@@ -770,11 +772,6 @@ impl Lab {
     /// 後端連線池借一條 SFTP channel（檔案管理 / SFTP REST 的路）。
     pub async fn backend_sftp(&self, device: &Device, os_user: &str) -> anyhow::Result<telepy_server::ssh::pool::PooledSftp> {
         self.app.state.pool.sftp(&self.app.state, device.reverse_port as i64, os_user).await
-    }
-
-    /// 後端 OpenSSH（terminal / `ssh -D` 的路）：同一支包裝程式、一跳到 loopback。
-    pub async fn backend_ssh(&self, device: &Device, os_user: &str, cmd: &str) -> Run {
-        run(Command::new(&self.app.state.config.ssh_binary).args(["-p", &device.reverse_port.to_string(), &format!("{os_user}@127.0.0.1"), cmd])).await
     }
 
     /// 筆電的 ssh config：`telepy-ssh-server`（gateway）+ 每一跳一個 `hopN`，最後一跳是目的地。

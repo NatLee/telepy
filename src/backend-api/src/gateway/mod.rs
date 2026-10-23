@@ -1,11 +1,10 @@
 //! 內建 SSH gateway：後端自己終結裝置的反向隧道（取代 OpenSSH 容器 + AuthorizedKeysCommand + ss/探測腳本）。
 //!
 //! 只實作裝置端 `ssh -NR '*:<port>:localhost:22' telepy@server` 需要的最小子集：
-//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰）。後端自己走 loopback、不經 gateway 認證，所以**不接受服務金鑰**：
+//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰）。後端自己在行程內開通道、不經 gateway 認證，所以**不接受服務金鑰**：
 //!   那把金鑰在每台裝置的 authorized_keys 裡，若也能登入 gateway，外洩一把就能從外網進所有裝置。
-//! - `tcpip-forward`：記住 port → 連線，並在 **127.0.0.1:<port>** 綁一個 loopback listener，把進來的 TCP
-//!   橋到 `forwarded-tcpip` channel（= sshd 在 GatewayPorts no 下的行為），所以 OpenSSH 客戶端（terminal、
-//!   `ssh -D`）與 russh（SFTP）都能用 `127.0.0.1:<port>` 單跳到裝置。
+//! - `tcpip-forward`：只**記住** port → 這條連線（不綁任何本機 port；`reverse_port` 只是識別號碼）。後端要連裝置時
+//!   用 [`Gateway::open_stream`] 在行程內開 `forwarded-tcpip` channel（終端機、檔案、SFTP、SOCKS、AI 都是）。
 //! - `direct-tcpip`（使用者金鑰的 `ProxyCommand ssh -W localhost:<port> telepy-ssh-server`）：橋到同一條 forward。
 //! - 其餘（session/shell/exec/pty/subsystem/agent/x11）一律拒絕，等同現在 `Match User telepy` 的 sshd 設定。
 //!
@@ -21,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use dashmap::DashMap;
 use russh::keys::{load_secret_key, HashAlg, PrivateKey};
 use russh::server::{self, Auth, Config as ServerConfig, Handle, Handler, Msg, Session};
@@ -48,7 +47,6 @@ pub struct Forward {
     pub address: String,
     pub conn_id: u64,
     pub handle: Handle,
-    listener: tokio::task::JoinHandle<()>,
 }
 
 struct ConnInfo {
@@ -313,7 +311,8 @@ impl Gateway {
         })
     }
 
-    async fn register_forward(self: &Arc<Self>, conn_id: u64, address: &str, port: u16, handle: Handle) -> anyhow::Result<()> {
+    /// 記住 port → 這條連線（不綁本機 port）。/ Remember port → connection; nothing is bound locally.
+    fn register_forward(&self, conn_id: u64, address: &str, port: u16, handle: Handle) -> anyhow::Result<()> {
         if let Some(existing) = self.forwards.get(&port).map(|f| f.clone()) {
             if existing.conn_id == conn_id {
                 return Ok(());
@@ -322,27 +321,9 @@ impl Gateway {
                 bail!("port {port} is already forwarded by another live connection");
             }
             // 擁有者已斷線但尚未清理：接手。/ Stale owner: take over.
-            existing.listener.abort();
             self.forwards.remove(&port);
         }
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.with_context(|| format!("bind 127.0.0.1:{port}"))?;
-        let gw = self.clone();
-        let task_handle = handle.clone();
-        let task_address = address.to_string();
-        let listener_task = tokio::spawn(async move {
-            loop {
-                let Ok((tcp, peer)) = listener.accept().await else { break };
-                let h = task_handle.clone();
-                let addr = task_address.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = bridge_tcp(h, addr, port, tcp, peer).await {
-                        tracing::debug!(port, error = %e, "gateway: loopback bridge ended with error");
-                    }
-                });
-            }
-            let _ = gw; // keep the gateway alive for the task's lifetime
-        });
-        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), conn_id, handle, listener: listener_task }));
+        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), conn_id, handle }));
         self.publish_status();
         Ok(())
     }
@@ -350,9 +331,7 @@ impl Gateway {
     fn unregister_forward(&self, conn_id: u64, port: u16) -> bool {
         let owned = self.forwards.get(&port).map(|f| f.conn_id == conn_id).unwrap_or(false);
         if owned {
-            if let Some((_, f)) = self.forwards.remove(&port) {
-                f.listener.abort();
-            }
+            self.forwards.remove(&port);
             self.publish_status();
         }
         owned
@@ -363,7 +342,6 @@ impl Gateway {
         let mut dropped = Vec::new();
         self.forwards.retain(|port, f| {
             if f.conn_id == conn_id {
-                f.listener.abort();
                 dropped.push(*port);
                 false
             } else {
@@ -407,18 +385,6 @@ impl Gateway {
             self.probe_latency().await;
         }
     }
-}
-
-/// loopback TCP ↔ forwarded-tcpip channel。
-async fn bridge_tcp(handle: Handle, address: String, port: u16, mut tcp: TcpStream, peer: SocketAddr) -> anyhow::Result<()> {
-    let channel = handle
-        .channel_open_forwarded_tcpip(address, port as u32, peer.ip().to_string(), peer.port() as u32)
-        .await
-        .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
-    let mut stream = channel.into_stream();
-    let _ = tcp.set_nodelay(true);
-    tokio::io::copy_bidirectional(&mut tcp, &mut stream).await?;
-    Ok(())
 }
 
 /// direct-tcpip channel ↔ forwarded-tcpip channel（使用者金鑰的 `ssh -W`）。
@@ -514,7 +480,7 @@ impl Handler for GatewayHandler {
             self.gw.event("refused_forward", Some(self.peer), Some(p), tunnel_id, format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
             return Ok(false);
         }
-        match self.gw.register_forward(self.conn_id, address, p, session.handle()).await {
+        match self.gw.register_forward(self.conn_id, address, p, session.handle()) {
             Ok(()) => {
                 self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
                 self.gw.remember_endpoint(self.conn_id, p).await;
