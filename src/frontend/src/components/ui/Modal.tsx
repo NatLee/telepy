@@ -76,9 +76,10 @@ const SIZE_CLASS: Record<ModalSize, string> = {
 /**
  * 內容區底部的哨兵:看不到它(內容還沒捲到底)時顯示淡出遮罩 + 「往下還有」。sticky 的 -bottom-5 抵銷內容區的 py-5。
  * A sentinel at the end of the body: while it is out of view, show a fade and a "More below" pill.
- * The sticky -bottom-5 offsets the body's py-5.
+ * The sticky -bottom-5 offsets the body's py-5. 其他捲動區（例如浮層）用 className 改位置與底色。
+ * Other scroll areas (e.g. a popover) pass `className` to change the offset and the fade colour.
  */
-function MoreBelow() {
+export function MoreBelow({ className }: { className?: string }) {
     const { t } = useI18n();
     const end = useRef<HTMLDivElement>(null);
     const [cut, setCut] = useState(false);
@@ -97,6 +98,7 @@ function MoreBelow() {
                 className={cn(
                     "pointer-events-none sticky -bottom-5 z-20 -mt-16 flex h-16 shrink-0 items-end justify-center bg-gradient-to-t from-card via-card/85 to-transparent pb-1 transition-opacity duration-200",
                     cut ? "opacity-100" : "opacity-0",
+                    className,
                 )}
             >
                 <button

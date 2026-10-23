@@ -1,14 +1,27 @@
 "use client";
 
-import React, { createContext, useContext, useEffect } from "react";
+import React, { createContext, useContext, useEffect, useMemo } from "react";
 import { useAuth } from "@/lib/auth";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
-import { useNotificationWebSocket } from "@/lib/websocket";
+import { useNotificationWebSocket, type SocketPhase } from "@/lib/websocket";
+
+type NotificationWsStatus = {
+    isConnected: boolean;
+    phase: SocketPhase;
+    /** 已收到的訊息數，每多一則代表剛有更新進來。/ Messages received; each increment means an update just arrived. */
+    messageCount: number;
+    reconnect: () => void;
+};
 
 /** Context exposing the notification WebSocket connection status */
-const NotificationWsContext = createContext<{ isConnected: boolean }>({ isConnected: false });
+const NotificationWsContext = createContext<NotificationWsStatus>({
+    isConnected: false,
+    phase: { state: "connecting" },
+    messageCount: 0,
+    reconnect: () => {},
+});
 export const useNotificationWsStatus = () => useContext(NotificationWsContext);
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
@@ -16,7 +29,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     const router = useRouter();
 
     // Establish global notification websocket when logged in
-    const { isConnected } = useNotificationWebSocket();
+    const { isConnected, phase, messageCount, reconnect } = useNotificationWebSocket();
+    const wsStatus = useMemo(
+        () => ({ isConnected, phase, messageCount, reconnect }),
+        [isConnected, phase, messageCount, reconnect],
+    );
     const pathname = usePathname();
     const isTerminalPage = pathname?.startsWith("/tunnels/terminal");
 
@@ -39,7 +56,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     }
 
     return (
-        <NotificationWsContext.Provider value={{ isConnected }}>
+        <NotificationWsContext.Provider value={wsStatus}>
             <div className="flex min-h-screen w-full bg-background font-sans">
                 <Sidebar />
                 <div className="relative flex flex-col flex-1 w-full min-w-0">

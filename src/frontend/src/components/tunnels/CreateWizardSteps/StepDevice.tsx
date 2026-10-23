@@ -7,6 +7,7 @@
 
 import React, { useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, KeyRound, Loader2, Lock, ShieldAlert } from "lucide-react";
+import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -108,10 +109,9 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                         </p>
                     )}
                     {kc.kind === "private" && (
-                        <p role="alert" className="flex items-start gap-1.5 rounded-lg border border-destructive/40 bg-destructive/[0.07] p-2.5 text-xs text-destructive">
-                            <ShieldAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
+                        <Callout tone="danger" role="alert" icon={<ShieldAlert size={17} className="mt-0.5 shrink-0" aria-hidden />}>
                             {t("wizard.device.keyPrivate")}
-                        </p>
+                        </Callout>
                     )}
                     {kc.kind === "invalid" && !d.errors.key && (
                         <p className="flex items-center gap-1.5 text-xs text-warning">
