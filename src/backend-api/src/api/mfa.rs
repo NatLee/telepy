@@ -100,6 +100,28 @@ pub async fn factors(state: &AppState, user_id: i64) -> sqlx::Result<Factors> {
     Ok(Factors { totp, passkeys })
 }
 
+/// 站台要求的因素（快取 ≤ 5 秒）。/ The site's required factors, cached for at most 5 s.
+pub async fn requirement(state: &AppState) -> sqlx::Result<mfa::Requirement> {
+    if let Some(r) = state.mfa.requirement.get(&()) {
+        return Ok(r);
+    }
+    let s = db::settings::get_solo(&state.db).await?;
+    let r = mfa::Requirement { totp: s.mfa_require_totp, passkey: s.mfa_require_passkey };
+    state.mfa.requirement.insert((), r);
+    Ok(r)
+}
+
+/// 管理員要求、但這位使用者還沒設定的因素；兩個開關都關時不查使用者的因素。
+/// Required factors the user still lacks; the user's factors are only read when a switch is on.
+pub async fn enrollment_missing(state: &AppState, user_id: i64) -> sqlx::Result<Vec<&'static str>> {
+    let req = requirement(state).await?;
+    if !req.any() {
+        return Ok(Vec::new());
+    }
+    let f = factors(state, user_id).await?;
+    Ok(mfa::missing_factors(req.totp, req.passkey, f.totp, f.passkeys))
+}
+
 /// 帳密 / Google 第一關通過後：沒有 2FA → token pair；有 → 登入挑戰。`first_factor` = password / google。
 /// After the first factor (password / google): tokens, or a challenge when the account has 2FA.
 pub async fn complete_login(state: &AppState, user: &User, first_factor: &'static str, meta: &ClientMeta) -> ApiResult<Value> {

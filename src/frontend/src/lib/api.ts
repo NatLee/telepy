@@ -123,5 +123,17 @@ export async function apiFetch(
         window.dispatchEvent(new CustomEvent("api:unauthorized"));
     }
 
+    // 管理員在使用中途要求兩步驟：重抓 profile，讓 AppLayout 換成設定畫面（lib/auth.tsx 監聽）。
+    // The admin started requiring two-step sign-in mid-session: refetch the profile so the gate appears.
+    if (response.status === 403 && typeof window !== "undefined") {
+        response
+            .clone()
+            .json()
+            .then((body: { code?: string } | null) => {
+                if (body?.code === "mfa_enrollment_required") window.dispatchEvent(new CustomEvent("api:mfa-enrollment-required"));
+            })
+            .catch(() => {});
+    }
+
     return response;
 }

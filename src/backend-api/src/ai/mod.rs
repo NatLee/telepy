@@ -583,6 +583,8 @@ mod tests {
             notify_webhook_url: String::new(),
             notify_down_delay: 60,
             user_key_max_days: 0,
+            mfa_require_totp: false,
+            mfa_require_passkey: false,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

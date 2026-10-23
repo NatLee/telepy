@@ -63,6 +63,10 @@ pub async fn resolve(state: &AppState, token: &str) -> Result<McpPrincipal, McpA
     if !user.is_active {
         return Err(McpAuthError::Invalid);
     }
+    // 管理員要求的第二因素還沒設好 → 和撤銷一樣視為無效。/ Not enrolled in the required factors: treated as invalid.
+    if !crate::api::mfa::enrollment_missing(state, user.id).await.map(|m| m.is_empty()).unwrap_or(false) {
+        return Err(McpAuthError::Invalid);
+    }
     let client_name = db::oauth::client_by_id(&state.db, &grant.client_id).await.ok().flatten().map(|c| c.client_name).unwrap_or_default();
     let stale_before = db_time(now - chrono::Duration::seconds(TOUCH_INTERVAL_SECS));
     if grant.last_used_at.as_deref().map(|t| t < stale_before.as_str()).unwrap_or(true) {

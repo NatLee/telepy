@@ -17,7 +17,14 @@ export interface UserProfile {
     terminal_font_size?: number;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
+    /** 已設定任一第二因素。/ A passkey or an authenticator app is set up. */
+    mfa_enabled?: boolean;
+    /** 管理員要求、但這個帳號還沒設定的因素；非空時只能先完成設定（components/auth/EnrollmentGate）。
+     *  Second factors the admin requires that this account still lacks; while non-empty the app shows the enrollment gate. */
+    mfa_missing?: RequiredFactor[];
 }
+
+export type RequiredFactor = "totp" | "passkey";
 
 export interface AuthContextType {
     accessToken: string | null;

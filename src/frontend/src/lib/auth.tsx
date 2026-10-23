@@ -34,8 +34,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const handleUnauthorized = () => {
             logout();
         };
+        // 403 mfa_enrollment_required（lib/api.ts）→ 重抓 profile，mfa_missing 會帶出設定畫面。
+        // 403 mfa_enrollment_required → refetch the profile; its mfa_missing brings up the enrollment gate.
+        const handleEnrollmentRequired = () => {
+            const token = localStorage.getItem("accessToken");
+            if (token) fetchUserProfileState(token);
+        };
         window.addEventListener("api:unauthorized", handleUnauthorized);
-        return () => window.removeEventListener("api:unauthorized", handleUnauthorized);
+        window.addEventListener("api:mfa-enrollment-required", handleEnrollmentRequired);
+        return () => {
+            window.removeEventListener("api:unauthorized", handleUnauthorized);
+            window.removeEventListener("api:mfa-enrollment-required", handleEnrollmentRequired);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {

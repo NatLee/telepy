@@ -134,6 +134,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> Api
         "terminal_font_size": settings.as_ref().map(|s| s.terminal_font_size).unwrap_or(14),
         "ui_scale": settings.as_ref().map(|s| s.ui_scale).unwrap_or(100),
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
+        "mfa_missing": super::mfa::enrollment_missing(&state, user.id).await?,
     })))
 }
 

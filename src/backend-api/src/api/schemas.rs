@@ -117,6 +117,10 @@ pub struct UserProfile {
     pub terminal_font_size: i64,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
+    /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
+    /// While non-empty, every other REST route answers 403 `mfa_enrollment_required`.
+    #[schema(example = json!(["totp"]))]
+    pub mfa_missing: Vec<String>,
 }
 
 // ---------------------------------------------------------------- tunnels

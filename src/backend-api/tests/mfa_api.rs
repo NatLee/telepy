@@ -335,3 +335,140 @@ async fn admin_reset_and_oauth_consent_step_up() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json["code"], "passkey_unavailable");
 }
+
+// ---------------------------------------------------------------- admin-required factors
+
+async fn enable_totp(app: &TestApp, token: &str) -> String {
+    let r = app.post("/api/auth/mfa/totp/setup", Some(token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let secret = r.json["secret"].as_str().unwrap().to_string();
+    let r = app.post("/api/auth/mfa/totp/enable", Some(token), json!({"code": code_at(&secret, now())})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    secret
+}
+
+fn assert_enrollment_required(r: &common::Resp, missing: Value) {
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    assert_eq!(r.json["code"], "mfa_enrollment_required");
+    assert_eq!(r.json["missing"], missing);
+    assert!(r.json["error"].as_str().unwrap().contains("two-step sign-in"));
+}
+
+async fn serve(app: &TestApp) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = app.router.clone();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("ws://{addr}")
+}
+
+/// 開一個 WS、送 auth + ping，回第一個回應（文字訊框或 close code）。/ Open a socket, authenticate, ping; return the outcome.
+async fn ws_outcome(base: &str, path: &str, token: &str) -> Result<Value, u16> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("{base}{path}")).await.unwrap();
+    ws.send(Message::Text(json!({"type": "auth", "token": token}).to_string().into())).await.unwrap();
+    ws.send(Message::Text(json!({"type": "ping"}).to_string().into())).await.unwrap();
+    loop {
+        let m = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next()).await.expect("timeout").expect("ended").unwrap();
+        match m {
+            Message::Close(Some(f)) => return Err(u16::from(f.code)),
+            Message::Close(None) => return Err(0),
+            Message::Text(t) => return Ok(serde_json::from_str(&t).unwrap()),
+            _ => continue,
+        }
+    }
+}
+
+#[tokio::test]
+async fn required_totp_gates_everything_but_enrollment() {
+    let app = app_with_public_url().await;
+    let admin = app.login("admin", "pw").await;
+    app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;
+    let bob = app.login("bob", "pw").await;
+
+    // 預設關：沒有任何變化。/ Off by default: nothing changes.
+    let s = app.get("/api/site/settings", Some(&admin)).await.json;
+    assert_eq!((s["values"]["mfa_require_totp"].as_bool(), s["values"]["mfa_require_passkey"].as_bool()), (Some(false), Some(false)));
+    assert!(s["meta"]["mfa_require_totp"]["label"].is_string());
+    assert_eq!(app.get("/api/reverse/server/dashboard", Some(&bob)).await.status, StatusCode::OK);
+    assert_eq!(app.get("/api/auth/user/profile", Some(&bob)).await.json["mfa_missing"], json!([]));
+
+    // 管理員自己沒有 TOTP 就不能開。/ The admin needs TOTP before requiring it.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_totp": true})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert_eq!(r.json["mfa_require_totp"][0], "Set up an authenticator app on your own account first.");
+    assert_eq!(app.get("/api/site/settings", Some(&admin)).await.json["values"]["mfa_require_totp"], false);
+    enable_totp(&app, &admin).await;
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_totp": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["values"]["mfa_require_totp"], true);
+    // 已開時重送 true 不算「打開」。/ Re-sending true is not a transition.
+    assert_eq!(app.post("/api/site/settings", Some(&admin), json!({"mfa_require_totp": true, "allow_registration": true})).await.status, StatusCode::OK);
+    assert_eq!(app.get("/api/reverse/server/dashboard", Some(&admin)).await.status, StatusCode::OK, "the admin has TOTP");
+
+    // bob：受保護的路徑 403，設定所需的路徑照常。/ bob: protected routes 403, enrollment routes open.
+    assert_enrollment_required(&app.get("/api/reverse/server/dashboard", Some(&bob)).await, json!(["totp"]));
+    assert_enrollment_required(&app.get("/api/reverse/user/keys", Some(&bob)).await, json!(["totp"]));
+    let p = app.get("/api/auth/user/profile", Some(&bob)).await;
+    assert_eq!(p.status, StatusCode::OK);
+    assert_eq!(p.json["mfa_missing"], json!(["totp"]));
+    for path in ["/api/auth/mfa", "/api/user/settings", "/api/auth/sign-ins"] {
+        assert_eq!(app.get(path, Some(&bob)).await.status, StatusCode::OK, "{path}");
+    }
+    // 登入本身照常成功（才能進來設定）。/ Signing in still works, so bob can enrol.
+    assert!(password_login(&app, "bob").await["access_token"].is_string());
+
+    // WebSocket：notifications 可以，其他一律 4007。/ Notifications connect; every other socket is refused with 4007.
+    let base = serve(&app).await;
+    assert_eq!(ws_outcome(&base, "/ws/notifications/", &bob).await, Ok(json!({"type": "pong"})));
+    assert_eq!(ws_outcome(&base, "/ws/terminal/", &bob).await, Err(4007));
+    assert_eq!(ws_outcome(&base, "/ws/tunnel_connection/1/", &bob).await, Err(4007));
+
+    // 設好 TOTP 就解除。/ Enrolling lifts the gate.
+    enable_totp(&app, &bob).await;
+    assert_eq!(app.get("/api/auth/user/profile", Some(&bob)).await.json["mfa_missing"], json!([]));
+    assert_eq!(app.get("/api/reverse/server/dashboard", Some(&bob)).await.status, StatusCode::OK);
+    assert_ne!(ws_outcome(&base, "/ws/terminal/", &bob).await, Err(4007));
+
+    // 關閉永遠可以。/ Turning it off is always allowed.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_totp": false})).await;
+    assert_eq!((r.status, r.json["values"]["mfa_require_totp"].as_bool()), (StatusCode::OK, Some(false)));
+}
+
+#[tokio::test]
+async fn required_passkey_is_separate_from_totp() {
+    let app = app_with_public_url().await;
+    let admin = app.login("admin", "pw").await;
+    app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;
+    let bob = app.login("bob", "pw").await;
+    let carol = app.login("carol", "pw").await;
+    let admin_secret = enable_totp(&app, &admin).await;
+    let bob_secret = enable_totp(&app, &bob).await;
+
+    // TOTP 不能代替 passkey。/ TOTP does not satisfy the passkey requirement.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_passkey": true})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert_eq!(r.json["mfa_require_passkey"][0], "Register a passkey on your own account first.");
+    forget_totp_step(&app, user_id(&app, &admin).await).await;
+    let mut admin_laptop = Browser::new();
+    register_passkey(&app, &admin, &mut admin_laptop, "Admin laptop", Some(json!({"method": "totp", "code": code_at(&admin_secret, now())}))).await;
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_passkey": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+
+    assert_enrollment_required(&app.get("/api/reverse/server/dashboard", Some(&bob)).await, json!(["passkey"]));
+    assert_eq!(app.get("/api/auth/user/profile", Some(&bob)).await.json["mfa_missing"], json!(["passkey"]));
+
+    // 兩個都要時，缺的都列出來。/ With both required, every missing factor is listed.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"mfa_require_totp": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_enrollment_required(&app.get("/api/reverse/server/dashboard", Some(&carol)).await, json!(["totp", "passkey"]));
+    assert_enrollment_required(&app.get("/api/reverse/server/dashboard", Some(&bob)).await, json!(["passkey"]));
+
+    // bob 註冊 passkey（已有 TOTP → 先再驗證）就解除。/ bob registers a passkey (re-auth with TOTP) and is through.
+    forget_totp_step(&app, user_id(&app, &bob).await).await;
+    let mut bob_phone = Browser::new();
+    register_passkey(&app, &bob, &mut bob_phone, "Phone", Some(json!({"method": "totp", "code": code_at(&bob_secret, now())}))).await;
+    assert_eq!(app.get("/api/auth/user/profile", Some(&bob)).await.json["mfa_missing"], json!([]));
+    assert_eq!(app.get("/api/reverse/server/dashboard", Some(&bob)).await.status, StatusCode::OK);
+}
