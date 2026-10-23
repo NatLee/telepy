@@ -239,3 +239,71 @@ async fn offline_device_and_key_list_seed() {
     let r = lab.app.get(&path(tid, "device-keys"), Some(&carol.token)).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
+
+/// 合成一把 Ed25519 公鑰（不用跑 ssh-keygen：只要能解析、指紋各不相同）。/ A parseable, distinct Ed25519 public key.
+fn fake_ed25519(i: u32, comment: &str) -> String {
+    use base64::Engine;
+    let mut blob = Vec::new();
+    for part in [&b"ssh-ed25519"[..], &[&i.to_be_bytes()[..], &[7u8; 28][..]].concat()] {
+        blob.extend_from_slice(&(part.len() as u32).to_be_bytes());
+        blob.extend_from_slice(part);
+    }
+    format!("ssh-ed25519 {} {comment}", base64::engine::general_purpose::STANDARD.encode(blob))
+}
+
+/// 帳號裡有幾百把金鑰：稽核全部列出，批次移除一次改寫檔案，服務金鑰 / 清單上的 / 不存在的列在 skipped。
+/// Hundreds of keys in one account: the audit lists them all, a batch removal rewrites the file once.
+#[tokio::test]
+async fn audit_lists_many_keys_and_removes_a_batch() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("crowd", &[("ubuntu", &[&lab.service])], false).await;
+    let home = boxm.account_home("ubuntu");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let fleet: Vec<String> = (0..300).map(|i| fake_ed25519(i, &format!("fleet-{i}"))).collect();
+    // 第一把出現兩次（一次帶 options）。/ The first key appears twice, once with options.
+    let content = format!("# fleet\n{}\n{}\nno-pty {}\n", lab.service.public, fleet.join("\n"), fleet[0]);
+    std::fs::write(home.join(".ssh/authorized_keys"), content).unwrap();
+    let dev = lab.device(&alice, "crowd", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let alice_key = key_id(&lab, &alice).await;
+    lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key]})).await;
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]), "{}", r.text);
+
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let lines = r.json["accounts"][0]["lines"].as_array().unwrap().clone();
+    let count = |kind: &str| lines.iter().filter(|l| l["kind"] == kind).count();
+    assert_eq!((count("unknown"), count("service"), count("managed")), (301, 1, 1));
+    let fp_of = |kind: &str| lines.iter().find(|l| l["kind"] == kind).unwrap()["fingerprint"].as_str().unwrap().to_string();
+    // fleet-0 … fleet-249；fleet-0 有兩行。/ fleet-0 … fleet-249; fleet-0 is on two lines.
+    let fps: Vec<String> = lines.iter().filter(|l| l["kind"] == "unknown").filter_map(|l| l["fingerprint"].as_str().map(str::to_string)).take(250).collect();
+    let remove = path(dev.tunnel_id, "authorized-keys/remove");
+    let mut batch = fps.clone();
+    batch.extend([fp_of("service"), fp_of("managed"), "SHA256:not-there".to_string(), fps[0].clone()]);
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": batch})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["keys"].as_i64(), r.json["removed"].as_i64()), (Some(250), Some(251)), "{}", r.text);
+    let skipped: Vec<&str> = r.json["skipped"].as_array().unwrap().iter().map(|s| s["code"].as_str().unwrap()).collect();
+    assert_eq!(skipped, vec!["service_key", "in_key_list", "not_found"]);
+    let ak = boxm.authorized_keys("ubuntu");
+    assert!(ak.starts_with(&format!("# fleet\n{}\n", lab.service.public)), "{ak}");
+    assert_eq!(ak.lines().filter(|l| l.contains("fleet-")).count(), 50, "{ak}");
+    assert!(!ak.contains(&fleet[0]) && ak.contains(&fleet[299]));
+    assert!(ak.contains(&alice.key.bare()));
+    assert_eq!(lab.laptop_exec(&alice, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await.stdout, "ubuntu@crowd");
+
+    // 只剩不能移的：200、什麼都沒改。/ Nothing removable: 200, file untouched.
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": [fp_of("service")]})).await;
+    assert_eq!((r.status, r.json["keys"].as_i64()), (StatusCode::OK, Some(0)), "{}", r.text);
+    assert_eq!(boxm.authorized_keys("ubuntu"), ak);
+    for bad in [json!([]), json!(["SHA256:x", 3]), json!("SHA256:x")] {
+        let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": bad})).await;
+        assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{}", r.text);
+    }
+}

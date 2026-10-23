@@ -1276,16 +1276,31 @@ pub struct AuthorizedKeysAudit {
     pub accounts: Vec<AuthorizedKeysAccount>,
 }
 
+/// Send `fingerprint` for one key (errors if it can't be removed) or `fingerprints` for a batch
+/// (one rewrite of the file; keys that can't be removed are reported in `skipped`).
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemove {
     pub username: String,
-    pub fingerprint: String,
+    pub fingerprint: Option<String>,
+    /// 1 to 10000 fingerprints
+    pub fingerprints: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemoved {
     /// Lines removed
     pub removed: i64,
+    /// Keys removed
+    pub keys: i64,
+    pub skipped: Vec<AuthorizedKeySkipped>,
+}
+
+/// A key the batch left alone.
+#[derive(ToSchema)]
+pub struct AuthorizedKeySkipped {
+    pub fingerprint: String,
+    /// `not_found` | `service_key` | `in_key_list`
+    pub code: String,
 }
 
 #[derive(ToSchema)]

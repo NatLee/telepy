@@ -4,7 +4,7 @@
 //! - `DELETE /api/reverse/server/{id}/device-keys/{key_id}`：移出清單（金鑰擁有者；擁有者 / ADMIN 可移任何人的）
 //! - `POST   /api/reverse/server/{id}/device-keys/sync`：立刻同步（重讀每個帳號的 authorized_keys）
 //! - `GET    /api/reverse/server/{id}/authorized-keys`：稽核——實際讀裝置每個帳號的 authorized_keys（擁有者 / ADMIN）
-//! - `POST   /api/reverse/server/{id}/authorized-keys/remove`：從某帳號移除一把清單外的金鑰（擁有者 / ADMIN）
+//! - `POST   /api/reverse/server/{id}/authorized-keys/remove`：從某帳號移除清單外的金鑰（一把或一批；擁有者 / ADMIN）
 //! - `GET    /api/reverse/user/keys/devices`：金鑰頁的矩陣——我的金鑰 × 我能用的裝置
 //! REST endpoints for per-device key lists, the live authorized_keys audit and the keys-page matrix.
 
@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, device_keys::Installed, device_keys::SyncStatus, tunnels::Tunnel};
-use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, remove_key};
+use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, plan_removal, remove_keys};
 use crate::device_keys::view::{self, KnownKey};
 use crate::device_keys::{self as dk, remote::AuthorizedKeysFile, Desired};
 use crate::error::{ApiError, ApiResult};
@@ -421,7 +421,11 @@ async fn audit(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
 async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let (t, eff) = access(&state, me.id, id).await?;
     require_manager(eff)?;
-    let (Some(acct), Some(fp)) = (json_str(&body, "username"), json_str(&body, "fingerprint")) else {
+    // `fingerprint`：一把（找不到 / 不能移時回錯誤）；`fingerprints`：一次多把，不能移的列在 `skipped`。
+    // One key (errors as before) or a batch (`fingerprints`; what can't be removed is listed in `skipped`).
+    let batch = body.get("fingerprints").is_some();
+    let fps = if batch { batch_fingerprints(&body)? } else { json_str(&body, "fingerprint").into_iter().collect() };
+    let (Some(acct), false) = (json_str(&body, "username"), fps.is_empty()) else {
         return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "username and fingerprint are required"));
     };
     if !audit_accounts(&state, &t).await?.contains(&acct) {
@@ -434,24 +438,50 @@ async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     let _guard = lock.lock().await;
     let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
-    let found: Option<String> = parse_authorized_keys(&content).into_iter().filter_map(|l| l.key).find(|k| k.fingerprint == fp).map(|k| k.bare);
-    let Some(bare) = found else {
-        return Err(ApiError::not_found("That key is not in this account's authorized_keys"));
-    };
-    if db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).any(|k| k.bare == bare) {
-        return Err(coded(StatusCode::BAD_REQUEST, "service_key", "This is Telepy's service key; removing it would cut Telepy off from this account."));
-    }
+    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
     let desired: BTreeMap<String, _> = dk::desired(&state.db, &t).await?;
-    if desired.get(&acct).is_some_and(|d| d.contains_key(&bare)) {
-        return Err(coded(StatusCode::CONFLICT, "in_key_list", "This key is in the device's key list; remove it from the list instead."));
+    let listed: BTreeSet<String> = desired.get(&acct).map(|d| d.keys().cloned().collect()).unwrap_or_default();
+    let plan = plan_removal(&content, &fps, &service, &listed);
+    if !batch {
+        match plan.skipped.first().map(|(_, code)| *code) {
+            Some("not_found") => return Err(ApiError::not_found("That key is not in this account's authorized_keys")),
+            Some("service_key") => return Err(coded(StatusCode::BAD_REQUEST, "service_key", "This is Telepy's service key; removing it would cut Telepy off from this account.")),
+            Some(_) => return Err(coded(StatusCode::CONFLICT, "in_key_list", "This key is in the device's key list; remove it from the list instead.")),
+            None => {}
+        }
     }
-    let (new, removed) = remove_key(&content, &bare);
-    file.write(&new).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
-    db::device_keys::installed_delete(&state.db, t.id, &acct, &bare).await?;
-    tracing::info!(tunnel_id = t.id, account = %acct, fingerprint = %fp, by = %me.username, "device keys: removed a key from authorized_keys");
-    let audience = super::notify::tunnel_audience(&state, &t).await?;
-    state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": t.id }));
-    Ok(Json(json!({ "removed": removed })))
+    let mut removed = 0;
+    if !plan.remove.is_empty() {
+        let (new, n) = remove_keys(&content, &plan.remove);
+        file.write(&new).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+        for bare in &plan.remove {
+            db::device_keys::installed_delete(&state.db, t.id, &acct, bare).await?;
+        }
+        removed = n;
+        tracing::info!(tunnel_id = t.id, account = %acct, keys = plan.remove.len(), lines = n, by = %me.username, "device keys: removed keys from authorized_keys");
+        let audience = super::notify::tunnel_audience(&state, &t).await?;
+        state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": t.id }));
+    }
+    let skipped: Vec<Value> = plan.skipped.iter().map(|(fp, code)| json!({ "fingerprint": fp, "code": code })).collect();
+    Ok(Json(json!({ "removed": removed, "keys": plan.remove.len(), "skipped": skipped })))
+}
+
+/// 一次最多移除幾把（1 MiB 的檔案大約一萬把 Ed25519）。/ Batch cap (a 1 MiB file holds about 10k Ed25519 keys).
+const MAX_BATCH: usize = 10_000;
+
+/// `fingerprints`：非空、全是字串、不超過 `MAX_BATCH`；重複的只留一個（保留順序）。
+fn batch_fingerprints(body: &Value) -> ApiResult<Vec<String>> {
+    let bad = || coded(StatusCode::BAD_REQUEST, "bad_request", format!("fingerprints must be a list of 1 to {MAX_BATCH} fingerprints"));
+    let list = body.get("fingerprints").and_then(Value::as_array).filter(|l| !l.is_empty() && l.len() <= MAX_BATCH).ok_or_else(bad)?;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for v in list {
+        let fp = v.as_str().filter(|s| !s.is_empty()).ok_or_else(bad)?;
+        if seen.insert(fp) {
+            out.push(fp.to_string());
+        }
+    }
+    Ok(out)
 }
 
 #[utoipa::path(get, path = "/api/reverse/user/keys/devices", tag = "Device Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::KeyDevice>)))]
