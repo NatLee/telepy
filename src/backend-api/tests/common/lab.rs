@@ -434,6 +434,11 @@ pub struct Lab {
 impl Lab {
     /// 起 gateway + 後端；沒有 ssh / ssh-keygen 就回 None（呼叫端 `return`）。
     pub async fn start() -> Option<Lab> {
+        Self::start_with(|_| {}).await
+    }
+
+    /// 同上，但先讓呼叫端改 config（例如 guacd 位址）。/ Same, with a chance to tweak the config first.
+    pub async fn start_with(tweak: impl FnOnce(&mut telepy_server::config::Config)) -> Option<Lab> {
         if !have("ssh") || !have("ssh-keygen") {
             eprintln!("skipping: ssh / ssh-keygen not available");
             return None;
@@ -468,6 +473,7 @@ impl Lab {
         config.server_domain = Some("127.0.0.1".to_string());
         config.reverse_server_ssh_port = gw_port.to_string();
         config.ssh_logs_path = dir.path().join("ssh-gateway.log");
+        tweak(&mut config);
         app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
         app.router = telepy_server::app::build(app.state.clone());
         telepy_server::gateway::start(app.state.gateway.clone(), listener).unwrap();
@@ -683,19 +689,23 @@ impl Lab {
         self.terminal_with(user, device, os_user, json!({})).await
     }
 
-    /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `lan_host_id`）。/ Same, with extra auth-message fields.
-    pub async fn terminal_with(&self, user: &LabUser, device: &Device, os_user: &str, extra: Value) -> Result<Terminal, u16> {
-        let base = self
-            .ws_base
+    /// 真的 listener 上的後端（WebSocket 測試用），與正式環境一樣帶 ConnectInfo：`ws://127.0.0.1:<port>`。
+    /// The backend on a real listener (with ConnectInfo, like production), for WebSocket tests.
+    pub async fn ws_base(&self) -> &str {
+        self.ws_base
             .get_or_init(|| async {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let addr = listener.local_addr().unwrap();
                 let router = self.app.router.clone();
-                // 與正式環境一樣帶 ConnectInfo（來源 IP）。/ Serve with ConnectInfo like production.
                 tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
                 format!("ws://{addr}")
             })
-            .await;
+            .await
+    }
+
+    /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `lan_host_id`）。/ Same, with extra auth-message fields.
+    pub async fn terminal_with(&self, user: &LabUser, device: &Device, os_user: &str, extra: Value) -> Result<Terminal, u16> {
+        let base = self.ws_base().await;
         let (mut ws, _) = connect_async(format!("{base}/ws/terminal/")).await.unwrap();
         let mut auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
         if let (Some(a), Some(e)) = (auth.as_object_mut(), extra.as_object()) {

@@ -377,6 +377,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "ai_session_max_lifetime", "integer NOT NULL DEFAULT 7200"),
     ("site_settings_sitesettings", "ai_max_sessions_per_user", "integer NOT NULL DEFAULT 3"),
     ("site_settings_sitesettings", "lan_scan_enabled", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "desktop_max_sessions", "integer NOT NULL DEFAULT 4"),
+    ("site_settings_sitesettings", "desktop_session_idle_timeout", "integer NOT NULL DEFAULT 900"),
+    ("site_settings_sitesettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
+    ("site_settings_sitesettings", "desktop_max_resolution", "integer NOT NULL DEFAULT 2560"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.
@@ -428,8 +433,10 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             remote_browser_session_idle_timeout, remote_browser_max_sessions, remote_browser_geometry, \
             remote_browser_ssh_timeout, remote_browser_ssh_attempts, remote_browser_kasm_create_timeout, \
             remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, ai_session_max_lifetime, \
-            ai_max_sessions_per_user, lan_scan_enabled) \
-         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3, 1 \
+            ai_max_sessions_per_user, lan_scan_enabled, desktop_enabled, desktop_max_sessions, \
+            desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution) \
+         SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3, 1, \
+            1, 4, 900, 'both', 2560 \
          WHERE NOT EXISTS (SELECT 1 FROM site_settings_sitesettings WHERE id = 1)",
     )
     .execute(pool)

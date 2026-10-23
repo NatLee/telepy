@@ -9,6 +9,7 @@ use crate::auth::google::GoogleVerifier;
 use crate::auth::Jwt;
 use crate::config::Config;
 use crate::db::Db;
+use crate::desktop::Desktop;
 use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
 use crate::hub::Hub;
@@ -34,6 +35,8 @@ pub struct Inner {
     pub presence: Arc<Presence>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
+    /// 網頁內遠端桌面（RDP / VNC，經 guacd）的 session。/ In-browser remote desktop sessions (guacd).
+    pub desktop: Arc<Desktop>,
     /// 依「隧道 + OS 帳號」共用的裝置 SSH 連線（SFTP / 檔案管理）。
     pub pool: Arc<DevicePool>,
     /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
@@ -66,12 +69,14 @@ impl AppState {
             .expect("reqwest client");
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
+        let desktop = Arc::new(Desktop::new(&config));
         // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
         let status = Arc::new(StatusState::new(None));
         let presence = Arc::new(Presence::default());
         let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
         Self(Arc::new(Inner {
             remote_browser,
+            desktop,
             google: GoogleVerifier::new(http.clone()),
             jwt,
             hub: Hub::new(),

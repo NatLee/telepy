@@ -45,6 +45,11 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許隧道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
+    FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
+    FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
+    FieldMeta { name: "desktop_session_idle_timeout", kind: Kind::Int, label: "Remote Desktop Idle Timeout (seconds)", description: "遠端桌面多久沒有鍵盤 / 滑鼠 / 剪貼簿輸入就自動斷線(秒)。設 0 = 不自動斷線。變更後即時生效。" },
+    FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard", description: "剪貼簿方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。下次開桌面時生效。" },
+    FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -63,6 +68,11 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
+    m.insert("desktop_enabled".into(), json!(s.desktop_enabled));
+    m.insert("desktop_max_sessions".into(), json!(s.desktop_max_sessions));
+    m.insert("desktop_session_idle_timeout".into(), json!(s.desktop_session_idle_timeout));
+    m.insert("desktop_clipboard".into(), json!(s.desktop_clipboard));
+    m.insert("desktop_max_resolution".into(), json!(s.desktop_max_resolution));
     Value::Object(m)
 }
 
@@ -122,7 +132,9 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     let mut updates = Vec::new();
     for f in META {
         if let Some(v) = body.get(f.name) {
-            updates.push((f.name, parse_value(f, v)?));
+            let value = parse_value(f, v)?;
+            validate(f.name, &value)?;
+            updates.push((f.name, value));
         }
     }
     for (name, value) in updates {
@@ -131,4 +143,16 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     }
     let s = db::settings::get_solo(&state.db).await?;
     Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+}
+
+/// 個別欄位的值域（型別檢查之外）。/ Per-field value constraints beyond the type check.
+fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
+    match (name, value) {
+        ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
+            Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
+        }
+        ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
+        ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
+        _ => Ok(()),
+    }
 }

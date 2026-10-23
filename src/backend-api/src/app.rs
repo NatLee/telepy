@@ -32,6 +32,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::logs::router())
         .merge(api::sftp::router())
         .merge(api::remote_browser::router())
+        .merge(api::desktop::router())
         .merge(api::oauth::router())
         .merge(api::ai::router())
         .merge(api::mfa::router())
