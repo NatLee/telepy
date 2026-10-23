@@ -19,7 +19,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog } from "lucide-react";
-import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -138,12 +137,7 @@ function AdminSettings() {
             <PageHeader
                 icon={<Settings />}
                 title={t("settings.title")}
-                titleAddon={
-                    <>
-                        <Chip tone="primary"><Shield /> {t("common.adminOnly")}</Chip>
-                        <WebSocketStatusBadge />
-                    </>
-                }
+                titleAddon={<Chip tone="primary"><Shield /> {t("common.adminOnly")}</Chip>}
                 description={t("settings.subtitle")}
             />
 

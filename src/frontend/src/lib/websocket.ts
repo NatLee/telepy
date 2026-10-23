@@ -12,7 +12,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth";
 import { NotificationPayload } from "./notificationActions";
-import { ReconnectingSocket } from "./reconnectingSocket";
+import { ReconnectingSocket, type SocketPhase } from "./reconnectingSocket";
+
+export type { SocketPhase } from "./reconnectingSocket";
 
 // 為相容既有 import（如 useTerminalPage 由此取 getWsOrigin），自 wsCommon 再匯出。
 // Re-export from wsCommon for existing imports (e.g. useTerminalPage imports getWsOrigin from here).
@@ -25,12 +27,14 @@ export { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CO
 type NotificationListener = {
     onMessage: (msg: unknown) => void;
     onStatus: (connected: boolean) => void;
+    onPhase: (phase: SocketPhase) => void;
 };
 
 class NotificationHub {
     private socket: ReconnectingSocket | null = null;
     private listeners = new Set<NotificationListener>();
     private connected = false;
+    private phase: SocketPhase = { state: "connecting" };
     private teardownTimer: ReturnType<typeof setTimeout> | null = null;
 
     subscribe(listener: NotificationListener): () => void {
@@ -39,6 +43,7 @@ class NotificationHub {
 
         this.listeners.add(listener);
         listener.onStatus(this.connected);
+        listener.onPhase(this.phase);
 
         if (!this.socket) {
             this.socket = new ReconnectingSocket({
@@ -47,6 +52,10 @@ class NotificationHub {
                 onStatus: (c) => {
                     this.connected = c;
                     this.listeners.forEach((l) => l.onStatus(c));
+                },
+                onPhase: (p) => {
+                    this.phase = p;
+                    this.listeners.forEach((l) => l.onPhase(p));
                 },
                 onMessage: (data) => {
                     let parsed: unknown;
@@ -60,6 +69,11 @@ class NotificationHub {
         return () => this.unsubscribe(listener);
     }
 
+    /** 立即重連（略過退避等待）。/ Reconnect right away (skips the backoff wait). */
+    reconnect() {
+        this.socket?.reconnect();
+    }
+
     private unsubscribe(listener: NotificationListener) {
         this.listeners.delete(listener);
         if (this.listeners.size === 0) {
@@ -69,6 +83,7 @@ class NotificationHub {
                 this.socket?.close();
                 this.socket = null;
                 this.connected = false;
+                this.phase = { state: "connecting" };
             }, 500);
         }
     }
@@ -84,18 +99,29 @@ const notificationHub = new NotificationHub();
 export function useNotificationWebSocket() {
     const { accessToken } = useAuth();
     const [isConnected, setIsConnected] = useState(false);
+    const [phase, setPhase] = useState<SocketPhase>({ state: "connecting" });
     const [lastMessage, setLastMessage] = useState<unknown>(null);
+    // 收到幾則訊息（給狀態燈「剛收到更新」的閃動用）。/ Messages received so far (drives the status dot's "update arrived" ping).
+    const [messageCount, setMessageCount] = useState(0);
 
     useEffect(() => {
         if (!accessToken) return; // 未登入不連 / don't connect when logged out
         const listener: NotificationListener = {
-            onMessage: setLastMessage,
+            onMessage: (msg) => {
+                setLastMessage(msg);
+                setMessageCount((n) => n + 1);
+            },
             onStatus: setIsConnected,
+            onPhase: setPhase,
         };
         return notificationHub.subscribe(listener);
     }, [accessToken]);
 
-    return { isConnected, lastMessage };
+    return { isConnected, phase, lastMessage, messageCount, reconnect: reconnectNotifications };
+}
+
+function reconnectNotifications() {
+    notificationHub.reconnect();
 }
 
 /**

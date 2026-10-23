@@ -13,7 +13,6 @@ import { CircleHelp, Key as KeyIcon, Plus, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
 import { AddKeyModal } from "@/components/keys/AddKeyModal";
 import { DeviceKeysModal } from "@/components/keys/DeviceKeysModal";
 import { DeviceMatrix } from "@/components/keys/DeviceMatrix";
@@ -70,7 +69,6 @@ function UserKeysPage() {
             <PageHeader
                 icon={<KeyIcon />}
                 title={t("keys.title")}
-                titleAddon={<WebSocketStatusBadge />}
                 description={t("keys.subtitle")}
                 actions={
                     <>
