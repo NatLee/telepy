@@ -3,7 +3,7 @@
  * Pure helpers for reaching a LAN host: the ssh config stanza (ProxyJump through the device), the no-config
  * one-liner and a coarse host kind for the topology view.
  */
-import { buildSegments, segmentsToString, type ConnectTarget } from "@/lib/forwardRecipes";
+import { buildSegments, jumpServerSpec, LOCAL_PRESETS, shq, type ConnectMode, type ConnectTarget, type Segment, type Token } from "@/lib/forwardRecipes";
 import type { LanHost, LanScan } from "@/types/lan";
 
 /** 這台主機的 SSH port 有沒有在最後一次掃描時開著（或看到 SSH banner）。/ SSH seen on this host. */
@@ -46,18 +46,68 @@ export function lanSshConfig(deviceAlias: string, h: LanHost, login: string): st
     return lines.join("\n");
 }
 
-/** 不用任何 ssh config 的一行指令：`ssh -J telepy@伺服器,帳號@localhost:<反向埠> 使用者@主機`。/ The no-config one-liner. */
-export function lanOneLiner(target: ConnectTarget, h: LanHost, login: string): string {
+const NO_OPTIONS = { background: false, keepAlive: false, exitOnFailure: false };
+
+/** 登入這台主機的指令（`ssh -J …`），可選免設定（direct）或用 ssh config 別名（alias）。/ The login command. */
+export function lanSshSegments(target: ConnectTarget, h: LanHost, login: string, mode: ConnectMode): Segment[] {
     const params = { lanUser: login || "USER", lanHost: h.address, lanPort: String(h.ssh_port) };
-    const opts = { background: false, keepAlive: false, exitOnFailure: false };
-    return segmentsToString(buildSegments("jump", params, { ...target, mode: "direct" }, opts));
+    return buildSegments("jump", params, { ...target, mode }, NO_OPTIONS);
 }
 
-/** 指令速查頁「跳到區網主機」並帶入這台主機。/ Command sheet deep link with the jump recipe prefilled. */
-export function cheatsheetJumpUrl(tunnelId: number, h: LanHost, login: string): string {
-    const q = new URLSearchParams({ tunnel: String(tunnelId), recipe: "jump", lanHost: h.address, lanPort: String(h.ssh_port) });
-    if (login) q.set("lanUser", login);
-    return `/tunnels/cheatsheet?${q.toString()}`;
+/** 把這台主機的某個 port 開到你電腦上（`ssh -N -L 本機:主機:port 裝置`）；不需要它有 SSH。/ Forward one of its ports. */
+export function lanForwardSegments(target: ConnectTarget, h: LanHost, port: number, localPort: number, mode: ConnectMode): Segment[] {
+    const params = { lanHost: h.address, lanPort: String(port), localPort: String(localPort) };
+    return buildSegments("lan", params, { ...target, mode }, NO_OPTIONS);
+}
+
+/** 常見服務的名稱（產品 / 協定名，不翻譯）。/ Well-known service names (protocol names, untranslated). */
+const SERVICES: Record<number, string> = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 53: "DNS", 80: "HTTP", 139: "SMB", 443: "HTTPS", 445: "SMB", 548: "AFP",
+    631: "IPP", 1883: "MQTT", 2049: "NFS", 3000: "HTTP", 3306: "MySQL", 3389: "RDP", 5000: "HTTP", 5432: "PostgreSQL",
+    5900: "VNC", 6379: "Redis", 8000: "HTTP", 8006: "Proxmox", 8080: "HTTP", 8443: "HTTPS", 8888: "HTTP", 9000: "HTTP",
+    9090: "HTTP", 9100: "Printer", 27017: "MongoDB", 32400: "Plex",
+};
+const WEB_HTTPS = new Set([443, 8006, 8443]);
+const WEB_HTTP = new Set([80, 3000, 5000, 8000, 8080, 8888, 9000, 9090, 32400]);
+
+export function serviceName(port: number): string | null {
+    return SERVICES[port] ?? null;
+}
+
+/** 轉發時本機用哪個 port：常見服務照速查表的預設，其他 < 1024 的加 10000（免管理員權限）。/ Local port for a forward. */
+export function suggestLocalPort(port: number): number {
+    const preset = LOCAL_PRESETS.find((p) => p.remotePort === String(port));
+    if (preset) return Number(preset.localPort);
+    return port < 1024 ? port + 10000 : port;
+}
+
+/** 轉發後在瀏覽器打開的網址（網頁服務才有）。/ The URL to open after forwarding (web services only). */
+export function forwardUrl(port: number, localPort: number): string | null {
+    if (WEB_HTTPS.has(port)) return `https://localhost:${localPort}`;
+    if (WEB_HTTP.has(port)) return `http://localhost:${localPort}`;
+    return null;
+}
+
+const tok = (text: string, kind: Token["kind"]): Token => ({ text, kind });
+
+/**
+ * 經裝置跳板複製檔案到 / 從這台主機（`scp -r -J … [-P port]`）。/ Copy files to or from the host through the device.
+ */
+export function lanCopySegments(target: ConnectTarget, h: LanHost, login: string, mode: ConnectMode, upload: boolean, localPath: string, remotePath: string): Segment[] {
+    const user = login || "USER";
+    const lp = localPath.trim() || "./file";
+    const rp = remotePath.trim() || "~/";
+    const hop: Segment = mode === "alias"
+        ? { tokens: [tok("-J", "flag"), tok(target.alias, "value")], explain: { key: "sheet.explain.jumpDevice", vars: { alias: target.alias } } }
+        : { tokens: [tok("-J", "flag"), tok(`${jumpServerSpec(target)},${target.username}@localhost:${target.reversePort}`, "value")], explain: { key: "sheet.explain.jumpChain", vars: { user: target.username } } };
+    const out: Segment[] = [{ tokens: [tok("scp", "cmd"), tok("-r", "flag")], explain: { key: "sheet.explain.scp" } }, hop];
+    if (h.ssh_port !== 22) out.push({ tokens: [tok("-P", "flag"), tok(String(h.ssh_port), "value")], explain: { key: "sheet.explain.lanPort", vars: { port: h.ssh_port } } });
+    const local: Segment = { tokens: [tok(shq(lp), "arg")], explain: { key: upload ? "sheet.explain.copyFromLocal" : "sheet.explain.copyToLocal", vars: { path: lp } } };
+    const remote: Segment = {
+        tokens: [tok(`${shq(user)}@${h.address}:${shq(rp)}`, "target")],
+        explain: { key: upload ? "sheet.explain.copyToLanHost" : "sheet.explain.copyFromLanHost", vars: { path: rp, host: h.address } },
+    };
+    return [...out, ...(upload ? [local, remote] : [remote, local])];
 }
 
 export function scanRunning(s: LanScan | null | undefined): boolean {
