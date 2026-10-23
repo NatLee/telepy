@@ -39,7 +39,6 @@ export default function TunnelsPage() {
         latencyMap,
         loading,
         fetchData,
-        handleDelete,
         handleLeaveTunnel,
         modals: {
             configModal, setConfigModal,
@@ -256,7 +255,6 @@ export default function TunnelsPage() {
                 }}
                 tunnels={tunnels}
                 fetchData={fetchData}
-                handleDelete={handleDelete}
                 handleLeaveTunnel={handleLeaveTunnel}
             />
         </div>

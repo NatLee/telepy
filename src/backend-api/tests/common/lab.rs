@@ -168,6 +168,9 @@ pub struct MachineOpts {
     pub allow_jump: bool,
     /// 每條連線同時最多幾個 session channel（= sshd 的 MaxSessions）；None = 不限。
     pub max_sessions: Option<usize>,
+    /// exec 用真的 `/bin/sh -c` 跑（HOME / TMPDIR / 工作目錄 = 帳號的 `<home>/<user>`，不會碰到開發者的家目錄）。
+    /// Run exec requests with a real `/bin/sh -c`, HOME / TMPDIR / cwd pointed at the account's scratch home.
+    pub shell: bool,
     /// 沒有 `sftp` 子系統（像沒裝 sftp-server 的裝置）；exec 認不得的指令交給本機 `sh -c`，在機器的 home 跑。
     /// No sftp subsystem; unknown exec commands run under the local `sh -c` in the machine's home.
     pub shell_without_sftp: bool,
@@ -320,6 +323,39 @@ impl server::Handler for SshdHandler {
         session.channel_success(channel)?;
         let cmd = String::from_utf8_lossy(data).trim().to_string();
         let user = self.user.clone().unwrap_or_default();
+        if self.m.opts.shell {
+            let home = self.m.home.join(&user);
+            let tmp = home.join("tmp");
+            std::fs::create_dir_all(&tmp)?;
+            let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
+            tokio::spawn(async move {
+                let out = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&home)
+                    .env("HOME", &home)
+                    .env("TMPDIR", &tmp)
+                    .env("USER", &user)
+                    .env("LOGNAME", &user)
+                    .stdin(Stdio::null())
+                    .output()
+                    .await;
+                let (stdout, stderr, code) = match out {
+                    Ok(o) => (o.stdout, o.stderr, o.status.code().unwrap_or(1) as u32),
+                    Err(e) => (Vec::new(), e.to_string().into_bytes(), 127),
+                };
+                if !stdout.is_empty() {
+                    let _ = ch.data_bytes(stdout).await;
+                }
+                if !stderr.is_empty() {
+                    let _ = ch.extended_data_bytes(1, stderr).await;
+                }
+                let _ = ch.exit_status(code).await;
+                let _ = ch.eof().await;
+                let _ = ch.close().await;
+            });
+            return Ok(());
+        }
         let (out, err, code) = match cmd.as_str() {
             "whoami" => (format!("{user}\n"), String::new(), 0),
             "hostname" => (format!("{}\n", self.m.name), String::new(), 0),

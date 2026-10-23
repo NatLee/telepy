@@ -161,7 +161,8 @@ async fn tunnel_lifecycle_and_dashboard() {
 
     // delete tunnel cascades usernames
     let r = app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json["deleted"], true, "{}", r.text);
     let r = app.get("/api/reverse/server/usernames", Some(&admin)).await;
     assert_eq!(r.json, json!([]));
     let r = app.get(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
