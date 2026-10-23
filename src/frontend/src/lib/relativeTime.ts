@@ -11,13 +11,13 @@ const STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
     ["year", Infinity],
 ];
 
-export function formatRelativeTime(iso: string, locale: string, now: number = Date.now()): string {
+export function formatRelativeTime(iso: string, locale: string, now: number = Date.now(), style: Intl.RelativeTimeFormatStyle = "long"): string {
     const at = Date.parse(iso);
     if (Number.isNaN(at)) return iso;
     let value = (at - now) / 1000;
     for (const [unit, size] of STEPS) {
         if (Math.abs(value) < size) {
-            return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(Math.trunc(value), unit);
+            return new Intl.RelativeTimeFormat(locale, { numeric: "auto", style }).format(Math.trunc(value), unit);
         }
         value /= size;
     }

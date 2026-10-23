@@ -13,7 +13,7 @@
 //! 日誌：sshd 風格的 `Accepted publickey … / Disconnected …` 行寫到 ssh-gateway.log，Logs 頁沿用。
 //! In-process SSH gateway terminating the devices' reverse tunnels (pubkey + tcpip-forward only).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -372,6 +372,7 @@ impl Gateway {
     /// 每條 forward 開一條 forwarded-tcpip 通道、讀裝置 sshd banner 的第一個 byte，當作 RTT。
     pub async fn probe_latency(&self) -> HashMap<u16, f64> {
         let forwards: Vec<Arc<Forward>> = self.forwards.iter().map(|e| e.value().clone()).collect();
+        let probed: Vec<u16> = forwards.iter().map(|f| f.port).collect();
         let probes = forwards.into_iter().map(|f| async move {
             let started = Instant::now();
             let res = tokio::time::timeout(PROBE_TIMEOUT, async {
@@ -392,8 +393,27 @@ impl Gateway {
         });
         let results = futures::future::join_all(probes).await;
         let map: HashMap<u16, f64> = results.into_iter().flatten().collect();
-        self.status.set_latency(map.clone());
+        let before = self.status.degraded_ports();
+        self.status.record_probes(&probed, map.clone());
+        self.log_health_changes(&before, &self.status.degraded_ports()).await;
         map
+    }
+
+    /// 降級 / 恢復寫進 gateway 事件（隧道的 Logs 頁看得到）。forward 已經不在的不記：斷線事件已經說明了。
+    /// Degraded / recovered go to the gateway events (the tunnel's Logs); ports whose forward is gone are skipped.
+    async fn log_health_changes(&self, before: &HashSet<u16>, after: &HashSet<u16>) {
+        for port in after.difference(before) {
+            let tunnel_id = db::tunnels::by_port(&self.db, *port as i64).await.ok().and_then(|t| t.into_iter().next()).map(|t| t.id);
+            let n = self.status.probe_failures(*port);
+            self.event("degraded", None, Some(*port), tunnel_id, format!("Tunnel on port {port} is up but the device's SSH server is not answering ({n} probes in a row failed)")).await;
+        }
+        for port in before.difference(after) {
+            if !self.forwards.contains_key(port) {
+                continue;
+            }
+            let tunnel_id = db::tunnels::by_port(&self.db, *port as i64).await.ok().and_then(|t| t.into_iter().next()).map(|t| t.id);
+            self.event("recovered", None, Some(*port), tunnel_id, format!("The device's SSH server answers again on port {port}")).await;
+        }
     }
 
     pub async fn run_probes(self: Arc<Self>, interval: Duration) {

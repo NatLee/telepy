@@ -209,6 +209,12 @@ export const en = {
     "tunnels.emptyBody": "Get started by creating a new reverse proxy tunnel to securely expose your local services.",
     "tunnels.online": "Online",
     "tunnels.offline": "Offline",
+    "tunnels.degraded": "Degraded",
+    "tunnels.never": "Never connected",
+    "tunnels.degradedHint": "The tunnel is up, but the device's SSH server doesn't answer through it. Check that sshd is running on the device.",
+    "tunnels.neverHint": "This tunnel has never connected. Run the setup command on the device.",
+    "tunnels.lastSeen": "Last seen {time}",
+    "tunnels.degradedToast": "{name}: the tunnel is up, but the device's SSH server isn't answering.",
     "tunnels.thName": "Name",
     "tunnels.thActions": "Actions",
     "tunnels.sharedWithYou": "Shared with you",
@@ -1338,6 +1344,8 @@ export const en = {
     "logs.event.failed_publickey": "Key rejected",
     "logs.event.invalid_user": "Invalid user",
     "logs.event.preauth_close": "Closed before auth",
+    "logs.event.degraded": "SSH not answering",
+    "logs.event.recovered": "SSH answering again",
 
     // ── 指令速查 / Command sheet ───────────────────────────────────
     "sheet.title": "Command Sheet",

@@ -2,7 +2,7 @@
 //! 通知的 action / payload 與 Django management command 完全相同。
 //! The resident port-monitor loop (debounce, transition detection, notifications) ported from update_ports.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::time::Duration;
 
 use serde_json::json;
@@ -19,6 +19,8 @@ const PRESENCE_INTERVAL: Duration = Duration::from_secs(1);
 pub struct Runner {
     debouncer: Debouncer,
     throttle: LatencyThrottle,
+    /// 上一輪通知過的降級 port。/ Degraded ports as of the last notification.
+    degraded: HashSet<u16>,
 }
 
 pub async fn run(state: AppState, interval: Duration) {
@@ -103,6 +105,27 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
                 }));
             }
         }
+    }
+
+    // 降級 / 恢復（forward 在、但經由隧道讀不到 sshd）也在「狀態沒變就早退」之前。
+    // Degraded / recovered changes, also before the no-change early return.
+    let degraded = state.status.degraded_ports();
+    if degraded != runner.degraded {
+        let listen = state.status.listen_ports().unwrap_or_default();
+        let changed: Vec<u16> = degraded.symmetric_difference(&runner.degraded).copied().collect();
+        for port in changed {
+            let health = super::health(listen.contains(&port), state.status.probe_failures(port), true);
+            for t in tunnels.iter().filter(|t| t.reverse_port == i64::from(port)) {
+                let users = audience.get(&t.id).cloned().unwrap_or_default();
+                state.hub.notify_users(users, &json!({
+                    "action": "UPDATE-TUNNEL-HEALTH",
+                    "tunnel_id": t.id,
+                    "port": port,
+                    "health": health.as_str(),
+                }));
+            }
+        }
+        runner.degraded = degraded;
     }
 
     let previous = state.status.committed_ports();

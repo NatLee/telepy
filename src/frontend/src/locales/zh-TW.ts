@@ -203,6 +203,12 @@ export const zhTW: Record<TranslationKey, string> = {
     "tunnels.emptyBody": "建立一條新的反向代理通道，安全地公開你的本機服務。",
     "tunnels.online": "上線",
     "tunnels.offline": "離線",
+    "tunnels.degraded": "降級",
+    "tunnels.never": "從未連線",
+    "tunnels.degradedHint": "通道連著，但經由通道連不到裝置的 SSH 伺服器。請確認裝置上的 sshd 有在執行。",
+    "tunnels.neverHint": "這條通道還沒連上過。請在裝置上執行安裝指令。",
+    "tunnels.lastSeen": "最後上線 {time}",
+    "tunnels.degradedToast": "{name}：通道連著，但裝置的 SSH 伺服器沒有回應。",
     "tunnels.thName": "名稱",
     "tunnels.thActions": "操作",
     "tunnels.sharedWithYou": "與你分享",
@@ -1328,6 +1334,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "logs.event.failed_publickey": "金鑰被拒",
     "logs.event.invalid_user": "無效使用者",
     "logs.event.preauth_close": "認證前關閉",
+    "logs.event.degraded": "SSH 無回應",
+    "logs.event.recovered": "SSH 已恢復",
 
     // ── 指令速查 / Command sheet ───────────────────────────────────
     "sheet.title": "指令速查",

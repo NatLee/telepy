@@ -10,7 +10,8 @@ import { ArrowLeftRight, Server } from "lucide-react";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
-import { TunnelAccessBadges, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
+import { liveHealth } from "@/lib/tunnelHealth";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ interface TunnelCardProps extends TunnelActionHandlers {
 
 export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...actions }: TunnelCardProps) {
     const { t } = useI18n();
+    const health = liveHealth(tunnel, isActive);
     return (
         <article
             className="group relative flex flex-col h-full overflow-hidden rounded-xl border border-border bg-card shadow-card transition-[border-color] duration-150 hover:border-foreground/25"
@@ -35,7 +37,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                 <div
                     className={cn(
                         "grid place-items-center size-9 rounded-md shrink-0 border transition-colors",
-                        isActive ? "border-success/25 bg-success/10 text-success" : "border-border bg-surface text-muted-foreground"
+                        HEALTH_TILE[health]
                     )}
                     aria-hidden
                 >
@@ -55,8 +57,9 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                     </div>
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">
-                    <TunnelStatusPill online={isActive} />
+                    <TunnelStatusPill health={health} lastSeenAt={tunnel.last_seen_at} />
                     {isActive && <LatencyIndicator rttMs={latencyMs} online={isActive} size="xs" />}
+                    {health === "offline" && <TunnelLastSeen at={tunnel.last_seen_at} />}
                 </div>
             </div>
 
@@ -71,7 +74,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
             </div>
 
             <div className="p-4 pt-3 space-y-2">
-                <TunnelOpenButtons tunnel={tunnel} online={isActive} />
+                <TunnelOpenButtons tunnel={tunnel} online={isActive} degraded={health === "degraded"} />
                 <div className="flex items-center gap-2">
                     <Button
                         variant="ghost"

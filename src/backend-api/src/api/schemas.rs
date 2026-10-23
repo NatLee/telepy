@@ -146,6 +146,13 @@ pub struct Tunnel {
     pub endpoint: Option<TunnelEndpoint>,
     /// 只有列表帶：誰正在用。/ List / dashboard only: who is using the tunnel right now.
     pub presence: Option<TunnelPresence>,
+    /// 只有列表帶：`online`（經由隧道讀得到裝置 sshd）/ `degraded`（forward 在但 sshd 連續沒回應）/ `offline` / `never`（從沒連上過）。
+    /// List / dashboard only: online, degraded (forward up, device sshd not answering), offline or never (never connected).
+    #[schema(example = "online")]
+    pub health: Option<String>,
+    /// 只有列表帶：離線時最後一次有連線的時間（UTC，`…Z`）；連著或從沒連過時 null。不含 IP，所有人都看得到。
+    /// List / dashboard only: when the tunnel was last connected (UTC); null while connected or if it never was.
+    pub last_seen_at: Option<String>,
 }
 
 #[derive(ToSchema)]

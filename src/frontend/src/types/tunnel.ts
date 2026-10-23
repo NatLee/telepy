@@ -18,7 +18,17 @@ export interface Tunnel {
     endpoint?: TunnelEndpoint | null;
     /** 誰在用（只在列表裡）。/ Who is using the tunnel (list only). */
     presence?: TunnelPresence | null;
+    /** 健康狀態（只在列表裡；抓取當下的值，即時狀態看 portsMap，見 lib/tunnelHealth）。/ Health at fetch time (list only). */
+    health?: TunnelHealth;
+    /** 離線時最後一次連線的時間（UTC）；連著或從沒連過時 null。/ When it was last connected; null while connected or never. */
+    last_seen_at?: string | null;
 }
+
+/**
+ * online：經由隧道讀得到裝置 sshd；degraded：隧道在、sshd 沒回應；offline：連過但現在斷線；never：從沒連上過。
+ * online / degraded (tunnel up, device sshd not answering) / offline / never connected.
+ */
+export type TunnelHealth = "online" | "degraded" | "offline" | "never";
 
 /** 人數給所有人；sessions 只給 owner / ADMIN / 管理員（其他人 null）。/ Count for all; sessions for owner / ADMIN / admins. */
 export interface TunnelPresence {
