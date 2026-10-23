@@ -419,8 +419,8 @@ async fn legacy_sharee_usernames_are_dropped_once() {
     let admin = users::create(db, mk("admin2")).await.unwrap();
     let gone = users::create(db, mk("gone")).await.unwrap();
     let t = tunnels::create(db, tunnels::NewTunnel { user_id: owner.id, host_friendly_name: "box", key: KEY_A, reverse_port: 40001, description: None, default_username_id: None }).await.unwrap();
-    let s_editor = sharing::create(db, t.id, owner.id, editor.id, "edit").await.unwrap();
-    sharing::create(db, t.id, owner.id, admin.id, "admin").await.unwrap();
+    let s_editor = sharing::create(db, t.id, owner.id, editor.id, "edit", None).await.unwrap();
+    sharing::create(db, t.id, owner.id, admin.id, "admin", None).await.unwrap();
 
     let ubuntu = tunnels::username_create(db, owner.id, t.id, "ubuntu").await.unwrap();
     let by_editor = tunnels::username_create(db, editor.id, t.id, "root").await.unwrap();

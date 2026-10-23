@@ -5,10 +5,12 @@
  * offline solid grey, never connected a dashed ring; owner / shared-with-you / share-count are small chips.
  */
 import React from "react";
-import { Crown, Share2, Users } from "lucide-react";
+import { Clock, Crown, Share2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
+import { shareExpiryState } from "@/lib/shareExpiry";
+import { ShareExpiryText } from "@/components/tunnels/ShareExpiry";
 import type { TranslationKey } from "@/locales/en";
 import { Tunnel, TunnelHealth } from "@/types/tunnel";
 
@@ -90,6 +92,17 @@ export function TunnelAccessBadges({ tunnel, sharedCount }: { tunnel: Tunnel; sh
             ) : (
                 <span className={cn(chip, "border-info/25 bg-info/10 text-info")}>
                     <Share2 /> {t("tunnels.sharedWithYou")}
+                </span>
+            )}
+            {/* 限時分享：還剩多久（一天內琥珀色）。/ Timed share: how long is left (amber within a day). */}
+            {!tunnel.is_owner && tunnel.share_expires_at && (
+                <span
+                    className={cn(
+                        chip,
+                        shareExpiryState(tunnel.share_expires_at) === "ok" ? "border-border bg-muted" : "border-warning/30 bg-warning/10",
+                    )}
+                >
+                    <Clock className="text-muted-foreground" /> <ShareExpiryText expiresAt={tunnel.share_expires_at} />
                 </span>
             )}
             {tunnel.is_owner && sharedCount > 0 && (

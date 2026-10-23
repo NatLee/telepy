@@ -101,6 +101,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
     state.remote_browser.cleanup_orphans(&state.db).await;
+    // 限時分享：到期的每 30 秒收掉。/ Timed shares end within 30 s of their expiry.
+    tokio::spawn(telepy_server::api::sharing::run_expiry(state.clone()));
     // 上次沒關到的連線紀錄（後端重啟 = 所有 forward 都斷了）。/ Connection rows left open by the last run.
     match telepy_server::db::tunnel_sessions::close_orphans(&state.db).await {
         Ok(0) => {}

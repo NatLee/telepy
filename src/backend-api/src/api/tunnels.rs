@@ -71,6 +71,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let using = state.presence.by_tunnel();
     let seen = db::tunnel_endpoints::last_seen_visible_to(&state.db, user_id).await?;
     let pins = db::tunnel_tags::pinned_by(&state.db, user_id).await?;
+    let my_expiries = db::sharing::my_expiries(&state.db, user_id).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
     let tz = state.config.tz_offset_minutes;
@@ -93,6 +94,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             let health = crate::monitor::health(listening, failures, listening || seen.contains_key(&t.id));
             v["health"] = json!(health.as_str());
             v["pinned"] = json!(pins.contains(&t.id));
+            // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
+            v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),

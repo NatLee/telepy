@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ReverseServerUsername } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import { ShareExpiryControl } from "@/components/tunnels/ShareExpiry";
 
 export interface SharedUserRow {
     id: number;
@@ -16,6 +17,8 @@ export interface SharedUserRow {
     can_admin_tunnel?: boolean;
     can_edit_tunnel?: boolean;
     allowed_target_usernames?: { id: number }[];
+    /** 分享到期時間（UTC ISO）；null = 一直有效。/ When the share ends (UTC ISO); null = never. */
+    expires_at?: string | null;
 }
 
 export interface ShareModalSharedListProps {
@@ -25,6 +28,7 @@ export interface ShareModalSharedListProps {
     tunnelUsernames: ReverseServerUsername[];
     onEditTargetUsers: (payload: { userId: number; username: string; allowedIds: number[] }) => void;
     onUpdatePermission: (userId: number, value: string) => void;
+    onUpdateExpiry: (userId: number, expiresAt: string | null) => Promise<boolean>;
     onUnshare: (payload: { userId: number; username: string }) => void;
 }
 
@@ -35,6 +39,7 @@ export function ShareModalSharedList({
     tunnelUsernames,
     onEditTargetUsers,
     onUpdatePermission,
+    onUpdateExpiry,
     onUnshare,
 }: ShareModalSharedListProps) {
     const { t } = useI18n();
@@ -66,7 +71,14 @@ export function ShareModalSharedList({
                                 <span className="grid size-8 shrink-0 place-items-center rounded-full bg-foreground text-sm text-background uppercase" aria-hidden>
                                     {sharedUser.username.slice(0, 1)}
                                 </span>
-                                <span className="truncate text-sm text-foreground">{sharedUser.username}</span>
+                                <span className="flex min-w-0 flex-col items-start">
+                                    <span className="max-w-full truncate text-sm text-foreground">{sharedUser.username}</span>
+                                    <ShareExpiryControl
+                                        expiresAt={sharedUser.expires_at}
+                                        editable={!readOnly}
+                                        onChange={(value) => onUpdateExpiry(sharedUser.id, value)}
+                                    />
+                                </span>
                             </div>
                             <div className="flex items-center gap-2">
                                 <button
