@@ -161,6 +161,9 @@ pub struct MachineOpts {
     pub allow_jump: bool,
     /// 每條連線同時最多幾個 session channel（= sshd 的 MaxSessions）；None = 不限。
     pub max_sessions: Option<usize>,
+    /// 沒有 `sftp` 子系統（像沒裝 sftp-server 的裝置）；exec 認不得的指令交給本機 `sh -c`，在機器的 home 跑。
+    /// No sftp subsystem; unknown exec commands run under the local `sh -c` in the machine's home.
+    pub shell_without_sftp: bool,
 }
 
 struct MachineState {
@@ -309,6 +312,10 @@ impl server::Handler for SshdHandler {
             "hostname" => (format!("{}\n", self.m.name), String::new(), 0),
             "whereami" => (format!("{user}@{}\n", self.m.name), String::new(), 0),
             c if c.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).is_some() => (String::new(), String::new(), 0),
+            _ if self.m.opts.shell_without_sftp => {
+                let o = std::process::Command::new("sh").arg("-c").arg(&cmd).current_dir(&self.m.home).env("HOME", &self.m.home).output().unwrap();
+                (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned(), o.status.code().unwrap_or(1) as u32)
+            }
             _ => (String::new(), format!("{cmd}: command not found\n"), 127),
         };
         // `sleep N`：讓 session 開著一陣子（測 presence 這類「連線期間」的狀態）。/ Keeps the session open for N seconds.
@@ -332,7 +339,7 @@ impl server::Handler for SshdHandler {
     }
 
     async fn subsystem_request(&mut self, channel: ChannelId, name: &str, session: &mut Session) -> Result<(), Self::Error> {
-        let bin = if name == "sftp" { sftp_server_bin() } else { None };
+        let bin = if name == "sftp" && !self.m.opts.shell_without_sftp { sftp_server_bin() } else { None };
         let (Some(bin), Some(ch)) = (bin, self.channels.remove(&channel)) else {
             session.channel_failure(channel)?;
             return Ok(());
@@ -494,6 +501,20 @@ impl Terminal {
                 Ok(Some(Ok(_))) => {}
                 Ok(Some(Err(_))) | Ok(None) => return None,
                 Err(_) => panic!("terminal was not closed by the server; output so far: {:?}", self.seen),
+            }
+        }
+    }
+
+    /// `{action:"ping"}` → 伺服器回 **binary** `pong`（前端把 text frame 全寫進 xterm）。中間的 PTY 輸出照收。
+    pub async fn ping(&mut self) -> bool {
+        self.ws.send(Message::Text(json!({"action": "ping"}).to_string().into())).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Binary(b)))) => return &b[..] == b"pong",
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(_))) => {}
+                _ => return false,
             }
         }
     }
@@ -801,6 +822,42 @@ impl Lab {
         run(Command::new("ssh").arg("-F").arg(config).arg(host).arg(cmd)).await
     }
 
+    /// 真的 HTTP listener（WebSocket 測試用），第一次呼叫時起；與正式環境一樣帶 ConnectInfo（來源 IP）。
+    pub async fn ws_base(&self) -> String {
+        self.ws_base
+            .get_or_init(|| async {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let router = self.app.router.clone();
+                tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+                format!("ws://{addr}")
+            })
+            .await
+            .clone()
+    }
+
+    /// 檔案管理（`/ws/filemanager/`）：送 auth，再送一個 action，回第一個 JSON 回應（Telepy 拒絕時回關閉碼）。
+    pub async fn filemanager(&self, user: &LabUser, device: &Device, os_user: &str, action: Value) -> Result<Value, u16> {
+        let base = self.ws_base().await;
+        let (mut ws, _) = connect_async(format!("{base}/ws/filemanager/")).await.unwrap();
+        let auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        ws.send(Message::Text(auth.to_string().into())).await.unwrap();
+        ws.send(Message::Text(action.to_string().into())).await.unwrap();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("no file manager frame") {
+                Some(Ok(Message::Close(Some(f)))) => return Err(u16::from(f.code)),
+                Some(Ok(Message::Text(t))) => {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    if v.get("type").is_none() {
+                        return Ok(v);
+                    }
+                }
+                Some(Ok(_)) => {}
+                other => panic!("file manager socket ended: {other:?}"),
+            }
+        }
+    }
+
     /// 網頁終端機：Telepy 拒絕（權限 / 帳號不允許）時回關閉碼；否則回已開始的終端機。
     pub async fn terminal(&self, user: &LabUser, device: &Device, os_user: &str) -> Result<Terminal, u16> {
         self.terminal_with(user, device, os_user, json!({})).await
@@ -808,17 +865,7 @@ impl Lab {
 
     /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `lan_host_id`）。/ Same, with extra auth-message fields.
     pub async fn terminal_with(&self, user: &LabUser, device: &Device, os_user: &str, extra: Value) -> Result<Terminal, u16> {
-        let base = self
-            .ws_base
-            .get_or_init(|| async {
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let addr = listener.local_addr().unwrap();
-                let router = self.app.router.clone();
-                // 與正式環境一樣帶 ConnectInfo（來源 IP）。/ Serve with ConnectInfo like production.
-                tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-                format!("ws://{addr}")
-            })
-            .await;
+        let base = self.ws_base().await;
         let (mut ws, _) = connect_async(format!("{base}/ws/terminal/")).await.unwrap();
         let mut auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
         if let (Some(a), Some(e)) = (auth.as_object_mut(), extra.as_object()) {

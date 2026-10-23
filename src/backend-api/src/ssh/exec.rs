@@ -6,8 +6,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context};
-use russh::client::Handle;
-use russh::{ChannelMsg, Sig};
+use russh::client::{Handle, Msg};
+use russh::{Channel, ChannelMsg, Sig};
 
 use super::device::ClientHandler;
 
@@ -73,8 +73,13 @@ pub struct ExecResult {
 
 /// 開一個 exec channel 跑指令。/ Open an exec channel and run the command.
 pub async fn run(handle: &Handle<ClientHandler>, command: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
+    let ch = handle.channel_open_session().await.context("open a channel (is the device still connected?)")?;
+    run_on(ch, command, timeout, max_output).await
+}
+
+/// 在已經開好的 session channel 上跑指令（連線池的 `session_channel`）。/ Run on an already opened session channel.
+pub async fn run_on(mut ch: Channel<Msg>, command: &str, timeout: Duration, max_output: usize) -> anyhow::Result<ExecResult> {
     let started = Instant::now();
-    let mut ch = handle.channel_open_session().await.context("open a channel (is the device still connected?)")?;
     if let Err(e) = ch.exec(true, command.as_bytes()).await {
         let _ = ch.close().await;
         return Err(e).context("send the command");
