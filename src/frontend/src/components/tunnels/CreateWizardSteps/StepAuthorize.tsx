@@ -8,7 +8,7 @@
 
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Info, KeyRound, Laptop, Lock, ServerCog, UserRound } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, KeyRound, Laptop, Lock, ServerCog, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { CodeBlock } from "@/components/ui/CodeBlock";
@@ -138,24 +138,21 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                     <Callout tone="warning">{t("wizard.noServiceKeys")}</Callout>
                 )}
 
-                <ul className="space-y-1.5 text-xs leading-relaxed text-muted-foreground">
-                    <li className="flex gap-2">
-                        <Info size={13} className="mt-0.5 shrink-0 text-primary" aria-hidden />
-                        <span>{t("wizard.authorize.appendOnly")}</span>
-                    </li>
-                    {accounts.length > 1 && (
-                        <li className="flex gap-2">
-                            <Info size={13} className="mt-0.5 shrink-0 text-primary" aria-hidden />
-                            <span>{tn("wizard.authorize.eachAccount", { su: <Code>sudo -iu {accounts[1].username}</Code> })}</span>
-                        </li>
+                <Callout tone="info">
+                    {accounts.length > 1 ? (
+                        <ul className="list-disc space-y-1 pl-4 marker:text-info/60">
+                            <li>{t("wizard.authorize.appendOnly")}</li>
+                            <li>{tn("wizard.authorize.eachAccount", { su: <Code>sudo -iu {accounts[1].username}</Code> })}</li>
+                        </ul>
+                    ) : (
+                        t("wizard.authorize.appendOnly")
                     )}
-                    {k.deviceOs === "windows" && (
-                        <li className="flex gap-2">
-                            <Info size={13} className="mt-0.5 shrink-0 text-warning" aria-hidden />
-                            <span>{tn("wizard.authorize.windowsAdmin", { path: <Code>C:\ProgramData\ssh\administrators_authorized_keys</Code> })}</span>
-                        </li>
-                    )}
-                </ul>
+                </Callout>
+                {k.deviceOs === "windows" && (
+                    <Callout tone="warning">
+                        {tn("wizard.authorize.windowsAdmin", { path: <Code>C:\ProgramData\ssh\administrators_authorized_keys</Code> })}
+                    </Callout>
+                )}
             </div>
 
             <div className="space-y-2">
@@ -170,17 +167,14 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                         ))}
                 </ul>
                 {k.keysInstalledByTelepy && (
-                    <p className="flex flex-wrap items-start gap-1.5 rounded-xl border border-primary/20 bg-primary/6 p-3 text-xs leading-relaxed text-foreground/85">
-                        <Laptop size={14} className="mt-px shrink-0 text-primary" aria-hidden />
-                        <span className="min-w-0 flex-1">
-                            {t("wizard.authorize.userKeysAuto", { n: k.userKeys.length })}{" "}
-                            {wizard.created && (
-                                <Link href={`/tunnels/keys?device=${wizard.created.id}`} target="_blank" prefetch={false} className="inline-flex items-center gap-0.5 font-medium text-primary hover:underline">
-                                    {t("wizard.authorize.manageKeys")} <ExternalLink size={11} aria-hidden />
-                                </Link>
-                            )}
-                        </span>
-                    </p>
+                    <Callout tone="info" icon={<Laptop size={17} className="mt-0.5 shrink-0" aria-hidden />}>
+                        {t("wizard.authorize.userKeysAuto", { n: k.userKeys.length })}{" "}
+                        {wizard.created && (
+                            <Link href={`/tunnels/keys?device=${wizard.created.id}`} target="_blank" prefetch={false} className="inline-flex items-center gap-0.5 text-primary hover:underline">
+                                {t("wizard.authorize.manageKeys")} <ExternalLink size={11} aria-hidden />
+                            </Link>
+                        )}
+                    </Callout>
                 )}
                 {!k.loading && k.userKeys.length === 0 && (
                     <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">

@@ -29,14 +29,22 @@ function Callout({
     className,
     tone = "info",
     icon,
+    title,
     children,
     ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof calloutVariants> & { icon?: React.ReactNode }) {
+}: Omit<React.ComponentProps<"div">, "title"> & VariantProps<typeof calloutVariants> & {
+    icon?: React.ReactNode;
+    /** 第一行標題(例如「為什麼要這一步？」),內容接在下面。/ Optional heading line above the body. */
+    title?: React.ReactNode;
+}) {
     const Icon = ICONS[tone ?? "info"];
     return (
         <div data-slot="callout" role="note" className={cn(calloutVariants({ tone }), className)} {...props}>
             {icon ?? <Icon size={17} className="mt-0.5 shrink-0" aria-hidden />}
-            <div className="min-w-0 flex-1">{children}</div>
+            <div className="min-w-0 flex-1">
+                {title && <p className="mb-1 text-foreground">{title}</p>}
+                {children}
+            </div>
         </div>
     );
 }
