@@ -4,7 +4,7 @@
  * My keys × the devices I can use: a tick puts the key on that device's list; each cell shows the
  * per-account install state. A table on desktop (scrolls sideways with many keys), cards on phones.
  */
-import React from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import { HardDrive, Loader2, Plus, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, TunnelRole, UserKey } from "@/types/keys";
 import { TargetChips } from "./TargetChips";
+import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
+import { MATRIX_COLUMNS } from "@/lib/userKeyList";
 
 const ROLE_KEY: Record<TunnelRole, TranslationKey> = {
     owner: "keys.role.owner",
@@ -34,7 +36,7 @@ export function OnlineDot({ online }: { online: boolean }) {
 export function RoleBadge({ role }: { role: TunnelRole }) {
     const { t } = useI18n();
     return (
-        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
+        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", role === "owner" ? "bg-primary/8 text-primary ring-primary/25" : "bg-info/10 text-info ring-info/30")}>
             {t(ROLE_KEY[role])}
         </span>
     );
@@ -94,7 +96,8 @@ function Cell({ device, keyItem, busy, onToggle }: { device: KeyDevice; keyItem:
 
 export function DeviceMatrix({
     devices,
-    keys,
+    keys: allKeys,
+    totalKeys,
     pending,
     syncing,
     onToggle,
@@ -102,7 +105,10 @@ export function DeviceMatrix({
     onManage,
 }: {
     devices: KeyDevice[];
+    /** 要當欄位的金鑰（已依「我的金鑰」的篩選排好）。/ Keys to show as columns (filtered and sorted by "My keys"). */
     keys: UserKey[];
+    /** 我全部的金鑰數（篩選時提示用）。/ How many keys I have in all. */
+    totalKeys?: number;
     pending: Set<string>;
     syncing: Set<number>;
     onToggle: (device: KeyDevice, key: UserKey, on: boolean) => void;
@@ -110,6 +116,17 @@ export function DeviceMatrix({
     onManage: (device: KeyDevice) => void;
 }) {
     const { t } = useI18n();
+    // 金鑰多時先只顯示幾欄（其餘在「我的金鑰」篩選，或全部展開）。/ Many keys: a few columns first.
+    const [allColumns, setAllColumns] = useState(false);
+    const capped = !allColumns && allKeys.length > MATRIX_COLUMNS + 1;
+    const keys = capped ? allKeys.slice(0, MATRIX_COLUMNS) : allKeys;
+    const total = totalKeys ?? allKeys.length;
+    // 裝置多時：搜尋、只看有我的金鑰的、只看需要處理的。/ Many devices: search and buckets.
+    const filter = useDeviceFilter(devices, {
+        device: (d) => d,
+        isOn: (d) => d.keys.length > 0,
+        isProblem: (d) => d.keys.some((k) => needsAttention(k.targets, d.online)),
+    });
 
     if (devices.length === 0) {
         return (
@@ -145,7 +162,26 @@ export function DeviceMatrix({
     );
 
     return (
-        <>
+        <div className="space-y-3">
+            <DeviceFilterBar filter={filter} onLabel={t("keys.filter.withMine")} modes={["all", "on", "problems"]} />
+            {(keys.length < total || allColumns) && (
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    <span>{t("keys.matrix.columns", { shown: keys.length, total })}</span>
+                    {keys.length < total && <span>{t("keys.matrix.columnsHint")}</span>}
+                    {capped ? (
+                        <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={() => setAllColumns(true)}>
+                            {t("keys.matrix.allColumns", { count: allKeys.length })}
+                        </Button>
+                    ) : (
+                        allColumns &&
+                        allKeys.length > MATRIX_COLUMNS + 1 && (
+                            <Button variant="ghost" size="xs" onClick={() => setAllColumns(false)}>
+                                {t("keys.matrix.fewerColumns")}
+                            </Button>
+                        )
+                    )}
+                </p>
+            )}
             {/* 桌面：表格 / Desktop: table */}
             <div className="hidden overflow-x-auto rounded-xl border border-border/80 bg-card shadow-card md:block">
                 <table className="w-full min-w-max text-left">
@@ -162,7 +198,7 @@ export function DeviceMatrix({
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border/70">
-                        {devices.map((d) => (
+                        {filter.visible.map((d) => (
                             <tr key={d.tunnel_id} className="align-top transition-colors hover:bg-muted/30">
                                 <th scope="row" className="sticky left-0 z-10 max-w-[18rem] bg-card px-4 py-3 font-normal">
                                     <DeviceHeading device={d} />
@@ -183,7 +219,7 @@ export function DeviceMatrix({
 
             {/* 手機：卡片 / Phones: cards */}
             <div className="space-y-3 md:hidden">
-                {devices.map((d) => (
+                {filter.visible.map((d) => (
                     <div key={d.tunnel_id} className="rounded-xl border border-border/80 bg-card p-4 shadow-card">
                         <div className="flex items-start justify-between gap-3">
                             <DeviceHeading device={d} />
@@ -200,6 +236,7 @@ export function DeviceMatrix({
                     </div>
                 ))}
             </div>
-        </>
+            <DeviceFilterFooter filter={filter} />
+        </div>
     );
 }

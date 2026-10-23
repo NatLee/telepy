@@ -1181,6 +1181,8 @@ pub struct MyKeyChoice {
 #[derive(ToSchema)]
 pub struct DeviceKeys {
     pub tunnel: DeviceKeyTunnel,
+    /// Per-account merged view: the list × what Telepy installed × the file as last read
+    pub view: DeviceKeyView,
     /// Owner or ADMIN sharee
     pub can_manage: bool,
     /// OS accounts the caller may use here (their keys go into exactly these)
@@ -1190,6 +1192,51 @@ pub struct DeviceKeys {
     pub removals: Vec<DeviceKeyRemoval>,
     pub sync: Vec<DeviceKeySync>,
     pub my_keys: Vec<MyKeyChoice>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyView {
+    pub accounts: Vec<DeviceKeyViewAccount>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyViewAccount {
+    pub username: String,
+    /// When Telepy last read this account's authorized_keys (null = never; "sync" re-reads)
+    pub checked_at: Option<String>,
+    /// Whether the file exists (null until read)
+    pub exists: Option<bool>,
+    /// Last sync or read error of this account
+    pub error: Option<String>,
+    pub rows: Vec<DeviceKeyViewRow>,
+}
+
+/// One key in one account. Owners / ADMIN sharees see every row; other users only their own keys.
+#[derive(ToSchema)]
+pub struct DeviceKeyViewRow {
+    /// service / installed / pending / error / removing / manual (a Telepy user's key added by hand) / unknown / invalid
+    pub state: String,
+    /// Seen in the file at `checked_at`
+    pub verified: bool,
+    /// On the device's key list
+    pub on_list: bool,
+    /// The viewer's own key
+    pub mine: bool,
+    pub user_key_id: Option<i64>,
+    pub name: Option<String>,
+    pub owner: Option<String>,
+    pub fingerprint: Option<String>,
+    pub key_type: Option<String>,
+    pub bits: Option<u32>,
+    pub comment: Option<String>,
+    pub options: Option<String>,
+    /// First line holding this key
+    pub line_no: Option<i64>,
+    /// Lines holding this key (more than 1 when it was pasted twice; removing it removes every one)
+    pub line_count: i64,
+    pub error: Option<String>,
+    /// First 120 characters of an unreadable line
+    pub raw: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1232,16 +1279,31 @@ pub struct AuthorizedKeysAudit {
     pub accounts: Vec<AuthorizedKeysAccount>,
 }
 
+/// Send `fingerprint` for one key (errors if it can't be removed) or `fingerprints` for a batch
+/// (one rewrite of the file; keys that can't be removed are reported in `skipped`).
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemove {
     pub username: String,
-    pub fingerprint: String,
+    pub fingerprint: Option<String>,
+    /// 1 to 10000 fingerprints
+    pub fingerprints: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemoved {
     /// Lines removed
     pub removed: i64,
+    /// Keys removed
+    pub keys: i64,
+    pub skipped: Vec<AuthorizedKeySkipped>,
+}
+
+/// A key the batch left alone.
+#[derive(ToSchema)]
+pub struct AuthorizedKeySkipped {
+    pub fingerprint: String,
+    /// `not_found` | `service_key` | `in_key_list`
+    pub code: String,
 }
 
 #[derive(ToSchema)]

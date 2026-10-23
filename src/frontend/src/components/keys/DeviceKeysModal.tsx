@@ -1,62 +1,343 @@
 /**
- * 一台裝置的金鑰視窗。「金鑰清單」分頁：勾選自己的金鑰、看每把金鑰在每個帳號的狀態、（擁有者 / ADMIN）
- * 看所有人的與待移除的；「裝置上實際內容」分頁（擁有者 / ADMIN）：即時讀每個帳號的 authorized_keys，逐行標出
- * 來源，移除清單外的金鑰。
- * One device's key panel. "Key list": tick your keys, per-account state, (owner / ADMIN) everyone's entries
- * and pending removals. "On the device" (owner / ADMIN): live authorized_keys of every account, each line
- * labelled by origin, with removal of keys that are not on the list.
+ * 一台裝置的金鑰視窗：清單與裝置上實際內容在同一個畫面。
+ * - 頂端狀態列（固定不捲）：是否同步完成、上次檢查時間、唯一的「立即同步」（套用清單 + 重讀每個帳號）。
+ * - 「你的金鑰」：勾選 = 放進這台裝置的清單。
+ * - 每個帳號一張卡：檔案裡的每把金鑰 × 清單狀態（已在裝置上 / 安裝中 / 失敗 / 移除中 / 服務金鑰 / 手動加的 / 非 Telepy），
+ *   在同一列直接處理（移出清單、加入清單、從裝置移除）。
+ * - 列很多時（authorized_keys 可能有幾百把）：toolbar 裡的搜尋 / 帳號 / 分類、每張卡先顯示幾列、勾選後一次從裝置移除（KeyRowFilter）。
+ * One device's key panel with the list and the device's actual authorized_keys in one view: a fixed status
+ * bar with the single "sync now" (apply the list + re-read every account), your keys to tick, and one card per
+ * account where every key shows both its list state and what is on the device, with its action on the row.
+ * Long files (hundreds of keys) get search / account / buckets in the toolbar, paged cards and bulk removal.
  */
-import React, { useState } from "react";
-import Link from "next/link";
-import { FileSearch, HardDrive, KeyRound, Loader2, Plus, RefreshCw, Trash2, WifiOff } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+    CircleAlert,
+    CircleCheck,
+    CircleDashed,
+    Clock3,
+    FileWarning,
+    HardDrive,
+    Loader2,
+    Lock,
+    Plus,
+    RefreshCw,
+    Trash2,
+    UserPen,
+    WifiOff,
+} from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { Segmented } from "@/components/ui/segmented";
-import { SectionHeading } from "@/components/ui/section";
+import { Chip, SectionHeading } from "@/components/ui/section";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { formatRelativeTime } from "@/lib/relativeTime";
 import { shortFingerprint } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
-import { useDeviceKeys } from "@/hooks/useDeviceKeys";
-import type { AuditKind, AuditLine } from "@/types/keys";
+import { oldestCheck, useDeviceKeys } from "@/hooks/useDeviceKeys";
+import type { DeviceKeys, RowState, ViewAccount, ViewRow } from "@/types/keys";
+import { isRemovable } from "@/lib/keyRows";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
-import { TargetChips } from "./TargetChips";
+import { MyKeysOnDevice } from "./MyKeysOnDevice";
+import { RowFilterBar, RowsMore, SelectAllRemovable, useRowFilter, useRowLimit, useRowSelection, type RowFilterState, type RowSelection } from "./KeyRowFilter";
 
-const KIND: Record<AuditKind, { label: TranslationKey; className: string }> = {
-    service: { label: "keys.audit.kind.service", className: "bg-info/10 text-info ring-info/25" },
-    managed: { label: "keys.audit.kind.managed", className: "bg-success/10 text-success ring-success/25" },
-    telepy_user: { label: "keys.audit.kind.telepyUser", className: "bg-warning/10 text-warning ring-warning/30" },
-    unknown: { label: "keys.audit.kind.unknown", className: "bg-muted text-muted-foreground ring-border" },
-    invalid: { label: "keys.audit.kind.invalid", className: "bg-destructive/8 text-destructive ring-destructive/25" },
+type Tone = "neutral" | "success" | "warning" | "danger" | "primary";
+
+const ROW: Record<RowState, { label: TranslationKey; tip: TranslationKey; tone: Tone; icon: React.ComponentType<{ size?: number; className?: string }> }> = {
+    service: { label: "keys.row.service", tip: "keys.row.serviceTip", tone: "neutral", icon: Lock },
+    installed: { label: "keys.row.installed", tip: "keys.row.installedTip", tone: "success", icon: CircleCheck },
+    pending: { label: "keys.row.pending", tip: "keys.row.pendingTip", tone: "warning", icon: Clock3 },
+    error: { label: "keys.row.error", tip: "keys.row.errorTip", tone: "danger", icon: CircleAlert },
+    removing: { label: "keys.row.removing", tip: "keys.row.removingTip", tone: "warning", icon: Trash2 },
+    manual: { label: "keys.row.manual", tip: "keys.row.manualTip", tone: "warning", icon: UserPen },
+    unknown: { label: "keys.row.unknown", tip: "keys.row.unknownTip", tone: "neutral", icon: CircleDashed },
+    invalid: { label: "keys.row.invalid", tip: "keys.row.invalidTip", tone: "danger", icon: FileWarning },
 };
 
-function SectionTitle({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) {
-    return <SectionHeading title={children} description={hint} className="mb-2.5" />;
+/** 「多久前檢查」：伺服器時間可能比瀏覽器快一點，未來的時間一律當成現在。
+ *  "Checked … ago"; the server clock may run slightly ahead, so future times count as now. */
+function ago(at: string | number, now: number, locale: string) {
+    const ms = typeof at === "number" ? at : Date.parse(at);
+    return formatRelativeTime(new Date(Math.min(ms, now)).toISOString(), locale, now);
 }
+
+/** 每 15 秒重畫一次，讓「幾秒前檢查」跟著走。/ Re-render every 15 s so "checked … ago" stays current. */
+function useNow(ms: number) {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const id = setInterval(() => setNow(Date.now()), ms);
+        return () => clearInterval(id);
+    }, [ms]);
+    return now;
+}
+
+function StateBadge({ row, online }: { row: ViewRow; online: boolean }) {
+    const { t } = useI18n();
+    const spec = ROW[row.state];
+    const Icon = spec.icon;
+    // 裝了但還沒在檔案裡看到：灰色勾。離線的「安裝中」寫成等裝置。/ Unverified installs are grey; offline pending says so.
+    const unverified = row.state === "installed" && !row.verified;
+    const label = unverified ? t("keys.row.installedUnverified") : row.state === "pending" && !online ? t("keys.row.waiting") : t(spec.label);
+    const tip = unverified ? t("keys.row.installedUnverifiedTip") : row.state === "pending" && !online ? t("keys.row.waitingTip") : t(spec.tip);
+    return (
+        <TooltipProvider delayDuration={150}>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                        <Chip tone={unverified ? "neutral" : spec.tone}>
+                            <Icon className={cn(row.state === "pending" && online && "animate-pulse")} aria-hidden />
+                            {label}
+                        </Chip>
+                    </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">{tip}</TooltipContent>
+            </Tooltip>
+        </TooltipProvider>
+    );
+}
+
+/** 頂端狀態列：一句話說明現況 + 唯一的同步按鈕。/ The fixed status bar with the one sync action. */
+function StatusBar({ d, syncing, onSync, now }: { d: DeviceKeys; syncing: boolean; onSync: () => void; now: number }) {
+    const { t, locale } = useI18n();
+    const rows = d.view.accounts.flatMap((a) => a.rows);
+    const pending = rows.filter((r) => r.state === "pending" || r.state === "removing").length;
+    const failed = d.view.accounts.filter((a) => a.error || a.rows.some((r) => r.state === "error")).length;
+    const oldest = oldestCheck(d);
+    let tone: "success" | "warning" | "danger" | "muted" = "success";
+    let icon = <CircleCheck size={16} aria-hidden />;
+    let text: string;
+    if (syncing) {
+        tone = "muted";
+        icon = <Loader2 size={16} className="animate-spin" aria-hidden />;
+        text = t("keys.device.statusChecking");
+    } else if (!d.tunnel.online) {
+        tone = pending ? "warning" : "muted";
+        icon = <WifiOff size={16} aria-hidden />;
+        text = pending ? t("keys.device.statusOfflinePending", { count: pending }) : t("keys.device.statusOffline");
+    } else if (failed) {
+        tone = "danger";
+        icon = <CircleAlert size={16} aria-hidden />;
+        text = t("keys.device.statusFailed", { count: failed });
+    } else if (pending) {
+        tone = "warning";
+        icon = <Clock3 size={16} className="animate-pulse" aria-hidden />;
+        text = t("keys.device.statusPending", { count: pending });
+    } else if (oldest === null) {
+        tone = "muted";
+        icon = <CircleDashed size={16} aria-hidden />;
+        text = t("keys.device.statusNotChecked");
+    } else {
+        text = t("keys.device.statusUpToDate", { when: ago(oldest, now, locale) });
+    }
+    return (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+            <p
+                role="status"
+                className={cn(
+                    "flex min-w-0 items-center gap-2 text-sm",
+                    tone === "success" && "text-success",
+                    tone === "warning" && "text-warning",
+                    tone === "danger" && "text-destructive",
+                    tone === "muted" && "text-muted-foreground"
+                )}
+            >
+                {icon}
+                <span className="min-w-0">{text}</span>
+            </p>
+            <Button size="sm" variant="outline" onClick={onSync} disabled={syncing || !d.tunnel.online} title={t("keys.device.syncHint")}>
+                <RefreshCw className={cn(syncing && "animate-spin")} /> {t("keys.matrix.syncNow")}
+            </Button>
+        </div>
+    );
+}
+
+function KeyRowView({
+    row,
+    account,
+    accountError,
+    d,
+    busy,
+    onRemoveFromList,
+    onAddToList,
+    onRemoveFromDevice,
+    selection,
+}: {
+    row: ViewRow;
+    account: string;
+    /** 帳號卡已顯示的錯誤，列上就不再重複。/ Shown on the account card already; not repeated on the row. */
+    accountError: string | null;
+    d: DeviceKeys;
+    busy: string | null;
+    onRemoveFromList: (row: ViewRow) => void;
+    onAddToList: (row: ViewRow) => void;
+    onRemoveFromDevice: (account: string, row: ViewRow) => void;
+    /** 擁有者 / ADMIN 才有：勾選後一次移除。/ Owners / ADMIN only: bulk selection. */
+    selection?: RowSelection;
+}) {
+    const { t } = useI18n();
+    // 服務金鑰：標籤已寫「Telepy 服務」，標題用它自己的註解。/ The badge already says "Telepy service"; title it by its comment.
+    const title = row.state === "service" ? row.comment ?? t("keys.row.serviceName") : row.name ?? row.comment ?? shortFingerprint(row.fingerprint ?? null);
+    const canRemoveFromList = row.on_list && row.user_key_id !== null && (row.mine || d.can_manage);
+    const canAddToList = !row.on_list && row.mine && row.user_key_id !== null && row.state === "manual";
+    const canRemoveFromDevice = d.can_manage && (row.state === "manual" || row.state === "unknown") && !!row.fingerprint;
+    const rowBusy = busy === `entry:${row.user_key_id}` || busy === `key:${row.user_key_id}` || busy === `line:${account}:${row.fingerprint}` || (busy === "bulk" && !!selection?.isSelected(account, row));
+    const selectable = !!selection && canRemoveFromDevice && isRemovable(row);
+    return (
+        <li className={cn("flex flex-col gap-2 px-3.5 py-2.5 sm:flex-row sm:items-center sm:justify-between", selectable && selection.isSelected(account, row) && "bg-destructive/[0.04]")}>
+            <div className="flex min-w-0 items-start gap-2.5">
+                {selection && (
+                    <span className="flex w-4 shrink-0 justify-center pt-1">
+                        {selectable && (
+                            <input
+                                type="checkbox"
+                                className="size-4 cursor-pointer accent-primary"
+                                checked={selection.isSelected(account, row)}
+                                disabled={busy === "bulk"}
+                                onChange={(e) => selection.toggle(account, [row], e.target.checked)}
+                                aria-label={t("keys.rows.select", { key: title })}
+                            />
+                        )}
+                    </span>
+                )}
+            <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <StateBadge row={row} online={d.tunnel.online} />
+                    <span className="min-w-0 truncate text-sm text-foreground">{row.state === "invalid" ? t("keys.row.invalidLine", { line: row.line_no ?? "?" }) : title}</span>
+                    {row.owner && row.state !== "service" && <Chip tone={row.mine ? "primary" : "neutral"}>{row.mine ? t("keys.device.you") : row.owner}</Chip>}
+                    {row.line_count > 1 && (
+                        <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
+                            {t("keys.rows.lines", { count: row.line_count })}
+                        </Chip>
+                    )}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 font-mono text-xs text-muted-foreground">
+                    {row.state === "invalid" ? (
+                        <span className="truncate" title={row.raw ?? ""}>{row.raw}</span>
+                    ) : (
+                        <>
+                            {row.key_type && <span>{row.key_type}{row.bits ? ` · ${row.bits}` : ""}</span>}
+                            {row.fingerprint && <span title={row.fingerprint}>{shortFingerprint(row.fingerprint)}</span>}
+                            {row.state !== "service" && row.name && row.comment && <span className="truncate">{row.comment}</span>}
+                        </>
+                    )}
+                </div>
+                {row.options && <div className="truncate font-mono text-xs text-warning" title={row.options}>{t("keys.row.options", { options: row.options })}</div>}
+                {row.error && row.error !== accountError && (row.state === "error" || row.state === "removing") && <div className="break-words text-xs text-destructive">{row.error}</div>}
+            </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 self-start sm:self-center">
+                {rowBusy && <Loader2 size={14} className="animate-spin text-muted-foreground" aria-hidden />}
+                {canAddToList && (
+                    <Button variant="ghost" size="xs" className="text-primary hover:text-primary" disabled={rowBusy} onClick={() => onAddToList(row)}>
+                        <Plus /> {t("keys.row.addToList")}
+                    </Button>
+                )}
+                {canRemoveFromList && (
+                    <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-destructive hover:bg-destructive/8 hover:text-destructive"
+                        disabled={rowBusy}
+                        title={t("keys.row.removeFromListTip")}
+                        onClick={() => onRemoveFromList(row)}
+                    >
+                        <Trash2 /> {t("keys.row.removeFromList")}
+                    </Button>
+                )}
+                {canRemoveFromDevice && (
+                    <Button variant="ghost" size="xs" className="text-destructive hover:bg-destructive/8 hover:text-destructive" disabled={rowBusy} onClick={() => onRemoveFromDevice(account, row)}>
+                        <Trash2 /> {t("keys.row.removeFromDevice")}
+                    </Button>
+                )}
+            </div>
+        </li>
+    );
+}
+
+function AccountCard({
+    account,
+    rows,
+    d,
+    now,
+    filter,
+    selection,
+    renderRow,
+}: {
+    account: ViewAccount;
+    /** 符合篩選的列。/ Rows matching the filter. */
+    rows: ViewRow[];
+    d: DeviceKeys;
+    now: number;
+    filter: RowFilterState;
+    selection?: RowSelection;
+    renderRow: (row: ViewRow, i: number) => React.ReactNode;
+}) {
+    const { t, locale } = useI18n();
+    const limit = useRowLimit(rows.length, filter.resetKey, filter.filtering);
+    return (
+        <section className="overflow-hidden rounded-xl ring-1 ring-inset ring-border">
+            <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border/70 bg-surface px-3.5 py-2">
+                <span className="font-mono text-sm text-foreground">
+                    {account.username} <span className="text-xs text-muted-foreground">~/.ssh/authorized_keys</span>
+                </span>
+                <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {selection && <SelectAllRemovable username={account.username} rows={rows} selection={selection} />}
+                    <span className="text-xs text-muted-foreground">
+                        {account.checked_at
+                            ? t("keys.device.accountChecked", { count: account.rows.length, when: ago(account.checked_at, now, locale) })
+                            : t("keys.device.accountNotChecked")}
+                    </span>
+                </span>
+            </header>
+            {account.error && (
+                <div className="px-3.5 pt-2.5">
+                    <Callout tone="danger">{t("keys.device.accountError", { error: account.error })}</Callout>
+                </div>
+            )}
+            {rows.length > 0 ? (
+                <>
+                    <ul className="divide-y divide-border/70">{rows.slice(0, limit.shown).map(renderRow)}</ul>
+                    <RowsMore shown={limit.shown} total={rows.length} onMore={limit.more} onAll={limit.all} />
+                </>
+            ) : account.rows.length > 0 ? (
+                <p className="px-3.5 py-3 text-sm text-muted-foreground">{t("keys.rows.noMatch")}</p>
+            ) : (
+                <p className="px-3.5 py-3 text-sm text-muted-foreground">
+                    {account.exists === false ? t("keys.device.noFile") : account.checked_at ? (d.can_manage ? t("keys.device.emptyFile") : t("keys.device.noneOfMine")) : t("keys.device.notReadYet")}
+                </p>
+            )}
+        </section>
+    );
+}
+
+const NO_ACCOUNTS: ViewAccount[] = [];
 
 export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: number | null; onClose: () => void; onChanged: () => void }) {
     const { t } = useI18n();
     const dk = useDeviceKeys(tunnelId, onChanged);
-    const [tab, setTab] = useState<"list" | "audit">("list");
-    const [confirm, setConfirm] = useState<{ username: string; line: AuditLine } | null>(null);
+    const [confirm, setConfirm] = useState<{ username: string; row: ViewRow } | null>(null);
+    const now = useNow(15_000);
     const d = dk.data;
+    const [bulkConfirm, setBulkConfirm] = useState(false);
+    const accounts = d?.view.accounts ?? NO_ACCOUNTS;
+    const filter = useRowFilter(accounts, !!d?.tunnel.online);
+    const selection = useRowSelection(accounts);
+    // 篩選時，沒有符合列的帳號收起來（「需要處理」時有錯誤的帳號照樣顯示）。
+    // While filtering, accounts without matches fold away (failing accounts stay under "needs attention").
+    const shownAccounts = filter.filtering ? filter.accounts.filter((a) => a.rows.length > 0 || (filter.bucket === "attention" && a.account.error)) : filter.accounts;
+    const foldedAccounts = filter.accounts.length - shownAccounts.length;
+    const bulkSummary = useMemo(() => [...selection.groups].map(([user, fps]) => `${user} (${fps.length})`).join(", "), [selection.groups]);
 
-    const close = () => {
-        setTab("list");
-        onClose();
-    };
-
-    const openAudit = (v: "list" | "audit") => {
-        setTab(v);
-        if (v === "audit" && d?.tunnel.online && !dk.audit && !dk.auditLoading) dk.loadAudit();
-    };
+    // 在清單上、卻沒有任何帳號能裝的（擁有者還沒給帳號）。/ On the list but in no account yet.
+    const unplaced = useMemo(() => (d ? d.entries.filter((e) => e.targets.length === 0) : []), [d]);
 
     return (
         <Modal
             isOpen={tunnelId !== null}
-            onClose={close}
+            onClose={onClose}
             title={d ? t("keys.device.title", { device: d.tunnel.host_friendly_name }) : t("keys.device.titleLoading")}
             description={
                 d ? (
@@ -68,28 +349,29 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             }
             icon={<HardDrive />}
             size="3xl"
-            isLoading={dk.loading}
+            isLoading={dk.loading && !d}
             toolbar={
-                d?.can_manage ? (
-                    <Segmented
-                        kind="tabs"
-                        fullWidth
-                        value={tab}
-                        onChange={openAudit}
-                        aria-label={t("keys.device.tabsAria")}
-                        options={[
-                            { value: "list", label: t("keys.device.tabList"), icon: <KeyRound size={15} /> },
-                            { value: "audit", label: t("keys.device.tabAudit"), icon: <FileSearch size={15} /> },
-                        ]}
-                    />
+                d ? (
+                    <div className="space-y-2.5">
+                        <StatusBar d={d} syncing={dk.syncing} onSync={() => dk.sync()} now={now} />
+                        <RowFilterBar filter={filter} />
+                    </div>
                 ) : undefined
             }
             footer={
                 <>
-                    <Button variant="outline" onClick={close}>{t("common.close")}</Button>
-                    {d && (
-                        <Button onClick={() => dk.sync()} disabled={dk.busy === "sync" || !d.tunnel.online}>
-                            <RefreshCw className={cn(dk.busy === "sync" && "animate-spin")} /> {t("keys.matrix.syncNow")}
+                    {d?.can_manage && selection.count > 0 && (
+                        <span className="mr-auto flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="text-sm text-foreground">{t("keys.rows.selected", { count: selection.count })}</span>
+                            <Button variant="ghost" size="sm" onClick={selection.clear} disabled={dk.busy === "bulk"}>
+                                {t("keys.rows.clearSelection")}
+                            </Button>
+                        </span>
+                    )}
+                    <Button variant="outline" onClick={onClose}>{t("common.close")}</Button>
+                    {d?.can_manage && selection.count > 0 && (
+                        <Button variant="destructive" onClick={() => setBulkConfirm(true)} disabled={dk.busy === "bulk" || !d.tunnel.online}>
+                            {dk.busy === "bulk" ? <Loader2 className="animate-spin" /> : <Trash2 />} {t("keys.rows.removeSelected", { count: selection.count })}
                         </Button>
                     )}
                 </>
@@ -97,132 +379,80 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
         >
             {dk.notFound && <Callout tone="danger">{t("keys.device.notFound")}</Callout>}
             {d && (
-                <div className="space-y-5">
-                    {!d.tunnel.online && tab === "list" && (
-                        <Callout tone="warning" icon={<WifiOff size={17} className="mt-0.5 shrink-0 text-warning" aria-hidden />}>
-                            {t("keys.device.offline")}
-                        </Callout>
-                    )}
+                <div className="space-y-6">
+                    {/* 你的金鑰（篩選帳號裡的列時收起來，讓結果在最上面）/ Your keys (hidden while filtering rows so matches come first) */}
+                    {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onNavigate={onClose} />}
 
-                    {tab === "list" ? (
-                        <>
-                            {/* 我的金鑰 / My keys */}
-                            <section>
-                                <SectionTitle
-                                    hint={
-                                        d.accounts.length > 0
-                                            ? t("keys.device.myKeysHint", { accounts: d.accounts.join(", ") })
-                                            : d.can_manage
-                                              ? t("keys.matrix.noAccountsOwner")
-                                              : t("keys.matrix.noAccountsSharee")
-                                    }
-                                >
-                                    {t("keys.device.myKeys")}
-                                </SectionTitle>
-                                {d.my_keys.length === 0 ? (
-                                    <p className="text-sm text-muted-foreground">
-                                        {t("keys.device.noMyKeys")}{" "}
-                                        <Link href="/tunnels/keys" onClick={close} className="text-primary hover:underline">{t("keys.addKey")}</Link>
+                    {/* 每個帳號：清單 × 裝置上實際內容 / Each account: the list × what is on the device */}
+                    <section className="space-y-3">
+                        <SectionHeading title={t("keys.device.accounts")} description={d.can_manage ? t("keys.device.accountsHintManager") : t("keys.device.accountsHintSharee")} />
+                        {d.view.accounts.length === 0 ? (
+                            <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm text-muted-foreground">{t("keys.device.noAccounts")}</p>
+                        ) : (
+                            <>
+                                {shownAccounts.map(({ account: a, rows }) => (
+                                    <AccountCard
+                                        key={a.username}
+                                        account={a}
+                                        rows={rows}
+                                        d={d}
+                                        now={now}
+                                        filter={filter}
+                                        selection={d.can_manage ? selection : undefined}
+                                        renderRow={(r, i) => (
+                                            <KeyRowView
+                                                key={`${r.state}:${r.fingerprint ?? r.line_no ?? i}`}
+                                                row={r}
+                                                account={a.username}
+                                                accountError={a.error}
+                                                d={d}
+                                                busy={dk.busy}
+                                                onRemoveFromList={(row) => row.user_key_id !== null && dk.removeEntry(row.user_key_id)}
+                                                onAddToList={(row) => row.user_key_id !== null && dk.toggleMine(row.user_key_id, true)}
+                                                onRemoveFromDevice={(username, row) => setConfirm({ username, row })}
+                                                selection={d.can_manage ? selection : undefined}
+                                            />
+                                        )}
+                                    />
+                                ))}
+                                {filter.filtering && (shownAccounts.length === 0 || foldedAccounts > 0) && (
+                                    <p className="flex flex-wrap items-center justify-center gap-x-2 rounded-xl border border-dashed border-border px-4 py-3 text-center text-sm text-muted-foreground">
+                                        {shownAccounts.length === 0 ? t("keys.rows.noMatch") : t("keys.rows.otherAccounts", { count: foldedAccounts })}
+                                        <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={filter.reset}>
+                                            {t("keys.rows.clearFilter")}
+                                        </Button>
                                     </p>
-                                ) : (
-                                    <div className="grid gap-1.5 sm:grid-cols-2">
-                                        {d.my_keys.map((k) => {
-                                            const busy = dk.busy === `key:${k.id}`;
-                                            return (
-                                                <label
-                                                    key={k.id}
-                                                    className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 ring-1 ring-border transition-colors hover:bg-muted/40 has-[:checked]:bg-primary/6 has-[:checked]:ring-primary/30"
-                                                >
-                                                    {busy ? (
-                                                        <Loader2 size={16} className="animate-spin text-primary" aria-hidden />
-                                                    ) : (
-                                                        <input type="checkbox" checked={k.in_list} onChange={(e) => dk.toggleMine(k.id, e.target.checked)} className="size-4 accent-primary" />
-                                                    )}
-                                                    <span className="min-w-0">
-                                                        <span className="block truncate text-sm text-foreground">{k.name}</span>
-                                                        <span className="block truncate font-mono text-[0.75rem] text-muted-foreground" title={k.fingerprint ?? ""}>
-                                                            {k.key_type ?? "?"} · {shortFingerprint(k.fingerprint)}
-                                                        </span>
-                                                    </span>
-                                                </label>
-                                            );
-                                        })}
-                                    </div>
                                 )}
-                                {d.my_keys.some((k) => !k.in_list) && d.my_keys.length > 1 && (
-                                    <Button
-                                        variant="ghost"
-                                        size="xs"
-                                        className="mt-2 text-primary hover:text-primary"
-                                        disabled={dk.busy === "all"}
-                                        onClick={() => dk.addAllMine(d.my_keys.filter((k) => !k.in_list).map((k) => k.id))}
-                                    >
-                                        <Plus /> {t("keys.device.addAllMine")}
-                                    </Button>
-                                )}
-                            </section>
+                            </>
+                        )}
+                    </section>
 
-                            {/* 清單 / The list */}
-                            <section>
-                                <SectionTitle hint={d.can_manage ? t("keys.device.listHintManager") : t("keys.device.listHintSharee")}>
-                                    {d.can_manage ? t("keys.device.everyone") : t("keys.device.status")}
-                                </SectionTitle>
-                                {d.entries.length === 0 ? (
-                                    <p className="rounded-lg bg-surface px-3 py-4 text-center text-sm text-muted-foreground ring-1 ring-border">{t("keys.device.emptyList")}</p>
-                                ) : (
-                                    <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-border">
-                                        {d.entries.map((e) => (
-                                            <li key={e.user_key_id} className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
-                                                <div className="min-w-0 space-y-1">
-                                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                                        <span className="truncate text-sm text-foreground">{e.name}</span>
-                                                        <span className={cn("rounded-full px-1.5 py-px text-[0.6875rem] ring-1 ring-inset", e.mine ? "bg-primary/8 text-primary ring-primary/25" : "bg-brand-2/10 text-brand-2 ring-brand-2/30")}>
-                                                            {e.mine ? t("keys.device.you") : e.owner.username}
-                                                        </span>
-                                                        <span className="font-mono text-[0.75rem] text-muted-foreground" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
-                                                    </div>
-                                                    <TargetChips targets={e.targets} online={d.tunnel.online} />
-                                                </div>
-                                                {(e.mine || d.can_manage) && (
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="xs"
-                                                        className="self-start text-destructive hover:bg-destructive/8 hover:text-destructive sm:self-center"
-                                                        disabled={dk.busy === `entry:${e.user_key_id}`}
-                                                        onClick={() => dk.removeEntry(e.user_key_id)}
-                                                    >
-                                                        <Trash2 /> {t("keys.device.removeFromList")}
-                                                    </Button>
-                                                )}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </section>
-
-                            {d.can_manage && d.removals.length > 0 && (
-                                <section>
-                                    <SectionTitle hint={t("keys.device.removalsHint")}>{t("keys.device.removals")}</SectionTitle>
-                                    <ul className="space-y-1.5">
-                                        {d.removals.map((r) => (
-                                            <li key={`${r.username}:${r.fingerprint}`} className="flex flex-wrap items-center gap-2 rounded-lg bg-warning/6 px-3 py-2 text-xs ring-1 ring-warning/25">
-                                                <Trash2 size={13} className="text-warning" aria-hidden />
-                                                <span className="font-mono">{r.username}</span>
-                                                <span className="text-muted-foreground">{r.owner ?? t("keys.device.deletedKey")}</span>
-                                                <span className="font-mono text-muted-foreground" title={r.fingerprint}>{shortFingerprint(r.fingerprint)}</span>
-                                                {r.status === "error" && <span className="text-destructive" title={r.error ?? ""}>{t("keys.status.error")}</span>}
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </section>
-                            )}
-                        </>
-                    ) : d.tunnel.online ? (
-                        <AuditTab dk={dk} onRemove={(username, line) => setConfirm({ username, line })} />
-                    ) : (
-                        <Callout tone="warning" icon={<WifiOff size={17} className="mt-0.5 shrink-0 text-warning" aria-hidden />}>
-                            {t("keys.audit.offline")}
-                        </Callout>
+                    {unplaced.length > 0 && !filter.filtering && (
+                        <section>
+                            <SectionHeading title={t("keys.device.unplaced")} description={t("keys.device.unplacedHint")} className="mb-2.5" />
+                            <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border">
+                                {unplaced.map((e) => (
+                                    <li key={e.user_key_id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
+                                        <span className="flex min-w-0 flex-wrap items-center gap-2">
+                                            <span className="truncate text-sm text-foreground">{e.name}</span>
+                                            <Chip tone={e.mine ? "primary" : "neutral"}>{e.mine ? t("keys.device.you") : e.owner.username}</Chip>
+                                            <span className="font-mono text-xs text-muted-foreground" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
+                                        </span>
+                                        {(e.mine || d.can_manage) && (
+                                            <Button
+                                                variant="ghost"
+                                                size="xs"
+                                                className="text-destructive hover:bg-destructive/8 hover:text-destructive"
+                                                disabled={dk.busy === `entry:${e.user_key_id}`}
+                                                onClick={() => dk.removeEntry(e.user_key_id)}
+                                            >
+                                                <Trash2 /> {t("keys.row.removeFromList")}
+                                            </Button>
+                                        )}
+                                    </li>
+                                ))}
+                            </ul>
+                        </section>
                     )}
                 </div>
             )}
@@ -230,98 +460,29 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                 isOpen={!!confirm}
                 onClose={() => setConfirm(null)}
                 onConfirm={async () => {
-                    if (confirm?.line.fingerprint) await dk.removeLine(confirm.username, confirm.line.fingerprint);
+                    if (confirm?.row.fingerprint) await dk.removeLine(confirm.username, confirm.row.fingerprint);
                     setConfirm(null);
                 }}
-                title={t("keys.audit.removeTitle")}
-                message={t("keys.audit.removeMessage", {
-                    key: confirm?.line.comment || shortFingerprint(confirm?.line.fingerprint),
+                title={t("keys.row.removeTitle")}
+                message={t("keys.row.removeMessage", {
+                    key: confirm?.row.name || confirm?.row.comment || shortFingerprint(confirm?.row.fingerprint ?? null),
                     account: confirm?.username ?? "",
                 })}
-                confirmText={t("keys.audit.remove")}
+                confirmText={t("keys.row.removeFromDevice")}
+                isDestructive
+            />
+            <ConfirmDialog
+                isOpen={bulkConfirm}
+                onClose={() => setBulkConfirm(false)}
+                onConfirm={async () => {
+                    if (await dk.removeLines(selection.groups)) selection.clear();
+                    setBulkConfirm(false);
+                }}
+                title={t("keys.rows.removeSelectedTitle", { count: selection.count })}
+                message={t("keys.rows.removeSelectedMessage", { accounts: bulkSummary })}
+                confirmText={t("keys.rows.removeSelected", { count: selection.count })}
                 isDestructive
             />
         </Modal>
-    );
-}
-
-function AuditTab({ dk, onRemove }: { dk: ReturnType<typeof useDeviceKeys>; onRemove: (username: string, line: AuditLine) => void }) {
-    const { t } = useI18n();
-    if (dk.auditLoading) {
-        return (
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-                <Loader2 size={16} className="animate-spin" /> {t("keys.audit.reading")}
-            </div>
-        );
-    }
-    if (dk.auditError) {
-        return <Callout tone={dk.auditError === "offline" ? "warning" : "danger"}>{dk.auditError === "offline" ? t("keys.err.deviceOffline") : dk.auditError}</Callout>;
-    }
-    if (!dk.audit) return null;
-    return (
-        <div className="space-y-4">
-            <div className="flex items-start justify-between gap-3">
-                <p className="text-xs text-muted-foreground">{t("keys.audit.intro")}</p>
-                <Button variant="outline" size="xs" onClick={() => dk.loadAudit()}>
-                    <RefreshCw /> {t("keys.audit.reload")}
-                </Button>
-            </div>
-            {dk.audit.accounts.length === 0 && <p className="text-sm text-muted-foreground">{t("keys.audit.noAccounts")}</p>}
-            {dk.audit.accounts.map((a) => (
-                <section key={a.username} className="rounded-xl ring-1 ring-border">
-                    <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/70 bg-surface px-3 py-2">
-                        <span className="font-mono text-sm text-foreground">
-                            {a.username} <span className="text-xs text-muted-foreground">~/.ssh/authorized_keys</span>
-                        </span>
-                        {a.ok && <span className="text-[0.75rem] text-muted-foreground">{t("keys.audit.lineCount", { count: a.lines.length })}</span>}
-                    </header>
-                    <div className="p-3">
-                        {!a.ok ? (
-                            <Callout tone="danger">{t("keys.audit.accountError", { error: a.error ?? "" })}</Callout>
-                        ) : !a.exists ? (
-                            <p className="text-sm text-muted-foreground">{t("keys.audit.noFile")}</p>
-                        ) : a.lines.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">{t("keys.audit.emptyFile")}</p>
-                        ) : (
-                            <ul className="space-y-2">
-                                {a.lines.map((l) => {
-                                    const kind = KIND[l.kind];
-                                    const removable = (l.kind === "unknown" || l.kind === "telepy_user") && !!l.fingerprint;
-                                    return (
-                                        <li key={l.line_no} className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between">
-                                            <div className="min-w-0 space-y-1">
-                                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                                    <span className={cn("rounded-full px-2 py-px text-[0.75rem] ring-1 ring-inset", kind.className)}>
-                                                        {t(kind.label)}
-                                                        {l.owner ? ` · ${l.owner}` : ""}
-                                                    </span>
-                                                    {l.key_type && <span className="font-mono text-[0.75rem] text-muted-foreground">{l.key_type}{l.bits ? ` · ${l.bits}` : ""}</span>}
-                                                    {l.comment && <span className="truncate font-mono text-[0.75rem] text-foreground/80">{l.comment}</span>}
-                                                </div>
-                                                <div className="truncate font-mono text-[0.75rem] text-muted-foreground" title={l.fingerprint ?? l.raw ?? ""}>
-                                                    {l.fingerprint ?? l.raw}
-                                                </div>
-                                                {l.options && <div className="truncate font-mono text-[0.75rem] text-warning" title={l.options}>{t("keys.audit.options", { options: l.options })}</div>}
-                                            </div>
-                                            {removable && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="xs"
-                                                    className="self-start text-destructive hover:bg-destructive/8 hover:text-destructive"
-                                                    disabled={dk.busy === `line:${a.username}:${l.fingerprint}`}
-                                                    onClick={() => onRemove(a.username, l)}
-                                                >
-                                                    <Trash2 /> {t("keys.audit.remove")}
-                                                </Button>
-                                            )}
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                        )}
-                    </div>
-                </section>
-            ))}
-        </div>
     );
 }

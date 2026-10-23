@@ -12,6 +12,7 @@
 
 pub mod authorized_keys;
 pub mod remote;
+pub mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -41,6 +42,19 @@ pub struct DeviceKeys {
     locks: DashMap<i64, Arc<tokio::sync::Mutex<()>>>,
     retry_at: Mutex<HashMap<(i64, String), Instant>>,
     forced_at: Mutex<HashMap<i64, Instant>>,
+    /// 每台裝置（reverse port）每個帳號最近一次讀到 / 寫入的 authorized_keys，面板不必每次都連裝置。
+    /// The authorized_keys last read or written per (reverse port, account), so the panel needn't dial the device.
+    snapshots: Mutex<HashMap<(i64, String), FileSnapshot>>,
+}
+
+/// 最近一次看到的檔案內容。/ The file as Telepy last saw it.
+#[derive(Debug, Clone)]
+pub struct FileSnapshot {
+    /// None = 檔案不存在（或讀取失敗）。/ None = no such file (or the read failed).
+    pub content: Option<String>,
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// 讀取失敗的原因。/ Why the read failed.
+    pub error: Option<String>,
 }
 
 impl DeviceKeys {
@@ -60,6 +74,20 @@ impl DeviceKeys {
     /// 同一台裝置的 authorized_keys 一次只有一個人在改。/ One writer per device at a time.
     pub fn lock_for(&self, tunnel_id: i64) -> Arc<tokio::sync::Mutex<()>> {
         self.locks.entry(tunnel_id).or_default().clone()
+    }
+
+    /// `remote` 每次讀 / 寫成功都記一筆。/ Recorded by `remote` after every successful read or write.
+    pub fn record_snapshot(&self, reverse_port: i64, account: &str, content: Option<String>) {
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content, at: chrono::Utc::now(), error: None });
+    }
+
+    /// 讀不到（例如服務金鑰不在這個帳號）。/ The read failed (e.g. the service key is not in that account).
+    pub fn record_failure(&self, reverse_port: i64, account: &str, error: String) {
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content: None, at: chrono::Utc::now(), error: Some(error) });
+    }
+
+    pub fn snapshot(&self, reverse_port: i64, account: &str) -> Option<FileSnapshot> {
+        self.snapshots.lock().unwrap().get(&(reverse_port, account.to_string())).cloned()
     }
 }
 

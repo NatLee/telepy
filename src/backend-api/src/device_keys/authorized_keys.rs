@@ -181,12 +181,13 @@ pub fn plan(content: &str, wanted: &[WantedKey], managed: &BTreeSet<String>, pro
     }
 }
 
-/// 從檔案移除某把金鑰的每一行（稽核頁的「移除」）。回傳 (新內容, 移除的行數)。
-pub fn remove_key(content: &str, bare: &str) -> (String, usize) {
+/// 從檔案移除這些金鑰的每一行（稽核頁的「移除」；一次移除多把也只改寫一次檔案）。回傳 (新內容, 移除的行數)。
+/// Removes every line of each key in `bares` in one pass. Returns (new content, lines removed).
+pub fn remove_keys(content: &str, bares: &BTreeSet<String>) -> (String, usize) {
     let mut out = String::with_capacity(content.len());
     let mut n = 0;
     for l in parse_authorized_keys(content) {
-        if l.key.as_ref().is_some_and(|k| k.bare == bare) {
+        if l.key.as_ref().is_some_and(|k| bares.contains(&k.bare)) {
             n += 1;
             continue;
         }
@@ -194,6 +195,34 @@ pub fn remove_key(content: &str, bare: &str) -> (String, usize) {
         out.push('\n');
     }
     (out, n)
+}
+
+/// 稽核頁要移除的金鑰（依指紋挑）。/ What an audit removal will take out, picked by fingerprint.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Removal {
+    /// 要移除的金鑰（bare）。/ Keys to remove.
+    pub remove: BTreeSet<String>,
+    /// 沒移除的指紋與原因：`not_found` / `service_key` / `in_key_list`（依請求順序）。
+    /// Fingerprints left alone, with the reason, in request order.
+    pub skipped: Vec<(String, &'static str)>,
+}
+
+/// 依指紋挑出要移除的金鑰：檔案裡沒有的、服務金鑰（`protected`）、在裝置清單上的（`listed`）都跳過並附原因。
+/// Picks the keys to remove; absent keys, service keys and keys on the device's list are skipped with a reason.
+pub fn plan_removal(content: &str, fingerprints: &[String], protected: &BTreeSet<String>, listed: &BTreeSet<String>) -> Removal {
+    let by_fp: std::collections::HashMap<String, String> = parse_authorized_keys(content).into_iter().filter_map(|l| l.key).map(|k| (k.fingerprint, k.bare)).collect();
+    let mut r = Removal::default();
+    for fp in fingerprints {
+        match by_fp.get(fp) {
+            None => r.skipped.push((fp.clone(), "not_found")),
+            Some(bare) if protected.contains(bare) => r.skipped.push((fp.clone(), "service_key")),
+            Some(bare) if listed.contains(bare) => r.skipped.push((fp.clone(), "in_key_list")),
+            Some(bare) => {
+                r.remove.insert(bare.clone());
+            }
+        }
+    }
+    r
 }
 
 /// 寫進 `authorized_keys` 的 comment：`telepy:<使用者>/<金鑰名>`，空白與控制字元換成 `_`。
@@ -281,9 +310,27 @@ mod tests {
 
     #[test]
     fn remove_key_drops_every_line_of_that_key() {
-        let (c, n) = remove_key(&format!("{ED}\n{ED2}\nno-pty {ED}"), &bare(ED));
+        let (c, n) = remove_keys(&format!("{ED}\n{ED2}\nno-pty {ED}"), &BTreeSet::from([bare(ED)]));
         assert_eq!(n, 2);
         assert_eq!(c, format!("{ED2}\n"));
+    }
+
+    #[test]
+    fn remove_keys_rewrites_once_and_keeps_the_rest() {
+        let content = format!("# mine\n{ED}\n{SVC}\nno-pty {ED2}\n{ED}\n");
+        let (c, n) = remove_keys(&content, &BTreeSet::from([bare(ED), bare(ED2)]));
+        assert_eq!(n, 3);
+        assert_eq!(c, format!("# mine\n{SVC}\n"));
+    }
+
+    #[test]
+    fn plan_removal_skips_service_listed_and_missing_keys() {
+        let content = format!("{ED}\n{ED2}\n{SVC}\n{RSA1024}\n");
+        let fp = |k: &str| parse_public_key(k).unwrap().fingerprint;
+        let fps = vec![fp(ED), fp(SVC), fp(ED2), "SHA256:nope".to_string(), fp(RSA1024)];
+        let r = plan_removal(&content, &fps, &BTreeSet::from([bare(SVC)]), &BTreeSet::from([bare(ED2)]));
+        assert_eq!(r.remove, BTreeSet::from([bare(ED), bare(RSA1024)]));
+        assert_eq!(r.skipped, vec![(fp(SVC), "service_key"), (fp(ED2), "in_key_list"), ("SHA256:nope".to_string(), "not_found")]);
     }
 
     #[test]
