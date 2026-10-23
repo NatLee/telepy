@@ -10,7 +10,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useTunnelDetailsModal } from "@/hooks/useTunnelDetailsModal";
-import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck } from "lucide-react";
+import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -62,8 +62,8 @@ function KeyPreview({ value }: { value: string }) {
 export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: TunnelDetailsModalProps) {
     const { t } = useI18n();
     const {
-        state: { details, loading, form, errors, canEdit, dirty, keyChanged, valid, isSaving },
-        actions: { setField, save },
+        state: { details, loading, form, labelsText, labels, errors, canEdit, dirty, keyChanged, valid, isSaving },
+        actions: { setField, setLabelsText, save },
     } = useTunnelDetailsModal(tunnelId, isOpen, onUpdate, onClose);
 
     const role = details?.user_permission ?? "owner";
@@ -126,6 +126,23 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                                 placeholder={canEdit ? t("tunnelDetails.descriptionPlaceholder") : t("tunnelDetails.noDescription")}
                             />
                         </Field>
+                        <Field id="tunnel-details-labels" label={t("tunnelDetails.labels")} addon={canEdit ? t("common.optional") : undefined} hint={canEdit ? t("tunnelDetails.labelsHint") : undefined} error={errors.labels}>
+                            <Input
+                                value={labelsText}
+                                onChange={(e) => setLabelsText(e.target.value)}
+                                disabled={!canEdit}
+                                spellCheck={false}
+                                autoCapitalize="none"
+                                placeholder={canEdit ? "home, env=prod" : t("tunnelDetails.noLabels")}
+                            />
+                        </Field>
+                        {labels.length > 0 && (
+                            <span className="-mt-2 flex flex-wrap gap-1">
+                                {labels.map((l) => (
+                                    <Chip key={l}><Tag /> {l}</Chip>
+                                ))}
+                            </span>
+                        )}
                     </Section>
 
                     {/* 裝置公鑰 / Device public key */}

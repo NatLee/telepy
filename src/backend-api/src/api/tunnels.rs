@@ -31,6 +31,8 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(usernames_for_server))
         .routes(routes!(set_default_username))
         .routes(routes!(service_keys))
+        .routes(routes!(pin, unpin))
+        .routes(routes!(set_labels))
 }
 
 /// `{port: bool}`；取樣不可用回 `{}`。/ Port map, `{}` when the sample is unavailable.
@@ -67,6 +69,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let live = state.status.endpoints();
     let using = state.presence.by_tunnel();
     let seen = db::tunnel_endpoints::last_seen_visible_to(&state.db, user_id).await?;
+    let pins = db::tunnel_tags::pinned_by(&state.db, user_id).await?;
+    let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
@@ -87,6 +91,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             let failures = port.map(|p| state.status.probe_failures(p)).unwrap_or(0);
             let health = crate::monitor::health(listening, failures, listening || seen.contains_key(&t.id));
             v["health"] = json!(health.as_str());
+            v["pinned"] = json!(pins.contains(&t.id));
+            v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
                 _ => Value::Null,
@@ -99,7 +105,11 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
 async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Value> {
     let eff = permissions::effective_for(&state.db, user_id, t).await?;
     let count = db::sharing::sharee_ids(&state.db, t.id).await?.len() as i64;
-    Ok(tunnel_json(t, eff, count, state.config.tz_offset_minutes))
+    let mut v = tunnel_json(t, eff, count, state.config.tz_offset_minutes);
+    // 標籤與我的釘選也給單筆（詳細資訊視窗編輯標籤用）。/ Labels and my pin, for the details dialog.
+    v["labels"] = json!(db::tunnel_tags::labels_of(&state.db, t.id).await?);
+    v["pinned"] = json!(db::tunnel_tags::pinned_by(&state.db, user_id).await?.contains(&t.id));
+    Ok(v)
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/dashboard", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "Tunnels visible to the user plus live port status and latency", body = super::schemas::Dashboard)))]
@@ -452,4 +462,42 @@ async fn service_keys(State(state): State<AppState>, _user: AuthUser) -> ApiResu
             .map(|k| json!({ "id": k.id, "service": k.service, "key": k.key, "description": k.description }))
             .collect(),
     )))
+}
+
+// ---------------------------------------------------------------- pins / labels
+
+/// 釘選是每個人自己的：看得到這條隧道就能釘。/ Pins are per user: anyone who can see the tunnel may pin it.
+#[utoipa::path(put, path = "/api/reverse/server/{id}/pin", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "{\"pinned\": true}", body = super::schemas::PinState), (status = 404, body = super::schemas::ErrorBody)))]
+async fn pin(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(&state, user.id, id).await?;
+    db::tunnel_tags::set_pin(&state.db, user.id, t.id, true).await?;
+    Ok(Json(json!({ "pinned": true })))
+}
+
+#[utoipa::path(delete, path = "/api/reverse/server/{id}/pin", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "{\"pinned\": false}", body = super::schemas::PinState), (status = 404, body = super::schemas::ErrorBody)))]
+async fn unpin(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(&state, user.id, id).await?;
+    db::tunnel_tags::set_pin(&state.db, user.id, t.id, false).await?;
+    Ok(Json(json!({ "pinned": false })))
+}
+
+/// 標籤整組換掉；所有看得到隧道的人共用，所以要 EDIT 以上（owner / EDIT / ADMIN），改完通知大家重抓。
+/// Replace the labels. They are shared, so EDIT and up only; the tunnel audience is told to refetch.
+#[utoipa::path(put, path = "/api/reverse/server/{id}/labels", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::LabelsRequest, responses((status = 200, body = super::schemas::LabelsRequest), (status = 400, description = "{\"labels\": [message]}", body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn set_labels(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(&state, user.id, id).await?;
+    if !permissions::check_access(&state.db, user.id, &t, Permission::Edit).await? {
+        return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to edit this tunnel."));
+    }
+    let Some(raw) = body.get("labels").and_then(Value::as_array) else {
+        return Err(ApiError::field("labels", "Expected a list of labels."));
+    };
+    let input: Vec<String> = raw.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    if input.len() != raw.len() {
+        return Err(ApiError::field("labels", "Labels must be strings."));
+    }
+    let labels = db::tunnel_tags::normalize_labels(&input).map_err(|m| ApiError::field("labels", m))?;
+    db::tunnel_tags::replace_labels(&state.db, t.id, &labels).await?;
+    notify::tunnel_updated(&state, &t).await?;
+    Ok(Json(json!({ "labels": labels })))
 }

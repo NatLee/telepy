@@ -27,7 +27,7 @@ import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { liveHealth } from "@/lib/tunnelHealth";
-import { compareTunnels, matchTunnel, parseQuery, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
+import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
 import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
@@ -42,6 +42,7 @@ export default function TunnelsPage() {
         latencyMap,
         loading,
         fetchData,
+        togglePin,
         handleLeaveTunnel,
         modals: {
             configModal, setConfigModal,
@@ -85,7 +86,7 @@ export default function TunnelsPage() {
                 if (filter === "shared" && tn.is_owner) return false;
                 return matchTunnel(tn, parsed, ctx(tn));
             })
-            .sort((a, b) => compareTunnels(a, b, sort, ctx));
+            .sort((a, b) => pinnedFirst(a, b) || compareTunnels(a, b, sort, ctx));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tunnels, portsMap, filter, parsed, sort]);
 
@@ -101,6 +102,9 @@ export default function TunnelsPage() {
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
+        onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),
+        // 點標籤：把 label:x 加進搜尋（已經有就不重複）。/ Clicking a label adds label:x to the search.
+        onLabel: (label) => setQuery((q) => (q.split(/\s+/).includes(`label:${label}`) ? q : `${q.trim()} label:${label}`.trim())),
     };
 
     const clearFilters = () => {

@@ -22,6 +22,10 @@ export interface Tunnel {
     health?: TunnelHealth;
     /** 離線時最後一次連線的時間（UTC）；連著或從沒連過時 null。/ When it was last connected; null while connected or never. */
     last_seen_at?: string | null;
+    /** 我有沒有釘選（每個人自己的）。/ Whether I pinned it (per user). */
+    pinned?: boolean;
+    /** 隧道標籤（大家共用，EDIT 以上可改）。/ Shared labels (EDIT and up may change them). */
+    labels?: string[];
 }
 
 /**
@@ -100,4 +104,8 @@ export interface TunnelActionHandlers {
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
     onDelete: (tunnelId: number, name: string) => void;
+    /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
+    onTogglePin?: (tunnelId: number, pinned: boolean) => void;
+    /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */
+    onLabel?: (label: string) => void;
 }

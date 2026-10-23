@@ -163,12 +163,25 @@ export function useTunnelsPage() {
         }
     };
 
+    // 釘選：先改畫面再送出，失敗就改回來。/ Pin: update the list first, roll back on failure.
+    const togglePin = async (tunnelId: number, pinned: boolean) => {
+        setTunnels(prev => prev.map(tn => (tn.id === tunnelId ? { ...tn, pinned } : tn)));
+        try {
+            const res = await apiFetch(`/api/reverse/server/${tunnelId}/pin`, { method: pinned ? "PUT" : "DELETE" });
+            if (!res.ok) throw new Error();
+        } catch {
+            setTunnels(prev => prev.map(tn => (tn.id === tunnelId ? { ...tn, pinned: !pinned } : tn)));
+            showError(t("tunnels.pinFailed"));
+        }
+    };
+
     return {
         tunnels,
         portsMap,
         latencyMap,
         loading,
         fetchData,
+        togglePin,
         handleLeaveTunnel,
         modals: {
             configModal, setConfigModal,

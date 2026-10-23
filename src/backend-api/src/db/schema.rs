@@ -263,6 +263,25 @@ const TABLES: &[(&str, &str)] = &[
             "last_seen_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：每個使用者自己的隧道釘選。/ Per-user tunnel pins.
+    (
+        "telepy_tunnel_pin",
+        r#"CREATE TABLE "telepy_tunnel_pin" (
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "tunnel_id")
+        )"#,
+    ),
+    // Rust 自有：隧道標籤（所有看得到隧道的人共用）。/ Tunnel labels, shared by everyone who sees the tunnel.
+    (
+        "telepy_tunnel_label",
+        r#"CREATE TABLE "telepy_tunnel_label" (
+            "tunnel_id" integer NOT NULL,
+            "label" varchar(32) NOT NULL,
+            PRIMARY KEY ("tunnel_id", "label")
+        )"#,
+    ),
     // Rust 自有：裝置金鑰清單——哪些使用者金鑰要裝進這台裝置（依擁有者允許的 OS 帳號）。
     // Device key lists: which user keys Telepy installs on a device (into the owner's allowed accounts).
     (

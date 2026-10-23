@@ -11,6 +11,7 @@ import { TunnelActions } from "@/components/tunnels/TunnelActions";
 import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { liveHealth } from "@/lib/tunnelHealth";
+import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
@@ -39,14 +40,18 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                         <Server size={15} />
                     </div>
                     <div className="min-w-0">
-                        <p className="text-sm text-foreground truncate max-w-[18rem]" title={tunnel.host_friendly_name}>
-                            {tunnel.host_friendly_name}
-                        </p>
+                        <div className="flex items-center gap-1">
+                            <p className="text-sm text-foreground truncate max-w-[18rem]" title={tunnel.host_friendly_name}>
+                                {tunnel.host_friendly_name}
+                            </p>
+                            <PinButton pinned={!!tunnel.pinned} onToggle={actions.onTogglePin ? () => actions.onTogglePin!(tunnel.id, !tunnel.pinned) : undefined} />
+                        </div>
                         {tunnel.description && (
                             <p className="text-xs text-muted-foreground truncate max-w-[18rem]" title={tunnel.description}>
                                 {tunnel.description}
                             </p>
                         )}
+                        <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} className="mt-1" />
                     </div>
                 </div>
             </td>

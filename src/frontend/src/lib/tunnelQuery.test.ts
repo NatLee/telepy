@@ -1,7 +1,7 @@
 // node --test（Node 23 會直接拿掉型別）。/ Run with `npm test` (Node strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareTunnels, matchTunnel, parseQuery, tokenize, type MatchContext } from "./tunnelQuery.ts";
+import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, tokenize, type MatchContext } from "./tunnelQuery.ts";
 import type { Tunnel, TunnelHealth } from "../types/tunnel";
 
 const NOW = Date.parse("2026-10-23T12:00:00Z");
@@ -78,4 +78,17 @@ test("status sort puts degraded first, lastseen puts never last", () => {
     const c = (t: Tunnel) => ctx(health[t.id]);
     assert.deepEqual([...list].sort((x, y) => compareTunnels(x, y, "status", c)).map((t) => t.id), [3, 2, 4, 1]);
     assert.deepEqual([...list].sort((x, y) => compareTunnels(x, y, "lastseen", c)).map((t) => t.id), [3, 2, 4, 1]);
+});
+
+test("labels (tag: alias) and pins", () => {
+    const t = tunnel({ labels: ["env=prod", "home"], pinned: true });
+    assert.ok(match("label:home", t));
+    assert.ok(match("tag:env=prod", t), "tag is an alias");
+    assert.ok(!match("label:hom", t), "labels match exactly");
+    assert.ok(match("hom", t), "free text matches inside labels");
+    assert.ok(match("pinned:yes", t));
+    assert.ok(match("pinned:no", tunnel({})));
+    assert.deepEqual(parseQuery("pinned:maybe").invalid, ["pinned:maybe"]);
+    const list = [tunnel({ id: 1 }), tunnel({ id: 2, pinned: true })];
+    assert.deepEqual(list.sort(pinnedFirst).map((x) => x.id), [2, 1]);
 });

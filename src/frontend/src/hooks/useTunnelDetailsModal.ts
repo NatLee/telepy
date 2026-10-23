@@ -9,6 +9,7 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { keyProblem } from "@/lib/sshKeys";
+import { parseLabels, sameLabels } from "@/lib/tunnelLabels";
 import type { TranslationKey } from "@/locales/en";
 
 export interface TunnelDetails {
@@ -23,10 +24,11 @@ export interface TunnelDetails {
     created_at?: string;
     updated_at?: string;
     shared_with_count?: number;
+    labels?: string[];
 }
 
 export type TunnelForm = { host_friendly_name: string; key: string; description: string };
-export type TunnelFormErrors = Partial<Record<keyof TunnelForm, string>>;
+export type TunnelFormErrors = Partial<Record<keyof TunnelForm | "labels", string>>;
 
 const PROBLEM: Record<NonNullable<ReturnType<typeof keyProblem>>, TranslationKey> = {
     invalid: "keys.problem.invalid",
@@ -41,6 +43,8 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState<TunnelForm>({ host_friendly_name: "", key: "", description: "" });
     const [errors, setErrors] = useState<TunnelFormErrors>({});
+    // 標籤另外存（另一支 API：PUT …/labels）。/ Labels are kept apart (their own endpoint).
+    const [labelsText, setLabelsTextState] = useState("");
     const [isSaving, setIsSaving] = useState(false);
     const { showSuccess, showError } = useToast();
 
@@ -57,6 +61,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 if (res.ok && data) {
                     setDetails(data);
                     setForm({ host_friendly_name: data.host_friendly_name ?? "", key: data.key ?? "", description: data.description ?? "" });
+                    setLabelsTextState((data.labels ?? []).join(", "));
                 } else {
                     showError(responseError(res, data, t("tunnelDetails.fetchFailed")));
                 }
@@ -93,6 +98,18 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
         });
     };
 
+    const setLabelsText = (value: string) => {
+        setLabelsTextState(value);
+        setErrors((e) => {
+            if (!("labels" in e)) return e;
+            const next = { ...e };
+            delete next.labels;
+            return next;
+        });
+    };
+    const labelCheck = useMemo(() => parseLabels(labelsText), [labelsText]);
+    const labelsChanged = !!details && !sameLabels(labelCheck.labels, details.labels ?? []);
+
     /** 只送有改的欄位。/ Only the changed fields. */
     const patch = useMemo(() => {
         if (!details) return {};
@@ -102,7 +119,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
         if (form.description !== (details.description ?? "")) p.description = form.description;
         return p;
     }, [details, form]);
-    const dirty = Object.keys(patch).length > 0;
+    const dirty = Object.keys(patch).length > 0 || labelsChanged;
     const keyChanged = patch.key !== undefined;
 
     // 即時檢查(後端會再檢查一次):別名必填、公鑰格式 / 強度。/ Live checks; the backend re-validates.
@@ -112,12 +129,30 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
         const problem = form.key.trim() ? keyProblem(form.key) : "invalid";
         if (problem) liveErrors.key = t(PROBLEM[problem]);
     }
+    if (labelCheck.invalid.length) liveErrors.labels = t("tunnelDetails.labelInvalid", { label: labelCheck.invalid[0] });
+    else if (labelCheck.tooMany) liveErrors.labels = t("tunnelDetails.labelsTooMany");
     const valid = Object.keys(liveErrors).length === 0;
 
     const save = async () => {
         if (!tunnelId || !dirty || !valid) return;
         setIsSaving(true);
         try {
+            if (labelsChanged) {
+                const lr = await apiFetch(`/api/reverse/server/${tunnelId}/labels`, { method: "PUT", body: JSON.stringify({ labels: labelCheck.labels }) });
+                const lb = await readJson<Record<string, unknown>>(lr);
+                if (!lr.ok) {
+                    const v = lb?.labels;
+                    if (Array.isArray(v) && v[0]) setErrors({ labels: String(v[0]) });
+                    else showError(responseError(lr, lb, t("tunnelDetails.updateFailed")));
+                    return;
+                }
+                if (Object.keys(patch).length === 0) {
+                    showSuccess(t("tunnelDetails.updated"));
+                    onUpdate();
+                    onClose();
+                    return;
+                }
+            }
             const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, { method: "PATCH", body: JSON.stringify(patch) });
             const body = await readJson<Record<string, unknown>>(res);
             if (res.ok) {
@@ -147,7 +182,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     };
 
     return {
-        state: { details, loading, form, errors: { ...liveErrors, ...errors }, canEdit, dirty, keyChanged, valid, isSaving },
-        actions: { setField, save },
+        state: { details, loading, form, labelsText, labels: labelCheck.labels, errors: { ...liveErrors, ...errors }, canEdit, dirty, keyChanged, valid, isSaving },
+        actions: { setField, setLabelsText, save },
     };
 }

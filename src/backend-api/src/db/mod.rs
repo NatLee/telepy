@@ -14,6 +14,7 @@ pub mod settings;
 pub mod sharing;
 pub mod sign_ins;
 pub mod tunnel_endpoints;
+pub mod tunnel_tags;
 pub mod tunnels;
 pub mod users;
 
