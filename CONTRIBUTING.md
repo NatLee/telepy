@@ -17,11 +17,11 @@ too.
 ## Contributor License Agreement
 
 Telepy is released under the [AGPL-3.0](./LICENSE) and is also offered under a commercial license (see
-[NOTICE](./NOTICE)). To keep both possible, every contribution is made under this agreement. You accept it by
-ticking the CLA box in your pull request, or by writing "I agree to the Telepy CLA" in the pull request or issue
-that carries your contribution.
+[NOTICE](./NOTICE)). To keep both possible, every contribution is made under this agreement; in return, every
+release that contains your work stays open source (clause 6). You accept it by ticking the CLA box in your pull
+request, or by writing "I agree to the Telepy CLA" in the pull request or issue that carries your contribution.
 
-### Telepy Individual Contributor License Agreement, version 1.0
+### Telepy Individual Contributor License Agreement, version 1.1
 
 **Definitions.** "You" means the person or legal entity making a Contribution. "Contribution" means any work of
 authorship (code, documentation, artwork or other material) that You submit to the Telepy project, by pull
@@ -44,3 +44,7 @@ request, patch, issue or any other means, other than material You clearly mark a
 4. **No warranty.** Contributions are provided "as is", without warranties or conditions of any kind, and You
    are not expected to provide support for them.
 5. **No obligation.** The Maintainer is not required to use any Contribution.
+6. **Open-source promise.** In return, every version of Telepy that the Maintainer distributes and that includes
+   Your Contribution will also be made available to the public, in source form, under the AGPL-3.0 or another
+   license approved by the Open Source Initiative. Commercial licenses are offered alongside that open-source
+   release, never instead of it.

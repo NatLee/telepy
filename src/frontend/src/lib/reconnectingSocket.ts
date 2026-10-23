@@ -27,6 +27,18 @@ function getAccessToken(): string | null {
     return typeof window !== "undefined" ? localStorage.getItem("accessToken") : null;
 }
 
+/**
+ * 連線階段，給 UI 顯示用（比 onStatus 的 true/false 多了「多久後重試」與「已放棄」）。
+ * Connection phase for the UI — unlike onStatus's boolean it tells "retrying at …" apart from "gave up".
+ */
+export type SocketPhase =
+    | { state: "connecting" }
+    | { state: "open" }
+    /** 已排定重連；retryAt = epoch ms。/ A reconnect is scheduled; retryAt = epoch ms. */
+    | { state: "retrying"; retryAt: number }
+    /** 不會再自動重連（認證 / 權限關閉碼、refresh 失敗）。/ No more automatic reconnects (auth / permission close, refresh failed). */
+    | { state: "stopped" };
+
 export type ReconnectingSocketOptions = {
     /** e.g. "/ws/notifications/" */
     path: string;
@@ -40,6 +52,7 @@ export type ReconnectingSocketOptions = {
     onOpen?: (socket: ReconnectingSocket) => void;
     onMessage?: (data: string) => void;
     onStatus?: (connected: boolean) => void;
+    onPhase?: (phase: SocketPhase) => void;
 };
 
 export class ReconnectingSocket {
@@ -89,6 +102,7 @@ export class ReconnectingSocket {
     private async connect() {
         if (this.closedByUser || this.connecting || this.ws) return;
         this.connecting = true;
+        this.opts.onPhase?.({ state: "connecting" });
         try {
             const extra = this.opts.authFields ? await this.opts.authFields() : {};
             if (this.closedByUser) { this.connecting = false; return; }
@@ -102,6 +116,7 @@ export class ReconnectingSocket {
                 // First frame authenticates: {type:'auth', token, ...authFields}.
                 ws.send(JSON.stringify({ type: "auth", token: getAccessToken(), ...extra }));
                 this.opts.onStatus?.(true);
+                this.opts.onPhase?.({ state: "open" });
                 if (this.stableTimer) clearTimeout(this.stableTimer);
                 this.stableTimer = setTimeout(() => {
                     this.reconnectAttempt = 0;
@@ -132,7 +147,7 @@ export class ReconnectingSocket {
                 // 4001：token 無效/過期。refresh 一次再重連；refresh 失敗才放棄。
                 // 4001: invalid/expired token — refresh once and retry; give up only if refresh fails.
                 if (event.code === 4001) { void this.handleAuthClose(); return; }
-                if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) return;
+                if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) { this.opts.onPhase?.({ state: "stopped" }); return; }
                 this.scheduleReconnect();
             };
 
@@ -147,20 +162,25 @@ export class ReconnectingSocket {
     }
 
     private async handleAuthClose() {
-        if (this.closedByUser || this.authRefreshTried) return; // 每次認證失敗只 refresh 一次
+        if (this.closedByUser) return;
+        if (this.authRefreshTried) { this.opts.onPhase?.({ state: "stopped" }); return; } // 每次認證失敗只 refresh 一次
         this.authRefreshTried = true;
+        this.opts.onPhase?.({ state: "connecting" });
         const ok = await refreshAccessToken();
         if (ok && !this.closedByUser && !this.ws) {
             this.reconnectAttempt = 0;
             void this.connect();
+        } else if (!ok && !this.closedByUser) {
+            // refresh 失敗 → 不重連（保持關閉）。/ refresh failed → stay closed.
+            this.opts.onPhase?.({ state: "stopped" });
         }
-        // refresh 失敗 → 不重連（保持關閉）。/ refresh failed → stay closed.
     }
 
     private scheduleReconnect() {
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
         const delay = backoffDelay(this.reconnectAttempt);
         this.reconnectAttempt += 1;
+        this.opts.onPhase?.({ state: "retrying", retryAt: Date.now() + delay });
         this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             if (!this.closedByUser && !this.ws) void this.connect();
