@@ -24,6 +24,25 @@ fn targets(entry: &Value) -> Vec<(String, String)> {
     entry["targets"].as_array().unwrap().iter().map(|t| (t["username"].as_str().unwrap().to_string(), t["status"].as_str().unwrap().to_string())).collect()
 }
 
+/// 合併檢視裡某帳號的每一列：(state, 擁有者, verified)。/ Rows of one account in the merged view.
+fn view_rows(device: &Value, account: &str) -> Vec<(String, String, bool)> {
+    let acct = device["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == account).unwrap_or_else(|| panic!("no {account} in {device}"));
+    acct["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["state"].as_str().unwrap().to_string(), r["owner"].as_str().unwrap_or("").to_string(), r["verified"].as_bool().unwrap()))
+        .collect()
+}
+
+fn view_accounts(device: &Value) -> Vec<String> {
+    device["view"]["accounts"].as_array().unwrap().iter().map(|a| a["username"].as_str().unwrap().to_string()).collect()
+}
+
+fn rows(v: &[(&str, &str, bool)]) -> Vec<(String, String, bool)> {
+    v.iter().map(|(a, b, c)| (a.to_string(), b.to_string(), *c)).collect()
+}
+
 fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
     v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
 }
@@ -65,6 +84,10 @@ async fn device_key_list_installs_and_revokes() {
     let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(targets(&r.json["entries"][0]), pairs(&[("root", "installed"), ("ubuntu", "installed")]));
+    // 合併檢視：同步時寫過 / 讀過檔，所以是「在裝置上看到了」。/ Merged view: verified on the device by the sync.
+    assert_eq!(view_accounts(&r.json), vec!["root", "ubuntu"]);
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true)]));
+    assert!(r.json["view"]["accounts"][1]["checked_at"].is_string(), "{}", r.text);
     let ak = boxm.authorized_keys("ubuntu");
     assert!(ak.starts_with("# written by hand\n"), "{ak}");
     assert!(ak.contains(&format!("{} telepy:alice/alice-laptop", alice.key.bare())), "{ak}");
@@ -90,6 +113,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(r.json["entries"][0]["mine"], true);
     let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&bob.token), json!({})).await;
     assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]));
+    // 被分享者：只有自己能用的帳號、只有自己的金鑰。/ A sharee: only their accounts and their own keys.
+    assert_eq!(view_accounts(&r.json), vec!["ubuntu"]);
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "bob", true)]));
     assert!(boxm.authorized_keys("ubuntu").contains(&bob.key.bare()));
     assert!(!boxm.authorized_keys("root").contains(&bob.key.bare()));
     assert_eq!(lab.laptop_exec(&bob, &to_ubuntu, "whereami").await.stdout, "ubuntu@box");
@@ -115,7 +141,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
     assert_eq!(r.json["removals"][0]["owner"], "bob", "{}", r.text);
-    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true), ("removing", "bob", true)]));
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true)]));
     assert!(!boxm.authorized_keys("ubuntu").contains(&bob.key.bare()));
     assert!(!lab.laptop_exec(&bob, &to_ubuntu, "whoami").await.ok);
     lab.app.patch(&allowed, Some(&alice.token), json!({"allowed_target_username_ids": [ubuntu]})).await;
@@ -142,6 +170,9 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(acct["lines"][0]["owner"], "alice");
     assert_eq!(acct["lines"][0]["in_list"], true);
     assert_eq!(acct["lines"][2]["options"], "no-pty");
+    // 讀過檔，合併檢視也看得到服務金鑰與清單外的那把。/ After that read the merged view shows them too.
+    let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("service", "", true), ("installed", "alice", true), ("unknown", "", true)]));
     let fp = |i: usize| acct["lines"][i]["fingerprint"].as_str().unwrap().to_string();
     let remove = format!("/api/reverse/server/{}/authorized-keys/remove", dev.tunnel_id);
     let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(1)})).await;
@@ -207,4 +238,82 @@ async fn offline_device_and_key_list_seed() {
     let carol = lab.user("carol").await;
     let r = lab.app.get(&path(tid, "device-keys"), Some(&carol.token)).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+/// 合成一把 Ed25519 公鑰（不用跑 ssh-keygen：只要能解析、指紋各不相同）。/ A parseable, distinct Ed25519 public key.
+fn fake_ed25519(i: u32, comment: &str) -> String {
+    use base64::Engine;
+    let mut blob = Vec::new();
+    for part in [&b"ssh-ed25519"[..], &[&i.to_be_bytes()[..], &[7u8; 28][..]].concat()] {
+        blob.extend_from_slice(&(part.len() as u32).to_be_bytes());
+        blob.extend_from_slice(part);
+    }
+    format!("ssh-ed25519 {} {comment}", base64::engine::general_purpose::STANDARD.encode(blob))
+}
+
+/// 帳號裡有幾百把金鑰：稽核全部列出，批次移除一次改寫檔案，服務金鑰 / 清單上的 / 不存在的列在 skipped。
+/// Hundreds of keys in one account: the audit lists them all, a batch removal rewrites the file once.
+#[tokio::test]
+async fn audit_lists_many_keys_and_removes_a_batch() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("crowd", &[("ubuntu", &[&lab.service])], false).await;
+    let home = boxm.account_home("ubuntu");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let fleet: Vec<String> = (0..300).map(|i| fake_ed25519(i, &format!("fleet-{i}"))).collect();
+    // 第一把出現兩次（一次帶 options）。/ The first key appears twice, once with options.
+    let content = format!("# fleet\n{}\n{}\nno-pty {}\n", lab.service.public, fleet.join("\n"), fleet[0]);
+    std::fs::write(home.join(".ssh/authorized_keys"), content).unwrap();
+    let dev = lab.device(&alice, "crowd", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let alice_key = key_id(&lab, &alice).await;
+    lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key]})).await;
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]), "{}", r.text);
+
+    // 面板的合併檢視：每把一列，重複的行合併並附行數。/ The panel view: one row per key, duplicates counted.
+    let view_rows = |r: &common::Resp| r.json["view"]["accounts"][0]["rows"].as_array().unwrap().clone();
+    let rows = view_rows(&r);
+    assert_eq!(rows.iter().filter(|r| r["state"] == "unknown").count(), 300, "{}", r.text);
+    let fleet0 = rows.iter().find(|r| r["comment"] == "fleet-0").unwrap();
+    assert_eq!((fleet0["line_count"].as_i64(), fleet0["options"].as_str()), (Some(2), None));
+
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let lines = r.json["accounts"][0]["lines"].as_array().unwrap().clone();
+    let count = |kind: &str| lines.iter().filter(|l| l["kind"] == kind).count();
+    assert_eq!((count("unknown"), count("service"), count("managed")), (301, 1, 1));
+    let fp_of = |kind: &str| lines.iter().find(|l| l["kind"] == kind).unwrap()["fingerprint"].as_str().unwrap().to_string();
+    // fleet-0 … fleet-249；fleet-0 有兩行。/ fleet-0 … fleet-249; fleet-0 is on two lines.
+    let fps: Vec<String> = lines.iter().filter(|l| l["kind"] == "unknown").filter_map(|l| l["fingerprint"].as_str().map(str::to_string)).take(250).collect();
+    let remove = path(dev.tunnel_id, "authorized-keys/remove");
+    let mut batch = fps.clone();
+    batch.extend([fp_of("service"), fp_of("managed"), "SHA256:not-there".to_string(), fps[0].clone()]);
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": batch})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["keys"].as_i64(), r.json["removed"].as_i64()), (Some(250), Some(251)), "{}", r.text);
+    let skipped: Vec<&str> = r.json["skipped"].as_array().unwrap().iter().map(|s| s["code"].as_str().unwrap()).collect();
+    assert_eq!(skipped, vec!["service_key", "in_key_list", "not_found"]);
+    let ak = boxm.authorized_keys("ubuntu");
+    assert!(ak.starts_with(&format!("# fleet\n{}\n", lab.service.public)), "{ak}");
+    assert_eq!(ak.lines().filter(|l| l.contains("fleet-")).count(), 50, "{ak}");
+    assert!(!ak.contains(&fleet[0]) && ak.contains(&fleet[299]));
+    assert!(ak.contains(&alice.key.bare()));
+    assert_eq!(lab.laptop_exec(&alice, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await.stdout, "ubuntu@crowd");
+    // 移除時寫檔的內容就是面板看到的（不用再連裝置）。/ The panel shows the file as written, without dialing the device.
+    let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
+    assert_eq!(view_rows(&r).iter().filter(|r| r["state"] == "unknown").count(), 50, "{}", r.text);
+
+    // 只剩不能移的：200、什麼都沒改。/ Nothing removable: 200, file untouched.
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": [fp_of("service")]})).await;
+    assert_eq!((r.status, r.json["keys"].as_i64()), (StatusCode::OK, Some(0)), "{}", r.text);
+    assert_eq!(boxm.authorized_keys("ubuntu"), ak);
+    for bad in [json!([]), json!(["SHA256:x", 3]), json!("SHA256:x")] {
+        let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": bad})).await;
+        assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{}", r.text);
+    }
 }

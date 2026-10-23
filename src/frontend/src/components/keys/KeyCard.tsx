@@ -91,7 +91,10 @@ export function KeyCard({
                             t("keys.onNoDevice")
                         ) : (
                             <span title={placements.map((p) => p.device.host_friendly_name).join(", ")}>
-                                <span className="text-foreground/80">{placements.map((p) => p.device.host_friendly_name).join(", ")}</span>
+                                <span className="text-foreground/80">
+                                    {placements.slice(0, 3).map((p) => p.device.host_friendly_name).join(", ")}
+                                    {placements.length > 3 && ` ${t("keys.moreDevices", { count: placements.length - 3 })}`}
+                                </span>
                                 <span> · {t("keys.onDeviceCount", { count: placements.length, installed })}</span>
                             </span>
                         )}

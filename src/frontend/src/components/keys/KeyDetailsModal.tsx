@@ -6,7 +6,7 @@
  * on every device account.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { HardDrive, Hash, KeyRound, Loader2, Pencil, Save } from "lucide-react";
+import { HardDrive, Hash, KeyRound, Loader2, Pencil, Save, Settings2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,8 +22,9 @@ import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, KeyTarget, UserKey } from "@/types/keys";
 import type { KeyPatch, KeyPatchErrors } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyCard";
-import { OnlineDot } from "./DeviceMatrix";
+import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { TargetChips } from "./TargetChips";
+import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
     invalid: "keys.problem.invalid",
@@ -32,37 +33,117 @@ const PROBLEM: Record<KeyProblem, TranslationKey> = {
     rsaShort: "keys.problem.rsaShort",
 };
 
+interface DevicesProps {
+    /** 我能用的每台裝置（含這把金鑰不在清單上的）。/ Every device I can use. */
+    devices: KeyDevice[];
+    /** 正在切換的 `${tunnelId}:${keyId}`。/ Cells being toggled. */
+    pending: Set<string>;
+    onToggle: (device: KeyDevice, key: UserKey, on: boolean) => void;
+    onManageDevice: (device: KeyDevice) => void;
+}
+
 export function KeyDetailsModal({
     keyItem,
-    placements,
     onClose,
     onSave,
-    onManageDevice,
+    ...devices
 }: {
     keyItem: UserKey | null;
-    placements: { device: KeyDevice; targets: KeyTarget[] }[];
     onClose: () => void;
     /** 回傳欄位錯誤;null = 成功。/ Returns field errors; null on success. */
     onSave: (key: UserKey, patch: KeyPatch) => Promise<KeyPatchErrors | null>;
-    onManageDevice: (device: KeyDevice) => void;
-}) {
+} & DevicesProps) {
     // 每把金鑰一份新表單(key = 金鑰 id):換一把就重設。/ Fresh form per key (keyed by id).
-    return keyItem ? <KeyDetailsBody key={keyItem.id} keyItem={keyItem} placements={placements} onClose={onClose} onSave={onSave} onManageDevice={onManageDevice} /> : <Modal isOpen={false} onClose={onClose} title="" />;
+    return keyItem ? <KeyDetailsBody key={keyItem.id} keyItem={keyItem} onClose={onClose} onSave={onSave} {...devices} /> : <Modal isOpen={false} onClose={onClose} title="" />;
+}
+
+/** 這把金鑰在每台裝置上：在清單上的才有 targets。/ The key on every device; targets only when on the list. */
+type Placement = { device: KeyDevice; targets: KeyTarget[] | null };
+
+function rank(p: Placement): number {
+    if (p.targets && needsAttention(p.targets, p.device.online)) return 0;
+    return p.targets ? 1 : 2;
+}
+
+/** 很多台也看得完：摘要、問題排前面、搜尋 / 篩選、勾選直接放上或拿掉。
+ *  Scales to many devices: a summary, problems first, search / filter, and a tick per device. */
+function KeyDevices({ keyItem, devices, pending, onToggle, onManageDevice }: { keyItem: UserKey } & DevicesProps) {
+    const { t } = useI18n();
+    const placements = useMemo<Placement[]>(
+        () =>
+            devices
+                .map((device) => ({ device, targets: device.keys.find((k) => k.user_key_id === keyItem.id)?.targets ?? null }))
+                .sort((a, b) => rank(a) - rank(b) || a.device.host_friendly_name.localeCompare(b.device.host_friendly_name)),
+        [devices, keyItem.id]
+    );
+    const onList = placements.filter((p) => p.targets);
+    const installed = onList.filter((p) => p.targets!.length > 0 && p.targets!.every((x) => x.status === "installed")).length;
+    const problems = onList.filter((p) => needsAttention(p.targets!, p.device.online)).length;
+    const filter = useDeviceFilter(placements, {
+        device: (p) => p.device,
+        isOn: (p) => !!p.targets,
+        isProblem: (p) => !!p.targets && needsAttention(p.targets, p.device.online),
+        initial: onList.length > 0 ? "on" : "all",
+    });
+
+    if (devices.length === 0) {
+        return <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{t("keys.matrix.emptyBody")}</p>;
+    }
+    return (
+        <div className="space-y-3">
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                <span>{t("keys.details.devicesSummary", { on: onList.length, total: devices.length })}</span>
+                {installed > 0 && <Chip tone="success">{t("keys.details.installedCount", { count: installed })}</Chip>}
+                {problems > 0 && <Chip tone="warning">{t("keys.details.problemCount", { count: problems })}</Chip>}
+            </p>
+            <DeviceFilterBar filter={filter} />
+            <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
+                {filter.visible.map(({ device, targets }) => {
+                    const busy = pending.has(`${device.tunnel_id}:${keyItem.id}`);
+                    const id = `key-${keyItem.id}-dev-${device.tunnel_id}`;
+                    return (
+                        <li key={device.tunnel_id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
+                            <label htmlFor={id} className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5">
+                                {busy ? (
+                                    <Loader2 size={16} className="mt-0.5 animate-spin text-primary" aria-hidden />
+                                ) : (
+                                    <input id={id} type="checkbox" checked={!!targets} onChange={(e) => onToggle(device, keyItem, e.target.checked)} className="mt-0.5 size-4 accent-primary" />
+                                )}
+                                <span className="flex min-w-0 flex-col gap-1">
+                                    <span className="flex flex-wrap items-center gap-2 text-sm">
+                                        <span className="truncate text-foreground">{device.host_friendly_name}</span>
+                                        <RoleBadge role={device.role} />
+                                        <OnlineDot online={device.online} />
+                                    </span>
+                                    {targets ? (
+                                        <TargetChips targets={targets} online={device.online} />
+                                    ) : (
+                                        <span className="text-xs text-muted-foreground">{t("keys.matrix.notInList")}</span>
+                                    )}
+                                </span>
+                            </label>
+                            <Button type="button" variant="ghost" size="xs" onClick={() => onManageDevice(device)} className="text-muted-foreground hover:text-foreground" title={t("keys.matrix.manage")}>
+                                <Settings2 /> <span className="sr-only sm:not-sr-only">{t("keys.matrix.manage")}</span>
+                            </Button>
+                        </li>
+                    );
+                })}
+            </ul>
+            <DeviceFilterFooter filter={filter} />
+        </div>
+    );
 }
 
 function KeyDetailsBody({
     keyItem,
-    placements,
     onClose,
     onSave,
-    onManageDevice,
+    ...devices
 }: {
     keyItem: UserKey;
-    placements: { device: KeyDevice; targets: KeyTarget[] }[];
     onClose: () => void;
     onSave: (key: UserKey, patch: KeyPatch) => Promise<KeyPatchErrors | null>;
-    onManageDevice: (device: KeyDevice) => void;
-}) {
+} & DevicesProps) {
     const { t, locale } = useI18n();
     const [form, setForm] = useState({ host_friendly_name: keyItem.host_friendly_name, key: keyItem.key, description: keyItem.description ?? "" });
     const [serverErrors, setServerErrors] = useState<KeyPatchErrors>({});
@@ -207,29 +288,9 @@ function KeyDetailsBody({
                     {keyChanged && !errors.key && <Callout tone="warning">{t("keys.keyChangedHint")}</Callout>}
                 </Section>
 
-                {/* 在哪些裝置上 / Where it is installed */}
-                <Section icon={<HardDrive />} title={t("keys.onDevices")}>
-                    {placements.length === 0 ? (
-                        <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{t("keys.onNoDeviceHint")}</p>
-                    ) : (
-                        <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
-                            {placements.map(({ device, targets }) => (
-                                <li key={device.tunnel_id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5">
-                                    <span className="flex min-w-0 flex-col gap-1">
-                                        <span className="flex items-center gap-2 text-sm">
-                                            <HardDrive size={14} className="text-muted-foreground" aria-hidden />
-                                            <span className="truncate">{device.host_friendly_name}</span>
-                                            <OnlineDot online={device.online} />
-                                        </span>
-                                        <TargetChips targets={targets} online={device.online} />
-                                    </span>
-                                    <Button type="button" variant="ghost" size="xs" onClick={() => onManageDevice(device)} className="text-primary hover:text-primary">
-                                        {t("keys.matrix.manage")}
-                                    </Button>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
+                {/* 在哪些裝置上（勾選立即生效，與上面的儲存無關）/ Devices (ticks apply right away, separate from Save) */}
+                <Section icon={<HardDrive />} title={t("keys.onDevices")} description={t("keys.details.devicesHint")}>
+                    <KeyDevices keyItem={keyItem} {...devices} />
                 </Section>
             </form>
         </Modal>
