@@ -46,6 +46,8 @@ pub struct Row {
     pub comment: Option<String>,
     pub options: Option<String>,
     pub line_no: Option<usize>,
+    /// 這把金鑰在檔案裡佔幾行（同一把重複貼上時 > 1；移除會刪掉每一行）。/ Lines holding this key (> 1 for duplicates).
+    pub line_count: usize,
     pub error: Option<String>,
     pub raw: Option<String>,
 }
@@ -109,6 +111,7 @@ fn base(state: RowState) -> Row {
         comment: None,
         options: None,
         line_no: None,
+        line_count: 0,
         error: None,
         raw: None,
     }
@@ -136,13 +139,16 @@ pub fn build(i: &Inputs) -> Vec<AccountView> {
 fn account(i: &Inputs, acct: &str) -> AccountView {
     let snapshot = i.snapshots.get(acct);
     let lines = snapshot.and_then(|(c, _)| c.as_deref()).map(parse_authorized_keys).unwrap_or_default();
-    // bare → 檔案裡第一行。/ bare → first line in the file.
+    // bare → 檔案裡第一行與行數。/ bare → first line in the file, and how many lines hold it.
     let mut in_file: HashMap<&str, &super::authorized_keys::AuthorizedLine> = HashMap::new();
+    let mut line_counts: HashMap<&str, usize> = HashMap::new();
     for l in &lines {
         if let Some(k) = &l.key {
             in_file.entry(k.bare.as_str()).or_insert(l);
+            *line_counts.entry(k.bare.as_str()).or_default() += 1;
         }
     }
+    let count = |bare: &str| line_counts.get(bare).copied().unwrap_or(0);
     let read = snapshot.is_some();
     let error = i.sync_errors.get(acct).cloned();
     let empty = BTreeSet::new();
@@ -170,6 +176,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         if let Some(l) = line {
             r.options = l.options.clone();
             r.line_no = Some(l.line_no);
+            r.line_count = count(bare);
         }
         if let Some(k) = i.known.get(bare) {
             r = with_known(r, k, i.viewer);
@@ -200,6 +207,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         if let Some(l) = line {
             r.options = l.options.clone();
             r.line_no = Some(l.line_no);
+            r.line_count = count(bare);
             if let Some(k) = &l.key {
                 r = with_key(r, k);
             }
@@ -215,6 +223,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
                 let mut r = base(RowState::Invalid);
                 r.verified = true;
                 r.line_no = Some(l.line_no);
+                r.line_count = 1;
                 r.raw = Some(trimmed.chars().take(120).collect());
                 rows.push(r);
             }
@@ -234,6 +243,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         r.verified = true;
         r.options = l.options.clone();
         r.line_no = Some(l.line_no);
+        r.line_count = count(&k.bare);
         if !k.comment.is_empty() {
             r.comment = Some(k.comment.clone());
         }
@@ -333,6 +343,7 @@ mod tests {
         assert_eq!(alice.name.as_deref(), Some("MacBook"));
         assert!(!v.rows[2].verified);
         assert_eq!(v.rows[3].comment.as_deref(), Some("stranger"));
+        assert_eq!((alice.line_count, v.rows[2].line_count, v.rows[4].line_count), (1, 0, 1));
         assert_eq!(v.checked_at.as_deref(), Some("t"));
         assert_eq!(v.exists, Some(true));
     }
@@ -374,6 +385,15 @@ mod tests {
         assert_eq!(v.rows.len(), 1);
         assert_eq!(v.rows[0].name.as_deref(), Some("bob-pc"));
         assert_eq!(v.rows[0].state, RowState::Installed);
+    }
+
+    #[test]
+    fn duplicate_lines_are_one_row_with_a_count() {
+        let mut f = Fixture::new();
+        f.snapshots.insert("ubuntu".into(), (Some(format!("{STRANGER}\nno-pty {STRANGER}\n{SVC}\n{STRANGER}\n")), "t".into()));
+        let v = f.build(10, true);
+        assert_eq!(states(&v), vec![RowState::Service, RowState::Unknown]);
+        assert_eq!((v.rows[0].line_count, v.rows[1].line_count, v.rows[1].line_no), (1, 3, Some(1)));
     }
 
     #[test]

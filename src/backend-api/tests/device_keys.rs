@@ -275,6 +275,13 @@ async fn audit_lists_many_keys_and_removes_a_batch() {
     let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
     assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]), "{}", r.text);
 
+    // 面板的合併檢視：每把一列，重複的行合併並附行數。/ The panel view: one row per key, duplicates counted.
+    let view_rows = |r: &common::Resp| r.json["view"]["accounts"][0]["rows"].as_array().unwrap().clone();
+    let rows = view_rows(&r);
+    assert_eq!(rows.iter().filter(|r| r["state"] == "unknown").count(), 300, "{}", r.text);
+    let fleet0 = rows.iter().find(|r| r["comment"] == "fleet-0").unwrap();
+    assert_eq!((fleet0["line_count"].as_i64(), fleet0["options"].as_str()), (Some(2), None));
+
     let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys"), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let lines = r.json["accounts"][0]["lines"].as_array().unwrap().clone();
@@ -297,6 +304,9 @@ async fn audit_lists_many_keys_and_removes_a_batch() {
     assert!(!ak.contains(&fleet[0]) && ak.contains(&fleet[299]));
     assert!(ak.contains(&alice.key.bare()));
     assert_eq!(lab.laptop_exec(&alice, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await.stdout, "ubuntu@crowd");
+    // 移除時寫檔的內容就是面板看到的（不用再連裝置）。/ The panel shows the file as written, without dialing the device.
+    let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
+    assert_eq!(view_rows(&r).iter().filter(|r| r["state"] == "unknown").count(), 50, "{}", r.text);
 
     // 只剩不能移的：200、什麼都沒改。/ Nothing removable: 200, file untouched.
     let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": [fp_of("service")]})).await;

@@ -1230,7 +1230,10 @@ pub struct DeviceKeyViewRow {
     pub bits: Option<u32>,
     pub comment: Option<String>,
     pub options: Option<String>,
+    /// First line holding this key
     pub line_no: Option<i64>,
+    /// Lines holding this key (more than 1 when it was pasted twice; removing it removes every one)
+    pub line_count: i64,
     pub error: Option<String>,
     /// First 120 characters of an unreadable line
     pub raw: Option<String>,
