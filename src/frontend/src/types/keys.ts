@@ -18,6 +18,9 @@ export interface UserKey {
     comment: string | null;
     last_used_at: string | null;
     last_used_ip: string | null;
+    /** 到期時間；null = 不到期。到期後 Telepy 拒絕它、並從裝置移除。/ Expiry; null = never. Expired keys are refused and removed. */
+    expires_at: string | null;
+    expired: boolean;
 }
 
 export type TunnelRole = "owner" | "admin" | "edit" | "view";

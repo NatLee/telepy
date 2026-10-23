@@ -399,6 +399,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
+    // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).
+    ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),
@@ -415,6 +417,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 隧道狀態告警的 webhook（空 = 關閉）與「斷線多久才通知」（秒）。/ Status alert webhook (empty = off) and its delay.
     ("site_settings_sitesettings", "notify_webhook_url", "varchar(512) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "notify_down_delay", "integer NOT NULL DEFAULT 60"),
+    // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
+    ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

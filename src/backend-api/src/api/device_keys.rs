@@ -256,6 +256,7 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
                 "fingerprint": p.as_ref().map(|p| p.fingerprint.clone()),
                 "key_type": p.as_ref().map(|p| p.label),
                 "in_list": in_list.contains(&k.id),
+                "expired": k.expired(),
             })
         })
         .collect();

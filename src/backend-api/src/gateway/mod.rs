@@ -504,6 +504,11 @@ impl Handler for GatewayHandler {
                 Ok(Auth::Accept)
             }
             None => {
+                // 到期的個人金鑰：講清楚是到期，不是不認得。/ An expired personal key says so, not just "failed".
+                if let Ok(Some((name, at))) = db::keys::expired_user_key_by_prefix(&self.gw.db, &like_prefix(&bare)).await {
+                    self.gw.event("expired_key", Some(self.peer), None, None, format!("Expired key \"{name}\" (expired {at} UTC) for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
+                    return Ok(Auth::reject());
+                }
                 self.gw.event("failed_publickey", Some(self.peer), None, None, format!("Failed publickey for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
                 Ok(Auth::reject())
             }

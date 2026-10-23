@@ -19,6 +19,8 @@ import type { NewKey } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyCard";
 import { OnlineDot } from "./DeviceMatrix";
 import { DeviceFilterBar, DeviceFilterFooter, useDeviceFilter } from "./DeviceFilter";
+import { ExpiryPicker } from "@/components/keys/ExpiryPicker";
+import { expiryValue, type ExpiryPreset } from "@/lib/keyExpiry";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
     invalid: "keys.problem.invalid",
@@ -44,6 +46,8 @@ export function AddKeyModal({
     const [nameInput, setNameInput] = useState<string | null>(null);
     const [description, setDescription] = useState("");
     const [deviceIds, setDeviceIds] = useState<number[]>([]);
+    const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset>("never");
+    const [expiryDate, setExpiryDate] = useState("");
     const [computed, setComputed] = useState<{ key: string; fp: string } | null>(null);
     const [submitting, setSubmitting] = useState(false);
 
@@ -68,6 +72,8 @@ export function AddKeyModal({
         setNameInput(null);
         setDescription("");
         setDeviceIds([]);
+        setExpiryPreset("never");
+        setExpiryDate("");
         onClose();
     };
 
@@ -80,7 +86,7 @@ export function AddKeyModal({
         e.preventDefault();
         if (problem || !name.trim()) return;
         setSubmitting(true);
-        const ok = await onSubmit({ key, name, description, deviceIds });
+        const ok = await onSubmit({ key, name, description, deviceIds, expiresAt: expiryValue(expiryPreset, expiryDate, "create") ?? undefined });
         setSubmitting(false);
         if (ok) close();
     };
@@ -145,6 +151,11 @@ export function AddKeyModal({
                             {t("common.description")} <span className="text-muted-foreground">{t("common.optional")}</span>
                         </Label>
                         <Input id="add-key-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("keys.descriptionPlaceholder")} />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="add-key-expiry">{t("keys.expiry.label")}</Label>
+                        <ExpiryPicker id="add-key-expiry" preset={expiryPreset} customDate={expiryDate} onPreset={setExpiryPreset} onCustomDate={setExpiryDate} neverLabel={t("keys.expiry.siteDefault")} />
+                        <p className="text-xs text-muted-foreground">{t("keys.expiry.hint")}</p>
                     </div>
                 </div>
                 {devices.length > 0 && (

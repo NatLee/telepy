@@ -14,6 +14,39 @@ use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::json_str;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+
+/// `expires_at` 的值：null / "" = 不到期；RFC 3339 時間，或 `YYYY-MM-DD`（那天 UTC 23:59:59）。
+/// An `expires_at` value: null / "" = never; an RFC 3339 time, or `YYYY-MM-DD` (the end of that day, UTC).
+pub fn parse_expiry(v: &Value) -> Result<Option<DateTime<Utc>>, String> {
+    let bad = || "Use an ISO date or time, for example 2026-12-31.".to_string();
+    match v {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(None),
+        Value::String(s) => {
+            let s = s.trim();
+            DateTime::parse_from_rfc3339(s)
+                .map(|d| d.with_timezone(&Utc))
+                .or_else(|_| NaiveDate::parse_from_str(s, "%Y-%m-%d").map(|d| d.and_hms_opt(23, 59, 59).unwrap().and_utc()))
+                .map(Some)
+                .map_err(|_| bad())
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// 檢查到期時間：要在未來；站台設了最長效期（`max_days` > 0）時不能不到期、也不能超過上限（容許幾分鐘誤差）。
+/// Validate an expiry: in the future; with a site limit (`max_days` > 0) it must exist and stay within it.
+pub fn check_expiry(at: Option<DateTime<Utc>>, now: DateTime<Utc>, max_days: i64) -> Result<Option<DateTime<Utc>>, String> {
+    let limit = || format!("Keys on this server must expire within {max_days} days.");
+    match at {
+        None if max_days > 0 => Err(limit()),
+        None => Ok(None),
+        Some(t) if t <= now => Err("Pick a time in the future.".to_string()),
+        Some(t) if max_days > 0 && t > now + Duration::days(max_days) + Duration::minutes(10) => Err(limit()),
+        Some(t) => Ok(Some(t)),
+    }
+}
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -85,7 +118,17 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     let (name, key) = validate_full(&body)?;
     let key = checked_key(&state, &key, None).await?;
     let description = json_str(&body, "description");
-    let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref()).await.map_err(unique_error)?;
+    // 沒給到期時間：站台有上限就用上限，否則不到期。/ No expiry given: the site limit when set, else never.
+    let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
+    let now = Utc::now();
+    let expires = match body.get("expires_at") {
+        Some(v) => check_expiry(parse_expiry(v).map_err(|m| ApiError::field("expires_at", m))?, now, max_days),
+        None if max_days > 0 => Ok(Some(now + Duration::days(max_days))),
+        None => Ok(None),
+    }
+    .map_err(|m| ApiError::field("expires_at", m))?;
+    let expires = expires.map(crate::util::db_time);
+    let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref(), expires.as_deref()).await.map_err(unique_error)?;
     state.hub.notify_user(
         user.id,
         &json!({
@@ -111,10 +154,26 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         None => None,
     };
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));
-    let k = db::keys::user_key_update(&state.db, id, name.as_deref(), key.as_deref(), description.as_ref().map(|d| d.as_deref()))
-        .await
-        .map_err(unique_error)?;
-    if key.is_some() {
+    // 續期 / 改到期時間（null = 不到期，站台有上限時不行）。/ Renew or change the expiry.
+    let expires: Option<Option<String>> = match body.get("expires_at") {
+        Some(v) => {
+            let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
+            let t = check_expiry(parse_expiry(v).map_err(|m| ApiError::field("expires_at", m))?, Utc::now(), max_days).map_err(|m| ApiError::field("expires_at", m))?;
+            Some(t.map(crate::util::db_time))
+        }
+        None => None,
+    };
+    let k = db::keys::user_key_update(
+        &state.db,
+        id,
+        name.as_deref(),
+        key.as_deref(),
+        description.as_ref().map(|d| d.as_deref()),
+        expires.as_ref().map(|e| e.as_deref()),
+    )
+    .await
+    .map_err(unique_error)?;
+    if key.is_some() || expires.is_some() {
         // 公鑰換了：裝置上的舊金鑰換成新的。/ New key material: replace it on every device.
         state.device_keys.kick_many(db::device_keys::tunnels_with_key(&state.db, id).await?);
     }
@@ -142,4 +201,34 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         }),
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn expiry_values() {
+        assert_eq!(parse_expiry(&json!(null)).unwrap(), None);
+        assert_eq!(parse_expiry(&json!("")).unwrap(), None);
+        assert_eq!(parse_expiry(&json!("2026-12-31")).unwrap(), Some(at("2026-12-31T23:59:59Z")));
+        assert_eq!(parse_expiry(&json!("2026-12-31T08:00:00+08:00")).unwrap(), Some(at("2026-12-31T00:00:00Z")));
+        assert!(parse_expiry(&json!("next week")).is_err());
+        assert!(parse_expiry(&json!(5)).is_err());
+    }
+
+    #[test]
+    fn expiry_rules() {
+        let now = at("2026-10-24T00:00:00Z");
+        assert_eq!(check_expiry(None, now, 0).unwrap(), None, "no limit: never expiring is fine");
+        assert!(check_expiry(None, now, 90).is_err(), "with a limit a key must expire");
+        assert!(check_expiry(Some(at("2026-10-23T00:00:00Z")), now, 0).is_err(), "past");
+        assert!(check_expiry(Some(at("2027-02-01T00:00:00Z")), now, 90).is_err(), "beyond the limit");
+        assert!(check_expiry(Some(at("2026-12-01T00:00:00Z")), now, 90).is_ok());
+    }
 }
