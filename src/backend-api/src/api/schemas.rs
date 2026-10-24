@@ -170,6 +170,8 @@ pub struct Tunnel {
     /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
     /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
     pub share_expires_at: Option<String>,
+    /// 只有列表帶：owner / ADMIN 看得到還在等的存取申請數；其他人 0。/ List only: pending access requests (owner / ADMIN; else 0).
+    pub access_requests: Option<i64>,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -422,6 +424,62 @@ pub struct ShareExpiryRequest {
     pub expires_at: Option<String>,
 }
 
+/// 存取申請：要哪些帳號、要不要更高權限、多久（15 分鐘到 7 天）、理由。
+/// An access request: accounts, an optional higher permission, how long (15 minutes to 7 days), and why.
+#[derive(ToSchema)]
+pub struct AccessRequestCreate {
+    pub account_ids: Vec<i64>,
+    #[schema(example = "edit")]
+    pub permission: Option<String>,
+    #[schema(example = 28800)]
+    pub duration_secs: i64,
+    pub reason: Option<String>,
+}
+
+/// 核准時可以改時長（省略 = 照申請的）。/ Approve with a different duration (omit = as requested).
+#[derive(ToSchema)]
+pub struct AccessRequestDecision {
+    pub duration_secs: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessRequestItem {
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub requester: UserRef,
+    pub accounts: Vec<UserRef>,
+    pub permission: Option<String>,
+    pub duration_secs: i64,
+    pub reason: String,
+    /// pending / approved / denied / cancelled
+    pub status: String,
+    pub created_at: String,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<String>,
+    /// 核准後暫時授權到什麼時候。/ When an approved grant ends.
+    pub ends_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct RequestableAccount {
+    pub id: i64,
+    pub username: String,
+    pub allowed: bool,
+    pub until: Option<String>,
+}
+
+/// owner / ADMIN：等待中與最近的申請；其他 sharee：自己的申請 + 可以要的帳號。
+/// Owner / ADMIN: pending and recent requests. Other sharees: their own + the accounts they could ask for.
+#[derive(ToSchema)]
+pub struct AccessRequestList {
+    pub can_decide: bool,
+    pub can_request: bool,
+    pub permission: String,
+    pub requests: Vec<AccessRequestItem>,
+    pub accounts: Option<Vec<RequestableAccount>>,
+    pub permission_until: Option<String>,
+}
+
 #[derive(ToSchema)]
 pub struct ServiceKey {
     pub id: i64,
@@ -557,6 +615,8 @@ pub struct PermissionUpdated {
 pub struct AllowedUsername {
     pub id: i64,
     pub username: String,
+    /// 存取申請給的暫時帳號：到什麼時候（UTC）；永久的是 null。/ Temporary (access request): when it ends; null = permanent.
+    pub until: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -566,6 +626,11 @@ pub struct SharedUser {
     pub email: String,
     pub permission_type: String,
     pub shared_at: String,
+    /// 分享到什麼時候（UTC）；null = 一直有效。/ When the share ends (UTC); null = never.
+    pub expires_at: Option<String>,
+    /// 存取申請暫時提升了權限：到什麼時候、之後回到哪個。/ A temporary raise: until when, and the permission after it.
+    pub permission_until: Option<String>,
+    pub base_permission: Option<String>,
     pub allowed_target_usernames: Vec<AllowedUsername>,
 }
 

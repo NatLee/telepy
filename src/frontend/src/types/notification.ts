@@ -32,6 +32,11 @@ export const NOTIFICATION_ACTIONS = {
     UPDATED_LAN_HOSTS: "UPDATED-LAN-HOSTS",
     // 一行指令加入裝置的進度（送給發指令的人）。/ One-command join progress (to the ticket owner).
     JOIN_UPDATED: "JOIN-UPDATED",
+    // 存取申請：新申請送給 owner / ADMIN；決定送給申請人；其他變動讓 owner / ADMIN 端刷新。
+    // Access requests: new ones go to the owner / ADMINs, decisions to the requester, other changes refresh deciders.
+    ACCESS_REQUEST_CREATED: "ACCESS-REQUEST-CREATED",
+    ACCESS_REQUEST_DECIDED: "ACCESS-REQUEST-DECIDED",
+    ACCESS_REQUEST_UPDATED: "ACCESS-REQUEST-UPDATED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];

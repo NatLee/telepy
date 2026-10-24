@@ -4,6 +4,7 @@ import { ServerScriptModal } from "@/components/tunnels/ServerScriptModal";
 import { ManageUsersModal } from "@/components/tunnels/ManageUsersModal";
 import { TunnelDetailsModal } from "@/components/tunnels/TunnelDetailsModal";
 import { ShareModal } from "@/components/tunnels/ShareModal";
+import { RequestAccessDialog } from "@/components/tunnels/AccessRequests";
 import { DeleteTunnelDialog } from "@/components/tunnels/DeleteTunnelDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tunnel } from "@/types/tunnel";
@@ -25,6 +26,7 @@ export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel }: 
         usersModal, setUsersModal,
         detailsModal, setDetailsModal,
         shareModal, setShareModal,
+        requestModal, setRequestModal,
         deleteConfirm, setDeleteConfirm,
         leaveConfirm, setLeaveConfirm
     } = modals;
@@ -59,6 +61,13 @@ export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel }: 
                 onClose={() => setShareModal({ isOpen: false, tunnelId: null })}
                 tunnelId={shareModal.tunnelId}
                 readOnly={shareModal.tunnelId ? !tunnels.find(t => t.id === shareModal.tunnelId)?.is_owner : false}
+            />
+
+            <RequestAccessDialog
+                isOpen={requestModal.isOpen}
+                onClose={() => setRequestModal({ ...requestModal, isOpen: false })}
+                tunnelId={requestModal.tunnelId}
+                tunnelName={tunnels.find((tn) => tn.id === requestModal.tunnelId)?.host_friendly_name}
             />
 
             {/* 關閉時保留 id / 名稱，關閉動畫期間內容不會消失；換一條隧道就重新掛載（選項與結果重來）。

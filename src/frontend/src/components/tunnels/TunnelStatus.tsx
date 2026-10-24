@@ -5,7 +5,7 @@
  * offline solid grey, never connected a dashed ring; owner / shared-with-you / share-count are small chips.
  */
 import React from "react";
-import { Clock, Crown, Share2, Users } from "lucide-react";
+import { Clock, Crown, Hourglass, Share2, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
@@ -81,7 +81,7 @@ export const HEALTH_TILE: Record<TunnelHealth, string> = {
 const chip = "inline-flex items-center gap-1 rounded-sm border px-1.5 py-px text-[0.75rem] whitespace-nowrap [&>svg]:size-3";
 
 /** 這條隧道和「我」的關係：我的 / 別人分享給我的，以及我分享給幾個人。/ How the tunnel relates to me. */
-export function TunnelAccessBadges({ tunnel, sharedCount }: { tunnel: Tunnel; sharedCount: number }) {
+export function TunnelAccessBadges({ tunnel, sharedCount, onRequests }: { tunnel: Tunnel; sharedCount: number; onRequests?: () => void }) {
     const { t } = useI18n();
     return (
         <span className="inline-flex flex-wrap items-center gap-1">
@@ -104,6 +104,12 @@ export function TunnelAccessBadges({ tunnel, sharedCount }: { tunnel: Tunnel; sh
                 >
                     <Clock className="text-muted-foreground" /> <ShareExpiryText expiresAt={tunnel.share_expires_at} />
                 </span>
+            )}
+            {/* owner / ADMIN：有存取申請在等，點了打開分享視窗。/ Pending access requests open the share dialog. */}
+            {!!tunnel.access_requests && onRequests && (
+                <button type="button" onClick={onRequests} className={cn(chip, "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15")} title={t("share.request.chipHint")}>
+                    <Hourglass /> {t("share.request.chip", { count: tunnel.access_requests })}
+                </button>
             )}
             {tunnel.is_owner && sharedCount > 0 && (
                 <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("tunnels.sharedWithCount", { count: sharedCount })}>

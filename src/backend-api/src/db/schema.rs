@@ -288,6 +288,25 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("user_id", "tunnel_id")
         )"#,
     ),
+    // Rust 自有：存取申請——被分享的人要求某些帳號或更高權限一段時間，由 owner / ADMIN 核准。
+    // Access requests: a sharee asks for accounts or a higher permission for a while; the owner / an ADMIN decides.
+    (
+        "telepy_access_request",
+        r#"CREATE TABLE "telepy_access_request" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "requester_id" integer NOT NULL,
+            "username_ids" text NOT NULL,
+            "permission" varchar(10) NULL,
+            "duration_secs" integer NOT NULL,
+            "reason" text NOT NULL,
+            "status" varchar(16) NOT NULL,
+            "created_at" datetime NOT NULL,
+            "decided_by_id" integer NULL,
+            "decided_at" datetime NULL,
+            "ends_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：隧道標籤（所有看得到隧道的人共用）。/ Tunnel labels, shared by everyone who sees the tunnel.
     (
         "telepy_tunnel_label",
@@ -428,6 +447,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "authorized_keys_reverseserverusernames_reverse_server_id_567b60c7" ON "authorized_keys_reverseserverusernames" ("reverse_server_id")"#,
@@ -461,6 +481,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
     // 限時分享：到期時間（NULL = 一直有效）。/ Timed sharing: when the share ends (NULL = never).
     ("tunnels_tunnelsharing", "expires_at", "datetime NULL"),
+    // 核准的存取申請：暫時的帳號（到期就移除）與暫時提升的權限（到期回到 base_permission）。
+    // Approved access requests: temporary accounts (removed at expiry) and a temporary permission (back to base_permission).
+    ("tunnels_tunnelsharingallowedusername", "expires_at", "datetime NULL"),
+    ("tunnels_tunnelsharing", "base_permission", "varchar(10) NULL"),
+    ("tunnels_tunnelsharing", "permission_until", "datetime NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),

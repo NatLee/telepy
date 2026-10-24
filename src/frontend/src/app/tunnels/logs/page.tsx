@@ -41,6 +41,7 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     expired_key: { key: "logs.event.expired_key", variant: "destructive" },
     desktop_open: { key: "logs.event.desktop_open", variant: "default" },
     desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
+    access_request: { key: "logs.event.access_request", variant: "outline" },
     host_key_pinned: { key: "logs.event.host_key_pinned", variant: "outline" },
     host_key_mismatch: { key: "logs.event.host_key_mismatch", variant: "destructive" },
     host_key_accepted: { key: "logs.event.host_key_accepted", variant: "warning" },

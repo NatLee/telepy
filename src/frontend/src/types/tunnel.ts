@@ -29,6 +29,8 @@ export interface Tunnel {
     labels?: string[];
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
+    /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
+    access_requests?: number;
     /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */
     host_key_changed?: boolean;
 }
@@ -117,6 +119,8 @@ export interface TunnelActionHandlers {
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
     onDelete: (tunnelId: number, name: string) => void;
+    /** 被分享的人申請更多存取。/ A sharee asks for more access. */
+    onRequestAccess?: (tunnelId: number) => void;
     /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
     onTogglePin?: (tunnelId: number, pinned: boolean) => void;
     /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */

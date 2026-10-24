@@ -20,6 +20,7 @@ import {
     FileCode2,
     Info,
     KeyRound,
+    LockKeyholeOpen,
     LogOut,
     Rocket,
     ScreenShare,
@@ -90,6 +91,7 @@ export function TunnelActions({
     onShare,
     onLeave,
     onDelete,
+    onRequestAccess,
 }: TunnelActionsProps) {
     const { t } = useI18n();
 
@@ -170,6 +172,15 @@ export function TunnelActions({
                         hint={t("tunnelActions.targetServerUsersHint")}
                         onSelect={() => onUsers(tunnel.id, !tunnel.can_share)}
                     />
+                    {/* 被分享的人（ADMIN 以下）：申請帳號 / 更高權限一段時間。/ Sharees below ADMIN: ask for more for a while. */}
+                    {!tunnel.is_owner && !tunnel.can_share && onRequestAccess && (
+                        <ActionItem
+                            icon={LockKeyholeOpen}
+                            label={t("share.request.menu")}
+                            hint={t("share.request.menuHint")}
+                            onSelect={() => onRequestAccess(tunnel.id)}
+                        />
+                    )}
                     {tunnel.can_share && (
                         <ActionItem
                             icon={Share2}

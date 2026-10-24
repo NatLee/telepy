@@ -76,7 +76,7 @@ pub async fn effective_for(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx::Resu
         return Ok(Some(Effective::Owner));
     }
     let sharing = db::sharing::get(db, tunnel.id, user_id).await?;
-    Ok(effective(user_id, tunnel.user_id, sharing.as_ref().map(|s| s.permission_type.as_str())))
+    Ok(effective(user_id, tunnel.user_id, sharing.as_ref().map(|s| s.permission())))
 }
 
 /// `TunnelPermissionManager.check_access`

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ReverseServerUsername } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 import { ShareExpiryControl } from "@/components/tunnels/ShareExpiry";
+import { TemporaryGrantText } from "@/components/tunnels/AccessRequests";
 
 export interface SharedUserRow {
     id: number;
@@ -16,7 +17,10 @@ export interface SharedUserRow {
     permission_type?: string;
     can_admin_tunnel?: boolean;
     can_edit_tunnel?: boolean;
-    allowed_target_usernames?: { id: number }[];
+    allowed_target_usernames?: { id: number; username?: string; until?: string | null }[];
+    /** 存取申請暫時提升了權限：到什麼時候、之後回到哪個。/ A temporary raise: until when, and what comes after. */
+    permission_until?: string | null;
+    base_permission?: string | null;
     /** 分享到期時間（UTC ISO）；null = 一直有效。/ When the share ends (UTC ISO); null = never. */
     expires_at?: string | null;
 }
@@ -77,6 +81,11 @@ export function ShareModalSharedList({
                                         expiresAt={sharedUser.expires_at}
                                         editable={!readOnly}
                                         onChange={(value) => onUpdateExpiry(sharedUser.id, value)}
+                                    />
+                                    <TemporaryGrantText
+                                        accounts={(sharedUser.allowed_target_usernames ?? []).map((a) => ({ username: a.username ?? `#${a.id}`, until: a.until }))}
+                                        permission={sharedUser.permission_type}
+                                        permissionUntil={sharedUser.permission_until}
                                     />
                                 </span>
                             </div>

@@ -50,6 +50,7 @@ export default function TunnelsPage() {
             usersModal, setUsersModal,
             detailsModal, setDetailsModal,
             shareModal, setShareModal,
+            requestModal, setRequestModal,
             deleteConfirm, setDeleteConfirm,
             leaveConfirm, setLeaveConfirm
         }
@@ -101,6 +102,7 @@ export default function TunnelsPage() {
         onDesktop: (tunnelId) => router.push(`/tunnels/desktop?tunnel=${tunnelId}`),
         onUsers: (tunnelId, readOnly) => setUsersModal({ isOpen: true, tunnelId, readOnly }),
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),
+        onRequestAccess: (tunnelId) => setRequestModal({ isOpen: true, tunnelId }),
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),
@@ -247,6 +249,7 @@ export default function TunnelsPage() {
                     usersModal, setUsersModal,
                     detailsModal, setDetailsModal,
                     shareModal, setShareModal,
+                    requestModal, setRequestModal,
                     deleteConfirm, setDeleteConfirm,
                     leaveConfirm, setLeaveConfirm
                 }}
