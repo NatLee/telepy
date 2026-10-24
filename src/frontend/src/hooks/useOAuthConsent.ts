@@ -1,8 +1,11 @@
 /**
  * OAuth 同意頁邏輯：URL 上是 MCP 客戶端送來的授權請求；用網頁登入（Bearer JWT）向後端取顯示資料，
- * 使用者核可／拒絕後把瀏覽器導到後端回的 redirect_to。
- * Consent-page logic: the authorization request is in the URL; fetch what to show with the web login,
- * then send the browser to the backend's redirect_to after approve / deny.
+ * 使用者核可／拒絕後把瀏覽器導到後端回的 redirect_to，並留在「已允許 / 已拒絕」的結果畫面（自訂 scheme 的 app
+ * 不會換頁，舊版會跳回表單讓人以為沒成功）。沒登入 → /oauth/login；「不是你？」登出後回到同一個請求；
+ * 管理員要求兩步驟而帳號還沒設好 → 先設定再繼續。
+ * Consent-page logic: fetch what to show with the web login, send the browser to the backend's redirect_to
+ * after approve / deny and stay on a result view (custom-scheme apps do not navigate away). Signed out →
+ * /oauth/login; "Not you?" signs out and returns to the same request; required two-step setup comes first.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -11,6 +14,8 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useReauth } from "@/hooks/useReauth";
 import { mfaErrorMessage, needsReauth, type MfaMethod, type MfaProof } from "@/lib/mfa";
+import { loginPathFor, matchesTunnel } from "@/lib/oauthFlow";
+import type { RequiredFactor } from "@/types/auth";
 
 export interface ConsentScope {
     name: string;
@@ -32,6 +37,14 @@ export interface ConsentInfo {
     user: { id: number; username: string };
     /** 帳號有兩步驟驗證 → 核可前要再驗證。/ Accounts with 2FA confirm the approval. */
     reauth?: { required: boolean; methods: MfaMethod[] };
+    /** 這個帳號先前連接過同一個 app（仍有效的連線）。/ Earlier, still active connections of this same app. */
+    existing?: { id: number; scopes: string[]; created_at: string; last_used_at: string | null }[];
+}
+
+/** 送出決定之後：導回 app 的網址，畫面停在結果。/ After a decision: where the app is, and the result view. */
+export interface ConsentDecision {
+    approved: boolean;
+    to: string;
 }
 
 export interface ConsentError {
@@ -47,7 +60,7 @@ export function useOAuthConsent() {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
-    const { isAuthenticated, isLoading: authLoading } = useAuth();
+    const { isAuthenticated, isLoading: authLoading, user, logout, fetchUserProfile } = useAuth();
     const { t } = useI18n();
     const reauth = useReauth();
 
@@ -58,8 +71,16 @@ export function useOAuthConsent() {
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [selectedScopes, setSelectedScopes] = useState<string[]>([]);
-    /** null = 全部隧道。/ null = every tunnel. */
-    const [tunnelIds, setTunnelIds] = useState<number[] | null>(null);
+    /** all = 全部隧道（含之後才有的）；some = 只限勾選的。/ all = every tunnel, later ones too; some = only the ticked ones. */
+    const [tunnelMode, setTunnelMode] = useState<"all" | "some">("all");
+    const [tunnelIds, setTunnelIds] = useState<number[]>([]);
+    const [tunnelQuery, setTunnelQuery] = useState("");
+    /** 重新連接同一個 app 時取代舊連線（預設勾）。/ Replace the earlier connection when reconnecting (on by default). */
+    const [replace, setReplace] = useState(true);
+    const [decision, setDecision] = useState<ConsentDecision | null>(null);
+    /** 管理員要求兩步驟、帳號還沒設好（後端 403 mfa_enrollment_required）。/ Required two-step setup is missing. */
+    const [enrollMissing, setEnrollMissing] = useState<RequiredFactor[] | null>(null);
+    const [reloadKey, setReloadKey] = useState(0);
 
     const request = useMemo(() => {
         const out: Record<string, string> = {};
@@ -71,12 +92,14 @@ export function useOAuthConsent() {
     }, [searchParams]);
     const query = useMemo(() => new URLSearchParams(request).toString(), [request]);
 
-    // 沒登入 → 去登入頁，登入後回到這個 URL。/ Not logged in → login, then come back here.
+    const here = `${pathname}?${query}`;
+
+    // 沒登入 → OAuth 登入頁（不是一般登入頁），登入後回到這個 URL。/ Signed out → the OAuth sign-in, then back here.
     useEffect(() => {
         if (!authLoading && !isAuthenticated) {
-            router.replace(`/login?next=${encodeURIComponent(`${pathname}?${query}`)}`);
+            router.replace(loginPathFor(here));
         }
-    }, [authLoading, isAuthenticated, router, pathname, query]);
+    }, [authLoading, isAuthenticated, router, here]);
 
     useEffect(() => {
         if (authLoading || !isAuthenticated) return;
@@ -85,12 +108,15 @@ export function useOAuthConsent() {
             setLoading(true);
             try {
                 const res = await apiFetch(`/api/oauth/authorize?${query}`);
-                const data = await readJson<ConsentInfo & ConsentError>(res);
+                const data = await readJson<ConsentInfo & ConsentError & { code?: string; missing?: RequiredFactor[] }>(res);
                 if (cancelled) return;
                 if (res.ok && data && "client" in data) {
                     setInfo(data);
                     setSelectedScopes(data.scopes.map((s) => s.name));
+                    setEnrollMissing(null);
                     setError(null);
+                } else if (res.status === 403 && data?.code === "mfa_enrollment_required") {
+                    setEnrollMissing(data.missing ?? []);
                 } else {
                     setError({ error: data?.error ?? "invalid_request", error_description: data?.error_description ?? t("oauth.loadFailed"), redirect_to: data?.redirect_to });
                 }
@@ -103,25 +129,42 @@ export function useOAuthConsent() {
         return () => {
             cancelled = true;
         };
-    }, [authLoading, isAuthenticated, query, t]);
+    }, [authLoading, isAuthenticated, query, t, reloadKey]);
 
     const toggleScope = useCallback((name: string) => {
         setSelectedScopes((prev) => (prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name]));
     }, []);
 
-    const toggleTunnel = useCallback(
-        (id: number) => {
-            setTunnelIds((prev) => {
-                const all = info?.tunnels.map((x) => x.id) ?? [];
-                // 從「全部」第一次點 = 只取消這一條。/ First click from "all" deselects just that tunnel.
-                const base = prev ?? all;
-                return base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
-            });
+    const toggleTunnel = useCallback((id: number) => {
+        setTunnelIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    }, []);
+
+    const allTunnels = useMemo(() => info?.tunnels ?? [], [info]);
+    const shownTunnels = useMemo(() => allTunnels.filter((x) => matchesTunnel(x.name, tunnelQuery)), [allTunnels, tunnelQuery]);
+
+    /** 勾 / 取消目前搜尋結果裡的全部。/ Tick or untick every tunnel the search shows. */
+    const setShownTunnels = useCallback(
+        (on: boolean) => {
+            const ids = shownTunnels.map((x) => x.id);
+            setTunnelIds((prev) => (on ? [...new Set([...prev, ...ids])] : prev.filter((id) => !ids.includes(id))));
         },
-        [info]
+        [shownTunnels]
     );
 
-    const selectAllTunnels = useCallback(() => setTunnelIds(null), []);
+    const leave = useCallback((d: ConsentDecision) => {
+        setDecision(d);
+        window.location.assign(d.to);
+    }, []);
+
+    /** 「不是你？」：登出後回到同一個請求（OAuth 登入頁）。/ "Not you?": sign out and come back to this request. */
+    const switchAccount = useCallback(() => logout(here), [logout, here]);
+
+    /** 兩步驟設定完成：更新 profile 再重抓同意頁資料。/ Two-step setup done: refresh the profile and reload. */
+    const enrollmentDone = useCallback(() => {
+        setEnrollMissing(null);
+        void fetchUserProfile();
+        setReloadKey((k) => k + 1);
+    }, [fetchUserProfile]);
 
     const decide = useCallback(
         async (approve: boolean) => {
@@ -131,7 +174,8 @@ export function useOAuthConsent() {
                 const body: Record<string, unknown> = { ...request, approve };
                 if (approve) {
                     body.scopes = selectedScopes;
-                    body.tunnel_ids = tunnelIds;
+                    body.tunnel_ids = tunnelMode === "all" ? null : tunnelIds;
+                    if (info?.existing?.length) body.replace = replace;
                     // 核可 = 讓 AI 拿到 SSH 權限：有兩步驟驗證的帳號先再驗證。/ Step up before granting SSH access.
                     if (info?.reauth?.required) {
                         const proof: MfaProof | null = await reauth.request(info.reauth.methods);
@@ -151,7 +195,7 @@ export function useOAuthConsent() {
                     data = await readJson<{ redirect_to?: string; code?: string } & ConsentError>(res);
                 }
                 if (res.ok && data?.redirect_to) {
-                    window.location.assign(data.redirect_to);
+                    leave({ approved: approve, to: data.redirect_to });
                     return;
                 }
                 if (data?.code) {
@@ -165,16 +209,45 @@ export function useOAuthConsent() {
                 setSubmitting(false);
             }
         },
-        [request, selectedScopes, tunnelIds, t, info, reauth]
+        [request, selectedScopes, tunnelMode, tunnelIds, replace, t, info, reauth, leave]
     );
 
-    const allTunnelIds = info?.tunnels.map((x) => x.id) ?? [];
-    const effectiveTunnelIds = tunnelIds ?? allTunnelIds;
-    const canApprove = !!info && selectedScopes.length > 0 && (tunnelIds === null || tunnelIds.length > 0) && !submitting;
+    const canApprove = !!info && selectedScopes.length > 0 && (tunnelMode === "all" || tunnelIds.length > 0) && !submitting && !decision;
+    // profile 比同意頁資料先知道還缺什麼（設定途中會更新）。/ The profile tracks what is still missing during setup.
+    const missing = enrollMissing === null ? null : (user?.mfa_missing ?? enrollMissing);
 
     return {
-        state: { info, error, loading: loading || authLoading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove, request, stepUpError },
+        state: {
+            info,
+            error,
+            loading: loading || authLoading,
+            submitting,
+            selectedScopes,
+            tunnelMode,
+            tunnelIds,
+            tunnelQuery,
+            allTunnels,
+            shownTunnels,
+            replace,
+            decision,
+            enrollMissing: missing,
+            canApprove,
+            request,
+            stepUpError,
+        },
         reauthDialog: reauth.dialog,
-        actions: { toggleScope, toggleTunnel, selectAllTunnels, approve: () => decide(true), deny: () => decide(false) },
+        actions: {
+            toggleScope,
+            toggleTunnel,
+            setTunnelMode,
+            setTunnelQuery,
+            setShownTunnels,
+            setReplace,
+            switchAccount,
+            enrollmentDone,
+            reopen: () => decision && window.location.assign(decision.to),
+            approve: () => decide(true),
+            deny: () => decide(false),
+        },
     };
 }

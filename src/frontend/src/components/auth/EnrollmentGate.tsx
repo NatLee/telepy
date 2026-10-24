@@ -43,7 +43,7 @@ export function EnrollmentGate({ missing, onDone }: { missing: RequiredFactor[];
                     <div className="hidden w-[8.5rem] sm:block">
                         <LanguageSwitcher />
                     </div>
-                    <Button variant="outline" size="sm" onClick={logout}>
+                    <Button variant="outline" size="sm" onClick={() => logout()}>
                         <LogOut size={15} aria-hidden />
                         {t("nav.logout")}
                     </Button>

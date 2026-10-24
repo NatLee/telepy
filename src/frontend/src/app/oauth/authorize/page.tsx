@@ -1,162 +1,120 @@
 "use client";
 
 /**
- * OAuth 2.1 同意頁（authorization_endpoint）：MCP / AI 客戶端把使用者導來這裡；顯示是哪個應用程式、
- * 要導回哪裡（redirect host，因為動態註冊是開放的，名稱可被冒用）、要哪些權限、可用哪些隧道，
- * 核可後導回客戶端。沒登入會先去登入頁再回來。
- * OAuth 2.1 consent page: shows the app, its redirect host (names are attacker-controlled under open
- * registration), the requested permissions and the tunnels it may use; approving sends the browser back.
+ * OAuth 2.1 同意頁（authorization_endpoint）：MCP 應用程式把使用者導來這裡。跟 OAuth 登入頁（/oauth/login）同一個
+ * 外框與流程面板（登入 → 決定 → 回到 app），看起來跟一般登入頁不同。顯示是哪個應用程式、要導回哪裡（redirect host，
+ * 因為動態註冊是開放的，名稱可被冒用）、目前登入的帳號（不是你？換帳號）、先前的連線、要哪些權限、可用哪些隧道；
+ * 決定後導回客戶端並停在結果畫面。
+ * OAuth 2.1 consent page. Same frame and flow panel as the OAuth sign-in (sign in → decide → back to the app),
+ * unlike the normal sign-in. Shows the app and its redirect host (names are attacker-controlled under open
+ * registration), the signed-in account with "Not you?", earlier connections, permissions and tunnels; after the
+ * decision the browser goes back to the client and the page stays on a result view.
  */
 import React, { Suspense } from "react";
-import { Bot, Check, ExternalLink, Server, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Check, ShieldCheck } from "lucide-react";
+import { AuthShell } from "@/components/auth/AuthShell";
+import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
+import { AppTile, ConnectAppAside, ConnectProgress, OAuthProblem, ReturnsTo, type ConnectStep } from "@/components/oauth/ConnectFlow";
+import { AccountRow, ConsentSkeleton, DecisionView, ExistingConnection, ScopeChoices, TunnelChoice } from "@/components/oauth/ConsentSections";
 import { Button } from "@/components/ui/button";
-import { useI18n } from "@/lib/i18n";
-import type { TranslationKey } from "@/locales/en";
 import { useOAuthConsent } from "@/hooks/useOAuthConsent";
-
-// scope 名稱固定（後端 SCOPES），標籤走字典。/ Scope names are fixed by the backend; labels are translated.
-const SCOPE_LABELS: Record<string, { label: TranslationKey; description: TranslationKey }> = {
-    "tunnels:read": { label: "oauth.scope.tunnelsRead", description: "oauth.scope.tunnelsReadDescription" },
-    "ssh:exec": { label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription" },
-    "ssh:files": { label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription" },
-    "network:scan": { label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription" },
-};
+import { useI18n } from "@/lib/i18n";
 
 function ConsentInner() {
-    const { t, tn } = useI18n();
+    const { t } = useI18n();
     const { state, actions, reauthDialog } = useOAuthConsent();
-    const { info, error, loading, submitting, selectedScopes, tunnelIds, effectiveTunnelIds, canApprove, stepUpError } = state;
+    const { info, error, loading, submitting, selectedScopes, tunnelMode, tunnelIds, tunnelQuery, allTunnels, shownTunnels, replace, decision, enrollMissing, canApprove, stepUpError } = state;
 
-    const shell = (children: React.ReactNode) => (
-        <div className="min-h-screen flex items-center justify-center bg-background p-4">
-            <div className="w-full max-w-lg bg-card text-card-foreground rounded-xl shadow-dialog p-8 border border-border animate-fade-in-up">
-                <div className="text-center mb-6">
-                    <div className="inline-flex items-center justify-center size-12 rounded-lg border border-border bg-surface text-muted-foreground mb-3">
-                        <Bot size={24} />
-                    </div>
-                    <h1 className="text-2xl font-bold tracking-tight">{t("oauth.title")}</h1>
-                </div>
-                {children}
-            </div>
-        </div>
+    // 管理員要求兩步驟而帳號還沒設好：先設定，完成後回到這個請求。/ Required two-step setup first, then back here.
+    if (enrollMissing) return <EnrollmentGate missing={enrollMissing} onDone={actions.enrollmentDone} />;
+
+    const appName = info?.client.client_name ?? "";
+    const step: ConnectStep = decision ? 2 : 1;
+    const frame = (children: React.ReactNode) => (
+        <AuthShell wide aside={<ConnectAppAside step={step} appName={appName || null} />}>
+            <ConnectProgress step={step} />
+            {children}
+        </AuthShell>
     );
 
-    if (loading) {
-        return shell(
-            <div className="flex flex-col items-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4" />
-                <p className="text-muted-foreground text-sm">{t("oauth.loading")}</p>
-            </div>
-        );
-    }
+    if (loading) return frame(<ConsentSkeleton />);
 
     if (error || !info) {
-        return shell(
-            <div className="space-y-4">
-                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 flex items-start gap-3">
-                    <ShieldAlert size={20} className="text-destructive mt-0.5 shrink-0" />
-                    <div className="text-sm">
-                        <p className="font-semibold text-destructive">{t("oauth.errorTitle")}</p>
-                        <p className="text-muted-foreground mt-1 break-words">{error?.error_description ?? t("oauth.loadFailed")}</p>
-                        {error?.error && <p className="text-xs text-muted-foreground mt-1 font-mono">{error.error}</p>}
-                    </div>
-                </div>
-                {error?.redirect_to ? (
-                    <Button className="w-full" onClick={() => window.location.assign(error.redirect_to!)}>
-                        <ExternalLink size={16} className="mr-2" /> {t("oauth.returnToApp")}
-                    </Button>
-                ) : (
-                    <p className="text-xs text-center text-muted-foreground">{t("oauth.noReturn")}</p>
-                )}
-            </div>
-        );
+        return frame(<OAuthProblem description={error?.error_description ?? t("oauth.loadFailed")} code={error?.error} redirectTo={error?.redirect_to} />);
     }
 
-    return shell(
-        <div className="space-y-6">
-            <p className="text-sm text-center text-muted-foreground">
-                {tn("oauth.intro", { app: <strong className="text-foreground">{info.client.client_name}</strong>, user: <strong className="text-foreground">{info.user.username}</strong> })}
-            </p>
+    if (decision) return frame(<DecisionView approved={decision.approved} app={appName} onReopen={actions.reopen} />);
 
-            {/* 導回目標（防冒名）/ Redirect target, shown prominently */}
-            <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
-                <p className="text-xs text-muted-foreground">{t("oauth.redirectHostLabel")}</p>
-                <p className="font-mono font-semibold break-all">{info.redirect_host}</p>
-                <p className="text-xs text-muted-foreground mt-1">{t("oauth.redirectHostHint")}</p>
+    const tunnelSummary = tunnelMode === "all" ? t("oauth.summaryAllTunnels") : t("oauth.summarySomeTunnels", { count: tunnelIds.length });
+
+    return frame(
+        <div>
+            {/* 誰在要求、會導回哪裡（防冒名）。/ Who is asking and where it returns (anti-impersonation). */}
+            <header className="flex items-start gap-3">
+                <AppTile />
+                <div className="min-w-0">
+                    <h1 className="text-2xl font-semibold tracking-tight break-words text-foreground">{appName}</h1>
+                    <p className="mt-0.5 text-sm text-muted-foreground">{t("oauth.wantsAccess")}</p>
+                </div>
+            </header>
+            <div className="mt-3 space-y-1">
+                <ReturnsTo host={info.redirect_host} />
+                <p className="text-xs leading-relaxed text-muted-foreground">{t("oauth.redirectHostHint")}</p>
             </div>
 
-            {/* 權限 / Permissions */}
-            <section>
-                <h2 className="text-sm font-semibold flex items-center gap-2 mb-2">
-                    <ShieldCheck size={15} className="text-primary" /> {t("oauth.permissions")}
-                </h2>
-                <ul className="space-y-2">
-                    {info.scopes.map((s) => {
-                        const labels = SCOPE_LABELS[s.name];
-                        const checked = selectedScopes.includes(s.name);
-                        return (
-                            <li key={s.name}>
-                                <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${checked ? "border-primary bg-primary/5" : "border-border"}`}>
-                                    <input type="checkbox" className="mt-1 accent-primary" checked={checked} onChange={() => actions.toggleScope(s.name)} />
-                                    <span className="text-sm">
-                                        <span className="font-medium">{labels ? t(labels.label) : s.name}</span>
-                                        <span className="block text-xs text-muted-foreground">{labels ? t(labels.description) : s.description}</span>
-                                    </span>
-                                </label>
-                            </li>
-                        );
-                    })}
-                </ul>
-                {selectedScopes.length === 0 && <p className="text-xs text-destructive mt-2">{t("oauth.needOneScope")}</p>}
-            </section>
+            <div className="mt-6">
+                <AccountRow username={info.user.username} onSwitch={actions.switchAccount} disabled={submitting} />
+            </div>
 
-            {/* 隧道 / Tunnels */}
-            <section>
-                <div className="flex items-center justify-between mb-2">
-                    <h2 className="text-sm font-semibold flex items-center gap-2">
-                        <Server size={15} className="text-primary" /> {t("oauth.tunnels")}
-                    </h2>
-                    {tunnelIds !== null && (
-                        <button type="button" className="text-xs text-primary hover:underline" onClick={actions.selectAllTunnels}>
-                            {t("oauth.allTunnels")}
-                        </button>
-                    )}
+            {info.existing && info.existing.length > 0 && (
+                <div className="mt-4">
+                    <ExistingConnection app={appName} existing={info.existing} replace={replace} onReplace={actions.setReplace} />
                 </div>
-                {info.tunnels.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{t("oauth.noTunnels")}</p>
-                ) : (
-                    <>
-                        <p className="text-xs text-muted-foreground mb-2">{tunnelIds === null ? t("oauth.tunnelsAllHint") : t("oauth.tunnelsSomeHint", { count: effectiveTunnelIds.length })}</p>
-                        <ul className="max-h-44 overflow-auto rounded-lg border border-border divide-y divide-border">
-                            {info.tunnels.map((tun) => {
-                                const checked = effectiveTunnelIds.includes(tun.id);
-                                return (
-                                    <li key={tun.id}>
-                                        <label className="flex items-center gap-3 px-3 py-2 text-sm cursor-pointer hover:bg-muted/40">
-                                            <input type="checkbox" className="accent-primary" checked={checked} onChange={() => actions.toggleTunnel(tun.id)} />
-                                            <span className="flex-1 truncate">{tun.name}</span>
-                                            {tun.permission && <span className="text-xs text-muted-foreground">{tun.permission}</span>}
-                                        </label>
-                                    </li>
-                                );
-                            })}
-                        </ul>
-                    </>
+            )}
+
+            <div className="mt-8 space-y-8">
+                <ScopeChoices scopes={info.scopes} selected={selectedScopes} onToggle={actions.toggleScope} />
+                <TunnelChoice
+                    all={allTunnels}
+                    shown={shownTunnels}
+                    mode={tunnelMode}
+                    selected={tunnelIds}
+                    query={tunnelQuery}
+                    onMode={actions.setTunnelMode}
+                    onToggle={actions.toggleTunnel}
+                    onQuery={actions.setTunnelQuery}
+                    onShown={actions.setShownTunnels}
+                />
+            </div>
+
+            <div className="mt-8 space-y-2 text-xs leading-relaxed text-muted-foreground">
+                <p>{t("oauth.sessionNote")}</p>
+                {info.reauth?.required && (
+                    <p className="flex items-start gap-1.5">
+                        <ShieldCheck size={14} className="mt-px shrink-0" aria-hidden />
+                        {t("oauth.reauthHint")}
+                    </p>
                 )}
-                {tunnelIds !== null && tunnelIds.length === 0 && <p className="text-xs text-destructive mt-2">{t("oauth.needOneTunnel")}</p>}
-            </section>
+            </div>
 
-            <p className="text-xs text-muted-foreground">{t("oauth.sessionNote")}</p>
-            {info.reauth?.required && <p className="text-xs text-muted-foreground">{t("oauth.reauthHint")}</p>}
-            {stepUpError && <p className="text-sm text-destructive">{stepUpError}</p>}
-
-            <div className="flex gap-3">
-                <Button variant="outline" className="flex-1" disabled={submitting} onClick={actions.deny}>
-                    {t("oauth.deny")}
-                </Button>
-                <Button className="flex-1 font-bold" disabled={!canApprove} onClick={actions.approve}>
-                    {submitting ? <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : (<><Check size={16} className="mr-2" /> {t("oauth.approve")}</>)}
-                </Button>
+            {/* 決定列黏在視窗底部：清單再長，按鈕與摘要都看得到。/ The decision bar sticks to the bottom of the viewport. */}
+            <div className="sticky bottom-0 z-10 mt-6 border-t border-border bg-background pt-3 pb-4">
+                {stepUpError && <p className="mb-2 text-sm text-destructive">{stepUpError}</p>}
+                <p className="mb-2 text-xs text-muted-foreground">{t("oauth.summary", { scopes: selectedScopes.length, total: info.scopes.length, tunnels: tunnelSummary })}</p>
+                <div className="flex gap-3">
+                    <Button variant="outline" className="h-11 flex-1" disabled={submitting} onClick={actions.deny}>
+                        {t("oauth.deny")}
+                    </Button>
+                    <Button className="h-11 flex-[2] font-semibold" disabled={!canApprove} onClick={actions.approve}>
+                        {submitting ? (
+                            <span className="size-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" aria-hidden />
+                        ) : (
+                            <>
+                                <Check size={16} aria-hidden /> {t("oauth.approve")}
+                            </>
+                        )}
+                    </Button>
+                </div>
             </div>
             {reauthDialog}
         </div>

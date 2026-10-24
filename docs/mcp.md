@@ -29,8 +29,10 @@ MCP client ── POST /mcp ─────────────────�
            ── GET /.well-known/oauth-protected-resource/mcp   （RFC 9728：authorization_servers）
            ── GET /.well-known/oauth-authorization-server     （RFC 8414：endpoints、S256）
            ── POST /api/oauth/register                        （RFC 7591 動態註冊，公開）
-           ── 開瀏覽器 → /oauth/authorize（前端同意頁）
-                 使用者用網頁登入狀態核可：確認 app 名稱與導回位址、勾選權限、限制可用隧道
+           ── 開瀏覽器 → /oauth/authorize（前端同意頁；沒登入先到 /oauth/login，畫面與一般登入頁不同，
+                 登入前就用公開的 GET /api/oauth/authorize/preview 顯示 app、導回位址與權限，可直接取消）
+                 使用者用網頁登入狀態核可：確認 app 名稱與導回位址、目前帳號（不是你？換帳號）、勾選權限、限制可用隧道；
+                 同一個 app 先前的連線可勾「取代」，客戶端換到新 token 時舊的就撤銷
                  前端 POST /api/oauth/authorize → {redirect_to: <redirect_uri>?code=…&state=…&iss=…}
            ── POST /api/oauth/token  (authorization_code + PKCE S256) → access token（1 小時）+ refresh token（30 天、每次換發都輪替）
            ── POST /mcp  Authorization: Bearer <access token>

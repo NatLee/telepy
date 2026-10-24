@@ -31,6 +31,8 @@ pub struct OAuthCode {
     pub scope: String,
     pub tunnel_ids: Option<Vec<i64>>,
     pub resource: String,
+    /// 兌換成功後要撤銷的舊 grant（同意頁的「取代先前的連線」）。/ Earlier grants to revoke once redeemed.
+    pub replaces: Vec<i64>,
 }
 
 pub struct TokenStores {
