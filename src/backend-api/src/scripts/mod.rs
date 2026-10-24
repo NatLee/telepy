@@ -52,6 +52,35 @@ pub struct ScriptContext<'a> {
     /// gateway 的 host key（`type base64`）：有的話腳本把它釘住，裝置就只會連到真的 Telepy；沒有就退回不驗證（舊行為）。
     /// The gateway's host keys; when known the scripts pin them, otherwise they fall back to not checking (the old behaviour).
     pub gateway_host_keys: &'a [String],
+    /// SSH over WebSocket：裝置只能出網頁 port 時，ssh 經 `telepy-ws.py` 把連線包進 `/ws/gateway/`。
+    /// SSH over WebSocket for devices that can only reach the web port.
+    pub ws: Option<WsCarrier<'a>>,
+}
+
+/// SSH over WebSocket 需要的兩個位址。/ What the WebSocket carrier needs.
+#[derive(Debug, Clone, Copy)]
+pub struct WsCarrier<'a> {
+    /// `wss://host/ws/gateway/`
+    pub url: &'a str,
+    /// `https://host/api/join/telepy-ws.py`
+    pub client_url: &'a str,
+}
+
+/// 筆電 / 使用者層級腳本存放小程式的路徑。/ Where the carrier lives for user-level scripts and laptops.
+pub const WS_CLIENT_PATH: &str = "~/.ssh/telepy-ws.py";
+
+/// 使用者層級的 bash 腳本：下載小程式、組 ProxyCommand。回 (setup 區塊, ssh 選項)。
+/// User-level bash scripts: fetch the carrier, build the ProxyCommand. Returns (setup, option).
+fn bash_ws(ws: Option<WsCarrier>, dir: &str, python: &str) -> (String, String) {
+    let Some(ws) = ws else { return (String::new(), String::new()) };
+    let setup = format!(
+        "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
+         command -v {python} >/dev/null 2>&1 || {{ echo '{python} is required to carry the tunnel over the web port.'; exit 1; }}\n\
+         WS_CLIENT=\"{dir}/telepy-ws.py\"\n\
+         curl -fsSL '{}' -o \"$WS_CLIENT\" && chmod 700 \"$WS_CLIENT\" || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n",
+        ws.client_url
+    );
+    (setup, format!("-o \"ProxyCommand={python} $WS_CLIENT {}\" \\\n", ws.url))
 }
 
 /// known_hosts 裡的別名（與一鍵加入相同）。/ The known_hosts alias (the same one the join script uses).
@@ -115,11 +144,34 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             let (setup, options) = bash_pinning(ctx);
             m.insert("known_hosts_setup", setup);
             m.insert("host_key_options", options);
+            let (ws_setup, proxy) = bash_ws(ctx.ws, "$HOME/.ssh", "python3");
+            m.insert("ws_client_setup", ws_setup);
+            m.insert("proxy_option", proxy);
             let tpl = if tunnel_type.eq_ignore_ascii_case("ssh") { SSH } else { AUTOSSH };
             Ok((safe_substitute(tpl, &m), "bash"))
         }
         "autossh-service" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i {k} ")).unwrap_or_default());
+            // 系統服務：小程式放 /etc/ssh（服務跑在別的帳號下）。/ System service: the carrier goes to /etc/ssh.
+            match ctx.ws {
+                Some(ws) => {
+                    m.insert(
+                        "ws_client_setup",
+                        format!(
+                            "\n# Only the web port is open here: ssh rides inside a WebSocket to Telepy (the SSH inside is unchanged).\n\
+                             command -v python3 >/dev/null 2>&1 || {{ echo 'python3 is required to carry the tunnel over the web port.'; exit 1; }}\n\
+                             curl -fsSL '{}' | $SUDO tee /etc/ssh/telepy-ws.py > /dev/null || {{ echo 'cannot download the WebSocket carrier'; exit 1; }}\n\
+                             $SUDO chmod 755 /etc/ssh/telepy-ws.py\n",
+                            ws.client_url
+                        ),
+                    );
+                    m.insert("proxy_option", format!("-o \"ProxyCommand=python3 /etc/ssh/telepy-ws.py {}\" ", ws.url));
+                }
+                None => {
+                    m.insert("ws_client_setup", String::new());
+                    m.insert("proxy_option", String::new());
+                }
+            }
             // 系統服務：known_hosts 放 /etc/ssh（服務跑在別的帳號下，家目錄不一定在）；unit 檔是引號 heredoc，路徑要寫死。
             // System service: the known_hosts goes to /etc/ssh (the service runs as another account); the unit is a
             // quoted heredoc, so the path is spelled out.
@@ -141,6 +193,8 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             }
             Ok((safe_substitute(AUTOSSH_SERVICE, &m), "bash"))
         }
+        "powershell" if ctx.ws.is_some() => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
+        "docker-run" | "docker-compose" if ctx.ws.is_some() => Err("The web-port carrier is only available for the ssh, autossh and systemd scripts.".into()),
         "powershell" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i '{k}' ")).unwrap_or_default());
             // 模板裡已經有 $knownHosts / $hostKeyOptions 的預設（不驗證）；有金鑰就寫檔並改成釘住。
@@ -250,10 +304,17 @@ pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, revers
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
 
+/// 筆電側的 ProxyCommand（SSH over WebSocket）。Windows 的寫法（`python`、`%d`）由前端在安裝時換。
+/// The laptop's ProxyCommand line; the frontend rewrites it for PowerShell (`python`, `%d`) at install time.
+pub fn laptop_proxy_command(ws_url: &str) -> String {
+    format!("ProxyCommand python3 {WS_CLIENT_PATH} {ws_url}")
+}
+
 /// `SshServerTemplate`：`Host telepy-ssh-server` 區塊。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
-/// `HostKeyAlias`，檔案內容見 [`known_hosts_lines`]），沒有就照舊不驗證。
+/// `HostKeyAlias`，檔案內容見 [`known_hosts_lines`]），沒有就照舊不驗證。`ws_proxy` = SSH over WebSocket 的
+/// ProxyCommand 行（[`laptop_proxy_command`]），筆電只能出網頁 port 時用。
 /// The `Host telepy-ssh-server` stanza; pins the gateway's host keys when known, else no checking as before.
-pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String]) -> String {
+pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String], ws_proxy: Option<&str>) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
     m.insert("server_domain", server_domain.into());
@@ -270,7 +331,7 @@ pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, 
             format!("StrictHostKeyChecking yes\n    UserKnownHostsFile {LAPTOP_KNOWN_HOSTS}\n    HostKeyAlias {}", gateway_alias(server_domain, reverse_server_ssh_port))
         },
     );
-    m.insert("client_proxy_command", String::new());
+    m.insert("client_proxy_command", ws_proxy.unwrap_or_default().to_string());
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
 
@@ -297,6 +358,7 @@ mod tests {
             key_path: None,
             telepy_public_key: None,
             gateway_host_keys: &[],
+            ws: None,
         };
         let (s, lang) = render_script("ssh", &ctx).unwrap();
         assert_eq!(lang, "bash");
@@ -325,6 +387,7 @@ mod tests {
             key_path: None,
             telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
             gateway_host_keys: &[],
+            ws: None,
         };
         let (s, lang) = render_script("docker-compose", &ctx).unwrap();
         assert_eq!(lang, "yaml");
@@ -370,6 +433,7 @@ mod tests {
             key_path: Some("~/.ssh/id_rsa"),
             telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
             gateway_host_keys: &keys,
+            ws: None,
         };
         for kind in ["ssh", "autossh"] {
             let (s, _) = render_script(kind, &ctx).unwrap();
@@ -413,12 +477,12 @@ mod tests {
 
     #[test]
     fn ssh_config_blocks() {
-        let server = render_server_config("telepy.test", "24242", &[]);
+        let server = render_server_config("telepy.test", "24242", &[], None);
         assert!(server.contains("StrictHostKeyChecking no\n"), "{server}");
-        let pinned = render_server_config("telepy.test", "24242", &["ssh-ed25519 AAAAgateway".to_string()]);
+        let pinned = render_server_config("telepy.test", "24242", &["ssh-ed25519 AAAAgateway".to_string()], None);
         assert!(pinned.contains("    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.test-24242\n    User telepy\n"), "{pinned}");
         assert_eq!(known_hosts_lines("telepy-telepy.test-24242", &["ssh-ed25519 AAAAgateway".to_string()]), "telepy-telepy.test-24242 ssh-ed25519 AAAAgateway\n");
-        let server = render_server_config("telepy.test", "24242", &[]);
+        let server = render_server_config("telepy.test", "24242", &[], None);
         assert!(server.starts_with("Host telepy-ssh-server\n"));
         assert!(server.contains("Port  24242\n"));
         assert!(server.contains("User telepy\n"));

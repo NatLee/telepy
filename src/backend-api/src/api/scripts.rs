@@ -64,8 +64,14 @@ async fn config(
     let t = viewable_tunnel(&state, user.id, id).await?;
     let domain = server_domain(&headers, &state);
     let gateway_keys = state.gateway.host_public_keys();
+    // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
+    // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
+    let via_web = super::join::parse_transport(q.get("transport").cloned())? == "websocket";
+    let base = crate::oauth::issuer(state.config.public_url.as_deref(), &headers);
+    let ws_url = super::join::ws_url(&base);
+    let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
     let mut out = String::from(SERVER_STEM);
-    out.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys));
+    out.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
 
     let all = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let usernames_list: Vec<Value> = all
@@ -95,7 +101,20 @@ async fn config(
     Ok(Json(json!({
         "config": out, "usernames": usernames_list, "server": server, "hosts": hosts, "reverse_port": t.reverse_port,
         "known_hosts": known_hosts, "known_hosts_path": scripts::LAPTOP_KNOWN_HOSTS,
+        "transport": if via_web { "websocket" } else { "ssh" },
+        "ws_url": ws_url,
+        "ws_client_url": format!("{base}/api/join/telepy-ws.py"),
+        "ws_client_path": scripts::WS_CLIENT_PATH,
     })))
+}
+
+/// `transport=websocket` 時腳本要的兩個位址 (ws url, 小程式 url)。/ The carrier's URLs when the WebSocket transport is asked for.
+fn ws_carrier(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> Result<Option<(String, String)>, ApiError> {
+    if super::join::parse_transport(transport)? != "websocket" {
+        return Ok(None);
+    }
+    let base = crate::oauth::issuer(state.config.public_url.as_deref(), headers);
+    Ok(Some((super::join::ws_url(&base), format!("{base}/api/join/telepy-ws.py"))))
 }
 
 /// 六種腳本的共用渲染：autossh-service 需要目標使用者名稱（username_id 可指定）。
@@ -108,6 +127,7 @@ async fn render_for(
     key_path: Option<&str>,
     username_id: Option<i64>,
     domain: &str,
+    ws: Option<(String, String)>,
 ) -> Result<(String, &'static str), ApiError> {
     let username = if kind == "autossh-service" {
         let allowed = permissions::allowed_usernames(&state.db, user_id, t).await?;
@@ -132,6 +152,7 @@ async fn render_for(
         key_path,
         telepy_public_key: service_key.as_deref(),
         gateway_host_keys: &gateway_keys,
+        ws: ws.as_ref().map(|(url, client_url)| scripts::WsCarrier { url, client_url }),
     };
     scripts::render_script(kind, &ctx).map_err(ApiError::bad_request)
 }
@@ -152,7 +173,8 @@ async fn script(
     let domain = server_domain(&headers, &state);
     let key_path = clean_key_path(q.get("key_path"));
     let username_id = q.get("username_id").and_then(|s| s.parse::<i64>().ok());
-    let (script, language) = render_for(&state, user.id, &t, &kind, ssh_port, key_path.as_deref(), username_id, &domain).await?;
+    let ws = ws_carrier(&state, &headers, q.get("transport").cloned())?;
+    let (script, language) = render_for(&state, user.id, &t, &kind, ssh_port, key_path.as_deref(), username_id, &domain, ws).await?;
     Ok(Json(json!({ "script": script, "language": language })))
 }
 
@@ -192,6 +214,7 @@ async fn one_time_token(
             }
         }
     }
+    let transport = super::join::parse_transport(json_str(&body, "transport"))?;
     let token = state.tokens.issue_script_token(ScriptTokenPayload {
         user_id: user.id,
         server_id,
@@ -199,6 +222,7 @@ async fn one_time_token(
         script_type,
         key_path: json_str(&body, "key_path"),
         username_id,
+        transport: Some(transport.to_string()),
     });
     let scheme = headers
         .get("x-forwarded-proto")
@@ -242,7 +266,11 @@ async fn one_time_script(State(state): State<AppState>, Path(token): Path<String
     }
     let domain = server_domain(&headers, &state);
     let key_path = payload.key_path.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain).await {
+    let ws = match ws_carrier(&state, &headers, payload.transport.clone()) {
+        Ok(ws) => ws,
+        Err(e) => return plain(StatusCode::BAD_REQUEST, format!("{:?}", e.body)),
+    };
+    match render_for(&state, user.id, &t, &payload.script_type, payload.ssh_port, key_path.as_deref(), payload.username_id, &domain, ws).await {
         Ok((script, _)) => plain(StatusCode::OK, script),
         Err(e) => {
             let msg = e.body.get("error").and_then(|v| v.as_str()).unwrap_or("error").to_string();

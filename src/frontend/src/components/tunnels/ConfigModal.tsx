@@ -102,9 +102,11 @@ function CheckRow({ icon, children, right }: { icon: React.ReactNode; children: 
 export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
     const { t, tn } = useI18n();
     const {
-        state: { data, loading, targetUsers, selectedUserId, serverStanza, deviceStanzas, deviceKeys },
-        actions: { handleUserChange }
+        state: { data, loading, targetUsers, selectedUserId, serverStanza, deviceStanzas, deviceKeys, transport },
+        actions: { handleUserChange, handleTransportChange }
     } = useConfigModal(isOpen, tunnelId);
+    // SSH over WebSocket：筆電先存小程式，伺服器區塊的 ProxyCommand 用它。/ The carrier the server stanza's ProxyCommand runs.
+    const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
     const [active, setActive] = useState<ConfigPart | null>(null);
     // Telepy 的主機金鑰（伺服器區塊釘住它）。/ Telepy's host key, pinned by the server stanza.
     const knownHosts = data?.known_hosts ?? null;
@@ -158,7 +160,24 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
             icon={<FileCode2 />}
             size="3xl"
             isLoading={loading}
-            toolbar={targetUsers.length > 1 ? <AccountPicker users={targetUsers} value={selectedUserId} onChange={handleUserChange} /> : undefined}
+            toolbar={
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                    {targetUsers.length > 1 && <AccountPicker users={targetUsers} value={selectedUserId} onChange={handleUserChange} />}
+                    <div className="flex min-w-0 items-center gap-3">
+                        <span className="shrink-0 text-sm text-muted-foreground">{t("config.transportLabel")}</span>
+                        <Segmented
+                            size="sm"
+                            aria-label={t("config.transportLabel")}
+                            value={transport}
+                            onChange={handleTransportChange}
+                            options={[
+                                { value: "ssh", label: t("config.transportSsh") },
+                                { value: "websocket", label: t("config.transportWeb") },
+                            ]}
+                        />
+                    </div>
+                </div>
+            }
         >
             {data && (
                 <div className="space-y-6">
@@ -185,7 +204,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
 
                     <ol className="list-none">
                         <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
-                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} active={active} onActive={setActive} />
+                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} active={active} onActive={setActive} />
                         </Step>
 
                         {hosts.length > 0 && (

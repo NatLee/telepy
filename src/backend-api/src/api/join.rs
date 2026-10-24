@@ -30,11 +30,30 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(create_ticket))
         .routes(routes!(ticket_status, revoke_ticket))
         .routes(routes!(install_script))
+        .routes(routes!(ws_client))
         .routes(routes!(register))
         .routes(routes!(device_status))
 }
 
 const INSTALL: &str = include_str!("../../templates/join_install.sh");
+/// SSH over WebSocket 的裝置端小程式（純 python3 標準函式庫）。/ The device-side WebSocket carrier (python3 stdlib only).
+pub const WS_CLIENT: &str = include_str!("../../templates/telepy_ws.py");
+
+/// `/ws/gateway/` 的完整位址（`ws://` / `wss://`，依網站的 scheme）。/ The gateway WebSocket URL for this deployment.
+pub fn ws_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let ws = base.strip_prefix("https://").map(|h| format!("wss://{h}")).or_else(|| base.strip_prefix("http://").map(|h| format!("ws://{h}"))).unwrap_or_else(|| base.to_string());
+    format!("{ws}/ws/gateway/")
+}
+
+/// 裝置怎麼連：`ssh`（預設）或 `websocket`。/ Validate the transport choice.
+pub fn parse_transport(v: Option<String>) -> Result<&'static str, ApiError> {
+    match v.as_deref().map(str::trim) {
+        None | Some("") | Some("ssh") => Ok("ssh"),
+        Some("websocket") => Ok("websocket"),
+        Some(_) => Err(ApiError::field("transport", "Use \"ssh\" or \"websocket\".")),
+    }
+}
 /// 伺服器透過隧道登入一次的時限。/ Time limit for the test login through the new tunnel.
 const VERIFY_TIMEOUT: Duration = Duration::from_secs(25);
 
@@ -55,8 +74,8 @@ fn base_url(state: &AppState, headers: &HeaderMap) -> String {
     crate::oauth::issuer(state.config.public_url.as_deref(), headers)
 }
 
-pub fn install_command(base: &str, token: &str, sudo: bool) -> String {
-    format!("curl -fsSL '{base}/api/join/install.sh' | {}sh -s -- --token {token}", if sudo { "sudo " } else { "" })
+pub fn install_command(base: &str, token: &str, sudo: bool, via_web: bool) -> String {
+    format!("curl -fsSL '{base}/api/join/install.sh' | {}sh -s -- --token {token}{}", if sudo { "sudo " } else { "" }, if via_web { " --via-web" } else { "" })
 }
 
 fn ticket_json(t: &Ticket) -> Value {
@@ -91,17 +110,19 @@ async fn create_ticket(State(state): State<AppState>, AuthUser(user): AuthUser, 
         }
     }
     let mine = super::device_keys::key_list_choice(&body)?;
+    let transport = parse_transport(json_str(&body, "transport"))?;
     let (token, t) = state
         .join
-        .mint(user.id, name, mine)
+        .mint(user.id, name, mine, transport)
         .ok_or_else(|| join_error(StatusCode::TOO_MANY_REQUESTS, "too_many_join_tokens", "Too many open join commands; use or cancel one first."))?;
     let base = base_url(&state, &headers);
     let mut v = ticket_json(&t);
     let o = v.as_object_mut().unwrap();
     o.insert("token".into(), json!(token));
     o.insert("install_url".into(), json!(format!("{base}/api/join/install.sh")));
-    o.insert("command".into(), json!(install_command(&base, &token, true)));
-    o.insert("command_no_sudo".into(), json!(install_command(&base, &token, false)));
+    let via_web = t.transport == "websocket";
+    o.insert("command".into(), json!(install_command(&base, &token, true, via_web)));
+    o.insert("command_no_sudo".into(), json!(install_command(&base, &token, false, via_web)));
     Ok((StatusCode::CREATED, Json(v)))
 }
 
@@ -118,6 +139,11 @@ async fn revoke_ticket(State(state): State<AppState>, AuthUser(user): AuthUser, 
     } else {
         Err(ApiError::drf_not_found())
     }
+}
+
+#[utoipa::path(get, path = "/api/join/telepy-ws.py", tag = "Device join", responses((status = 200, description = "The python3 program that carries ssh inside a WebSocket to /ws/gateway/ (ProxyCommand)", content_type = "text/plain", body = String)))]
+async fn ws_client() -> Response {
+    text(StatusCode::OK, WS_CLIENT.to_string())
 }
 
 #[utoipa::path(get, path = "/api/join/install.sh", tag = "Device join", responses((status = 200, description = "The POSIX install script (run with --token)", content_type = "text/plain", body = String)))]
@@ -299,6 +325,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
         lines.push(("SAME_MACHINE_ID", same.id.to_string()));
     }
     lines.push(("WEB_URL", format!("{}/tunnels", base_url(state, headers))));
+    lines.push(("WS_URL", ws_url(&base_url(state, headers))));
     Ok(text(StatusCode::CREATED, join::kv_lines(&lines)))
 }
 

@@ -263,6 +263,10 @@ if [ -f "$U" ] && grep -qF "(#$T_ID)" "$U" 2>/dev/null; then
         rmf "$U" file
     fi
 fi
+# SSH over WebSocket 的小程式（只有這條隧道用）。/ The WebSocket carrier of this tunnel.
+for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh"; do
+    [ -f "$f" ] && rmf "$f" file
+done
 KH="$SSH_DIR/telepy_known_hosts"
 if [ -f "$KH" ]; then
     USERS=""

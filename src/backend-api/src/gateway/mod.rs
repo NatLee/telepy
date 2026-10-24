@@ -52,17 +52,35 @@ pub struct Forward {
     pub handle: Handle,
 }
 
+/// 連線怎麼到 gateway 的：直接連 24242，或包在 `/ws/gateway/` 的 WebSocket 裡（只放行網頁 port 的網路）。
+/// How a connection reached the gateway: plain TCP on 24242, or inside a WebSocket on `/ws/gateway/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transport {
+    Tcp,
+    WebSocket,
+}
+
+impl Transport {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Transport::Tcp => "tcp",
+            Transport::WebSocket => "websocket",
+        }
+    }
+}
+
 struct ConnInfo {
     peer: SocketAddr,
     identity: Identity,
     /// 認證成功的時間（DB 格式）。/ When the connection authenticated (DB format).
     since: String,
+    transport: Transport,
 }
 
 impl ConnInfo {
     fn endpoint(&self) -> Endpoint {
         // 雙堆疊 listener 上的 IPv4 會是 ::ffff:a.b.c.d，轉回一般寫法。/ Unmap IPv4-mapped addresses.
-        Endpoint { ip: self.peer.ip().to_canonical().to_string(), since: self.since.clone() }
+        Endpoint { ip: self.peer.ip().to_canonical().to_string(), since: self.since.clone(), transport: self.transport.as_str() }
     }
 }
 
@@ -271,6 +289,11 @@ impl Gateway {
 
     pub fn has_forward(&self, port: u16) -> bool {
         self.forwards.contains_key(&port)
+    }
+
+    /// 連線數到上限了（listener 與 WebSocket 入口都看這個）。/ The connection limit is reached (both entrances check it).
+    pub fn at_capacity(&self) -> bool {
+        self.live.load(Ordering::SeqCst) >= self.config.gateway_max_connections
     }
 
     /// 後端自己用：直接在裝置的隧道上開一條 forwarded-tcpip 通道（不經 loopback TCP、不占本機 port）。
@@ -543,6 +566,7 @@ pub struct GatewayHandler {
     gw: Arc<Gateway>,
     conn_id: u64,
     peer: SocketAddr,
+    transport: Transport,
     identity: Option<Identity>,
     offered: Option<String>,
     key_desc: String,
@@ -592,7 +616,7 @@ impl Handler for GatewayHandler {
     async fn auth_succeeded(&mut self, _session: &mut Session) -> Result<(), Self::Error> {
         self.authed.store(true, Ordering::SeqCst);
         if let Some(id) = &self.identity {
-            self.gw.conns.insert(self.conn_id, ConnInfo { peer: self.peer, identity: id.clone(), since: crate::util::now_db() });
+            self.gw.conns.insert(self.conn_id, ConnInfo { peer: self.peer, identity: id.clone(), since: crate::util::now_db(), transport: self.transport });
         }
         let tunnel_id = match &self.identity {
             Some(Identity::Tunnel { tunnel_id, .. }) => Some(*tunnel_id),
@@ -605,7 +629,20 @@ impl Handler for GatewayHandler {
             }
         }
         self.gw
-            .event("accepted", Some(self.peer), None, tunnel_id, format!("Accepted publickey for {} from {} port {} ssh2: {}", self.gw.config.gateway_user, self.peer.ip(), self.peer.port(), self.key_desc))
+            .event(
+                "accepted",
+                Some(self.peer),
+                None,
+                tunnel_id,
+                format!(
+                    "Accepted publickey for {} from {} port {} ssh2: {}{}",
+                    self.gw.config.gateway_user,
+                    self.peer.ip(),
+                    self.peer.port(),
+                    self.key_desc,
+                    if self.transport == Transport::WebSocket { " (over websocket)" } else { "" }
+                ),
+            )
             .await;
         Ok(())
     }
@@ -792,11 +829,21 @@ async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: Socket
     } else {
         peer
     };
+    serve(gw, stream, peer, Transport::Tcp).await;
+}
+
+/// 在任何雙向串流上跑一條 gateway 連線：24242 的 TCP、或 `/ws/gateway/` 轉成的串流（`ws::gateway::WsStream`）。
+/// 握手、認證、forward、事件都一樣；`transport` 只記在連線資訊與 `accepted` 事件裡。
+/// One gateway connection on any byte stream: the TCP listener or a WebSocket. Everything else is identical.
+pub async fn serve<S>(gw: Arc<Gateway>, stream: S, peer: SocketAddr, transport: Transport)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let conn_id = gw.next_id.fetch_add(1, Ordering::SeqCst);
     let authed = Arc::new(AtomicBool::new(false));
     // `live` 在 GatewayHandler::drop 歸還，握手失敗 / 逾時時 handler 也會被 drop。/ Released in GatewayHandler::drop.
     gw.live.fetch_add(1, Ordering::SeqCst);
-    let handler = GatewayHandler { gw: gw.clone(), conn_id, peer, identity: None, offered: None, key_desc: String::new(), authed: authed.clone() };
+    let handler = GatewayHandler { gw: gw.clone(), conn_id, peer, transport, identity: None, offered: None, key_desc: String::new(), authed: authed.clone() };
     let grace = gw.config.gateway_login_grace;
     // 握手（版本交換 + KEX）也受 LoginGraceTime 約束：連上來不講話的連線不能無限期占位。
     // The handshake is bounded by the login grace time too, so an idle pre-KEX connection cannot hold a slot forever.
@@ -847,7 +894,7 @@ pub fn start(gw: Arc<Gateway>, listener: TcpListener) -> anyhow::Result<tokio::t
                     continue;
                 }
             };
-            if gw.live.load(Ordering::SeqCst) >= gw.config.gateway_max_connections {
+            if gw.at_capacity() {
                 tracing::warn!(%peer, "gateway: connection limit reached; dropping");
                 continue;
             }

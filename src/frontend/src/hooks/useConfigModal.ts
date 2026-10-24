@@ -19,17 +19,19 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
     const [loading, setLoading] = useState(false);
     const [targetUsers, setTargetUsers] = useState<TargetUser[]>([]);
     const [selectedUserId, setSelectedUserId] = useState<string>("");
+    // 筆電怎麼連 Telepy：SSH port，或只開網頁 port 時包進 WebSocket。/ How the laptop reaches Telepy.
+    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
     const { showError } = useToast();
     const deviceKeys = useDeviceKeys(isOpen ? tunnelId : null);
 
-    const fetchConfig = useCallback(async (usernameId?: string) => {
+    const fetchConfig = useCallback(async (usernameId?: string, via: "ssh" | "websocket" = transport) => {
         if (!tunnelId) return;
         setLoading(true);
         try {
-            let url = `/tunnels/server/config/${tunnelId}`;
-            if (usernameId && usernameId !== "all") {
-                url += `?username_id=${usernameId}`;
-            }
+            const params = new URLSearchParams();
+            if (usernameId && usernameId !== "all") params.set("username_id", usernameId);
+            if (via === "websocket") params.set("transport", "websocket");
+            const url = `/tunnels/server/config/${tunnelId}${params.size ? `?${params.toString()}` : ""}`;
             const res = await apiFetch(url);
             if (res.ok) {
                 const body: TunnelConfigData = await res.json();
@@ -61,14 +63,15 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
         } finally {
             setLoading(false);
         }
-    }, [tunnelId, showError, t]);
+    }, [tunnelId, transport, showError, t]);
 
     useEffect(() => {
         if (isOpen && tunnelId) {
             setTargetUsers([]);
             setSelectedUserId("");
+            setTransport("ssh");
             setData(null);
-            fetchConfig();
+            fetchConfig(undefined, "ssh");
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, tunnelId]);
@@ -76,6 +79,11 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
     const handleUserChange = (value: string) => {
         setSelectedUserId(value);
         fetchConfig(value);
+    };
+
+    const handleTransportChange = (value: "ssh" | "websocket") => {
+        setTransport(value);
+        fetchConfig(selectedUserId || undefined, value);
     };
 
     // 伺服器區塊 = 別名等於後端給的 server.alias，其餘是裝置區塊（每個帳號一個）。
@@ -94,9 +102,11 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
             serverStanza,
             deviceStanzas,
             deviceKeys,
+            transport,
         },
         actions: {
-            handleUserChange
+            handleUserChange,
+            handleTransportChange,
         }
     };
 }

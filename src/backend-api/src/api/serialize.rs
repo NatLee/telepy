@@ -44,7 +44,7 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
 /// `geo` = scope plus country / network owner; `previous_ip` / `changed_at` = the latest address change.
 pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: &GeoIp) -> Value {
     let mut v = match (live, last) {
-        (Some(e), _) => json!({"ip": e.ip, "live": true, "connected_at": db_to_iso_utc_z(&e.since), "last_seen_at": null}),
+        (Some(e), _) => json!({"ip": e.ip, "live": true, "connected_at": db_to_iso_utc_z(&e.since), "last_seen_at": null, "transport": e.transport}),
         (None, Some(l)) => json!({
             "ip": l.ip,
             "live": false,

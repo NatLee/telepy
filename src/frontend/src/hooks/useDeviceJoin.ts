@@ -17,6 +17,8 @@ export interface JoinTicket {
     id: string;
     name: string | null;
     key_list_mine: boolean;
+    /** ssh（24242）或 websocket（只開網頁 port 的網路）。/ How the device reaches the gateway. */
+    transport: "ssh" | "websocket";
     phase: JoinPhase;
     detail: string | null;
     tunnel_id: number | null;
@@ -45,6 +47,7 @@ export function useDeviceJoin() {
     const { t } = useI18n();
     const [name, setName] = useState("");
     const [keyList, setKeyList] = useState<"mine" | "empty">("mine");
+    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
     const [myKeyCount, setMyKeyCount] = useState<number | null>(null);
     const [creating, setCreating] = useState(false);
     const [nameError, setNameError] = useState<string | null>(null);
@@ -69,7 +72,7 @@ export function useDeviceJoin() {
         try {
             const res = await apiFetch("/api/reverse/join", {
                 method: "POST",
-                body: JSON.stringify({ name: name.trim() || undefined, key_list: keyList === "mine" && (myKeyCount ?? 0) > 0 ? "mine" : "empty" }),
+                body: JSON.stringify({ name: name.trim() || undefined, key_list: keyList === "mine" && (myKeyCount ?? 0) > 0 ? "mine" : "empty", transport }),
             });
             const data = await readJson<JoinCommand & { name?: string[] | string | null; error?: string; code?: string }>(res);
             if (res.ok && data?.token) {
@@ -86,7 +89,7 @@ export function useDeviceJoin() {
         } finally {
             setCreating(false);
         }
-    }, [name, keyList, myKeyCount, t]);
+    }, [name, keyList, transport, myKeyCount, t]);
 
     const refresh = useCallback(async (id: string) => {
         try {
@@ -138,7 +141,7 @@ export function useDeviceJoin() {
     const rttMs: number | null = typeof status?.rtt_ms === "number" ? status.rtt_ms : null;
 
     return {
-        form: { name, setName, keyList, setKeyList, myKeyCount, creating, nameError, error },
+        form: { name, setName, keyList, setKeyList, transport, setTransport, myKeyCount, creating, nameError, error },
         ticket,
         expired: expired || waitingExpired,
         msLeft: Math.max(0, msLeft),

@@ -17,7 +17,7 @@ import { useI18n } from "@/lib/i18n";
 import { METHOD_LANGUAGE, type ConnectMethod } from "@/lib/tunnelSetup";
 import type { TranslationKey } from "@/locales/en";
 import type { CreateTunnelWizard } from "@/hooks/useCreateTunnelWizard";
-import { Disclosure, StepFooter, StepHeading } from "./parts";
+import { Disclosure, Segmented, StepFooter, StepHeading } from "./parts";
 import { DialInMonitor } from "@/components/tunnels/DialIn";
 
 const METHODS: { id: ConnectMethod; icon: LucideIcon; title: TranslationKey; desc: TranslationKey; tag?: TranslationKey }[] = [
@@ -39,6 +39,24 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
     return (
         <div className="space-y-6">
             <StepHeading title={t("wizard.connect.title")} subtitle={t("wizard.connect.subtitle", { name: created.name })} />
+
+            {/* 裝置連得到哪個 port：SSH port（預設）或只有網頁 port（ssh 包進 WebSocket）。/ Which port the device can reach. */}
+            <div className="space-y-2">
+                <Segmented
+                    value={c.transportSupported ? c.transport : "ssh"}
+                    onChange={c.setTransport}
+                    ariaLabel={t("wizard.connect.transportLabel")}
+                    options={[
+                        { value: "ssh", label: t("wizard.connect.transportSsh") },
+                        { value: "websocket", label: t("wizard.connect.transportWeb") },
+                    ]}
+                />
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                    {!c.transportSupported && c.transport === "websocket"
+                        ? t("wizard.connect.transportUnsupported")
+                        : c.transport === "websocket" ? t("wizard.connect.transportWebHint") : t("wizard.connect.transportSshHint")}
+                </p>
+            </div>
 
             {/* gap-y-4：卡片頂端的標籤凸出 8px，手機兩欄時才不會碰到上一列。
                 gap-y-4: the tags stick out 8px above a card, so on phones (two columns) they clear the row above. */}

@@ -88,6 +88,19 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                         </div>
                     </fieldset>
                 )}
+                <fieldset className="space-y-2">
+                    <legend className="text-sm text-foreground">{t("join.transportLabel")}</legend>
+                    <Segmented
+                        value={form.transport}
+                        onChange={form.setTransport}
+                        ariaLabel={t("join.transportLabel")}
+                        options={[
+                            { value: "ssh", label: t("join.transportSsh") },
+                            { value: "websocket", label: t("join.transportWeb") },
+                        ]}
+                    />
+                    <p className="text-xs leading-relaxed text-muted-foreground">{form.transport === "websocket" ? t("join.transportWebHint") : t("join.transportSshHint")}</p>
+                </fieldset>
                 {form.error && <Callout tone="danger">{form.error}</Callout>}
                 <StepFooter>
                     <Button type="submit" disabled={form.creating} className="">
@@ -140,7 +153,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                     </div>
                     <Disclosure title={t("join.whatItDoes")} icon={<ShieldCheck size={15} />}>
                         <ol className="list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-muted-foreground">
-                            {(["join.does1", "join.does2", "join.does3", "join.does4", "join.does5", "join.does6"] as TranslationKey[]).map((k) => <li key={k}>{t(k)}</li>)}
+                            {(["join.does1", "join.does2", "join.does3", "join.does4", ...(ticket.transport === "websocket" ? ["join.doesWeb" as TranslationKey] : []), "join.does5", "join.does6"] as TranslationKey[]).map((k) => <li key={k}>{t(k)}</li>)}
                         </ol>
                     </Disclosure>
                 </div>

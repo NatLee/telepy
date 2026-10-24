@@ -89,6 +89,25 @@ const HEREDOC = "TELEPY";
 export const KNOWN_HOSTS_PATH = "~/.ssh/telepy_known_hosts";
 const KNOWN_HOSTS_HEREDOC = "TELEPY_HOST_KEYS";
 
+/** SSH over WebSocket 的小程式：從哪裡下載、存到哪裡。/ The WebSocket carrier: where to fetch it and where it lives. */
+export interface WsClient {
+    url: string;
+    path: string;
+    wsUrl: string;
+}
+
+/**
+ * 後端給的 ProxyCommand 是 POSIX 寫法（`python3 ~/.ssh/telepy-ws.py …`）；Windows 的 OpenSSH 用 `python` 和 `%d`。
+ * The backend writes the POSIX ProxyCommand; Windows OpenSSH wants `python` and `%d` for the home directory.
+ */
+export function adaptForShell(stanzas: ConfigStanza[], shell: ConfigShell): ConfigStanza[] {
+    if (shell !== "powershell") return stanzas;
+    return stanzas.map((s) => ({
+        ...s,
+        options: s.options.map((o) => (o.key.toLowerCase() === "proxycommand" && o.value.startsWith("python3 ~/.ssh/telepy-ws.py ") ? { ...o, value: o.value.replace(/^python3 ~\/\.ssh\/telepy-ws\.py /, "python %d/.ssh/telepy-ws.py ") } : o)),
+    }));
+}
+
 /**
  * 建立 ~/.ssh（和 config，權限 600——群組可寫的 config 會讓 ssh 直接拒絕）、備份、拿掉舊區塊、加上新區塊。
  * `knownHosts`（後端給的 `<alias> <type> <base64>` 行）有內容時先把它存成 ~/.ssh/telepy_known_hosts：伺服器區塊用它
@@ -97,12 +116,13 @@ const KNOWN_HOSTS_HEREDOC = "TELEPY_HOST_KEYS";
  * append the new ones. With `knownHosts` (the backend's `<alias> <type> <base64>` lines) the command first saves
  * ~/.ssh/telepy_known_hosts, which the server stanza pins Telepy's host key with.
  */
-export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null): string {
+export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null, wsClient?: WsClient | null): string {
     const aliases = stanzas.map((s) => s.alias);
-    const blocks = markedBlocks(stanzas);
+    const blocks = markedBlocks(adaptForShell(stanzas, shell));
     const hostKeys = knownHosts?.trim() ? knownHosts.trim() + "\n" : "";
     if (shell === "posix") {
         return [
+            ...(wsClient ? [`mkdir -p ~/.ssh && curl -fsSL '${wsClient.url}' -o ${wsClient.path} && chmod 700 ${wsClient.path}`] : []),
             ...(hostKeys
                 ? [
                     `mkdir -p ~/.ssh && cat > ${KNOWN_HOSTS_PATH} <<'${KNOWN_HOSTS_HEREDOC}'`,
@@ -121,6 +141,7 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
     // [IO.File]: ReadAllText drops a BOM and WriteAllText writes UTF-8 without one (Windows OpenSSH chokes on a BOM).
     return [
         `$cfg = "$HOME\\.ssh\\config"; New-Item -ItemType Directory -Force "$HOME\\.ssh" | Out-Null`,
+        ...(wsClient ? [`Invoke-WebRequest -UseBasicParsing '${wsClient.url}' -OutFile "$HOME\\.ssh\\telepy-ws.py"`] : []),
         ...(hostKeys ? [`[IO.File]::WriteAllText("$HOME\\.ssh\\telepy_known_hosts", @'`, hostKeys + "'@ + \"`n\")"] : []),
         `$text = ''; if (Test-Path $cfg) { Copy-Item $cfg "$cfg.bak" -Force; $text = [IO.File]::ReadAllText($cfg) }`,
         `$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`,
