@@ -1,7 +1,8 @@
 //! gateway 前面有 L4 代理（PROXY protocol）：列出的代理送來的 header 決定裝置的來源 IP；
-//! 沒送 header 就拒絕（記 `refused_proxy`）；只連上就斷（健康檢查）不記事件。
-//! The gateway behind an L4 proxy: a listed proxy's header sets the device's source IP; no header is
-//! refused (logged as `refused_proxy`); a bare connect-and-close (health check) is not logged.
+//! 沒送 header 的直連照常可用；header 格式錯就拒絕（記 `refused_proxy`）；只連上就斷（健康檢查）不記事件。
+//! The gateway behind an L4 proxy: a listed proxy's header sets the device's source IP; a direct
+//! connection without a header still works; a malformed header is refused (`refused_proxy`); a bare
+//! connect-and-close (health check) is not logged.
 mod common;
 
 use std::process::Stdio;
@@ -64,13 +65,40 @@ async fn proxied_devices_get_the_address_from_the_header() {
             .unwrap()
     };
 
-    // 直接連（沒有 header）：被拒絕並記事件。/ Direct, without a header: refused and logged.
+    let listening = |want: bool| {
+        let status = lab.app.state.status.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            while status.listen_ports().is_some_and(|p| p.contains(&port)) != want {
+                assert!(tokio::time::Instant::now() < deadline, "forward never became {want}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    let endpoint = || async {
+        let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
+        r.json["tunnels"].as_array().unwrap().iter().find(|x| x["id"] == t.id).unwrap()["endpoint"].clone()
+    };
+
+    // 直接連（沒有 header）：照常可用，來源是 socket 對端。/ Direct, without a header: works, the socket peer is the source.
     let mut direct = ssh(lab.gw_port);
-    let status = tokio::time::timeout(Duration::from_secs(20), direct.wait()).await.expect("direct ssh should fail fast").unwrap();
-    assert!(!status.success());
+    listening(true).await;
+    let e: Value = endpoint().await;
+    assert_eq!(e["ip"], "127.0.0.1", "{e}");
+    direct.kill().await.unwrap();
+    listening(false).await;
+
+    // header 格式錯：拒絕並記事件。/ A malformed header: refused and logged.
+    let mut bad = TcpStream::connect(("127.0.0.1", lab.gw_port)).await.unwrap();
+    bad.write_all(b"PROXY TCP4 not-an-address 127.0.0.1 1 2\r\n").await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while events(&lab, "refused_proxy").await.is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "malformed header was not refused");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     let refused = events(&lab, "refused_proxy").await;
     assert_eq!(refused.len(), 1, "{refused:?}");
-    assert!(refused[0].1.contains("no PROXY protocol header"), "{refused:?}");
+    assert!(refused[0].1.contains("bad PROXY protocol header"), "{refused:?}");
 
     // 只連上就斷（代理的健康檢查）：不記事件。/ A bare connect-and-close is not logged.
     drop(TcpStream::connect(("127.0.0.1", lab.gw_port)).await.unwrap());
@@ -80,13 +108,8 @@ async fn proxied_devices_get_the_address_from_the_header() {
     // 經過代理：來源是 header 裡的位址。/ Through the proxy: the source comes from the header.
     let proxy = start_proxy(lab.gw_port).await;
     let _tunnel = ssh(proxy);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    while !lab.app.state.status.listen_ports().is_some_and(|p| p.contains(&port)) {
-        assert!(tokio::time::Instant::now() < deadline, "forward never registered through the proxy");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let r = lab.app.get("/api/reverse/server/dashboard", Some(&alice.token)).await;
-    let e: Value = r.json["tunnels"].as_array().unwrap().iter().find(|x| x["id"] == t.id).unwrap()["endpoint"].clone();
+    listening(true).await;
+    let e: Value = endpoint().await;
     assert_eq!(e["ip"], "203.0.113.50", "{e}");
     assert_eq!(e["geo"]["scope"], "public");
     let accepted = events(&lab, "accepted").await;

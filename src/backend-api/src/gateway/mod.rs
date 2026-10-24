@@ -737,24 +737,32 @@ async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: Socket
     let _ = stream.set_nodelay(true);
     // 前面有 L4 代理時，真正的來源在它送的 PROXY header 裡；只有列出的代理要送、也才會被讀。
     // Behind an L4 proxy the real source is in its PROXY header; only listed proxies send one (and are read).
+    // 列出的來源：先偷看第一個 byte（不消耗），是 header 才讀；沒有 header 就是直連。
+    // Listed sources: peek at the first byte (not consumed); read a header only if one starts there.
     let peer = if gw.proxy_from.contains(peer.ip()) {
-        match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
-            Ok(Ok(proxy_protocol::Header::Proxied(source))) => source,
-            Ok(Ok(proxy_protocol::Header::Local)) => peer,
-            Ok(Err(proxy_protocol::ProxyError::Closed)) => {
-                tracing::debug!(%peer, "gateway: proxy connection closed before its header (health check)");
+        let mut first = [0u8; 1];
+        match tokio::time::timeout(PROXY_HEADER_TIMEOUT, stream.peek(&mut first)).await {
+            Ok(Ok(0)) | Ok(Err(_)) => {
+                tracing::debug!(%peer, "gateway: connection closed before sending anything (health check)");
                 return;
             }
-            Ok(Err(e)) => {
-                let message = format!("Refused connection from {} port {}: {e}", peer.ip(), peer.port());
-                gw.event("refused_proxy", Some(peer), None, None, message).await;
-                return;
-            }
-            Err(_) => {
-                let message = format!("Refused connection from {} port {}: no PROXY protocol header within {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
-                gw.event("refused_proxy", Some(peer), None, None, message).await;
-                return;
-            }
+            // 直連（SSH 以 `SSH-` 開頭），或 5 秒都沒送東西的客戶端（等我們先送 banner）。/ Direct, or a client waiting for our banner.
+            Ok(Ok(_)) if !proxy_protocol::starts_header(first[0]) => peer,
+            Err(_) => peer,
+            Ok(Ok(_)) => match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
+                Ok(Ok(proxy_protocol::Header::Proxied(source))) => source,
+                Ok(Ok(proxy_protocol::Header::Local)) => peer,
+                Ok(Err(e)) => {
+                    let message = format!("Refused connection from {} port {}: bad PROXY protocol header: {e}", peer.ip(), peer.port());
+                    gw.event("refused_proxy", Some(peer), None, None, message).await;
+                    return;
+                }
+                Err(_) => {
+                    let message = format!("Refused connection from {} port {}: incomplete PROXY protocol header after {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
+                    gw.event("refused_proxy", Some(peer), None, None, message).await;
+                    return;
+                }
+            },
         }
     } else {
         peer
