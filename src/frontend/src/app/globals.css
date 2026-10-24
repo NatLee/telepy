@@ -430,6 +430,17 @@
     font-synthesis-weight: auto;
   }
 
+  /* xterm 5 的 DOM renderer 在 <body> 底下放一個量字寬的 div(top:-50000px; width:50000px)。對話框打開時
+     react-remove-scroll 把 body 設成 position:relative + overflow:hidden,這個 div 就把整頁撐到 5 萬 px 寬,
+     手機的版面視窗跟著縮小(終端機頁的每個對話框都變成 4 倍寬)。改成 fixed 就不算進頁面寬度,量字寬照常。
+     xterm 5's DOM renderer appends a measuring div (top:-50000px; width:50000px) to <body>. While a dialog
+     is open, react-remove-scroll makes body position:relative + overflow:hidden, so that div widened the page
+     to 50,000px and phones zoomed the layout out (every dialog on the terminal page rendered 4x wide).
+     position:fixed keeps it out of the page width; measuring is unaffected. */
+  body > div[aria-hidden="true"][style*="top: -50000px"] {
+    position: fixed !important;
+  }
+
   /* 沒有粗體可用,<strong> 改成螢光筆底線式強調(跟著文字顏色)。
      With no bold to fall back on, <strong> becomes a highlighter mark tinted by the text colour. */
   strong,

@@ -78,6 +78,9 @@ services:
       # 內建 SSH gateway：沿用原本的 host keys，裝置端 known_hosts 不受影響。
       # In-process SSH gateway; reuses the existing host keys so devices see the same host identity.
       - GATEWAY_HOST_KEYS_DIR=/config/ssh_host_keys
+      # gateway 前面有 L4 代理（nginx stream / HAProxy / NLB）時填它的 IP / CIDR，讓它送 PROXY protocol header 帶出裝置真正的 IP。
+      # IPs / CIDRs of an L4 proxy in front of the gateway that sends a PROXY protocol header (the device's real IP).
+      - GATEWAY_PROXY_PROTOCOL_FROM=${GATEWAY_PROXY_PROTOCOL_FROM:-}
     volumes:
       # Mutable data (SQLite db)
       - ./telepy-data:/data

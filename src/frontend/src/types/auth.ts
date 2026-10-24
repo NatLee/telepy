@@ -15,6 +15,9 @@ export interface UserProfile {
     theme?: "system" | "light" | "dark";
     /** 終端機字型大小(px, 10–24)。/ Web terminal font size. */
     terminal_font_size?: number;
+    /** 終端機字型 / 配色 id(lib/terminalAppearance.ts)。/ Terminal font / colour-scheme ids. */
+    terminal_font?: string;
+    terminal_scheme?: string;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
 }

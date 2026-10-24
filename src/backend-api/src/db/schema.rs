@@ -116,6 +116,8 @@ const TABLES: &[(&str, &str)] = &[
             "theme" varchar(8) NOT NULL DEFAULT 'system',
             "terminal_font_size" smallint unsigned NOT NULL DEFAULT 14 CHECK ("terminal_font_size" >= 0),
             "ui_scale" smallint unsigned NOT NULL DEFAULT 100,
+            "terminal_font" varchar(32) NOT NULL DEFAULT 'hack',
+            "terminal_scheme" varchar(32) NOT NULL DEFAULT 'telepy',
             "user_id" integer NOT NULL UNIQUE REFERENCES "auth_user" ("id") DEFERRABLE INITIALLY DEFERRED
         )"#,
     ),
@@ -352,6 +354,22 @@ const TABLES: &[(&str, &str)] = &[
             "reason" varchar(64) NULL
         )"#,
     ),
+    // Rust 自有：某使用者對某條隧道的終端機外觀覆寫（字型 / 字級 / 配色）；NULL 欄位 = 跟隨
+    // user_management_usersettings 的個人預設。隧道刪除時一併刪（db::tunnels::delete）。
+    // Per-user terminal appearance override for one tunnel (font / size / colour scheme); a NULL field
+    // inherits the personal default in user_management_usersettings. Deleted with the tunnel.
+    (
+        "telepy_terminal_profile",
+        r#"CREATE TABLE "telepy_terminal_profile" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "font" varchar(32) NULL,
+            "font_size" smallint NULL,
+            "scheme" varchar(32) NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -364,6 +382,7 @@ const TABLES: &[(&str, &str)] = &[
 
 const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
@@ -428,6 +447,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.
     ("user_management_usersettings", "ui_scale", "smallint unsigned NOT NULL DEFAULT 100"),
+    // 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
+    ("user_management_usersettings", "terminal_font", "varchar(32) NOT NULL DEFAULT 'hack'"),
+    ("user_management_usersettings", "terminal_scheme", "varchar(32) NOT NULL DEFAULT 'telepy'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
