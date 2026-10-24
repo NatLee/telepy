@@ -4,7 +4,8 @@ import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
-import { EVENT_KINDS, countByCategory, dayKey, dayRelation, filterLogs, groupByDay, type CategoryFilter } from "@/lib/gatewayLogs";
+import { EVENT_KINDS, countByCategory, filterLogs, type CategoryFilter } from "@/lib/gatewayLogs";
+import { dayKey, labelDays, type LabeledDayGroup } from "@/lib/timeline";
 
 /**
  * SSH gateway 事件（/api/log/ssh/events 的一筆）。後端已依權限過濾：管理員全看，其他人只看自己擁有／被分享的隧道。
@@ -72,12 +73,7 @@ export const ALL_TUNNELS = "all";
 export const PAGE_LIMIT = 500;
 const MAX_LIMIT = 5000;
 
-export interface LogDayGroup {
-    day: string;
-    /** 「今天 · 10月24日 週五」。/ "Today · Fri, Oct 24". */
-    label: string;
-    items: LogEntry[];
-}
+export type LogDayGroup = LabeledDayGroup<LogEntry>;
 
 export function useLogsPage() {
     const router = useRouter();
@@ -98,6 +94,9 @@ export function useLogsPage() {
     // 「載入更早的」會加大 limit；換隧道就回到第一頁。/ "Load older" raises the limit; switching tunnels starts over.
     const [paging, setPaging] = useState({ tunnel: tunnelFilter, limit: PAGE_LIMIT });
     const limit = paging.tunnel === tunnelFilter ? paging.limit : PAGE_LIMIT;
+    // logs 是用多大的 limit 抓的（載入更早的還在路上時，不能拿新的 limit 判斷「沒有更早的」）。
+    // The limit `logs` were fetched with (while "load older" is in flight, the new limit says nothing yet).
+    const [logsLimit, setLogsLimit] = useState(PAGE_LIMIT);
     const { showError } = useToast();
     const { t, locale } = useI18n();
     const { user } = useAuth();
@@ -200,6 +199,7 @@ export function useLogsPage() {
             );
             setFetchedAt(now);
             setLogsFor(tunnelFilter);
+            setLogsLimit(limit);
         } catch (e) {
             showError(e instanceof Error ? e.message : t("logs.fetchFailed"));
         } finally {
@@ -216,21 +216,15 @@ export function useLogsPage() {
     const counts = useMemo(() => countByCategory(logs, search, label), [logs, search, label]);
     const filteredLogs = useMemo(() => filterLogs(logs, { query: search, category, label }), [logs, search, category, label]);
 
-    const groups = useMemo<LogDayGroup[]>(() => {
-        const now = fetchedAt ?? new Date(0);
-        return groupByDay(filteredLogs).map((g) => {
-            const rel = dayRelation(g.day, now);
-            const date = g.items[0].date;
-            return { day: g.day, label: rel ? `${t(rel === "today" ? "logs.today" : "logs.yesterday")} · ${date}` : date, items: g.items };
-        });
-    }, [filteredLogs, fetchedAt, t]);
+    const groups = useMemo<LogDayGroup[]>(() => labelDays(filteredLogs, fetchedAt ?? new Date(0), t), [filteredLogs, fetchedAt, t]);
 
     // 第一次載入或換了隧道才整個換成轉圈；重新整理 / 載入更早的保留列表，頁面高度與捲動位置不跳。
     // Spinner only for the first load or a tunnel switch; refresh / load older keep the list so nothing jumps.
     const initialLoading = loading && (logs.length === 0 || logsFor !== tunnelFilter);
     // 回來的比要的少 = 沒有更早的了；到了後端上限就兩者都不說。/ Fewer than asked = nothing older; at the backend cap, neither.
-    const noOlder = logs.length < limit;
-    const hasMore = !noOlder && limit < MAX_LIMIT;
+    const loadingMore = logsLimit < limit;
+    const noOlder = !loadingMore && logs.length < logsLimit;
+    const hasMore = !noOlder && logsLimit < MAX_LIMIT;
     const loadMore = useCallback(() => setPaging({ tunnel: tunnelFilter, limit: Math.min(limit + PAGE_LIMIT, MAX_LIMIT) }), [tunnelFilter, limit]);
 
     const tunnelsById = useMemo(() => new Map(tunnels.map((x) => [x.id, x])), [tunnels]);

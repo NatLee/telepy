@@ -7,7 +7,7 @@
  * list), event-type filter and keyword search (hits highlighted). The page itself scrolls: the filter bar sticks under
  * the header (sm and up) and each day's heading under the filter bar.
  */
-import React, { Suspense, useEffect, useRef, useState } from "react";
+import React, { Suspense } from "react";
 import { Search, FileText, AlertCircle, RefreshCw, Filter, X, ShieldCheck, ChevronDown } from "lucide-react";
 import { AuditVerifyDialog } from "@/components/logs/AuditVerifyDialog";
 import { Button } from "@/components/ui/button";
@@ -19,7 +19,9 @@ import { Segmented } from "@/components/ui/segmented";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { ALL_TUNNELS, useLogsPage, type LogEntry, type TunnelOption } from "@/hooks/useLogsPage";
-import { CATEGORY_FILTERS, EVENT_KINDS, highlightSegments, type CategoryFilter } from "@/lib/gatewayLogs";
+import { CATEGORY_FILTERS, EVENT_KINDS, type CategoryFilter } from "@/lib/gatewayLogs";
+import { Highlighted, TimelineDay } from "@/components/ui/timeline";
+import { useStickyBar } from "@/hooks/useStickyBar";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
@@ -30,22 +32,6 @@ const CATEGORY_LABELS: Record<CategoryFilter, TranslationKey> = {
     session: "logs.cat.session",
     change: "logs.cat.change",
 };
-
-function Highlighted({ text, query }: { text: string; query: string }) {
-    return (
-        <>
-            {highlightSegments(text, query).map((seg, i) =>
-                seg.hit ? (
-                    <mark key={i} className="rounded-sm bg-primary/20 text-foreground">
-                        {seg.text}
-                    </mark>
-                ) : (
-                    <React.Fragment key={i}>{seg.text}</React.Fragment>
-                )
-            )}
-        </>
-    );
-}
 
 function LogRow({ log, query, tunnel, onTunnel }: { log: LogEntry; query: string; tunnel: TunnelOption | null; onTunnel: (id: number) => void }) {
     const { t } = useI18n();
@@ -88,15 +74,7 @@ function LogsPageInner() {
 
     // 每天的標題黏在篩選列下方，所以要知道篩選列多高（會換行，選了隧道也會變）。
     // Day headings stick under the filter bar, so they need its height (it wraps, and grows with a tunnel selected).
-    const barRef = useRef<HTMLDivElement>(null);
-    const [barHeight, setBarHeight] = useState(0);
-    useEffect(() => {
-        const bar = barRef.current;
-        if (!bar) return;
-        const ro = new ResizeObserver(() => setBarHeight(bar.offsetHeight));
-        ro.observe(bar);
-        return () => ro.disconnect();
-    }, []);
+    const { ref: barRef, style: barStyle } = useStickyBar();
 
     // 從某一列的隧道標籤切過去：換成那條隧道並回到頂端。/ From a row's tunnel chip: filter to it and go back to the top.
     const showTunnel = (id: number) => {
@@ -107,7 +85,7 @@ function LogsPageInner() {
     const filtering = search.trim() !== "" || category !== "all";
 
     return (
-        <div className="flex flex-col animate-fade-in-up" style={{ "--logs-bar": `${barHeight}px` } as React.CSSProperties}>
+        <div className="flex flex-col animate-fade-in-up" style={barStyle}>
             <PageHeader
                 className="mb-6"
                 icon={<FileText />}
@@ -196,9 +174,7 @@ function LogsPageInner() {
                 </div>
             </div>
 
-            {/* overflow-clip 只裁圓角、不建立捲動容器，所以裡面的 sticky 日期標題仍然跟著整頁黏住。
-                overflow-clip trims the rounded corners without creating a scroll container, so the sticky day headings
-                inside still stick to the page. */}
+            {/* overflow-clip：見 components/ui/timeline.tsx。/ overflow-clip: see components/ui/timeline.tsx. */}
             <div className="bg-card text-card-foreground border border-border rounded-xl shadow-card overflow-clip">
                 {initialLoading ? (
                     <div className="flex justify-center items-center py-24">
@@ -218,24 +194,18 @@ function LogsPageInner() {
                     <p className="px-6 py-10 text-center text-sm text-muted-foreground">{t("logs.noMatch")}</p>
                 ) : (
                     <div className={loading ? "opacity-60 transition-opacity" : undefined} aria-busy={loading}>
-                        {groups.map((group) => (
-                            <section key={group.day} aria-label={group.label} className="border-t border-border first:border-t-0">
-                                <h2 className="sticky top-16 z-10 flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-2 text-xs text-foreground sm:top-[calc(4rem+var(--logs-bar))] lg:px-5">
-                                    <span>{group.label}</span>
-                                    <span className="text-muted-foreground tabular-nums">{t("logs.dayCount", { count: group.items.length })}</span>
-                                </h2>
-                                <ol className="divide-y divide-border">
-                                    {group.items.map((log) => (
-                                        <LogRow
-                                            key={log.id}
-                                            log={log}
-                                            query={search}
-                                            tunnel={tunnelFilter === ALL_TUNNELS && log.tunnelId !== null ? tunnelsById.get(log.tunnelId) ?? null : null}
-                                            onTunnel={showTunnel}
-                                        />
-                                    ))}
-                                </ol>
-                            </section>
+                        {groups.map((group, i) => (
+                            <TimelineDay key={`${group.day}:${i}`} label={group.label} count={t("logs.dayCount", { count: group.items.length })}>
+                                {group.items.map((log) => (
+                                    <LogRow
+                                        key={log.id}
+                                        log={log}
+                                        query={search}
+                                        tunnel={tunnelFilter === ALL_TUNNELS && log.tunnelId !== null ? tunnelsById.get(log.tunnelId) ?? null : null}
+                                        onTunnel={showTunnel}
+                                    />
+                                ))}
+                            </TimelineDay>
                         ))}
                         {(hasMore || noOlder) && (
                             <div className="flex justify-center border-t border-border px-4 py-3">

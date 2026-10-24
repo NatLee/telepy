@@ -1,8 +1,11 @@
 /**
- * AI 活動頁邏輯：開著的 AI（MCP）SSH session（可關閉）與工具呼叫稽核紀錄；管理員可依隧道／使用者篩選。
+ * AI 活動頁邏輯：開著的 AI（MCP）SSH session（可關閉）與工具呼叫稽核紀錄；隧道（管理員另有使用者）在後端篩選，
+ * 工具類型 / 只看失敗 / 搜尋在前端篩選，列表依日期分組，「載入更早的」一次多 300 筆（後端最多 1000）。
  * 後端已依權限過濾：管理員全看，其他人看自己的與自己擁有的隧道上的。
- * AI activity page: live AI (MCP) SSH sessions with close, and the tool-call audit log; admins can filter.
- * The backend scopes both (admins: all; others: own rows + tunnels they own).
+ * AI activity page: live AI (MCP) SSH sessions with close, and the tool-call audit log. Tunnel (and, for admins,
+ * user) filters run on the backend; tool type / failed only / search run here; rows are grouped by day and "load
+ * older" adds 300 at a time (the backend caps at 1000). The backend scopes both (admins: all; others: own rows +
+ * tunnels they own).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api";
@@ -11,6 +14,9 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
+import { toolLabel } from "@/lib/aiAccess";
+import { countCalls, filterCalls, type ToolFilter } from "@/lib/aiActivity";
+import { dayKey, labelDays, type LabeledDayGroup } from "@/lib/timeline";
 
 export interface AiSession {
     id: string;
@@ -48,13 +54,26 @@ export interface AiActivityRow {
     ip?: string | null;
 }
 
+/** 加上頁面要顯示的時間欄位。/ A row plus the formatted time fields the page shows. */
+export interface AiActivityEntry extends AiActivityRow {
+    /** 時:分:秒（日期在分組標題）。/ Time of day (the date is in the group heading). */
+    time: string;
+    /** 依 locale 格式化的日期。/ Locale-formatted date. */
+    date: string;
+    /** 本地日期鍵 YYYY-MM-DD。/ Local day key. */
+    day: string;
+    /** 完整時間戳（含時區），滑過時間時顯示。/ Full timestamp with time zone, shown on hover. */
+    full: string;
+}
+
 export interface FilterOption {
     id: number;
     label: string;
 }
 
 export const ALL = "all";
-const LIMIT = 300;
+const PAGE = 300;
+const MAX_LIMIT = 1000;
 
 export function useAiActivityPage() {
     const { t, locale } = useI18n();
@@ -67,6 +86,19 @@ export function useAiActivityPage() {
     const [loading, setLoading] = useState(true);
     const [tunnelFilter, setTunnelFilter] = useState<string>(ALL);
     const [userFilter, setUserFilter] = useState<string>(ALL);
+    const [search, setSearch] = useState("");
+    const [toolFilter, setToolFilter] = useState<ToolFilter>("all");
+    const [failedOnly, setFailedOnly] = useState(false);
+    // 後端篩選的鍵：rows 屬於哪一組篩選（換了就不顯示舊的），「載入更早的」也跟著重來。
+    // The backend filter key: which filters `rows` belong to (stale rows are never shown), and "load older" restarts.
+    const filterKey = `${tunnelFilter}|${userFilter}`;
+    const [rowsFor, setRowsFor] = useState<string | null>(null);
+    // rows 是用多大的 limit 抓的（載入更早的還在路上時，不能拿新的 limit 判斷「沒有更早的」）。
+    // The limit `rows` were fetched with (while "load older" is in flight, the new limit says nothing yet).
+    const [rowsLimit, setRowsLimit] = useState(PAGE);
+    const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
+    const [paging, setPaging] = useState({ key: filterKey, limit: PAGE });
+    const limit = paging.key === filterKey ? paging.limit : PAGE;
     const [tunnels, setTunnels] = useState<FilterOption[]>([]);
     const [users, setUsers] = useState<FilterOption[]>([]);
 
@@ -81,16 +113,23 @@ export function useAiActivityPage() {
 
     const fetchActivity = useCallback(async () => {
         try {
-            const qs = new URLSearchParams({ limit: String(LIMIT) });
+            const qs = new URLSearchParams({ limit: String(limit) });
             if (tunnelFilter !== ALL) qs.set("tunnel_id", tunnelFilter);
             if (userFilter !== ALL) qs.set("user_id", userFilter);
             const res = await apiFetch(`/api/ai/activity?${qs.toString()}`);
-            if (res.ok) setRows(await res.json());
-            else showError(t("activity.fetchFailed"));
+            if (res.ok) {
+                setRows(await res.json());
+                setRowsLimit(limit);
+                setFetchedAt(new Date());
+            } else {
+                showError(t("activity.fetchFailed"));
+            }
         } catch (e) {
             showError(e instanceof Error ? e.message : t("activity.fetchFailed"));
+        } finally {
+            setRowsFor(`${tunnelFilter}|${userFilter}`);
         }
-    }, [tunnelFilter, userFilter, showError, t]);
+    }, [tunnelFilter, userFilter, limit, showError, t]);
 
     const refresh = useCallback(async () => {
         setLoading(true);
@@ -182,8 +221,57 @@ export function useAiActivityPage() {
         [fmt]
     );
 
+    // 每列的時間欄位（時:分:秒、日期、完整時間戳）。/ Per-row time fields (time of day, date, full timestamp).
+    const entries = useMemo<AiActivityEntry[]>(() => {
+        const year = (fetchedAt ?? new Date(0)).getFullYear();
+        const timeFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+        const dateFmt = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", weekday: "short" });
+        const dateYearFmt = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", weekday: "short" });
+        const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "long" });
+        return rows.map((r) => {
+            const d = new Date(r.at);
+            if (isNaN(d.getTime())) return { ...r, time: r.at, date: "", day: "", full: r.at };
+            return { ...r, time: timeFmt.format(d), date: (d.getFullYear() === year ? dateFmt : dateYearFmt).format(d), day: dayKey(d), full: fullFmt.format(d) };
+        });
+    }, [rows, fetchedAt, locale]);
+
+    const label = useCallback((tool: string) => toolLabel(tool, t), [t]);
+    const counts = useMemo(() => countCalls(entries, search, toolFilter, label), [entries, search, toolFilter, label]);
+    const filtered = useMemo(() => filterCalls(entries, { query: search, tool: toolFilter, failedOnly, label }), [entries, search, toolFilter, failedOnly, label]);
+    const groups = useMemo<LabeledDayGroup<AiActivityEntry>[]>(() => labelDays(filtered, fetchedAt ?? new Date(0), t), [filtered, fetchedAt, t]);
+
+    // 第一次載入或換了後端篩選才整個換成轉圈；重新整理 / 載入更早的保留列表，捲動位置不跳。
+    // Spinner only for the first load or a backend filter change; refresh / load older keep the list in place.
+    const initialLoading = rowsFor !== filterKey;
+    // 回來的比要的少 = 沒有更早的了；到了後端上限就兩者都不說。/ Fewer than asked = nothing older; at the cap, neither.
+    const loadingMore = rowsLimit < limit;
+    const noOlder = !loadingMore && rows.length < rowsLimit;
+    const hasMore = !noOlder && rowsLimit < MAX_LIMIT;
+    const loadMore = useCallback(() => setPaging({ key: filterKey, limit: Math.min(limit + PAGE, MAX_LIMIT) }), [filterKey, limit]);
+
     return {
-        state: { sessions, rows, loading, isAdmin, me: user?.username ?? null, meId: user?.id ?? null, tunnelFilter, userFilter, tunnels, users },
-        actions: { refresh, closeSession, setTunnelFilter, setUserFilter, formatTime },
+        state: {
+            sessions,
+            rows: entries,
+            filtered,
+            groups,
+            counts,
+            loading,
+            initialLoading,
+            hasMore,
+            noOlder,
+            loadingMore,
+            isAdmin,
+            me: user?.username ?? null,
+            meId: user?.id ?? null,
+            tunnelFilter,
+            userFilter,
+            tunnels,
+            users,
+            search,
+            toolFilter,
+            failedOnly,
+        },
+        actions: { refresh, closeSession, setTunnelFilter, setUserFilter, setSearch, setToolFilter, setFailedOnly, loadMore, formatTime },
     };
 }
