@@ -13,7 +13,7 @@ export interface HostKey {
     key_type: string;
     fingerprint: string;
     public_key: string;
-    /** first_use | accepted */
+    /** first_use | join | accepted */
     source: string;
     attempts: number;
     first_seen: string;
@@ -24,6 +24,10 @@ export interface DeviceHostKeys {
     pinned: HostKey[];
     rejected: HostKey[];
     can_manage: boolean;
+    /** 同一台機器上我看得到的其他隧道。/ Other tunnels I can see on this very machine. */
+    same_machine: { id: number; name: string }[];
+    /** 最近一次因「機器屬於別的帳號」被拒的連線。/ The last connection refused because the machine belongs to another account. */
+    refused_claim: { key_type: string; fingerprint: string; at: string } | null;
 }
 
 export function useDeviceHostKey(tunnelId: number | null, isOpen: boolean, onChanged?: () => void) {

@@ -60,6 +60,8 @@ pub struct Ticket {
     pub ssh_port: Option<i64>,
     pub hostname: Option<String>,
     pub os: Option<String>,
+    /// 這台機器已經是擁有者的另一條隧道（同一組 SSH host key）。/ The owner's other tunnel on this very machine.
+    pub same_machine_as: Option<SameMachine>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     #[serde(skip)]
@@ -85,6 +87,14 @@ pub struct Registration {
     pub ssh_port: i64,
     pub hostname: String,
     pub os: String,
+    pub same_machine_as: Option<SameMachine>,
+}
+
+/// 同一台機器上、同一個擁有者的另一條隧道。/ The same owner's other tunnel on the same machine.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SameMachine {
+    pub id: i64,
+    pub name: String,
 }
 
 #[derive(Default)]
@@ -130,6 +140,7 @@ impl JoinTickets {
             ssh_port: None,
             hostname: None,
             os: None,
+            same_machine_as: None,
             created_at: now,
             expires_at: now + chrono::Duration::from_std(TICKET_TTL).unwrap(),
             deadline: Instant::now() + TICKET_TTL,
@@ -173,6 +184,7 @@ impl JoinTickets {
         t.ssh_port = Some(r.ssh_port);
         t.hostname = Some(r.hostname);
         t.os = Some(r.os);
+        t.same_machine_as = r.same_machine_as;
         t.deadline = Instant::now() + STATUS_TTL;
         t.expires_at = Utc::now() + chrono::Duration::from_std(STATUS_TTL).unwrap();
         Some(t.clone())
@@ -315,7 +327,7 @@ mod tests {
         assert_eq!(s.claim(&token).unwrap_err(), TakeError::Used, "one registration per ticket");
         s.release(&claimed.token_hash);
         assert!(s.claim(&token).is_ok(), "a failed registration can be retried");
-        s.registered(&claimed.token_hash, Registration { tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), ssh_port: 22, hostname: "pi".into(), os: "Linux".into() });
+        s.registered(&claimed.token_hash, Registration { same_machine_as: None, tunnel_id: 7, tunnel_name: "pi".into(), reverse_port: 40001, username: "pi".into(), ssh_port: 22, hostname: "pi".into(), os: "Linux".into() });
         assert_eq!(s.by_token(&token).unwrap().tunnel_id, Some(7));
         assert!(s.begin_verify(&claimed.token_hash));
         assert!(!s.begin_verify(&claimed.token_hash), "one check at a time");

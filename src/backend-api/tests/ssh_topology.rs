@@ -45,6 +45,25 @@ async fn one_device_many_users() {
     let r = lab.laptop_exec(&carol, &[(Hop::Tunnel(&dev), "ubuntu")], "whoami").await;
     assert!(!r.ok, "{r:?}");
     assert!(!boxm.any_login_with(&carol.key));
+    // dave 被分享但一個帳號都不准用（只看狀態）：gateway 不開通道，裝置的 sshd 連他的敲門都看不到
+    // dave is shared the tunnel with no allowed account (status only): no direct-tcpip, the device never sees him
+    let dave = lab.user("dave").await;
+    lab.share(&alice, &dev, &dave, "edit", &[]).await;
+    let r = lab.laptop_exec(&dave, &[(Hop::Tunnel(&dev), "ubuntu")], "whoami").await;
+    assert!(!r.ok, "{r:?}");
+    assert!(!boxm.any_login_with(&dave.key));
+    let r = lab.app.get(&format!("/api/log/ssh/events?tunnel_id={}", dev.tunnel_id), Some(&alice.token)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "refused_direct"), "{}", r.text);
+    // ADMIN sharee 管帳號清單，所以不需要在清單上：過得了 gateway，裝置再用 authorized_keys 決定（這裡放了她的金鑰）
+    // An ADMIN sharee manages the allow-list, so needs no entry: passes the gateway; the device decides by authorized_keys
+    let erin = lab.user("erin").await;
+    lab.share(&alice, &dev, &erin, "admin", &[]).await;
+    let ssh_dir = boxm.account_home("ubuntu").join(".ssh");
+    std::fs::create_dir_all(&ssh_dir).unwrap();
+    std::fs::write(ssh_dir.join("authorized_keys"), format!("{}\n", erin.key.public)).unwrap();
+    let r = lab.laptop_exec(&erin, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await;
+    assert_eq!(r.stdout, "ubuntu@box", "{r:?}");
+    assert!(boxm.logged_in("ubuntu", &erin.key));
     // API 產生的 ~/.ssh/config 原樣可用
     let (cfg, alias) = lab.generated_ssh_config(&alice, &dev, "root").await;
     let r = lab.ssh_with_config(&cfg, &alias, "whereami").await;

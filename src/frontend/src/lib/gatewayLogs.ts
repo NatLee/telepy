@@ -37,6 +37,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     invalid_user: { key: "logs.event.invalid_user", tone: "destructive", category: "problem" },
     expired_key: { key: "logs.event.expired_key", tone: "destructive", category: "problem" },
     host_key_mismatch: { key: "logs.event.host_key_mismatch", tone: "destructive", category: "problem" },
+    claim_refused: { key: "logs.event.claim_refused", tone: "destructive", category: "problem" },
+    claim_attempt: { key: "logs.event.claim_attempt", tone: "destructive", category: "problem" },
     degraded: { key: "logs.event.degraded", tone: "warning", category: "problem" },
     step_up_required: { key: "logs.event.step_up_required", tone: "warning", category: "problem" },
     terminal_open: { key: "logs.event.terminal_open", tone: "default", category: "session" },

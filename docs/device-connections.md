@@ -116,3 +116,27 @@
 隧道詳細資訊的「裝置身分」核對指紋後按「改信任這把金鑰」，或「忘掉」讓下一次連線重新記。理由：裝置分不出 Telepy
 使用者、只認服務金鑰，而拿到隧道金鑰的人可以把 `-R` 指到自己的 sshd 冒充裝置，接住終端機輸入、上傳的檔案與遠端桌面
 的密碼；釘選之後這種冒充在握手時就被擋下，服務金鑰的登入也不會送出。測試：`tests/host_keys.rs`。
+
+## 七、一台機器一個主人（host key = 機器身分）
+
+裝置分不出 Telepy 使用者：所有人都用同一把服務金鑰登入，誰能把隧道指到那台 sshd（`-R <port>:<那台>:22`，從它本機的
+任何帳號、同一個區網或 VPN 都行），誰就能用「自己隧道」的帳號清單登入它，連 root 都行。擋這件事的是釘選的 host key：
+它同時是「這台機器」的身分。
+
+- **釘選前先看同一把金鑰還被誰信任**（`db::host_keys::claimants`）：別的帳號的隧道 → 拒絕握手（錯誤開頭
+  `device managed by another account`，API / 遠端桌面錯誤碼 `device_claimed`），被拒的隧道記 `claim_refused`，那台機器
+  的隧道記 `claim_attempt` 並送 `DEVICE-CLAIM-ATTEMPT` 給擁有者與 ADMIN sharee；同一把只報一次。「確認新金鑰」與
+  「忘掉再連」都走同一條規則，繞不過。自己的另一條隧道 → 照常釘選，`GET …/host-key` 的 `same_machine` 列出來。
+- **加入腳本在註冊時就送 host key**（`ssh-keyscan` 本機 → `host_keys`）：屬於別的帳號的機器在建隧道前就被拒（409，訊息
+  請他向擁有者要分享，或若是複製的 VM 就重做 host key）；自己的另一條隧道回 `SAME_MACHINE_AS`，票上有 `same_machine_as`
+  給網頁提醒；新隧道的 host key 立刻釘選（`source = join`），第一次連線不再是看到什麼信什麼。重新加入時只在還沒釘、或
+  至少一把對得上時才補釘，全換掉的留給連線時的比對去拒絕。
+- **裝置金鑰全站唯一**（`api::reverse_keys::device_key_problem`）：不看註解、不分誰的，也不能是任何人的個人金鑰或服務
+  金鑰（gateway 只認金鑰，先登記的那條隧道會被當成那把金鑰的裝置）。
+- **gateway 的 direct-tcpip**：只看狀態、一個帳號都沒被允許的 sharee 不能開通道到裝置的 sshd（允許清單是唯一邊界；
+  ADMIN 管清單所以例外）。
+- 隧道刪掉後釘選也沒了，機器就沒有主人，下一個指過來的人會釘選它；要在刪除時勾「移除服務金鑰」，機器才真的離開 Telepy。
+
+測試：`tests/machine_identity.rs`（指到別人的機器、兩種繞法、自己的第二條、刪掉後釋出）、`tests/join_api.rs`
+（註冊時的拒絕 / 同一台提醒 / 立刻釘選）、`tests/rest_api.rs`（裝置金鑰去重）、`tests/ssh_topology.rs`（沒有允許帳號的
+sharee）。

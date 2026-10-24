@@ -184,6 +184,11 @@ export function useTunnelsPage() {
             showError(t("hostKey.notify", { name }));
             fetchData();
         },
+        // 別的帳號把隧道指到了我的機器（已被拒）：提醒去看誰碰得到那台。/ Another account's tunnel reached my machine (refused).
+        [NOTIFICATION_ACTIONS.DEVICE_CLAIM_ATTEMPT]: (msg) => {
+            const name = (typeof msg.tunnel_name === "string" && msg.tunnel_name) || tunnels.find((tn) => tn.id === msg.tunnel_id)?.host_friendly_name || `#${msg.tunnel_id ?? "?"}`;
+            showError(t("hostKey.claimNotify", { name, by: String(msg.by ?? "?") }));
+        },
     });
 
     const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {

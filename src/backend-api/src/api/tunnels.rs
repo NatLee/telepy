@@ -76,6 +76,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
     let key_alerts = db::host_keys::tunnels_with_rejected(&state.db).await?;
+    let claimed = state.host_keys.claimed_tunnels();
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -104,6 +105,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
             // 裝置出示了和釘選不同的 host key、正等擁有者確認。/ The device presented a different host key; waiting for review.
             v["host_key_changed"] = json!(key_alerts.contains(&t.id));
+            // 這條隧道指到的機器屬於別的帳號，連線被拒。/ The machine behind this tunnel belongs to another account; refused.
+            v["device_claimed"] = json!(claimed.contains(&t.id));
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
                 _ => Value::Null,
@@ -388,6 +391,9 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
     crate::recording::forget_tunnel(&state, id).await;
     db::tunnels::delete(&state.db, id).await?;
+    // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
+    // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.
+    state.host_keys.invalidate(id);
     let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false), &revoke).await?;
     let disconnected = state.gateway.disconnect_tunnel(t.id).await;
     tracing::info!(tunnel = t.id, name = %t.host_friendly_name, keys_left = cleanup.keys_left, revoked, detached, ai_closed, disconnected, "tunnel deleted");

@@ -141,7 +141,7 @@ async fn list_screens(State(state): State<AppState>, AuthUser(user): AuthUser, h
     // Make sure the device answers first (offline / refused key = 502); each command then gets its own channel.
     let probe = state.pool.acquire(&state, tunnel.reverse_port, &hop_username).await.map_err(|e| {
         let m = format!("{e:#}");
-        let code = if m.contains(crate::ssh::host_keys::CHANGED) { "host_key_changed" } else if m.contains("device offline") { "device_offline" } else if m.contains("device auth") || m.contains("authentication failed") { "device_auth" } else { "device_unreachable" };
+        let code = if m.contains(crate::ssh::host_keys::CHANGED) { "host_key_changed" } else if m.contains(crate::ssh::host_keys::CLAIMED) { "device_claimed" } else if m.contains("device offline") { "device_offline" } else if m.contains("device auth") || m.contains("authentication failed") { "device_auth" } else { "device_unreachable" };
         coded(StatusCode::BAD_GATEWAY, code, m)
     })?;
     drop(probe);

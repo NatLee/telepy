@@ -23,6 +23,8 @@ export const NOTIFICATION_ACTIONS = {
     AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
     // 裝置出示了和釘選不同的 SSH host key（送給隧道擁有者與被分享者）。/ A device presented a different host key (tunnel audience).
     HOST_KEY_CHANGED: "HOST-KEY-CHANGED",
+    // 別的帳號把隧道指到了你的機器、被拒絕（送給擁有者與 ADMIN 被分享者）。/ Another account's tunnel reached your machine and was refused.
+    DEVICE_CLAIM_ATTEMPT: "DEVICE-CLAIM-ATTEMPT",
     // 裝置金鑰清單同步完（送給隧道擁有者與被分享者）。/ A device's key list was synced (tunnel audience).
     DEVICE_KEYS_UPDATED: "DEVICE-KEYS-UPDATED",
     // 區網掃描（#20）：進度 / 完成只送給發起的人，主機表更新送給看得到隧道的人。

@@ -108,6 +108,8 @@ pub struct Machine {
     pub port: u16,
     /// 當前目錄 = sftp-server 的 home。
     pub home: PathBuf,
+    /// 這台 sshd 的 host key（`type base64`）：Telepy 用它辨認機器。/ The sshd's host key (`type base64`).
+    pub host_key: String,
     logins: Arc<Mutex<Vec<Login>>>,
     ptys: Arc<Mutex<Vec<PtyState>>>,
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
@@ -565,7 +567,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
             });
         }
     });
-    Machine { name: name.to_string(), port, home, logins, ptys, resizes, resolves, commands }
+    Machine { name: name.to_string(), port, home, host_key: host_key.bare(), logins, ptys, resizes, resolves, commands }
 }
 
 // ------------------------------------------------------------------ lab

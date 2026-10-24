@@ -271,14 +271,19 @@ main() {
         [ -n "$SSH_PORT" ] || SSH_PORT=22
     fi
     step "Checking the SSH server on port $SSH_PORT"
+    # This machine's SSH host keys: Telepy pins them now (no trust-on-first-use later) and uses them to tell machines
+    # apart, so a machine that already belongs to another account's tunnel is refused instead of taken over.
+    SCAN=""
     if command -v ssh-keyscan >/dev/null 2>&1; then
-        if [ -z "$(ssh-keyscan -T 5 -p "$SSH_PORT" 127.0.0.1 2>/dev/null)" ]; then
+        SCAN=$(ssh-keyscan -T 5 -p "$SSH_PORT" 127.0.0.1 2>/dev/null || true)
+        if [ -z "$SCAN" ]; then
             if [ "$OS" = Darwin ]; then
                 die "no SSH server answers on port $SSH_PORT. Turn on Remote Login (System Settings > General > Sharing), or pass --ssh-port."
             fi
             die "no SSH server answers on port $SSH_PORT. Install and start openssh-server (e.g. sudo apt install openssh-server), or pass --ssh-port."
         fi
     fi
+    HOST_KEYS_JSON=$(printf '%s\n' "$SCAN" | awk 'NF >= 3 && $2 ~ /^(ssh-|ecdsa-|sk-)/ && $3 ~ /^[A-Za-z0-9+\/=]+$/ { printf "%s\"%s %s\"", (n++ ? "," : ""), $2, $3 }')
     say "ok"
 
     HOST_NAME=$( (hostname 2>/dev/null || uname -n) | tr -cd 'A-Za-z0-9._-')
@@ -304,8 +309,8 @@ main() {
 
     # --- register -----------------------------------------------------------------------------------
     step "Registering this machine with Telepy"
-    BODY=$(printf '{"public_key":"%s","hostname":"%s","username":"%s","ssh_port":%s,"os":"%s","name":"%s"}' \
-        "$PUBLIC_KEY" "$HOST_NAME" "$TARGET_USER" "$SSH_PORT" "$OS_INFO" "$NAME")
+    BODY=$(printf '{"public_key":"%s","hostname":"%s","username":"%s","ssh_port":%s,"os":"%s","name":"%s","host_keys":[%s]}' \
+        "$PUBLIC_KEY" "$HOST_NAME" "$TARGET_USER" "$SSH_PORT" "$OS_INFO" "$NAME" "$HOST_KEYS_JSON")
     http POST "$TELEPY_URL/api/join/$TOKEN" "$BODY"
     case "$HTTP_STATUS" in
         2*) ;;
@@ -324,6 +329,10 @@ main() {
     case "$GATEWAY_HOST$GATEWAY_USER$TUNNEL_NAME" in ""|*[!A-Za-z0-9._-]*) die "unexpected answer from Telepy" ;; esac
     case "$SERVICE_KEY" in ssh-*|ecdsa-*) ;; *) die "Telepy sent no service key" ;; esac
     say "registered as $TUNNEL_NAME (tunnel #$TUNNEL_ID)"
+    SAME_MACHINE_AS=$(value SAME_MACHINE_AS || true)
+    if [ -n "$SAME_MACHINE_AS" ]; then
+        warn "this machine is already your tunnel '$SAME_MACHINE_AS' (same SSH host key). Two tunnels on one machine work, but they manage the same accounts and keys separately; consider adding this account to '$SAME_MACHINE_AS' instead."
+    fi
 
     # --- authorize Telepy ---------------------------------------------------------------------------
     step "Authorizing Telepy to log in as $TARGET_USER"
