@@ -96,6 +96,10 @@ switch ($Command) {
         Invoke-DevScript "dev-geoip" $Arguments
         break
     }
+    "oui" {
+        Invoke-DevScript "dev-oui" $Arguments
+        break
+    }
     "doctor" {
         Invoke-DevScript "dev-doctor" $Arguments
         break
@@ -109,6 +113,7 @@ switch ($Command) {
         Write-ColorMessage $Colors.Green "  migration: Reconcile the database schema (also runs automatically on start)."
         Write-ColorMessage $Colors.Green "  backend-debug: Recreate the backend container and follow its logs."
         Write-ColorMessage $Colors.Green "  geoip: Download the offline IP geolocation databases (DB-IP Lite; re-run monthly)."
+        Write-ColorMessage $Colors.Green "  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor (re-run now and then)."
         Write-ColorMessage $Colors.Green "  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken."
         break
     }

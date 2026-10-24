@@ -2327,6 +2327,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "network.field.address": "位址",
     "network.field.hostname": "主機名稱",
     "network.field.mac": "MAC",
+    "network.field.vendor": "廠商",
+    "network.macPrivate": "私有（隨機）位址",
     "network.field.openPorts": "開著的 port",
     "network.field.banner": "SSH banner",
     "network.field.source": "來源",

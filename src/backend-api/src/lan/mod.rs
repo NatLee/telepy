@@ -223,6 +223,44 @@ pub fn parse_getent(output: &str) -> Vec<(Ipv4Addr, String)> {
         .collect()
 }
 
+/// `avahi-resolve -a ip…` 的輸出（`ip<TAB>name.local`）→ (ip, 名稱)。/ Names from `avahi-resolve -a` (mDNS).
+pub fn parse_avahi(output: &str) -> Vec<(Ipv4Addr, String)> {
+    output
+        .lines()
+        .filter_map(|l| {
+            let (ip, rest) = l.trim().split_once(char::is_whitespace)?;
+            let ip: Ipv4Addr = ip.parse().ok()?;
+            let name = rest.trim().trim_end_matches('.').to_string();
+            (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))).then_some((ip, name))
+        })
+        .collect()
+}
+
+/// `for ip; do echo "@@ $ip"; nmblookup -A $ip; done` 的輸出 → (ip, NetBIOS 名稱)：每段第一個 `<00>` 的唯一名稱
+/// （不是 `<GROUP>`，那是工作群組）。/ NetBIOS names: the first unique `<00>` name of each section.
+pub fn parse_nmblookup(output: &str) -> Vec<(Ipv4Addr, String)> {
+    let mut out = Vec::new();
+    let mut current: Option<Ipv4Addr> = None;
+    for line in output.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            current = rest.trim().parse().ok();
+            continue;
+        }
+        let Some(ip) = current else { continue };
+        if line.contains("<GROUP>") {
+            continue;
+        }
+        if let Some(i) = line.find("<00>") {
+            let name = line[..i].trim();
+            if !name.is_empty() && name.len() <= 15 && !name.contains(char::is_whitespace) {
+                out.push((ip, name.to_string()));
+                current = None;
+            }
+        }
+    }
+    out
+}
+
 /// SSH banner 的第一行（`SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13`）。/ First line of an SSH banner.
 pub fn parse_ssh_banner(bytes: &[u8]) -> Option<String> {
     let line = String::from_utf8_lossy(bytes);
@@ -250,6 +288,14 @@ pub fn targets(networks: &[Network], own: &[Ipv4Addr]) -> Vec<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn avahi_and_netbios_names() {
+        let avahi = "192.168.1.5\tprinter.local\n192.168.1.6\tbad name;rm\nFailed to resolve address '192.168.1.7': Timeout reached\n";
+        assert_eq!(parse_avahi(avahi), vec![("192.168.1.5".parse().unwrap(), "printer.local".to_string())]);
+        let nmb = "@@ 192.168.1.20\nLooking up status of 192.168.1.20\n\tWORKGROUP       <00> - <GROUP> B <ACTIVE> \n\tDESKTOP-ABC     <00> -         B <ACTIVE> \n\tDESKTOP-ABC     <20> -         B <ACTIVE> \n@@ 192.168.1.21\nNo reply from 192.168.1.21\n";
+        assert_eq!(parse_nmblookup(nmb), vec![("192.168.1.20".parse().unwrap(), "DESKTOP-ABC".to_string())]);
+    }
 
     #[test]
     fn networks_from_ip_addr() {

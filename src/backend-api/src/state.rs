@@ -13,6 +13,7 @@ use crate::desktop::Desktop;
 use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
 use crate::geoip::GeoIp;
+use crate::oui::Oui;
 use crate::hub::Hub;
 use crate::join::JoinTickets;
 use crate::lan::scan::LanScans;
@@ -37,6 +38,8 @@ pub struct Inner {
     pub presence: Arc<Presence>,
     /// 離線 GeoIP（沒有資料庫時只判斷位址範圍）。/ Offline GeoIP; scope only without databases.
     pub geoip: Arc<GeoIp>,
+    /// 網卡廠商表（IEEE OUI）。/ NIC vendor table.
+    pub oui: Arc<Oui>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
     /// 網頁內遠端桌面（RDP / VNC，經 guacd）的 session。/ In-browser remote desktop sessions (guacd).
@@ -101,6 +104,7 @@ impl AppState {
             http,
             status,
             geoip: Arc::new(GeoIp::load(&config.geoip_dir)),
+            oui: Arc::new(Oui::load(&config.oui_dir)),
             presence,
             gateway,
             pool: Arc::new(DevicePool::default()),

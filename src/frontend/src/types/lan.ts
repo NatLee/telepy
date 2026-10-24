@@ -10,6 +10,10 @@ export interface LanHost {
     address: string;
     hostname: string | null;
     mac: string | null;
+    /** 網卡廠商（後端有 IEEE OUI 表才有）。/ NIC vendor (when the server has the OUI table). */
+    vendor?: string | null;
+    /** 隨機 / 私有 MAC（查不到廠商）。/ Randomized (private) MAC; no vendor. */
+    mac_private?: boolean;
     open_ports: number[];
     ssh_banner: string | null;
     label: string | null;

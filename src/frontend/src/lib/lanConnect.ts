@@ -23,6 +23,15 @@ export function hostKind(h: LanHost): HostKind {
     return "other";
 }
 
+/** 廠商名稱去掉公司字尾，放得進小標籤。/ Vendor name without company suffixes, for a small tag. */
+export function shortVendor(vendor: string): string {
+    const v = vendor
+        .replace(/[,.]?\s+(Co\.,?\s*Ltd\.?|Co\.,?\s*Limited|Corporation|Corp\.?|Inc\.?|Incorporated|Ltd\.?|Limited|LLC|GmbH(\s*&\s*Co\.?\s*KG)?|AG|S\.?A\.?|B\.?V\.?|AB|Oy|Pty\.?\s*Ltd\.?|SE|K\.?K\.?)\.?$/i, "")
+        .replace(/[,.]\s*$/, "")
+        .trim();
+    return v.length > 24 ? `${v.slice(0, 23)}…` : v;
+}
+
 /** 顯示名稱：標籤 > 主機名稱 > 位址。/ Display name: label, then hostname, then address. */
 export function hostName(h: LanHost): string {
     return h.label || h.hostname || h.address;

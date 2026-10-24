@@ -21,6 +21,7 @@ pub mod lan;
 pub mod mcp;
 pub mod mfa;
 pub mod monitor;
+pub mod oui;
 pub mod oauth;
 pub mod permissions;
 pub mod presence;

@@ -89,6 +89,8 @@ pub struct Config {
     pub client_ip_header: Option<String>,
     /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
     pub geoip_dir: PathBuf,
+    /// IEEE OUI 廠商表的目錄（`oui.csv`）。/ Directory with IEEE's oui.csv.
+    pub oui_dir: PathBuf,
     // --- WebSocket liveness (terminal / file manager / remote browser) ---
     /// 每隔多久送一次 WebSocket Ping（瀏覽器自動回 Pong，背景分頁也一樣）。/ How often the server pings.
     pub ws_ping_interval: Duration,
@@ -142,6 +144,7 @@ impl Config {
         let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
         let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
         let geoip_dir = env("GEOIP_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("geoip"));
+        let oui_dir = env("OUI_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("oui"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -195,6 +198,7 @@ impl Config {
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,
+            oui_dir,
             ws_ping_interval: Duration::from_secs(env("WS_PING_INTERVAL_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(20)),
             ws_peer_timeout: Duration::from_secs(env("WS_PEER_TIMEOUT_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(40)),
         }

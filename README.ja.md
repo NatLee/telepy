@@ -140,6 +140,7 @@ Sub-commands:
   shell: Open a shell in the backend container.
   migration: Reconcile the database schema (also runs automatically on start).
   backend-debug: Recreate the backend container and follow its logs.
+  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor.
   doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken.
 ```
 

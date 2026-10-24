@@ -59,6 +59,10 @@ case "$1" in
         shift
         execute_script "dev-geoip" "$@"
         ;;
+    oui)
+        shift
+        execute_script "dev-oui" "$@"
+        ;;
     doctor)
         shift
         execute_script "dev-doctor" "$@"
@@ -72,6 +76,7 @@ case "$1" in
         print_message "$GREEN" "  migration: Reconcile the database schema (also runs automatically on start)."
         print_message "$GREEN" "  backend-debug: Recreate the backend container and follow its logs."
         print_message "$GREEN" "  geoip: Download the offline IP geolocation databases (DB-IP Lite; re-run monthly)."
+        print_message "$GREEN" "  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor (re-run now and then)."
         print_message "$GREEN" "  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken."
         ;;
 esac
