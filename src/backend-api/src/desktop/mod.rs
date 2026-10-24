@@ -159,6 +159,9 @@ pub enum PrepareError {
     Auth,
     #[error("the device could not reach {0}")]
     Unreachable(String),
+    /// 裝置的 sshd 不允許轉發（`AllowTcpForwarding no`，例如 Alpine 的預設）。/ The device's sshd forbids forwarding.
+    #[error("the device's SSH server does not allow port forwarding (AllowTcpForwarding)")]
+    ForwardingDisabled,
     #[error("{0}")]
     Other(String),
 }
@@ -169,6 +172,7 @@ impl PrepareError {
             Self::Offline => "device_offline",
             Self::Auth => "device_auth",
             Self::Unreachable(_) => "target_unreachable",
+            Self::ForwardingDisabled => "forwarding_disabled",
             Self::Other(_) => "device_unreachable",
         }
     }
@@ -189,6 +193,7 @@ pub async fn prepare(state: &AppState, reverse_port: i64, hop_username: &str, ta
     let open = lease.device().channel_open_direct_tcpip(target.host.clone(), target.port as u32, "127.0.0.1", 0);
     let channel = match tokio::time::timeout(OPEN_TIMEOUT, open).await {
         Ok(Ok(c)) => c,
+        Ok(Err(russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::AdministrativelyProhibited))) => return Err(PrepareError::ForwardingDisabled),
         Ok(Err(e)) => return Err(PrepareError::Unreachable(format!("{}:{} ({e})", target.host, target.port))),
         Err(_) => return Err(PrepareError::Unreachable(format!("{}:{} (timed out)", target.host, target.port))),
     };

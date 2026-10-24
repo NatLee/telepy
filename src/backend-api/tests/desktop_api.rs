@@ -286,6 +286,13 @@ async fn desktop_refusals() {
     let r = start(alice.token.clone(), json!({"protocol": "rdp", "username": "ubuntu", "port": free_port()})).await;
     assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("target_unreachable")), "{}", r.text);
 
+    // 裝置的 sshd 不允許轉發 → 502 forwarding_disabled。/ The device's sshd forbids forwarding → 502.
+    let locked = lab.machine("locked", &[("ubuntu", &[&lab.service])], false).await;
+    let locked_dev = lab.device(&alice, "locked", &locked).await;
+    lab.username(&alice, &locked_dev, "ubuntu").await;
+    let r = app.post(&format!("/api/reverse/server/{}/desktop/start", locked_dev.tunnel_id), Some(&alice.token), json!({"protocol": "rdp", "username": "ubuntu", "port": desktop})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("forwarding_disabled")), "{}", r.text);
+
     // 別條隧道的區網主機 → 404。/ A LAN host of another tunnel → 404.
     let other = lab.device(&bob, "other", &pc).await;
     let r = app.post(&format!("/api/reverse/server/{}/lan/hosts", other.tunnel_id), Some(&bob.token), json!({"address": "127.0.0.1"})).await;

@@ -757,6 +757,7 @@ export const ja: Record<TranslationKey, string> = {
     "desktop.pathSummary": "あなたのブラウザー → Telepy → {device} → {target}",
     "desktop.err.deviceOffline": "デバイスがオフラインです：Telepy へのトンネルがつながっていません。",
     "desktop.err.deviceAuth": "デバイスがアカウント {account} での Telepy の鍵を拒否しました。そのアカウントの authorized_keys にサービス鍵を追加してください。",
+    "desktop.err.forwardingDisabled": "デバイスの SSH サーバーがポート転送を許可していません。sshd_config で AllowTcpForwarding yes を設定し、sshd を再起動してください。",
     "desktop.err.targetUnreachable": "デバイスから {address} に接続できませんでした。RDP / VNC サーバーが起動していて、そのポートで待ち受けているか確認してください。",
     "desktop.err.deviceUnreachable": "Telepy はデバイス経由の接続を開けませんでした。",
     "desktop.err.busy": "リモートデスクトップの枠がすべて使用中です。しばらくしてからもう一度お試しください。",

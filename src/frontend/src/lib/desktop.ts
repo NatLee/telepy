@@ -61,6 +61,8 @@ export function startFailure(code: string | undefined, status: number, vars: { a
             return { key: "desktop.err.deviceOffline", at: "tunnel" };
         case "device_auth":
             return { key: "desktop.err.deviceAuth", vars: { account: vars.account }, at: "device" };
+        case "forwarding_disabled":
+            return { key: "desktop.err.forwardingDisabled", at: "device" };
         case "target_unreachable":
             return { key: "desktop.err.targetUnreachable", vars: { address: vars.address }, at: "reach" };
         case "device_unreachable":

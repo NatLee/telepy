@@ -67,7 +67,7 @@ function StateLine({ state }: { state: SpotState }) {
 function Node({ icon, brand, title, sub, state }: { icon?: LucideIcon; brand?: boolean; title: string; sub: string; state: SpotState }) {
     const Icon = icon;
     return (
-        <li className={cn("flex min-w-0 flex-col items-center gap-1.5 rounded-xl border bg-card px-3 py-3 text-center @2xl:w-44 @2xl:shrink-0", NODE_BORDER[state])}>
+        <li className={cn("flex min-w-0 flex-col items-center gap-1.5 rounded-xl border bg-card px-3 py-3 text-center @3xl:flex-1 @3xl:basis-0", NODE_BORDER[state])}>
             <span className={cn("grid size-10 place-items-center rounded-lg", brand ? "bg-brand-gradient text-white" : "bg-muted text-foreground")} aria-hidden>
                 {brand ? <TelepyGlyph size={22} /> : Icon ? <Icon size={20} /> : null}
             </span>
@@ -83,7 +83,7 @@ function Link({ label, state, motion }: { label: string; state: SpotState; motio
     const dash = state === "waiting" ? "4 5" : state === "failed" ? "2 6" : "7 5";
     const line = (vertical: boolean) => (
         <svg
-            className={cn(vertical ? "h-10 w-3 @2xl:hidden" : "hidden h-3 w-full @2xl:block", STATE_TONE[state])}
+            className={cn(vertical ? "h-10 w-3 @3xl:hidden" : "hidden h-3 w-full @3xl:block", STATE_TONE[state])}
             viewBox={vertical ? "0 0 6 100" : "0 0 100 6"}
             preserveAspectRatio="none"
             aria-hidden
@@ -94,10 +94,10 @@ function Link({ label, state, motion }: { label: string; state: SpotState; motio
         </svg>
     );
     return (
-        <li className="flex min-w-0 flex-row items-center gap-3 px-6 @2xl:flex-1 @2xl:flex-col @2xl:gap-1 @2xl:px-1" aria-label={label}>
+        <li className="flex min-w-0 flex-row items-center gap-3 px-6 @3xl:w-24 @3xl:shrink-0 @3xl:flex-col @3xl:gap-1 @3xl:px-1.5" aria-label={label}>
             {line(true)}
             {line(false)}
-            <span className={cn("text-xs leading-snug @2xl:text-center", state === "failed" ? "text-destructive" : "text-muted-foreground")}>
+            <span className={cn("text-xs leading-tight @3xl:text-center", state === "failed" ? "text-destructive" : "text-muted-foreground")}>
                 {state === "failed" && <XCircle size={12} className="mr-1 inline-block align-[-2px]" aria-hidden />}
                 {label}
             </span>
@@ -146,7 +146,7 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
             </p>
 
             <div className="@container">
-                <ol className="flex flex-col items-stretch @2xl:flex-row @2xl:items-center">
+                <ol className="flex flex-col items-stretch @3xl:flex-row @3xl:items-center">
                     <Node icon={Laptop} title={t("desktop.flow.you")} sub={t("desktop.flow.youSub")} state={s.browser} />
                     <Link label={t("desktop.flow.linkWeb")} state={s.web} motion={motion} />
                     <Node brand title="Telepy" sub={t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />

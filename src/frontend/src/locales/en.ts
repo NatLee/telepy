@@ -767,6 +767,7 @@ export const en = {
     "desktop.pathSummary": "Your browser → Telepy → {device} → {target}",
     "desktop.err.deviceOffline": "The device is offline: its tunnel to Telepy is not connected.",
     "desktop.err.deviceAuth": "The device refused Telepy's key for the account {account}. Add the service key to that account's authorized_keys.",
+    "desktop.err.forwardingDisabled": "The device's SSH server does not allow port forwarding. Set AllowTcpForwarding yes in its sshd_config and restart sshd.",
     "desktop.err.targetUnreachable": "The device could not reach {address}. Check that the RDP or VNC server is running and listening on that port.",
     "desktop.err.deviceUnreachable": "Telepy could not open a connection through the device.",
     "desktop.err.busy": "All remote desktop slots are in use. Try again in a moment.",

@@ -757,6 +757,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "desktop.pathSummary": "你的瀏覽器 → Telepy → {device} → {target}",
     "desktop.err.deviceOffline": "裝置離線：它到 Telepy 的通道沒有連上。",
     "desktop.err.deviceAuth": "裝置不接受 Telepy 用 {account} 帳號登入的金鑰。請把服務金鑰加到該帳號的 authorized_keys。",
+    "desktop.err.forwardingDisabled": "裝置的 SSH 伺服器不允許轉發。請在它的 sshd_config 設定 AllowTcpForwarding yes 並重新啟動 sshd。",
     "desktop.err.targetUnreachable": "裝置連不到 {address}。請確認 RDP / VNC 伺服器有在執行，並在那個埠上等待連線。",
     "desktop.err.deviceUnreachable": "Telepy 無法經由裝置建立連線。",
     "desktop.err.busy": "遠端桌面的名額都在使用中，請稍後再試。",
