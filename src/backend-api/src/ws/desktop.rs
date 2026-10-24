@@ -12,10 +12,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::close;
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::desktop::guac::{self, Guacd, Parser, Size, Unit};
@@ -47,29 +46,37 @@ pub fn parse_size(query: &HashMap<String, String>, max: u32) -> Size {
     Size { width: dim("width", 1280), height: dim("height", 720), dpi }
 }
 
+/// 關閉並把代碼也放進 reason：guacamole-common-js 的 WebSocketTunnel 只看 reason（`parseInt(reason)` 當狀態碼），
+/// 自訂的 4xxx 關閉碼本身會被它翻成籠統的 SERVER_ERROR。
+/// Close with the code repeated as the reason: the Guacamole tunnel reads `parseInt(reason)` as the status and
+/// would otherwise turn our 4xxx codes into a generic SERVER_ERROR.
+async fn close_with_code(socket: &mut WebSocket, code: u16) {
+    let _ = socket.send(Message::Close(Some(CloseFrame { code, reason: Utf8Bytes::from(code.to_string()) }))).await;
+}
+
 fn short(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
 }
 
 pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, query: HashMap<String, String>, meta: ClientMeta) {
     let Some(ticket) = query.get("ticket").filter(|t| !t.is_empty()) else {
-        close(&mut socket, CLOSE_NO_SESSION).await;
+        close_with_code(&mut socket, CLOSE_NO_SESSION).await;
         return;
     };
     let Some(session) = state.desktop.redeem(&session_id, ticket) else {
         tracing::warn!(session = %session_id, "desktop: unknown session or invalid/expired ticket");
-        close(&mut socket, CLOSE_NO_SESSION).await;
+        close_with_code(&mut socket, CLOSE_NO_SESSION).await;
         return;
     };
     if !desktop::still_allowed(&state.db, &session).await {
         tracing::warn!(session = %session_id, user = %session.user_name, "desktop: access no longer allowed");
         state.desktop.remove(&session_id);
-        close(&mut socket, CLOSE_FORBIDDEN).await;
+        close_with_code(&mut socket, CLOSE_FORBIDDEN).await;
         return;
     }
     let Some(handoff) = session.take_handoff() else {
         state.desktop.remove(&session_id);
-        close(&mut socket, CLOSE_NO_SESSION).await;
+        close_with_code(&mut socket, CLOSE_NO_SESSION).await;
         return;
     };
     let max_res = db::settings::get_solo(&state.db).await.map(|s| s.desktop_max_resolution).unwrap_or(desktop::DEFAULT_MAX_RESOLUTION as i64).clamp(desktop::MIN_DIMENSION as i64, 16384) as u32;
@@ -82,7 +89,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         Err(e) => {
             tracing::error!(error = %e, "desktop: cannot bind the rendezvous port");
             state.desktop.remove(&session_id);
-            close(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
+            close_with_code(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
             return;
         }
     };
@@ -93,7 +100,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         Err(e) => {
             tracing::error!(addr = %state.desktop.guacd_addr, error = %e, "desktop: cannot connect to guacd");
             state.desktop.remove(&session_id);
-            close(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
+            close_with_code(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
             return;
         }
     };
@@ -126,7 +133,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             tracing::error!(session = %session_id, error = %e, "desktop: guacd handshake failed");
             abort_bridge(&accept);
             state.desktop.remove(&session_id);
-            close(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
+            close_with_code(&mut socket, CLOSE_GUACD_UNAVAILABLE).await;
             return;
         }
     };
@@ -240,7 +247,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                 }
             },
             _ = session.stop.notified() => {
-                let _ = socket.send(Message::Text(Utf8Bytes::from(guac::encode(&["disconnect"], Unit::Utf16)))).await;
+                // 不先送 `disconnect` 指令：瀏覽器會把它當成正常結束，看不到 4014 的原因。
+                // No `disconnect` instruction first: the browser would treat it as a normal end and miss the 4014.
                 close_code = Some(CLOSE_STOPPED);
                 break session.stop_reason().unwrap_or("stopped");
             }
@@ -254,7 +262,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     tracing::info!(session = %session_id, "desktop: {message}");
     state.gateway.event("desktop_close", None, None, Some(session.tunnel_id), message).await;
     match close_code {
-        Some(code) => close(&mut socket, code).await,
+        Some(code) => close_with_code(&mut socket, code).await,
         None => {
             let _ = socket.send(Message::Close(None)).await;
         }

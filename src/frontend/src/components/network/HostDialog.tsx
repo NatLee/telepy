@@ -8,7 +8,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Terminal, SquareTerminal, Trash2, Save, Loader2 } from "lucide-react";
+import { Loader2, Save, ScreenShare, SquareTerminal, Terminal, Trash2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { Section } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
+import { desktopPorts } from "@/lib/desktop";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
 import { cheatsheetJumpUrl, hasSsh, hostName, isValidLogin, lanAlias, lanOneLiner, lanSshConfig } from "@/lib/lanConnect";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
@@ -159,6 +160,11 @@ function HostDialogBody({ host, tunnel, online, onClose, loadConnectTarget, upda
                             <Button variant="outline" asChild>
                                 <Link href={cheatsheetJumpUrl(tunnel.id, host, cleanLogin)} prefetch={false}>
                                     <SquareTerminal size={16} /> {t("network.openCheatsheet")}
+                                </Link>
+                            </Button>
+                            <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "outline"} asChild>
+                                <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>
+                                    <ScreenShare size={16} /> {t("network.openDesktop")}
                                 </Link>
                             </Button>
                         </div>

@@ -18,7 +18,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, ScreenShare } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -57,6 +57,15 @@ function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disab
     );
 }
 
+/** 只能選固定值的字串設定：用下拉選單。/ String settings with a fixed set of values get a select. */
+const SETTING_CHOICES: Record<string, { value: string; label: TranslationKey }[]> = {
+    desktop_clipboard: [
+        { value: "both", label: "siteSettings.desktop_clipboard.both" },
+        { value: "to_remote", label: "siteSettings.desktop_clipboard.to_remote" },
+        { value: "off", label: "siteSettings.desktop_clipboard.off" },
+    ],
+};
+
 /** 以秒為單位的站台設定(逾時 / 存活時間)。/ Site settings measured in seconds. */
 const SECONDS_KEY = /_(timeout|lifetime)$/;
 
@@ -68,16 +77,17 @@ function formatDuration(seconds: number, locale: string): string {
 }
 
 /** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
-type SiteTabId = "general" | "browser" | "ai";
+type SiteTabId = "general" | "browser" | "desktop" | "ai";
 type TabId = SiteTabId | "users";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_"),
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("desktop_"),
     browser: (k) => k.startsWith("remote_browser"),
+    desktop: (k) => k.startsWith("desktop_"),
     ai: (k) => k.startsWith("ai_"),
 };
 
-const TAB_IDS: TabId[] = ["general", "browser", "ai", "users"];
+const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "users"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -128,6 +138,7 @@ function AdminSettings() {
     const tabs: { value: TabId; label: string; icon: React.ReactNode }[] = [
         { value: "general", label: t("settings.groupAccount"), icon: <UserPlus size={15} /> },
         { value: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={15} /> },
+        { value: "desktop", label: t("settings.groupDesktop"), icon: <ScreenShare size={15} /> },
         { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
         { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
     ];
@@ -155,6 +166,7 @@ function AdminSettings() {
 const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
     general: "settings.generalBanner",
     browser: "settings.browserBanner",
+    desktop: "settings.desktopBanner",
     ai: "settings.aiBanner",
 };
 
@@ -237,6 +249,10 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                         <div className="shrink-0 pt-0.5">
                                             {kind === "boolean" ? (
                                                 <ToggleSwitch checked={!!value} onToggle={() => handleToggle(key, value)} />
+                                            ) : SETTING_CHOICES[key] ? (
+                                                <NativeSelect className="h-8 w-56" value={String(value ?? "")} onChange={(e) => handleUpdate(key, e.target.value)} aria-label={labelOf(key, m)}>
+                                                    {SETTING_CHOICES[key].map((c) => <option key={c.value} value={c.value}>{t(c.label)}</option>)}
+                                                </NativeSelect>
                                             ) : (
                                                 <>
                                                     <div className="flex items-center gap-2">

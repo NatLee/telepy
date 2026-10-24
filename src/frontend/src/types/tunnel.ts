@@ -86,6 +86,8 @@ export interface TunnelActionHandlers {
     onKeys: (tunnelId: number) => void;
     /** 裝置背後的區網主機（/tunnels/network?tunnel=<id>）。/ The LAN hosts behind this device. */
     onNetwork: (tunnelId: number) => void;
+    /** 在瀏覽器裡開它（或它區網主機）的 RDP / VNC 桌面（/tunnels/desktop?tunnel=<id>）。/ Remote desktop. */
+    onDesktop: (tunnelId: number) => void;
     onUsers: (tunnelId: number, readOnly: boolean) => void;
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;

@@ -33,6 +33,8 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     failed_publickey: { key: "logs.event.failed_publickey", variant: "destructive" },
     invalid_user: { key: "logs.event.invalid_user", variant: "destructive" },
     preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
+    desktop_open: { key: "logs.event.desktop_open", variant: "default" },
+    desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
 };
 
 function LogsPageInner() {
