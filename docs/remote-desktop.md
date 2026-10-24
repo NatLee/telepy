@@ -32,6 +32,7 @@ backend desktop/bridge.rs
    區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip 通道到目標，所以
    `device_offline` / `device_auth` / `target_unreachable` 在這一步就回 502，不必等 WebSocket。
    回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, target, username}`；帳密只留在記憶體。
+   帶 `credential_id` 時改用憑證庫裡那筆的 login / password / domain（見下方「憑證庫」），請求裡的帳密欄位被忽略。
 2. 瀏覽器用票證開 WS。後端重驗權限、開 rendezvous、連 guacd 握手（`hostname` / `port` = rendezvous），
    guacd 連回來的那條接到第 1 步的通道。握手完成後先送 `0.,<uuid>;`（guacamole-common-js 收到才把 tunnel 標成開啟），
    再把握手期間已讀進解析器的指令送出（guacd 常把 `ready` 和第一批畫面放在同一個封包）。
@@ -54,6 +55,24 @@ WebSocket 關閉時把代碼也放進 reason（guacamole-common-js 的 WebSocket
 
 guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203 / 0x0301 = RDP 登入被拒），
 前端 `lib/desktop.ts` 的 `sessionFailure` 對到翻譯與「卡在哪一段」。
+
+## 憑證庫（saved logins）
+
+`vault.rs`、`db/credentials.rs`、`api/credentials.rs`；測試 `tests/credentials_api.rs` 與 `tests/desktop_api.rs` 的 vault 段落。
+
+- 每位使用者自己的：`GET /api/credentials`（可用 `tunnel_id` / `lan_host_id` / `protocol` 篩選）、`POST`、
+  `PATCH /api/credentials/{id}`、`DELETE`。只有本人看得到、用得到；管理員也不例外。
+- 每筆綁一個桌面：`protocol` + `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`。
+  `start` 收到的 `credential_id` 若不是同一個目標（隧道、區網主機、協定）就回 `credential_id` 欄位錯誤，
+  所以一筆 Windows 密碼不會被拿去登另一台。
+- 密碼以 AES-256-GCM 封存，金鑰由 `SECRET_KEY` 衍生（前綴 `telepy-vault-v1:`），AAD =
+  `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`，密碼永不回傳；
+  解密只發生在 `start`，結果跟手打的一樣只留在 session 記憶體。輪換 `SECRET_KEY` 會讓舊的存檔解不開（重存即可）。
+- 隧道或區網主機刪除時，綁在上面的憑證一起刪。使用後更新 `last_used_at`；`desktop_open` 事件會註明
+  「with saved login '<label>'」（只有名稱，沒有帳密）。
+- 前端：桌面頁的「已存的登入」選單（`hooks/useSavedLogins.ts`）與「儲存這組登入」勾選（連線前先存，再用
+  `credential_id` 連）；偏好設定的 Saved logins 分頁（`components/layout/SavedLogins.tsx`）列出與刪除。
+  任一處新增 / 刪除都會發 `telepy:saved-logins-changed`，其他畫面跟著重載。
 
 ## 稽核與可見性
 

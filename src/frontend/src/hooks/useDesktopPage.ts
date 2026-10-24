@@ -16,6 +16,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { DEFAULT_PORT, desktopPorts, isValidPort, startFailure, type DesktopFailure, type DesktopPhase, type DesktopProtocol, type DesktopStart } from "@/lib/desktop";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
+import { useSavedLogins } from "@/hooks/useSavedLogins";
 
 export interface DesktopForm {
     account: string;
@@ -24,9 +25,14 @@ export interface DesktopForm {
     login: string;
     password: string;
     domain: string;
+    /** 用憑證庫的哪一筆（null = 自己輸入）。/ Saved login to use (null = type it in). */
+    savedId: number | null;
+    /** 連線前把輸入的登入存進憑證庫。/ Save the typed login to the vault before connecting. */
+    save: boolean;
+    saveLabel: string;
 }
 
-const EMPTY_FORM: DesktopForm = { account: "", protocol: "rdp", port: String(DEFAULT_PORT.rdp), login: "", password: "", domain: "" };
+const EMPTY_FORM: DesktopForm = { account: "", protocol: "rdp", port: String(DEFAULT_PORT.rdp), login: "", password: "", domain: "", savedId: null, save: false, saveLabel: "" };
 
 export function useDesktopPage() {
     const router = useRouter();
@@ -122,6 +128,9 @@ export function useDesktopPage() {
     }, []);
 
     const address = host ? `${host.address}:${form.port}` : `127.0.0.1:${form.port}`;
+    // 這個桌面（隧道 + 主機 + 協定）存過的登入。/ Logins saved for this desktop (tunnel + host + protocol).
+    const saved = useSavedLogins(tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel);
+    const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
     const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && (phase === "idle" || phase === "failed");
 
     const connect = useCallback(async () => {
@@ -130,6 +139,27 @@ export function useDesktopPage() {
         setEndedNormally(false);
         setPhase("starting");
         try {
+            // 要存的話先存，之後用存好的那筆開（密碼只送一次）。/ Save first, then start with the saved row.
+            let credentialId = savedLogin?.id ?? null;
+            if (!credentialId && form.save && form.password) {
+                const created = await saved.create({
+                    label: form.saveLabel.trim() || `${form.login.trim() || form.protocol.toUpperCase()}@${host ? (host.label || host.hostname || host.address) : tunnel.name}`,
+                    protocol: form.protocol,
+                    tunnel_id: tunnel.id,
+                    lan_host_id: host?.id ?? null,
+                    port: Number(form.port),
+                    login: form.login.trim(),
+                    domain: form.protocol === "rdp" ? form.domain.trim() : "",
+                    password: form.password,
+                });
+                if (typeof created === "string") {
+                    setFailure({ key: "desktop.err.saveLogin", vars: { message: created }, at: "telepy" });
+                    setPhase("failed");
+                    return;
+                }
+                credentialId = created.id;
+                setForm((f) => ({ ...f, savedId: created.id, save: false, saveLabel: "" }));
+            }
             const res = await apiFetch(`/api/reverse/server/${tunnel.id}/desktop/start`, {
                 method: "POST",
                 body: JSON.stringify({
@@ -137,13 +167,18 @@ export function useDesktopPage() {
                     username: form.account,
                     port: Number(form.port),
                     lan_host_id: host?.id ?? null,
-                    login: form.login.trim(),
-                    password: form.password,
-                    domain: form.protocol === "rdp" ? form.domain.trim() : "",
+                    ...(credentialId
+                        ? { credential_id: credentialId }
+                        : { login: form.login.trim(), password: form.password, domain: form.protocol === "rdp" ? form.domain.trim() : "" }),
                 }),
             });
-            const data = await readJson<DesktopStart & { code?: string; error?: string }>(res);
+            const data = await readJson<DesktopStart & { code?: string; error?: string; credential_id?: string[] }>(res);
             if (!res.ok || !data?.ticket) {
+                if (data?.credential_id?.[0]) {
+                    setFailure({ key: "desktop.err.savedLogin", vars: { message: data.credential_id[0] }, at: "telepy" });
+                    setPhase("failed");
+                    return;
+                }
                 setFailure(startFailure(data?.code, res.status, { account: form.account, address }));
                 setPhase("failed");
                 return;
@@ -154,7 +189,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [tunnel, host, form, address]);
+    }, [tunnel, host, form, address, savedLogin, saved]);
 
     const onConnected = useCallback(() => {
         setPhase("connected");
@@ -199,7 +234,7 @@ export function useDesktopPage() {
     }, [postStop]);
 
     return {
-        state: { tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address },
-        actions: { setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded, dismissFailure: () => { setFailure(null); setPhase("idle"); } },
+        state: { tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin },
+        actions: { setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded, dismissFailure: () => { setFailure(null); setPhase("idle"); }, forgetSaved: async (id: number) => { if (await saved.remove(id)) setForm((f) => ({ ...f, savedId: null })); } },
     };
 }

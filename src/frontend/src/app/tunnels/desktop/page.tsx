@@ -9,7 +9,7 @@
  */
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ClipboardPaste, Info, Keyboard, Maximize2, Minimize2, MonitorX, Plus, ScreenShare, Waypoints } from "lucide-react";
+import { ClipboardPaste, Info, KeyRound, Keyboard, Maximize2, Minimize2, MonitorX, Plus, ScreenShare, Waypoints } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -80,7 +80,8 @@ function DesktopPageInner() {
         account: form.account,
         lanHost: host ? { name: hostName(host), address: host.address } : null,
         clipboard,
-    }), [phase, failure, form.protocol, form.port, form.account, tunnel, host, clipboard, t]);
+        savedLogin: !!state.savedLogin,
+    }), [phase, failure, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin]);
 
     const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -197,8 +198,8 @@ type PageState = ReturnType<typeof useDesktopPage>["state"];
 type PageActions = ReturnType<typeof useDesktopPage>["actions"];
 
 function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
-    const { t } = useI18n();
-    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address } = state;
+    const { t, tn } = useI18n();
+    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin } = state;
     const portOk = isValidPort(form.port);
     const busy = phase === "starting";
     // 預熱畫面元件的 chunk（與填表並行）。/ Warm up the client chunk while the form is filled in.
@@ -284,18 +285,56 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                     <Input inputMode="numeric" value={form.port} onChange={(e) => actions.update({ port: e.target.value.replace(/[^\d]/g, "") })} />
                 </Field>
 
-                <Field label={form.protocol === "rdp" ? t("desktop.field.login") : t("desktop.field.loginVnc")} addon={form.protocol === "vnc" ? t("common.optional") : undefined}>
-                    <Input value={form.login} onChange={(e) => actions.update({ login: e.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} />
-                </Field>
-
-                <Field label={t("desktop.field.password")} hint={t("desktop.credentialsNote")}>
-                    <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
-                </Field>
-
-                {form.protocol === "rdp" && (
-                    <Field label={t("desktop.field.domain")} addon={t("common.optional")}>
-                        <Input value={form.domain} onChange={(e) => actions.update({ domain: e.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} />
+                {savedLogins.length > 0 && (
+                    <Field label={t("desktop.field.saved")} hint={t("desktop.field.savedHint")}>
+                        <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
+                            <option value="">{t("desktop.field.savedNone")}</option>
+                            {savedLogins.map((c) => (
+                                <option key={c.id} value={c.id}>{c.label}{c.login ? ` (${c.login})` : ""}</option>
+                            ))}
+                        </NativeSelect>
                     </Field>
+                )}
+
+                {savedLogin ? (
+                    <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm sm:col-span-2">
+                        <span className="flex flex-wrap items-center gap-2 text-foreground">
+                            <KeyRound size={15} className="text-muted-foreground" aria-hidden />
+                            <span>{tn("desktop.savedUses", { label: <strong>{savedLogin.label}</strong>, login: <code className="font-mono text-xs">{savedLogin.login || "—"}{savedLogin.domain ? ` @ ${savedLogin.domain}` : ""}</code> })}</span>
+                        </span>
+                        <span className="text-xs text-muted-foreground">{t("desktop.savedNote")}</span>
+                        <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
+                            {t("desktop.savedForget")}
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                    <Field label={form.protocol === "rdp" ? t("desktop.field.login") : t("desktop.field.loginVnc")} addon={form.protocol === "vnc" ? t("common.optional") : undefined}>
+                        <Input value={form.login} onChange={(e) => actions.update({ login: e.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} />
+                    </Field>
+
+                    <Field label={t("desktop.field.password")} hint={t("desktop.credentialsNote")}>
+                        <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
+                    </Field>
+
+                    {form.protocol === "rdp" && (
+                        <Field label={t("desktop.field.domain")} addon={t("common.optional")}>
+                            <Input value={form.domain} onChange={(e) => actions.update({ domain: e.target.value })} autoComplete="off" autoCapitalize="off" spellCheck={false} />
+                        </Field>
+                    )}
+                        <label className="flex items-start gap-2 text-sm text-foreground sm:col-span-2">
+                            <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
+                            <span>
+                                {t("desktop.saveLogin")}
+                                <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHint")}</span>
+                            </span>
+                        </label>
+                        {form.save && (
+                            <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
+                                <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={`${form.login || form.protocol.toUpperCase()}@${host ? host.address : tunnel?.name ?? ""}`} maxLength={100} />
+                            </Field>
+                        )}
+                    </>
                 )}
             </div>
 
