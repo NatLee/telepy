@@ -12,7 +12,7 @@
  */
 import type { TranslationKey } from "@/locales/en";
 
-export type RecipeId = "local" | "lan" | "socks" | "remote" | "jump" | "copy";
+export type RecipeId = "local" | "lan" | "socks" | "remote" | "jump" | "copy" | "rustdesk";
 
 /** alias：用 ~/.ssh/config 的 Host 別名；direct：不需要 config 的單行指令（-J 經 Telepy）。 */
 export type ConnectMode = "alias" | "direct";
@@ -158,6 +158,20 @@ export const RECIPES: RecipeDef[] = [
         defaults: { direction: "upload", tool: "scp", localPath: "./project", remotePath: "~/" },
         forwarding: false,
     },
+    {
+        // RustDesk 的 Direct IP Access（21118）經隧道轉到本機，用 RustDesk 原生 client 連 127.0.0.1。
+        // 主機 `localhost` = 裝置自己；區網主機填它的位址。/ RustDesk's Direct IP port forwarded for the native client.
+        id: "rustdesk",
+        flag: "-L",
+        title: "sheet.recipe.rustdesk.title",
+        fields: [
+            { key: "lanHost", label: "sheet.field.rustdeskHost", kind: "text" },
+            { key: "remotePort", label: "sheet.field.rustdeskPort", kind: "port" },
+            { key: "localPort", label: "sheet.field.localPort", kind: "port" },
+        ],
+        defaults: { lanHost: "localhost", remotePort: "21118", localPort: "21118" },
+        forwarding: true,
+    },
 ];
 
 export const RECIPE_BY_ID: Record<RecipeId, RecipeDef> = Object.fromEntries(RECIPES.map((r) => [r.id, r])) as Record<RecipeId, RecipeDef>;
@@ -168,6 +182,7 @@ export const LOCAL_PRESETS: { label: string; remotePort: string; localPort: stri
     { label: "HTTPS", remotePort: "443", localPort: "8443" },
     { label: "Dev 3000", remotePort: "3000", localPort: "3000" },
     { label: "Jupyter", remotePort: "8888", localPort: "8888" },
+    { label: "RustDesk", remotePort: "21118", localPort: "21118" },
     { label: "PostgreSQL", remotePort: "5432", localPort: "15432" },
     { label: "MySQL", remotePort: "3306", localPort: "13306" },
     { label: "Redis", remotePort: "6379", localPort: "16379" },
@@ -271,6 +286,8 @@ export function forwardSpec(id: RecipeId, params: RecipeParams): string | null {
             return `-D ${port(params, "localPort", def)}`;
         case "remote":
             return `${port(params, "devicePort", def)}:localhost:${port(params, "localPort", def)}`;
+        case "rustdesk":
+            return `${port(params, "localPort", def)}:${host(params, "lanHost", def)}:${port(params, "remotePort", def)}`;
         default:
             return null;
     }
@@ -293,6 +310,17 @@ export function buildSegments(id: RecipeId, params: RecipeParams, target: Connec
             const lp = port(params, "localPort", def);
             const h = host(params, "lanHost", def);
             const rp = port(params, "lanPort", def);
+            return [
+                SSH,
+                ...forwardOptionSegments(options),
+                { tokens: [tok("-L", "flag"), tok(`${lp}:${h}:${rp}`, "value")], explain: { key: "sheet.explain.localForward", vars: { localPort: lp, host: h, remotePort: rp } } },
+                ...deviceTarget(target),
+            ];
+        }
+        case "rustdesk": {
+            const lp = port(params, "localPort", def);
+            const h = host(params, "lanHost", def);
+            const rp = port(params, "remotePort", def);
             return [
                 SSH,
                 ...forwardOptionSegments(options),

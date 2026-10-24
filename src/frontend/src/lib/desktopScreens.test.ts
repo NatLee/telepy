@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arrangeBySize, fitScale, placePositioned, presetChoices, screenChoices, type DetectedScreen } from "./desktopScreens.ts";
+import { arrangeBySize, fitScale, parseStoredArea, placePositioned, rectFromPoints, screenChoices, splitChoices, type DetectedScreen } from "./desktopScreens.ts";
 
 const laptop: DetectedScreen = { name: "eDP-1", x: 0, y: 0, width: 1920, height: 1080, primary: true };
 const external: DetectedScreen = { name: "HDMI-1", x: 1920, y: 0, width: 2560, height: 1440, primary: false };
@@ -48,17 +48,19 @@ test("size-only screens are arranged by the framebuffer shape", () => {
     assert.equal(arrangeBySize([], { width: 100, height: 100 }), null);
 });
 
-test("presets follow the aspect ratio", () => {
-    assert.deepEqual(presetChoices({ width: 1920, height: 1080 }), []);
-    const two = presetChoices({ width: 3840, height: 1080 });
-    assert.deepEqual(two.map((c) => c.preset), ["left", "right", "third1", "third2", "third3"]);
-    assert.deepEqual(two[1].viewport, { x: 1920, y: 0, width: 1920, height: 1080 });
-    assert.deepEqual(presetChoices({ width: 2560, height: 1080 }).map((c) => c.preset), ["left", "right"]);
-    assert.deepEqual(presetChoices({ width: 1080, height: 2160 }).map((c) => c.preset), ["top", "bottom"]);
-    assert.deepEqual(presetChoices({ width: 0, height: 0 }), []);
+test("even splits are always on offer", () => {
+    const all = splitChoices({ width: 3840, height: 1080 });
+    assert.deepEqual(all.map((c) => c.preset), ["left", "right", "third1", "third2", "third3", "top", "bottom"]);
+    assert.deepEqual(all[1].viewport, { x: 1920, y: 0, width: 1920, height: 1080 });
+    assert.deepEqual(all[4].viewport, { x: 2560, y: 0, width: 1280, height: 1080 });
+    assert.deepEqual(all[6].viewport, { x: 0, y: 540, width: 3840, height: 540 });
+    // 正常比例的單螢幕也給（兩顆一樣大的螢幕並排就是 2:1 左右）。/ A normal picture gets them too.
+    assert.deepEqual(splitChoices({ width: 1920, height: 1080 }).map((c) => c.preset), ["left", "right", "third1", "third2", "third3", "top", "bottom"]);
+    assert.deepEqual(splitChoices({ width: 150, height: 100 }).map((c) => c.preset), ["left", "right"], "too narrow for thirds, too short for halves");
+    assert.deepEqual(splitChoices({ width: 0, height: 0 }), []);
 });
 
-test("screenChoices prefers detected screens and hides a single whole screen", () => {
+test("screenChoices lists detected screens and hides the whole-screen entry", () => {
     const fb = { width: 4480, height: 1440 };
     const detected = screenChoices([laptop, external], fb);
     assert.equal(detected.length, 2);
@@ -71,8 +73,26 @@ test("screenChoices prefers detected screens and hides a single whole screen", (
     const left: DetectedScreen = { name: "left-eye", x: 0, y: 0, width: 1024, height: 768, primary: false };
     const right: DetectedScreen = { name: "right-eye", x: 1024, y: 0, width: 1024, height: 768, primary: false };
     assert.deepEqual(screenChoices([left, right, whole], { width: 2048, height: 768 }).map((c) => c.name), ["left-eye", "right-eye"]);
-    assert.deepEqual(screenChoices([], { width: 3840, height: 1080 }).map((c) => c.preset), ["left", "right", "third1", "third2", "third3"]);
-    assert.deepEqual(screenChoices([laptop, external], { width: 1920, height: 1080 }), [], "detected screens that don't fit, normal ratio: nothing");
+    assert.deepEqual(screenChoices([], { width: 3840, height: 1080 }), [], "nothing detected: the menu falls back to splits");
+    assert.deepEqual(screenChoices([laptop, external], { width: 1920, height: 1080 }), [], "detected screens that don't fit");
+});
+
+test("a dragged rectangle becomes a custom area", () => {
+    const fb = { width: 2048, height: 768 };
+    assert.deepEqual(rectFromPoints({ x: 1100.4, y: 50.6 }, { x: 1900, y: 700 }, fb), { x: 1100, y: 51, width: 800, height: 649 });
+    assert.deepEqual(rectFromPoints({ x: 1900, y: 700 }, { x: 1100, y: 51 }, fb), { x: 1100, y: 51, width: 800, height: 649 }, "any corner order");
+    assert.deepEqual(rectFromPoints({ x: -50, y: -50 }, { x: 3000, y: 3000 }, fb), { x: 0, y: 0, width: 2048, height: 768 }, "clamped to the picture");
+    assert.equal(rectFromPoints({ x: 10, y: 10 }, { x: 40, y: 400 }, fb), null, "too narrow = a click, not an area");
+});
+
+test("stored custom areas are validated against the picture", () => {
+    const fb = { width: 2048, height: 768 };
+    assert.deepEqual(parseStoredArea('{"x":100,"y":0,"width":900,"height":768}', fb), { x: 100, y: 0, width: 900, height: 768 });
+    assert.equal(parseStoredArea('{"x":1500,"y":0,"width":900,"height":768}', fb), null, "sticks out of the picture");
+    assert.equal(parseStoredArea('{"x":0,"y":0,"width":10,"height":10}', fb), null, "too small");
+    assert.equal(parseStoredArea("garbage", fb), null);
+    assert.equal(parseStoredArea(null, fb), null);
+    assert.equal(parseStoredArea('{"x":"0","y":0,"width":900,"height":768}', fb), null);
 });
 
 test("fitScale never upscales past the cap", () => {

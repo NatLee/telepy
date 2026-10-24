@@ -23,7 +23,8 @@ import { getWsOrigin } from "@/lib/wsCommon";
 import { useI18n } from "@/lib/i18n";
 import { sessionFailure, type DesktopFailure, type DesktopStart } from "@/lib/desktop";
 import { parseStats, PING_OPCODE, PONG_OPCODE, STATS_OPCODE, type StreamStats } from "@/lib/desktopStats";
-import { fitScale, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
+import { fitScale, rectFromPoints, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
+import { Button } from "@/components/ui/button";
 
 type GuacNS = typeof Guac;
 
@@ -79,6 +80,10 @@ interface Props {
     start: DesktopStart;
     /** 只看這個矩形；null = 整張畫面。/ Crop to this rectangle; null = everything. */
     viewport: Viewport | null;
+    /** 框選模式：顯示整張畫面，讓使用者拖出要看的區域（鍵盤滑鼠不送往遠端）。/ Area-selection mode over the whole desktop. */
+    selecting: boolean;
+    /** 框選完成（null = 取消）。/ The dragged area, or null when cancelled. */
+    onAreaSelected: (area: Viewport | null) => void;
     /** 1 = CSS 像素；devicePixelRatio = 向 guacd 要原生解析度（sharp）。/ 1, or devicePixelRatio for HiDPI. */
     pixelRatio: number;
     /** Control 送成 Command（macOS 桌面）。/ Send Control as Command. */
@@ -96,7 +101,7 @@ interface Props {
     onScale: (scale: number) => void;
 }
 
-export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale }, ref) {
+export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -104,22 +109,39 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
     const guacRef = useRef<GuacNS | null>(null);
     const keyboardRef = useRef<Guac.Keyboard | null>(null);
     const sinkRef = useRef<Guac.InputSink | null>(null);
+    const displayElRef = useRef<HTMLElement | null>(null);
     const rescaleRef = useRef<(() => void) | null>(null);
     const typingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const endedRef = useRef(false);
     // 最新的回呼與選項（連線只建一次，這些每次 render 都可能換）。/ Latest callbacks and options; the connection is set up once.
-    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale });
-    const options = useRef({ viewport, pixelRatio, ctrlAsCmd });
+    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected });
+    const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting });
     useLayoutEffect(() => {
-        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale };
-        options.current = { viewport, pixelRatio, ctrlAsCmd };
+        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected };
+        options.current = { viewport, pixelRatio, ctrlAsCmd, selecting };
     });
     const [focused, setFocused] = useState(false);
 
-    // 換螢幕 → 重新裁切縮放。/ A new viewport re-crops the display.
+    // 換螢幕、進出框選模式 → 重新裁切縮放。/ A new viewport or selection mode re-crops the display.
     useEffect(() => {
         rescaleRef.current?.();
-    }, [viewport, pixelRatio]);
+    }, [viewport, pixelRatio, selecting]);
+
+    /** 視窗座標 → 整張畫面的座標（框選用）。/ Client coordinates → framebuffer coordinates. */
+    const toFramebuffer = (clientX: number, clientY: number): { x: number; y: number } | null => {
+        const el = displayElRef.current;
+        const c = clientRef.current;
+        if (!el || !c) return null;
+        const rect = el.getBoundingClientRect();
+        const s = c.getDisplay().getScale() || 1;
+        return { x: (clientX - rect.left) / s, y: (clientY - rect.top) / s };
+    };
+    const framebufferSize = (): Framebuffer | null => {
+        const c = clientRef.current;
+        if (!c) return null;
+        const d = c.getDisplay();
+        return d.getWidth() && d.getHeight() ? { width: d.getWidth(), height: d.getHeight() } : null;
+    };
 
     useImperativeHandle(ref, () => ({
         disconnect: () => clientRef.current?.disconnect(),
@@ -193,15 +215,16 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             const display = client.getDisplay();
             const el = display.getElement();
             host.appendChild(el);
+            displayElRef.current = el;
 
             // 裁切 + 等比縮放：host 是裁切框（viewport 的大小 × 比例），畫面元素往左上挪 viewport 的位移。
-            // 不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是原生解析度）。
+            // 不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是原生解析度）。框選時一律整張。
             // Crop and fit: the host is the clip box, the display element shifted by the viewport's origin.
             const rescale = () => {
                 const w = display.getWidth();
                 const h = display.getHeight();
                 if (!w || !h) return;
-                const vpRaw = options.current.viewport;
+                const vpRaw = options.current.selecting ? null : options.current.viewport;
                 const vp: Viewport = vpRaw && vpRaw.x < w && vpRaw.y < h ? { x: vpRaw.x, y: vpRaw.y, width: Math.min(vpRaw.width, w - vpRaw.x), height: Math.min(vpRaw.height, h - vpRaw.y) } : { x: 0, y: 0, width: w, height: h };
                 const box = frame.getBoundingClientRect();
                 const scale = fitScale(box, vp, 1 / Math.max(1, options.current.pixelRatio));
@@ -246,13 +269,16 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             // Remember what was sent on press so the release matches even if the remap toggles in between.
             const sent = new Map<number, number>();
             keyboard.onkeydown = (keysym) => {
+                // 框選中：按鍵留給框選層（Esc 取消），不送往遠端。/ While selecting, keys stay local (Esc cancels).
+                if (options.current.selecting) return true;
                 const k = options.current.ctrlAsCmd ? ctrlToCmd(keysym) : keysym;
                 sent.set(keysym, k);
                 client.sendKeyEvent(1, k);
                 return false;
             };
             keyboard.onkeyup = (keysym) => {
-                const k = sent.get(keysym) ?? keysym;
+                const k = sent.get(keysym);
+                if (k === undefined) return;
                 sent.delete(keysym);
                 client.sendKeyEvent(0, k);
             };
@@ -343,6 +369,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 rescaleRef.current = null;
                 sinkRef.current = null;
                 keyboardRef.current = null;
+                displayElRef.current = null;
             };
         }).catch(() => end({ key: "desktop.err.bundle", at: "browser" }));
 
@@ -363,7 +390,8 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             aria-label={t("desktop.viewerLabel")}
         >
             <div ref={hostRef} className="relative overflow-hidden" />
-            {!focused && (
+            {selecting && <AreaSelector toFramebuffer={toFramebuffer} framebuffer={framebufferSize} onDone={(area) => callbacks.current.onAreaSelected(area)} />}
+            {!focused && !selecting && (
                 <div className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-background/90 px-2.5 py-1 text-xs text-foreground shadow-pop">
                     <MousePointerClick size={14} aria-hidden /> {t("desktop.clickToType")}
                 </div>
@@ -371,3 +399,92 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
         </div>
     );
 });
+
+/**
+ * 框選層：蓋在整張畫面上，拖出一個矩形 → 畫面座標的區域；太小（像點一下）不算，Esc 或「取消」放棄。
+ * 指標事件都被這層吃掉，遠端不會收到滑鼠。/ The drag-to-select layer over the whole desktop.
+ */
+function AreaSelector({ toFramebuffer, framebuffer, onDone }: {
+    toFramebuffer: (clientX: number, clientY: number) => { x: number; y: number } | null;
+    framebuffer: () => Framebuffer | null;
+    onDone: (area: Viewport | null) => void;
+}) {
+    const { t } = useI18n();
+    const layerRef = useRef<HTMLDivElement | null>(null);
+    const startRef = useRef<{ x: number; y: number } | null>(null);
+    const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+    const doneRef = useRef(onDone);
+    useLayoutEffect(() => {
+        doneRef.current = onDone;
+    });
+
+    // Esc 在整個視窗都算（打開選單那顆按鈕會把焦點搶回去，不能只靠這一層的焦點）。
+    // Esc anywhere in the window: the menu button takes focus back after the menu closes.
+    useEffect(() => {
+        layerRef.current?.focus();
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "Escape") return;
+            e.preventDefault();
+            e.stopPropagation();
+            doneRef.current(null);
+        };
+        window.addEventListener("keydown", onKey, true);
+        return () => window.removeEventListener("keydown", onKey, true);
+    }, []);
+
+    const clientBox = (ax: number, ay: number, bx: number, by: number) => {
+        const r = layerRef.current?.getBoundingClientRect();
+        if (!r) return null;
+        return { left: Math.min(ax, bx) - r.left, top: Math.min(ay, by) - r.top, width: Math.abs(bx - ax), height: Math.abs(by - ay) };
+    };
+    const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        startRef.current = { x: e.clientX, y: e.clientY };
+        setBox(clientBox(e.clientX, e.clientY, e.clientX, e.clientY));
+    };
+    const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        const s = startRef.current;
+        if (!s) return;
+        setBox(clientBox(s.x, s.y, e.clientX, e.clientY));
+    };
+    const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+        const s = startRef.current;
+        startRef.current = null;
+        setBox(null);
+        if (!s) return;
+        const fb = framebuffer();
+        const a = toFramebuffer(s.x, s.y);
+        const b = toFramebuffer(e.clientX, e.clientY);
+        if (!fb || !a || !b) return;
+        const area = rectFromPoints(a, b, fb);
+        // 太小 = 點了一下：留在框選模式，再拖一次。/ A click, not a drag: stay in selection mode.
+        if (area) onDone(area);
+    };
+
+    return (
+        <div
+            ref={layerRef}
+            tabIndex={0}
+            role="application"
+            aria-label={t("desktop.screen.selectHint")}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={() => { startRef.current = null; setBox(null); }}
+            className="absolute inset-0 z-10 cursor-crosshair touch-none select-none outline-none"
+        >
+            {box && (
+                <div
+                    className="pointer-events-none absolute border-2 border-primary bg-primary/10"
+                    style={{ left: box.left, top: box.top, width: box.width, height: box.height, boxShadow: "0 0 0 9999px rgba(0,0,0,0.45)" }}
+                />
+            )}
+            <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-2 rounded-md bg-background/95 px-3 py-1.5 text-xs text-foreground shadow-pop">
+                <span>{t("desktop.screen.selectHint")}</span>
+                <Button size="xs" variant="outline" className="pointer-events-auto" onClick={() => onDone(null)}>{t("common.cancel")}</Button>
+            </div>
+        </div>
+    );
+}

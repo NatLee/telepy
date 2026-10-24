@@ -17,7 +17,7 @@ export type HostKind = "ssh" | "desktop" | "files" | "web" | "other";
 export function hostKind(h: LanHost): HostKind {
     const p = new Set(h.open_ports);
     if (hasSsh(h)) return "ssh";
-    if (p.has(3389) || p.has(5900)) return "desktop";
+    if (p.has(3389) || p.has(5900) || p.has(21118)) return "desktop";
     if (p.has(445) || p.has(139) || p.has(548) || p.has(2049)) return "files";
     if (p.has(80) || p.has(443) || p.has(8080) || p.has(8443)) return "web";
     return "other";
@@ -74,7 +74,7 @@ const SERVICES: Record<number, string> = {
     21: "FTP", 22: "SSH", 23: "Telnet", 53: "DNS", 80: "HTTP", 139: "SMB", 443: "HTTPS", 445: "SMB", 548: "AFP",
     631: "IPP", 1883: "MQTT", 2049: "NFS", 3000: "HTTP", 3306: "MySQL", 3389: "RDP", 5000: "HTTP", 5432: "PostgreSQL",
     5900: "VNC", 6379: "Redis", 8000: "HTTP", 8006: "Proxmox", 8080: "HTTP", 8443: "HTTPS", 8888: "HTTP", 9000: "HTTP",
-    9090: "HTTP", 9100: "Printer", 27017: "MongoDB", 32400: "Plex",
+    9090: "HTTP", 9100: "Printer", 21118: "RustDesk", 27017: "MongoDB", 32400: "Plex",
 };
 const WEB_HTTPS = new Set([443, 8006, 8443]);
 const WEB_HTTP = new Set([80, 3000, 5000, 8000, 8080, 8888, 9000, 9090, 32400]);

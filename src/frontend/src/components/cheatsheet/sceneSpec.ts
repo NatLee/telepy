@@ -2,7 +2,7 @@
  * 每個情境的插圖內容（節點 / 連線），以及情境卡片上的迷你插圖。
  * Scene content (nodes / links) per recipe, plus the mini illustration on each recipe card.
  */
-import { Cpu, Globe, Laptop, Router, SquareTerminal } from "lucide-react";
+import { Cpu, Globe, Laptop, Monitor, Router, SquareTerminal } from "lucide-react";
 import type { Translate } from "@/lib/i18n";
 import { resolveParams, type ConnectTarget, type RecipeId, type RecipeParams } from "@/lib/forwardRecipes";
 import type { MiniItem, SceneLink, SceneNode } from "./TunnelScene";
@@ -70,6 +70,17 @@ export function sceneFor(id: RecipeId, rawParams: RecipeParams, target: ConnectT
                 file: true,
             };
         }
+        case "rustdesk": {
+            // 裝置自己的 RustDesk，或它區網裡另一台的。/ RustDesk on the device itself, or on a LAN host.
+            const onDevice = p.lanHost === "localhost" || p.lanHost === "127.0.0.1";
+            const me = you(`RustDesk → localhost:${p.localPort}`, true);
+            if (onDevice) return { nodes: [me, device(`RustDesk :${p.remotePort}`)], links: [tunnel()], file: false };
+            return {
+                nodes: [me, device(), { icon: Monitor, role: "target", name: p.lanHost, sub: t("sheet.scene.onItsNetwork"), socket: `RustDesk :${p.remotePort}` }],
+                links: [tunnel(), { kind: "plain", direction: "forward", label: t("sheet.scene.linkLan") }],
+                file: false,
+            };
+        }
     }
 }
 
@@ -83,4 +94,5 @@ export const MINI_SCENES: Record<RecipeId, MiniItem[]> = {
     remote: [YOU, { link: "tunnel", back: true }, DEVICE],
     jump: [YOU, { link: "tunnel" }, DEVICE, { link: "ssh" }, { icon: SquareTerminal, role: "target" }],
     copy: [YOU, { link: "tunnel", both: true }, DEVICE],
+    rustdesk: [YOU, { link: "tunnel" }, { icon: Monitor, role: "device" }],
 };

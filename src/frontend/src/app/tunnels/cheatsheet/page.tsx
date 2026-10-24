@@ -256,6 +256,7 @@ function CheatsheetInner() {
             case "remote": return tn("sheet.sentence.remote", { device, localPort: blank("localPort"), devicePort: blank("devicePort") });
             case "jump": return tn("sheet.sentence.jump", { device, lanUser: blank("lanUser"), lanHost: blank("lanHost"), lanPort: blank("lanPort") });
             case "copy": return tn(upload ? "sheet.sentence.copyUp" : "sheet.sentence.copyDown", { device, localPath: blank("localPath"), remotePath: blank("remotePath"), tool });
+            case "rustdesk": return tn("sheet.sentence.rustdesk", { device, lanHost: blank("lanHost"), remotePort: blank("remotePort"), localPort: blank("localPort") });
         }
     })();
 
@@ -268,6 +269,7 @@ function CheatsheetInner() {
             case "remote": return tn("sheet.caption.remote", { device: code(`localhost:${resolved.devicePort}`), you: code(`localhost:${resolved.localPort}`), alias: name });
             case "jump": return tn("sheet.caption.jump", { target: code(`${resolved.lanUser}@${resolved.lanHost}`), alias: name });
             case "copy": return tn(upload ? "sheet.caption.copyUp" : "sheet.caption.copyDown", { from: code(upload ? resolved.localPath : resolved.remotePath), to: code(upload ? resolved.remotePath : resolved.localPath), alias: name });
+            case "rustdesk": return tn("sheet.caption.rustdesk", { you: code(`127.0.0.1:${resolved.localPort}`), target: code(`${resolved.lanHost}:${resolved.remotePort}`), alias: name });
         }
     })();
 
@@ -302,6 +304,7 @@ function CheatsheetInner() {
                 );
             case "jump": return <p>{t("sheet.next.jump")}</p>;
             case "copy": return null;
+            case "rustdesk": return <p>{tn("sheet.next.rustdesk", { addr: code(resolved.localPort === "21118" ? "127.0.0.1" : `127.0.0.1:${resolved.localPort}`) })}</p>;
         }
     })();
 
@@ -377,7 +380,7 @@ function CheatsheetInner() {
             {/* ① 要做什麼 / What to do */}
             <section>
                 <StepHeading n={1}>{t("sheet.step1")}</StepHeading>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-7">
                     {RECIPES.map((r) => {
                         const active = r.id === recipe;
                         return (

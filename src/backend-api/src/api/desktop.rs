@@ -1,6 +1,8 @@
 //! 網頁內遠端桌面（RDP / VNC）：
 //! - `POST /api/reverse/server/{id}/desktop/start`：驗權限、對目標開通道、發票證（帳密只進記憶體）
 //! - `GET /api/reverse/server/{id}/desktop/screens?username=`：經裝置 SSH 問它的螢幕配置（VNC 裁切用）
+//! - `GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：從裝置試連一個埠（RustDesk 的
+//!   Direct IP 21118 之類不經 guacd 的桌面）——和 start 一樣先開通道，通了就關，回 reachable
 //! - `POST /api/reverse/server/desktop/{sid}/stop`：結束（自己的 session；管理員任何人的）
 //! 設計見 `desktop/mod.rs`。/ In-browser remote desktop endpoints; see `desktop/mod.rs`.
 
@@ -23,7 +25,23 @@ use crate::util::{json_i64, json_str};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(start)).routes(routes!(list_screens)).routes(routes!(stop))
+    OpenApiRouter::new().routes(routes!(start)).routes(routes!(list_screens)).routes(routes!(probe)).routes(routes!(stop))
+}
+
+/// 桌面所在的主機：裝置自己，或這條隧道底下的區網主機（別條隧道的 → 404）。/ The device itself or one of this tunnel's LAN hosts.
+async fn target_for(state: &AppState, tunnel_id: i64, lan_host_id: Option<i64>, port: u16) -> Result<Target, ApiError> {
+    match lan_host_id {
+        Some(hid) => {
+            let host = db::lan::host_by_id(&state.db, hid).await?.filter(|h| h.tunnel_id == tunnel_id).ok_or_else(|| ApiError::not_found("LAN host not found"))?;
+            let label = host.label.clone().or(host.hostname.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| host.address.clone());
+            Ok(Target { host: host.address, port, label, lan_host_id: Some(host.id) })
+        }
+        None => Ok(Target::device(port)),
+    }
+}
+
+fn target_json(t: &Target) -> Value {
+    json!({ "host": t.host, "port": t.port, "label": t.label, "lan_host_id": t.lan_host_id })
 }
 
 fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
@@ -73,14 +91,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
-    let target = match json_i64(&body, "lan_host_id") {
-        Some(hid) => {
-            let host = db::lan::host_by_id(&state.db, hid).await?.filter(|h| h.tunnel_id == tunnel.id).ok_or_else(|| ApiError::not_found("LAN host not found"))?;
-            let label = host.label.clone().or(host.hostname.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| host.address.clone());
-            Target { host: host.address, port, label, lan_host_id: Some(host.id) }
-        }
-        None => Target::device(port),
-    };
+    let target = target_for(&state, tunnel.id, json_i64(&body, "lan_host_id"), port).await?;
     // 存在憑證庫的登入：後端自己解開，瀏覽器不必（也拿不到）密碼。/ A saved login: unsealed here, never sent to the browser.
     let (credentials, saved_label) = match json_i64(&body, "credential_id") {
         Some(cid) => {
@@ -119,9 +130,37 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         "protocol": protocol.as_str(),
         "clipboard": clipboard.as_str(),
         "quality": quality.as_str(),
-        "target": { "host": session.target.host, "port": session.target.port, "label": session.target.label, "lan_host_id": session.target.lan_host_id },
+        "target": target_json(&session.target),
         "username": session.hop_username,
     })))
+}
+
+/// 從裝置試連目標的一個埠（例如 RustDesk 的 Direct IP 21118）：和 start 同一道門、同一條路（連線池的 lease +
+/// direct-tcpip 通道），通了立刻關掉。不經 guacd，所以不看 `desktop_enabled`。錯誤碼和 start 一樣。
+/// Try one port on the target from the device, the same way start opens its channel; closed at once.
+#[utoipa::path(get, path = "/api/reverse/server/{id}/desktop/probe", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("port" = u16, Query, description = "Port to try on the target"), ("username" = Option<String>, Query, description = "Device account for the SSH hop; omitted = the default allowed one"), ("lan_host_id" = Option<i64>, Query, description = "A LAN host of this tunnel; omitted = the device itself")), responses((status = 200, body = super::schemas::DesktopProbe), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable", body = super::schemas::DesktopError)))]
+async fn probe(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, Query(query): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let tunnel = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
+    if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
+        return Err(ApiError::forbidden("Permission denied"));
+    }
+    super::step_up::check(&state, user.id, &tunnel, &headers)?;
+    let port = match query.get("port").map(|p| p.trim().parse::<u16>()) {
+        Some(Ok(p)) if p > 0 => p,
+        _ => return Err(ApiError::field("port", "A valid port (1-65535) is required.")),
+    };
+    let lan_host_id = match query.get("lan_host_id").map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        Some(v) => Some(v.parse::<i64>().map_err(|_| ApiError::field("lan_host_id", "Must be a LAN host id."))?),
+        None => None,
+    };
+    let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
+    let requested = query.get("username").map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+    let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
+    let target = target_for(&state, tunnel.id, lan_host_id, port).await?;
+    let prepared = desktop::prepare(&state, tunnel.reverse_port, &hop_username, &target).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, e.code(), e.to_string()))?;
+    drop(prepared);
+    tracing::debug!(tunnel = tunnel.id, user = %user.username, target = %format!("{}:{}", target.host, target.port), "desktop: port probe succeeded");
+    Ok(Json(json!({ "reachable": true, "target": target_json(&target), "username": hop_username })))
 }
 
 /// 裝置的螢幕配置：經連線池的那條裝置連線跑 `uname` / `xrandr` / `system_profiler` / PowerShell（見

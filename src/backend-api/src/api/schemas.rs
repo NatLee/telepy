@@ -1046,6 +1046,16 @@ pub struct DesktopScreen {
     pub primary: bool,
 }
 
+/// A port on the target answered a TCP connection opened from the device (the same path a desktop session
+/// takes). Used for desktops Telepy forwards instead of rendering, such as RustDesk's Direct IP port.
+#[derive(ToSchema)]
+pub struct DesktopProbe {
+    pub reachable: bool,
+    pub target: DesktopTarget,
+    /// The device account the channel was opened as
+    pub username: String,
+}
+
 /// The device's monitor layout, asked over SSH (`xrandr`, `system_profiler`, PowerShell). Used by the
 /// VNC viewer to show one screen of a multi-monitor desktop.
 #[derive(ToSchema)]
