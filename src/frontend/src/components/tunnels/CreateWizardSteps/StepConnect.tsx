@@ -40,7 +40,9 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
         <div className="space-y-6">
             <StepHeading title={t("wizard.connect.title")} subtitle={t("wizard.connect.subtitle", { name: created.name })} />
 
-            <div role="radiogroup" aria-label={t("wizard.connect.methodAria")} className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {/* gap-y-4：卡片頂端的標籤凸出 8px，手機兩欄時才不會碰到上一列。
+                gap-y-4: the tags stick out 8px above a card, so on phones (two columns) they clear the row above. */}
+            <div role="radiogroup" aria-label={t("wizard.connect.methodAria")} className="grid grid-cols-2 gap-x-2 gap-y-4 sm:grid-cols-3">
                 {METHODS.map(({ id, icon: Icon, title, tag }) => {
                     const selected = id === c.method;
                     return (

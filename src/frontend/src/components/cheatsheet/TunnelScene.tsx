@@ -1,9 +1,11 @@
 /**
  * 指令速查的插圖式場景：每個情境都用同一套構圖——你的電腦 ═ 加密通道（經 Telepy）═ 裝置（─ 後面的目標）。
- * 埠畫成機器上的「插座」，封包（複製檔案時是檔案）沿流量方向移動；手機版改成直排。
+ * 埠畫成機器上的「插座」，封包（複製檔案時是檔案）沿流量方向移動。看的是插圖自己的寬度（container query）而不是視窗：
+ * 三台機器橫排要 41rem，放不下（手機、有側欄的平板）就改成直排。
  * Illustrated scene for the command sheet. Every recipe uses the same layout — your computer ═ encrypted tunnel
  * (via Telepy) ═ the device (─ whatever sits behind it) — with ports drawn as sockets on the machines and packets
- * (files when copying) moving in the traffic direction. Stacks vertically on phones.
+ * (files when copying) moving in the traffic direction. Goes by the figure's own width (container query), not the
+ * viewport: three machines in a row need 41rem, so anything narrower (phones, tablets with the sidebar) stacks them.
  *
  * 構圖參考 iximiuz「A Visual Guide to SSH Tunnels」：固定拓樸、實線是 SSH、虛線是轉發出去的連線。
  * Layout follows iximiuz's "A Visual Guide to SSH Tunnels": a fixed topology, solid = SSH, dashed = forwarded hop.
@@ -45,11 +47,11 @@ function Node({ node }: { node: SceneNode }) {
     const { t } = useI18n();
     const Icon = node.icon;
     return (
-        <div className="flex md:flex-col items-center gap-3 md:gap-2 md:text-center min-w-0 md:w-40 lg:w-44 md:shrink-0">
-            <span className={cn("grid place-items-center size-14 md:size-16 shrink-0 rounded-xl ring-1 ring-inset bg-card shadow-card", ROLE_TONE[node.role])} aria-hidden>
+        <div className="flex @min-[42rem]:flex-col items-center gap-3 @min-[42rem]:gap-2 @min-[42rem]:text-center min-w-0 @min-[42rem]:w-40 @min-[46rem]:w-44 @min-[42rem]:shrink-0">
+            <span className={cn("grid place-items-center size-14 @min-[42rem]:size-16 shrink-0 rounded-xl ring-1 ring-inset bg-card shadow-card", ROLE_TONE[node.role])} aria-hidden>
                 <Icon size={28} strokeWidth={1.75} />
             </span>
-            <div className="flex flex-col md:items-center gap-1.5 min-w-0">
+            <div className="flex flex-col @min-[42rem]:items-center gap-1.5 min-w-0">
                 <div className="min-w-0">
                     <p className="text-sm font-semibold text-foreground truncate" title={node.name}>{node.name}</p>
                     {node.sub && <p className="text-[0.75rem] leading-snug text-muted-foreground">{node.sub}</p>}
@@ -57,7 +59,8 @@ function Node({ node }: { node: SceneNode }) {
                 {node.socket && (
                     <span
                         className={cn(
-                            "inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 font-mono text-xs ring-1 ring-inset",
+                            // 直排時欄位是 stretch，self-start 讓插座跟內容一樣寬。/ self-start: content-wide in the stacked layout's stretched column.
+                            "inline-flex max-w-full items-center gap-1 self-start rounded-full px-2.5 py-1 font-mono text-xs ring-1 ring-inset @min-[42rem]:self-auto",
                             node.entry ? "bg-primary text-primary-foreground ring-primary" : "bg-muted text-foreground ring-border"
                         )}
                         title={node.socket}
@@ -147,17 +150,20 @@ function LinkLabel({ link }: { link: SceneLink }) {
 function Link({ link, file }: { link: SceneLink; file: boolean }) {
     return (
         <>
-            {/* 桌面：水平，和圖示中心對齊 / Desktop: horizontal, aligned with the icon centres */}
-            <div className="hidden md:flex relative flex-1 min-w-16 max-w-[20rem] self-start h-16 items-center px-3">
+            {/* 寬：水平，和圖示中心對齊 / Wide: horizontal, aligned with the icon centres */}
+            <div className="hidden @min-[42rem]:flex relative flex-1 min-w-16 max-w-[20rem] self-start h-16 items-center px-3">
                 <span className="absolute left-1/2 -translate-x-1/2 -top-1">
                     <LinkLabel link={link} />
                 </span>
                 <Track link={link} axis="x" file={file} />
             </div>
-            {/* 手機：垂直 / Phones: vertical */}
-            <div className="md:hidden flex items-stretch gap-3 h-16 pl-5 py-2">
-                <Track link={link} axis="y" file={file} />
-                <span className="self-center pl-4"><LinkLabel link={link} /></span>
+            {/* 窄：垂直；線放在跟圖示一樣寬的欄裡，粗細不同的線都對準圖示中心。
+                Narrow: vertical; the track sits in an icon-wide column so every kind of line hits the icon centre. */}
+            <div className="@min-[42rem]:hidden flex items-stretch h-16 py-2">
+                <div className="flex w-14 shrink-0 justify-center">
+                    <Track link={link} axis="y" file={file} />
+                </div>
+                <span className="self-center pl-3"><LinkLabel link={link} /></span>
             </div>
         </>
     );
@@ -172,8 +178,9 @@ export function TunnelScene({ nodes, links, file = false, caption }: {
 }) {
     const { t } = useI18n();
     return (
-        <figure className="rounded-xl border border-border bg-surface/60 px-4 pt-6 pb-4 sm:px-6" aria-label={t("sheet.scene.aria")}>
-            <div className="flex flex-col md:flex-row md:items-start md:justify-center">
+        <figure className="@container rounded-xl border border-border bg-surface/60 px-4 pt-6 pb-4 sm:px-6" aria-label={t("sheet.scene.aria")}>
+            {/* 直排時整欄置中，寬的框裡才不會全擠在左邊。/ Stacked: centre the column so a wide frame isn't all left-heavy. */}
+            <div className="mx-auto flex max-w-sm flex-col @min-[42rem]:max-w-none @min-[42rem]:flex-row @min-[42rem]:items-start @min-[42rem]:justify-center">
                 {nodes.map((node, i) => (
                     <React.Fragment key={i}>
                         <Node node={node} />
@@ -190,24 +197,29 @@ export function TunnelScene({ nodes, links, file = false, caption }: {
     );
 }
 
-/** 情境卡片上的迷你插圖（不帶數值）。/ Tiny illustration for a recipe card (no values). */
+/**
+ * 情境卡片上的迷你插圖（不帶數值）。卡片要是 `@container`：窄卡片（手機兩欄）用小一號的圖示，連線再按剩下的寬度縮短，
+ * 三台機器的情境才不會超出卡片。
+ * Tiny illustration for a recipe card (no values). The card must be an `@container`: narrow cards (two columns on a
+ * phone) get smaller icons and the links shrink to the width left, so three-machine recipes stay inside the card.
+ */
 export type MiniItem = { icon: LucideIcon; role: SceneRole } | { link: SceneLink["kind"]; back?: boolean; both?: boolean };
 
 export function MiniScene({ items, active }: { items: MiniItem[]; active: boolean }) {
     return (
-        <div className="flex items-center" aria-hidden>
+        <div className="flex max-w-full items-center" aria-hidden>
             {items.map((it, i) => {
                 if ("icon" in it) {
                     const Icon = it.icon;
                     return (
-                        <span key={i} className={cn("grid place-items-center size-8 rounded-lg ring-1 ring-inset bg-card", ROLE_TONE[it.role])}>
-                            <Icon size={16} strokeWidth={1.75} />
+                        <span key={i} className={cn("grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-inset bg-card @[10.5rem]:size-8", ROLE_TONE[it.role])}>
+                            <Icon size={16} strokeWidth={1.75} className="size-3.5 @[10.5rem]:size-4" />
                         </span>
                     );
                 }
                 const plain = it.link === "plain";
                 return (
-                    <span key={i} className="relative flex items-center w-7 mx-0.5">
+                    <span key={i} className="relative mx-0.5 flex w-7 min-w-2.5 shrink items-center">
                         {it.back || it.both ? <ChevronLeft size={12} className={cn("absolute -left-1.5", plain ? "text-muted-foreground" : "text-primary")} /> : null}
                         <span
                             className={cn(
