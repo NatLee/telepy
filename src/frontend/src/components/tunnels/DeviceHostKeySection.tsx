@@ -6,7 +6,7 @@
  * The "device identity" section: the pinned host-key fingerprint, and when the device shows a different key,
  * the refused fingerprint with how to check it on the device and an owner-only "trust this key".
  */
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Fingerprint, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -24,11 +24,17 @@ export function DeviceHostKeySection({ tunnelId, isOpen, onChanged }: { tunnelId
     const [confirmAccept, setConfirmAccept] = useState<HostKey | null>(null);
     const [confirmForget, setConfirmForget] = useState(false);
     const time = (iso: string) => new Date(iso).toLocaleString(locale, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const changed = !!data && data.rejected.length > 0;
+    // 金鑰變了：開窗時直接捲到這一段（最要緊的事不該藏在下面）。/ Key changed: scroll this section into view on open.
+    const anchorRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (changed) anchorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, [changed]);
 
     if (!loaded) return null;
-    const changed = !!data && data.rejected.length > 0;
 
     return (
+        <div ref={anchorRef} className="scroll-mt-2">
         <Section
             icon={changed ? <ShieldAlert /> : <ShieldCheck />}
             title={t("hostKey.title")}
@@ -118,5 +124,6 @@ export function DeviceHostKeySection({ tunnelId, isOpen, onChanged }: { tunnelId
                 isDestructive
             />
         </Section>
+        </div>
     );
 }
