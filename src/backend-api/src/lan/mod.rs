@@ -18,8 +18,8 @@ use std::net::Ipv4Addr;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-/// 預設探測的 port：SSH、HTTP(S)、SMB、RDP、VNC、常見的 web 管理介面。/ Default probe ports.
-pub const DEFAULT_PORTS: &[u16] = &[22, 80, 443, 445, 3389, 5900, 8080, 8443];
+/// 預設探測的 port：SSH、HTTP(S)、SMB、RDP、VNC、常見的 web 管理介面、RustDesk 的 Direct IP（21118）。/ Default probe ports.
+pub const DEFAULT_PORTS: &[u16] = &[22, 80, 443, 445, 3389, 5900, 8080, 8443, 21118];
 pub const MAX_PORTS: usize = 32;
 /// 一次掃描最多幾個位址（= 一個 /22）。/ Address cap per scan (a /22).
 pub const MAX_ADDRESSES: usize = 1024;

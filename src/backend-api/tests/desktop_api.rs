@@ -273,6 +273,21 @@ async fn desktop_session_through_the_device() {
     let ev = events(&lab, &alice.token, id).await;
     assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (VNC) by alice to device:")), "{ev:?}");
 
+    // 埠探測（RustDesk 這類不經 guacd 的桌面）：開著的埠 → reachable，關著的 → 502 target_unreachable；同一道門。
+    // Port probe: an open port is reachable, a closed one answers 502; the gate is the same as start.
+    let r = app.get(&format!("/api/reverse/server/{id}/desktop/probe?port={desktop}&username=ubuntu"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["reachable"], true);
+    assert_eq!(r.json["target"]["port"], desktop);
+    assert_eq!(r.json["username"], "ubuntu");
+    let closed = free_port();
+    let r = app.get(&format!("/api/reverse/server/{id}/desktop/probe?port={closed}"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{}", r.text);
+    assert_eq!(r.json["code"], "target_unreachable");
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/desktop/probe?port={desktop}"), None).await.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/desktop/probe?port=0"), Some(&alice.token)).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/desktop/probe?port={desktop}&lan_host_id=999999"), Some(&alice.token)).await.status, StatusCode::NOT_FOUND);
+
     // 憑證庫：用存好的登入開桌面，guacd 拿到的是存的密碼；綁定不同的桌面就拒絕。
     // Vault: a saved login reaches guacd; a login saved for another desktop is refused.
     let r = app.post("/api/credentials", Some(&alice.token), json!({"label": "pc vnc", "protocol": "vnc", "tunnel_id": id, "password": "from-the-vault"})).await;

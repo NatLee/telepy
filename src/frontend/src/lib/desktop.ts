@@ -7,7 +7,14 @@
 import type { TranslationKey } from "@/locales/en";
 
 export type DesktopProtocol = "rdp" | "vnc";
+/**
+ * 桌面頁的模式：guacd 畫在瀏覽器裡的 RDP / VNC，或 Telepy 只負責轉發、用原生 client 看的 RustDesk（Direct IP）。
+ * The page's mode: RDP / VNC rendered by guacd, or RustDesk, which Telepy forwards for the native client.
+ */
+export type DesktopMode = DesktopProtocol | "rustdesk";
 export type ClipboardPolicy = "both" | "to_remote" | "off";
+/** RustDesk 的 Direct IP Access 埠。/ RustDesk's Direct IP Access port. */
+export const RUSTDESK_PORT = 21118;
 /** 畫質預設（start 時送給後端 → guacd 參數）。/ Quality preset, turned into guacd parameters at start. */
 export type DesktopQuality = "auto" | "speed" | "sharp";
 export const QUALITY_VALUES: readonly DesktopQuality[] = ["auto", "speed", "sharp"];
@@ -15,7 +22,14 @@ export const QUALITY_VALUES: readonly DesktopQuality[] = ["auto", "speed", "shar
 export type CtrlAsCmdMode = "auto" | "on" | "off";
 export const CTRL_MODE_VALUES: readonly CtrlAsCmdMode[] = ["auto", "on", "off"];
 
-export const DEFAULT_PORT: Record<DesktopProtocol, number> = { rdp: 3389, vnc: 5900 };
+export const DEFAULT_PORT: Record<DesktopMode, number> = { rdp: 3389, vnc: 5900, rustdesk: RUSTDESK_PORT };
+
+/** `GET …/desktop/probe` 的回應。/ The probe response. */
+export interface DesktopProbe {
+    reachable: boolean;
+    target: { host: string; port: number; label: string; lan_host_id: number | null };
+    username: string;
+}
 
 /** `POST /api/reverse/server/{id}/desktop/start` 的回應。/ The start response. */
 export interface DesktopStart {
@@ -63,12 +77,13 @@ export interface DesktopFailure {
     at: FlowSpot;
 }
 
-/** 這台主機掃描到的桌面服務（3389 = RDP、5900–5909 = VNC）。/ Desktop services seen on a host. */
-export function desktopPorts(openPorts: number[]): { protocol: DesktopProtocol; port: number }[] {
-    const out: { protocol: DesktopProtocol; port: number }[] = [];
+/** 這台主機掃描到的桌面服務（3389 = RDP、5900–5909 = VNC、21118 = RustDesk）。/ Desktop services seen on a host. */
+export function desktopPorts(openPorts: number[]): { protocol: DesktopMode; port: number }[] {
+    const out: { protocol: DesktopMode; port: number }[] = [];
     for (const p of [...openPorts].sort((a, b) => a - b)) {
         if (p === 3389) out.push({ protocol: "rdp", port: p });
         else if (p >= 5900 && p <= 5909) out.push({ protocol: "vnc", port: p });
+        else if (p === RUSTDESK_PORT) out.push({ protocol: "rustdesk", port: p });
     }
     return out;
 }

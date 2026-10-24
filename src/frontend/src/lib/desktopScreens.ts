@@ -163,26 +163,26 @@ function alignHorizontally(y: number, h: number, w: number, fb: Framebuffer, pro
     return left > right ? gap : 0;
 }
 
+/** 最小的可用區域（像素）。/ The smallest usable area. */
+export const MIN_AREA = 64;
+
 /**
- * 預設切法：畫面很寬（> 2.3:1）→ 左 / 右半，超寬（> 3.4:1）再加三等分；很高（> 1.3:1）→ 上 / 下半。
- * 單一正常螢幕沒有預設。/ Aspect-ratio presets for when nothing was detected.
+ * 等分切法，不靠偵測、隨時可選：左 / 右半、三等分（夠寬時）、上 / 下半（夠高時）。
+ * 螢幕一樣大並排的多螢幕桌面用這個就夠了。/ Even splits, always available: halves, thirds, top / bottom.
  */
-export function presetChoices(fb: Framebuffer): ScreenChoice[] {
-    if (fb.width <= 0 || fb.height <= 0) return [];
-    const ratio = fb.width / fb.height;
+export function splitChoices(fb: Framebuffer): ScreenChoice[] {
+    if (fb.width < MIN_AREA * 2 || fb.height < MIN_AREA) return [];
     const out: ScreenChoice[] = [];
     const half = Math.floor(fb.width / 2);
-    if (ratio > 2.3) {
-        out.push({ id: "left", name: "left", preset: "left", viewport: { x: 0, y: 0, width: half, height: fb.height } });
-        out.push({ id: "right", name: "right", preset: "right", viewport: { x: half, y: 0, width: fb.width - half, height: fb.height } });
-    }
-    if (ratio > 3.4) {
+    out.push({ id: "left", name: "left", preset: "left", viewport: { x: 0, y: 0, width: half, height: fb.height } });
+    out.push({ id: "right", name: "right", preset: "right", viewport: { x: half, y: 0, width: fb.width - half, height: fb.height } });
+    if (fb.width >= MIN_AREA * 3) {
         const third = Math.floor(fb.width / 3);
         out.push({ id: "third1", name: "third1", preset: "third1", viewport: { x: 0, y: 0, width: third, height: fb.height } });
         out.push({ id: "third2", name: "third2", preset: "third2", viewport: { x: third, y: 0, width: third, height: fb.height } });
         out.push({ id: "third3", name: "third3", preset: "third3", viewport: { x: 2 * third, y: 0, width: fb.width - 2 * third, height: fb.height } });
     }
-    if (ratio < 1 / 1.3) {
+    if (fb.height >= MIN_AREA * 2) {
         const h = Math.floor(fb.height / 2);
         out.push({ id: "top", name: "top", preset: "top", viewport: { x: 0, y: 0, width: fb.width, height: h } });
         out.push({ id: "bottom", name: "bottom", preset: "bottom", viewport: { x: 0, y: h, width: fb.width, height: fb.height - h } });
@@ -191,21 +191,53 @@ export function presetChoices(fb: Framebuffer): ScreenChoice[] {
 }
 
 /**
- * 選單要列的螢幕：偵測到且放得進畫面的 → 每個一項；否則預設切法。只有一個螢幕且就是整張畫面 → 空（沒得選）。
- * The choices for the screen menu: detected screens when they fit, otherwise presets; empty when the whole
- * framebuffer is the one screen.
+ * 偵測到的螢幕（放得進畫面的）→ 每個一項；蓋住整張畫面的那個就是「整個桌面」，不另外列（Xvfb 這類 X server
+ * 會多列一個涵蓋全部的 monitor）。推不出排列、或沒偵測到 → 空（選單還有等分切法與自訂區域）。
+ * Detected screens that fit, one choice each; a screen covering the whole framebuffer is the "whole desktop"
+ * entry (Xvfb lists one next to the real ones). Empty when nothing was detected or nothing fits.
  */
 export function screenChoices(detected: DetectedScreen[], fb: Framebuffer, probe?: BlackProbe): ScreenChoice[] {
     if (fb.width <= 0 || fb.height <= 0) return [];
     const placed = placePositioned(detected, fb) ?? arrangeBySize(detected, fb, probe);
-    if (placed) {
-        // 蓋住整張畫面的「螢幕」就是「整個桌面」那一項（Xvfb 這類 X server 會多列一個涵蓋全部的 monitor）。
-        // A screen that covers the whole framebuffer is the "whole desktop" entry (Xvfb lists one next to the real ones).
-        const isWhole = (v: Viewport) => v.x === 0 && v.y === 0 && close(v.width, fb.width) && close(v.height, fb.height);
-        const choices = placed.map((viewport, i) => ({ id: `s${i}`, name: detected[i].name, viewport, primary: detected[i].primary })).filter((c) => !isWhole(c.viewport));
-        return choices;
+    if (!placed) return [];
+    const isWhole = (v: Viewport) => v.x === 0 && v.y === 0 && close(v.width, fb.width) && close(v.height, fb.height);
+    return placed.map((viewport, i) => ({ id: `s${i}`, name: detected[i].name, viewport, primary: detected[i].primary })).filter((c) => !isWhole(c.viewport));
+}
+
+/**
+ * 使用者在整張畫面上拖出的矩形（畫面座標的兩個角）→ 區域：取整、夾進畫面、太小就 null。
+ * A rectangle the user dragged over the whole desktop (two corners in framebuffer coordinates).
+ */
+export function rectFromPoints(a: { x: number; y: number }, b: { x: number; y: number }, fb: Framebuffer): Viewport | null {
+    const clampX = (v: number) => Math.min(fb.width, Math.max(0, Math.round(v)));
+    const clampY = (v: number) => Math.min(fb.height, Math.max(0, Math.round(v)));
+    const x1 = clampX(Math.min(a.x, b.x));
+    const x2 = clampX(Math.max(a.x, b.x));
+    const y1 = clampY(Math.min(a.y, b.y));
+    const y2 = clampY(Math.max(a.y, b.y));
+    if (x2 - x1 < MIN_AREA || y2 - y1 < MIN_AREA) return null;
+    return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+/** localStorage 裡存的自訂區域 → 區域；壞資料或超出畫面 → null。/ A stored custom area; null when invalid or outside. */
+export function parseStoredArea(json: string | null, fb: Framebuffer): Viewport | null {
+    if (!json) return null;
+    let v: unknown;
+    try {
+        v = JSON.parse(json);
+    } catch {
+        return null;
     }
-    return presetChoices(fb);
+    if (!v || typeof v !== "object") return null;
+    const o = v as Record<string, unknown>;
+    const n = (k: string) => (typeof o[k] === "number" && Number.isFinite(o[k]) ? Math.round(o[k] as number) : null);
+    const x = n("x");
+    const y = n("y");
+    const width = n("width");
+    const height = n("height");
+    if (x === null || y === null || width === null || height === null) return null;
+    if (x < 0 || y < 0 || width < MIN_AREA || height < MIN_AREA || x + width > fb.width || y + height > fb.height) return null;
+    return { x, y, width, height };
 }
 
 /** 縮放比例：整個 viewport 放進框，不放大超過 maxScale。/ Fit the viewport into the box, never above maxScale. */

@@ -9,7 +9,9 @@
  * Data and flow for the remote desktop page. Devices, allowed accounts, LAN hosts and online state come from the
  * topology endpoint; the selection lives in the URL. Credentials are sent once and cleared once connected.
  * While connected: the relay's per-second stats, the tunnel's unstable flag, the framebuffer size and, for VNC
- * on the device itself, the detected screen layout.
+ * on the device itself, the detected screen layout; a custom crop area and the chosen screen are remembered per target.
+ * RustDesk 模式：不開 guacd session，而是從裝置探測 Direct IP 埠（`GET …/desktop/probe`）並給出 `ssh -L` 指令
+ * （別名來自 `/tunnels/server/config/{id}`，和命令表同一套）。/ RustDesk mode: a port probe plus the ssh -L command.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -30,20 +32,23 @@ import {
     startFailure,
     type CtrlAsCmdMode,
     type DesktopFailure,
+    type DesktopMode,
     type DesktopPhase,
-    type DesktopProtocol,
+    type DesktopProbe,
     type DesktopQuality,
     type DesktopStart,
 } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
-import type { DetectedScreen, Framebuffer } from "@/lib/desktopScreens";
+import { parseStoredArea, type DetectedScreen, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
+import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
+import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 import { useSavedLogins } from "@/hooks/useSavedLogins";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 
 export interface DesktopForm {
     account: string;
-    protocol: DesktopProtocol;
+    protocol: DesktopMode;
     port: string;
     login: string;
     password: string;
@@ -61,12 +66,30 @@ export interface ScreensState {
     list: DetectedScreen[];
 }
 
+export interface ProbeState {
+    state: "idle" | "checking" | "ok" | "failed";
+    failure: DesktopFailure | null;
+    result: DesktopProbe | null;
+}
+
 const EMPTY_FORM: DesktopForm = { account: "", protocol: "rdp", port: String(DEFAULT_PORT.rdp), login: "", password: "", domain: "", savedId: null, save: false, saveLabel: "" };
 const NO_SCREENS: ScreensState = { state: "idle", os: null, list: [] };
+const NO_PROBE: ProbeState = { state: "idle", failure: null, result: null };
 
 /** 每個目標記住選的螢幕。/ The chosen screen, remembered per target. */
 function screenStorageKey(tunnelId: number, hostId: number | null): string {
     return `telepy.desktopScreen.${tunnelId}.${hostId ?? "device"}`;
+}
+
+/** 每個目標記住框選的區域（JSON）。/ The custom area, remembered per target. */
+function areaStorageKey(tunnelId: number, hostId: number | null): string {
+    return `telepy.desktopArea.${tunnelId}.${hostId ?? "device"}`;
+}
+
+/** 與後端 sanitize_host_alias 相同（config 還沒載入時的別名）。/ Mirrors the backend alias sanitizer. */
+function sanitizeAlias(value: string): string {
+    const v = value.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    return v || "telepy-endpoint";
 }
 
 export function useDesktopPage() {
@@ -95,6 +118,11 @@ export function useDesktopPage() {
     const [scale, setScale] = useState<number | null>(null);
     const [screens, setScreens] = useState<ScreensState>(NO_SCREENS);
     const [viewportId, setViewportIdState] = useState<string>("");
+    // 框選的區域存成 JSON，畫面大小知道了才解析（區域要在畫面裡才算數）。/ The custom area as stored JSON; parsed once the size is known.
+    const [areaRaw, setAreaRaw] = useState<string | null>(null);
+    const [selecting, setSelecting] = useState(false);
+    const [probeState, setProbeState] = useState<ProbeState>(NO_PROBE);
+    const [config, setConfig] = useState<TunnelConfigData | null>(null);
     const sessionRef = useRef<DesktopStart | null>(null);
     sessionRef.current = session;
     const connectedRef = useRef(false);
@@ -164,22 +192,27 @@ export function useDesktopPage() {
     const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null }), [replaceQuery]);
     const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id) }), [replaceQuery]);
     const update = useCallback((patch: Partial<DesktopForm>) => setForm((f) => ({ ...f, ...patch })), []);
-    const setProtocol = useCallback((protocol: DesktopProtocol) => {
+    const setProtocol = useCallback((protocol: DesktopMode) => {
         setForm((f) => {
-            const other: DesktopProtocol = protocol === "rdp" ? "vnc" : "rdp";
-            const port = f.port === String(DEFAULT_PORT[other]) || !isValidPort(f.port) ? String(DEFAULT_PORT[protocol]) : f.port;
+            // 埠還是別種模式的預設（或打壞了）→ 換成新模式的預設；自己改過的留著。進出 RustDesk 一律換成預設
+            // （21118 對 RDP / VNC 沒意義，反過來也是）。/ Swap default ports, keep a typed one; RustDesk always resets.
+            const isOtherDefault = (Object.keys(DEFAULT_PORT) as DesktopMode[]).some((m) => m !== protocol && String(DEFAULT_PORT[m]) === f.port);
+            const crossesRustDesk = protocol === "rustdesk" || f.protocol === "rustdesk";
+            const port = crossesRustDesk || isOtherDefault || !isValidPort(f.port) ? String(DEFAULT_PORT[protocol]) : f.port;
             return { ...f, protocol, port };
         });
     }, []);
 
     const address = host ? `${host.address}:${form.port}` : `127.0.0.1:${form.port}`;
+    const isRustDesk = form.protocol === "rustdesk";
     // 這個桌面（隧道 + 主機 + 協定）存過的登入。/ Logins saved for this desktop (tunnel + host + protocol).
-    const saved = useSavedLogins(tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel);
+    const saved = useSavedLogins(tunnel && form.protocol !== "rustdesk" ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel && !isRustDesk);
     const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
-    const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && (phase === "idle" || phase === "failed");
+    const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && !isRustDesk && (phase === "idle" || phase === "failed");
+    const canProbe = !!tunnel && online && !!form.account && isValidPort(form.port) && probeState.state !== "checking";
 
     const connect = useCallback(async () => {
-        if (!tunnel) return;
+        if (!tunnel || form.protocol === "rustdesk") return;
         setFailure(null);
         setEndedNormally(false);
         setPhase("starting");
@@ -237,12 +270,16 @@ export function useDesktopPage() {
             setScale(null);
             setScreens(NO_SCREENS);
             let remembered = "";
+            let area: string | null = null;
             try {
                 remembered = localStorage.getItem(screenStorageKey(tunnel.id, host?.id ?? null)) ?? "";
+                area = localStorage.getItem(areaStorageKey(tunnel.id, host?.id ?? null));
             } catch {
                 // 私密模式：不記得就從整張畫面開始。/ Storage blocked: start from the whole desktop.
             }
             setViewportIdState(remembered);
+            setAreaRaw(area);
+            setSelecting(false);
             setSession(data);
             setPhase("connecting");
         } catch {
@@ -262,6 +299,7 @@ export function useDesktopPage() {
         setSession(null);
         setConnectedAt(null);
         setStats(null);
+        setSelecting(false);
         if (f) {
             setFailure(f);
             setPhase("failed");
@@ -287,6 +325,7 @@ export function useDesktopPage() {
         setSession(null);
         setConnectedAt(null);
         setStats(null);
+        setSelecting(false);
         setPhase("idle");
         setEndedNormally(true);
     }, [postStop]);
@@ -336,6 +375,114 @@ export function useDesktopPage() {
         }
     }, [tunnel, host]);
 
+    // 自訂區域：框選後存起來並選用；畫面大小變了（換 session）就重新驗證。/ The custom crop area.
+    const customArea: Viewport | null = framebuffer ? parseStoredArea(areaRaw, framebuffer) : null;
+    const startSelecting = useCallback(() => setSelecting(true), []);
+    const finishSelecting = useCallback((area: Viewport | null) => {
+        setSelecting(false);
+        if (!area || !tunnel) return;
+        const json = JSON.stringify(area);
+        setAreaRaw(json);
+        try {
+            localStorage.setItem(areaStorageKey(tunnel.id, host?.id ?? null), json);
+        } catch {
+            // 記不住就這次用。/ Not remembered, used for this session.
+        }
+        setViewportId("custom");
+    }, [tunnel, host, setViewportId]);
+    const forgetArea = useCallback(() => {
+        setAreaRaw(null);
+        if (tunnel) {
+            try {
+                localStorage.removeItem(areaStorageKey(tunnel.id, host?.id ?? null));
+            } catch {
+                // 本來就沒存。/ Nothing stored anyway.
+            }
+        }
+        setViewportIdState((id) => (id === "custom" ? "" : id));
+        if (tunnel) {
+            try {
+                if (localStorage.getItem(screenStorageKey(tunnel.id, host?.id ?? null)) === "custom") localStorage.removeItem(screenStorageKey(tunnel.id, host?.id ?? null));
+            } catch {
+                // 同上。/ Same.
+            }
+        }
+    }, [tunnel, host]);
+
+    // RustDesk：從裝置探測 Direct IP 埠。目標 / 帳號 / 埠一變就歸零。/ RustDesk: probe the port from the device.
+    const probeKey = `${tunnel?.id ?? ""}|${host?.id ?? ""}|${form.account}|${form.port}`;
+    const probeKeyRef = useRef(probeKey);
+    useEffect(() => {
+        if (probeKeyRef.current !== probeKey) {
+            probeKeyRef.current = probeKey;
+            const id = setTimeout(() => setProbeState(NO_PROBE), 0);
+            return () => clearTimeout(id);
+        }
+    }, [probeKey]);
+    const runProbe = useCallback(async () => {
+        if (!tunnel || !isValidPort(form.port)) return;
+        setProbeState({ state: "checking", failure: null, result: null });
+        const key = probeKey;
+        try {
+            const q = new URLSearchParams({ port: form.port, username: form.account });
+            if (host) q.set("lan_host_id", String(host.id));
+            const res = await apiFetch(`/api/reverse/server/${tunnel.id}/desktop/probe?${q.toString()}`);
+            const data = await readJson<DesktopProbe & { code?: string }>(res);
+            if (probeKeyRef.current !== key) return;
+            if (!res.ok || !data?.reachable) {
+                setProbeState({ state: "failed", failure: startFailure(data?.code, res.status, { account: form.account, address }), result: null });
+                return;
+            }
+            setProbeState({ state: "ok", failure: null, result: data });
+        } catch {
+            if (probeKeyRef.current === key) setProbeState({ state: "failed", failure: { key: "desktop.err.network", at: "web" }, result: null });
+        }
+    }, [tunnel, host, form.port, form.account, address, probeKey]);
+
+    // RustDesk 的 ssh 指令要別名：和命令表一樣讀 config（多個帳號時取這個帳號那一份）。/ The alias for the ssh command.
+    const tunnelId = tunnel?.id ?? null;
+    useEffect(() => {
+        if (!isRustDesk || tunnelId === null) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await apiFetch(`/tunnels/server/config/${tunnelId}`);
+                if (!res.ok) return;
+                let data = await readJson<TunnelConfigData>(res);
+                if (!data) return;
+                const users = data.usernames ?? [];
+                if (users.length > 1) {
+                    const one = users.find((u) => u.username === form.account) ?? users[0];
+                    const r2 = await apiFetch(`/tunnels/server/config/${tunnelId}?username_id=${one.id}`);
+                    if (r2.ok) data = (await readJson<TunnelConfigData>(r2)) ?? data;
+                }
+                if (!cancelled) setConfig(data);
+            } catch {
+                // 沒有別名就用隧道名稱推。/ Without the config the alias is derived from the name.
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [isRustDesk, tunnelId, form.account]);
+    let connectMode: ConnectMode = "alias";
+    try {
+        const m = typeof localStorage !== "undefined" ? localStorage.getItem("telepy.cheatsheetMode") : null;
+        if (m === "direct") connectMode = "direct";
+    } catch {
+        // 預設用別名。/ Alias by default.
+    }
+    const currentConfig = config && tunnel && config.reverse_port === tunnel.reverse_port ? config : null;
+    const configHost = currentConfig?.hosts?.find((h) => h.username === form.account) ?? currentConfig?.hosts?.[0] ?? null;
+    const connectTarget: ConnectTarget | null = tunnel
+        ? {
+            alias: configHost?.alias ?? sanitizeAlias(tunnel.name),
+            username: form.account || configHost?.username || "USER",
+            serverHost: currentConfig?.server?.host || (typeof window !== "undefined" ? window.location.hostname : "telepy"),
+            serverPort: currentConfig?.server?.port ?? "",
+            reversePort: tunnel.reverse_port,
+            mode: connectMode,
+        }
+        : null;
+
     const browserIsMac = typeof navigator !== "undefined" && isMacBrowser(navigator);
     const effectiveCtrlAsCmd = ctrlAsCmd(ctrlMode, screens.os, browserIsMac);
     const pixelRatio = pixelRatioFor(session?.quality ?? quality, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
@@ -344,10 +491,12 @@ export function useDesktopPage() {
         state: {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
+            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig,
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
             setQuality, setCtrlMode, detectScreens, setViewportId,
+            startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },
             forgetSaved: async (id: number) => { if (await saved.remove(id)) setForm((f) => ({ ...f, savedId: null })); },

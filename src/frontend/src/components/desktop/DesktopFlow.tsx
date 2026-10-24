@@ -14,14 +14,15 @@ import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
-import { spotStates, type ClipboardPolicy, type DesktopFailure, type DesktopPhase, type DesktopProtocol, type FlowSpot, type SpotState } from "@/lib/desktop";
+import { spotStates, type ClipboardPolicy, type DesktopFailure, type DesktopMode, type DesktopPhase, type FlowSpot, type SpotState } from "@/lib/desktop";
 import { formatMs, laggingHop, type StreamStats } from "@/lib/desktopStats";
 import type { TranslationKey } from "@/locales/en";
 
 export interface FlowContext {
     phase: DesktopPhase;
     failure: DesktopFailure | null;
-    protocol: DesktopProtocol;
+    /** RDP / VNC 由 guacd 畫在瀏覽器裡；RustDesk 只轉發埠，桌面在 RustDesk app 裡。/ RustDesk is forwarded, not rendered. */
+    protocol: DesktopMode;
     port: number;
     deviceName: string;
     /** 裝置那一跳的帳號。/ The device account for the hop. */
@@ -128,17 +129,28 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
     const { t } = useI18n();
     const motion = !useReducedMotion();
     const s: Record<FlowSpot, SpotState> = spotStates(ctx.phase, ctx.failure);
-    const proto = ctx.protocol === "rdp" ? "RDP" : "VNC";
+    const rustdesk = ctx.protocol === "rustdesk";
+    const proto = ctx.protocol === "rdp" ? "RDP" : ctx.protocol === "vnc" ? "VNC" : "RustDesk";
     const target = ctx.lanHost ? `${ctx.lanHost.address}:${ctx.port}` : `127.0.0.1:${ctx.port}`;
-    const step = currentStep(ctx.phase, ctx.failure);
-    const steps: { key: TranslationKey; vars?: Record<string, string | number> }[] = [
-        { key: "desktop.flow.step1", vars: { account: ctx.account || "?", device: ctx.deviceName, target } },
-        { key: "desktop.flow.step2" },
-        { key: "desktop.flow.step3", vars: { protocol: proto } },
-        { key: "desktop.flow.step4" },
-    ];
-    const nowKey: TranslationKey =
-        ctx.phase === "starting" ? "desktop.flow.now.starting"
+    const step = rustdesk ? (ctx.phase === "idle" ? 0 : ctx.phase === "failed" && ctx.failure ? (ctx.failure.at === "web" ? 1 : 2) : ctx.phase === "connected" ? 3 : 2) : currentStep(ctx.phase, ctx.failure);
+    const steps: { key: TranslationKey; vars?: Record<string, string | number> }[] = rustdesk
+        ? [
+            { key: "desktop.flow.rd.step1", vars: { device: ctx.deviceName } },
+            { key: "desktop.flow.rd.step2", vars: { account: ctx.account || "?", target } },
+            { key: "desktop.flow.rd.step3" },
+        ]
+        : [
+            { key: "desktop.flow.step1", vars: { account: ctx.account || "?", device: ctx.deviceName, target } },
+            { key: "desktop.flow.step2" },
+            { key: "desktop.flow.step3", vars: { protocol: proto } },
+            { key: "desktop.flow.step4" },
+        ];
+    const nowKey: TranslationKey = rustdesk
+        ? (ctx.phase === "starting" || ctx.phase === "connecting" ? "desktop.flow.now.rd.starting"
+            : ctx.phase === "connected" ? "desktop.flow.now.rd.connected"
+                : ctx.phase === "failed" ? "desktop.flow.now.rd.failed"
+                    : "desktop.flow.now.rd.idle")
+        : ctx.phase === "starting" ? "desktop.flow.now.starting"
             : ctx.phase === "connecting" ? "desktop.flow.now.connecting"
                 : ctx.phase === "connected" ? "desktop.flow.now.connected"
                     : ctx.phase === "failed" ? "desktop.flow.now.failed"
@@ -162,16 +174,16 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
 
             <div className="@container">
                 <ol className="flex flex-col items-stretch @3xl:flex-row @3xl:items-center">
-                    <Node icon={Laptop} title={t("desktop.flow.you")} sub={t("desktop.flow.youSub")} state={s.browser} />
-                    <Link label={t("desktop.flow.linkWeb")} state={s.web} motion={motion} note={stats ? formatMs(stats.netMs) : undefined} slow={where === "web"} />
-                    <Node brand title="Telepy" sub={t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />
+                    <Node icon={Laptop} title={rustdesk ? t("desktop.flow.rd.you") : t("desktop.flow.you")} sub={rustdesk ? t("desktop.flow.rd.youSub") : t("desktop.flow.youSub")} state={s.browser} />
+                    <Link label={rustdesk ? t("desktop.flow.rd.linkSsh") : t("desktop.flow.linkWeb")} state={s.web} motion={motion} note={stats ? formatMs(stats.netMs) : undefined} slow={where === "web"} />
+                    <Node brand title="Telepy" sub={rustdesk ? t("desktop.flow.rd.telepySub") : t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />
                     <Link label={t("desktop.flow.linkTunnel")} state={s.tunnel} motion={motion} note={stats ? formatMs(stats.tunnelMs) : undefined} slow={where === "tunnel"} />
                     <Node icon={Server} title={ctx.deviceName} sub={t("desktop.flow.deviceSub")} state={s.device} />
                     <Link label={ctx.lanHost ? t("desktop.flow.linkLan", { port: ctx.port }) : t("desktop.flow.linkLocal", { port: ctx.port })} state={s.reach} motion={motion} />
                     <Node
                         icon={Monitor}
                         title={ctx.lanHost ? ctx.lanHost.name : t("desktop.flow.deviceDesktop")}
-                        sub={t("desktop.flow.targetSub", { protocol: proto, address: target })}
+                        sub={rustdesk ? t("desktop.flow.rd.targetSub", { address: target }) : t("desktop.flow.targetSub", { protocol: proto, address: target })}
                         state={s.target}
                     />
                 </ol>
@@ -208,11 +220,21 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
             </ol>
 
             <ul className="space-y-1.5 border-t border-border pt-4 text-sm text-muted-foreground">
-                <li>{t(ctx.savedLogin ? "desktop.flow.noteVault" : "desktop.flow.noteCredentials")}</li>
-                <li>{t(ctx.clipboard === "off" ? "desktop.flow.noteClipboardOff" : ctx.clipboard === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}</li>
-                <li>{t("desktop.flow.noteLogged")}</li>
-                <li>{t("desktop.flow.noteDevice")}</li>
-                <li>{t("desktop.flow.noteIme")}</li>
+                {rustdesk ? (
+                    <>
+                        <li>{t("desktop.flow.rd.notePrivate")}</li>
+                        <li>{t("desktop.flow.rd.noteDirectIp")}</li>
+                        <li>{t("desktop.flow.noteDevice")}</li>
+                    </>
+                ) : (
+                    <>
+                        <li>{t(ctx.savedLogin ? "desktop.flow.noteVault" : "desktop.flow.noteCredentials")}</li>
+                        <li>{t(ctx.clipboard === "off" ? "desktop.flow.noteClipboardOff" : ctx.clipboard === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}</li>
+                        <li>{t("desktop.flow.noteLogged")}</li>
+                        <li>{t("desktop.flow.noteDevice")}</li>
+                        <li>{t("desktop.flow.noteIme")}</li>
+                    </>
+                )}
             </ul>
         </div>
     );

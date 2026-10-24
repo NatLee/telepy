@@ -83,10 +83,27 @@ VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x
 2. 前端 `screenChoices`：有位置的螢幕平移到 (0,0)，整體和畫面大小不符但比例一樣時等比縮放（Windows 的 DPI 縮放）；
    只有大小的（macOS）用整張畫面推排列 —— 寬相加 = 畫面寬就是側排、高相加 = 畫面高就是疊排，高度不同時取樣畫面裡的
    黑色區域判斷貼上緣還是下緣（`isBlack` 讀 canvas）；都推不出來就依長寬比給「左半 / 右半 / 三等分 / 上半 / 下半」預設。
-3. 工具列「螢幕」選單（只有 VNC）：整個桌面 + 每個螢幕（名稱、大小、主螢幕）+ 重新偵測；選擇記在 localStorage
-   `telepy.desktopScreen.<tunnel>.<lanHost|device>`。連上就自動偵測一次。
+3. 工具列「螢幕」選單（只有 VNC）：整個桌面 + 每個偵測到的螢幕（名稱、大小、主螢幕）+ **等分切法**（左 / 右半、
+   三等分、上 / 下半，`splitChoices`，不靠偵測、隨時可選）+ **自訂區域**（「框選區域…」進入框選模式：viewer 顯示
+   整張畫面、蓋一層 `AreaSelector`，拖一個矩形 → `rectFromPoints` 夾進畫面、最小 64px；Esc 或「取消」放棄；框選中
+   鍵盤滑鼠不送往遠端）+ 重新偵測。選擇記在 localStorage `telepy.desktopScreen.<tunnel>.<lanHost|device>`，
+   自訂區域記在 `telepy.desktopArea.<…>`（JSON，`parseStoredArea` 在畫面大小知道後驗證）。連上就自動偵測一次。
 
 RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只有一個虛擬螢幕。
+
+## RustDesk（經隧道轉發，用原生 client）
+
+RustDesk 用自己的協定，guacd 不認得，所以不在瀏覽器裡畫；Telepy 做的是把 RustDesk 的 **Direct IP Access**（TCP 21118）
+經裝置轉到使用者電腦，使用者用 RustDesk app 連 `127.0.0.1`。多螢幕切換、傳檔、聲音都是 RustDesk 自己的功能。
+
+- 桌面頁協定選「RustDesk」：不開 session，面板四步 —— 在那台 RustDesk 開 Direct IP Access 並設固定密碼 →
+  「從裝置檢查」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：和 start 同一道門、同一條路
+  —— 池的 lease + direct-tcpip 通道，通了立刻關；不看 `desktop_enabled`；錯誤碼同 start）→ `ssh -L 21118:<host>:21118 <alias>`
+  （命令表的 `rustdesk` recipe，別名來自 `/tunnels/server/config/{id}`）→ app 的 ID 填 `127.0.0.1`（本機埠非 21118 時
+  `127.0.0.1:<port>`）。info 路徑圖在 RustDesk 模式顯示這條路（你的電腦 ─ssh─ Telepy ─隧道─ 裝置 ─ RustDesk），階段跟著探測。
+- 命令表多了「用 RustDesk」情境（`-L`，欄位：主機 `localhost` = 裝置自己、RustDesk 埠、本機埠）；區網掃描預設探測
+  21118，`lib/lanConnect.ts` 把它顯示成 RustDesk，網路頁的指令分頁也會列出它的 `-L`。
+- 做不到的：在瀏覽器裡直接看 RustDesk。RustDesk 的 web client 要自架 hbbs / hbbr 並另做 WebSocket 中繼，不在這裡。
 
 ## 輸入法（IME）與跨系統鍵盤
 
