@@ -259,7 +259,8 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     state.device_keys.kick(tunnel.id);
     notify::tunnel_updated(state, &tunnel).await.map_err(internal)?;
 
-    let service_key = db::keys::first_service_key(&state.db).await.map_err(internal)?.ok_or((StatusCode::SERVICE_UNAVAILABLE, "Telepy has no service key yet; ask the administrator to check the backend's SSH key.".to_string()))?;
+    // 裝置只授權這條隧道自己的服務金鑰。/ The device authorizes this tunnel's own service key only.
+    let service_key = crate::ssh::tunnel_keys::ensure(state, tunnel.id).await.map_err(internal)?;
     let gateway_host = crate::api::scripts::server_domain(headers, state);
     if gateway_host.is_empty() {
         return Err((StatusCode::SERVICE_UNAVAILABLE, "Telepy does not know its public host name; set SERVER_DOMAIN.".into()));

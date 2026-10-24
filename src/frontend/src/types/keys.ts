@@ -84,6 +84,8 @@ export type RowState = "service" | "installed" | "pending" | "error" | "removing
 /** 一把金鑰在一個帳號：清單 × Telepy 裝過的 × 最近一次讀到的檔案。/ One key in one account. */
 export interface ViewRow {
     state: RowState;
+    /** service 列：全站共用的舊服務金鑰（每條通道都改用自己的金鑰後會被移掉）。/ service rows: the legacy shared key. */
+    legacy: boolean;
     /** 最近一次讀檔時在檔案裡看到。/ Seen in the file at the last check. */
     verified: boolean;
     on_list: boolean;

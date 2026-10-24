@@ -123,6 +123,8 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
     // 標籤與我的釘選也給單筆（詳細資訊視窗編輯標籤用）。/ Labels and my pin, for the details dialog.
     v["labels"] = json!(db::tunnel_tags::labels_of(&state.db, t.id).await?);
     v["pinned"] = json!(db::tunnel_tags::pinned_by(&state.db, user_id).await?.contains(&t.id));
+    // 這條隧道自己的服務金鑰（裝置要授權的那把）。/ The tunnel's own service key (the one the device authorizes).
+    v["service_key"] = json!(crate::ssh::tunnel_keys::ensure(state, t.id).await?);
     Ok(v)
 }
 
@@ -406,6 +408,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
     crate::recording::forget_tunnel(&state, id).await;
     db::tunnels::delete(&state.db, id).await?;
+    crate::ssh::tunnel_keys::forget(&state, id).await;
     // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.
     state.host_keys.invalidate(id);

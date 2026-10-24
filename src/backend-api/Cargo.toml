@@ -35,6 +35,8 @@ hmac = "0.12"
 subtle = "2"
 base64 = "0.22"
 rand = "0.8"
+# ssh-key 0.7 產金鑰要 rand_core 0.10 的 RNG（russh 也用這版）。/ Key generation needs a rand_core 0.10 RNG (russh uses it too).
+rand10 = { package = "rand", version = "0.10" }
 # http client (Google JWKS, kasm session-manager)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # upstream websocket (KasmVNC relay)

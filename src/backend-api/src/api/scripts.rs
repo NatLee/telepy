@@ -119,7 +119,8 @@ async fn render_for(
     } else {
         "root".to_string()
     };
-    let service_key = db::keys::first_service_key(&state.db).await?;
+    // 腳本裡寫進 authorized_keys 的是這條隧道自己的服務金鑰。/ The scripts authorize the tunnel's own service key.
+    let service_key = Some(crate::ssh::tunnel_keys::ensure(state, t.id).await?);
     let gateway_keys = state.gateway.host_public_keys();
     let ctx = ScriptContext {
         host_friendly_name: &t.host_friendly_name,

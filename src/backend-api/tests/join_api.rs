@@ -93,7 +93,9 @@ async fn one_command_join() {
     assert!(m.get("SAME_MACHINE_AS").is_none(), "{}", reg.text);
     assert_eq!(one(&m, "GATEWAY_USER"), "telepy");
     assert_eq!(one(&m, "GATEWAY_PORT"), lab.gw_port.to_string());
-    assert_eq!(one(&m, "SERVICE_KEY").split_whitespace().take(2).collect::<Vec<_>>(), lab.service.public.split_whitespace().take(2).collect::<Vec<_>>());
+    // 裝置拿到的是這條隧道自己的服務金鑰，不是全站共用的那把。/ The device gets the tunnel's own key, not the shared one.
+    assert_ne!(one(&m, "SERVICE_KEY").split_whitespace().take(2).collect::<Vec<_>>(), lab.service.public.split_whitespace().take(2).collect::<Vec<_>>());
+    assert!(one(&m, "SERVICE_KEY").starts_with("ssh-ed25519 ") && one(&m, "SERVICE_KEY").ends_with(&format!("telepy-tunnel-{}", one(&m, "TUNNEL_ID"))), "{}", reg.text);
     let host_keys = m.get("HOST_KEY").cloned().unwrap_or_default();
     assert!(!host_keys.is_empty() && host_keys.iter().all(|k| k.starts_with("ssh-")), "{}", reg.text);
     let tunnel_id: i64 = one(&m, "TUNNEL_ID").parse().unwrap();

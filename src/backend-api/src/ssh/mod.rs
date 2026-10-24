@@ -14,5 +14,6 @@ pub mod process;
 pub mod resolve;
 pub mod socks;
 pub mod terminal;
+pub mod tunnel_keys;
 
 pub use process::PtyChild;

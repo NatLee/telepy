@@ -51,6 +51,8 @@ pub struct Inner {
     pub pool: Arc<DevicePool>,
     /// 裝置 host key 釘選的快取。/ Cache of the devices' pinned host keys.
     pub host_keys: HostKeyPins,
+    /// 每條隧道自己的服務金鑰（解開後的私鑰快取）。/ Per-tunnel service keys (decrypted private keys, cached).
+    pub tunnel_keys: crate::ssh::tunnel_keys::TunnelKeys,
     /// AI（MCP）開的 SSH session。/ SSH sessions opened by AI agents over MCP.
     pub ai: AiSessions,
     /// 兩步驟驗證的記憶體狀態。/ Two-factor in-memory state.
@@ -115,6 +117,7 @@ impl AppState {
             gateway,
             pool: Arc::new(DevicePool::default()),
             host_keys: HostKeyPins::default(),
+            tunnel_keys: Default::default(),
             ai: AiSessions::default(),
             mfa: MfaStores::new(&config.secret_key),
             lan_scans: LanScans::default(),

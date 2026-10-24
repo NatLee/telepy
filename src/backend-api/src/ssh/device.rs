@@ -3,7 +3,11 @@
 //! 對裝置 sshd 的 SSH 握手 —— 不經 loopback TCP、不占本機 port。共用連線見 `ssh::pool`。
 //! gateway 沒啟用（沒有 host key 的開發環境、自帶 sshd 的測試）時才退回 TCP `ssh_target_host:port`。
 //! 主機金鑰依隧道釘選（第一次使用時記下，之後不同就拒絕），見 `ssh::host_keys`。
+//! 登入先用這條隧道自己的服務金鑰（`ssh::tunnel_keys`），裝置還沒裝它才退回全站共用的那把（`SSH_IDENTITY`）；
+//! 用隧道金鑰成功就記下「這個帳號驗證過」，之後 `device_keys` 才會把共用金鑰從那個帳號移掉。
 //! The device's host key is pinned per tunnel (trust on first use, refused when it changes), see `ssh::host_keys`.
+//! Login tries the tunnel's own service key first and falls back to the shared one; a success with the tunnel key
+//! marks the account verified, which lets `device_keys` drop the shared key there.
 //! Native SSH connection to a device over an in-process gateway channel (no loopback TCP).
 
 use std::path::Path;
@@ -61,9 +65,19 @@ impl Handler for ClientHandler {
     }
 }
 
+/// 哪把金鑰登入成功。/ Which key authenticated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthKey {
+    /// 這條隧道自己的服務金鑰。/ The tunnel's own service key.
+    Tunnel,
+    /// 全站共用的服務金鑰（還沒遷移的裝置）。/ The shared service key (a device not migrated yet).
+    Shared,
+}
+
 /// 到裝置的一條 SSH 連線（drop 即關閉）。
 pub struct DeviceConn {
     pub device: Handle<ClientHandler>,
+    pub auth: AuthKey,
 }
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -85,17 +99,33 @@ pub async fn load_identity(path: &Path) -> anyhow::Result<Arc<PrivateKey>> {
     Ok(Arc::new(key))
 }
 
-async fn authenticate(handle: &mut Handle<ClientHandler>, user: &str, key: &Arc<PrivateKey>) -> anyhow::Result<()> {
+/// 一次公鑰登入；回傳是否成功（失敗不是錯誤：還可以換一把再試）。/ One publickey attempt; false = refused, try another key.
+async fn try_key(handle: &mut Handle<ClientHandler>, user: &str, key: &Arc<PrivateKey>) -> anyhow::Result<bool> {
     let hash = handle.best_supported_rsa_hash().await?.flatten();
-    let result = handle.authenticate_publickey(user, PrivateKeyWithHashAlg::new(key.clone(), hash)).await?;
-    if !result.success() {
-        bail!("public key authentication failed for user '{user}'");
+    Ok(handle.authenticate_publickey(user, PrivateKeyWithHashAlg::new(key.clone(), hash)).await?.success())
+}
+
+/// 先隧道金鑰、再共用金鑰。/ The tunnel's key first, then the shared one.
+async fn authenticate(state: &AppState, handle: &mut Handle<ClientHandler>, user: &str, tunnel_id: Option<i64>) -> anyhow::Result<AuthKey> {
+    let own = match tunnel_id {
+        Some(id) => crate::ssh::tunnel_keys::private(state, id).await,
+        None => None,
+    };
+    if let Some(key) = &own {
+        if try_key(handle, user, key).await? {
+            return Ok(AuthKey::Tunnel);
+        }
     }
-    Ok(())
+    match load_identity(&state.config.ssh_identity).await {
+        Ok(shared) if try_key(handle, user, &shared).await? => Ok(AuthKey::Shared),
+        Ok(_) => bail!("public key authentication failed for user '{user}'"),
+        // 沒有共用金鑰（新部署）：只剩隧道金鑰可用。/ No shared key (a fresh deployment): only the tunnel key counts.
+        Err(e) if own.is_some() => bail!("public key authentication failed for user '{user}' (the device does not accept this tunnel's key; no shared key: {e:#})"),
+        Err(e) => Err(e),
+    }
 }
 
 async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
-    let key = load_identity(&state.config.ssh_identity).await?;
     let port = u16::try_from(reverse_port).context("invalid reverse port")?;
     let refused = Arc::new(std::sync::Mutex::new(None));
     let tunnel_id = crate::db::tunnels::by_port(&state.db, reverse_port).await.ok().and_then(|t| t.first().map(|t| t.id));
@@ -117,8 +147,11 @@ async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> a
             }
         }
     };
-    authenticate(&mut device, username, &key).await.context("device auth")?;
-    Ok(DeviceConn { device })
+    let auth = authenticate(state, &mut device, username, tunnel_id).await.context("device auth")?;
+    if let (AuthKey::Tunnel, Some(id)) = (auth, tunnel_id) {
+        crate::ssh::tunnel_keys::verified(state, id, username).await;
+    }
+    Ok(DeviceConn { device, auth })
 }
 
 /// 連線 + 認證，整體 30s 逾時。每次都是新的一條；要共用請走 `ssh::pool`。

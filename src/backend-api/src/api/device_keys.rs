@@ -140,7 +140,8 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
             }
         }
     }
-    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
+    let service: BTreeSet<String> = dk::service_bares(&state, t.id).await?;
+    let shared = dk::shared_bares(&state.db).await?;
     let mut known: HashMap<String, KnownKey> = HashMap::new();
     let mut users: HashMap<i64, String> = HashMap::new();
     for (id, key, name, uid, username) in db::keys::all_with_owner(&state.db).await? {
@@ -163,6 +164,7 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
         sync_errors: &errors,
         snapshots: &snapshots,
         service: &service,
+        shared: &shared,
         known: &known,
         users: &users,
         viewer,
@@ -353,7 +355,7 @@ async fn audit(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
         return Err(coded(StatusCode::CONFLICT, "device_offline", "The device is offline."));
     }
     let accounts = audit_accounts(&state, &t).await?;
-    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
+    let service: BTreeSet<String> = dk::service_bares(&state, t.id).await?;
     let telepy = telepy_keys(&state).await?;
     let snap = snapshot(&state, &t).await?;
     let managed: BTreeSet<(String, String)> = snap.installed.iter().map(|i| (i.username.clone(), i.key_bare.clone())).collect();
@@ -439,7 +441,14 @@ async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     let _guard = lock.lock().await;
     let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
-    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
+    // 共用的舊服務金鑰：這台機器上每條隧道都用自己的金鑰登入過這個帳號，就可以手動移掉；隧道自己的金鑰永遠保護。
+    // The legacy shared key may be removed by hand once every tunnel on the machine verified its own key there.
+    let mut service: BTreeSet<String> = dk::service_bares(&state, t.id).await?;
+    if crate::ssh::tunnel_keys::shared_removable(&state, t.id, &acct).await? {
+        for b in dk::shared_bares(&state.db).await? {
+            service.remove(&b);
+        }
+    }
     let desired: BTreeMap<String, _> = dk::desired(&state.db, &t).await?;
     let listed: BTreeSet<String> = desired.get(&acct).map(|d| d.keys().cloned().collect()).unwrap_or_default();
     let plan = plan_removal(&content, &fps, &service, &listed);

@@ -24,6 +24,7 @@ use tokio::sync::Notify;
 
 use crate::db::{self, device_keys::Installed, tunnels::Tunnel};
 use crate::permissions;
+use crate::ssh::tunnel_keys;
 use crate::state::AppState;
 use authorized_keys::{managed_comment, parse_public_key, WantedKey};
 
@@ -167,9 +168,24 @@ pub fn diff(desired: &Desired, installed: &[Installed]) -> BTreeMap<String, Acco
         .collect()
 }
 
-/// 服務金鑰（永不移除）。/ Service keys are never removed.
-async fn protected(db: &db::Db) -> sqlx::Result<BTreeSet<String>> {
+/// 全站共用的服務金鑰（舊）。/ The shared (legacy) service keys.
+pub async fn shared_bares(db: &db::Db) -> sqlx::Result<BTreeSet<String>> {
     Ok(db::keys::service_keys(db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect())
+}
+
+/// Telepy 登入這台裝置會用的金鑰：這條隧道自己的 + 全站共用的。/ The keys Telepy logs in with: the tunnel's own + the shared ones.
+pub async fn service_bares(state: &AppState, tunnel_id: i64) -> anyhow::Result<BTreeSet<String>> {
+    let mut set = shared_bares(&state.db).await?;
+    if let Some(line) = tunnel_keys::public_line(state, tunnel_id).await? {
+        set.insert(tunnel_keys::bare(&line));
+    }
+    Ok(set)
+}
+
+/// 這條隧道自己的金鑰，當成要裝到每個登入帳號的 wanted。/ The tunnel's own key as a wanted entry for every login account.
+async fn own_wanted(state: &AppState, tunnel_id: i64) -> anyhow::Result<WantedKey> {
+    let line = tunnel_keys::ensure(state, tunnel_id).await?;
+    Ok(WantedKey { bare: tunnel_keys::bare(&line), comment: tunnel_keys::comment(tunnel_id) })
 }
 
 pub fn online(state: &AppState, reverse_port: i64) -> bool {
@@ -201,7 +217,30 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
     };
     let desired = desired(&state.db, &tunnel).await?;
     let installed = db::device_keys::installed_for_tunnel(&state.db, tunnel.id).await?;
-    let diffs = diff(&desired, &installed);
+    let mut diffs = diff(&desired, &installed);
+    // 隧道自己的服務金鑰要在每個登入帳號裡；還沒裝的帳號也是待辦。共用金鑰在每條隧道都驗證過後移掉：
+    // 已驗證、而且最近一次讀到的檔案裡還有共用金鑰的帳號也算待辦（不然要等下一次有事才會碰那個帳號）。
+    // The tunnel's own key belongs in every login account; accounts without it are to-do. The shared key goes once every
+    // tunnel on the machine verified its own key: verified accounts whose last snapshot still holds it are to-do as well.
+    let own = own_wanted(state, tunnel.id).await?;
+    let shared = shared_bares(&state.db).await?;
+    let key_accounts: HashMap<String, db::tunnel_keys::KeyAccount> = db::tunnel_keys::accounts(&state.db, tunnel.id).await?.into_iter().map(|a| (a.username.clone(), a)).collect();
+    for u in db::tunnels::usernames_for_tunnel(&state.db, tunnel.id).await? {
+        let d = diffs.entry(u.username.clone()).or_default();
+        match key_accounts.get(&u.username) {
+            None => d.to_add.push(own.bare.clone()),
+            Some(a) if a.installed_at.is_none() => d.to_add.push(own.bare.clone()),
+            Some(a) if a.verified_at.is_some() && !shared.is_empty() => {
+                let snapshot_has_shared = state.device_keys.snapshot(tunnel.reverse_port, &u.username).and_then(|s| s.content).is_some_and(|c| {
+                    authorized_keys::parse_authorized_keys(&c).iter().any(|l| l.key.as_ref().is_some_and(|k| shared.contains(&k.bare)))
+                });
+                if snapshot_has_shared && tunnel_keys::shared_removable(state, tunnel.id, &u.username).await? {
+                    d.to_remove.extend(shared.iter().cloned());
+                }
+            }
+            Some(_) => {}
+        }
+    }
     // 不再有任何金鑰的帳號：清掉它的同步狀態。/ Forget the status of accounts with nothing to manage.
     for s in db::device_keys::sync_for_tunnel(&state.db, tunnel.id).await? {
         if !diffs.contains_key(&s.username) {
@@ -220,13 +259,17 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
     if !online(state, tunnel.reverse_port) {
         return Ok(SyncOutcome::Offline);
     }
-    let protected = protected(&state.db).await?;
     let (mut changed, mut errors) = (false, 0);
     for acct in todo {
         let empty = BTreeMap::new();
         let want = desired.get(acct).unwrap_or(&empty);
         let mine: Vec<&Installed> = installed.iter().filter(|i| &i.username == acct).collect();
-        match sync_account(state, &tunnel, acct, want, &mine, &protected).await {
+        // 共用金鑰：這台機器上每條隧道都用自己的金鑰登入過這個帳號才移掉，否則保護。/ Shared key: removable or protected.
+        let drop_shared = !shared.is_empty() && tunnel_keys::shared_removable(state, tunnel.id, acct).await?;
+        let mut protected: BTreeSet<String> = if drop_shared { BTreeSet::new() } else { shared.clone() };
+        protected.insert(own.bare.clone());
+        let stale_shared = if drop_shared { shared.clone() } else { BTreeSet::new() };
+        match sync_account(state, &tunnel, acct, want, &mine, &own, &protected, &stale_shared).await {
             Ok(c) => {
                 changed |= c;
                 state.device_keys.retry_at.lock().unwrap().remove(&(tunnel.id, acct.clone()));
@@ -247,21 +290,35 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
 }
 
 /// 讀檔 → 規劃 → （需要時）原子寫回 → 更新「已裝」紀錄。回傳檔案是否有變。
+/// `own` = 這條隧道自己的服務金鑰（一定要在）；`stale_shared` = 可以從這個帳號移掉的共用金鑰。
+/// `own` = the tunnel's own key (always wanted); `stale_shared` = shared keys that may leave this account.
+#[allow(clippy::too_many_arguments)]
 async fn sync_account(
     state: &AppState,
     tunnel: &Tunnel,
     account: &str,
     want: &BTreeMap<String, DesiredKey>,
     installed: &[&Installed],
+    own: &WantedKey,
     protected: &BTreeSet<String>,
+    stale_shared: &BTreeSet<String>,
 ) -> anyhow::Result<bool> {
     let file = remote::AuthorizedKeysFile::open(state, account, tunnel.reverse_port, true).await?;
     let content = file.read().await?;
-    let wanted: Vec<WantedKey> = want.values().map(|d| WantedKey { bare: d.bare.clone(), comment: d.comment.clone() }).collect();
-    let managed: BTreeSet<String> = installed.iter().map(|i| i.key_bare.clone()).collect();
+    let mut wanted: Vec<WantedKey> = want.values().map(|d| WantedKey { bare: d.bare.clone(), comment: d.comment.clone() }).collect();
+    wanted.push(own.clone());
+    let mut managed: BTreeSet<String> = installed.iter().map(|i| i.key_bare.clone()).collect();
+    managed.extend(stale_shared.iter().cloned());
     let plan = authorized_keys::plan(&content, &wanted, &managed, protected);
     if let Some(new) = &plan.content {
         file.write(new).await?;
+    }
+    db::tunnel_keys::mark_installed(&state.db, tunnel.id, account).await?;
+    if plan.removed.iter().any(|b| stale_shared.contains(b)) {
+        state
+            .gateway
+            .event("service_key_migrated", None, u16::try_from(tunnel.reverse_port).ok(), Some(tunnel.id), format!("Telepy now logs in to {account} on '{}' with this tunnel's own key; the shared service key was removed from that account", tunnel.host_friendly_name))
+            .await;
     }
     for d in want.values() {
         db::device_keys::installed_insert(&state.db, tunnel.id, account, &d.bare, &d.fingerprint, Some(d.user_key_id), Some(d.user_id)).await?;
@@ -356,16 +413,28 @@ pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel, opts: CleanupOptio
     }
     // 留在裝置上的「金鑰」數（同一把裝在兩個帳號算一把，和刪除前的檢查一致）。/ Distinct keys, like the check.
     let distinct = |rows: &mut dyn Iterator<Item = &Installed>| rows.map(|i| i.key_bare.as_str()).collect::<BTreeSet<_>>().len();
+    // 這條隧道自己的服務金鑰：刪了隧道就沒用了，每個裝過它的帳號都移掉（不管選項）。
+    // The tunnel's own service key is worthless after the delete: it leaves every account it was installed in.
+    let own = tunnel_keys::public_line(state, tunnel.id).await.ok().flatten().map(|l| tunnel_keys::bare(&l));
+    if let Some(own) = &own {
+        for a in db::tunnel_keys::accounts(&state.db, tunnel.id).await.unwrap_or_default() {
+            work.entry(a.username).or_default().insert(own.clone());
+        }
+        for a in accounts {
+            work.entry(a.clone()).or_default().insert(own.clone());
+        }
+    }
     if !online || work.is_empty() {
         let keys_left = if opts.device_keys && online { 0 } else { distinct(&mut installed.iter()) };
         return Cleanup { online, accounts: Vec::new(), keys_left };
     }
-    let service = protected(&state.db).await.unwrap_or_default();
+    let mut service = shared_bares(&state.db).await.unwrap_or_default();
+    service.extend(own.iter().cloned());
     let port = tunnel.reverse_port;
     let results: Vec<AccountCleanup> = futures::future::join_all(work.into_iter().map(|(account, managed)| {
-        let service = &service;
+        let (service, own) = (&service, &own);
         async move {
-            let run = clean_account(state, port, &account, &managed, service, opts.service_key);
+            let run = clean_account(state, port, &account, &managed, service, own.as_deref(), opts.service_key);
             match tokio::time::timeout(CLEANUP_TIMEOUT, run).await {
                 Ok(Ok((removed, service_key_removed))) => AccountCleanup { account, removed, service_key_removed, error: None },
                 Ok(Err(e)) => {
@@ -382,14 +451,19 @@ pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel, opts: CleanupOptio
     Cleanup { online, accounts: results, keys_left }
 }
 
-/// 一個帳號：移掉 `managed`（與服務金鑰），一次寫回。回傳（移掉的管理金鑰數, 服務金鑰是否移掉）。
-async fn clean_account(state: &AppState, port: i64, account: &str, managed: &BTreeSet<String>, service: &BTreeSet<String>, remove_service: bool) -> anyhow::Result<(usize, bool)> {
+/// 一個帳號：移掉 `managed`（使用者金鑰 + 這條隧道自己的服務金鑰 `own`，`remove_service` 時連共用金鑰），一次寫回。
+/// 回傳（移掉的使用者金鑰數, 有沒有移掉服務金鑰）。/ One account, one rewrite: (user keys removed, any service key removed).
+async fn clean_account(state: &AppState, port: i64, account: &str, managed: &BTreeSet<String>, service: &BTreeSet<String>, own: Option<&str>, remove_service: bool) -> anyhow::Result<(usize, bool)> {
     let file = remote::AuthorizedKeysFile::open(state, account, port, false).await?;
     if !file.exists() {
         return Ok((0, false));
     }
     let mut remove = managed.clone();
     let mut keep = service.clone();
+    if let Some(own) = own {
+        remove.insert(own.to_string());
+        keep.remove(own);
+    }
     if remove_service {
         remove.extend(service.iter().cloned());
         keep.clear();

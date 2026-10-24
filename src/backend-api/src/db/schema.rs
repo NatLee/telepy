@@ -488,6 +488,31 @@ const TABLES: &[(&str, &str)] = &[
             "last_seen" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：每條隧道自己的服務金鑰（私鑰以 SECRET_KEY 衍生的金鑰密封），隧道刪除時一併刪。
+    // One service key pair per tunnel (private key sealed with the vault); deleted with the tunnel.
+    (
+        "telepy_tunnel_service_key",
+        r#"CREATE TABLE "telepy_tunnel_service_key" (
+            "tunnel_id" integer NOT NULL PRIMARY KEY,
+            "public_key" text NOT NULL,
+            "private_key" text NOT NULL,
+            "fingerprint" varchar(128) NOT NULL,
+            "created_at" datetime NOT NULL,
+            "verified_at" datetime NULL
+        )"#,
+    ),
+    // Rust 自有：隧道金鑰裝到了哪個 OS 帳號、用它登入成功過沒有（共用金鑰只在每條隧道都驗證過後才移除）。
+    // Which accounts hold the tunnel's key and whether a login with it succeeded there.
+    (
+        "telepy_tunnel_key_account",
+        r#"CREATE TABLE "telepy_tunnel_key_account" (
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(150) NOT NULL,
+            "installed_at" datetime NULL,
+            "verified_at" datetime NULL,
+            PRIMARY KEY ("tunnel_id", "username")
+        )"#,
+    ),
     // Rust 自有：憑證庫（遠端桌面的登入，密碼只存密文），隧道 / 區網主機刪除時一併刪。
     // Credential vault (saved desktop logins, password sealed); deleted with the tunnel or the LAN host.
     (

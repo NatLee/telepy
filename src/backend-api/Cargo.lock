@@ -4124,6 +4124,7 @@ dependencies = [
  "once_cell",
  "pbkdf2 0.12.2",
  "qrcode",
+ "rand 0.10.3",
  "rand 0.8.8",
  "regex",
  "reqwest",

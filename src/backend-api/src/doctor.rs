@@ -123,6 +123,29 @@ pub async fn run(config: &Config) -> Vec<Check> {
         }
     };
 
+    // 每條隧道自己的服務金鑰：都解得開才對（SECRET_KEY 換過會解不開，後端退回共用金鑰）。
+    // Per-tunnel service keys must all decrypt (a changed SECRET_KEY breaks them; the backend falls back to the shared key).
+    if let Some(db) = &db {
+        let vault = crate::vault::Vault::new(&config.secret_key);
+        match db::tunnel_keys::all_public_keys(db).await {
+            Ok(keys) if keys.is_empty() => out.push(check("tunnel keys", Status::Ok, "no tunnel has its own service key yet (created on first use)")),
+            Ok(keys) => {
+                let mut broken = 0;
+                for (id, _) in &keys {
+                    let ok = db::tunnel_keys::get(db, *id).await.ok().flatten().is_some_and(|r| vault.open(&crate::ssh::tunnel_keys::aad(*id), &r.private_key).is_some());
+                    if !ok {
+                        broken += 1;
+                    }
+                }
+                out.push(if broken == 0 {
+                    check("tunnel keys", Status::Ok, format!("{} tunnel service keys, all readable", keys.len()))
+                } else {
+                    check("tunnel keys", Status::Warn, format!("{broken} of {} tunnel service keys cannot be decrypted (SECRET_KEY changed?); those tunnels fall back to the shared key", keys.len()))
+                });
+            }
+            Err(e) => out.push(check("tunnel keys", Status::Fail, format!("cannot read tunnel service keys: {e}"))),
+        }
+    }
     // 服務金鑰：私鑰讀得到、公鑰存在、DB 裡登記的是同一把。/ Service key: private key loads, matches the DB.
     out.push(match crate::ssh::device::load_identity(&config.ssh_identity).await {
         Err(e) => check("service key", Status::Fail, format!("{}: {e:#}. Run ./telepy.sh keygen", config.ssh_identity.display())),

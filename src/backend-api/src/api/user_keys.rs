@@ -60,7 +60,10 @@ async fn checked_key(state: &AppState, raw: &str, except_id: Option<i64>) -> Api
         return Err(ApiError::field("key", "user keys with this SSH Key (public) already exists."));
     }
     let service = db::keys::service_keys(&state.db).await?;
-    if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some() || service.iter().any(|s| parse_public_key(&s.key).is_some_and(|p| p.bare == parsed.bare)) {
+    if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some()
+        || db::tunnel_keys::tunnel_by_key_prefix(&state.db, &like).await?.is_some()
+        || service.iter().any(|s| parse_public_key(&s.key).is_some_and(|p| p.bare == parsed.bare))
+    {
         return Err(ApiError::field("key", "This key is already used by a tunnel or by Telepy itself; use a different key."));
     }
     Ok(key.to_string())

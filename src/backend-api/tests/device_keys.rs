@@ -24,13 +24,15 @@ fn targets(entry: &Value) -> Vec<(String, String)> {
     entry["targets"].as_array().unwrap().iter().map(|t| (t["username"].as_str().unwrap().to_string(), t["status"].as_str().unwrap().to_string())).collect()
 }
 
-/// 合併檢視裡某帳號的每一列：(state, 擁有者, verified)。/ Rows of one account in the merged view.
+/// 合併檢視裡某帳號的每一列：(state, 擁有者, verified)。隧道自己的服務金鑰（`service` 列）每個帳號都有，不列。
+/// Rows of one account in the merged view; the tunnel's own service key (`service`) sits in every account and is left out.
 fn view_rows(device: &Value, account: &str) -> Vec<(String, String, bool)> {
     let acct = device["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == account).unwrap_or_else(|| panic!("no {account} in {device}"));
     acct["rows"]
         .as_array()
         .unwrap()
         .iter()
+        .filter(|r| r["state"] != "service")
         .map(|r| (r["state"].as_str().unwrap().to_string(), r["owner"].as_str().unwrap_or("").to_string(), r["verified"].as_bool().unwrap()))
         .collect()
 }
@@ -166,20 +168,21 @@ async fn device_key_list_installs_and_revokes() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let acct = r.json["accounts"].as_array().unwrap().iter().find(|a| a["username"] == "ubuntu").unwrap().clone();
     let kinds: Vec<&str> = acct["lines"].as_array().unwrap().iter().map(|l| l["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, vec!["managed", "service", "unknown"], "{acct}");
+    // 兩把 service：這條隧道自己的金鑰（同步裝的）與手動寫進去的共用金鑰。/ Two service lines: the tunnel's own key and the shared one.
+    assert_eq!(kinds, vec!["managed", "service", "service", "unknown"], "{acct}");
     assert_eq!(acct["lines"][0]["owner"], "alice");
     assert_eq!(acct["lines"][0]["in_list"], true);
-    assert_eq!(acct["lines"][2]["options"], "no-pty");
+    assert_eq!(acct["lines"][3]["options"], "no-pty");
     // 讀過檔，合併檢視也看得到服務金鑰與清單外的那把。/ After that read the merged view shows them too.
     let r = lab.app.get(&path(dev.tunnel_id, "device-keys"), Some(&alice.token)).await;
-    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("service", "", true), ("installed", "alice", true), ("unknown", "", true)]));
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true), ("unknown", "", true)]));
     let fp = |i: usize| acct["lines"][i]["fingerprint"].as_str().unwrap().to_string();
     let remove = format!("/api/reverse/server/{}/authorized-keys/remove", dev.tunnel_id);
     let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(1)})).await;
     assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("service_key")), "{}", r.text);
     let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(0)})).await;
     assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::CONFLICT, Some("in_key_list")), "{}", r.text);
-    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(2)})).await;
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp(3)})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(r.json["removed"], 1);
     assert!(!boxm.authorized_keys("ubuntu").contains(&stranger.bare()));
@@ -188,7 +191,9 @@ async fn device_key_list_installs_and_revokes() {
     let r = lab.app.delete(&path(dev.tunnel_id, &format!("device-keys/{alice_key}")), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
-    assert_eq!(boxm.authorized_keys("ubuntu"), format!("# written by hand\n{}\n", lab.service.public));
+    // 剩下手寫的那行、這條隧道自己的服務金鑰（同步裝的）與共用金鑰。/ Left: the hand-written line, the tunnel's own key, the shared key.
+    let own = lab.tunnel_service_key(&dev).await;
+    assert_eq!(boxm.authorized_keys("ubuntu"), format!("# written by hand\n{own}\n{}\n", lab.service.public));
     assert!(!boxm.authorized_keys("root").contains(&alice.key.bare()));
     assert!(!lab.laptop_exec(&alice, &to_root, "whoami").await.ok);
 
@@ -286,7 +291,7 @@ async fn audit_lists_many_keys_and_removes_a_batch() {
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let lines = r.json["accounts"][0]["lines"].as_array().unwrap().clone();
     let count = |kind: &str| lines.iter().filter(|l| l["kind"] == kind).count();
-    assert_eq!((count("unknown"), count("service"), count("managed")), (301, 1, 1));
+    assert_eq!((count("unknown"), count("service"), count("managed")), (301, 2, 1), "the tunnel's own key is a service line too");
     let fp_of = |kind: &str| lines.iter().find(|l| l["kind"] == kind).unwrap()["fingerprint"].as_str().unwrap().to_string();
     // fleet-0 … fleet-249；fleet-0 有兩行。/ fleet-0 … fleet-249; fleet-0 is on two lines.
     let fps: Vec<String> = lines.iter().filter(|l| l["kind"] == "unknown").filter_map(|l| l["fingerprint"].as_str().map(str::to_string)).take(250).collect();
