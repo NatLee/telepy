@@ -238,6 +238,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     };
     let _presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
+    let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Files, tunnel.id, &user.username, Some(&username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
     while let Some(Ok(frame)) = heartbeat.recv(&mut socket).await {
@@ -281,6 +282,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             break;
         }
     }
+    audit.close(&state).await;
 }
 
 #[cfg(test)]

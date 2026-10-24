@@ -31,6 +31,8 @@ pub enum StartError {
 pub struct Session {
     pub id: String,
     pub server_id: i64,
+    /// 這個 session 用的裝置帳號。/ The device account this session uses.
+    pub username: String,
     pub proxy_port: u16,
     pub ws_port: Option<u16>,
     pub kasm_session_id: Option<String>,
@@ -107,6 +109,7 @@ impl RemoteBrowser {
         let session = Arc::new(Session {
             id: session_id.clone(),
             server_id,
+            username: username.to_string(),
             proxy_port,
             ws_port: None,
             kasm_session_id: None,
@@ -130,6 +133,7 @@ impl RemoteBrowser {
         let session = Arc::new(Session {
             id: session_id.clone(),
             server_id,
+            username: username.to_string(),
             proxy_port,
             ws_port: Some(ws_port),
             kasm_session_id: Some(kasm_id.clone()),
