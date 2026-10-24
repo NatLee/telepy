@@ -13,6 +13,7 @@ import { ShareModalPermissionMatrix } from "@/components/tunnels/ShareModalPermi
 import { ShareModalShareForm } from "@/components/tunnels/ShareModalShareForm";
 import { ShareModalSharedList, type SharedUserRow } from "@/components/tunnels/ShareModalSharedList";
 import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalEditTargetUsersModal";
+import { AccessRequestsPanel } from "@/components/tunnels/AccessRequests";
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 
@@ -41,12 +42,14 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
         expiryDate,
         setExpiryDate,
     } = state;
-    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed, handleUpdateExpiry } = actions;
+    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed, handleUpdateExpiry, refresh } = actions;
 
     return (
         <>
             <Modal isOpen={isOpen} onClose={onClose} title={readOnly ? t("share.permissionsTitle") : t("share.shareTitle")} icon={<Share2 />} size="2xl" isLoading={loading}>
                 <div className="space-y-5">
+                    {/* 等待決定的存取申請（owner / ADMIN；沒有就不顯示）。/ Pending access requests (owner / ADMIN; hidden when none). */}
+                    <AccessRequestsPanel tunnelId={tunnelId} enabled={isOpen} onDecided={refresh} />
 
                     {!readOnly && (
                         <ShareModalShareForm

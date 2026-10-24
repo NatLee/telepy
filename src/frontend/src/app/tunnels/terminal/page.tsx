@@ -17,9 +17,13 @@ import "xterm/css/xterm.css";
 import { useTerminalPage } from "@/hooks/useTerminalPage";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { useI18n } from "@/lib/i18n";
+import { useAccessRequests } from "@/hooks/useAccessRequests";
+import { RequestAccessDialog } from "@/components/tunnels/AccessRequests";
+import { useNotificationHandlers } from "@/lib/websocket";
+import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 
 export default function TerminalPage() {
-    const { t, tn } = useI18n();
+    const { t } = useI18n();
     const searchParams = useSearchParams();
     const serverId = searchParams.get("serverId");
     const port = searchParams.get("port");
@@ -92,16 +96,7 @@ export default function TerminalPage() {
         );
     }
     if (noUsers) {
-        return (
-            <StatusCard
-                title={t("terminal.noUsersTitle")}
-                message={tn("terminal.noUsersMessage", { targetServerUsers: <strong>{t("terminal.noUsersMessageHighlight")}</strong> })}
-                icon={<Server size={20} />}
-                variant="warning"
-                actionLabel={t("terminal.returnToList")}
-                onAction={() => router.push("/tunnels")}
-            />
-        );
+        return <NoAccounts tunnelId={Number(serverId)} />;
     }
 
     return (
@@ -167,5 +162,46 @@ export default function TerminalPage() {
 
             <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
         </div>
+    );
+}
+
+/**
+ * 沒有可用的帳號：被分享的人可以直接申請（核准後重新載入就能連）；owner 照舊提示去加帳號。
+ * No usable account: a sharee can ask for one right here (the page reloads once it is approved); owners are told to add one.
+ */
+function NoAccounts({ tunnelId }: { tunnelId: number }) {
+    const { t, tn } = useI18n();
+    const router = useRouter();
+    const { data } = useAccessRequests(tunnelId, true);
+    const [open, setOpen] = useState(false);
+    useNotificationHandlers({
+        [NOTIFICATION_ACTIONS.ACCESS_REQUEST_DECIDED]: (msg) => {
+            if (msg.tunnel_id === tunnelId && msg.status === "approved") window.location.reload();
+        },
+    });
+    if (data?.can_request) {
+        return (
+            <>
+                <StatusCard
+                    title={t("terminal.noUsersTitle")}
+                    message={t("share.request.noAccountsSharee")}
+                    icon={<Server size={20} />}
+                    variant="warning"
+                    actionLabel={t("share.request.menu")}
+                    onAction={() => setOpen(true)}
+                />
+                <RequestAccessDialog isOpen={open} onClose={() => setOpen(false)} tunnelId={tunnelId} />
+            </>
+        );
+    }
+    return (
+        <StatusCard
+            title={t("terminal.noUsersTitle")}
+            message={tn("terminal.noUsersMessage", { targetServerUsers: <strong>{t("terminal.noUsersMessageHighlight")}</strong> })}
+            icon={<Server size={20} />}
+            variant="warning"
+            actionLabel={t("terminal.returnToList")}
+            onAction={() => router.push("/tunnels")}
+        />
     );
 }
