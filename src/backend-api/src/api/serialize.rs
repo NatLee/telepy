@@ -56,6 +56,16 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: 
     v["geo"] = geo.json(v["ip"].as_str());
     v["previous_ip"] = json!(last.and_then(|l| l.previous_ip.clone()));
     v["changed_at"] = json!(last.and_then(|l| l.changed_at.as_deref()).map(db_to_iso_utc_z));
+    // 裝置自己的位址（`device_info`）：公網 IP（gateway 或裝置回報）、內網網卡、hostname。
+    // The device's own addresses: public IP (gateway or device-reported), LAN interfaces, hostname.
+    let public = last.and_then(|l| l.public_ip.as_deref());
+    v["public_ip"] = json!(public);
+    v["public_source"] = json!(last.and_then(|l| l.public_source.as_deref()));
+    v["public_geo"] = geo.json(public);
+    v["lan"] = last.and_then(|l| l.lan.as_deref()).and_then(|s| serde_json::from_str::<Value>(s).ok()).unwrap_or_else(|| json!([]));
+    v["hostname"] = json!(last.and_then(|l| l.hostname.as_deref()));
+    v["probed_at"] = json!(last.and_then(|l| l.probed_at.as_deref()).map(db_to_iso_utc_z));
+    v["probe_error"] = json!(last.and_then(|l| l.probe_error.as_deref()));
     v
 }
 

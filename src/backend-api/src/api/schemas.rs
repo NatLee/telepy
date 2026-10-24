@@ -264,10 +264,34 @@ pub struct TunnelEndpoint {
     /// 離線時：forward 釋放的時間；連著時 null。/ When the forward went away; null while live.
     pub last_seen_at: Option<String>,
     pub geo: Option<IpGeo>,
-    /// 最近一次換 IP 之前的位址（從沒換過是 null）。/ The address before the latest change; null if it never changed.
+    /// 最近一次換「公網 IP」之前的位址（從沒換過是 null）。/ The public address before the latest change; null if it never changed.
     #[schema(example = "198.51.100.20")]
     pub previous_ip: Option<String>,
     pub changed_at: Option<String>,
+    /// 裝置真正的公網 IP：gateway 看到的（是公網位址時）或裝置經 `/api/whoami` 回報的；不知道是 null。
+    /// The device's real public IP: the gateway's peer when public, else reported by the device via `/api/whoami`.
+    #[schema(example = "114.34.69.11")]
+    pub public_ip: Option<String>,
+    /// gateway / device
+    pub public_source: Option<String>,
+    pub public_geo: Option<IpGeo>,
+    /// 裝置的內網網卡（每次連上問一次）。/ The device's LAN interfaces (asked once per connection).
+    pub lan: Vec<LanAddress>,
+    #[schema(example = "pi-garage")]
+    pub hostname: Option<String>,
+    /// 最後一次問裝置的時間與錯誤。/ When the device was last asked, and why it failed.
+    pub probed_at: Option<String>,
+    pub probe_error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct LanAddress {
+    #[schema(example = "eth0")]
+    pub iface: String,
+    #[schema(example = "192.168.1.23")]
+    pub ip: String,
+    #[schema(example = 24)]
+    pub prefix: i64,
 }
 
 /// IP 的位址範圍與（有離線 GeoIP 資料庫時的）國家 / 網路業者。/ Address scope plus country / network owner when a GeoIP database is installed.

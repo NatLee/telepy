@@ -79,6 +79,9 @@ pub struct Config {
     /// gateway 前面送 PROXY protocol header 的 L4 代理（IP / CIDR，逗號分隔）；空 = 不啟用。
     /// L4 proxies in front of the gateway that send a PROXY protocol header (IPs / CIDRs); empty = off.
     pub gateway_proxy_protocol_from: String,
+    /// 每次裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（`DEVICE_PROBE=false` 關閉）。
+    /// Ask each device for its hostname / LAN / public IP once per connection (DEVICE_PROBE=false turns it off).
+    pub device_probe: bool,
     // --- client IP (sign-in history, presence) ---
     /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
     /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
@@ -195,6 +198,7 @@ impl Config {
             gateway_login_grace: Duration::from_secs(env("GATEWAY_LOGIN_GRACE_SECS").and_then(|v| v.parse().ok()).unwrap_or(60)),
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
             gateway_proxy_protocol_from: env("GATEWAY_PROXY_PROTOCOL_FROM").unwrap_or_default(),
+            device_probe: env_bool("DEVICE_PROBE", true),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,

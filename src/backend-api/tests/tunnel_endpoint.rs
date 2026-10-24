@@ -100,41 +100,57 @@ async fn device_ip_on_the_tunnel_list() {
     assert!(last["last_seen_at"].as_str().unwrap() >= last["connected_at"].as_str().unwrap(), "{last}");
     assert_eq!(endpoint(&lab, &carol.token, t.id).await, Value::Null);
 
-    // 從別的 IP 連回來：記下舊的、寫 `ip_changed`、通知擁有者與 ADMIN（VIEW 不收）。
-    // Back from another address: the old one is kept, `ip_changed` is logged, owner and ADMIN are told (not VIEW).
-    sqlx::query("UPDATE telepy_tunnel_endpoint SET ip = '198.51.100.20' WHERE tunnel_id = ?").bind(t.id).execute(&lab.app.state.db.write).await.unwrap();
+    // gateway 看到的是 loopback（不是公網）：不算裝置的公網 IP，也不會警示。/ A loopback peer is not a public IP.
+    let changes = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telepy_gateway_event WHERE event = 'ip_changed' AND tunnel_id = ?").bind(t.id).fetch_one(&lab.app.state.db.read).await.unwrap()
+    };
+    let mut ssh = tunnel_ssh(&lab, &dev.key, port, &boxm);
+    wait_for("forward again", async || status.listen_ports().is_some_and(|p| p.contains(&port))).await;
+    wait_for("endpoint live", async || endpoint(&lab, &alice.token, t.id).await["live"] == true).await;
+    let now = endpoint(&lab, &alice.token, t.id).await;
+    assert!(now["public_ip"].is_null(), "{now}");
+    assert_eq!(changes().await, 0);
+
+    // 裝置回報的公網 IP（device_info 做的事）：第一次不算換；換了就保留舊的、寫 `ip_changed`、通知擁有者與
+    // ADMIN（VIEW 不收）；同一個再回報不算換。
+    // Public IPs reported by the device: the first is no change; a different one keeps the old, logs and alerts.
+    let at = telepy_server::util::now_db();
+    let db_ = &lab.app.state.db;
+    assert_eq!(db::tunnel_endpoints::update_public_ip(db_, t.id, "198.51.100.20", "device", &at).await.unwrap(), None);
     let mut alice_rx = lab.app.state.hub.subscribe_user(alice.id);
     let mut dave_rx = lab.app.state.hub.subscribe_user(dave.id);
     let mut bob_rx = lab.app.state.hub.subscribe_user(bob.id);
-    let mut ssh = tunnel_ssh(&lab, &dev.key, port, &boxm);
-    wait_for("forward again", async || status.listen_ports().is_some_and(|p| p.contains(&port))).await;
-    let mut now = Value::Null;
-    wait_for("change recorded", async || {
-        now = endpoint(&lab, &alice.token, t.id).await;
-        now["live"] == true && now["previous_ip"] == "198.51.100.20"
-    })
-    .await;
-    assert_eq!(now["ip"], "127.0.0.1", "{now}");
-    assert!(now["changed_at"].as_str().unwrap().ends_with('Z'), "{now}");
+    let ch = db::tunnel_endpoints::update_public_ip(db_, t.id, "203.0.113.9", "device", &at).await.unwrap().expect("a change");
+    assert_eq!(ch.previous, "198.51.100.20");
+    lab.app.state.gateway.announce_ip_change(port, &ch, "203.0.113.9", None).await;
     for rx in [&mut alice_rx, &mut dave_rx] {
         let msg: Value = serde_json::from_str(&rx.try_recv().expect("ip change notification")).unwrap();
         assert_eq!(msg["message"]["action"], "TUNNEL-IP-CHANGED", "{msg}");
         assert_eq!(msg["message"]["tunnel_id"], t.id);
-        assert_eq!(msg["message"]["ip"], "127.0.0.1");
+        assert_eq!(msg["message"]["ip"], "203.0.113.9");
         assert_eq!(msg["message"]["previous_ip"], "198.51.100.20");
     }
     assert!(bob_rx.try_recv().is_err(), "VIEW sharees are not alerted");
-    let changes = || async {
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telepy_gateway_event WHERE event = 'ip_changed' AND tunnel_id = ?").bind(t.id).fetch_one(&lab.app.state.db.read).await.unwrap()
-    };
     assert_eq!(changes().await, 1);
-    // 同一個 IP 再連一次不算換。/ Reconnecting from the same address is not a change.
-    ssh.kill().await.unwrap();
-    wait_for("released again", async || !status.listen_ports().is_some_and(|p| p.contains(&port))).await;
-    let mut ssh = tunnel_ssh(&lab, &dev.key, port, &boxm);
-    wait_for("forward third time", async || status.listen_ports().is_some_and(|p| p.contains(&port))).await;
-    wait_for("endpoint live", async || endpoint(&lab, &alice.token, t.id).await["live"] == true).await;
-    assert_eq!(changes().await, 1);
+    assert_eq!(db::tunnel_endpoints::update_public_ip(db_, t.id, "203.0.113.9", "device", &at).await.unwrap(), None);
+
+    // 裝置回報的 hostname / 內網網卡，以及「這次連線已經問過」。/ Reported hostname / LAN, and "already asked".
+    let lan = r#"[{"iface":"eth0","ip":"192.168.1.23","prefix":24}]"#;
+    db::tunnel_endpoints::record_probe(db_, t.id, Some("box"), Some(lan), None, &telepy_server::util::now_db()).await.unwrap();
+    let now = endpoint(&lab, &alice.token, t.id).await;
+    assert_eq!(now["ip"], "127.0.0.1", "{now}");
+    assert_eq!(now["public_ip"], "203.0.113.9");
+    assert_eq!(now["public_source"], "device");
+    assert_eq!(now["public_geo"]["scope"], "public");
+    assert_eq!(now["previous_ip"], "198.51.100.20");
+    assert!(now["changed_at"].as_str().unwrap().ends_with('Z'), "{now}");
+    assert_eq!(now["hostname"], "box");
+    assert_eq!(now["lan"][0]["ip"], "192.168.1.23");
+    assert!(now["probed_at"].as_str().unwrap().ends_with('Z'));
+    let due = db::tunnel_endpoints::probe_due(db_, "2000-01-01 00:00:00.000000").await.unwrap();
+    assert!(!due.iter().any(|(id, _)| *id == t.id), "probed during this connection: {due:?}");
+    // 只看狀態的 sharee 一樣拿不到。/ Status-only sharees still get nothing.
+    assert_eq!(endpoint(&lab, &carol.token, t.id).await, Value::Null);
     ssh.kill().await.unwrap();
 
     // 刪隧道連同最後 IP 一起刪。/ Deleting the tunnel deletes its last IP.
