@@ -747,6 +747,60 @@ pub struct RemoteBrowserError {
     pub code: Option<String>,
 }
 
+// ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
+
+#[derive(ToSchema)]
+pub struct DesktopStartRequest {
+    /// `rdp` or `vnc`
+    #[schema(example = "rdp")]
+    pub protocol: String,
+    /// Device account for the SSH hop; omitted = the tunnel's default (or only) allowed username
+    pub username: Option<String>,
+    /// A LAN host of this tunnel (see `/lan/hosts`); omitted = the device itself
+    pub lan_host_id: Option<i64>,
+    /// Desktop port on the target; default 3389 (RDP) / 5900 (VNC)
+    pub port: Option<u16>,
+    /// Desktop login (the RDP user, or the VNC username where the server uses one); memory only
+    pub login: Option<String>,
+    /// Desktop password; memory only, dropped after the guacd handshake
+    pub password: Option<String>,
+    /// RDP domain
+    pub domain: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopTarget {
+    /// As seen from the device: `127.0.0.1` for the device itself
+    pub host: String,
+    pub port: u16,
+    pub label: String,
+    pub lan_host_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopSession {
+    pub session_id: String,
+    #[schema(example = "/ws/desktop/<session_id>/")]
+    pub ws_path: String,
+    /// One-time ticket, passed as `?ticket=` when opening ws_path (subprotocol `guacamole`)
+    pub ticket: String,
+    /// Seconds the ticket stays valid
+    pub expires_in: u64,
+    pub protocol: String,
+    /// Effective clipboard policy: both | to_remote | off
+    pub clipboard: String,
+    pub target: DesktopTarget,
+    /// The device account used for the hop
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopError {
+    pub error: String,
+    #[schema(example = "device_offline")]
+    pub code: String,
+}
+
 // ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)
 
 #[derive(ToSchema)]

@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod desktop;
 pub mod device_keys;
 pub mod doc;
 pub mod join;

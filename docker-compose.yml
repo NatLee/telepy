@@ -71,6 +71,10 @@ services:
       # KasmVNC web 層 Basic Auth 帳密(consumer 帶去連上游 ws;與 kasm-browser 的 build args 同源)。
       - KASM_WS_USER=${KASM_WS_USER:-telepy}
       - KASM_WS_PASSWORD=${KASM_WS_PASSWORD:-telepyvnc}
+      # 遠端桌面（RDP / VNC）引擎 guacd 的位址，以及 guacd 連回 backend 時用的名字（兩者都在 telepy-desktop 網路上）。
+      # Remote desktop engine (guacd) and the name it dials back to (both on the telepy-desktop network).
+      - GUACD_ADDR=guacd:4822
+      - DESKTOP_CALLBACK_HOST=backend
       # 內建 SSH gateway：沿用原本的 host keys，裝置端 known_hosts 不受影響。
       # In-process SSH gateway; reuses the existing host keys so devices see the same host identity.
       - GATEWAY_HOST_KEYS_DIR=/config/ssh_host_keys
@@ -98,8 +102,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    # telepy-desktop：只有 backend 與 guacd（guacd 沒有認證，不讓其他容器碰得到）。
+    # telepy-desktop holds only the backend and guacd (guacd has no authentication).
+    networks:
+      - telepy-network
+      - telepy-desktop
     depends_on:
       - kasm-browser
+      - guacd
 
   # 共用 KasmVNC 瀏覽器容器(取代 CDP 的 chromium)。內含 KasmVNC + Chromium + CJK 字型 +
   # 一支 session-manager API(:7000)。backend 呼叫它 per-session 起 Xvnc+chromium(注入該
@@ -135,6 +145,23 @@ services:
     # 瀏覽器設定檔:每 session 臨時目錄、停止即刪(不保留歷史),故不掛任何 volume。
     # 不 publish 任何埠:只在 telepy-network 內 / never published to host
 
+  # 遠端桌面引擎：guacd 把 RDP / VNC 轉成 Guacamole 協定，backend 中繼到瀏覽器（guacamole-common-js）。
+  # 每個 session guacd 連回 backend 上一個一次性的埠，backend 再把它接到裝置 sshd 的 direct-tcpip 通道，
+  # 所以 guacd 碰不到任何裝置，只在 internal 網路上，沒有對外埠。
+  # Remote desktop engine. Per session it dials a one-shot port on the backend, which pipes it into a
+  # direct-tcpip channel on the device's sshd; guacd itself reaches no device and sits on an internal network.
+  guacd:
+    <<: *common-restart
+    image: guacamole/guacd:1.6.0
+    container_name: telepy-guacd-${PROJECT_NAME}
+    environment:
+      - GUACD_LOG_LEVEL=${GUACD_LOG_LEVEL:-info}
+    networks:
+      - telepy-desktop
+
 networks:
   telepy-network:
     name: telepy-network-${PROJECT_NAME}
+  telepy-desktop:
+    name: telepy-desktop-${PROJECT_NAME}
+    internal: true

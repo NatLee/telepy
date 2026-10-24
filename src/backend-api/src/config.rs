@@ -53,6 +53,11 @@ pub struct Config {
     pub kasm_ws_path: String,
     pub kasm_ws_subprotocol: String,
     pub remote_browser_gc: bool,
+    // --- remote desktop / guacd ---
+    /// guacd 的 `host:port`。/ guacd address.
+    pub guacd_addr: String,
+    /// guacd 連回後端的主機名稱（預設 = 自己的 hostname）。/ Host name guacd dials back to (default: our hostname).
+    pub desktop_callback_host: String,
     /// `ssh` client config/keys live here (mounted from ./ssh/backend_ssh_key in compose).
     pub ssh_home: PathBuf,
     /// OpenSSH 客戶端執行檔（測試可換成假程式）。/ The ssh client binary (swappable in tests).
@@ -164,6 +169,8 @@ impl Config {
                 .unwrap_or(8 * 60),
             project_name: env("PROJECT_NAME").unwrap_or_else(|| "main".to_string()),
             hostname: env("HOSTNAME").unwrap_or_else(|| "backend".to_string()),
+            guacd_addr: env("GUACD_ADDR").unwrap_or_else(|| "guacd:4822".to_string()),
+            desktop_callback_host: env("DESKTOP_CALLBACK_HOST").or_else(|| env("HOSTNAME")).unwrap_or_else(|| "backend".to_string()),
             kasm_api: env("KASM_BROWSER_API").unwrap_or_else(|| "http://kasm-browser:7000".to_string()),
             kasm_host: env("KASM_BROWSER_HOST").unwrap_or_else(|| "kasm-browser".to_string()),
             kasm_ws_user: std::env::var("KASM_WS_USER").unwrap_or_else(|_| "telepy".to_string()),

@@ -38,6 +38,8 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     recovered: { key: "logs.event.recovered", variant: "success" },
     ip_changed: { key: "logs.event.ip_changed", variant: "warning" },
     expired_key: { key: "logs.event.expired_key", variant: "destructive" },
+    desktop_open: { key: "logs.event.desktop_open", variant: "default" },
+    desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
 };
 
 function LogsPageInner() {

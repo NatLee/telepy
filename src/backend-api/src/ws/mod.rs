@@ -2,6 +2,7 @@
 //! WebSocket endpoints replacing the Channels consumers; same protocols, close codes and payloads.
 
 pub mod auth;
+pub mod desktop;
 pub mod filemanager;
 pub mod notifications;
 pub mod remote_browser;
@@ -12,7 +13,9 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use std::collections::HashMap;
+
+use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
@@ -37,10 +40,19 @@ pub fn router() -> Router<AppState> {
         .route("/ws/filemanager/", get(filemanager_upgrade))
         .route("/ws/tunnel_connection/{tunnel_id}/", get(tunnel_connection_upgrade))
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
+        .route("/ws/desktop/{session_id}/", get(desktop_upgrade))
 }
 
 async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
     prepare(ws).on_upgrade(move |socket| remote_browser::handle(state, socket, session_id, meta))
+}
+
+/// 遠端桌面：票證在 query（guacamole-common-js 的 WebSocketTunnel 不能送自訂的第一則訊息），而且它要求
+/// 伺服器回應 `guacamole` 子協定，不回的話瀏覽器會自己把連線關掉。
+/// Remote desktop: the ticket rides in the query (the Guacamole tunnel cannot send a custom first frame) and
+/// the `guacamole` subprotocol must be echoed or the browser drops the socket.
+async fn desktop_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, Query(query): Query<HashMap<String, String>>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).protocols(["guacamole"]).on_upgrade(move |socket| desktop::handle(state, socket, session_id, query, meta))
 }
 
 fn prepare(ws: WebSocketUpgrade) -> WebSocketUpgrade {

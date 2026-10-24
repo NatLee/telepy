@@ -389,7 +389,7 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 17);
+    assert_eq!(keys.len(), 22);
     assert_eq!(r.json["values"]["user_key_max_days"], 0, "personal keys don't expire by default");
     assert_eq!(r.json["values"]["notify_webhook_url"], "", "alerts are off by default");
     assert_eq!(r.json["values"]["notify_down_delay"], 60);

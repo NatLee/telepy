@@ -583,6 +583,11 @@ mod tests {
             notify_webhook_url: String::new(),
             notify_down_delay: 60,
             user_key_max_days: 0,
+            desktop_enabled: true,
+            desktop_max_sessions: 4,
+            desktop_session_idle_timeout: 900,
+            desktop_clipboard: "both".into(),
+            desktop_max_resolution: 2560,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;
