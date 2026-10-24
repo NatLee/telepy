@@ -857,6 +857,38 @@ impl Lab {
         Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
     }
 
+    /// 建隧道，但裝置的 `-R` 要求別的號碼（0 = 讓伺服器挑）。/ A tunnel whose device asks for another number (0 = server picks).
+    pub async fn device_requesting(&self, owner: &LabUser, name: &str, target: &Machine, requested: u16) -> Device {
+        let key = self.keygen(&format!("{name}-tunnel"));
+        let reverse_port = free_port();
+        let t = db::tunnels::create(
+            &self.app.state.db,
+            db::tunnels::NewTunnel { user_id: owner.id, host_friendly_name: name, key: &key.public, reverse_port: reverse_port as i64, description: None, default_username_id: None },
+        )
+        .await
+        .unwrap();
+        telepy_server::ssh::tunnel_keys::ensure(&self.app.state, t.id).await.unwrap();
+        let no_pin = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"].map(String::from);
+        let ssh = self.spawn_tunnel_requesting(&key, requested, reverse_port, target.port, name, self.gw_port, &no_pin).await;
+        self.tunnels.lock().unwrap().insert(t.id, ssh);
+        Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
+    }
+
+    /// 筆電的 ssh config，裝置區塊用隧道名稱（新的產生形式）而不是 `localhost:<號碼>`。
+    /// A laptop config whose device stanza names the tunnel (the generated form) instead of `localhost:<number>`.
+    pub fn laptop_config_named(&self, user: &LabUser, device: &Device, os_user: &str) -> PathBuf {
+        let path = self.dir.path().join(format!("{}-named-{}.conf", user.username, next_id()));
+        let cfg = format!(
+            "Host telepy-ssh-server\n    HostName 127.0.0.1\n    Port {}\n    User telepy\n\nHost hop0\n    HostName {}\n    Port 22\n    User {os_user}\n    ProxyCommand ssh -F {} -W %h:%p telepy-ssh-server\n\n{}",
+            self.gw_port,
+            device.name,
+            path.display(),
+            laptop_defaults(&user.key)
+        );
+        std::fs::write(&path, cfg).unwrap();
+        path
+    }
+
     /// 這條隧道自己的服務公鑰（`type base64 comment`）。/ The tunnel's own service public key.
     pub async fn tunnel_service_key(&self, device: &Device) -> String {
         telepy_server::ssh::tunnel_keys::ensure(&self.app.state, device.tunnel_id).await.unwrap()
@@ -931,13 +963,22 @@ impl Lab {
 
     /// 同上，但連到指定的 port（例如一個把 TCP 轉進 /ws/gateway/ 的橋）。/ Same, dialling a given port (e.g. a WebSocket bridge).
     pub async fn spawn_tunnel_to(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str, gw_port: u16, host_key_opts: &[String]) -> Child {
+        self.spawn_tunnel_requesting(key, reverse_port, reverse_port, target_port, name, gw_port, host_key_opts).await
+    }
+
+    /// 裝置在 `-R` 要求 `requested`（可以是 0 或別的號碼）、連到 `gw_port`；gateway 以金鑰認隧道，forward 記在 `expected` 下。
+    /// The device asks for `requested` in `-R` (0 or any number) on `gw_port`; the gateway identifies the tunnel by key
+    /// and registers the forward under `expected`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_tunnel_requesting(&self, key: &LabKey, requested: u16, expected: u16, target_port: u16, name: &str, gw_port: u16, host_key_opts: &[String]) -> Child {
+        let reverse_port = expected;
         let mut ssh = Command::new("ssh")
             .args(["-F", "/dev/null", "-N"])
             .args(host_key_opts)
             .args(["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=5", "-o", "LogLevel=ERROR", "-i"])
             .arg(&key.path)
-            .args(["-p", &gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
+            .args(["-p", &gw_port.to_string(), "-R", &format!("*:{requested}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

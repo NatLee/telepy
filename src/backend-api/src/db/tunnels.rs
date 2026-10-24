@@ -96,6 +96,11 @@ pub fn like_prefix(prefix: &str) -> String {
     format!("{escaped}%")
 }
 
+/// 依名稱找（名稱全站唯一）。/ By name (names are unique across all users).
+pub async fn by_name(db: &Db, name: &str) -> sqlx::Result<Option<Tunnel>> {
+    sqlx::query_as(&format!("SELECT {T_COLS} FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_optional(&db.read).await
+}
+
 /// 名稱全站唯一（UNIQUE）。/ Names are unique across all users.
 pub async fn name_taken(db: &Db, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_one(&db.read).await?;

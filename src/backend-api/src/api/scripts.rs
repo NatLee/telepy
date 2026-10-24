@@ -91,7 +91,7 @@ async fn config(
     let mut hosts: Vec<Value> = Vec::with_capacity(selected.len());
     for u in selected {
         let alias = if multi { format!("{}-{}", t.host_friendly_name, u.username) } else { t.host_friendly_name.clone() };
-        out.push_str(&scripts::render_client_config(&alias, &u.username, t.reverse_port));
+        out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name));
         hosts.push(json!({ "alias": scripts::sanitize_host_alias(&alias), "username": u.username, "username_id": u.id }));
     }
     let server = json!({ "alias": "telepy-ssh-server", "host": domain, "port": state.config.reverse_server_ssh_port });
