@@ -81,6 +81,10 @@ tempfile = "3"
 # 測試用的軟體 passkey（模擬瀏覽器 + authenticator）。/ Software passkey for the WebAuthn tests.
 webauthn-authenticator-rs = { version = "0.5.5", features = ["softpasskey"] }
 
+# 稽核雜湊鏈驗證在 debug build 也要快（未最佳化的 SHA-256 慢十幾倍）。/ Keep SHA-256 fast in debug builds too.
+[profile.dev.package.sha2]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

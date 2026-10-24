@@ -4,6 +4,7 @@
 
 use sqlx::FromRow;
 
+use super::audit_chain::{self, Field, Table};
 use super::Db;
 use crate::util::now_db;
 
@@ -61,31 +62,27 @@ fn clip(s: Option<&str>) -> Option<String> {
 }
 
 pub async fn insert(db: &Db, e: NewEvent<'_>) -> sqlx::Result<i64> {
-    let id = sqlx::query(&format!(
-        "INSERT INTO {T} (at, user_id, grant_id, client_name, tool, tunnel_id, session_id, target_username, detail, ok, exit_code, duration_ms, bytes_out, error, ip) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ))
-    .bind(now_db())
-    .bind(e.user_id)
-    .bind(e.grant_id)
-    .bind(e.client_name)
-    .bind(e.tool)
-    .bind(e.tunnel_id)
-    .bind(e.session_id)
-    .bind(e.target_username)
-    .bind(clip(e.detail))
-    .bind(e.ok)
-    .bind(e.exit_code)
-    .bind(e.duration_ms)
-    .bind(e.bytes_out)
-    .bind(clip(e.error))
-    .bind(e.ip)
-    .execute(&db.write)
-    .await?
-    .last_insert_rowid();
-    // 偶爾修剪（每 1000 列一次），不必每筆都算。/ Trim occasionally rather than on every insert.
-    if id % 1000 == 0 {
-        sqlx::query(&format!("DELETE FROM {T} WHERE id <= ?")).bind(id - RETENTION_ROWS).execute(&db.write).await?;
+    let row = [
+        ("at", Field::text(now_db())),
+        ("user_id", Field::Int(Some(e.user_id))),
+        ("grant_id", Field::Int(e.grant_id)),
+        ("client_name", Field::text(e.client_name)),
+        ("tool", Field::text(e.tool)),
+        ("tunnel_id", Field::Int(e.tunnel_id)),
+        ("session_id", Field::opt_text(e.session_id)),
+        ("target_username", Field::opt_text(e.target_username)),
+        ("detail", Field::Text(clip(e.detail))),
+        ("ok", Field::Bool(e.ok)),
+        ("exit_code", Field::Int(e.exit_code)),
+        ("duration_ms", Field::Int(e.duration_ms)),
+        ("bytes_out", Field::Int(e.bytes_out)),
+        ("error", Field::Text(clip(e.error))),
+        ("ip", Field::opt_text(e.ip)),
+    ];
+    let id = audit_chain::append(db, Table::AiAudit, &row).await?;
+    // 偶爾修剪（每 1000 列一次），不必每筆都算；先寫 prune 錨點。/ Trim occasionally, behind a prune anchor.
+    if id % 1000 == 0 && id > RETENTION_ROWS {
+        audit_chain::prune_through(db, Table::AiAudit, id - RETENTION_ROWS).await?;
     }
     Ok(id)
 }

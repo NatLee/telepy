@@ -69,6 +69,7 @@ impl AppState {
         // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
         let status = Arc::new(StatusState::new(None));
         let presence = Arc::new(Presence::default());
+        db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
         Self(Arc::new(Inner {
             remote_browser,

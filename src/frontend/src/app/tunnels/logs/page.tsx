@@ -6,7 +6,8 @@
  * keyword search and event-kind badges.
  */
 import React, { Suspense } from "react";
-import { Search, FileText, AlertCircle, RefreshCw, Filter, X } from "lucide-react";
+import { Search, FileText, AlertCircle, RefreshCw, Filter, X, ShieldCheck } from "lucide-react";
+import { AuditVerifyDialog } from "@/components/logs/AuditVerifyDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -38,8 +39,8 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
 function LogsPageInner() {
     const { t } = useI18n();
     const { state, actions } = useLogsPage();
-    const { logs, filteredLogs, loading, search, setSearch, tunnels, tunnelFilter, selectedTunnel } = state;
-    const { fetchLogs, setTunnelFilter } = actions;
+    const { logs, filteredLogs, loading, search, setSearch, tunnels, tunnelFilter, selectedTunnel, isAdmin, verifyOpen, verifying, verifyReport } = state;
+    const { fetchLogs, setTunnelFilter, runVerify, closeVerify } = actions;
 
     const eventBadge = (event: string) => {
         const known = EVENT_BADGES[event];
@@ -58,12 +59,21 @@ function LogsPageInner() {
                 title={t("logs.title")}
                 description={t("logs.subtitle")}
                 actions={
-                    <Button onClick={fetchLogs} variant="outline">
-                        <RefreshCw size={16} />
-                        {t("common.refresh")}
-                    </Button>
+                    <>
+                        {isAdmin && (
+                            <Button onClick={runVerify} variant="outline">
+                                <ShieldCheck size={16} />
+                                {t("logs.verify.button")}
+                            </Button>
+                        )}
+                        <Button onClick={fetchLogs} variant="outline">
+                            <RefreshCw size={16} />
+                            {t("common.refresh")}
+                        </Button>
+                    </>
                 }
             />
+            {isAdmin && <AuditVerifyDialog isOpen={verifyOpen} onClose={closeVerify} onRerun={runVerify} loading={verifying} report={verifyReport} />}
 
             <Callout tone="info" className="mb-4 shrink-0">{t("logs.banner")}</Callout>
 

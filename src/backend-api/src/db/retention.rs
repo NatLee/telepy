@@ -4,20 +4,31 @@
 
 use std::time::Duration;
 
+use super::audit_chain;
 use super::Db;
 use crate::util::db_time;
 
 pub const IP_RETENTION_DAYS: i64 = 90;
-const TABLES: [&str; 3] = ["telepy_gateway_event", "telepy_sign_in_event", "telepy_ai_audit_event"];
 const INTERVAL: Duration = Duration::from_secs(3600);
 
-/// 刪掉超過保留期的列，回傳刪了幾列。/ Delete expired rows; returns how many went.
+/// 刪掉超過保留期的列，回傳刪了幾列。刪的是「最後一筆過期列」以前的整段（雜湊鏈只能從頭剪），
+/// 經 `audit_chain::prune_through` 先寫 prune 錨點。錨點本身也只留 90 天（各表最新的 prune 錨點除外）。
+/// Delete expired rows; returns how many went. Removes the prefix up to the newest expired row through
+/// `audit_chain::prune_through` (prune anchor first). Anchors older than 90 days go too, except each
+/// table's newest prune anchor, which verification starts from.
 pub async fn purge(db: &Db) -> sqlx::Result<u64> {
     let cutoff = db_time(chrono::Utc::now() - chrono::Duration::days(IP_RETENTION_DAYS));
     let mut deleted = 0;
-    for t in TABLES {
-        deleted += sqlx::query(&format!("DELETE FROM {t} WHERE at < ?")).bind(&cutoff).execute(&db.write).await?.rows_affected();
+    for t in audit_chain::TABLES {
+        let cut: Option<i64> = sqlx::query_scalar(&format!("SELECT MAX(id) FROM {} WHERE at < ?", t.name())).bind(&cutoff).fetch_one(&db.read).await?;
+        if let Some(cut) = cut {
+            deleted += audit_chain::prune_through(db, t, cut).await?;
+        }
     }
+    sqlx::query("DELETE FROM telepy_audit_anchor WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM telepy_audit_anchor WHERE kind = 'prune' GROUP BY table_name)")
+        .bind(&cutoff)
+        .execute(&db.write)
+        .await?;
     Ok(deleted)
 }
 
@@ -44,12 +55,17 @@ mod tests {
         let old = db_time(chrono::Utc::now() - chrono::Duration::days(IP_RETENTION_DAYS + 1));
         let recent = db_time(chrono::Utc::now() - chrono::Duration::days(IP_RETENTION_DAYS - 1));
         for at in [&old, &recent] {
-            sqlx::query("INSERT INTO telepy_gateway_event (at, event, message) VALUES (?, 'accepted', 'x')").bind(at).execute(&db.write).await.unwrap();
-            sqlx::query("INSERT INTO telepy_sign_in_event (at, user_id, ok, method) VALUES (?, 1, 1, 'password')").bind(at).execute(&db.write).await.unwrap();
-            sqlx::query("INSERT INTO telepy_ai_audit_event (at, user_id, client_name, tool, ok) VALUES (?, 1, 'app', 'list_tunnels', 1)").bind(at).execute(&db.write).await.unwrap();
+            use audit_chain::{append, Field, Table};
+            let at = Field::text(at.as_str());
+            append(&db, Table::Gateway, &[("at", at.clone()), ("event", Field::text("accepted")), ("message", Field::text("x"))]).await.unwrap();
+            append(&db, Table::SignIn, &[("at", at.clone()), ("user_id", Field::Int(Some(1))), ("ok", Field::Bool(true)), ("method", Field::text("password"))]).await.unwrap();
+            append(&db, Table::AiAudit, &[("at", at), ("user_id", Field::Int(Some(1))), ("client_name", Field::text("app")), ("tool", Field::text("list_tunnels")), ("ok", Field::Bool(true))])
+                .await
+                .unwrap();
         }
         assert_eq!(purge(&db).await.unwrap(), 3);
-        for t in TABLES {
+        assert!(audit_chain::verify(&db).await.unwrap().ok);
+        for t in audit_chain::TABLES.map(|t| t.name()) {
             let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {t}")).fetch_one(&db.read).await.unwrap();
             assert_eq!(n, 1, "{t}");
         }

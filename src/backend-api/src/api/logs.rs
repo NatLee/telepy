@@ -27,6 +27,18 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(ssh_logs))
         .routes(routes!(ssh_events))
+        .routes(routes!(audit_verify))
+}
+
+/// 稽核表的雜湊鏈驗證（只有管理員）：逐列重算 hash、檢查 prev_hash 連結，並比對 DB 外的 audit-anchors.log。
+/// Verify the audit tables' hash chains and the outside checkpoints (superusers only).
+#[utoipa::path(get, path = "/api/log/audit/verify", tag = "Logs", security(("bearer" = [])), responses((status = 200, description = "Per-table result of walking the hash chain of the gateway, sign-in and AI audit tables and checking the checkpoints in audit-anchors.log", body = super::schemas::AuditVerifyReport), (status = 403, description = "Not a superuser", body = super::schemas::ErrorBody)))]
+async fn audit_verify(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+    if !user.is_superuser {
+        return Err(ApiError::forbidden("Permission denied. Only administrators can verify the audit log."));
+    }
+    let report = db::audit_chain::verify(&state.db).await?;
+    Ok(Json(serde_json::to_value(report).map_err(|e| ApiError::internal(e.to_string()))?))
 }
 
 #[derive(Debug, FromRow)]
