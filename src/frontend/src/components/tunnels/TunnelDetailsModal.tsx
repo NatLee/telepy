@@ -14,6 +14,7 @@ import { useTunnelConnections } from "@/hooks/useTunnelConnections";
 import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections";
 import { DeviceHostKeySection } from "@/components/tunnels/DeviceHostKeySection";
 import { StepUpSetting } from "@/components/tunnels/StepUpSetting";
+import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -152,6 +153,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
 
                     {/* 開 session 前確認是你（owner / ADMIN 可改）。/ Step-up before sessions (owner / ADMIN). */}
                     <StepUpSetting tunnelId={details.id} required={!!details.require_step_up} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
+
+                    {/* 錄下網頁終端機（owner / ADMIN 可改）。/ Record web terminals (owner / ADMIN). */}
+                    <RecordingSetting tunnelId={details.id} enabled={!!details.record_sessions} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
 
                     {/* 裝置公鑰 / Device public key */}
                     <Section

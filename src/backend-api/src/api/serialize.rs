@@ -34,6 +34,7 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
         "user": t.user_id,
         "default_username": t.default_username_id,
         "require_step_up": t.require_step_up,
+        "record_sessions": t.record_sessions,
     })
 }
 

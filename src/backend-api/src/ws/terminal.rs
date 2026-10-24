@@ -17,6 +17,7 @@ use axum::extract::ws::{Message, WebSocket};
 use bytes::Bytes;
 use serde_json::Value;
 
+use crate::recording::Recorder;
 use super::{auth, close, close_with, send, send_text, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
@@ -135,6 +136,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
 
     // 區網終端機的稽核說明（連上之後才記開始）。/ The LAN terminal's audit line, recorded once it is open.
     let mut lan_audit: Option<String> = None;
+    // 錄影用的區網主機標示（`login@address`）。/ The LAN host label for the recording.
+    let mut lan_label: Option<String> = None;
     // 區網主機（經裝置跳過去）：主機要屬於這條隧道，帳號要是安全字元。/ A LAN host behind the device.
     let mut pty = match auth::id_field(&msg, "lan_host_id") {
         None => {
@@ -174,6 +177,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 return;
             };
             lan_audit = Some(format!("Web terminal by {} to {}@{}:{} through {}@device", user.username, login, host.address, host.ssh_port, username));
+            lan_label = Some(format!("{login}@{}", host.address));
             if device_offline(&state, reverse_port) {
                 close(&mut socket, 4005).await;
                 return;
@@ -213,6 +217,17 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     };
     let mut heartbeat = Heartbeat::new(&state.config);
 
+    // 這條隧道要錄影：先告訴使用者，再開始錄（只錄輸出與視窗大小，不錄鍵盤）。
+    // Recorded tunnel: tell the user first, then record (output and resizes only, never keystrokes).
+    let mut recorder = match db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten().filter(|t| t.record_sessions) {
+        Some(t) => {
+            let _ = send_text(&mut socket, "\x1b[90m[Telepy] This session is recorded.\x1b[0m\r\n".into()).await;
+            let title = format!("{} on {} as {}", user.username, t.host_friendly_name, lan_label.as_deref().unwrap_or(&username));
+            Recorder::start(&state, t.id, user.id, &user.username, &username, lan_label.as_deref(), &title).await
+        }
+        None => None,
+    };
+
     let mut decoder = Utf8Decoder::default();
     let mut buf = vec![0u8; 8192];
     let mut close_code: Option<u16> = None;
@@ -243,6 +258,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                         }
                         Some("pty_resize") => {
                             if let Some(size) = window_size(&data) {
+                                if let Some(r) = recorder.as_mut() {
+                                    r.resize(size.cols, size.rows).await;
+                                }
                                 let r = match &pty {
                                     Pty::Channel(s) => s.resize(size).await,
                                     Pty::Process(p) => p.resize(size.rows as u16, size.cols as u16, size.width as u16, size.height as u16).map_err(Into::into),
@@ -277,6 +295,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 }
                 Ok(n) => {
                     let text = decoder.decode(&buf[..n]);
+                    if let (Some(r), false) = (recorder.as_mut(), text.is_empty()) {
+                        r.output(&text).await;
+                    }
                     if !text.is_empty() && !send_text(&mut socket, text).await {
                         break;
                     }
@@ -294,6 +315,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     drop(presence);
     tracing::info!(code = ?close_code, lived = started.elapsed().as_secs_f64(), "Terminal session closed");
     audit.close(&state).await;
+    if let Some(r) = recorder {
+        r.finish(&state).await;
+    }
     match &mut pty {
         Pty::Channel(s) => s.close().await,
         Pty::Process(p) => p.terminate().await,

@@ -18,6 +18,8 @@ pub struct Tunnel {
     pub updated_at: String,
     /// 開 session 前要 step-up（見 `crate::step_up`）。/ Sessions need a step-up first (see `crate::step_up`).
     pub require_step_up: bool,
+    /// 網頁終端機要錄影（見 `crate::recording`）。/ Web terminal sessions are recorded (see `crate::recording`).
+    pub record_sessions: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -42,7 +44,7 @@ pub struct UsernameWithCreator {
     pub created_by: String,
 }
 
-const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up";
+const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up, record_sessions";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
 const U_COLS: &str = "id, user_id, reverse_server_id, username, created_at, updated_at";
 const U: &str = "authorized_keys_reverseserverusernames";
@@ -127,6 +129,12 @@ pub struct NewTunnel<'a> {
     pub default_username_id: Option<i64>,
 }
 
+/// 開 / 關錄影。/ Turn recording on or off.
+pub async fn set_record_sessions(db: &Db, id: i64, on: bool) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET record_sessions = ?, updated_at = ? WHERE id = ?")).bind(on).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
 /// 開 / 關 step-up。/ Turn step-up on or off.
 pub async fn set_require_step_up(db: &Db, id: i64, required: bool) -> sqlx::Result<()> {
     sqlx::query(&format!("UPDATE {T} SET require_step_up = ?, updated_at = ? WHERE id = ?")).bind(required).bind(now_db()).bind(id).execute(&db.write).await?;
@@ -208,6 +216,8 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM telepy_tunnel_pin WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_session WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_label WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    // 錄影的列；檔案由呼叫端（`recording::forget_tunnel`）刪。/ Recording rows; the caller removes the files.
+    sqlx::query("DELETE FROM telepy_terminal_recording WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_access_request WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
     tx.commit().await?;

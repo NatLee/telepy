@@ -27,6 +27,8 @@ export interface TunnelDetails {
     labels?: string[];
     /** 開 session 前要確認是你。/ Sessions ask for a step-up first. */
     require_step_up?: boolean;
+    /** 網頁終端機會錄影。/ Web terminal sessions are recorded. */
+    record_sessions?: boolean;
 }
 
 export type TunnelForm = { host_friendly_name: string; key: string; description: string };

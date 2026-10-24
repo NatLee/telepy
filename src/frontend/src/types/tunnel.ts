@@ -29,6 +29,8 @@ export interface Tunnel {
     labels?: string[];
     /** 開 session 前要確認是你（step-up）。/ Sessions ask for a step-up first. */
     require_step_up?: boolean;
+    /** 網頁終端機會錄影。/ Web terminal sessions are recorded. */
+    record_sessions?: boolean;
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
@@ -123,6 +125,8 @@ export interface TunnelActionHandlers {
     onDelete: (tunnelId: number, name: string) => void;
     /** 被分享的人申請更多存取。/ A sharee asks for more access. */
     onRequestAccess?: (tunnelId: number) => void;
+    /** 這條隧道的終端機錄影（/tunnels/recordings?tunnel=<id>）。/ This tunnel's terminal recordings. */
+    onRecordings?: (tunnelId: number) => void;
     /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
     onTogglePin?: (tunnelId: number, pinned: boolean) => void;
     /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */

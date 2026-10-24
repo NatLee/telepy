@@ -24,7 +24,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// 這個人能管的隧道：{tunnel_id: 隧道}（管理員 = 全部）。/ Tunnels this user manages (all for admins).
-async fn managed(state: &AppState, me: &User) -> ApiResult<HashMap<i64, Tunnel>> {
+pub(super) async fn managed(state: &AppState, me: &User) -> ApiResult<HashMap<i64, Tunnel>> {
     if me.is_superuser {
         return Ok(db::tunnels::all(&state.db).await?.into_iter().map(|t| (t.id, t)).collect());
     }

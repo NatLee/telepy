@@ -103,6 +103,7 @@ export default function TunnelsPage() {
         onUsers: (tunnelId, readOnly) => setUsersModal({ isOpen: true, tunnelId, readOnly }),
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),
         onRequestAccess: (tunnelId) => setRequestModal({ isOpen: true, tunnelId }),
+        onRecordings: (tunnelId) => router.push(`/tunnels/recordings?tunnel=${tunnelId}`),
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),

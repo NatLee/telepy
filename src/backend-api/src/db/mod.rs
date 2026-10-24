@@ -11,6 +11,7 @@ pub mod lan;
 pub mod mfa;
 pub mod oauth;
 pub mod pool;
+pub mod recordings;
 pub mod retention;
 pub mod schema;
 pub mod settings;

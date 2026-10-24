@@ -39,6 +39,8 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     recovered: { key: "logs.event.recovered", variant: "success" },
     ip_changed: { key: "logs.event.ip_changed", variant: "warning" },
     expired_key: { key: "logs.event.expired_key", variant: "destructive" },
+    recording_setting: { key: "logs.event.recording_setting", variant: "outline" },
+    recording_deleted: { key: "logs.event.recording_deleted", variant: "outline" },
     session_ended: { key: "logs.event.session_ended", variant: "warning" },
     terminal_open: { key: "logs.event.terminal_open", variant: "default" },
     lan_terminal: { key: "logs.event.lan_terminal", variant: "default" },

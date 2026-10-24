@@ -175,6 +175,8 @@ pub struct Tunnel {
     /// 開 session 前要 step-up（`POST /api/auth/step-up`，token 放 `X-Telepy-Step-Up` 或 WebSocket auth 的 `step_up`）。
     /// Sessions need a step-up first (token in `X-Telepy-Step-Up` or the WebSocket auth field `step_up`).
     pub require_step_up: bool,
+    /// 網頁終端機會錄影（`PUT /api/reverse/server/{id}/recording`）。/ Web terminal sessions are recorded.
+    pub record_sessions: bool,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -1920,4 +1922,38 @@ pub struct LiveSession {
 #[derive(ToSchema)]
 pub struct LiveSessions {
     pub sessions: Vec<LiveSession>,
+}
+
+// ---------------------------------------------------------------- terminal recordings
+
+#[derive(ToSchema)]
+pub struct RecordingItem {
+    pub id: i64,
+    pub tunnel: LiveSessionTunnel,
+    pub user: UserRef,
+    /// 裝置上的帳號（區網主機時是跳板帳號）。/ The device account (the jump account for a LAN host).
+    pub os_user: String,
+    /// 區網主機 `login@address`。/ A LAN host as `login@address`.
+    pub lan_host: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    /// 還在錄。/ Still recording.
+    pub live: bool,
+    pub duration_ms: i64,
+    pub bytes: i64,
+    /// 超過 64 MB，後面沒錄到。/ Hit the 64 MB cap; the rest was not recorded.
+    pub truncated: bool,
+    pub can_delete: bool,
+}
+
+#[derive(ToSchema)]
+pub struct RecordingList {
+    pub recordings: Vec<RecordingItem>,
+}
+
+/// 開關隧道的終端機錄影；關掉要 `reauth`（帳號有第二因素時）。/ Switch recording; turning it off needs `reauth`.
+#[derive(ToSchema)]
+pub struct RecordingSetting {
+    pub enabled: bool,
+    pub reauth: Option<MfaProof>,
 }

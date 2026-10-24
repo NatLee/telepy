@@ -385,6 +385,8 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
         None => None,
     };
     let ai_closed = crate::ai::close_for_tunnel(&state, t.id, crate::ai::CloseReason::TunnelDeleted).await;
+    // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
+    crate::recording::forget_tunnel(&state, id).await;
     db::tunnels::delete(&state.db, id).await?;
     let (revoked, detached) = super::oauth::detach_tunnel(&state, t.id, opts.revoke_grants.unwrap_or(false), &revoke).await?;
     let disconnected = state.gateway.disconnect_tunnel(t.id).await;
