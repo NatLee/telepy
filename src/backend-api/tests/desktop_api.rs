@@ -89,6 +89,10 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 bridge.read_exact(&mut echo).await.expect("echo through the device");
                 c.s.write_all(encode(&["ready", "$fake-1"], Unit::CodePoints).as_bytes()).await.unwrap();
                 c.s.write_all(encode(&["sync", std::str::from_utf8(&echo).unwrap()], Unit::CodePoints).as_bytes()).await.unwrap();
+                // 一個真的幀結尾（數字時間戳、合併了 2 個邏輯幀），另一個封包，給串流統計量。
+                // A real frame end (numeric timestamp, two logical frames merged) in its own packet, for the stats.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                c.s.write_all(encode(&["sync", "1000", "2"], Unit::CodePoints).as_bytes()).await.unwrap();
                 while let Some(i) = c.next().await {
                     let op = i.opcode().to_string();
                     seen.lock().unwrap().after_ready.push(op.clone());
@@ -127,8 +131,8 @@ async fn open_ws(lab: &Lab, start: &Value) -> Result<Ws, String> {
     Ok(ws)
 }
 
-/// 下一個文字 frame，或關閉碼。/ The next text frame, or the close code.
-async fn recv(ws: &mut Ws) -> Result<String, u16> {
+/// 下一個文字 frame（任何一種），或關閉碼。/ The next text frame of any kind, or the close code.
+async fn recv_any(ws: &mut Ws) -> Result<String, u16> {
     loop {
         match tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("no frame from the desktop socket") {
             Some(Ok(Message::Text(t))) => return Ok(t.to_string()),
@@ -137,6 +141,38 @@ async fn recv(ws: &mut Ws) -> Result<String, u16> {
             Some(Ok(_)) => continue,
             Some(Err(e)) => panic!("desktop socket error: {e}"),
         }
+    }
+}
+
+/// 每秒的統計 frame：`telepy-ping` + `telepy-stats` 在同一個訊息裡。/ The relay's own once-a-second frame.
+fn is_stats_frame(t: &str) -> bool {
+    t.starts_with("11.telepy-ping,")
+}
+
+/// 下一個來自 guacd 的 frame（跳過中繼自己的統計）。/ The next frame from guacd, skipping the relay's stats.
+async fn recv(ws: &mut Ws) -> Result<String, u16> {
+    loop {
+        let t = recv_any(ws).await?;
+        if !is_stats_frame(&t) {
+            return Ok(t);
+        }
+    }
+}
+
+/// 下一個統計 frame → (ping 編號, stats JSON)。/ The next stats frame as (ping number, stats JSON).
+async fn recv_stats(ws: &mut Ws) -> (u64, Value) {
+    loop {
+        let t = recv_any(ws).await.expect("socket closed before a stats frame");
+        if !is_stats_frame(&t) {
+            continue;
+        }
+        let mut p = Parser::new(Unit::Utf16);
+        p.push(t.as_bytes());
+        let (list, err) = p.drain();
+        assert!(err.is_none(), "{err:?}");
+        let ping = list.iter().find(|i| i.opcode() == "telepy-ping").and_then(|i| i.element(1)).and_then(|n| n.parse::<u64>().ok()).expect("ping number");
+        let stats = list.iter().find(|i| i.opcode() == "telepy-stats").and_then(|i| i.element(1)).expect("stats element");
+        return (ping, serde_json::from_str(stats).expect("stats JSON"));
     }
 }
 
@@ -185,6 +221,26 @@ async fn desktop_session_through_the_device() {
     // First the tunnel UUID (empty opcode), then the echo guacd read through the device.
     assert_eq!(recv(&mut ws).await.unwrap(), encode(&["", &sid], Unit::Utf16));
     assert_eq!(recv(&mut ws).await.unwrap(), "4.sync,4.PING;");
+    assert_eq!(recv(&mut ws).await.unwrap(), "4.sync,4.1000,1.2;");
+
+    // 串流統計：回 sync 的回音與 pong，下一份統計就有畫面往返與網路往返；pong 不會到 guacd。
+    // Stream stats: after the sync echo and a pong, the next stats carry both round trips; pongs stop at the relay.
+    let (ping, first) = recv_stats(&mut ws).await;
+    assert!(first["ms"].as_u64().is_some() && first["behind"].as_u64().is_some(), "{first}");
+    ws.send(Message::Text(format!("4.sync,4.1000;11.telepy-pong,{}.{ping};", ping.to_string().len()).into())).await.unwrap();
+    let mut measured = None;
+    for _ in 0..5 {
+        let (_, s) = recv_stats(&mut ws).await;
+        if s["frame_ms"].is_number() && s["net_ms"].is_number() {
+            measured = Some(s);
+            break;
+        }
+    }
+    let s = measured.expect("a stats frame with both round trips");
+    assert!(s["frame_ms"].as_u64().unwrap() < 10_000 && s["net_ms"].as_u64().unwrap() < 10_000, "{s}");
+    assert_eq!(s["behind"], 0, "{s}");
+    wait_for("the sync echo at guacd", || seen.lock().unwrap().after_ready.contains(&"sync".to_string())).await;
+    assert!(!seen.lock().unwrap().after_ready.iter().any(|o| o == "telepy-pong"), "{:?}", seen.lock().unwrap().after_ready);
 
     // 握手由後端做：guacd 連回 rendezvous，帳密在 connect 裡、不經瀏覽器。
     // The backend did the handshake: rendezvous address and the password are in `connect`.
@@ -260,8 +316,45 @@ async fn desktop_session_through_the_device() {
     let ev = events(&lab, &alice.token, id).await;
     let close = ev.iter().find(|e| e["event"] == "desktop_close" && e["message"].as_str().unwrap_or("").contains(&sid[..8])).expect("close event");
     let msg = close["message"].as_str().unwrap();
-    assert!(msg.contains("closed after") && msg.contains("(stopped,"), "{msg}");
+    assert!(msg.contains("closed after") && msg.contains("(stopped,") && msg.contains("to the browser") && msg.contains("frame latency avg"), "{msg}");
     wait_for("presence cleared", || app.state.presence.for_tunnel(id).iter().all(|e| e.kind.as_str() != "desktop")).await;
+}
+
+#[tokio::test]
+async fn desktop_screens_are_asked_over_the_device_connection() {
+    let (guacd, _seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| c.guacd_addr = guacd.clone());
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    // 假 macOS：`uname -s` 回 Darwin，`system_profiler` 不存在 → os 知道、清單空。
+    // Pretend macOS: uname answers Darwin, system_profiler is missing: the OS is known, the list empty.
+    let mac = lab.machine_with("mac", &[("nat", &[&lab.service])], common::lab::MachineOpts { pretend_darwin: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "mac", &mac).await;
+    lab.username(&alice, &dev, "nat").await;
+    let id = dev.tunnel_id;
+
+    let r = app.get(&format!("/api/reverse/server/{id}/desktop/screens?username=nat"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["os"], "darwin");
+    assert!(r.json["source"].is_null());
+    assert_eq!(r.json["screens"].as_array().map(Vec::len), Some(0));
+    assert_eq!(r.json["username"], "nat");
+
+    // 沒有 uname 也沒有 PowerShell 的裝置：unknown。/ Neither uname nor PowerShell: unknown.
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], false).await;
+    let dev2 = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev2, "ubuntu").await;
+    let r = app.get(&format!("/api/reverse/server/{}/desktop/screens", dev2.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["os"], "unknown");
+    assert_eq!(r.json["screens"].as_array().map(Vec::len), Some(0));
+
+    // 和 start 同一道門：沒有分享給 bob → 403；不在允許清單的帳號 → 403。/ Same gate as start.
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/desktop/screens?username=nat"), Some(&bob.token)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(app.get(&format!("/api/reverse/server/{id}/desktop/screens?username=root"), Some(&alice.token)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(app.get("/api/reverse/server/999999/desktop/screens", Some(&alice.token)).await.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

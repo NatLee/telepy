@@ -8,6 +8,12 @@ import type { TranslationKey } from "@/locales/en";
 
 export type DesktopProtocol = "rdp" | "vnc";
 export type ClipboardPolicy = "both" | "to_remote" | "off";
+/** 畫質預設（start 時送給後端 → guacd 參數）。/ Quality preset, turned into guacd parameters at start. */
+export type DesktopQuality = "auto" | "speed" | "sharp";
+export const QUALITY_VALUES: readonly DesktopQuality[] = ["auto", "speed", "sharp"];
+/** Ctrl 當 ⌘：auto = 偵測到 macOS 桌面且瀏覽器不是 Mac 時開。/ auto = on for macOS desktops from a non-Mac browser. */
+export type CtrlAsCmdMode = "auto" | "on" | "off";
+export const CTRL_MODE_VALUES: readonly CtrlAsCmdMode[] = ["auto", "on", "off"];
 
 export const DEFAULT_PORT: Record<DesktopProtocol, number> = { rdp: 3389, vnc: 5900 };
 
@@ -19,8 +25,27 @@ export interface DesktopStart {
     expires_in: number;
     protocol: DesktopProtocol;
     clipboard: ClipboardPolicy;
+    quality: DesktopQuality;
     target: { host: string; port: number; label: string; lan_host_id: number | null };
     username: string;
+}
+
+/** sharp 時向 guacd 要原生解析度的倍率（最多 2 倍）。/ The HiDPI factor requested for the sharp preset (capped at 2). */
+export function pixelRatioFor(quality: DesktopQuality, devicePixelRatio: number): number {
+    if (quality !== "sharp") return 1;
+    return Math.min(2, Math.max(1, Math.round(devicePixelRatio * 100) / 100));
+}
+
+/** Ctrl 是否送成 ⌘。/ Whether Control goes out as Command. */
+export function ctrlAsCmd(mode: CtrlAsCmdMode, remoteOs: string | null, browserIsMac: boolean): boolean {
+    if (mode === "on") return true;
+    if (mode === "off") return false;
+    return remoteOs === "darwin" && !browserIsMac;
+}
+
+export function isMacBrowser(nav: { platform?: string; userAgent?: string } | undefined): boolean {
+    if (!nav) return false;
+    return /Mac|iPhone|iPad|iPod/.test(nav.platform || "") || /Macintosh|Mac OS X/.test(nav.userAgent || "");
 }
 
 /** 連線的階段（驅動按鈕與示意圖）。/ Connection phase (drives the buttons and the diagram). */

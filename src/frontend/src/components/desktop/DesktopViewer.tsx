@@ -3,8 +3,15 @@
 /**
  * 遠端桌面畫面（guacamole-common-js）。WebSocketTunnel 連 `/ws/desktop/<sid>/?ticket=…`（子協定 `guacamole`），
  * 第一個指令是 tunnel UUID，之後 guacd 的畫面指令直接畫進 Guacamole.Display。
- * - 鍵盤只在畫面取得焦點時送出（點一下畫面），所以頁面上的表單照常能打字；滑鼠 / 觸控走 Guacamole.Mouse。
- * - 容器大小改變 → 等比縮放畫面；RDP 另外送 `size`，遠端桌面會跟著改解析度（resize-method display-update）。
+ * - 鍵盤：焦點放在一個看不見的 textarea（Guacamole.InputSink）而不是 div —— 輸入法只會在可編輯元素上組字，
+ *   所以這樣中文 / 日文等 IME 才打得進去（組好的字以 Unicode keysym 送出）。點一下畫面就取得焦點；
+ *   頁面上其他表單照常能打字。滑鼠 / 觸控走 Guacamole.Mouse。
+ * - 「Ctrl 當 ⌘」：對 macOS 桌面把 Control 送成 Meta（Command），Windows / Linux 的瀏覽器才能用 Ctrl+C 之類的快捷鍵。
+ * - 只看一個螢幕：`viewport` 把畫面裁成那個矩形（多螢幕的 VNC 桌面）；座標仍是整張畫面的，滑鼠位置照舊正確。
+ * - 容器大小改變 → 等比縮放畫面（HiDPI 時向 guacd 要 devicePixelRatio 倍的解析度、縮回 CSS 大小，字才銳利）；
+ *   RDP 另外送 `size`，遠端桌面會跟著改解析度（resize-method display-update）。
+ * - 串流統計：中繼每秒送 `telepy-ping`（這裡立刻回 `telepy-pong`）與 `telepy-stats`（交給 onStats）；
+ *   兩者在交給 Guacamole.Client 前攔下。tunnel 的 UNSTABLE 狀態也往上報。
  * - 錯誤：guacd 的 `error` 指令（client.onerror）或後端的關閉碼（後端把代碼放在 close reason，tunnel.onerror
  *   拿到的 status.code 就是它）；VNC 伺服器要求我們沒給的帳密（onrequired）時直接斷線，請使用者補填。
  * Remote desktop canvas on guacamole-common-js; see the backend relay in `ws/desktop.rs`.
@@ -15,6 +22,8 @@ import { MousePointerClick } from "lucide-react";
 import { getWsOrigin } from "@/lib/wsCommon";
 import { useI18n } from "@/lib/i18n";
 import { sessionFailure, type DesktopFailure, type DesktopStart } from "@/lib/desktop";
+import { parseStats, PING_OPCODE, PONG_OPCODE, STATS_OPCODE, type StreamStats } from "@/lib/desktopStats";
+import { fitScale, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
 
 type GuacNS = typeof Guac;
 
@@ -27,47 +36,98 @@ export function loadGuacamole(): Promise<GuacNS> {
     return guacPromise;
 }
 
-const KEY_CTRL = 0xffe3;
+const KEY_CTRL_L = 0xffe3;
+const KEY_CTRL_R = 0xffe4;
+const KEY_META_L = 0xffe7;
+const KEY_META_R = 0xffe8;
 const KEY_ALT = 0xffe9;
 const KEY_DELETE = 0xffff;
+const KEY_RETURN = 0xff0d;
+const KEY_TAB = 0xff09;
+/** 送文字時每個字的間隔（有些 VNC 伺服器會吃掉太密的按鍵）。/ Pause between typed characters. */
+const TYPE_INTERVAL_MS = 8;
+
+/** 一個字 → X11 keysym（Latin-1 直接對應，其他走 Unicode keysym）。/ A code point as an X11 keysym. */
+export function keysymForCodePoint(cp: number): number | null {
+    if (cp === 0x0a) return KEY_RETURN;
+    if (cp === 0x09) return KEY_TAB;
+    if (cp === 0x0d) return null;
+    if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff)) return cp;
+    if (cp < 0x20) return null;
+    return 0x01000000 | cp;
+}
+
+/** Control → Meta（⌘）。/ Control → Meta (Command). */
+function ctrlToCmd(keysym: number): number {
+    if (keysym === KEY_CTRL_L) return KEY_META_L;
+    if (keysym === KEY_CTRL_R) return KEY_META_R;
+    return keysym;
+}
 
 export interface DesktopViewerHandle {
     disconnect: () => void;
     sendCtrlAltDel: () => void;
     sendClipboard: (text: string) => void;
+    /** 把文字當按鍵一個個送出（IME 的備援）。/ Type text as key presses (the IME fallback). */
+    typeText: (text: string) => void;
     focus: () => void;
+    /** 畫面上這一點是不是黑的（多螢幕排列推斷用）。/ Is this framebuffer pixel black (layout inference)? */
+    isBlack: (x: number, y: number) => boolean;
 }
 
 interface Props {
     start: DesktopStart;
+    /** 只看這個矩形；null = 整張畫面。/ Crop to this rectangle; null = everything. */
+    viewport: Viewport | null;
+    /** 1 = CSS 像素；devicePixelRatio = 向 guacd 要原生解析度（sharp）。/ 1, or devicePixelRatio for HiDPI. */
+    pixelRatio: number;
+    /** Control 送成 Command（macOS 桌面）。/ Send Control as Command. */
+    ctrlAsCmd: boolean;
     onConnected: () => void;
     /** 連線結束：failure = null 是正常結束。/ The session ended; null = a normal end. */
     onEnded: (failure: DesktopFailure | null) => void;
     /** 遠端複製了文字（剪貼簿政策允許時）。/ The remote copied text (when the policy allows). */
     onRemoteClipboard: (text: string) => void;
+    onStats: (stats: StreamStats) => void;
+    onTunnelUnstable: (unstable: boolean) => void;
+    /** 遠端畫面的大小（整張，裁切前）。/ The framebuffer size before any crop. */
+    onDisplaySize: (size: Framebuffer) => void;
+    /** 目前的顯示比例（1 = 1:1）。/ The current display scale. */
+    onScale: (scale: number) => void;
 }
 
-export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, onConnected, onEnded, onRemoteClipboard }, ref) {
+export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
     const clientRef = useRef<Guac.Client | null>(null);
     const guacRef = useRef<GuacNS | null>(null);
+    const keyboardRef = useRef<Guac.Keyboard | null>(null);
+    const sinkRef = useRef<Guac.InputSink | null>(null);
+    const rescaleRef = useRef<(() => void) | null>(null);
+    const typingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const endedRef = useRef(false);
-    // 最新的回呼（連線只建一次，回呼可能每次 render 都換）。/ Latest callbacks; the connection is set up once.
-    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard });
+    // 最新的回呼與選項（連線只建一次，這些每次 render 都可能換）。/ Latest callbacks and options; the connection is set up once.
+    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale });
+    const options = useRef({ viewport, pixelRatio, ctrlAsCmd });
     useLayoutEffect(() => {
-        callbacks.current = { onConnected, onEnded, onRemoteClipboard };
+        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale };
+        options.current = { viewport, pixelRatio, ctrlAsCmd };
     });
     const [focused, setFocused] = useState(false);
+
+    // 換螢幕 → 重新裁切縮放。/ A new viewport re-crops the display.
+    useEffect(() => {
+        rescaleRef.current?.();
+    }, [viewport, pixelRatio]);
 
     useImperativeHandle(ref, () => ({
         disconnect: () => clientRef.current?.disconnect(),
         sendCtrlAltDel: () => {
             const c = clientRef.current;
             if (!c) return;
-            for (const k of [KEY_CTRL, KEY_ALT, KEY_DELETE]) c.sendKeyEvent(1, k);
-            for (const k of [KEY_DELETE, KEY_ALT, KEY_CTRL]) c.sendKeyEvent(0, k);
+            for (const k of [KEY_CTRL_L, KEY_ALT, KEY_DELETE]) c.sendKeyEvent(1, k);
+            for (const k of [KEY_DELETE, KEY_ALT, KEY_CTRL_L]) c.sendKeyEvent(0, k);
         },
         sendClipboard: (text: string) => {
             const c = clientRef.current;
@@ -77,7 +137,38 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             writer.sendText(text);
             writer.sendEnd();
         },
-        focus: () => frameRef.current?.focus(),
+        typeText: (text: string) => {
+            const c = clientRef.current;
+            if (!c) return;
+            if (typingRef.current) clearTimeout(typingRef.current);
+            const keys = Array.from(text).map((ch) => keysymForCodePoint(ch.codePointAt(0) ?? 0)).filter((k): k is number => k !== null);
+            let i = 0;
+            const step = () => {
+                if (i >= keys.length || clientRef.current !== c) {
+                    typingRef.current = null;
+                    return;
+                }
+                c.sendKeyEvent(1, keys[i]);
+                c.sendKeyEvent(0, keys[i]);
+                i += 1;
+                typingRef.current = setTimeout(step, TYPE_INTERVAL_MS);
+            };
+            step();
+        },
+        focus: () => sinkRef.current?.focus(),
+        isBlack: (x: number, y: number) => {
+            const c = clientRef.current;
+            if (!c) return false;
+            try {
+                const canvas = c.getDisplay().getDefaultLayer().getCanvas();
+                const ctx = canvas.getContext("2d", { willReadFrequently: true });
+                if (!ctx) return false;
+                const px = ctx.getImageData(Math.max(0, Math.min(canvas.width - 1, x)), Math.max(0, Math.min(canvas.height - 1, y)), 1, 1).data;
+                return px[0] < 12 && px[1] < 12 && px[2] < 12;
+            } catch {
+                return false;
+            }
+        },
     }), []);
 
     useEffect(() => {
@@ -103,15 +194,29 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             const el = display.getElement();
             host.appendChild(el);
 
-            // 等比縮放到容器裡（不放大超過 1:1）。/ Fit the remote screen into the frame (never upscale past 1:1).
+            // 裁切 + 等比縮放：host 是裁切框（viewport 的大小 × 比例），畫面元素往左上挪 viewport 的位移。
+            // 不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是原生解析度）。
+            // Crop and fit: the host is the clip box, the display element shifted by the viewport's origin.
             const rescale = () => {
                 const w = display.getWidth();
                 const h = display.getHeight();
                 if (!w || !h) return;
+                const vpRaw = options.current.viewport;
+                const vp: Viewport = vpRaw && vpRaw.x < w && vpRaw.y < h ? { x: vpRaw.x, y: vpRaw.y, width: Math.min(vpRaw.width, w - vpRaw.x), height: Math.min(vpRaw.height, h - vpRaw.y) } : { x: 0, y: 0, width: w, height: h };
                 const box = frame.getBoundingClientRect();
-                display.scale(Math.min(box.width / w, box.height / h, 1));
+                const scale = fitScale(box, vp, 1 / Math.max(1, options.current.pixelRatio));
+                display.scale(scale);
+                host.style.width = `${vp.width * scale}px`;
+                host.style.height = `${vp.height * scale}px`;
+                el.style.marginLeft = `${-vp.x * scale}px`;
+                el.style.marginTop = `${-vp.y * scale}px`;
+                callbacks.current.onScale(scale);
             };
-            display.onresize = rescale;
+            rescaleRef.current = rescale;
+            display.onresize = (w, h) => {
+                rescale();
+                callbacks.current.onDisplaySize({ width: w, height: h });
+            };
             // 本機游標換成遠端游標的圖（沒有延遲）；瀏覽器不支援時用 Display 自己畫的軟體游標。
             // Show the remote cursor image as the local cursor (no lag); fall back to the display's software cursor.
             const mouse = new G.Mouse(el);
@@ -123,24 +228,48 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             const touch = new G.Mouse.Touchscreen(el);
             touch.onEach(["mousedown", "mouseup", "mousemove"], sendMouse);
 
+            // 鍵盤：InputSink 的 textarea 收焦點（IME 才會組字），Keyboard 掛在框上（事件從 textarea 冒上來）。
+            // Keyboard: the InputSink textarea holds focus (so IMEs compose); the Keyboard listens on the frame.
+            const sink = new G.InputSink();
+            const sinkEl = sink.getElement();
+            sinkEl.setAttribute("aria-hidden", "true");
+            sinkEl.setAttribute("tabindex", "-1");
+            frame.appendChild(sinkEl);
+            sinkRef.current = sink;
+            const onSinkFocus = () => setFocused(true);
+            const onSinkBlur = () => setFocused(false);
+            sinkEl.addEventListener("focus", onSinkFocus);
+            sinkEl.addEventListener("blur", onSinkBlur);
             const keyboard = new G.Keyboard(frame);
+            keyboardRef.current = keyboard;
+            // 按下時記住實際送出的 keysym，放開時用同一個（中途切換 Ctrl→⌘ 不會卡住修飾鍵）。
+            // Remember what was sent on press so the release matches even if the remap toggles in between.
+            const sent = new Map<number, number>();
             keyboard.onkeydown = (keysym) => {
-                client.sendKeyEvent(1, keysym);
+                const k = options.current.ctrlAsCmd ? ctrlToCmd(keysym) : keysym;
+                sent.set(keysym, k);
+                client.sendKeyEvent(1, k);
                 return false;
             };
-            keyboard.onkeyup = (keysym) => client.sendKeyEvent(0, keysym);
+            keyboard.onkeyup = (keysym) => {
+                const k = sent.get(keysym) ?? keysym;
+                sent.delete(keysym);
+                client.sendKeyEvent(0, k);
+            };
 
             client.onstatechange = (state) => {
                 if (state === 3) {
                     rescale();
+                    callbacks.current.onDisplaySize({ width: display.getWidth(), height: display.getHeight() });
                     callbacks.current.onConnected();
-                    frame.focus();
+                    sink.focus();
                 } else if (state === 5) {
                     end(null);
                 }
             };
             client.onerror = (status) => end(sessionFailure(status.code, status.message));
             tunnel.onerror = (status) => end(sessionFailure(status.code, status.message));
+            tunnel.onstatechange = (state) => callbacks.current.onTunnelUnstable(state === G.Tunnel.State.UNSTABLE);
             // VNC 伺服器要我們沒給的欄位（例如密碼）：不在串流裡補，直接請使用者重新連。
             // The server wants a parameter we did not send: disconnect and ask the user to fill it in.
             client.onrequired = (params) => {
@@ -157,33 +286,63 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
 
             // RDP 跟著框的大小改解析度；VNC 的解析度固定，只縮放。/ RDP follows the frame size; VNC only scales.
             let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+            const requested = () => {
+                const box = frame.getBoundingClientRect();
+                const pr = Math.max(1, options.current.pixelRatio);
+                return { width: Math.max(320, Math.round(box.width * pr)), height: Math.max(240, Math.round(box.height * pr)), dpi: Math.round(96 * pr) };
+            };
             const observer = new ResizeObserver(() => {
                 rescale();
                 if (start.protocol !== "rdp") return;
                 if (resizeTimer) clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(() => {
                     const box = frame.getBoundingClientRect();
-                    if (box.width > 0 && box.height > 0) client.sendSize(Math.round(box.width), Math.round(box.height));
+                    if (box.width > 0 && box.height > 0) {
+                        const r = requested();
+                        client.sendSize(r.width, r.height);
+                    }
                 }, 400);
             });
             observer.observe(frame);
 
-            const box = frame.getBoundingClientRect();
-            const width = Math.max(320, Math.round(box.width));
-            const height = Math.max(240, Math.round(box.height));
-            client.connect(new URLSearchParams({ ticket: start.ticket, width: String(width), height: String(height), dpi: "96" }).toString());
+            const size = requested();
+            client.connect(new URLSearchParams({ ticket: start.ticket, width: String(size.width), height: String(size.height), dpi: String(size.dpi) }).toString());
+            // 中繼自己的指令在交給 Client 前攔下：ping 立刻回 pong，stats 往上報。其餘原樣交給 Client。
+            // Intercept the relay's own instructions before the Client sees them; everything else passes through.
+            const inner = tunnel.oninstruction;
+            tunnel.oninstruction = (opcode, args) => {
+                if (opcode === PING_OPCODE) {
+                    tunnel.sendMessage(PONG_OPCODE, String(args[0] ?? ""));
+                    return;
+                }
+                if (opcode === STATS_OPCODE) {
+                    const s = parseStats(String(args[0] ?? ""));
+                    if (s) callbacks.current.onStats(s);
+                    return;
+                }
+                inner?.(opcode, args);
+            };
 
             cleanup = () => {
                 observer.disconnect();
                 if (resizeTimer) clearTimeout(resizeTimer);
+                if (typingRef.current) clearTimeout(typingRef.current);
+                typingRef.current = null;
                 keyboard.onkeydown = null;
                 keyboard.onkeyup = null;
                 keyboard.reset();
+                sinkEl.removeEventListener("focus", onSinkFocus);
+                sinkEl.removeEventListener("blur", onSinkBlur);
+                sinkEl.remove();
                 client.onstatechange = null;
                 client.onerror = null;
                 tunnel.onerror = null;
+                tunnel.onstatechange = null;
                 client.disconnect();
                 el.remove();
+                rescaleRef.current = null;
+                sinkRef.current = null;
+                keyboardRef.current = null;
             };
         }).catch(() => end({ key: "desktop.err.bundle", at: "browser" }));
 
@@ -198,13 +357,12 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
         <div
             ref={frameRef}
             tabIndex={0}
-            onMouseDown={() => frameRef.current?.focus()}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
+            onMouseDown={() => sinkRef.current?.focus()}
+            onFocus={(e) => { if (e.target === frameRef.current) sinkRef.current?.focus(); }}
             className="relative flex h-full w-full items-center justify-center overflow-hidden bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             aria-label={t("desktop.viewerLabel")}
         >
-            <div ref={hostRef} className="[&>div]:mx-auto" />
+            <div ref={hostRef} className="relative overflow-hidden" />
             {!focused && (
                 <div className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-background/90 px-2.5 py-1 text-xs text-foreground shadow-pop">
                     <MousePointerClick size={14} aria-hidden /> {t("desktop.clickToType")}

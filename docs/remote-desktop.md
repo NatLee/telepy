@@ -27,17 +27,76 @@ backend desktop/bridge.rs
 
 ## 流程
 
-1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username, port?, lan_host_id?, login?, password?, domain?}`：
+1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username, port?, lan_host_id?, login?, password?, domain?, quality?}`：
    檢查 `desktop_enabled`、隧道 VIEW、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號）、
    區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip 通道到目標，所以
    `device_offline` / `device_auth` / `target_unreachable` 在這一步就回 502，不必等 WebSocket。
-   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, target, username}`；帳密只留在記憶體。
+   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, quality, target, username}`；帳密只留在記憶體。
    帶 `credential_id` 時改用憑證庫裡那筆的 login / password / domain（見下方「憑證庫」），請求裡的帳密欄位被忽略。
 2. 瀏覽器用票證開 WS。後端重驗權限、開 rendezvous、連 guacd 握手（`hostname` / `port` = rendezvous），
    guacd 連回來的那條接到第 1 步的通道。握手完成後先送 `0.,<uuid>;`（guacamole-common-js 收到才把 tunnel 標成開啟），
    再把握手期間已讀進解析器的指令送出（guacd 常把 `ready` 和第一批畫面放在同一個封包）。
 3. 中繼直到任一端結束。結束原因：使用者、guacd、閒置（`desktop_session_idle_timeout`）、`/desktop/{sid}/stop`、
    權限被收回（reaper 每 10 秒重驗）。
+
+## 延遲與串流狀況（`desktop/stats.rs`、前端 `lib/desktopStats.ts`、`components/desktop/DesktopStats.tsx`）
+
+中繼每秒給瀏覽器兩個自家指令（guacamole-common-js 不認得的 opcode 會被忽略，前端在交給 Client 前攔下）：
+
+| 指令 | 方向 | 內容 |
+|---|---|---|
+| `telepy-ping <n>` | 中繼 → 瀏覽器 | 瀏覽器立刻回 `telepy-pong <n>`；中繼結算網路往返，**不轉給 guacd** |
+| `telepy-stats <json>` | 中繼 → 瀏覽器 | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind}` |
+
+- **畫面往返 `frame_ms`**：guacd 每一幀結尾送 `sync <ts>`，瀏覽器把那一幀畫完才回 `sync <ts>`；中繼從送出到收到回音的時間
+  = WebSocket 來回 + 瀏覽器解碼繪製，就是使用者感覺到的「卡」。3 秒沒有新樣本就回 null（桌面靜止）。
+- **網路往返 `net_ms`**：ping / pong，不含繪製，靜止時也量得到。
+- **隧道 `tunnel_ms`**：monitor 每 15 秒經轉發通道量到的裝置 sshd 往返（`StatusState::latency`）。
+- `frames` = 這一秒的幀數；`merged` = 一次 `sync` 併了幾個邏輯幀（guacd 1.6 的第二個參數；> 1 = 瀏覽器跟不上，guacd 在併幀）；
+  `behind` = 送出但還沒回音的幀；`down` / `up` = 這一秒的 bytes。
+- 工具列的按鈕：訊號格 + 畫面往返 + 狀態字（串流中 / 延遲中 / 沒有資料 / 靜止；`streamHealth`），點開是每一段的數字、
+  解析度與縮放，以及「延遲主要在哪一段」（`laggingHop`：網路、隧道，或畫面往返遠大於網路往返 = 瀏覽器自己畫得慢）。
+  info 對話框的路徑圖在兩段線上標往返時間，最慢的那段標黃。
+- `desktop_close` 事件多了「12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)」。
+
+## 畫質預設（`Quality`，start 的 `quality`）
+
+| 值 | RDP | VNC | 前端 |
+|---|---|---|---|
+| `auto`（預設） | 和以前一樣（平滑字型） | 不加參數 | — |
+| `speed` | `color-depth 16`、不平滑字型 | `color-depth 16`、`compress-level 6`、`quality-level 5` | — |
+| `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | 向 guacd 要 devicePixelRatio 倍（≤ 2）的解析度、`dpi` 同倍，縮回 CSS 大小 |
+
+記在 localStorage `telepy.desktopQuality`；start 回應帶 `quality`。
+
+## 多螢幕：只看一個螢幕（`desktop/screens.rs`、`GET …/desktop/screens`、前端 `lib/desktopScreens.ts`）
+
+VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x11vnc、TightVNC 都是），guacd 沒有選螢幕的參數，所以
+「指定畫面」是**瀏覽器裁切**：viewer 的 `viewport` 把 Guacamole.Display 的元素挪到裁切框裡（座標仍是整張畫面的，滑鼠
+位置照舊）。螢幕在那張畫面裡的位置：
+
+1. `GET /api/reverse/server/{id}/desktop/screens?username=`（和 start 同一道門：VIEW + 允許的裝置帳號 + step-up）經連線池
+   問裝置：`uname -s` → Darwin 跑 `system_profiler SPDisplaysDataType -json`（只有大小、沒有位置）、其他 POSIX 跑
+   `xrandr --listmonitors`（試 `$DISPLAY`、`:0`、`:1`）、沒有 `uname` 跑 PowerShell `[System.Windows.Forms.Screen]::AllScreens`。
+   回 `{os, source, screens: [{name, x, y, width, height, primary}], username}`；問不到不是錯誤（`screens: []`）。
+   只有「桌面就是裝置自己」時有意義（區網主機沒有 SSH 可問）。解析器是純函式（單元測試）。
+2. 前端 `screenChoices`：有位置的螢幕平移到 (0,0)，整體和畫面大小不符但比例一樣時等比縮放（Windows 的 DPI 縮放）；
+   只有大小的（macOS）用整張畫面推排列 —— 寬相加 = 畫面寬就是側排、高相加 = 畫面高就是疊排，高度不同時取樣畫面裡的
+   黑色區域判斷貼上緣還是下緣（`isBlack` 讀 canvas）；都推不出來就依長寬比給「左半 / 右半 / 三等分 / 上半 / 下半」預設。
+3. 工具列「螢幕」選單（只有 VNC）：整個桌面 + 每個螢幕（名稱、大小、主螢幕）+ 重新偵測；選擇記在 localStorage
+   `telepy.desktopScreen.<tunnel>.<lanHost|device>`。連上就自動偵測一次。
+
+RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只有一個虛擬螢幕。
+
+## 輸入法（IME）與跨系統鍵盤
+
+- 畫面把鍵盤焦點放在 `Guacamole.InputSink` 的隱藏 textarea，而不是 div：輸入法只會在可編輯元素上組字，所以 Windows 瀏覽器
+  連 macOS / Linux VNC 也能打中文、日文（組好的字以 Unicode keysym `0x01000000 + codepoint` 送出；RDP 轉成 unicode 鍵盤
+  事件，VNC 直接送 keysym，macOS 螢幕共享、x11vnc、TigerVNC、TightVNC 都收）。
+- 「鍵盤 → 送出文字」：在對話框裡用自己的輸入法打字，每個字當一次按鍵送出（每字間隔 8 ms；換行 = Enter）。遠端桌面
+  仍不理組合文字時的備援；最後手段還有「貼上」（送到遠端剪貼簿）。
+- 「Ctrl 當作 ⌘」：Control_L/R → Meta_L/R（Command）。裝置偵測為 Darwin 且瀏覽器不是 Mac 時預設開（`telepy.desktopCtrlAsCmd`
+  = auto / on / off）；按下時記住實際送出的 keysym，放開用同一個，中途切換不會卡住修飾鍵。
 
 ## 關閉碼
 
