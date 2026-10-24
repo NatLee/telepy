@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as UpMsg;
 use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
-use super::{auth, close, send, send_json, Heartbeat};
+use super::{auth, close, close_with, send, send_json, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -112,7 +112,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         return;
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
-    let presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
+    let mut presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
     let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
@@ -130,6 +130,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
 
     let mut begun = false;
     let mut close_code: Option<u16> = None;
+    let mut ended_by: Option<String> = None;
     loop {
         tokio::select! {
             incoming = heartbeat.recv(&mut socket) => match incoming {
@@ -147,6 +148,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
+            // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
+            by = presence.ended() => {
+                ended_by = Some(by);
+                break;
+            }
             up = upstream.next(), if begun => match up {
                 Some(Ok(UpMsg::Binary(b))) => {
                     if !send(&mut socket, Message::Binary(b)).await { break; }
@@ -166,7 +172,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     // 人已經走了：先移出「使用中」再收尾（收 kasm session 要一點時間）。/ Leave presence before the teardown.
     drop(presence);
     audit.close(&state).await;
-    if let Some(code) = close_code {
+    if let Some(by) = &ended_by {
+        close_with(&mut socket, CLOSE_ENDED, by).await;
+    } else if let Some(code) = close_code {
         close(&mut socket, code).await;
     }
     let _ = upstream.close(None).await;

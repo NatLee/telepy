@@ -17,7 +17,7 @@ use axum::extract::ws::{Message, WebSocket};
 use bytes::Bytes;
 use serde_json::Value;
 
-use super::{auth, close, send, send_text, Heartbeat};
+use super::{auth, close, close_with, send, send_text, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -206,7 +206,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     let started = Instant::now();
     // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
     let tunnel_id: i64 = server_id.parse().unwrap_or(0);
-    let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
+    let mut presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
     let audit = match lan_audit {
         Some(what) => ConsoleSession::open(&state, ConsoleKind::LanTerminal, tunnel_id, what).await,
         None => ConsoleSession::open_for(&state, ConsoleKind::Terminal, tunnel_id, &user.username, Some(&username)).await,
@@ -262,6 +262,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
+            // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
+            by = presence.ended() => {
+                close_with(&mut socket, CLOSE_ENDED, &by).await;
+                close_code = Some(CLOSE_ENDED);
+                break;
+            }
             read = read_pty(&mut pty, &mut buf) => match read {
                 Ok(0) => {
                     // shell 已結束 → 正常關閉。/ EOF: the shell exited; close normally.

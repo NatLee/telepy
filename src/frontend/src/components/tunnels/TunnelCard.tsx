@@ -59,7 +59,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <HostKeyAlert changed={tunnel.host_key_changed} onOpen={() => actions.onDetails(tunnel.id)} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} />
-                        <TunnelPresenceButton presence={tunnel.presence} />
+                        <TunnelPresenceButton presence={tunnel.presence} tunnelId={tunnel.id} />
                         <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} />
                     </div>
                 </div>
