@@ -83,7 +83,7 @@ impl Utf8Decoder {
 }
 
 /// `_resolve_terminal_access`：一次完成所有前置檢查，回 reverse_port 或關閉碼。
-pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, username: &str) -> Result<i64, u16> {
+pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, username: &str, step_up: Option<&str>) -> Result<i64, u16> {
     let Ok(id) = server_id.parse::<i64>() else { return Err(4004) };
     let tunnel = match db::tunnels::by_id(&state.db, id).await {
         Ok(Some(t)) => t,
@@ -91,6 +91,10 @@ pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, use
     };
     if !permissions::check_access(&state.db, user_id, &tunnel, Permission::View).await.unwrap_or(false) {
         return Err(4004);
+    }
+    // 敏感隧道：auth 訊息要帶有效的 step-up token。/ Sensitive tunnel: the auth message needs a valid step-up token.
+    if !crate::step_up::allows(tunnel.require_step_up, &state.step_up, user_id, step_up) {
+        return Err(crate::step_up::CLOSE_CODE);
     }
     if tunnel.reverse_port <= 0 {
         return Err(4002);
@@ -120,7 +124,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     };
     tracing::info!(user = %user.username, "Terminal user authenticated");
-    let reverse_port = match resolve_access(&state, user.id, &server_id, &username).await {
+    let reverse_port = match resolve_access(&state, user.id, &server_id, &username, msg.get("step_up").and_then(|v| v.as_str())).await {
         Ok(p) => p,
         Err(code) => {
             tracing::error!(user = %user.username, server_id, code, "Terminal access denied");

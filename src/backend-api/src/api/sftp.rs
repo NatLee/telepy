@@ -3,7 +3,7 @@
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
@@ -29,12 +29,13 @@ pub fn router() -> OpenApiRouter<AppState> {
         .layer(DefaultBodyLimit::disable())
 }
 
-/// 權限：VIEW（否則 404）+ username 在允許清單（否則 400），與 Django 版訊息相同。
-async fn access(state: &AppState, user_id: i64, id: i64, username: &str) -> ApiResult<Tunnel> {
+/// 權限：VIEW（否則 404）+ 敏感隧道的 step-up（否則 403）+ username 在允許清單（否則 400），與 Django 版訊息相同。
+async fn access(state: &AppState, user_id: i64, id: i64, username: &str, headers: &HeaderMap) -> ApiResult<Tunnel> {
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Reverse server keys not found"))?;
     if !permissions::check_access(&state.db, user_id, &t, Permission::View).await? {
         return Err(ApiError::not_found("Reverse server keys not found"));
     }
+    super::step_up::check(state, user_id, &t, headers)?;
     let allowed = permissions::allowed_usernames(&state.db, user_id, &t).await?;
     if !allowed.iter().any(|u| u.username == username) {
         return Err(ApiError::bad_request("Username not found"));
@@ -48,8 +49,8 @@ async fn connect(state: &AppState, username: &str, t: &Tunnel) -> ApiResult<Pool
 }
 
 #[utoipa::path(get, path = "/api/sftp/shell/{id}/{username}", tag = "SFTP", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username" = String, Path, description = "Target username")), responses((status = 200, body = super::schemas::SftpShell), (status = 400, description = "Username not allowed or device unreachable", body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
-async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id, username)): Path<(i64, String)>) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username).await?;
+async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, headers: HeaderMap, Path((id, username)): Path<(i64, String)>) -> ApiResult<Json<Value>> {
+    let t = access(&state, user.id, id, &username, &headers).await?;
     let sftp = connect(&state, &username, &t).await?;
     Ok(Json(json!({ "shell": sftp::detect_shell(&sftp).await })))
 }
@@ -58,10 +59,11 @@ async fn shell(State(state): State<AppState>, AuthUser(user): AuthUser, Path((id
 async fn list(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
     Path((id, username)): Path<(i64, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username).await?;
+    let t = access(&state, user.id, id, &username, &headers).await?;
     let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
     let shell = if sftp::is_windows_home(&home) { "powershell" } else { "unix" };
@@ -81,10 +83,11 @@ async fn list(
 async fn download(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
     Path((id, username)): Path<(i64, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let t = access(&state, user.id, id, &username).await?;
+    let t = access(&state, user.id, id, &username, &headers).await?;
     let raw = q.get("path").cloned().filter(|p| !p.is_empty()).ok_or_else(|| ApiError::bad_request("path is required"))?;
     let sftp = connect(&state, &username, &t).await?;
     let home = sftp::home(&sftp).await;
@@ -139,11 +142,12 @@ async fn download(
 async fn upload(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    headers: HeaderMap,
     Path((id, username)): Path<(i64, String)>,
     Query(q): Query<HashMap<String, String>>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<Value>> {
-    let t = access(&state, user.id, id, &username).await?;
+    let t = access(&state, user.id, id, &username, &headers).await?;
     let Some(destination) = q.get("destination_path").cloned().filter(|p| !p.is_empty()) else {
         return Err(ApiError::bad_request("File and destination path required"));
     };

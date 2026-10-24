@@ -486,6 +486,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("tunnels_tunnelsharingallowedusername", "expires_at", "datetime NULL"),
     ("tunnels_tunnelsharing", "base_permission", "varchar(10) NULL"),
     ("tunnels_tunnelsharing", "permission_until", "datetime NULL"),
+    // 敏感隧道：開 session 前要再確認一次是你（step-up）。/ Sensitive tunnel: step-up before opening a session.
+    ("authorized_keys_reverseserverauthorizedkeys", "require_step_up", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),

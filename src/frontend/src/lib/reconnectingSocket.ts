@@ -17,6 +17,7 @@
  * backoff + jitter reconnect, stable-open reset, no-retry on auth/permission codes, ping/pong heartbeat.
  */
 import { refreshAccessToken } from "@/lib/api";
+import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CODES } from "@/lib/wsCommon";
 
 const HEARTBEAT_INTERVAL_MS = 25000;
@@ -114,7 +115,8 @@ export class ReconnectingSocket {
                 this.connecting = false;
                 // 第一則訊息即認證：{type:'auth', token, ...authFields}。
                 // First frame authenticates: {type:'auth', token, ...authFields}.
-                ws.send(JSON.stringify({ type: "auth", token: getAccessToken(), ...extra }));
+                // step_up：敏感隧道要的（其他端點會忽略）。/ step_up: for sensitive tunnels (ignored elsewhere).
+                ws.send(JSON.stringify({ type: "auth", token: getAccessToken(), step_up: stepUpToken() ?? undefined, ...extra }));
                 this.opts.onStatus?.(true);
                 this.opts.onPhase?.({ state: "open" });
                 if (this.stableTimer) clearTimeout(this.stableTimer);
@@ -147,6 +149,16 @@ export class ReconnectingSocket {
                 // 4001：token 無效/過期。refresh 一次再重連；refresh 失敗才放棄。
                 // 4001: invalid/expired token — refresh once and retry; give up only if refresh fails.
                 if (event.code === 4001) { void this.handleAuthClose(); return; }
+                // 4008：敏感隧道要先確認是你；確認了就重連，不確認就停。/ 4008: step-up needed; reconnect once confirmed.
+                if (event.code === STEP_UP_CLOSE_CODE) {
+                    this.opts.onPhase?.({ state: "connecting" });
+                    void requestStepUp().then((ok) => {
+                        if (this.closedByUser || this.ws) return;
+                        if (ok) void this.connect();
+                        else this.opts.onPhase?.({ state: "stopped" });
+                    });
+                    return;
+                }
                 if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) { this.opts.onPhase?.({ state: "stopped" }); return; }
                 this.scheduleReconnect();
             };

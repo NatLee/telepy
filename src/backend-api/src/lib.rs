@@ -29,6 +29,7 @@ pub mod session_audit;
 pub mod sftp;
 pub mod ssh;
 pub mod state;
+pub mod step_up;
 pub mod tokens;
 pub mod tunnel_service;
 pub mod util;

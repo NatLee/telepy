@@ -55,6 +55,8 @@ pub struct Inner {
     pub device_keys: DeviceKeys,
     /// 一行指令加入裝置的票（記憶體）。/ One-command device join tickets (in memory).
     pub join: JoinTickets,
+    /// 敏感隧道的 step-up（跟 gateway 共用）。/ Step-up confirmations (shared with the gateway).
+    pub step_up: Arc<crate::step_up::StepUps>,
 }
 
 #[derive(Clone)]
@@ -87,6 +89,7 @@ impl AppState {
         let desktop = Arc::new(Desktop::new(&config));
         // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
         let hub = gateway.hub();
+        let step_up = gateway.step_ups();
         db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         Self(Arc::new(Inner {
             remote_browser,
@@ -107,6 +110,7 @@ impl AppState {
             lan_scans: LanScans::default(),
             device_keys: DeviceKeys::default(),
             join: JoinTickets::default(),
+            step_up,
             config,
             db,
         }))

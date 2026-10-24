@@ -3,6 +3,7 @@
  */
 
 import { formatApiError } from "./formatApiError";
+import { requestStepUp, STEP_UP_HEADER, stepUpToken } from "./stepUp";
 import { translate } from "./translate";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
@@ -93,7 +94,9 @@ export async function refreshAccessToken(): Promise<boolean> {
 
 export async function apiFetch(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    /** 內部用：step-up 之後重送一次。/ Internal: the one retry after a step-up. */
+    stepUpRetried = false,
 ): Promise<Response> {
     // Prefix appropriate url
     const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint}`;
@@ -112,8 +115,11 @@ export async function apiFetch(
     if (accessToken) {
         headers.set("Authorization", `Bearer ${accessToken}`);
     }
+    // 敏感隧道的 step-up token（有才帶）。/ The step-up token for sensitive tunnels, when there is one.
+    const stepUp = stepUpToken();
+    if (stepUp) headers.set(STEP_UP_HEADER, stepUp);
 
-    let response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...options, headers });
 
     // Handle 401 Unauthorized globally
     if (response.status === 401 && typeof window !== "undefined") {
@@ -125,14 +131,13 @@ export async function apiFetch(
 
     // 管理員在使用中途要求兩步驟：重抓 profile，讓 AppLayout 換成設定畫面（lib/auth.tsx 監聽）。
     // The admin started requiring two-step sign-in mid-session: refetch the profile so the gate appears.
+    // 敏感隧道要先確認是你：問一次（StepUpProvider），成功就重送。/ A sensitive tunnel wants a step-up: ask once, then retry.
     if (response.status === 403 && typeof window !== "undefined") {
-        response
-            .clone()
-            .json()
-            .then((body: { code?: string } | null) => {
-                if (body?.code === "mfa_enrollment_required") window.dispatchEvent(new CustomEvent("api:mfa-enrollment-required"));
-            })
-            .catch(() => {});
+        const body = (await response.clone().json().catch(() => null)) as { code?: string } | null;
+        if (body?.code === "mfa_enrollment_required") window.dispatchEvent(new CustomEvent("api:mfa-enrollment-required"));
+        if (body?.code === "step_up_required" && !stepUpRetried && (await requestStepUp())) {
+            return apiFetch(endpoint, options, true);
+        }
     }
 
     return response;

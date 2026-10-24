@@ -46,6 +46,8 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     files_close: { key: "logs.event.files_close", variant: "secondary" },
     browser_open: { key: "logs.event.browser_open", variant: "default" },
     browser_close: { key: "logs.event.browser_close", variant: "secondary" },
+    step_up_required: { key: "logs.event.step_up_required", variant: "warning" },
+    step_up_setting: { key: "logs.event.step_up_setting", variant: "outline" },
     desktop_open: { key: "logs.event.desktop_open", variant: "default" },
     desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
     access_request: { key: "logs.event.access_request", variant: "outline" },

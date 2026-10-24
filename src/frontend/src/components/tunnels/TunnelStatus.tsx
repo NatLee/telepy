@@ -5,7 +5,7 @@
  * offline solid grey, never connected a dashed ring; owner / shared-with-you / share-count are small chips.
  */
 import React from "react";
-import { Clock, Crown, Hourglass, Share2, Users } from "lucide-react";
+import { Clock, Crown, Hourglass, Share2, ShieldCheck, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
@@ -110,6 +110,12 @@ export function TunnelAccessBadges({ tunnel, sharedCount, onRequests }: { tunnel
                 <button type="button" onClick={onRequests} className={cn(chip, "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15")} title={t("share.request.chipHint")}>
                     <Hourglass /> {t("share.request.chip", { count: tunnel.access_requests })}
                 </button>
+            )}
+            {/* 開 session 前要確認是你。/ Sessions ask for a step-up first. */}
+            {tunnel.require_step_up && (
+                <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("stepUp.chipHint")}>
+                    <ShieldCheck /> {t("stepUp.chip")}
+                </span>
             )}
             {tunnel.is_owner && sharedCount > 0 && (
                 <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("tunnels.sharedWithCount", { count: sharedCount })}>

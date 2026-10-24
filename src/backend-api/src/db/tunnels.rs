@@ -16,6 +16,8 @@ pub struct Tunnel {
     pub default_username_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
+    /// 開 session 前要 step-up（見 `crate::step_up`）。/ Sessions need a step-up first (see `crate::step_up`).
+    pub require_step_up: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -40,7 +42,7 @@ pub struct UsernameWithCreator {
     pub created_by: String,
 }
 
-const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at";
+const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
 const U_COLS: &str = "id, user_id, reverse_server_id, username, created_at, updated_at";
 const U: &str = "authorized_keys_reverseserverusernames";
@@ -123,6 +125,12 @@ pub struct NewTunnel<'a> {
     pub reverse_port: i64,
     pub description: Option<&'a str>,
     pub default_username_id: Option<i64>,
+}
+
+/// 開 / 關 step-up。/ Turn step-up on or off.
+pub async fn set_require_step_up(db: &Db, id: i64, required: bool) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET require_step_up = ?, updated_at = ? WHERE id = ?")).bind(required).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
 }
 
 pub async fn create(db: &Db, new: NewTunnel<'_>) -> sqlx::Result<Tunnel> {

@@ -27,6 +27,8 @@ export interface Tunnel {
     pinned?: boolean;
     /** 隧道標籤（大家共用，EDIT 以上可改）。/ Shared labels (EDIT and up may change them). */
     labels?: string[];
+    /** 開 session 前要確認是你（step-up）。/ Sessions ask for a step-up first. */
+    require_step_up?: boolean;
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */

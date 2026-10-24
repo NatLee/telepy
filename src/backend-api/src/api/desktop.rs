@@ -50,7 +50,7 @@ fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/desktop/start", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DesktopStartRequest, responses((status = 200, description = "Session created; open the WebSocket at ws_path with ?ticket= within expires_in seconds", body = super::schemas::DesktopSession), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | desktop_busy", body = super::schemas::DesktopError)))]
-async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
     if !settings.desktop_enabled {
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_disabled", "Remote desktop is disabled on this server."));
@@ -59,6 +59,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
     if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
         return Err(ApiError::forbidden("Permission denied"));
     }
+    super::step_up::check(&state, user.id, &tunnel, &headers)?;
     let protocol = match json_str(&body, "protocol") {
         Some(p) => Protocol::parse(&p).ok_or_else(|| ApiError::field("protocol", "Must be rdp or vnc."))?,
         None => return Err(ApiError::field("protocol", "This field is required.")),
