@@ -24,6 +24,7 @@ const NOTES: Record<ConfigPart, Record<string, TranslationKey>> = {
         stricthostkeychecking: "config.line.strictHostKeyChecking",
         userknownhostsfile: "config.line.userKnownHostsFile",
         hostkeyalias: "config.line.hostKeyAlias",
+        proxycommand: "config.line.serverProxyCommand",
     },
     device: {
         host: "config.line.deviceHost",

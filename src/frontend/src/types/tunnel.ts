@@ -71,6 +71,8 @@ export interface TunnelEndpoint {
     ip: string;
     /** true = 現在連著；false = 最後一次的紀錄。/ true while connected, false = last recorded connection. */
     live: boolean;
+    /** 連著時：tcp（24242）或 websocket（/ws/gateway/）。/ While connected: how the device reached the gateway. */
+    transport?: "tcp" | "websocket" | null;
     connected_at: string;
     last_seen_at: string | null;
     /** 位址範圍與（有 GeoIP 時的）國家 / 業者。/ Scope plus country / network owner. */

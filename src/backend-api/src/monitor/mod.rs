@@ -73,6 +73,8 @@ pub fn health(listening: bool, failures: u32, ever_connected: bool) -> Health {
 pub struct Endpoint {
     pub ip: String,
     pub since: String,
+    /// `tcp`（24242）或 `websocket`（/ws/gateway/）。/ How the device reached the gateway.
+    pub transport: &'static str,
 }
 
 pub struct StatusState {

@@ -560,6 +560,14 @@ pub struct ConfigResponse {
     pub known_hosts: String,
     #[schema(example = "~/.ssh/telepy_known_hosts")]
     pub known_hosts_path: String,
+    /// ssh | websocket (as requested with ?transport=)
+    pub transport: String,
+    /// The gateway's WebSocket address (`wss://host/ws/gateway/`)
+    pub ws_url: String,
+    /// Where to download the python3 carrier from
+    pub ws_client_url: String,
+    #[schema(example = "~/.ssh/telepy-ws.py")]
+    pub ws_client_path: String,
 }
 
 #[derive(ToSchema)]
@@ -597,6 +605,8 @@ pub struct OneTimeTokenRequest {
     pub script_type: String,
     pub key_path: Option<String>,
     pub username_id: Option<i64>,
+    /// `ssh` (default, port 24242) or `websocket` (the tunnel rides inside a WebSocket on the web port; ssh, autossh and systemd scripts only)
+    pub transport: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1818,6 +1828,8 @@ pub struct KeyDevice {
 pub struct JoinRequest {
     /// Tunnel name to use (default: the device's hostname)
     pub name: Option<String>,
+    /// `ssh` (default) or `websocket`: the command gets `--via-web` and the device carries the tunnel inside a WebSocket on the web port
+    pub transport: Option<String>,
     /// "mine" seeds the new device's key list with your keys; "empty" (default) leaves it empty
     #[schema(example = "mine")]
     pub key_list: Option<String>,
@@ -1829,6 +1841,8 @@ pub struct JoinTicket {
     pub id: String,
     pub name: Option<String>,
     pub key_list_mine: bool,
+    /// ssh | websocket
+    pub transport: String,
     /// waiting | registered | connected | verified | failed
     pub phase: String,
     pub detail: Option<String>,

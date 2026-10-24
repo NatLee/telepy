@@ -111,6 +111,11 @@ export function useCreateTunnelWizard() {
 
     // ── Step 4：連線 / Connect ──
     const [method, setMethod] = useState<ConnectMethod>("autossh-service");
+    // 裝置只能出網頁 port 時，腳本把 ssh 包進 WebSocket（只有 ssh / autossh / systemd 三種腳本支援）。
+    // Devices that can only reach the web port: the script carries ssh in a WebSocket (ssh / autossh / systemd only).
+    const [transport, setTransport] = useState<"ssh" | "websocket">("ssh");
+    const transportSupported = method === "ssh" || method === "autossh" || method === "autossh-service";
+    const effectiveTransport = transportSupported ? transport : "ssh";
     const [serviceAccountId, setServiceAccountId] = useState<number | null>(null);
     const [oneTime, setOneTime] = useState<Record<string, OneTime>>({});
     const [scripts, setScripts] = useState<Record<string, string>>({});
@@ -363,7 +368,7 @@ export function useCreateTunnelWizard() {
     }, [accounts, serviceAccountId]);
 
     const needsAccount = method === "autossh-service";
-    const scriptKey = `${method}|${sshPort}|${needsAccount ? serviceAccountId ?? "" : ""}`;
+    const scriptKey = `${method}|${sshPort}|${needsAccount ? serviceAccountId ?? "" : ""}|${effectiveTransport}`;
     const scriptReady = !!created && isPort(sshPort) && (!needsAccount || serviceAccountId !== null);
 
     const generateOneTime = useCallback(async () => {
@@ -371,7 +376,7 @@ export function useCreateTunnelWizard() {
         const key = scriptKey;
         setOneTime((m) => ({ ...m, [key]: { command: m[key]?.command ?? "", loading: true } }));
         try {
-            const body: Record<string, unknown> = { server_id: created.id, ssh_port: Number(sshPort), script_type: method };
+            const body: Record<string, unknown> = { server_id: created.id, ssh_port: Number(sshPort), script_type: method, transport: effectiveTransport };
             if (needsAccount && serviceAccountId !== null) body.username_id = serviceAccountId;
             const res = await apiFetch("/tunnels/server/script/one-time/token", { method: "POST", body: JSON.stringify(body) });
             const data = await readJson<{ url?: string }>(res);
@@ -381,12 +386,15 @@ export function useCreateTunnelWizard() {
         } catch (err: any) {
             setOneTime((m) => ({ ...m, [key]: { command: "", loading: false, error: err?.message || t("scripts.generateUrlFailed") } }));
         }
-    }, [created, scriptReady, scriptKey, sshPort, method, needsAccount, serviceAccountId, t]);
+    }, [created, scriptReady, scriptKey, sshPort, method, needsAccount, serviceAccountId, effectiveTransport, t]);
 
     const loadScript = useCallback(async () => {
         if (!created || !scriptReady || scripts[scriptKey] !== undefined) return;
         const key = scriptKey;
-        const qs = needsAccount && serviceAccountId !== null ? `?username_id=${serviceAccountId}` : "";
+        const params = new URLSearchParams();
+        if (needsAccount && serviceAccountId !== null) params.set("username_id", String(serviceAccountId));
+        if (effectiveTransport === "websocket") params.set("transport", "websocket");
+        const qs = params.size ? `?${params.toString()}` : "";
         try {
             const res = await apiFetch(`/tunnels/server/script/${method}/${created.id}/${sshPort}${qs}`);
             const data = await readJson<{ script?: string }>(res);
@@ -394,7 +402,7 @@ export function useCreateTunnelWizard() {
         } catch {
             setScripts((m) => ({ ...m, [key]: t("scripts.loadFailed") }));
         }
-    }, [created, scriptReady, scripts, scriptKey, method, sshPort, needsAccount, serviceAccountId, t]);
+    }, [created, scriptReady, scripts, scriptKey, method, sshPort, needsAccount, serviceAccountId, effectiveTransport, t]);
 
     // 進到 Step 4 或換方式時自動產生一次性指令（每個組合一次；用過可按「新連結」再產生）。
     // 稍等一下再發：打埠號時不要每個按鍵都換一張 token。
@@ -493,6 +501,7 @@ export function useCreateTunnelWizard() {
         },
         connect: {
             method, setMethod,
+            transport, setTransport, transportSupported,
             serviceAccountId, setServiceAccountId, needsAccount,
             sshPort, onPortChange, scriptReady,
             oneTime: oneTime[scriptKey] ?? null, generateOneTime,

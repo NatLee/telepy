@@ -40,6 +40,8 @@ Join this machine to Telepy as a device.
   --ssh-port PORT   port of this machine's SSH server (default: detected, else 22)
   --name NAME       tunnel name (default: the name set in Telepy, else this machine's hostname)
   --no-service      run the tunnel in a background loop instead of installing a service
+  --via-web         carry the tunnel inside a WebSocket on Telepy's web port (for networks that only let
+                    443 out); needs python3 on this machine
 USAGE
 }
 
@@ -200,6 +202,7 @@ main() {
     SSH_PORT=""
     NAME=""
     NO_SERVICE=0
+    VIA_WEB=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --token|--user|--ssh-port|--name)
@@ -216,6 +219,7 @@ main() {
             --ssh-port=*) SSH_PORT=${1#*=}; shift ;;
             --name=*) NAME=${1#*=}; shift ;;
             --no-service) NO_SERVICE=1; shift ;;
+            --via-web) VIA_WEB=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) die "unknown option: $1 (see --help)" ;;
         esac
@@ -237,6 +241,11 @@ main() {
     command -v ssh >/dev/null 2>&1 || die "the OpenSSH client (ssh) is required"
     command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen is required"
     SSH_BIN=$(command -v ssh)
+    PYTHON=""
+    if [ "$VIA_WEB" -eq 1 ]; then
+        PYTHON=$(command -v python3 || true)
+        [ -n "$PYTHON" ] || die "--via-web needs python3 on this machine (it carries the SSH connection inside a WebSocket)"
+    fi
 
     OS=$(uname -s)
     CURRENT_USER=$(id -un)
@@ -324,6 +333,7 @@ main() {
     GATEWAY_USER=$(value GATEWAY_USER)
     SERVICE_KEY=$(value SERVICE_KEY)
     WEB_URL=$(value WEB_URL)
+    WS_URL=$(value WS_URL)
     HOST_KEYS=$(printf '%s\n' "$HTTP_BODY" | sed -n 's/^HOST_KEY=//p')
     case "$TUNNEL_ID$REVERSE_PORT$GATEWAY_PORT" in ""|*[!0-9]*) die "unexpected answer from Telepy" ;; esac
     case "$GATEWAY_HOST$GATEWAY_USER$TUNNEL_NAME" in ""|*[!A-Za-z0-9._-]*) die "unexpected answer from Telepy" ;; esac
@@ -367,12 +377,32 @@ main() {
         chown "$TARGET_USER:$TARGET_GROUP" "$SSH_DIR" "$KEY" "$KEY.pub" "$AUTH_KEYS" "$KNOWN_HOSTS"
     fi
 
-    SSH_ARGS="-NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=$STRICT -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$ALIAS -i $KEY -p $GATEWAY_PORT -R $REVERSE_PORT:localhost:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST"
+    # --- SSH over WebSocket -------------------------------------------------------------------------
+    # 只放行網頁 port 的網路：ssh 透過 telepy-ws.py 把連線包進 WebSocket；裡面的 SSH（金鑰、host key）完全一樣。
+    # The web port only: ssh goes through telepy-ws.py, which carries it in a WebSocket; the SSH inside is unchanged.
+    PROXY_OPT=""
+    if [ "$VIA_WEB" -eq 1 ]; then
+        step "Setting up the WebSocket carrier (web port only)"
+        case "$WS_URL" in ws://*|wss://*) ;; *) die "Telepy sent no WebSocket address" ;; esac
+        WS_PY="$SSH_DIR/telepy-ws-$TUNNEL_ID.py"
+        WS_SH="$SSH_DIR/telepy-ws-$TUNNEL_ID.sh"
+        http GET "$TELEPY_URL/api/join/telepy-ws.py"
+        case "$HTTP_STATUS" in 2*) ;; *) die "cannot download the WebSocket carrier (HTTP $HTTP_STATUS)" ;; esac
+        printf '%s\n' "$HTTP_BODY" > "$WS_PY"
+        printf '#!/bin/sh\n# Telepy tunnel %s: carry ssh inside a WebSocket to the web port.\nexec %s %s %s\n' "$TUNNEL_NAME" "$PYTHON" "$WS_PY" "$WS_URL" > "$WS_SH"
+        chmod 700 "$WS_PY" "$WS_SH"
+        [ "$IS_ROOT" -eq 1 ] && chown "$TARGET_USER:$TARGET_GROUP" "$WS_PY" "$WS_SH"
+        PROXY_OPT="-o ProxyCommand=$WS_SH "
+        say "the tunnel will connect through $WS_URL"
+    fi
+
+    SSH_ARGS="-NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=$STRICT -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$ALIAS ${PROXY_OPT}-i $KEY -p $GATEWAY_PORT -R $REVERSE_PORT:localhost:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST"
 
     # --- run the tunnel -----------------------------------------------------------------------------
     UNIT="telepy-tunnel-$TUNNEL_ID"
     UNINSTALL="$SSH_DIR/telepy-uninstall-$TUNNEL_ID.sh"
     FILES="$KEY $KEY.pub $KNOWN_HOSTS $UNINSTALL"
+    [ "$VIA_WEB" -eq 1 ] && FILES="$FILES $WS_PY $WS_SH"
     LOGS=""
 
     step "Starting the tunnel"

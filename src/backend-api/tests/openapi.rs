@@ -77,7 +77,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
     let public = ["/api/auth/setup-status", "/api/auth/token", "/api/auth/token/refresh", "/api/auth/token/verify", "/api/auth/register", "/api/auth/google/token", "/tunnels/server/script/one-time/{token}",
         "/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/api/oauth/register", "/api/oauth/token", "/api/oauth/revoke",
         "/api/auth/mfa/verify", "/api/auth/mfa/passkey/options", "/api/auth/passkey/options", "/api/auth/passkey/login",
-        "/api/join/install.sh", "/api/join/{token}", "/api/join/{token}/status"];
+        "/api/join/install.sh", "/api/join/telepy-ws.py", "/api/join/{token}", "/api/join/{token}/status"];
     for (path, item) in paths {
         for (verb, op) in item.as_object().unwrap() {
             assert!(op["tags"].as_array().map(|t| !t.is_empty()).unwrap_or(false), "{verb} {path} has no tag");

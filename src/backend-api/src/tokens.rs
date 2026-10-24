@@ -17,6 +17,8 @@ pub struct ScriptTokenPayload {
     pub script_type: String,
     pub key_path: Option<String>,
     pub username_id: Option<i64>,
+    /// `websocket` = 腳本經 /ws/gateway/ 連（只開網頁 port 的網路）。/ `websocket` = the script dials /ws/gateway/.
+    pub transport: Option<String>,
 }
 
 /// 使用者在同意頁核可後、換成 token 之前的授權內容。/ What the user approved, until the code is redeemed.

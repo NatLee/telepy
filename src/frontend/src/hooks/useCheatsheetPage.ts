@@ -18,6 +18,11 @@ export interface TunnelConfigData {
     /** 筆電要存成 known_hosts_path 的行（Telepy 的主機金鑰）；gateway 沒有金鑰時是空字串。/ Lines to save as known_hosts_path. */
     known_hosts: string;
     known_hosts_path: string;
+    /** ssh（預設）或 websocket（伺服器區塊帶 ProxyCommand，筆電要先存小程式）。/ ssh or websocket (server stanza has a ProxyCommand). */
+    transport: "ssh" | "websocket";
+    ws_url: string;
+    ws_client_url: string;
+    ws_client_path: string;
 }
 
 const MODE_STORAGE_KEY = "telepy.cheatsheetMode";

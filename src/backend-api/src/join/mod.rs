@@ -48,6 +48,8 @@ pub struct Ticket {
     pub name: Option<String>,
     /// 建立時把我的金鑰放進裝置的金鑰清單。/ Seed the device key list with my keys.
     pub key_list_mine: bool,
+    /// 裝置怎麼連 gateway：`ssh`（24242）或 `websocket`（只開網頁 port 的網路）。/ How the device reaches the gateway.
+    pub transport: String,
     pub phase: Phase,
     /// 失敗原因或補充說明。/ Failure reason or a note.
     pub detail: Option<String>,
@@ -117,7 +119,7 @@ impl JoinTickets {
     }
 
     /// 發一張票；回傳 (token 原文, 票)。超過每人上限回 None。/ Mint a ticket; None when the user has too many open.
-    pub fn mint(&self, user_id: i64, name: Option<String>, key_list_mine: bool) -> Option<(String, Ticket)> {
+    pub fn mint(&self, user_id: i64, name: Option<String>, key_list_mine: bool, transport: &str) -> Option<(String, Ticket)> {
         let mut map = self.inner.lock().unwrap();
         Self::sweep(&mut map);
         if map.values().filter(|t| t.user_id == user_id && t.open()).count() >= MAX_OPEN_PER_USER {
@@ -131,6 +133,7 @@ impl JoinTickets {
             user_id,
             name,
             key_list_mine,
+            transport: transport.to_string(),
             phase: Phase::Waiting,
             detail: None,
             tunnel_id: None,
@@ -318,7 +321,7 @@ mod tests {
     #[test]
     fn tickets_are_single_use_and_scoped() {
         let s = JoinTickets::default();
-        let (token, t) = s.mint(1, None, false).unwrap();
+        let (token, t) = s.mint(1, None, false, "ssh").unwrap();
         assert!(token.starts_with(TOKEN_PREFIX));
         assert_eq!(s.by_id(1, &t.id).unwrap().phase, Phase::Waiting);
         assert!(s.by_id(2, &t.id).is_none(), "another user cannot see it");
@@ -336,10 +339,10 @@ mod tests {
         assert!(s.set_phase(&claimed.token_hash, Phase::Verified, None).is_none(), "no duplicate updates");
         assert!(!s.revoke(1, &t.id), "a used ticket is not revoked");
         for _ in 0..MAX_OPEN_PER_USER {
-            s.mint(3, None, false).unwrap();
+            s.mint(3, None, false, "ssh").unwrap();
         }
-        assert!(s.mint(3, None, false).is_none(), "per-user cap");
-        let (_, open) = s.mint(4, Some("x".into()), true).unwrap();
+        assert!(s.mint(3, None, false, "ssh").is_none(), "per-user cap");
+        let (_, open) = s.mint(4, Some("x".into()), true, "websocket").unwrap();
         assert!(s.revoke(4, &open.id));
         assert!(s.by_id(4, &open.id).is_none());
     }

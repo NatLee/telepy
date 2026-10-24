@@ -838,6 +838,25 @@ impl Lab {
         Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
     }
 
+    /// 建隧道，但裝置的 `ssh -NR` 連到 `gw_port`（例如 WebSocket 橋）而不是 gateway 的 listener。
+    /// Create a tunnel whose device dials `gw_port` (e.g. a WebSocket bridge) instead of the gateway listener.
+    pub async fn device_via_port(&self, owner: &LabUser, name: &str, target: &Machine, gw_port: u16, extra_opts: &[String]) -> Device {
+        let key = self.keygen(&format!("{name}-tunnel"));
+        let reverse_port = free_port();
+        let t = db::tunnels::create(
+            &self.app.state.db,
+            db::tunnels::NewTunnel { user_id: owner.id, host_friendly_name: name, key: &key.public, reverse_port: reverse_port as i64, description: None, default_username_id: None },
+        )
+        .await
+        .unwrap();
+        telepy_server::ssh::tunnel_keys::ensure(&self.app.state, t.id).await.unwrap();
+        let mut opts: Vec<String> = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"].map(String::from).to_vec();
+        opts.extend(extra_opts.iter().cloned());
+        let ssh = self.spawn_tunnel_to(&key, reverse_port, target.port, name, gw_port, &opts).await;
+        self.tunnels.lock().unwrap().insert(t.id, ssh);
+        Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
+    }
+
     /// 這條隧道自己的服務公鑰（`type base64 comment`）。/ The tunnel's own service public key.
     pub async fn tunnel_service_key(&self, device: &Device) -> String {
         telepy_server::ssh::tunnel_keys::ensure(&self.app.state, device.tunnel_id).await.unwrap()
@@ -907,13 +926,18 @@ impl Lab {
     }
 
     async fn spawn_tunnel_with(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str, host_key_opts: &[String]) -> Child {
+        self.spawn_tunnel_to(key, reverse_port, target_port, name, self.gw_port, host_key_opts).await
+    }
+
+    /// 同上，但連到指定的 port（例如一個把 TCP 轉進 /ws/gateway/ 的橋）。/ Same, dialling a given port (e.g. a WebSocket bridge).
+    pub async fn spawn_tunnel_to(&self, key: &LabKey, reverse_port: u16, target_port: u16, name: &str, gw_port: u16, host_key_opts: &[String]) -> Child {
         let mut ssh = Command::new("ssh")
             .args(["-F", "/dev/null", "-N"])
             .args(host_key_opts)
             .args(["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"])
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=5", "-o", "LogLevel=ERROR", "-i"])
             .arg(&key.path)
-            .args(["-p", &self.gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
+            .args(["-p", &gw_port.to_string(), "-R", &format!("*:{reverse_port}:127.0.0.1:{target_port}"), "telepy@127.0.0.1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())

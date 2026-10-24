@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod desktop;
 pub mod filemanager;
+pub mod gateway;
 pub mod notifications;
 pub mod remote_browser;
 pub mod terminal;
@@ -41,6 +42,12 @@ pub fn router() -> Router<AppState> {
         .route("/ws/tunnel_connection/{tunnel_id}/", get(tunnel_connection_upgrade))
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
         .route("/ws/desktop/{session_id}/", get(desktop_upgrade))
+        .route("/ws/gateway/", get(gateway_upgrade))
+}
+
+/// SSH over WebSocket：沒有 auth 訊息（SSH 自己認證），來源 IP 取自轉送標頭。/ SSH over WebSocket; SSH authenticates inside.
+async fn gateway_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| gateway::handle(state, socket, meta))
 }
 
 async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
