@@ -84,6 +84,7 @@ impl AppState {
         let desktop = Arc::new(Desktop::new(&config));
         // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
         let hub = gateway.hub();
+        db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         Self(Arc::new(Inner {
             remote_browser,
             desktop,

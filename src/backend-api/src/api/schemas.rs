@@ -689,6 +689,34 @@ pub struct GatewayEvent {
 }
 
 #[derive(ToSchema)]
+#[schema(description = "Hash-chain verification of one audit table")]
+pub struct AuditTableReport {
+    #[schema(example = "telepy_gateway_event")]
+    pub table: String,
+    pub ok: bool,
+    /// Hashed rows walked
+    pub checked: i64,
+    pub first_id: Option<i64>,
+    pub last_id: Option<i64>,
+    /// Rows written before the chain existed (NULL hash), not counted as breaks
+    pub unhashed_before: i64,
+    /// First row id where the chain or an outside checkpoint does not match
+    pub broken_at: Option<i64>,
+    /// hash_mismatch | link_mismatch | missing_hash | checkpoint_mismatch | checkpoint_missing
+    #[schema(example = "hash_mismatch")]
+    pub reason: Option<String>,
+    /// Lines of audit-anchors.log for rows that are still present (or should be)
+    pub checkpoints_checked: i64,
+    pub checkpoints_mismatched: i64,
+}
+
+#[derive(ToSchema)]
+pub struct AuditVerifyReport {
+    pub ok: bool,
+    pub tables: Vec<AuditTableReport>,
+}
+
+#[derive(ToSchema)]
 pub struct SftpShell {
     #[schema(example = "unix")]
     pub shell: String,

@@ -181,22 +181,33 @@ impl Gateway {
     /// 結構化事件：寫進 `telepy_gateway_event`（Logs 頁 / API 的來源），同時以 sshd 風格附加到
     /// ssh-gateway.log（運維用）。`kind` 是機器可讀的類別（accepted / forward / disconnect / refused …）。
     pub async fn event(&self, kind: &str, peer: Option<SocketAddr>, port: Option<u16>, tunnel_id: Option<i64>, message: String) {
-        let _ = sqlx::query("INSERT INTO telepy_gateway_event (at, event, peer, port, tunnel_id, message) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(crate::util::now_db())
-            .bind(kind)
-            .bind(peer.map(|p| p.to_string()))
-            .bind(port.map(|p| p as i64))
-            .bind(tunnel_id)
-            .bind(&message)
-            .execute(&self.db.write)
-            .await;
+        use crate::db::audit_chain::{self, Field, Table};
+        let row = [
+            ("at", Field::text(crate::util::now_db())),
+            ("event", Field::text(kind)),
+            ("peer", Field::Text(peer.map(|p| p.to_string()))),
+            ("port", Field::Int(port.map(i64::from))),
+            ("tunnel_id", Field::Int(tunnel_id)),
+            ("message", Field::text(message.as_str())),
+        ];
+        if let Err(e) = audit_chain::append(&self.db, Table::Gateway, &row).await {
+            tracing::warn!(error = %e, "gateway: cannot record event");
+        }
         self.log(&message).await;
-        // 保留：最多 EVENT_RETENTION_ROWS 列（每 128 筆順手清一次）。/ Retention: cap the table size.
+        // 保留：最多 EVENT_RETENTION_ROWS 列（每 128 筆順手清一次；先寫 prune 錨點，雜湊鏈照樣驗得過）。
+        // Retention: cap the table size (every 128 events, behind a prune anchor so the chain still verifies).
         if self.event_counter.fetch_add(1, Ordering::Relaxed) % 128 == 0 {
-            let _ = sqlx::query("DELETE FROM telepy_gateway_event WHERE id <= (SELECT id FROM telepy_gateway_event ORDER BY id DESC LIMIT 1 OFFSET ?)")
+            let cut: Option<i64> = sqlx::query_scalar("SELECT id FROM telepy_gateway_event ORDER BY id DESC LIMIT 1 OFFSET ?")
                 .bind(EVENT_RETENTION_ROWS)
-                .execute(&self.db.write)
-                .await;
+                .fetch_optional(&self.db.read)
+                .await
+                .ok()
+                .flatten();
+            if let Some(cut) = cut {
+                if let Err(e) = audit_chain::prune_through(&self.db, Table::Gateway, cut).await {
+                    tracing::warn!(error = %e, "gateway: cannot prune events");
+                }
+            }
         }
     }
 

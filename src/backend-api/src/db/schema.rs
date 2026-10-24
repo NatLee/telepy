@@ -354,6 +354,19 @@ const TABLES: &[(&str, &str)] = &[
             "reason" varchar(64) NULL
         )"#,
     ),
+    // Rust 自有：稽核雜湊鏈的錨點——prune（被刪的最新一列）與 checkpoint（寫到外部檔的鏈頭）。
+    // Audit hash-chain anchors: prune (newest deleted row) and checkpoint (head written to the anchors file).
+    (
+        "telepy_audit_anchor",
+        r#"CREATE TABLE "telepy_audit_anchor" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "table_name" varchar(64) NOT NULL,
+            "kind" varchar(16) NOT NULL,
+            "row_id" integer NOT NULL,
+            "row_hash" varchar(64) NULL
+        )"#,
+    ),
     // Rust 自有：某使用者對某條隧道的終端機外觀覆寫（字型 / 字級 / 配色）；NULL 欄位 = 跟隨
     // user_management_usersettings 的個人預設。隧道刪除時一併刪（db::tunnels::delete）。
     // Per-user terminal appearance override for one tunnel (font / size / colour scheme); a NULL field
@@ -394,6 +407,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
@@ -415,6 +429,13 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_endpoint", "previous_ip", "varchar(64) NULL"),
     ("telepy_tunnel_endpoint", "changed_at", "datetime NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
+    // 稽核雜湊鏈（升級前的列為 NULL）。/ Audit hash chain (NULL on rows written before the upgrade).
+    ("telepy_gateway_event", "prev_hash", "varchar(64) NULL"),
+    ("telepy_gateway_event", "hash", "varchar(64) NULL"),
+    ("telepy_sign_in_event", "prev_hash", "varchar(64) NULL"),
+    ("telepy_sign_in_event", "hash", "varchar(64) NULL"),
+    ("telepy_ai_audit_event", "prev_hash", "varchar(64) NULL"),
+    ("telepy_ai_audit_event", "hash", "varchar(64) NULL"),
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),

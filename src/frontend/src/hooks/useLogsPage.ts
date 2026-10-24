@@ -3,6 +3,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
+import { useAuth } from "@/lib/auth";
 
 /**
  * SSH gateway 事件（/api/log/ssh/events 的一筆）。後端已依權限過濾：管理員全看，其他人只看自己擁有／被分享的隧道。
@@ -35,6 +36,28 @@ export interface TunnelOption {
     reverse_port: number;
 }
 
+/**
+ * 稽核表雜湊鏈的驗證結果（/api/log/audit/verify，只有管理員）。`reason` 是機器可讀代碼，對應 `logs.verify.reason.*`。
+ * Hash-chain verification of one audit table (admins only); `reason` maps to `logs.verify.reason.*`.
+ */
+export interface AuditTableReport {
+    table: string;
+    ok: boolean;
+    checked: number;
+    first_id: number | null;
+    last_id: number | null;
+    unhashed_before: number;
+    broken_at: number | null;
+    reason: string | null;
+    checkpoints_checked: number;
+    checkpoints_mismatched: number;
+}
+
+export interface AuditVerifyReport {
+    ok: boolean;
+    tables: AuditTableReport[];
+}
+
 /** 隧道篩選的「全部」值（URL 上不帶 ?tunnel=）。/ The "all tunnels" filter value (no ?tunnel= in the URL). */
 export const ALL_TUNNELS = "all";
 
@@ -54,6 +77,35 @@ export function useLogsPage() {
     const [search, setSearch] = useState("");
     const { showError } = useToast();
     const { t, locale } = useI18n();
+    const { user } = useAuth();
+    const isAdmin = !!user?.is_superuser;
+
+    // 完整性驗證（管理員）：對話框開著時顯示結果。/ Integrity check (admins); the dialog shows the result.
+    const [verifyOpen, setVerifyOpen] = useState(false);
+    const [verifying, setVerifying] = useState(false);
+    const [verifyReport, setVerifyReport] = useState<AuditVerifyReport | null>(null);
+
+    const runVerify = useCallback(async () => {
+        setVerifyOpen(true);
+        setVerifying(true);
+        setVerifyReport(null);
+        try {
+            const res = await apiFetch("/api/log/audit/verify");
+            if (!res.ok) {
+                showError(t("logs.verify.failed"));
+                setVerifyOpen(false);
+                return;
+            }
+            setVerifyReport(await res.json());
+        } catch (e) {
+            showError(e instanceof Error ? e.message : t("logs.verify.failed"));
+            setVerifyOpen(false);
+        } finally {
+            setVerifying(false);
+        }
+    }, [showError, t]);
+
+    const closeVerify = useCallback(() => setVerifyOpen(false), []);
 
     const setTunnelFilter = useCallback(
         (value: string) => {
@@ -159,10 +211,16 @@ export function useLogsPage() {
             tunnels,
             tunnelFilter,
             selectedTunnel,
+            isAdmin,
+            verifyOpen,
+            verifying,
+            verifyReport,
         },
         actions: {
             fetchLogs,
             setTunnelFilter,
+            runVerify,
+            closeVerify,
         },
     };
 }

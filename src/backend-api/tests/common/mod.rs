@@ -96,6 +96,21 @@ impl TestApp {
         self.router = telepy_server::app::build(self.state.clone());
     }
 
+    /// 第一個使用者（管理員）+ 一個一般使用者，回 (admin token, user token)。會先開放註冊。
+    /// The first user (a superuser) plus a regular user; opens registration in between.
+    pub async fn admin_and_user(&self, admin: &str, user: &str) -> (String, String) {
+        let a = self.login(admin, "pw").await;
+        let r = self.post("/api/site/settings", Some(&a), serde_json::json!({"allow_registration": true})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+        let u = self.login(user, "pw").await;
+        (a, u)
+    }
+
+    /// 稽核雜湊鏈的外部錨點檔（`<log_root>/audit-anchors.log`）。/ The audit chain's anchors file.
+    pub fn audit_anchors_file(&self) -> std::path::PathBuf {
+        self.state.config.log_root.join(telepy_server::db::audit_chain::ANCHORS_FILE)
+    }
+
     /// 註冊 + 登入，回 access token。/ Register and log in; returns the access token.
     pub async fn login(&self, username: &str, password: &str) -> String {
         let r = self.post("/api/auth/register", None, serde_json::json!({"username": username, "password": password})).await;
