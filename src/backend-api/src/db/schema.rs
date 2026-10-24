@@ -260,7 +260,39 @@ const TABLES: &[(&str, &str)] = &[
             "tunnel_id" integer NOT NULL PRIMARY KEY,
             "ip" varchar(64) NOT NULL,
             "connected_at" datetime NOT NULL,
-            "last_seen_at" datetime NOT NULL
+            "last_seen_at" datetime NOT NULL,
+            "previous_ip" varchar(64) NULL,
+            "changed_at" datetime NULL
+        )"#,
+    ),
+    // Rust 自有：隧道連線紀錄（一個 forward 一列），給連線紀錄與在線率。/ Connection history, one row per forward.
+    (
+        "telepy_tunnel_session",
+        r#"CREATE TABLE "telepy_tunnel_session" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "ip" varchar(64) NOT NULL,
+            "connected_at" datetime NOT NULL,
+            "disconnected_at" datetime NULL
+        )"#,
+    ),
+    // Rust 自有：每個使用者自己的隧道釘選。/ Per-user tunnel pins.
+    (
+        "telepy_tunnel_pin",
+        r#"CREATE TABLE "telepy_tunnel_pin" (
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "tunnel_id")
+        )"#,
+    ),
+    // Rust 自有：隧道標籤（所有看得到隧道的人共用）。/ Tunnel labels, shared by everyone who sees the tunnel.
+    (
+        "telepy_tunnel_label",
+        r#"CREATE TABLE "telepy_tunnel_label" (
+            "tunnel_id" integer NOT NULL,
+            "label" varchar(32) NOT NULL,
+            PRIMARY KEY ("tunnel_id", "label")
         )"#,
     ),
     // Rust 自有：裝置金鑰清單——哪些使用者金鑰要裝進這台裝置（依擁有者允許的 OS 帳號）。
@@ -344,6 +376,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "authorized_keys_reverseserverusernames_reverse_server_id_567b60c7" ON "authorized_keys_reverseserverusernames" ("reverse_server_id")"#,
@@ -360,10 +393,14 @@ const INDEXES: &[&str] = &[
 
 /// 舊 DB 可能缺的欄位（Django 後來的 migration 加的）。(table, column, ADD COLUMN 子句)
 const COLUMNS: &[(&str, &str, &str)] = &[
+    ("telepy_tunnel_endpoint", "previous_ip", "varchar(64) NULL"),
+    ("telepy_tunnel_endpoint", "changed_at", "datetime NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
+    // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).
+    ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),
@@ -377,6 +414,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "ai_session_max_lifetime", "integer NOT NULL DEFAULT 7200"),
     ("site_settings_sitesettings", "ai_max_sessions_per_user", "integer NOT NULL DEFAULT 3"),
     ("site_settings_sitesettings", "lan_scan_enabled", "bool NOT NULL DEFAULT 1"),
+    // 隧道狀態告警的 webhook（空 = 關閉）與「斷線多久才通知」（秒）。/ Status alert webhook (empty = off) and its delay.
+    ("site_settings_sitesettings", "notify_webhook_url", "varchar(512) NOT NULL DEFAULT ''"),
+    ("site_settings_sitesettings", "notify_down_delay", "integer NOT NULL DEFAULT 60"),
+    // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
+    ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),
     ("site_settings_sitesettings", "desktop_max_sessions", "integer NOT NULL DEFAULT 4"),
     ("site_settings_sitesettings", "desktop_session_idle_timeout", "integer NOT NULL DEFAULT 900"),

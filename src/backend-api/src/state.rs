@@ -12,6 +12,7 @@ use crate::db::Db;
 use crate::desktop::Desktop;
 use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
+use crate::geoip::GeoIp;
 use crate::hub::Hub;
 use crate::join::JoinTickets;
 use crate::lan::scan::LanScans;
@@ -26,13 +27,15 @@ pub struct Inner {
     pub config: Config,
     pub db: Db,
     pub jwt: Jwt,
-    pub hub: Hub,
+    pub hub: Arc<Hub>,
     pub tokens: TokenStores,
     pub google: GoogleVerifier,
     pub http: reqwest::Client,
     pub status: Arc<StatusState>,
     /// 誰正在用哪條隧道（記憶體）。/ Who is using which tunnel right now.
     pub presence: Arc<Presence>,
+    /// 離線 GeoIP（沒有資料庫時只判斷位址範圍）。/ Offline GeoIP; scope only without databases.
+    pub geoip: Arc<GeoIp>,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
     /// 網頁內遠端桌面（RDP / VNC，經 guacd）的 session。/ In-browser remote desktop sessions (guacd).
@@ -63,6 +66,15 @@ impl Deref for AppState {
 
 impl AppState {
     pub fn new(config: Config, db: Db) -> Self {
+        // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
+        let status = Arc::new(StatusState::new(None));
+        let presence = Arc::new(Presence::default());
+        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone(), Arc::new(Hub::new())));
+        Self::with_gateway(config, db, gateway, status, presence)
+    }
+
+    /// 沿用一個已經在跑的 gateway（測試改設定時用）。/ Reuse a running gateway (tests that reconfigure).
+    pub fn with_gateway(config: Config, db: Db, gateway: Arc<Gateway>, status: Arc<StatusState>, presence: Arc<Presence>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -70,19 +82,18 @@ impl AppState {
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         let desktop = Arc::new(Desktop::new(&config));
-        // 狀態由內建 gateway 事件驅動餵入（永不過期）。/ Fed by the in-process gateway; never stale.
-        let status = Arc::new(StatusState::new(None));
-        let presence = Arc::new(Presence::default());
-        let gateway = Arc::new(Gateway::new(config.clone(), db.clone(), status.clone(), presence.clone()));
+        // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
+        let hub = gateway.hub();
         Self(Arc::new(Inner {
             remote_browser,
             desktop,
             google: GoogleVerifier::new(http.clone()),
             jwt,
-            hub: Hub::new(),
+            hub,
             tokens: TokenStores::new(),
             http,
             status,
+            geoip: Arc::new(GeoIp::load(&config.geoip_dir)),
             presence,
             gateway,
             pool: Arc::new(DevicePool::default()),

@@ -161,7 +161,8 @@ async fn tunnel_lifecycle_and_dashboard() {
 
     // delete tunnel cascades usernames
     let r = app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json["deleted"], true, "{}", r.text);
     let r = app.get("/api/reverse/server/usernames", Some(&admin)).await;
     assert_eq!(r.json, json!([]));
     let r = app.get(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
@@ -380,7 +381,11 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 19);
+    assert_eq!(keys.len(), 22);
+    assert_eq!(r.json["values"]["user_key_max_days"], 0, "personal keys don't expire by default");
+    assert_eq!(r.json["values"]["notify_webhook_url"], "", "alerts are off by default");
+    assert_eq!(r.json["values"]["notify_down_delay"], 60);
+    assert_eq!(r.json["meta"]["notify_webhook_url"]["type"], "url");
     assert_eq!(r.json["meta"]["remote_browser_homepage"]["label"], "Remote Browser Homepage");
     assert_eq!(r.json["values"]["ai_session_idle_timeout"], 600);
     assert_eq!(r.json["values"]["ai_session_max_lifetime"], 7200);

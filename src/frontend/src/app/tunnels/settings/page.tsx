@@ -18,7 +18,9 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, ScreenShare } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare } from "lucide-react";
+import { apiFetch, readJson, responseError } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -67,7 +69,7 @@ const SETTING_CHOICES: Record<string, { value: string; label: TranslationKey }[]
 };
 
 /** 以秒為單位的站台設定(逾時 / 存活時間)。/ Site settings measured in seconds. */
-const SECONDS_KEY = /_(timeout|lifetime)$/;
+const SECONDS_KEY = /_(timeout|lifetime|delay)$/;
 
 /** 秒數 → 「10 分鐘」「2 小時」這種好讀的長度(Intl 依語系翻單位)。/ Seconds → a readable, localized duration. */
 function formatDuration(seconds: number, locale: string): string {
@@ -77,17 +79,18 @@ function formatDuration(seconds: number, locale: string): string {
 }
 
 /** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
-type SiteTabId = "general" | "browser" | "desktop" | "ai";
+type SiteTabId = "general" | "browser" | "desktop" | "ai" | "notify";
 type TabId = SiteTabId | "users";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("desktop_"),
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_"),
     browser: (k) => k.startsWith("remote_browser"),
     desktop: (k) => k.startsWith("desktop_"),
     ai: (k) => k.startsWith("ai_"),
+    notify: (k) => k.startsWith("notify_"),
 };
 
-const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "users"];
+const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "notify", "users"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -140,6 +143,7 @@ function AdminSettings() {
         { value: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={15} /> },
         { value: "desktop", label: t("settings.groupDesktop"), icon: <ScreenShare size={15} /> },
         { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
+        { value: "notify", label: t("settings.groupNotify"), icon: <Bell size={15} /> },
         { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
     ];
 
@@ -168,6 +172,7 @@ const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
     browser: "settings.browserBanner",
     desktop: "settings.desktopBanner",
     ai: "settings.aiBanner",
+    notify: "settings.notifyBanner",
 };
 
 function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnType<typeof useSettingsPage> }) {
@@ -176,7 +181,10 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     const { settingsObj, meta, loading } = state;
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
-    const entries = Object.entries(settingsObj).filter(([k]) => SITE_TAB_KEYS[tab](k));
+    // 後端的鍵是字母序；網址（開關整個功能的那個）排最前面。/ Keys arrive sorted; the URL (which turns a feature on) goes first.
+    const entries = Object.entries(settingsObj)
+        .filter(([k]) => SITE_TAB_KEYS[tab](k))
+        .sort(([a], [b]) => Number(!a.endsWith("_url")) - Number(!b.endsWith("_url")));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
     // Prefer the frontend dictionary (localized); fall back to backend meta for unknown keys.
@@ -199,7 +207,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             handleUpdate(key, num);
         } else {
             const s = raw.trim();
-            if (!s) return;
+            // 網址欄位可以清空（= 關閉）。/ URL fields may be cleared (= off).
+            if (!s && kind !== "url") return;
             handleUpdate(key, s);
         }
     };
@@ -209,6 +218,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             <Callout tone="info">{t(SITE_TAB_BANNERS[tab])}</Callout>
 
             {tab === "ai" && <McpEndpointPanel />}
+            {tab === "notify" && <NotifyTestPanel configured={!!String(settingsObj.notify_webhook_url ?? "").trim()} />}
 
             {loading ? (
                 <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
@@ -257,8 +267,9 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                 <>
                                                     <div className="flex items-center gap-2">
                                                         <Input
-                                                            type={kind === "integer" ? "number" : "text"}
-                                                            className={`${kind === "integer" ? "w-24" : "w-56"} h-8`}
+                                                            type={kind === "integer" ? "number" : kind === "url" ? "url" : "text"}
+                                                            className={`${kind === "integer" ? "w-24" : kind === "url" ? "w-56 sm:w-80" : "w-56"} h-8`}
+                                                            placeholder={kind === "url" ? "https://hooks.slack.com/services/…" : undefined}
                                                             value={current}
                                                             onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
                                                             onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
@@ -558,5 +569,39 @@ function UserEditModal({
                 isDestructive
             />
         </Modal>
+    );
+}
+
+/** 通知分頁：送一則測試告警到存好的 webhook，並說明個人的桌面通知在哪裡開。/ Notifications tab: test send + where desktop notifications live. */
+function NotifyTestPanel({ configured }: { configured: boolean }) {
+    const { t } = useI18n();
+    const { showSuccess, showError } = useToast();
+    const [sending, setSending] = useState(false);
+    const send = async () => {
+        setSending(true);
+        try {
+            const res = await apiFetch("/api/site/settings/notify-test", { method: "POST" });
+            const body = await readJson<{ ok?: boolean; status?: number; error?: string }>(res);
+            if (res.ok && body?.ok) showSuccess(t("settings.notifyTestOk"));
+            else showError(t("settings.notifyTestFailed", { error: body?.error ?? responseError(res, body, String(res.status)) }));
+        } catch (e) {
+            showError(t("settings.notifyTestFailed", { error: e instanceof Error ? e.message : "" }));
+        } finally {
+            setSending(false);
+        }
+    };
+    return (
+        <section className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
+            <SectionHeading icon={<Send />} title={t("settings.notifyTestTitle")} />
+            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{t("settings.notifyTestBody")}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+                <Button type="button" variant="outline" size="sm" onClick={() => void send()} disabled={!configured || sending}>
+                    {sending ? <Loader2 className="animate-spin" /> : <Send />}
+                    {t("settings.notifyTestButton")}
+                </Button>
+                {!configured && <span className="text-xs text-muted-foreground">{t("settings.notifyTestNeedsUrl")}</span>}
+            </div>
+            <p className="mt-4 text-xs text-muted-foreground leading-relaxed">{t("settings.notifyDesktopNote")}</p>
+        </section>
     );
 }

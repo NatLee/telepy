@@ -26,7 +26,7 @@ export function useTunnelsPage() {
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
     const [leaveConfirm, setLeaveConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
 
-    const { showSuccess, showError } = useToast();
+    const { showSuccess, showError, showToast } = useToast();
     const { user } = useAuth();
 
     // silent = 背景重抓（不轉圈、失敗不吵）。/ silent = background refresh: no spinner, no error toast.
@@ -52,8 +52,8 @@ export function useTunnelsPage() {
             } else if (!silent) {
                 showError(t("tunnels.fetchFailed"));
             }
-        } catch (e: any) {
-            if (!silent) showError(e.message || t("tunnels.fetchFailed"));
+        } catch (e) {
+            if (!silent) showError((e instanceof Error && e.message) || t("tunnels.fetchFailed"));
         } finally {
             if (!silent) setLoading(false);
         }
@@ -102,6 +102,22 @@ export function useTunnelsPage() {
                 setLatencyMap(prev => ({ ...prev, ...latency }));
             }
         },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_HEALTH]: (msg) => {
+            // 降級 / 恢復：直接換這條的 health；變成降級時提醒一次。/ Degraded / recovered: patch it; warn once when it degrades.
+            const id = msg.tunnel_id;
+            const health = msg.health;
+            if (id === undefined || (health !== "online" && health !== "degraded" && health !== "offline")) return;
+            const tunnel = tunnelsRef.current.find(tn => tn.id === id);
+            setTunnels(prev => prev.map(tn => (tn.id === id ? { ...tn, health } : tn)));
+            if (health === "degraded" && tunnel) showToast(t("tunnels.degradedToast", { name: tunnel.host_friendly_name }), "warning");
+        },
+        [NOTIFICATION_ACTIONS.TUNNEL_IP_CHANGED]: (msg) => {
+            // 可能是浮動 IP，也可能是金鑰外流：提醒一下，並刷新列表上的 IP。/ Dynamic IP or a leaked key: tell the owner.
+            if (typeof msg.ip === "string" && typeof msg.previous_ip === "string") {
+                showToast(t("tunnels.ipChangedToast", { name: String(msg.tunnel_name ?? ""), ip: msg.ip, previous: msg.previous_ip }), "warning");
+            }
+            reloadSoon();
+        },
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_PRESENCE]: (msg) => {
             // 人數直接換；看得到細節（誰 / IP）的隧道再靜默重抓一次列表。/ Update the count; refetch when details are visible.
             const id = msg.tunnel_id;
@@ -139,25 +155,6 @@ export function useTunnelsPage() {
         },
     });
 
-    const handleDelete = async () => {
-        if (!deleteConfirm.tunnelId) return;
-        try {
-            const res = await apiFetch(`/api/reverse/server/keys/${deleteConfirm.tunnelId}`, {
-                method: "DELETE"
-            });
-            if (res.ok) {
-                showSuccess(t("tunnels.deleted", { name: deleteConfirm.name }));
-                fetchData();
-            } else {
-                showError(t("tunnels.deleteFailed"));
-            }
-        } catch (e: any) {
-            showError(e.message || t("tunnels.deleteFailed"));
-        } finally {
-            setDeleteConfirm({ isOpen: false, tunnelId: null, name: "" });
-        }
-    };
-
     const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {
         if (!user?.id) { showError(t("tunnels.getCurrentUserFailed")); return; }
         try {
@@ -168,8 +165,20 @@ export function useTunnelsPage() {
             } else {
                 showError(t("tunnels.leaveFailed"));
             }
-        } catch (e: any) {
-            showError(e.message || t("tunnels.leaveFailed"));
+        } catch (e) {
+            showError((e instanceof Error && e.message) || t("tunnels.leaveFailed"));
+        }
+    };
+
+    // 釘選：先改畫面再送出，失敗就改回來。/ Pin: update the list first, roll back on failure.
+    const togglePin = async (tunnelId: number, pinned: boolean) => {
+        setTunnels(prev => prev.map(tn => (tn.id === tunnelId ? { ...tn, pinned } : tn)));
+        try {
+            const res = await apiFetch(`/api/reverse/server/${tunnelId}/pin`, { method: pinned ? "PUT" : "DELETE" });
+            if (!res.ok) throw new Error();
+        } catch {
+            setTunnels(prev => prev.map(tn => (tn.id === tunnelId ? { ...tn, pinned: !pinned } : tn)));
+            showError(t("tunnels.pinFailed"));
         }
     };
 
@@ -179,7 +188,7 @@ export function useTunnelsPage() {
         latencyMap,
         loading,
         fetchData,
-        handleDelete,
+        togglePin,
         handleLeaveTunnel,
         modals: {
             configModal, setConfigModal,

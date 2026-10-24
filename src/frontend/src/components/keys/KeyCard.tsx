@@ -5,13 +5,15 @@
  * use (time + source IP) and which devices' lists it is on.
  */
 import React from "react";
-import { Clock3, HardDrive, KeyRound, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
+import { CalendarClock, Clock3, HardDrive, KeyRound, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import type { KeyDevice, KeyTarget, UserKey } from "@/types/keys";
+import { expiryState } from "@/lib/keyExpiry";
+import { cn } from "@/lib/utils";
 
 export function KeyTypeBadge({ type, bits }: { type: string | null; bits: number | null }) {
     const { t } = useI18n();
@@ -26,6 +28,22 @@ export function KeyTypeBadge({ type, bits }: { type: string | null; bits: number
         <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 font-mono text-[0.75rem] text-muted-foreground">
             {type}
             {bits ? ` · ${bits}` : ""}
+        </span>
+    );
+}
+
+/** 「30 天後到期」「已在 2 天前到期」「不到期」；顏色跟著狀態。/ Expiry text coloured by state. */
+export function KeyExpiryText({ expiresAt, compact = false }: { expiresAt: string | null; compact?: boolean }) {
+    const { t, locale } = useI18n();
+    const state = expiryState(expiresAt);
+    if (state === "none" || !expiresAt) return compact ? null : <span className="text-muted-foreground">{t("keys.expiry.neverExpires")}</span>;
+    const when = formatRelativeTime(expiresAt, locale);
+    return (
+        <span
+            title={new Date(expiresAt).toLocaleString(locale)}
+            className={cn(state === "expired" ? "text-destructive" : state === "soon" ? "text-warning" : compact ? "text-muted-foreground" : "text-foreground")}
+        >
+            {state === "expired" ? t("keys.expiry.expired", { when }) : t("keys.expiry.expires", { when })}
         </span>
     );
 }
@@ -83,6 +101,13 @@ export function KeyCard({
                         )}
                     </dd>
                 </div>
+                {keyItem.expires_at && (
+                    <div className="flex items-start gap-2">
+                        <CalendarClock size={14} className="mt-px shrink-0 text-muted-foreground" aria-hidden />
+                        <dt className="sr-only">{t("keys.expiry.label")}</dt>
+                        <dd className="min-w-0"><KeyExpiryText expiresAt={keyItem.expires_at} compact /></dd>
+                    </div>
+                )}
                 <div className="flex items-start gap-2">
                     <HardDrive size={14} className="mt-px shrink-0 text-muted-foreground" aria-hidden />
                     <dt className="sr-only">{t("keys.onDevices")}</dt>
@@ -91,7 +116,10 @@ export function KeyCard({
                             t("keys.onNoDevice")
                         ) : (
                             <span title={placements.map((p) => p.device.host_friendly_name).join(", ")}>
-                                <span className="text-foreground/80">{placements.map((p) => p.device.host_friendly_name).join(", ")}</span>
+                                <span className="text-foreground/80">
+                                    {placements.slice(0, 3).map((p) => p.device.host_friendly_name).join(", ")}
+                                    {placements.length > 3 && ` ${t("keys.moreDevices", { count: placements.length - 3 })}`}
+                                </span>
                                 <span> · {t("keys.onDeviceCount", { count: placements.length, installed })}</span>
                             </span>
                         )}

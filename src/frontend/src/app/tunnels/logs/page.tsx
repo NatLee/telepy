@@ -18,7 +18,7 @@ import { ALL_TUNNELS, useLogsPage } from "@/hooks/useLogsPage";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
 
 // 標籤依 gateway 的 `event` 欄位決定（不是比對訊息字串），所以可以翻譯。
 // Badges key off the gateway's `event` field (not message text), so their labels are translatable.
@@ -33,6 +33,10 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     failed_publickey: { key: "logs.event.failed_publickey", variant: "destructive" },
     invalid_user: { key: "logs.event.invalid_user", variant: "destructive" },
     preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
+    degraded: { key: "logs.event.degraded", variant: "warning" },
+    recovered: { key: "logs.event.recovered", variant: "success" },
+    ip_changed: { key: "logs.event.ip_changed", variant: "warning" },
+    expired_key: { key: "logs.event.expired_key", variant: "destructive" },
     desktop_open: { key: "logs.event.desktop_open", variant: "default" },
     desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
 };

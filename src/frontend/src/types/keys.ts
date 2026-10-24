@@ -18,6 +18,9 @@ export interface UserKey {
     comment: string | null;
     last_used_at: string | null;
     last_used_ip: string | null;
+    /** 到期時間；null = 不到期。到期後 Telepy 拒絕它、並從裝置移除。/ Expiry; null = never. Expired keys are refused and removed. */
+    expires_at: string | null;
+    expired: boolean;
 }
 
 export type TunnelRole = "owner" | "admin" | "edit" | "view";
@@ -71,34 +74,40 @@ export interface DeviceKeys {
     removals: DeviceKeyRemoval[];
     sync: { username: string; ok: boolean; error: string | null; synced_at: string }[];
     my_keys: { id: number; name: string; fingerprint: string | null; key_type: string | null; in_list: boolean }[];
+    /** 每個帳號一張卡：清單與裝置上實際內容合在一起。/ Per-account merged view. */
+    view: { accounts: ViewAccount[] };
 }
 
-export type AuditKind = "service" | "managed" | "telepy_user" | "unknown" | "invalid";
+/** 合併檢視一列的狀態。/ State of one row in the merged view. */
+export type RowState = "service" | "installed" | "pending" | "error" | "removing" | "manual" | "unknown" | "invalid";
 
-export interface AuditLine {
-    line_no: number;
-    kind: AuditKind;
-    key_type?: string;
-    bits?: number | null;
-    fingerprint?: string;
-    comment?: string | null;
-    options?: string | null;
-    in_list?: boolean;
-    owner?: string | null;
-    key_name?: string | null;
-    raw?: string;
-}
-
-export interface AuditAccount {
-    username: string;
-    ok: boolean;
+/** 一把金鑰在一個帳號：清單 × Telepy 裝過的 × 最近一次讀到的檔案。/ One key in one account. */
+export interface ViewRow {
+    state: RowState;
+    /** 最近一次讀檔時在檔案裡看到。/ Seen in the file at the last check. */
+    verified: boolean;
+    on_list: boolean;
+    mine: boolean;
+    user_key_id: number | null;
+    name: string | null;
+    owner: string | null;
+    fingerprint: string | null;
+    key_type: string | null;
+    bits: number | null;
+    comment: string | null;
+    options: string | null;
+    line_no: number | null;
+    /** 這把金鑰在檔案裡佔幾行（重複貼上時 > 1）。/ Lines holding this key (> 1 for duplicates). */
+    line_count: number;
     error: string | null;
-    exists: boolean;
-    lines: AuditLine[];
+    raw: string | null;
 }
 
-/** `GET /api/reverse/server/{id}/authorized-keys` */
-export interface AuthorizedKeysAudit {
-    tunnel_id: number;
-    accounts: AuditAccount[];
+export interface ViewAccount {
+    username: string;
+    /** 最近一次讀檔；null = 還沒讀過。/ Last read of the file; null = never. */
+    checked_at: string | null;
+    exists: boolean | null;
+    error: string | null;
+    rows: ViewRow[];
 }

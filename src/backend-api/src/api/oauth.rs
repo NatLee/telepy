@@ -3,7 +3,7 @@
 //! - `POST /api/oauth/register`（RFC 7591 動態註冊，公開）
 //! - `GET|POST /api/oauth/authorize`（前端同意頁用；要網頁登入）：GET 驗證請求並回顯示資料，POST 核可/拒絕 → `{redirect_to}`
 //! - `POST /api/oauth/token`（authorization_code + PKCE S256、refresh_token 輪替）、`POST /api/oauth/revoke`（RFC 7009）
-//! - `GET /api/oauth/grants`、`DELETE /api/oauth/grants/{id}`：Connected apps（列出 / 撤銷）
+//! - `GET /api/oauth/grants`、`GET|DELETE /api/oauth/grants/{id}`：Connected apps（列出 / 詳細 / 撤銷）
 //!
 //! 錯誤形狀依 OAuth 規格：`{"error": "<code>", "error_description": "..."}`。
 //! OAuth 2.1 authorization-server endpoints; errors use the OAuth `{error, error_description}` shape.
@@ -41,7 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(token))
         .routes(routes!(revoke))
         .routes(routes!(list_grants))
-        .routes(routes!(revoke_grant))
+        .routes(routes!(grant_details, revoke_grant))
 }
 
 fn oauth_error(status: StatusCode, error: &str, description: impl Into<String>) -> ApiError {
@@ -565,6 +565,37 @@ pub async fn revoke_grant_by_id(state: &AppState, grant_id: i64) -> sqlx::Result
     Ok(())
 }
 
+/// 隧道刪除：先撤銷使用者選的整個 grant（`revoke`，呼叫端已檢查過可以撤銷），再把隧道從每個 grant 的限制清單拿掉
+/// （隧道 id 不會被別的隧道重用，但清單不留死 id）；`revoke_orphans` 時，清單因此變空的有效 grant 也撤銷。
+/// 回傳（撤銷數, 拿掉隧道但仍保留的數）。
+/// Tunnel deleted: revoke the grants the user picked (`revoke`, already checked by the caller), drop the
+/// tunnel from every restriction list and, with `revoke_orphans`, revoke the active grants left with no
+/// tunnel. Returns (revoked, detached).
+pub async fn detach_tunnel(state: &AppState, tunnel_id: i64, revoke_orphans: bool, revoke: &std::collections::HashSet<i64>) -> sqlx::Result<(usize, usize)> {
+    let now = crate::util::now_db();
+    let (mut revoked, mut detached) = (0, 0);
+    for &id in revoke {
+        if db::oauth::grant_by_id(&state.db, id).await?.is_some_and(|g| g.is_active(&now)) {
+            revoke_grant_by_id(state, id).await?;
+            revoked += 1;
+        }
+    }
+    for g in db::oauth::grants_naming_tunnel(&state.db, tunnel_id).await? {
+        let rest = oauth::without_tunnel(&g.tunnel_id_list().unwrap_or_default(), tunnel_id);
+        db::oauth::grant_set_tunnels(&state.db, g.id, &rest).await?;
+        if revoke.contains(&g.id) || !g.is_active(&now) {
+            continue;
+        }
+        if rest.is_empty() && revoke_orphans {
+            revoke_grant_by_id(state, g.id).await?;
+            revoked += 1;
+        } else {
+            detached += 1;
+        }
+    }
+    Ok((revoked, detached))
+}
+
 #[utoipa::path(post, path = "/api/oauth/revoke", tag = "OAuth", request_body(content = super::schemas::RevokeRequest, content_type = "application/x-www-form-urlencoded"), responses((status = 200, description = "Always 200 for a known client (RFC 7009 §2.2), whether or not the token was valid"), (status = 401, body = super::schemas::OAuthErrorBody)))]
 async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let params = parse_params(&headers, &body);
@@ -595,38 +626,89 @@ async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
 
 // ---------------------------------------------------------------- connected apps
 
+/// 一個 grant 的列表欄位（Connected apps）。/ The list fields of one grant.
+async fn grant_json(state: &AppState, g: &db::oauth::GrantWithClient) -> sqlx::Result<Value> {
+    let tz = state.config.tz_offset_minutes;
+    let tunnels = match g.tunnel_ids.as_deref() {
+        None => Value::Null,
+        Some(raw) => {
+            let ids: Vec<i64> = serde_json::from_str(raw).unwrap_or_default();
+            let mut list = Vec::new();
+            for id in ids {
+                if let Some(t) = db::tunnels::by_id(&state.db, id).await? {
+                    list.push(json!({ "id": t.id, "name": t.host_friendly_name }));
+                }
+            }
+            Value::Array(list)
+        }
+    };
+    Ok(json!({
+        "id": g.id,
+        "client_id": g.client_id,
+        "client_name": g.client_name,
+        "client_uri": g.client_uri,
+        "scopes": oauth::scope_list(&g.scope),
+        "tunnels": tunnels,
+        "created_at": db_to_iso(&g.created_at, tz),
+        "last_used_at": opt_db_to_iso(&g.last_used_at, tz),
+        "expires_at": opt_db_to_iso(&g.refresh_expires_at, tz),
+    }))
+}
+
 #[utoipa::path(get, path = "/api/oauth/grants", tag = "OAuth", security(("bearer" = [])), responses((status = 200, description = "Apps the current user has authorized (active grants, newest first)", body = Vec<super::schemas::OAuthGrant>)))]
 async fn list_grants(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
-    let tz = state.config.tz_offset_minutes;
     let grants = db::oauth::active_grants_for_user(&state.db, user.id).await?;
     let mut out = Vec::with_capacity(grants.len());
-    for g in grants {
-        let tunnels = match g.tunnel_ids.as_deref() {
-            None => Value::Null,
-            Some(raw) => {
-                let ids: Vec<i64> = serde_json::from_str(raw).unwrap_or_default();
-                let mut list = Vec::new();
-                for id in ids {
-                    if let Some(t) = db::tunnels::by_id(&state.db, id).await? {
-                        list.push(json!({ "id": t.id, "name": t.host_friendly_name }));
-                    }
-                }
-                Value::Array(list)
-            }
-        };
-        out.push(json!({
-            "id": g.id,
-            "client_id": g.client_id,
-            "client_name": g.client_name,
-            "client_uri": g.client_uri,
-            "scopes": oauth::scope_list(&g.scope),
-            "tunnels": tunnels,
-            "created_at": db_to_iso(&g.created_at, tz),
-            "last_used_at": opt_db_to_iso(&g.last_used_at, tz),
-            "expires_at": opt_db_to_iso(&g.refresh_expires_at, tz),
-        }));
+    for g in &grants {
+        out.push(grant_json(&state, g).await?);
     }
     Ok(Json(Value::Array(out)))
+}
+
+/// 詳細資料裡的最近紀錄筆數。/ Recent tool calls shown in the details.
+const GRANT_RECENT_ACTIVITY: i64 = 20;
+
+#[utoipa::path(get, path = "/api/oauth/grants/{id}", tag = "OAuth", security(("bearer" = [])), params(("id" = i64, Path, description = "Grant id")), responses((status = 200, description = "One connected app: the list fields plus the registered client, open AI sessions, call totals and recent tool calls", body = super::schemas::OAuthGrantDetail), (status = 404, body = super::schemas::ErrorBody)))]
+async fn grant_details(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let tz = state.config.tz_offset_minutes;
+    let grant = db::oauth::grant_by_id(&state.db, id).await?.ok_or_else(ApiError::drf_not_found)?;
+    if (grant.user_id != user.id && !user.is_superuser) || !grant.is_active(&crate::util::now_db()) {
+        return Err(ApiError::drf_not_found());
+    }
+    let client = db::oauth::client_by_id(&state.db, &grant.client_id).await?.ok_or_else(ApiError::drf_not_found)?;
+    let row = db::oauth::GrantWithClient {
+        id: grant.id,
+        user_id: grant.user_id,
+        client_id: grant.client_id.clone(),
+        scope: grant.scope.clone(),
+        tunnel_ids: grant.tunnel_ids.clone(),
+        refresh_expires_at: grant.refresh_expires_at.clone(),
+        created_at: grant.created_at.clone(),
+        last_used_at: grant.last_used_at.clone(),
+        client_name: client.client_name.clone(),
+        client_uri: client.client_uri.clone(),
+    };
+    let mut out = grant_json(&state, &row).await?;
+    let owner = db::users::by_id(&state.db, grant.user_id).await?;
+    let uris = client.redirect_uri_list();
+    let mut hosts: Vec<String> = uris.iter().map(|u| redirect_host(u)).collect();
+    hosts.sort();
+    hosts.dedup();
+    let (calls, failed, last_call) = db::ai_audit::grant_stats(&state.db, grant.id).await?;
+    let filter = db::ai_audit::Filter { grant_id: Some(grant.id), limit: GRANT_RECENT_ACTIVITY, ..Default::default() };
+    let recent = db::ai_audit::list(&state.db, &filter).await?;
+    out["user"] = json!({ "id": grant.user_id, "username": owner.map(|u| u.username) });
+    out["client"] = json!({
+        "redirect_uris": uris,
+        "redirect_hosts": hosts,
+        "logo_uri": client.logo_uri,
+        "public": client.is_public(),
+        "registered_at": db_to_iso(&client.created_at, tz),
+    });
+    out["sessions"] = Value::Array(state.ai.list().iter().filter(|s| s.grant_id == grant.id).map(|s| super::ai::session_json(s, tz)).collect());
+    out["stats"] = json!({ "calls": calls, "failed": failed, "last_call_at": last_call.as_deref().map(|t| db_to_iso(t, tz)) });
+    out["activity"] = Value::Array(recent.iter().map(|e| super::ai::activity_json(e, tz)).collect());
+    Ok(Json(out))
 }
 
 #[utoipa::path(delete, path = "/api/oauth/grants/{id}", tag = "OAuth", security(("bearer" = [])), params(("id" = i64, Path, description = "Grant id")), responses((status = 204, description = "Revoked: its refresh token and access tokens stop working immediately"), (status = 404, body = super::schemas::ErrorBody)))]

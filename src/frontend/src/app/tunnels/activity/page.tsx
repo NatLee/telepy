@@ -13,43 +13,9 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useI18n } from "@/lib/i18n";
-import type { TranslationKey } from "@/locales/en";
+import { describeDetail, toolLabel } from "@/lib/aiAccess";
 import { ALL, useAiActivityPage, type AiSession } from "@/hooks/useAiActivityPage";
-
-const TOOL_LABELS: Record<string, TranslationKey> = {
-    list_tunnels: "activity.tool.list_tunnels",
-    tunnel_status: "activity.tool.tunnel_status",
-    ssh_session_open: "activity.tool.ssh_session_open",
-    ssh_exec: "activity.tool.ssh_exec",
-    ssh_session_close: "activity.tool.ssh_session_close",
-    sftp_list: "activity.tool.sftp_list",
-    sftp_read: "activity.tool.sftp_read",
-    sftp_write: "activity.tool.sftp_write",
-};
-
-const REASON_LABELS: Record<string, TranslationKey> = {
-    idle: "activity.reason.idle",
-    max_lifetime: "activity.reason.max_lifetime",
-    device_offline: "activity.reason.device_offline",
-    disconnected: "activity.reason.disconnected",
-    revoked: "activity.reason.revoked",
-    permission_removed: "activity.reason.permission_removed",
-    closed_by_user: "activity.reason.closed_by_user",
-    closed_by_agent: "activity.reason.closed_by_agent",
-};
-
-/** 關閉列的 detail 是 `reason: <r>; commands: N`，把 reason 換成翻譯。/ Translate the reason in close rows. */
-function describeDetail(tool: string, detail: string | null, t: (k: TranslationKey, v?: Record<string, string | number>) => string): string {
-    if (!detail) return "";
-    if (tool === "ssh_session_close") {
-        const m = detail.match(/^reason:\s*([a-z_]+);\s*commands:\s*(\d+)/);
-        if (m) {
-            const key = REASON_LABELS[m[1]];
-            return t("activity.closeDetail", { reason: key ? t(key) : m[1], count: Number(m[2]) });
-        }
-    }
-    return detail;
-}
+import { ConnectedAppDialog } from "@/components/layout/ConnectedAppDialog";
 
 function formatBytes(n: number | null): string {
     if (n === null || n === undefined) return "";
@@ -61,9 +27,14 @@ function formatBytes(n: number | null): string {
 export default function AiActivityPage() {
     const { t } = useI18n();
     const { state, actions } = useAiActivityPage();
-    const { sessions, rows, loading, isAdmin, me, tunnelFilter, userFilter, tunnels, users } = state;
+    const { sessions, rows, loading, isAdmin, me, meId, tunnelFilter, userFilter, tunnels, users } = state;
     const { refresh, closeSession, setTunnelFilter, setUserFilter, formatTime } = actions;
     const [pending, setPending] = useState<AiSession | null>(null);
+    const [appId, setAppId] = useState<number | null>(null);
+    // app 的詳細資料只給授權的本人與管理員（隧道擁有者看得到 session，但不是他的授權）。
+    // App details are for the person who authorized it and admins; tunnel owners see sessions, not the grant.
+    const canOpenApp = (userId: number | null, grantId: number | null | undefined): grantId is number =>
+        grantId !== null && grantId !== undefined && (isAdmin || (userId !== null && userId === meId));
 
     return (
         <div className="flex flex-col min-h-[calc(100vh-8rem)] animate-fade-in-up">
@@ -97,7 +68,13 @@ export default function AiActivityPage() {
                             <li key={s.id} className="rounded-lg border border-border bg-card p-4 text-sm flex flex-col gap-2">
                                 <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                        <p className="font-semibold truncate">{s.client_name}</p>
+                                        {canOpenApp(s.user.id, s.grant_id) ? (
+                                            <button type="button" onClick={() => setAppId(s.grant_id)} className="block max-w-full truncate text-left text-foreground underline decoration-dotted decoration-foreground/40 underline-offset-4 hover:text-primary hover:decoration-solid" title={t("apps.openDetails", { name: s.client_name })}>
+                                                {s.client_name}
+                                            </button>
+                                        ) : (
+                                            <p className="truncate">{s.client_name}</p>
+                                        )}
                                         <p className="text-xs text-muted-foreground truncate">
                                             {s.tunnel.name} · {s.username}
                                             {s.user.username !== me && ` · ${t("activity.sessionBy", { user: s.user.username })}`}
@@ -184,18 +161,23 @@ export default function AiActivityPage() {
                                 </thead>
                                 <tbody className="bg-card divide-y divide-border">
                                     {rows.map((r) => {
-                                        const toolKey = TOOL_LABELS[r.tool];
                                         return (
                                             <tr key={r.id} className="hover:bg-muted/50 transition-colors align-top">
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs text-muted-foreground">{formatTime(r.at)}</td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
                                                     <span className="font-medium">{r.user.username ?? "—"}</span>
-                                                    {r.client_name && <span className="block text-muted-foreground truncate max-w-[10rem]">{r.client_name}</span>}
+                                                    {r.client_name && (canOpenApp(r.user.id, r.grant_id) ? (
+                                                        <button type="button" onClick={() => setAppId(r.grant_id as number)} className="block max-w-[10rem] truncate text-left text-muted-foreground underline decoration-dotted decoration-muted-foreground/50 underline-offset-4 hover:text-primary hover:decoration-solid" title={t("apps.openDetails", { name: r.client_name })}>
+                                                            {r.client_name}
+                                                        </button>
+                                                    ) : (
+                                                        <span className="block text-muted-foreground truncate max-w-[10rem]">{r.client_name}</span>
+                                                    ))}
                                                     {r.ip && <span className="block font-mono text-[0.75rem] text-muted-foreground" title={t("activity.ipTitle")}>{r.ip}</span>}
                                                 </td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs">
                                                     <Badge variant={r.tool === "ssh_exec" || r.tool === "sftp_write" ? "default" : "outline"} className="text-[0.6875rem] leading-none py-0.5">
-                                                        {toolKey ? t(toolKey) : r.tool}
+                                                        {toolLabel(r.tool, t)}
                                                     </Badge>
                                                 </td>
                                                 <td className="px-4 py-2 whitespace-nowrap text-xs text-muted-foreground">
@@ -226,6 +208,7 @@ export default function AiActivityPage() {
                 </div>
             </section>
 
+            <ConnectedAppDialog grantId={appId} onClose={() => setAppId(null)} onRevoked={refresh} />
             <ConfirmDialog
                 isOpen={pending !== null}
                 onClose={() => setPending(null)}

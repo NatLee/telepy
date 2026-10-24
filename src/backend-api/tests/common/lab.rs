@@ -5,10 +5,12 @@
 //!   加上 [`Machine::account_home`] 之後 `<home>/<帳號>/.ssh/authorized_keys` 檔案裡的金鑰）、記錄每次登入
 //!   （帳號 + 用了哪把金鑰），可選擇當跳板（direct-tcpip）。exec 支援 `whoami` / `hostname` / `whereami`
 //!   （`user@machine`）；shell 先印 `login:user@machine` 再 echo；`sftp` 子系統轉給本機 sftp-server（有的話）。
-//! - 後端兩條路（都只一跳到 gateway 的 loopback）：russh（SFTP / 檔案管理）與 OpenSSH（terminal / `ssh -D`）
+//! - 後端：russh 在行程內經 gateway 開通道。連線池（SFTP / 檔案管理 / 終端機 / SOCKS）見 `backend_sftp`，
+//!   自己的一條連線（AI session、區網掃描）見 `backend_exec`
 //! - 筆電：真的 OpenSSH 客戶端。第一跳 `ProxyCommand ssh -W %h:%p telepy-ssh-server`（gateway + 裝置兩層），
 //!   之後每一跳 ProxyJump 穿過前一台。
-//! - 網頁終端機：真的 `/ws/terminal/`（Telepy 的權限）→ PTY → OpenSSH → 裝置。
+//! - 網頁終端機：真的 `/ws/terminal/`（Telepy 的權限）→ 池子連線上的 PTY channel → 裝置；區網主機那一跳由
+//!   OpenSSH（下面的包裝程式）連 `ssh::bridge` 的一次性入口。檔案管理：`filemanager`。
 //! 沒有 ssh / ssh-keygen 的環境 [`Lab::start`] 回 None，測試自行跳過。
 //! Reusable SSH topology for integration tests: gateway, real OpenSSH tunnels and laptops, scriptable device sshd.
 
@@ -107,6 +109,9 @@ pub struct Machine {
     /// 當前目錄 = sftp-server 的 home。
     pub home: PathBuf,
     logins: Arc<Mutex<Vec<Login>>>,
+    ptys: Arc<Mutex<Vec<PtyState>>>,
+    resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+    resolves: Arc<Mutex<Vec<String>>>,
 }
 
 impl Machine {
@@ -133,6 +138,18 @@ impl Machine {
     pub fn authorized_keys(&self, user: &str) -> String {
         std::fs::read_to_string(self.home.join(user).join(".ssh/authorized_keys")).unwrap_or_default()
     }
+    /// 收到過的 pty-req（term + 初始大小）。/ PTY requests seen so far.
+    pub fn ptys(&self) -> Vec<PtyState> {
+        self.ptys.lock().unwrap().clone()
+    }
+    /// 收到過的 window-change。/ Window changes seen so far.
+    pub fn resizes(&self) -> Vec<(u32, u32)> {
+        self.resizes.lock().unwrap().clone()
+    }
+    /// pretend_darwin：後端請裝置解析過的名稱。/ Names resolved on the (fake) macOS device.
+    pub fn resolves(&self) -> Vec<String> {
+        self.resolves.lock().unwrap().clone()
+    }
 }
 
 /// 檔案裡有沒有這把金鑰（忽略 options 與註解，只比 `type base64`）。
@@ -151,6 +168,16 @@ pub struct MachineOpts {
     pub allow_jump: bool,
     /// 每條連線同時最多幾個 session channel（= sshd 的 MaxSessions）；None = 不限。
     pub max_sessions: Option<usize>,
+    /// exec 用真的 `/bin/sh -c` 跑（HOME / TMPDIR / 工作目錄 = 帳號的 `<home>/<user>`，不會碰到開發者的家目錄）。
+    /// Run exec requests with a real `/bin/sh -c`, HOME / TMPDIR / cwd pointed at the account's scratch home.
+    pub shell: bool,
+    /// 沒有 `sftp` 子系統（像沒裝 sftp-server 的裝置）；exec 認不得的指令交給本機 `sh -c`，在機器的 home 跑。
+    /// No sftp subsystem; unknown exec commands run under the local `sh -c` in the machine's home.
+    pub shell_without_sftp: bool,
+    /// 假裝是 macOS：`uname -s` 回 `Darwin`、`dscacheutil -q host -a name X` 在本機解析 X；
+    /// 而且像 Apple 的 sshd-session 一樣，**名稱**的 direct-tcpip 讓整條連線斷掉（IP 才正常）。
+    /// Pretend to be macOS, including the sshd-session crash on hostname direct-tcpip targets.
+    pub pretend_darwin: bool,
 }
 
 struct MachineState {
@@ -159,6 +186,20 @@ struct MachineState {
     opts: MachineOpts,
     home: PathBuf,
     logins: Arc<Mutex<Vec<Login>>>,
+    /// 每次 pty-req 的 term + 初始大小。/ Every pty request seen.
+    ptys: Arc<Mutex<Vec<PtyState>>>,
+    /// 每次 window-change 的 (cols, rows)。/ Every window change seen.
+    resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+    /// pretend_darwin 時被要求解析過的名稱。/ Names the backend asked the (fake) macOS device to resolve.
+    resolves: Arc<Mutex<Vec<String>>>,
+}
+
+/// 一個 session channel 的 PTY 狀態（term + 視窗大小），`tty` 指令與 shell 的 `tty` 行會印出來。
+#[derive(Clone, Debug, Default)]
+pub struct PtyState {
+    pub term: String,
+    pub cols: u32,
+    pub rows: u32,
 }
 
 struct SshdHandler {
@@ -167,6 +208,8 @@ struct SshdHandler {
     channels: HashMap<ChannelId, Channel<Msg>>,
     /// 這條連線上開著的 session channel。
     sessions: HashSet<ChannelId>,
+    /// 每個 channel 要到的 PTY；shell 啟動後共用同一份（window_change 會改它）。
+    ptys: HashMap<ChannelId, Arc<Mutex<PtyState>>>,
 }
 
 impl SshdHandler {
@@ -209,26 +252,67 @@ impl server::Handler for SshdHandler {
     async fn channel_close(&mut self, channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
         self.sessions.remove(&channel);
         self.channels.remove(&channel);
+        self.ptys.remove(&channel);
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn pty_request(&mut self, channel: ChannelId, _term: &str, _c: u32, _r: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+    async fn pty_request(&mut self, channel: ChannelId, term: &str, cols: u32, rows: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+        self.ptys.insert(channel, Arc::new(Mutex::new(PtyState { term: term.to_string(), cols, rows })));
+        self.m.ptys.lock().unwrap().push(PtyState { term: term.to_string(), cols, rows });
         session.channel_success(channel)?;
         Ok(())
     }
 
+    async fn window_change_request(&mut self, channel: ChannelId, cols: u32, rows: u32, _pw: u32, _ph: u32, session: &mut Session) -> Result<(), Self::Error> {
+        if let Some(p) = self.ptys.get(&channel) {
+            let mut p = p.lock().unwrap();
+            p.cols = cols;
+            p.rows = rows;
+            self.m.resizes.lock().unwrap().push((cols, rows));
+        }
+        session.channel_success(channel)?;
+        Ok(())
+    }
+
+    /// shell：先印 `login:user@machine`，之後逐行處理：`tty` 印 `tty:<term> <cols>x<rows>`、`exit` 結束
+    /// （exit-status 0 + 關 channel），其餘原樣 echo。沒有 PTY 的 shell 也一樣跑。
     async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
         session.channel_success(channel)?;
         let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
+        let pty = self.ptys.get(&channel).cloned();
         let banner = format!("login:{}@{}\r\n", self.user.clone().unwrap_or_default(), self.m.name);
         tokio::spawn(async move {
             let _ = ch.data_bytes(banner.into_bytes()).await;
             let mut s = ch.into_stream();
             let mut buf = [0u8; 4096];
-            while let Ok(n) = s.read(&mut buf).await {
-                if n == 0 || s.write_all(&buf[..n]).await.is_err() {
+            let mut line = Vec::new();
+            'outer: while let Ok(n) = s.read(&mut buf).await {
+                if n == 0 {
                     break;
+                }
+                for &b in &buf[..n] {
+                    if b == b'\n' || b == b'\r' {
+                        let cmd = String::from_utf8_lossy(&line).trim().to_string();
+                        line.clear();
+                        let reply = match cmd.as_str() {
+                            "" => continue,
+                            "exit" => break 'outer,
+                            "tty" => match &pty {
+                                Some(p) => {
+                                    let p = p.lock().unwrap();
+                                    format!("tty:{} {}x{}\r\n", p.term, p.cols, p.rows)
+                                }
+                                None => "tty:none\r\n".to_string(),
+                            },
+                            other => format!("{other}\r\n"),
+                        };
+                        if s.write_all(reply.as_bytes()).await.is_err() {
+                            break 'outer;
+                        }
+                    } else {
+                        line.push(b);
+                    }
                 }
             }
         });
@@ -239,11 +323,59 @@ impl server::Handler for SshdHandler {
         session.channel_success(channel)?;
         let cmd = String::from_utf8_lossy(data).trim().to_string();
         let user = self.user.clone().unwrap_or_default();
+        if self.m.opts.shell {
+            let home = self.m.home.join(&user);
+            let tmp = home.join("tmp");
+            std::fs::create_dir_all(&tmp)?;
+            let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
+            tokio::spawn(async move {
+                let out = Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&home)
+                    .env("HOME", &home)
+                    .env("TMPDIR", &tmp)
+                    .env("USER", &user)
+                    .env("LOGNAME", &user)
+                    .stdin(Stdio::null())
+                    .output()
+                    .await;
+                let (stdout, stderr, code) = match out {
+                    Ok(o) => (o.stdout, o.stderr, o.status.code().unwrap_or(1) as u32),
+                    Err(e) => (Vec::new(), e.to_string().into_bytes(), 127),
+                };
+                if !stdout.is_empty() {
+                    let _ = ch.data_bytes(stdout).await;
+                }
+                if !stderr.is_empty() {
+                    let _ = ch.extended_data_bytes(1, stderr).await;
+                }
+                let _ = ch.exit_status(code).await;
+                let _ = ch.eof().await;
+                let _ = ch.close().await;
+            });
+            return Ok(());
+        }
         let (out, err, code) = match cmd.as_str() {
             "whoami" => (format!("{user}\n"), String::new(), 0),
             "hostname" => (format!("{}\n", self.m.name), String::new(), 0),
             "whereami" => (format!("{user}@{}\n", self.m.name), String::new(), 0),
             c if c.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).is_some() => (String::new(), String::new(), 0),
+            "uname -s" if self.m.opts.pretend_darwin => ("Darwin\n".to_string(), String::new(), 0),
+            c if self.m.opts.pretend_darwin && c.contains("dscacheutil -q host -a name ") => {
+                let name = c.rsplit("dscacheutil -q host -a name ").next().unwrap_or_default().trim_matches('\'').to_string();
+                self.m.resolves.lock().unwrap().push(name.clone());
+                use std::net::ToSocketAddrs;
+                let ip = (name.as_str(), 0).to_socket_addrs().ok().and_then(|mut a| a.find(|a| a.is_ipv4())).map(|a| a.ip().to_string());
+                match ip {
+                    Some(ip) => (format!("name: {name}\nip_address: {ip}\n"), String::new(), 0),
+                    None => (String::new(), String::new(), 0),
+                }
+            }
+            _ if self.m.opts.shell_without_sftp => {
+                let o = std::process::Command::new("sh").arg("-c").arg(&cmd).current_dir(&self.m.home).env("HOME", &self.m.home).output().unwrap();
+                (String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned(), o.status.code().unwrap_or(1) as u32)
+            }
             _ => (String::new(), format!("{cmd}: command not found\n"), 127),
         };
         // `sleep N`：讓 session 開著一陣子（測 presence 這類「連線期間」的狀態）。/ Keeps the session open for N seconds.
@@ -267,7 +399,7 @@ impl server::Handler for SshdHandler {
     }
 
     async fn subsystem_request(&mut self, channel: ChannelId, name: &str, session: &mut Session) -> Result<(), Self::Error> {
-        let bin = if name == "sftp" { sftp_server_bin() } else { None };
+        let bin = if name == "sftp" && !self.m.opts.shell_without_sftp { sftp_server_bin() } else { None };
         let (Some(bin), Some(ch)) = (bin, self.channels.remove(&channel)) else {
             session.channel_failure(channel)?;
             return Ok(());
@@ -307,6 +439,10 @@ impl server::Handler for SshdHandler {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.m.opts.pretend_darwin && host_to_connect.parse::<std::net::IpAddr>().is_err() {
+            // Apple sshd-session：getaddrinfo 在 fork 後的 privsep 子行程裡 abort → 整條連線斷。
+            anyhow::bail!("sshd-session crashed resolving {host_to_connect}");
+        }
         if !self.m.opts.allow_jump {
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
@@ -339,12 +475,18 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let home = dir.join(format!("{name}-home"));
     std::fs::create_dir_all(&home).unwrap();
     let logins = Arc::new(Mutex::new(Vec::new()));
+    let ptys = Arc::new(Mutex::new(Vec::new()));
+    let resizes = Arc::new(Mutex::new(Vec::new()));
+    let resolves = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
         opts,
         home: home.clone(),
         logins: logins.clone(),
+        ptys: ptys.clone(),
+        resizes: resizes.clone(),
+        resolves: resolves.clone(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -352,14 +494,14 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         while let Ok((stream, _)) = listener.accept().await {
             let (config, m) = (config.clone(), state.clone());
             tokio::spawn(async move {
-                let handler = SshdHandler { m, user: None, channels: HashMap::new(), sessions: HashSet::new() };
+                let handler = SshdHandler { m, user: None, channels: HashMap::new(), sessions: HashSet::new(), ptys: HashMap::new() };
                 if let Ok(session) = server::run_stream(config, stream, handler).await {
                     let _ = session.await;
                 }
             });
         }
     });
-    Machine { name: name.to_string(), port, home, logins }
+    Machine { name: name.to_string(), port, home, logins, ptys, resizes, resolves }
 }
 
 // ------------------------------------------------------------------ lab
@@ -404,6 +546,45 @@ impl Terminal {
         self.ws.send(Message::Text(msg.to_string().into())).await.unwrap();
     }
 
+    /// 前端的 `pty_resize`。/ The front end's resize message.
+    pub async fn resize(&mut self, cols: u32, rows: u32) {
+        let msg = json!({"action": "pty_resize", "payload": {"size": {"rows": rows, "cols": cols, "height": rows * 16, "width": cols * 8}}});
+        self.ws.send(Message::Text(msg.to_string().into())).await.unwrap();
+    }
+
+    /// 像瀏覽器關分頁：送 Close、丟掉 socket。/ Close the tab the way a browser does.
+    pub async fn close(mut self) {
+        let _ = self.ws.close(None).await;
+    }
+
+    /// 等伺服器端關閉這條連線，回關閉碼（1000 = shell 正常結束）；10 秒沒關就 panic。
+    pub async fn wait_closed(&mut self) -> Option<u16> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Close(f)))) => return f.map(|f| u16::from(f.code)),
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(_))) | Ok(None) => return None,
+                Err(_) => panic!("terminal was not closed by the server; output so far: {:?}", self.seen),
+            }
+        }
+    }
+
+    /// `{action:"ping"}` → 伺服器回 **binary** `pong`（前端把 text frame 全寫進 xterm）。中間的 PTY 輸出照收。
+    pub async fn ping(&mut self) -> bool {
+        self.ws.send(Message::Text(json!({"action": "ping"}).to_string().into())).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Binary(b)))) => return &b[..] == b"pong",
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(_))) => {}
+                _ => return false,
+            }
+        }
+    }
+
     /// 讀 PTY 輸出直到出現 `needle`（10 秒逾時）。
     pub async fn expect(&mut self, needle: &str) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -434,11 +615,6 @@ pub struct Lab {
 impl Lab {
     /// 起 gateway + 後端；沒有 ssh / ssh-keygen 就回 None（呼叫端 `return`）。
     pub async fn start() -> Option<Lab> {
-        Self::start_with(|_| {}).await
-    }
-
-    /// 同上，但先讓呼叫端改 config（例如 guacd 位址）。/ Same, with a chance to tweak the config first.
-    pub async fn start_with(tweak: impl FnOnce(&mut telepy_server::config::Config)) -> Option<Lab> {
         if !have("ssh") || !have("ssh-keygen") {
             eprintln!("skipping: ssh / ssh-keygen not available");
             return None;
@@ -449,8 +625,8 @@ impl Lab {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let gw_port = listener.local_addr().unwrap().port();
 
-        // 後端的 OpenSSH（terminal / ssh -D）：不讀開發者的 ~/.ssh、只用服務金鑰。命令列「先出現的值優先」，
-        // 所以這裡的 ControlPath / ControlPersist 會蓋過 terminal_args，多工 socket 不會殘留。
+        // 後端的 OpenSSH（只剩區網主機那一跳）：不讀開發者的 ~/.ssh、只用服務金鑰。
+        // The backend's OpenSSH client (only the LAN hop now): no developer ~/.ssh, only the service key.
         let wrapper = dir.path().join("backend-ssh");
         std::fs::write(
             &wrapper,
@@ -473,7 +649,6 @@ impl Lab {
         config.server_domain = Some("127.0.0.1".to_string());
         config.reverse_server_ssh_port = gw_port.to_string();
         config.ssh_logs_path = dir.path().join("ssh-gateway.log");
-        tweak(&mut config);
         app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
         app.router = telepy_server::app::build(app.state.clone());
         telepy_server::gateway::start(app.state.gateway.clone(), listener).unwrap();
@@ -487,6 +662,20 @@ impl Lab {
 
     pub fn keygen(&self, name: &str) -> LabKey {
         keygen(self.dir.path(), name)
+    }
+
+    /// 改設定並重建 state / router（gateway 與 DB 保留）。在開任何 WebSocket 之前呼叫。
+    /// Change config and rebuild state + router (the gateway and DB stay). Call before opening any WebSocket.
+    pub fn reconfigure(&mut self, f: impl FnOnce(&mut telepy_server::config::Config)) {
+        assert!(self.ws_base.get().is_none(), "reconfigure before the first WebSocket");
+        let mut config = self.app.state.config.clone();
+        f(&mut config);
+        let gateway = self.app.state.gateway.clone();
+        let status = self.app.state.status.clone();
+        let presence = self.app.state.presence.clone();
+        let db = self.app.state.db.clone();
+        self.app.state = telepy_server::state::AppState::with_gateway(config, db, gateway, status, presence);
+        self.app.router = telepy_server::app::build(self.app.state.clone());
     }
 
     /// 直接在 DB 建帳號並簽 access token（不走註冊 / 登入：debug build 的 pbkdf2 一百萬次要好幾秒）。
@@ -527,8 +716,8 @@ impl Lab {
         Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
     }
 
-    /// 裝置斷線再連回來（同一把金鑰、同一個 port），等到新的 forward 註冊好。
-    pub async fn reconnect_device(&self, device: &Device) {
+    /// 裝置斷線（殺掉它的 `ssh -NR`），等到 forward 釋放。/ Drop the device's tunnel and wait for the release.
+    pub async fn disconnect_device(&self, device: &Device) {
         let old = self.tunnels.lock().unwrap().remove(&device.tunnel_id);
         if let Some(mut c) = old {
             let _ = c.kill().await;
@@ -538,8 +727,23 @@ impl Lab {
             assert!(tokio::time::Instant::now() < deadline, "device {}: forward never released", device.name);
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// 裝置斷線再連回來（同一把金鑰、同一個 port），等到新的 forward 註冊好。
+    pub async fn reconnect_device(&self, device: &Device) {
+        self.disconnect_device(device).await;
         let ssh = self.spawn_tunnel(&device.key, device.reverse_port, device.target.port, &device.name).await;
         self.tunnels.lock().unwrap().insert(device.tunnel_id, ssh);
+    }
+
+    /// 在隧道的區網主機表手動加一台（#20），回 host id。/ Add a LAN host behind the device; returns its id.
+    pub async fn lan_host(&self, as_user: &LabUser, device: &Device, address: &str, ssh_port: u16, username: Option<&str>) -> i64 {
+        let r = self
+            .app
+            .post(&format!("/api/reverse/server/{}/lan/hosts", device.tunnel_id), Some(&as_user.token), json!({"address": address, "ssh_port": ssh_port, "username": username}))
+            .await;
+        assert!(r.status.is_success(), "lan host: {}", r.text);
+        r.json["id"].as_i64().unwrap()
     }
 
     /// 一行指令加入的裝置：用 join 腳本的選項（釘住 gateway host key）把隧道連上來。`host_keys` 是 `type base64` 行。
@@ -634,11 +838,6 @@ impl Lab {
         self.app.state.pool.sftp(&self.app.state, device.reverse_port as i64, os_user).await
     }
 
-    /// 後端 OpenSSH（terminal / `ssh -D` 的路）：同一支包裝程式、一跳到 loopback。
-    pub async fn backend_ssh(&self, device: &Device, os_user: &str, cmd: &str) -> Run {
-        run(Command::new(&self.app.state.config.ssh_binary).args(["-p", &device.reverse_port.to_string(), &format!("{os_user}@127.0.0.1"), cmd])).await
-    }
-
     /// 筆電的 ssh config：`telepy-ssh-server`（gateway）+ 每一跳一個 `hopN`，最後一跳是目的地。
     pub fn laptop_config(&self, user: &LabUser, hops: &[(Hop<'_>, &str)]) -> PathBuf {
         let path = self.dir.path().join(format!("{}-laptop-{}.conf", user.username, next_id()));
@@ -684,14 +883,8 @@ impl Lab {
         run(Command::new("ssh").arg("-F").arg(config).arg(host).arg(cmd)).await
     }
 
-    /// 網頁終端機：Telepy 拒絕（權限 / 帳號不允許）時回關閉碼；否則回已開始的終端機。
-    pub async fn terminal(&self, user: &LabUser, device: &Device, os_user: &str) -> Result<Terminal, u16> {
-        self.terminal_with(user, device, os_user, json!({})).await
-    }
-
-    /// 真的 listener 上的後端（WebSocket 測試用），與正式環境一樣帶 ConnectInfo：`ws://127.0.0.1:<port>`。
-    /// The backend on a real listener (with ConnectInfo, like production), for WebSocket tests.
-    pub async fn ws_base(&self) -> &str {
+    /// 真的 HTTP listener（WebSocket 測試用），第一次呼叫時起；與正式環境一樣帶 ConnectInfo（來源 IP）。
+    pub async fn ws_base(&self) -> String {
         self.ws_base
             .get_or_init(|| async {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -701,6 +894,34 @@ impl Lab {
                 format!("ws://{addr}")
             })
             .await
+            .clone()
+    }
+
+    /// 檔案管理（`/ws/filemanager/`）：送 auth，再送一個 action，回第一個 JSON 回應（Telepy 拒絕時回關閉碼）。
+    pub async fn filemanager(&self, user: &LabUser, device: &Device, os_user: &str, action: Value) -> Result<Value, u16> {
+        let base = self.ws_base().await;
+        let (mut ws, _) = connect_async(format!("{base}/ws/filemanager/")).await.unwrap();
+        let auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        ws.send(Message::Text(auth.to_string().into())).await.unwrap();
+        ws.send(Message::Text(action.to_string().into())).await.unwrap();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("no file manager frame") {
+                Some(Ok(Message::Close(Some(f)))) => return Err(u16::from(f.code)),
+                Some(Ok(Message::Text(t))) => {
+                    let v: Value = serde_json::from_str(&t).unwrap();
+                    if v.get("type").is_none() {
+                        return Ok(v);
+                    }
+                }
+                Some(Ok(_)) => {}
+                other => panic!("file manager socket ended: {other:?}"),
+            }
+        }
+    }
+
+    /// 網頁終端機：Telepy 拒絕（權限 / 帳號不允許）時回關閉碼；否則回已開始的終端機。
+    pub async fn terminal(&self, user: &LabUser, device: &Device, os_user: &str) -> Result<Terminal, u16> {
+        self.terminal_with(user, device, os_user, json!({})).await
     }
 
     /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `lan_host_id`）。/ Same, with extra auth-message fields.

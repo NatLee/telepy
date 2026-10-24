@@ -101,6 +101,12 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
     state.remote_browser.cleanup_orphans(&state.db).await;
+    // 上次沒關到的連線紀錄（後端重啟 = 所有 forward 都斷了）。/ Connection rows left open by the last run.
+    match telepy_server::db::tunnel_sessions::close_orphans(&state.db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "closed connection history rows left open by the previous run"),
+        Err(e) => tracing::warn!(error = %e, "cannot close orphaned connection history rows"),
+    }
     if config.gateway_enabled {
         match tokio::net::TcpListener::bind(&config.gateway_bind).await {
             Ok(listener) => match telepy_server::gateway::start(state.gateway.clone(), listener) {

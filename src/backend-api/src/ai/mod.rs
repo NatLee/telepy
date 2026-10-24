@@ -58,6 +58,7 @@ pub enum CloseReason {
     PermissionRemoved,
     ClosedByUser,
     ClosedByAgent,
+    TunnelDeleted,
 }
 
 impl CloseReason {
@@ -71,6 +72,7 @@ impl CloseReason {
             CloseReason::PermissionRemoved => "permission_removed",
             CloseReason::ClosedByUser => "closed_by_user",
             CloseReason::ClosedByAgent => "closed_by_agent",
+            CloseReason::TunnelDeleted => "tunnel_deleted",
         }
     }
 }
@@ -360,7 +362,16 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Ar
 
 /// grant 撤銷時立即關掉它的所有 session。/ Close every session of a grant (on revocation).
 pub async fn close_for_grant(state: &AppState, grant_id: i64, reason: CloseReason) -> usize {
-    let ids: Vec<String> = state.ai.list().iter().filter(|s| s.grant_id == grant_id).map(|s| s.id.clone()).collect();
+    close_where(state, |s| s.grant_id == grant_id, reason).await
+}
+
+/// 隧道刪除時立即關掉上面的 session（不等 reaper）。/ Close every session on a tunnel (on delete).
+pub async fn close_for_tunnel(state: &AppState, tunnel_id: i64, reason: CloseReason) -> usize {
+    close_where(state, |s| s.tunnel_id == tunnel_id, reason).await
+}
+
+async fn close_where(state: &AppState, pick: impl Fn(&AiSession) -> bool, reason: CloseReason) -> usize {
+    let ids: Vec<String> = state.ai.list().iter().filter(|s| pick(s)).map(|s| s.id.clone()).collect();
     let mut n = 0;
     for id in ids {
         if close(state, &id, reason).await.is_some() {
@@ -569,6 +580,9 @@ mod tests {
             ai_session_max_lifetime: 7200,
             ai_max_sessions_per_user: 3,
             lan_scan_enabled: true,
+            notify_webhook_url: String::new(),
+            notify_down_delay: 60,
+            user_key_max_days: 0,
             desktop_enabled: true,
             desktop_max_sessions: 4,
             desktop_session_idle_timeout: 900,

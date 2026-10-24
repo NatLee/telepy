@@ -158,14 +158,11 @@ async fn wait_for<F: Fn() -> bool>(what: &str, f: F) {
 #[tokio::test]
 async fn desktop_session_through_the_device() {
     let (guacd, seen) = fake_guacd().await;
-    let Some(lab) = Lab::start_with(|c| {
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
         c.guacd_addr = guacd.clone();
         c.desktop_callback_host = "127.0.0.1".into();
-    })
-    .await
-    else {
-        return;
-    };
+    });
     let app = &lab.app;
     let alice = lab.user("alice").await;
     let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
@@ -246,14 +243,11 @@ async fn desktop_session_through_the_device() {
 #[tokio::test]
 async fn desktop_refusals() {
     let (guacd, _seen) = fake_guacd().await;
-    let Some(lab) = Lab::start_with(|c| {
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
         c.guacd_addr = guacd.clone();
         c.desktop_callback_host = "127.0.0.1".into();
-    })
-    .await
-    else {
-        return;
-    };
+    });
     let app = &lab.app;
     let alice = lab.user("alice").await;
     let bob = lab.user("bob").await;

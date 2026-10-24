@@ -392,6 +392,8 @@ export const SHORT_LABEL: Partial<Record<TranslationKey, TranslationKey>> = {
     "sheet.explain.copyToLocal": "sheet.part.copyToLocal",
     "sheet.explain.copyToDevice": "sheet.part.copyToDevice",
     "sheet.explain.copyFromDevice": "sheet.part.copyFromDevice",
+    "sheet.explain.copyToLanHost": "sheet.part.copyToLanHost",
+    "sheet.explain.copyFromLanHost": "sheet.part.copyFromLanHost",
     "sheet.explain.remoteCommand": "sheet.part.remoteCommand",
 };
 

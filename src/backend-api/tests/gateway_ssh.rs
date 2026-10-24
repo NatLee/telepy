@@ -1,5 +1,5 @@
 //! 內建 SSH gateway 的端到端測試：用真正的 OpenSSH 客戶端建立 `-R` 反向隧道到本機 echo server，
-//! 再從 gateway 的 loopback listener 與 russh direct-tcpip 兩條路穿過去。沒有 ssh/ssh-keygen 就跳過。
+//! 再從行程內通道（`open_stream`）與 russh direct-tcpip 兩條路穿過去。沒有 ssh/ssh-keygen 就跳過。
 mod common;
 
 use std::process::Stdio;
@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::process::Command;
 
 use telepy_server::db;
@@ -112,7 +112,7 @@ async fn reverse_tunnel_through_real_openssh_client() {
     db::keys::service_key_upsert(&app.state.db, "web-service", &service_pub, "test").await.unwrap();
     let guest = db::users::create(&app.state.db, db::users::NewUser { username: "guest", password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
     db::sharing::create(&app.state.db, tunnel.id, uid, guest.id, "view").await.unwrap();
-    db::keys::user_key_create(&app.state.db, guest.id, "guest-laptop", &guest_pub, None).await.unwrap();
+    db::keys::user_key_create(&app.state.db, guest.id, "guest-laptop", &guest_pub, None, None).await.unwrap();
 
     let gw = app.state.gateway.clone();
     assert_eq!(gw.host_keys_loaded, 1);
@@ -153,8 +153,10 @@ async fn reverse_tunnel_through_real_openssh_client() {
     }
     assert_eq!(gw.active_ports(), vec![reverse_port as u16]);
 
-    // 1) loopback listener → forwarded-tcpip → ssh client → echo server
-    let mut tcp = TcpStream::connect(("127.0.0.1", reverse_port as u16)).await.unwrap();
+    // 1) 行程內 forwarded-tcpip → ssh client → echo server；gateway 不在本機綁 reverse port。
+    //    In-process forwarded-tcpip; the gateway binds nothing on 127.0.0.1:<reverse_port>.
+    assert!(std::net::TcpListener::bind(("127.0.0.1", reverse_port as u16)).is_ok(), "the reverse port must stay free on the host");
+    let mut tcp = gw.open_stream(reverse_port as u16).await.unwrap();
     let mut banner = [0u8; 14];
     tokio::time::timeout(Duration::from_secs(5), tcp.read_exact(&mut banner)).await.unwrap().unwrap();
     assert_eq!(&banner, b"SSH-2.0-echo\r\n");
@@ -209,7 +211,8 @@ async fn reverse_tunnel_through_real_openssh_client() {
     ssh.kill().await.unwrap();
     let released = wait_until(Duration::from_secs(15), || app.state.status.listen_ports().map(|p| !p.contains(&(reverse_port as u16))).unwrap_or(false)).await;
     assert!(released, "forward must be released when the client disconnects");
-    assert!(TcpStream::connect(("127.0.0.1", reverse_port as u16)).await.is_err(), "loopback listener must be closed");
+    assert!(!gw.has_forward(reverse_port as u16));
+    assert!(gw.open_stream(reverse_port as u16).await.is_err(), "no channel to an offline device");
 
     // 6b) with the device offline, a shared user's key cannot take over its port (no impersonating the
     //     device); the owner's own user key can.

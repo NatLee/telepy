@@ -1,4 +1,4 @@
-//! Remote browser 端到端：假的 `ssh -D`（python 聽埠）+ 假的 kasm session-manager（axum）+
+//! Remote browser 端到端：SSH lab 上真的裝置（行程內 SOCKS 經池子連線）+ 假的 kasm session-manager（axum）+
 //! 假的 KasmVNC websocket（echo），走 REST start/ping/stop 與 /ws/remote-browser 中繼。
 mod common;
 
@@ -66,28 +66,8 @@ async fn mock_vnc_ws() -> u16 {
     port
 }
 
-fn write_script(dir: &std::path::Path, name: &str, body: &str) -> String {
-    let p = dir.join(name);
-    std::fs::write(&p, body).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    p.to_str().unwrap().to_string()
-}
-
-const FAKE_SSH_LISTEN: &str = "#!/usr/bin/env python3\nimport socket, sys, time\nport = int([a for a in sys.argv if a.startswith('0.0.0.0:')][0].split(':')[1])\ns = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', port)); s.listen(8)\nwhile True:\n    time.sleep(1)\n";
-const FAKE_SSH_DEAD: &str = "#!/bin/sh\necho 'ssh: connect to host reverse port 22: Connection refused' >&2\nexit 255\n";
-
-async fn serve(app: &common::TestApp) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = app.router.clone();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    format!("{addr}")
-}
-
-async fn setup(app: &mut common::TestApp, ssh_script: &str, kasm_base: &str) -> (String, i64) {
+async fn setup(app: &mut common::TestApp, kasm_base: &str) -> (String, i64) {
     let mut config = app.state.config.clone();
-    config.ssh_binary = ssh_script.to_string();
     config.kasm_api = kasm_base.to_string();
     config.kasm_host = "127.0.0.1".to_string();
     config.hostname = "127.0.0.1".to_string();
@@ -107,13 +87,21 @@ async fn setup(app: &mut common::TestApp, ssh_script: &str, kasm_base: &str) -> 
 
 #[tokio::test]
 async fn start_relay_and_stop() {
-    let mut app = common::spawn().await;
-    let dir = tempfile::tempdir().unwrap();
-    let ssh = write_script(dir.path(), "fake-ssh-d", FAKE_SSH_LISTEN);
+    let Some(mut lab) = common::lab::Lab::start().await else { return };
     let log = KasmLog::default();
     let vnc_port = mock_vnc_ws().await;
     let kasm = mock_kasm(log.clone(), vnc_port).await;
-    let (token, tunnel_id) = setup(&mut app, &ssh, &kasm).await;
+    lab.reconfigure(|c| {
+        c.kasm_api = kasm;
+        c.kasm_host = "127.0.0.1".to_string();
+        c.hostname = "127.0.0.1".to_string();
+        c.remote_browser_gc = false;
+    });
+    let alice = lab.user("alice").await;
+    let edge = lab.machine("edge", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "edge", &edge).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let (app, token, tunnel_id) = (&lab.app, alice.token.clone(), dev.tunnel_id);
 
     // no access for a foreign tunnel → 404
     let r = app.post("/api/reverse/server/999/remote-browser/start", Some(&token), json!({})).await;
@@ -138,8 +126,8 @@ async fn start_relay_and_stop() {
     assert_eq!(rows, 1);
 
     // relay: auth → ready → begin → greeting → echo
-    let addr = serve(&app).await;
-    let (mut ws, _) = connect_async(format!("ws://{addr}/ws/remote-browser/{sid}/")).await.unwrap();
+    let base = lab.ws_base().await;
+    let (mut ws, _) = connect_async(format!("{base}/ws/remote-browser/{sid}/")).await.unwrap();
     ws.send(Message::Text(json!({"type": "auth", "token": token}).to_string().into())).await.unwrap();
     let ready = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
     assert_eq!(ready, Message::Text(json!({"type": "ready"}).to_string().into()));
@@ -151,7 +139,7 @@ async fn start_relay_and_stop() {
     assert_eq!(echo, Message::Binary(bytes::Bytes::from_static(b"client-bytes")));
 
     // unknown session → 4404
-    let (mut bad, _) = connect_async(format!("ws://{addr}/ws/remote-browser/nope/")).await.unwrap();
+    let (mut bad, _) = connect_async(format!("{base}/ws/remote-browser/nope/")).await.unwrap();
     bad.send(Message::Text(json!({"type": "auth", "token": token}).to_string().into())).await.unwrap();
     match tokio::time::timeout(Duration::from_secs(5), bad.next()).await.unwrap().unwrap().unwrap() {
         Message::Close(Some(f)) => assert_eq!(u16::from(f.code), 4404),
@@ -171,12 +159,11 @@ async fn start_relay_and_stop() {
 
 #[tokio::test]
 async fn offline_device_reports_device_offline() {
+    // 沒有裝置連上（沒有 gateway、也沒有 sshd）。/ No device behind the tunnel.
     let mut app = common::spawn().await;
-    let dir = tempfile::tempdir().unwrap();
-    let ssh = write_script(dir.path(), "fake-ssh-dead", FAKE_SSH_DEAD);
     let log = KasmLog::default();
     let kasm = mock_kasm(log.clone(), 1).await;
-    let (token, tunnel_id) = setup(&mut app, &ssh, &kasm).await;
+    let (token, tunnel_id) = setup(&mut app, &kasm).await;
     let r = app.post(&format!("/api/reverse/server/{tunnel_id}/remote-browser/start"), Some(&token), json!({"username": "ubuntu"})).await;
     assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", r.text);
     assert_eq!(r.json["code"], "device_offline");

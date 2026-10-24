@@ -13,6 +13,7 @@ use crate::auth::AuthUser;
 use crate::client_ip::ClientMeta;
 use crate::db::{self, sign_ins::{NewSignIn, SignIn}};
 use crate::error::{ApiError, ApiResult};
+use crate::geoip::GeoIp;
 use crate::state::AppState;
 use crate::util::db_to_iso_utc_z;
 
@@ -56,7 +57,7 @@ pub async fn record(state: &AppState, user_id: i64, meta: &ClientMeta, a: Attemp
     }
 }
 
-fn sign_in_json(e: &SignIn) -> Value {
+fn sign_in_json(e: &SignIn, geo: &GeoIp) -> Value {
     json!({
         "id": e.id,
         "at": db_to_iso_utc_z(&e.at),
@@ -64,6 +65,7 @@ fn sign_in_json(e: &SignIn) -> Value {
         "method": e.method,
         "second_factor": e.second_factor,
         "ip": e.ip,
+        "geo": geo.json(e.ip.as_deref()),
         "user_agent": e.user_agent,
         "reason": e.reason,
     })
@@ -72,7 +74,7 @@ fn sign_in_json(e: &SignIn) -> Value {
 async fn list(state: &AppState, user_id: i64, q: &HashMap<String, String>) -> ApiResult<Json<Value>> {
     let limit = q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let rows = db::sign_ins::for_user(&state.db, user_id, limit).await?;
-    Ok(Json(Value::Array(rows.iter().map(sign_in_json).collect())))
+    Ok(Json(Value::Array(rows.iter().map(|e| sign_in_json(e, &state.geoip)).collect())))
 }
 
 #[utoipa::path(get, path = "/api/auth/sign-ins", tag = "Login", security(("bearer" = [])), params(("limit" = Option<i64>, Query, description = "Default 20, max 200")), responses((status = 200, description = "Your recent sign-ins (successful and failed), newest first; kept 90 days", body = Vec<super::schemas::SignInEvent>)))]

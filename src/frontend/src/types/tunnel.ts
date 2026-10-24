@@ -2,6 +2,7 @@
  * 通道與反向代理相關型別 / Tunnel and Reverse Proxy types
  * Defines shapes for tunnels, users, and files associated with them.
  */
+import type { IpGeo } from "@/lib/geo";
 
 export interface Tunnel {
     id: number;
@@ -18,7 +19,21 @@ export interface Tunnel {
     endpoint?: TunnelEndpoint | null;
     /** 誰在用（只在列表裡）。/ Who is using the tunnel (list only). */
     presence?: TunnelPresence | null;
+    /** 健康狀態（只在列表裡；抓取當下的值，即時狀態看 portsMap，見 lib/tunnelHealth）。/ Health at fetch time (list only). */
+    health?: TunnelHealth;
+    /** 離線時最後一次連線的時間（UTC）；連著或從沒連過時 null。/ When it was last connected; null while connected or never. */
+    last_seen_at?: string | null;
+    /** 我有沒有釘選（每個人自己的）。/ Whether I pinned it (per user). */
+    pinned?: boolean;
+    /** 隧道標籤（大家共用，EDIT 以上可改）。/ Shared labels (EDIT and up may change them). */
+    labels?: string[];
 }
+
+/**
+ * online：經由隧道讀得到裝置 sshd；degraded：隧道在、sshd 沒回應；offline：連過但現在斷線；never：從沒連上過。
+ * online / degraded (tunnel up, device sshd not answering) / offline / never connected.
+ */
+export type TunnelHealth = "online" | "degraded" | "offline" | "never";
 
 /** 人數給所有人；sessions 只給 owner / ADMIN / 管理員（其他人 null）。/ Count for all; sessions for owner / ADMIN / admins. */
 export interface TunnelPresence {
@@ -31,6 +46,7 @@ export interface PresenceSession {
     /** terminal / files / browser / ssh / ai */
     kind: string;
     ip: string | null;
+    geo?: IpGeo | null;
     since: string;
     /** AI session 的 app。/ The app behind an AI session. */
     client: string | null;
@@ -43,6 +59,11 @@ export interface TunnelEndpoint {
     live: boolean;
     connected_at: string;
     last_seen_at: string | null;
+    /** 位址範圍與（有 GeoIP 時的）國家 / 業者。/ Scope plus country / network owner. */
+    geo?: IpGeo | null;
+    /** 最近一次換 IP 之前的位址與換的時間。/ The address before the latest change, and when it changed. */
+    previous_ip?: string | null;
+    changed_at?: string | null;
 }
 
 export interface ReverseServerUsername {
@@ -92,4 +113,8 @@ export interface TunnelActionHandlers {
     onShare: (tunnelId: number) => void;
     onLeave: (tunnelId: number, name: string) => void;
     onDelete: (tunnelId: number, name: string) => void;
+    /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
+    onTogglePin?: (tunnelId: number, pinned: boolean) => void;
+    /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */
+    onLabel?: (label: string) => void;
 }

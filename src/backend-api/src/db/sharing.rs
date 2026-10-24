@@ -118,6 +118,14 @@ pub async fn allowed_username_ids(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<
         .await
 }
 
+/// 這條隧道的 ADMIN sharee（管理它的人；收安全通知用）。/ ADMIN sharees of a tunnel (they manage it).
+pub async fn admin_sharee_ids(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(&format!("SELECT shared_with_id FROM {S} WHERE tunnel_id = ? AND permission_type = 'admin' ORDER BY id"))
+        .bind(tunnel_id)
+        .fetch_all(&db.read)
+        .await
+}
+
 /// 這位 sharee 至少有一個「允許的目標帳號」的隧道（與 `permissions::allowed_usernames` 同語意：
 /// 只算仍屬於該隧道的帳號）。一次查完，給列表用。/ Tunnels where this sharee may log in as at least one account.
 pub async fn tunnels_with_allowed_usernames(db: &Db, user_id: i64) -> sqlx::Result<HashSet<i64>> {

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "env:sync": "node scripts/sync-env.js"
+    "env:sync": "node scripts/sync-env.js",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

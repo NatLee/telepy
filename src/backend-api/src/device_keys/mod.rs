@@ -12,6 +12,7 @@
 
 pub mod authorized_keys;
 pub mod remote;
+pub mod view;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -41,6 +42,19 @@ pub struct DeviceKeys {
     locks: DashMap<i64, Arc<tokio::sync::Mutex<()>>>,
     retry_at: Mutex<HashMap<(i64, String), Instant>>,
     forced_at: Mutex<HashMap<i64, Instant>>,
+    /// 每台裝置（reverse port）每個帳號最近一次讀到 / 寫入的 authorized_keys，面板不必每次都連裝置。
+    /// The authorized_keys last read or written per (reverse port, account), so the panel needn't dial the device.
+    snapshots: Mutex<HashMap<(i64, String), FileSnapshot>>,
+}
+
+/// 最近一次看到的檔案內容。/ The file as Telepy last saw it.
+#[derive(Debug, Clone)]
+pub struct FileSnapshot {
+    /// None = 檔案不存在（或讀取失敗）。/ None = no such file (or the read failed).
+    pub content: Option<String>,
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// 讀取失敗的原因。/ Why the read failed.
+    pub error: Option<String>,
 }
 
 impl DeviceKeys {
@@ -60,6 +74,20 @@ impl DeviceKeys {
     /// 同一台裝置的 authorized_keys 一次只有一個人在改。/ One writer per device at a time.
     pub fn lock_for(&self, tunnel_id: i64) -> Arc<tokio::sync::Mutex<()>> {
         self.locks.entry(tunnel_id).or_default().clone()
+    }
+
+    /// `remote` 每次讀 / 寫成功都記一筆。/ Recorded by `remote` after every successful read or write.
+    pub fn record_snapshot(&self, reverse_port: i64, account: &str, content: Option<String>) {
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content, at: chrono::Utc::now(), error: None });
+    }
+
+    /// 讀不到（例如服務金鑰不在這個帳號）。/ The read failed (e.g. the service key is not in that account).
+    pub fn record_failure(&self, reverse_port: i64, account: &str, error: String) {
+        self.snapshots.lock().unwrap().insert((reverse_port, account.to_string()), FileSnapshot { content: None, at: chrono::Utc::now(), error: Some(error) });
+    }
+
+    pub fn snapshot(&self, reverse_port: i64, account: &str) -> Option<FileSnapshot> {
+        self.snapshots.lock().unwrap().get(&(reverse_port, account.to_string())).cloned()
     }
 }
 
@@ -82,6 +110,10 @@ pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
     let mut allowed: HashMap<i64, Vec<String>> = HashMap::new();
     let mut out = Desired::new();
     for e in entries {
+        // 到期的金鑰不該在裝置上：從期望狀態拿掉，同步就會把它移除。/ Expired keys drop out, so sync removes them.
+        if db::keys::is_expired(e.expires_at.as_deref()) {
+            continue;
+        }
         let Some(parsed) = parse_public_key(&e.key) else { continue };
         if !allowed.contains_key(&e.user_id) {
             let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| u.username).collect();
@@ -242,36 +274,133 @@ async fn sync_account(
     Ok(plan.content.is_some())
 }
 
-/// 隧道刪除前：把 Telepy 裝過的金鑰從裝置移掉（盡力而為，裝置離線就算了），再清掉紀錄。
-pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel) {
+/// 刪隧道時要不要動裝置上的金鑰。/ What to remove from the device when its tunnel is deleted.
+#[derive(Debug, Clone, Copy)]
+pub struct CleanupOptions {
+    /// Telepy 依清單裝過的金鑰。/ Keys Telepy installed from the key list.
+    pub device_keys: bool,
+    /// 服務金鑰（移掉之後 Telepy 就登不進這些帳號了）。/ The service key (Telepy can no longer log in).
+    pub service_key: bool,
+}
+
+/// 一個帳號的清理結果。/ Cleanup result of one account.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AccountCleanup {
+    pub account: String,
+    /// 移掉的 Telepy 管理金鑰數。/ Managed keys removed.
+    pub removed: usize,
+    pub service_key_removed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Cleanup {
+    pub online: bool,
+    pub accounts: Vec<AccountCleanup>,
+    /// Telepy 裝過、還留在裝置上的金鑰數（不重複；離線、失敗或選擇保留）。/ Distinct installed keys still on the device.
+    pub keys_left: usize,
+}
+
+/// 每個帳號最多等這麼久（裝置很慢或卡住時，刪除不能跟著卡住）。/ Per-account limit so a stuck device cannot hang the delete.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// 刪除前的檢查用：Telepy 裝在這台裝置上的金鑰，依金鑰分組（擁有者、名稱、帳號）。
+/// Keys Telepy installed on the device, grouped per key (for the delete check).
+pub async fn installed_summary(db: &db::Db, tunnel_id: i64) -> sqlx::Result<Vec<serde_json::Value>> {
+    let installed = db::device_keys::installed_for_tunnel(db, tunnel_id).await?;
+    let entries: HashMap<i64, db::device_keys::Entry> = db::device_keys::entries_for_tunnel(db, tunnel_id).await?.into_iter().map(|e| (e.user_key_id, e)).collect();
+    let mut keys: BTreeMap<String, (Option<i64>, Option<i64>, String, Vec<String>)> = BTreeMap::new();
+    for i in installed {
+        let k = keys.entry(i.key_bare.clone()).or_insert_with(|| (i.user_key_id, i.user_id, i.fingerprint.clone(), Vec::new()));
+        k.3.push(i.username);
+    }
+    let mut out = Vec::with_capacity(keys.len());
+    for (_, (key_id, user_id, fingerprint, accounts)) in keys {
+        let entry = key_id.and_then(|id| entries.get(&id));
+        let owner = match (entry, user_id) {
+            (Some(e), _) => Some(e.owner_username.clone()),
+            (None, Some(uid)) => db::users::by_id(db, uid).await?.map(|u| u.username),
+            (None, None) => None,
+        };
+        out.push(json!({
+            "fingerprint": fingerprint,
+            "owner": owner,
+            "name": entry.map(|e| e.name.clone()),
+            "in_list": entry.is_some(),
+            "accounts": accounts,
+        }));
+    }
+    Ok(out)
+}
+
+/// 隧道刪除前：清掉清單與安裝紀錄；裝置在線時依選項把 Telepy 裝過的金鑰（與服務金鑰）從各帳號移掉。
+/// 這要在隧道還連著時做（之後裝置就被踢掉、也連不回來了），所以是同步的，結果回報給刪除對話框。
+/// Before a tunnel is deleted: drop its key list and install records and, while the device is still
+/// connected, remove what the options ask for from every account. Synchronous so the result can be shown.
+pub async fn forget_tunnel(state: &AppState, tunnel: &Tunnel, opts: CleanupOptions, accounts: &[String]) -> Cleanup {
+    let lock = state.device_keys.lock_for(tunnel.id);
+    let _guard = lock.lock().await;
     let installed = db::device_keys::installed_for_tunnel(&state.db, tunnel.id).await.unwrap_or_default();
     let _ = db::device_keys::delete_tunnel(&state.db, tunnel.id).await;
-    if installed.is_empty() || !online(state, tunnel.reverse_port) {
-        return;
+    let online = online(state, tunnel.reverse_port);
+    let mut work: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    if opts.device_keys {
+        for i in &installed {
+            work.entry(i.username.clone()).or_default().insert(i.key_bare.clone());
+        }
     }
-    let state = state.clone();
+    if opts.service_key {
+        for a in accounts {
+            work.entry(a.clone()).or_default();
+        }
+    }
+    // 留在裝置上的「金鑰」數（同一把裝在兩個帳號算一把，和刪除前的檢查一致）。/ Distinct keys, like the check.
+    let distinct = |rows: &mut dyn Iterator<Item = &Installed>| rows.map(|i| i.key_bare.as_str()).collect::<BTreeSet<_>>().len();
+    if !online || work.is_empty() {
+        let keys_left = if opts.device_keys && online { 0 } else { distinct(&mut installed.iter()) };
+        return Cleanup { online, accounts: Vec::new(), keys_left };
+    }
+    let service = protected(&state.db).await.unwrap_or_default();
     let port = tunnel.reverse_port;
-    tokio::spawn(async move {
-        let protected = protected(&state.db).await.unwrap_or_default();
-        let mut by_account: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        for i in installed {
-            by_account.entry(i.username).or_default().insert(i.key_bare);
-        }
-        for (account, managed) in by_account {
-            let result = async {
-                let file = remote::AuthorizedKeysFile::open(&state, &account, port, false).await?;
-                let plan = authorized_keys::plan(&file.read().await?, &[], &managed, &protected);
-                if let Some(new) = plan.content {
-                    file.write(&new).await?;
+    let results: Vec<AccountCleanup> = futures::future::join_all(work.into_iter().map(|(account, managed)| {
+        let service = &service;
+        async move {
+            let run = clean_account(state, port, &account, &managed, service, opts.service_key);
+            match tokio::time::timeout(CLEANUP_TIMEOUT, run).await {
+                Ok(Ok((removed, service_key_removed))) => AccountCleanup { account, removed, service_key_removed, error: None },
+                Ok(Err(e)) => {
+                    tracing::info!(account = %account, error = %format!("{e:#}"), "device keys: cleanup after tunnel delete failed");
+                    AccountCleanup { account, removed: 0, service_key_removed: false, error: Some(format!("{e:#}")) }
                 }
-                anyhow::Ok(())
-            }
-            .await;
-            if let Err(e) = result {
-                tracing::info!(account = %account, error = %format!("{e:#}"), "device keys: cleanup after tunnel delete failed");
+                Err(_) => AccountCleanup { account, removed: 0, service_key_removed: false, error: Some("timed out".to_string()) },
             }
         }
-    });
+    }))
+    .await;
+    let failed: BTreeSet<&str> = results.iter().filter(|r| r.error.is_some()).map(|r| r.account.as_str()).collect();
+    let keys_left = if opts.device_keys { distinct(&mut installed.iter().filter(|i| failed.contains(i.username.as_str()))) } else { distinct(&mut installed.iter()) };
+    Cleanup { online, accounts: results, keys_left }
+}
+
+/// 一個帳號：移掉 `managed`（與服務金鑰），一次寫回。回傳（移掉的管理金鑰數, 服務金鑰是否移掉）。
+async fn clean_account(state: &AppState, port: i64, account: &str, managed: &BTreeSet<String>, service: &BTreeSet<String>, remove_service: bool) -> anyhow::Result<(usize, bool)> {
+    let file = remote::AuthorizedKeysFile::open(state, account, port, false).await?;
+    if !file.exists() {
+        return Ok((0, false));
+    }
+    let mut remove = managed.clone();
+    let mut keep = service.clone();
+    if remove_service {
+        remove.extend(service.iter().cloned());
+        keep.clear();
+    }
+    let plan = authorized_keys::plan(&file.read().await?, &[], &remove, &keep);
+    if let Some(new) = &plan.content {
+        file.write(new).await?;
+    }
+    let removed = plan.removed.iter().filter(|b| managed.contains(*b) && !service.contains(*b)).count();
+    let service_key_removed = plan.removed.iter().any(|b| service.contains(b));
+    Ok((removed, service_key_removed))
 }
 
 /// 背景同步：清單變動（kick）立刻跑；平時每 TICK 檢查一次（裝置剛上線也會在這時補上）。

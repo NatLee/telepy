@@ -11,6 +11,9 @@ use russh_sftp::protocol::{FileAttributes, OpenFlags, Packet, StatusCode};
 use crate::ssh::pool::Lease;
 use crate::state::AppState;
 
+/// 讀 / 寫成功後記下內容（`DeviceKeys::record_snapshot`），裝置金鑰面板就能顯示「裝置上實際有什麼」。
+/// After every successful read / write the content is recorded so the panel can show what is on the device.
+
 const POSIX_RENAME: &str = "posix-rename@openssh.com";
 /// authorized_keys 再大也不該超過這個；超過就不碰。/ Refuse to handle absurdly large files.
 const MAX_SIZE: u64 = 1024 * 1024;
@@ -20,6 +23,9 @@ const CHUNK: usize = 32 * 1024;
 pub struct AuthorizedKeysFile {
     sftp: RawSftpSession,
     _lease: Lease,
+    state: AppState,
+    reverse_port: i64,
+    account: String,
     posix_rename: bool,
     dir: String,
     path: String,
@@ -59,7 +65,7 @@ impl AuthorizedKeysFile {
             }
             Err(e) if is_status(&e, StatusCode::NoSuchFile) => {
                 let path = format!("{ssh_dir}/authorized_keys");
-                return Ok(Self { sftp, _lease: lease, posix_rename, dir: ssh_dir, path, mode: None });
+                return Ok(Self { sftp, _lease: lease, state: state.clone(), reverse_port, account: username.to_string(), posix_rename, dir: ssh_dir, path, mode: None });
             }
             Err(e) => return Err(e).with_context(|| format!("stat {ssh_dir}")),
         }
@@ -77,7 +83,7 @@ impl AuthorizedKeysFile {
             Err(e) => return Err(e).with_context(|| format!("stat {link}")),
         };
         let dir = path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or(ssh_dir);
-        Ok(Self { sftp, _lease: lease, posix_rename, dir, path, mode })
+        Ok(Self { sftp, _lease: lease, state: state.clone(), reverse_port, account: username.to_string(), posix_rename, dir, path, mode })
     }
 
     pub fn exists(&self) -> bool {
@@ -86,6 +92,7 @@ impl AuthorizedKeysFile {
 
     pub async fn read(&self) -> anyhow::Result<String> {
         if self.mode.is_none() {
+            self.state.device_keys.record_snapshot(self.reverse_port, &self.account, None);
             return Ok(String::new());
         }
         let handle = self.sftp.open(self.path.as_str(), OpenFlags::READ, FileAttributes::empty()).await.with_context(|| format!("open {}", self.path))?.handle;
@@ -107,7 +114,9 @@ impl AuthorizedKeysFile {
         .await;
         let _ = self.sftp.close(handle.as_str()).await;
         result?;
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        self.state.device_keys.record_snapshot(self.reverse_port, &self.account, Some(text.clone()));
+        Ok(text)
     }
 
     /// 原子取代整個檔案（保留原本的權限；新檔 0600）。
@@ -137,8 +146,11 @@ impl AuthorizedKeysFile {
             (_, Err(e)) => Err(anyhow::Error::from(e).context("close authorized_keys")),
             _ => self.replace(&tmp).await,
         };
-        if renamed.is_err() {
-            let _ = self.sftp.remove(tmp.as_str()).await;
+        match &renamed {
+            Ok(()) => self.state.device_keys.record_snapshot(self.reverse_port, &self.account, Some(content.to_string())),
+            Err(_) => {
+                let _ = self.sftp.remove(tmp.as_str()).await;
+            }
         }
         renamed
     }

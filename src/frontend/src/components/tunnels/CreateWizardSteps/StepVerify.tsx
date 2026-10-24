@@ -171,7 +171,7 @@ export function StepVerify({ wizard }: { wizard: CreateTunnelWizard }) {
             </div>
 
             <div className="space-y-2">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t("wizard.verify.nextTitle")}</h3>
+                <h3 className="text-sm text-foreground">{t("wizard.verify.nextTitle")}</h3>
                 <div className="grid gap-2 sm:grid-cols-2">
                     <NextTile href={getTerminalPageUrl(tunnel)} icon={TerminalSquare} title={t("wizard.verify.openTerminal")} desc={t("wizard.verify.openTerminalDesc")} primary={v.allLoginsOk} />
                     <NextTile href={getTerminalPageUrl(tunnel, { mainView: "files" })} icon={FolderOpen} title={t("wizard.verify.openFiles")} desc={t("wizard.verify.openFilesDesc")} />

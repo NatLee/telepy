@@ -64,7 +64,7 @@ pub struct Config {
     pub ssh_binary: String,
     /// russh 原生連線用的私鑰（預設 ~/.ssh/id_rsa，與 ssh 客戶端同一把）。
     pub ssh_identity: PathBuf,
-    /// terminal / file manager / `ssh -D` 連線的目標主機：內建 gateway 的 loopback listener（單跳）。
+    /// gateway 沒啟用時（開發環境、自帶 sshd 的測試）russh 直連裝置用的主機；有 gateway 時不用（行程內開通道）。
     pub ssh_target_host: String,
     /// Swagger UI + /api/openapi.json，登入後可見（OPENAPI_ENABLED=false 可關）。/ Login-gated API docs.
     pub openapi_enabled: bool,
@@ -84,6 +84,8 @@ pub struct Config {
     pub trusted_proxy_hops: usize,
     /// 直接採用這個標頭當來源 IP（例 `CF-Connecting-IP`）；只在上游一定會覆寫它時設定。/ Trusted client-IP header.
     pub client_ip_header: Option<String>,
+    /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
+    pub geoip_dir: PathBuf,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -130,6 +132,7 @@ impl Config {
         let ssh_logs_path = env("SSH_LOGS_PATH").map(PathBuf::from);
         let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
         let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
+        let geoip_dir = env("GEOIP_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("geoip"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -181,6 +184,7 @@ impl Config {
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
+            geoip_dir,
         }
     }
 

@@ -13,6 +13,9 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { describeUserAgent } from "@/lib/userAgent";
 import { cn } from "@/lib/utils";
+import { IpPlace } from "@/components/ui/IpPlace";
+import type { IpGeo } from "@/lib/geo";
+import { SectionHeading } from "@/components/ui/section";
 
 export interface SignInEvent {
     id: number;
@@ -21,6 +24,7 @@ export interface SignInEvent {
     method: string;
     second_factor: string | null;
     ip: string | null;
+    geo?: IpGeo | null;
     user_agent: string | null;
     reason: string | null;
 }
@@ -81,12 +85,8 @@ export function SignInHistory({ endpoint, description }: { endpoint: string; des
     const shown = events && !expanded ? events.slice(0, COLLAPSED) : events;
 
     return (
-        <section>
-            <h3 className="text-sm font-semibold flex items-center gap-2 mb-1">
-                <History size={15} className="text-primary" />
-                {t("security.signIns")}
-            </h3>
-            <p className="text-xs text-muted-foreground mb-2">{description}</p>
+        <section className="space-y-3">
+            <SectionHeading icon={<History />} title={t("security.signIns")} description={description} />
             {failed ? (
                 <p className="text-xs text-destructive">{t("security.signInsLoadFailed")}</p>
             ) : !events ? (
@@ -111,6 +111,7 @@ export function SignInHistory({ endpoint, description }: { endpoint: string; des
                                         <span className={cn("font-mono text-xs", e.ip ? "text-foreground/80" : "text-muted-foreground")}>
                                             {e.ip ?? t("security.unknownIp")}
                                         </span>
+                                        <IpPlace geo={e.geo} className="text-xs" />
                                     </p>
                                     <p className="text-xs text-muted-foreground">
                                         {when(e.at)} · {how(e)}
@@ -120,6 +121,18 @@ export function SignInHistory({ endpoint, description }: { endpoint: string; des
                             </li>
                         ))}
                     </ul>
+                    {/* GeoIP 資料出處（DB-IP Lite 是 CC BY 4.0）。/ Attribution for the GeoIP data (DB-IP Lite is CC BY 4.0). */}
+                    {(() => {
+                        const source = events.find((e) => e.geo?.source)?.geo?.source;
+                        if (!source) return null;
+                        const href = source === "DB-IP" ? "https://db-ip.com" : source === "MaxMind" ? "https://www.maxmind.com" : null;
+                        const text = t("geo.attribution", { source });
+                        return (
+                            <p className="mt-1.5 text-[0.75rem] text-muted-foreground">
+                                {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="hover:underline">{text}</a> : text}
+                            </p>
+                        );
+                    })()}
                     {events.length > COLLAPSED && (
                         <button type="button" className="mt-1.5 text-xs text-primary hover:underline" onClick={() => setExpanded((v) => !v)}>
                             {expanded ? t("security.signInsShowLess") : t("security.signInsShowAll", { count: events.length })}
