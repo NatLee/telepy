@@ -35,8 +35,14 @@ fn lan_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError
     ApiError::new(status, json!({ "error": msg.into(), "code": code }))
 }
 
-pub fn host_json(h: &LanHost, tz: i32) -> Value {
+/// `vendor` = MAC 前綴的廠商（有 OUI 表才有）；`mac_private` = 隨機 / 私有 MAC。
+/// `vendor` from the MAC prefix (when the OUI table is installed); `mac_private` = randomized MAC.
+pub fn host_json(h: &LanHost, tz: i32, oui: &crate::oui::Oui) -> Value {
+    let vendor = h.mac.as_deref().and_then(|m| oui.vendor(m));
+    let mac_private = h.mac.as_deref().is_some_and(crate::oui::is_private);
     json!({
+        "vendor": vendor,
+        "mac_private": mac_private,
         "id": h.id,
         "tunnel_id": h.tunnel_id,
         "address": h.address,
@@ -114,7 +120,7 @@ async fn list_hosts(State(state): State<AppState>, AuthUser(user): AuthUser, Pat
     let tz = state.config.tz_offset_minutes;
     let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
     Ok(Json(json!({
-        "hosts": hosts.iter().map(|h| host_json(h, tz)).collect::<Vec<_>>(),
+        "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui)).collect::<Vec<_>>(),
         "scan": state.lan_scans.get(t.id),
         "can_scan": scan_denied(&state, eff).await?.is_none(),
         "can_edit": eff.satisfies(Permission::Edit),
@@ -194,7 +200,7 @@ async fn add_host(State(state): State<AppState>, AuthUser(user): AuthUser, Path(
         }
     })?;
     notify_updated(&state, &t).await;
-    Ok((StatusCode::CREATED, Json(host_json(&h, state.config.tz_offset_minutes))))
+    Ok((StatusCode::CREATED, Json(host_json(&h, state.config.tz_offset_minutes, &state.oui))))
 }
 
 async fn own_host(state: &AppState, tunnel_id: i64, host_id: i64) -> ApiResult<LanHost> {
@@ -215,7 +221,7 @@ async fn update_host(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     )
     .await?;
     notify_updated(&state, &t).await;
-    Ok(Json(host_json(&own_host(&state, t.id, host_id).await?, state.config.tz_offset_minutes)))
+    Ok(Json(host_json(&own_host(&state, t.id, host_id).await?, state.config.tz_offset_minutes, &state.oui)))
 }
 
 #[utoipa::path(delete, path = "/api/reverse/server/{id}/lan/hosts/{host_id}", tag = "LAN", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("host_id" = i64, Path)), responses((status = 204, description = "Removed (a later scan finds it again if it is still there)"), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
@@ -283,8 +289,42 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
             "usernames": allowed.iter().map(|u| u.username.clone()).collect::<Vec<_>>(),
             "default_username": default_username,
             "scan": state.lan_scans.get(t.id),
-            "hosts": hosts.iter().map(|h| host_json(h, tz)).collect::<Vec<_>>(),
+            "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui)).collect::<Vec<_>>(),
         }));
     }
     Ok(Json(json!({ "tunnels": out })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_json_adds_the_vendor_and_flags_private_macs() {
+        let oui = crate::oui::Oui::from_csv("Registry,Assignment,Organization Name\nMA-L,B827EB,Raspberry Pi Foundation\n");
+        let mut h = LanHost {
+            id: 1,
+            tunnel_id: 1,
+            address: "192.168.1.9".into(),
+            hostname: None,
+            mac: Some("b8:27:eb:01:02:03".into()),
+            open_ports: "[22]".into(),
+            ssh_banner: None,
+            label: None,
+            username: None,
+            ssh_port: 22,
+            source: "scan".into(),
+            first_seen: None,
+            last_seen: None,
+            created_at: "2026-10-24 00:00:00.000000".into(),
+            updated_at: "2026-10-24 00:00:00.000000".into(),
+        };
+        let v = host_json(&h, 480, &oui);
+        assert_eq!(v["vendor"], "Raspberry Pi Foundation");
+        assert_eq!(v["mac_private"], false);
+        h.mac = Some("da:a1:19:00:00:01".into());
+        let v = host_json(&h, 480, &oui);
+        assert!(v["vendor"].is_null());
+        assert_eq!(v["mac_private"], true);
+    }
 }

@@ -2299,6 +2299,8 @@ export const ja: Record<TranslationKey, string> = {
     "network.field.address": "アドレス",
     "network.field.hostname": "ホスト名",
     "network.field.mac": "MAC",
+    "network.field.vendor": "メーカー",
+    "network.macPrivate": "プライベート（ランダム）アドレス",
     "network.field.openPorts": "開いているポート",
     "network.field.banner": "SSH バナー",
     "network.field.source": "追加元",
