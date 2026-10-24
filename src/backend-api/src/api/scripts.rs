@@ -63,8 +63,9 @@ async fn config(
 ) -> ApiResult<Json<Value>> {
     let t = viewable_tunnel(&state, user.id, id).await?;
     let domain = server_domain(&headers, &state);
+    let gateway_keys = state.gateway.host_public_keys();
     let mut out = String::from(SERVER_STEM);
-    out.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port));
+    out.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys));
 
     let all = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let usernames_list: Vec<Value> = all
@@ -88,7 +89,13 @@ async fn config(
         hosts.push(json!({ "alias": scripts::sanitize_host_alias(&alias), "username": u.username, "username_id": u.id }));
     }
     let server = json!({ "alias": "telepy-ssh-server", "host": domain, "port": state.config.reverse_server_ssh_port });
-    Ok(Json(json!({ "config": out, "usernames": usernames_list, "server": server, "hosts": hosts, "reverse_port": t.reverse_port })))
+    // 筆電要存的 known_hosts（`HostKeyAlias` 的別名 + gateway 的 host key）；gateway 沒有金鑰時是空字串。
+    // The known_hosts the laptop saves (alias for `HostKeyAlias` + the gateway's host keys); empty without gateway keys.
+    let known_hosts = scripts::known_hosts_lines(&scripts::gateway_alias(&domain, &state.config.reverse_server_ssh_port), &gateway_keys);
+    Ok(Json(json!({
+        "config": out, "usernames": usernames_list, "server": server, "hosts": hosts, "reverse_port": t.reverse_port,
+        "known_hosts": known_hosts, "known_hosts_path": scripts::LAPTOP_KNOWN_HOSTS,
+    })))
 }
 
 /// 六種腳本的共用渲染：autossh-service 需要目標使用者名稱（username_id 可指定）。
@@ -113,6 +120,7 @@ async fn render_for(
         "root".to_string()
     };
     let service_key = db::keys::first_service_key(&state.db).await?;
+    let gateway_keys = state.gateway.host_public_keys();
     let ctx = ScriptContext {
         host_friendly_name: &t.host_friendly_name,
         server_domain: domain,
@@ -122,6 +130,7 @@ async fn render_for(
         username: &username,
         key_path,
         telepy_public_key: service_key.as_deref(),
+        gateway_host_keys: &gateway_keys,
     };
     scripts::render_script(kind, &ctx).map_err(ApiError::bad_request)
 }

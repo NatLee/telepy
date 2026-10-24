@@ -42,6 +42,10 @@ export function defaultGrantChoice(g: DeleteCheckGrant): GrantChoice {
 export interface DeleteCheck {
     tunnel: { id: number; name: string; reverse_port: number };
     online: boolean;
+    /** 這台機器上沒有別的通道了（沒有其他通道釘選同一把 host key）。/ No other tunnel pins this machine's host key. */
+    last_on_machine: boolean;
+    /** 同一台機器上我看得到的其他通道。/ My other tunnels on this machine. */
+    same_machine: { id: number; name: string }[];
     accounts: string[];
     sharees: { id: number; username: string; permission: string }[];
     in_use: number;
@@ -111,7 +115,11 @@ export function useDeleteTunnel(tunnelId: number | null, isOpen: boolean, onDele
             } catch (e) {
                 next = { id: tunnelId, data: null, error: e instanceof Error ? e.message : t("deleteTunnel.checkFailed") };
             }
-            if (!cancelled) setCheck(next);
+            if (cancelled) return;
+            setCheck(next);
+            // 機器上最後一條通道：預設把服務金鑰一起移除，不然機器留在 Telepy 裡卻沒有主人。
+            // The last tunnel on the machine: remove the service key by default, or the machine stays reachable with it and has no owner.
+            if (next.data) setOptions((o) => ({ ...o, removeServiceKey: next.data?.last_on_machine ?? false }));
         })();
         return () => {
             cancelled = true;

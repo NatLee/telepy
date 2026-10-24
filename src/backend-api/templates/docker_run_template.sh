@@ -17,7 +17,7 @@ fi
 # Private key whose public key is registered in Telepy.
 KEY_FILE=${key_path}
 [ -f "$KEY_FILE" ] || { echo "Private key not found: $KEY_FILE"; exit 1; }
-
+${known_hosts_setup}
 # The container reaches this machine's sshd through host.docker.internal (Docker 20.10+ / Docker Desktop).
 docker rm -f telepy-tunnel >/dev/null 2>&1 || true
 docker run -d \
@@ -25,7 +25,7 @@ docker run -d \
   --restart unless-stopped \
   --add-host host.docker.internal:host-gateway \
   -v "$KEY_FILE":/id_rsa:ro \
-  -e SSH_REMOTE_USER=telepy \
+${known_hosts_mount}  -e SSH_REMOTE_USER=telepy \
   -e SSH_REMOTE_HOST=${server_domain} \
   -e SSH_REMOTE_PORT=${reverse_server_ssh_port} \
   -e SSH_MODE=-R \

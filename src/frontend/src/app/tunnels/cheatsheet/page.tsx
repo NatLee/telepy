@@ -542,6 +542,7 @@ function CheatsheetInner() {
                 mode={mode}
                 setMode={actions.setMode}
                 configText={config?.config ?? null}
+                knownHosts={config?.known_hosts ?? null}
                 checklist={checklist}
             />
         </div>

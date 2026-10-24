@@ -85,16 +85,31 @@ function stripRegex(aliases: string[]): string {
 // heredoc 結尾字：區塊裡不會有單獨一行 TELEPY（Host 行和縮排過的設定都不是）。/ Never a line of its own in a stanza.
 const HEREDOC = "TELEPY";
 
+/** 筆電上存 Telepy 主機金鑰的檔（伺服器區塊的 UserKnownHostsFile）。/ Where the laptop keeps Telepy's host key. */
+export const KNOWN_HOSTS_PATH = "~/.ssh/telepy_known_hosts";
+const KNOWN_HOSTS_HEREDOC = "TELEPY_HOST_KEYS";
+
 /**
  * 建立 ~/.ssh（和 config，權限 600——群組可寫的 config 會讓 ssh 直接拒絕）、備份、拿掉舊區塊、加上新區塊。
+ * `knownHosts`（後端給的 `<alias> <type> <base64>` 行）有內容時先把它存成 ~/.ssh/telepy_known_hosts：伺服器區塊用它
+ * 釘住 Telepy 的主機金鑰，筆電就只會連到真的 Telepy。
  * Create ~/.ssh and the config (mode 600 — ssh refuses a group-writable config), back it up, drop old blocks,
- * append the new ones.
+ * append the new ones. With `knownHosts` (the backend's `<alias> <type> <base64>` lines) the command first saves
+ * ~/.ssh/telepy_known_hosts, which the server stanza pins Telepy's host key with.
  */
-export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[]): string {
+export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null): string {
     const aliases = stanzas.map((s) => s.alias);
     const blocks = markedBlocks(stanzas);
+    const hostKeys = knownHosts?.trim() ? knownHosts.trim() + "\n" : "";
     if (shell === "posix") {
         return [
+            ...(hostKeys
+                ? [
+                    `mkdir -p ~/.ssh && cat > ${KNOWN_HOSTS_PATH} <<'${KNOWN_HOSTS_HEREDOC}'`,
+                    hostKeys + KNOWN_HOSTS_HEREDOC,
+                    `chmod 600 ${KNOWN_HOSTS_PATH}`,
+                ]
+                : []),
             "mkdir -p ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config \\",
             "  && cp ~/.ssh/config ~/.ssh/config.bak \\",
             `  && awk '${stripAwk(aliases)}' ~/.ssh/config.bak > ~/.ssh/config \\`,
@@ -106,6 +121,7 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[]): str
     // [IO.File]: ReadAllText drops a BOM and WriteAllText writes UTF-8 without one (Windows OpenSSH chokes on a BOM).
     return [
         `$cfg = "$HOME\\.ssh\\config"; New-Item -ItemType Directory -Force "$HOME\\.ssh" | Out-Null`,
+        ...(hostKeys ? [`[IO.File]::WriteAllText("$HOME\\.ssh\\telepy_known_hosts", @'`, hostKeys + "'@ + \"`n\")"] : []),
         `$text = ''; if (Test-Path $cfg) { Copy-Item $cfg "$cfg.bak" -Force; $text = [IO.File]::ReadAllText($cfg) }`,
         `$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`,
         "if ($text -and -not $text.EndsWith(\"`n\")) { $text += \"`n\" }",

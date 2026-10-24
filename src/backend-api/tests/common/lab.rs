@@ -990,9 +990,20 @@ impl Lab {
         let generated = r.json["config"].as_str().unwrap().to_string();
         let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != "telepy-ssh-server").last().unwrap().to_string();
         let path = self.dir.path().join(format!("{}-{}-generated.conf", user.username, device.name));
-        let patched = generated.replace("ProxyCommand ssh -W", &format!("ProxyCommand ssh -F {} -W", path.display()));
+        // 後端給的 known_hosts（gateway 的 host key）存到 lab 目錄，絕不碰開發者的 ~/.ssh。
+        // The known_hosts the backend hands out goes into the lab dir, never the developer's ~/.ssh.
+        let known_hosts = self.dir.path().join(format!("{}-{}-known_hosts", user.username, device.name));
+        std::fs::write(&known_hosts, r.json["known_hosts"].as_str().unwrap_or_default()).unwrap();
+        let patched = generated
+            .replace("ProxyCommand ssh -W", &format!("ProxyCommand ssh -F {} -W", path.display()))
+            .replace("UserKnownHostsFile ~/.ssh/telepy_known_hosts", &format!("UserKnownHostsFile {}", known_hosts.display()));
         std::fs::write(&path, format!("{patched}\n{}", laptop_defaults(&user.key))).unwrap();
         (path, alias)
+    }
+
+    /// `generated_ssh_config` 存下的 known_hosts 檔。/ The known_hosts file `generated_ssh_config` wrote.
+    pub fn generated_known_hosts(&self, user: &LabUser, device: &Device) -> PathBuf {
+        self.dir.path().join(format!("{}-{}-known_hosts", user.username, device.name))
     }
 
     pub async fn ssh_with_config(&self, config: &Path, host: &str, cmd: &str) -> Run {
