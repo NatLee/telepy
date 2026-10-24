@@ -275,7 +275,7 @@ function CheatsheetInner() {
         if (WEB_PORTS.has(port)) {
             const url = `${port === "443" || port === "8443" ? "https" : "http"}://localhost:${localPort}`;
             return tn("sheet.next.openUrl", {
-                url: <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono font-semibold text-primary underline-offset-4 hover:underline">{url}</a>,
+                url: <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono font-semibold text-primary underline-offset-4 wrap-anywhere hover:underline">{url}</a>,
             });
         }
         return tn("sheet.next.connectTo", { addr: code(`localhost:${localPort}`) });

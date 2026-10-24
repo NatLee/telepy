@@ -74,32 +74,34 @@ interface Layout {
 }
 
 // 橫向：你 ─ Telepy ─ 牆的缺口 ─ 裝置 一條直線；下一列是網路上的其他裝置，直直撞上牆（內網隔離）。
+// 牆身不貼任何字：「路由器 · 防火牆」是牆頂上的牌子，其他標籤都離牆和牆上的標記一段距離，說明文字也有自己的位置。
 // Landscape: you ─ Telepy ─ gap ─ device on one straight line; the row below holds other devices on the internet,
-// running straight into the wall (the private network's isolation).
+// running straight into the wall (the private network's isolation). Nothing sits against the wall: "Router · firewall"
+// is a sign on top of it, every other tag keeps clear of the wall and its markers, and the descriptions have room.
 const WIDE: Layout = {
     w: 800,
-    h: 272,
+    h: 340,
     tall: false,
-    you: { x: 96, y: 82 },
-    telepy: { x: 340, y: 82 },
-    device: { x: 686, y: 82 },
-    others: { x: 96, y: 198 },
-    lan: { x: 566, y: 12, w: 222, h: 248 },
-    wall: { x: 554, y: 20, w: 12, h: 232 },
-    gate: { x: 560, y: 82 },
-    block: { x: 560, y: 198 },
-    direct: "M 96 198 L 560 198",
-    tunnel: "M 686 82 L 340 82",
-    access: "M 96 82 L 340 82",
+    you: { x: 80, y: 132 },
+    telepy: { x: 300, y: 132 },
+    device: { x: 690, y: 132 },
+    others: { x: 80, y: 262 },
+    lan: { x: 566, y: 40, w: 224, h: 292 },
+    wall: { x: 554, y: 48, w: 12, h: 276 },
+    gate: { x: 560, y: 132 },
+    block: { x: 560, y: 262 },
+    direct: "M 80 262 L 560 262",
+    tunnel: "M 690 132 L 300 132",
+    access: "M 80 132 L 300 132",
     labelAbove: { you: false, telepy: false, others: false },
     at: {
-        internet: { p: { x: 24, y: 24 }, a: "left" },
-        lan: { p: { x: 582, y: 30 }, a: "left" },
-        tunnel: { p: { x: 452, y: 82 }, a: "center" },
-        access: { p: { x: 218, y: 82 }, a: "center" },
-        gate: { p: { x: 548, y: 56 }, a: "right" },
-        block: { p: { x: 546, y: 198 }, a: "right" },
-        firewall: { p: { x: 546, y: 140 }, a: "right" },
+        internet: { p: { x: 24, y: 22 }, a: "left" },
+        lan: { p: { x: 582, y: 72 }, a: "left" },
+        tunnel: { p: { x: 436, y: 132 }, a: "center" },
+        access: { p: { x: 190, y: 132 }, a: "center" },
+        gate: { p: { x: 540, y: 172 }, a: "right" },
+        block: { p: { x: 532, y: 262 }, a: "right" },
+        firewall: { p: { x: 560, y: 22 }, a: "center" },
     },
 };
 
@@ -135,13 +137,10 @@ const TALL: Layout = {
     },
 };
 
-/**
- * 直式場景的設計寬度：1 單位 = 1px（100% 顯示大小）。320 是最長的字（日文牆名、英文通道）還放得下的最窄寬度，
- * 這樣 402px 寬的手機幾乎不用縮小。
- * Design width of the portrait scene: 1 unit = 1px at 100 %. 320 is the narrowest that still fits the longest labels
- * (the Japanese wall label, the English tunnel label), so a 402px phone barely scales it.
- */
-const TALL_REM = TALL.w / 16;
+// 版面的 1 單位 = 100% 顯示大小時的 1px。直式的 320 是最長的字（日文牆名、英文通道）還放得下的最窄寬度，
+// 402px 寬的手機幾乎不用縮小；橫式要 800。
+// One layout unit = 1px at 100 % display size. Portrait's 320 is the narrowest that still fits the longest labels
+// (the Japanese wall label, the English tunnel label), so a 402px phone barely scales it; landscape needs 800.
 
 const ANCHOR: Record<Anchor, string> = {
     center: "-translate-x-1/2 -translate-y-1/2",
@@ -219,6 +218,28 @@ function Tag({ l, at, className, children }: { l: Layout; at: { p: Pt; a: Anchor
     );
 }
 
+/**
+ * 只在「 · 」換行：每一段是 inline-block，放不下才換到下一行（日文、中文不會斷在字中間，留下一個字）。
+ * lead（例如狀態點）放進第一段，換行後也貼著字。
+ * Breaks only at " · ": each part is an inline-block that moves to the next line when it doesn't fit, so Japanese and
+ * Chinese never break mid-phrase and leave one character behind. `lead` (e.g. the status dot) rides in the first part.
+ */
+function AtDots({ text, lead }: { text: string; lead?: React.ReactNode }) {
+    return (
+        <>
+            {text.split(" · ").map((part, i, parts) => (
+                <React.Fragment key={i}>
+                    {i > 0 && " "}
+                    <span className="inline-block">
+                        {i === 0 && lead}
+                        {i < parts.length - 1 ? `${part} ·` : part}
+                    </span>
+                </React.Fragment>
+            ))}
+        </>
+    );
+}
+
 function Marker({ l, p, className, children }: { l: Layout; p: Pt; className: string; children: React.ReactNode }) {
     return (
         <span className="absolute z-10 -translate-x-1/2 -translate-y-1/2" style={pos(l, p)}>
@@ -259,12 +280,12 @@ function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, ab
                 <div
                     className={cn(
                         "absolute left-1/2 flex -translate-x-1/2 flex-col items-center gap-0.5 text-center",
-                        l.tall ? (roomy ? "w-36" : "w-28") : roomy ? "w-52" : "w-40",
+                        l.tall ? (roomy ? "w-36" : "w-28") : roomy ? "w-48" : "w-40",
                         above ? "bottom-full mb-2" : "top-full mt-2"
                     )}
                 >
                     <span className="max-w-full truncate text-sm text-foreground" title={title}>{title}</span>
-                    {!l.tall && <span className="hidden text-xs leading-snug text-muted-foreground @min-[760px]:block">{detail}</span>}
+                    {!l.tall && <span className="text-xs leading-snug text-muted-foreground"><AtDots text={detail} /></span>}
                     {children && <span className="mt-1 flex max-w-full flex-wrap justify-center gap-1">{children}</span>}
                 </div>
             </div>
@@ -401,12 +422,12 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
                 <span className="inline-flex items-center gap-1.5 text-xs text-foreground/80">
                     <House size={13} aria-hidden /> {t("wizard.scene.lan")}
                 </span>
-                {/* 直式時折行，別碰到通道。/ Wraps in portrait so it stays clear of the tunnel. */}
-                <span className={cn("text-xs text-muted-foreground", l.tall ? "max-w-[12rem] text-balance" : "hidden whitespace-nowrap @min-[760px]:block")}>{t("wizard.scene.lanDetail")}</span>
+                {/* 折行：直式別碰到通道，橫式留在私有網路框裡。/ Wraps: clear of the tunnel in portrait, inside the zone in landscape. */}
+                <span className={cn("text-xs text-muted-foreground", l.tall ? "max-w-[12rem]" : "max-w-[12.5rem]")}><AtDots text={t("wizard.scene.lanDetail")} /></span>
             </span>
 
             {/* 牆上的標示 / Signs on the wall */}
-            <Tag l={l} at={l.at.firewall} className={l.tall ? undefined : "hidden @min-[760px]:inline-flex"}>
+            <Tag l={l} at={l.at.firewall}>
                 <ShieldHalf aria-hidden /> {t("wizard.scene.firewall")}
             </Tag>
             <Marker l={l} p={l.block} className="bg-destructive text-white">
@@ -422,7 +443,7 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
             >
                 <ArrowUpRight size={12} strokeWidth={2.5} className={cn(l.tall && "-rotate-45")} aria-hidden />
             </Marker>
-            <Tag l={l} at={l.at.gate} className={cn(view.gate !== "idle" && "border-success/35 text-success", !l.tall && "hidden @min-[760px]:inline-flex")}>
+            <Tag l={l} at={l.at.gate} className={cn(view.gate !== "idle" && "border-success/35 text-success")}>
                 <ArrowUpRight strokeWidth={2.5} aria-hidden /> {t("wizard.scene.outbound")}
             </Tag>
 
@@ -433,20 +454,14 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
                 className={cn(
                     view.tunnel === "live" && "border-success/35",
                     view.tunnel === "pending" && "border-warning/50",
-                    // 直式時線兩旁很窄，長句在「·」折成兩行；w-max：靠右邊的絕對定位不會被擠成窄欄。
-                    // Narrow on both sides of the line in portrait: long text wraps at the "·"; w-max keeps an absolute box
+                    // 長句在「·」折成兩行，不會蓋到牆上的標記；w-max：靠右邊的絕對定位不會被擠成窄欄。
+                    // Long text wraps at the "·" instead of running onto the wall's marker; w-max keeps an absolute box
                     // near the right edge from shrinking to the space left of it.
-                    l.tall && "w-max max-w-[10.5rem] whitespace-normal text-center"
+                    "w-max max-w-[10.5rem] whitespace-normal text-center"
                 )}
             >
-                <span className={cn("size-1.5 shrink-0 rounded-full", status.dot)} aria-hidden />
                 <span className={status.tone}>
-                    {status.text.split(" · ").map((part, i, parts) => (
-                        <React.Fragment key={i}>
-                            {i > 0 && " "}
-                            <span className="inline-block">{i < parts.length - 1 ? `${part} ·` : part}</span>
-                        </React.Fragment>
-                    ))}
+                    <AtDots text={status.text} lead={<span className={cn("mr-1.5 inline-block size-1.5 rounded-full align-middle", status.dot)} aria-hidden />} />
                 </span>
             </Tag>
             {view.access === "live" && (
@@ -476,26 +491,27 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
 }
 
 /**
- * 直式場景：節點與線照比例縮放，標籤卻是 rem 字級；容器比設計寬度窄（手機、或顯示大小調大）時標籤會互相壓到。
+ * 節點與線照比例縮放，標籤卻是 rem 字級；容器比設計寬度窄（手機、或顯示大小調大）時標籤會互相壓到。
  * 所以比設計寬度窄就照設計寬度排版、整張等比例縮小，任何寬度與顯示大小看起來都一樣。
- * The portrait scene: nodes and lines scale with the width but the labels are rem-sized, so a container narrower
- * than the design width (phones, or a larger display size) makes them collide. Below the design width it is laid
- * out at that width and scaled down as a whole, so it looks the same at any width and display size.
+ * Nodes and lines scale with the width but the labels are rem-sized, so a container narrower than the design width
+ * (phones, or a larger display size) makes them collide. Below the design width the scene is laid out at that width
+ * and scaled down as a whole, so it looks the same at any width and display size.
  */
-function FitTall({ children }: { children: React.ReactNode }) {
+function FitScene({ l, children }: { l: Layout; children: React.ReactNode }) {
     const outer = useRef<HTMLDivElement>(null);
     // 看不見的探針，寬度就是設計寬度（rem）：顯示大小一改它就變寬變窄，ResizeObserver 會叫我們重算。
     // An invisible probe exactly the design width (rem): it resizes whenever the display size changes, which
     // re-triggers the measurement even when the diagram itself keeps its width.
     const probe = useRef<HTMLSpanElement>(null);
     const [scale, setScale] = useState(1);
+    const designRem = `${l.w / 16}rem`;
 
     useLayoutEffect(() => {
         const box = outer.current;
         const design = probe.current;
         if (!box || !design) return;
         const measure = () => {
-            // 寬的容器會把直式藏起來（寬度 0），那時不用量。/ Hidden (zero width) in wide containers: nothing to fit.
+            // 另一種版面時這張是藏起來的（寬度 0），不用量。/ Hidden (zero width) while the other layout shows.
             if (!box.clientWidth || !design.offsetWidth) return;
             setScale(Math.min(1, box.clientWidth / design.offsetWidth));
         };
@@ -508,12 +524,9 @@ function FitTall({ children }: { children: React.ReactNode }) {
 
     const fit = scale < 1;
     return (
-        <div ref={outer} className="relative w-full" style={{ aspectRatio: `${TALL.w} / ${TALL.h}` }}>
-            <span ref={probe} className="pointer-events-none invisible absolute left-0 top-0 h-0" style={{ width: `${TALL_REM}rem` }} aria-hidden />
-            <div
-                className="absolute left-0 top-0 origin-top-left"
-                style={fit ? { width: `${TALL_REM}rem`, transform: `scale(${scale})` } : { width: "100%" }}
-            >
+        <div ref={outer} className="relative w-full" style={{ aspectRatio: `${l.w} / ${l.h}` }}>
+            <span ref={probe} className="pointer-events-none invisible absolute left-0 top-0 h-0" style={{ width: designRem }} aria-hidden />
+            <div className="absolute left-0 top-0 origin-top-left" style={fit ? { width: designRem, transform: `scale(${scale})` } : { width: "100%" }}>
                 {children}
             </div>
         </div>
@@ -524,9 +537,17 @@ function FitTall({ children }: { children: React.ReactNode }) {
 // 一行：圖示 + 名稱、中間的線、線上一小段防火牆、右邊是「點 + 文字」的狀態。
 // One row: icon + name, the lines between them, a short firewall bar on the tunnel, and a dot + text status.
 
-function StripNode({ icon: Icon, glyph, label, online, hideLabelBelow }: { icon?: LucideIcon; glyph?: boolean; label: string; online?: boolean | null; hideLabelBelow?: boolean }) {
+function StripNode({ icon: Icon, glyph, label, online, hideLabelBelow, shrink }: {
+    icon?: LucideIcon;
+    glyph?: boolean;
+    label: string;
+    online?: boolean | null;
+    hideLabelBelow?: boolean;
+    /** 擠的時候讓它讓位（名字截斷）。/ Gives way when tight (the name truncates). */
+    shrink?: boolean;
+}) {
     return (
-        <span className="flex min-w-0 shrink-0 items-center gap-2">
+        <span className={cn("flex min-w-0 items-center gap-2", shrink ? "shrink" : "shrink-0")}>
             <span className={cn("relative grid size-7 shrink-0 place-items-center rounded-md", glyph ? "bg-brand-gradient text-white" : "border border-border bg-card text-foreground/80")}>
                 {glyph ? <TelepyGlyph size={13} /> : Icon && <Icon size={15} strokeWidth={1.75} />}
                 {online != null && <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/40")} aria-hidden />}
@@ -570,14 +591,16 @@ function SceneStrip({ view, name, connected, created, rttMs }: { view: View; nam
     return (
         <div className="flex min-w-0 items-center gap-3">
             <div className="flex min-w-0 flex-1 items-center">
-                {/* 很窄時省掉「你」：一眼要看的是通道、牆和裝置。/ Very narrow: drop "You"; the tunnel, wall and device matter at a glance. */}
-                <span className="hidden min-w-0 flex-1 items-center @min-[440px]:flex">
+                {/* 很窄時省掉「你」：一眼要看的是通道、牆和裝置。不設 min-w-0：這一段不能被擠得比內容窄，否則「你」會疊到 Telepy 上。
+                    Very narrow: drop "You"; the tunnel, wall and device matter at a glance. No min-w-0: this part must
+                    never get narrower than its content, or "You" runs into Telepy. */}
+                <span className="hidden flex-1 items-center @min-[440px]:flex">
                     <StripNode icon={Laptop} label={t("wizard.scene.you")} hideLabelBelow />
                     <StripLine state={view.access === "live" ? "live" : "off"} inbound />
                 </span>
                 <StripNode glyph label="Telepy" hideLabelBelow />
                 <StripLine state={view.tunnel} wall={`${t("wizard.scene.firewall")} · ${t("wizard.scene.outbound")}`} className="flex-[2]" />
-                <StripNode icon={Server} label={name} online={created ? connected : null} />
+                <StripNode icon={Server} label={name} online={created ? connected : null} shrink />
             </div>
             <span className={cn("hidden shrink-0 items-center gap-1.5 text-xs @min-[600px]:inline-flex", status.tone)}>
                 <span className={cn("size-1.5 rounded-full", status.dot)} aria-hidden /> {status.text}
@@ -603,7 +626,8 @@ function readScene(): SceneMode {
     } catch {
         /* 沒有 localStorage 就用預設 / defaults without storage */
     }
-    return window.matchMedia("(max-width: 639px)").matches ? "compact" : "full";
+    // 手機直拿（窄）或橫拿（矮）都先給一行。/ Phones in portrait (narrow) or landscape (short) start with the strip.
+    return window.matchMedia("(max-width: 639px), (max-height: 500px)").matches ? "compact" : "full";
 }
 function storeScene(m: SceneMode) {
     try {
@@ -744,13 +768,17 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                 </div>
             ) : (
                 <>
-                    <div className="relative hidden @min-[600px]:block">
-                        <Scene l={WIDE} {...sceneProps} />
+                    {/* 橫式從 700px 起：縮到剛好時字還有 11px 多；更窄就用直式。
+                        Landscape from 700px, where fitting it still leaves 11px+ text; narrower gets the portrait one. */}
+                    <div className="relative hidden @min-[700px]:block">
+                        <FitScene l={WIDE}>
+                            <Scene l={WIDE} {...sceneProps} />
+                        </FitScene>
                     </div>
-                    <div className="relative mx-auto max-w-[400px] @min-[600px]:hidden">
-                        <FitTall>
+                    <div className="relative mx-auto max-w-[400px] @min-[700px]:hidden">
+                        <FitScene l={TALL}>
                             <Scene l={TALL} {...sceneProps} />
-                        </FitTall>
+                        </FitScene>
                     </div>
 
                     <div className="mt-4 border-t border-border pt-3">

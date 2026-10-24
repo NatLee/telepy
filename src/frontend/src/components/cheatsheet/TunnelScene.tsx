@@ -198,10 +198,11 @@ export function TunnelScene({ nodes, links, file = false, caption }: {
 }
 
 /**
- * 情境卡片上的迷你插圖（不帶數值）。卡片要是 `@container`：窄卡片（手機兩欄）用小一號的圖示，連線再按剩下的寬度縮短，
- * 三台機器的情境才不會超出卡片。
+ * 情境卡片上的迷你插圖（不帶數值）。卡片要是 `@container`：窄卡片（手機兩欄）用小一號的圖示；
+ * 還是放不下（Safari 頁面縮放、iOS 放大顯示、顯示大小調大）就先縮短連線、再縮小圖示，永遠留在卡片裡。
  * Tiny illustration for a recipe card (no values). The card must be an `@container`: narrow cards (two columns on a
- * phone) get smaller icons and the links shrink to the width left, so three-machine recipes stay inside the card.
+ * phone) get smaller icons; if it still doesn't fit (Safari page zoom, iOS Display Zoom, a larger display size) the
+ * links shrink first and then the icons, so it always stays inside the card.
  */
 export type MiniItem = { icon: LucideIcon; role: SceneRole } | { link: SceneLink["kind"]; back?: boolean; both?: boolean };
 
@@ -212,14 +213,14 @@ export function MiniScene({ items, active }: { items: MiniItem[]; active: boolea
                 if ("icon" in it) {
                     const Icon = it.icon;
                     return (
-                        <span key={i} className={cn("grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-inset bg-card @[10.5rem]:size-8", ROLE_TONE[it.role])}>
+                        <span key={i} className={cn("grid aspect-square w-7 min-w-5 shrink place-items-center rounded-lg ring-1 ring-inset bg-card @[10.5rem]:w-8", ROLE_TONE[it.role])}>
                             <Icon size={16} strokeWidth={1.75} className="size-3.5 @[10.5rem]:size-4" />
                         </span>
                     );
                 }
                 const plain = it.link === "plain";
                 return (
-                    <span key={i} className="relative mx-0.5 flex w-7 min-w-2.5 shrink items-center">
+                    <span key={i} className="relative mx-0.5 flex w-7 min-w-2.5 shrink-[4] items-center">
                         {it.back || it.both ? <ChevronLeft size={12} className={cn("absolute -left-1.5", plain ? "text-muted-foreground" : "text-primary")} /> : null}
                         <span
                             className={cn(
