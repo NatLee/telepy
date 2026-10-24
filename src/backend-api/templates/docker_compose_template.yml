@@ -7,7 +7,9 @@
 #      grep -qxF '${telepy_public_key}' ~/.ssh/authorized_keys 2>/dev/null || echo '${telepy_public_key}' >> ~/.ssh/authorized_keys
 #      chmod 600 ~/.ssh/authorized_keys
 #
-# 2) Check that the private key mounted below is the one whose public key you registered in Telepy, then:
+# 2) Check that the private key mounted below is the one whose public key you registered in Telepy.
+${known_hosts_step}#
+# Then:
 #
 #      docker compose -f telepy-docker-compose.yml up -d
 #      docker compose -f telepy-docker-compose.yml logs -f
@@ -24,7 +26,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - "${key_path}:/id_rsa:ro"
-    environment:
+${known_hosts_volume}    environment:
+${known_hosts_env}
       SSH_REMOTE_USER: telepy
       SSH_REMOTE_HOST: "${server_domain}"
       SSH_REMOTE_PORT: "${reverse_server_ssh_port}"

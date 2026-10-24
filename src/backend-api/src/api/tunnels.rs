@@ -323,9 +323,24 @@ async fn delete_check(State(state): State<AppState>, AuthUser(user): AuthUser, P
         .collect();
     let tz = state.config.tz_offset_minutes;
     let sessions: Vec<Value> = state.ai.list().iter().filter(|s| s.tunnel_id == t.id).map(|s| super::ai::session_json(s, tz)).collect();
+    // 同一台機器上的其他隧道（釘選了同一把 host key）：是最後一條時，刪除對話框預設一併移除服務金鑰，
+    // 否則機器留在 Telepy 裡卻沒有主人，誰指一條隧道過去都能用那把金鑰登入。
+    // Other tunnels on the same machine (same pinned host key): when this is the last one, the dialog defaults to
+    // removing the service key too — otherwise the machine stays reachable with Telepy's key and has no owner.
+    let on_machine = db::host_keys::same_machine(&state.db, t.id).await?;
+    let mut same_machine = Vec::new();
+    for c in &on_machine {
+        if let Some(other) = db::tunnels::by_id(&state.db, c.tunnel_id).await? {
+            if permissions::effective_for(&state.db, user.id, &other).await?.is_some() {
+                same_machine.push(json!({ "id": other.id, "name": other.host_friendly_name }));
+            }
+        }
+    }
     Ok(Json(json!({
         "tunnel": { "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port },
         "online": crate::device_keys::online(&state, t.reverse_port),
+        "last_on_machine": on_machine.is_empty(),
+        "same_machine": same_machine,
         "accounts": accounts,
         "sharees": sharees.iter().map(|s| json!({ "id": s.shared_with_id, "username": s.username, "permission": s.permission_type })).collect::<Vec<_>>(),
         "in_use": crate::presence::distinct_users(&using),

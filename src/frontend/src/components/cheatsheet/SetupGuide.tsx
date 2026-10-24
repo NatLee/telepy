@@ -127,10 +127,12 @@ interface SetupGuideProps {
     mode: ConnectMode;
     setMode: (m: ConnectMode) => void;
     configText: string | null;
+    /** 後端給的 known_hosts 行（Telepy 的主機金鑰）。/ The backend's known_hosts lines (Telepy's host key). */
+    knownHosts?: string | null;
     checklist: SetupChecklist;
 }
 
-export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online, mode, setMode, configText, checklist }: SetupGuideProps) {
+export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online, mode, setMode, configText, knownHosts, checklist }: SetupGuideProps) {
     const { t, tn } = useI18n();
     const { steps, done, total, current } = checklist;
     const allDone = current === null;
@@ -293,6 +295,7 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
                         <SshConfigInstall
                             serverStanza={stanzas.find((st) => !isDevice(st)) ?? null}
                             deviceStanzas={stanzas.filter(isDevice)}
+                            knownHosts={knownHosts}
                             active={null}
                             onActive={() => {}}
                         />

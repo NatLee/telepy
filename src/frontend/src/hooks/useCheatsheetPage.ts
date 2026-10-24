@@ -15,6 +15,9 @@ export interface TunnelConfigData {
     server: { alias: string; host: string; port: string };
     hosts: { alias: string; username: string; username_id: number }[];
     reverse_port: number;
+    /** 筆電要存成 known_hosts_path 的行（Telepy 的主機金鑰）；gateway 沒有金鑰時是空字串。/ Lines to save as known_hosts_path. */
+    known_hosts: string;
+    known_hosts_path: string;
 }
 
 const MODE_STORAGE_KEY = "telepy.cheatsheetMode";

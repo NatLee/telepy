@@ -64,10 +64,21 @@ async fn one_device_many_users() {
     let r = lab.laptop_exec(&erin, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await;
     assert_eq!(r.stdout, "ubuntu@box", "{r:?}");
     assert!(boxm.logged_in("ubuntu", &erin.key));
-    // API 產生的 ~/.ssh/config 原樣可用
+    // API 產生的 ~/.ssh/config 原樣可用，而且釘住了 gateway 的 host key：換成別的金鑰就連不上
+    // The generated config works as is and pins the gateway's host key: a different key in known_hosts and ssh refuses
     let (cfg, alias) = lab.generated_ssh_config(&alice, &dev, "root").await;
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    assert!(text.contains("StrictHostKeyChecking yes") && text.contains("HostKeyAlias telepy-"), "{text}");
+    let known = lab.generated_known_hosts(&alice, &dev);
+    let saved = std::fs::read_to_string(&known).unwrap();
+    assert!(saved.starts_with("telepy-") && saved.contains(" ssh-ed25519 "), "{saved}");
     let r = lab.ssh_with_config(&cfg, &alias, "whereami").await;
     assert_eq!(r.stdout, "root@box", "{r:?}");
+    std::fs::write(&known, saved.replacen("ssh-ed25519 ", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHEFltoMG4X8MG60ALp7MCsyv9mKKK1QjxImZr4QVzQ1 #", 1)).unwrap();
+    let r = lab.ssh_with_config(&cfg, &alias, "whereami").await;
+    assert!(!r.ok, "a wrong pinned key must stop the laptop: {r:?}");
+    std::fs::write(&known, &saved).unwrap();
+    assert_eq!(lab.ssh_with_config(&cfg, &alias, "whereami").await.stdout, "root@box");
     // 不同使用者同時連同一台，各自的身分不會混
     let (alice_root, bob_ubuntu) = ([(Hop::Tunnel(&dev), "root")], [(Hop::Tunnel(&dev), "ubuntu")]);
     let (a, b) = tokio::join!(lab.laptop_exec(&alice, &alice_root, "whereami"), lab.laptop_exec(&bob, &bob_ubuntu, "whereami"));

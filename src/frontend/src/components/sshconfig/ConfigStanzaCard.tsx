@@ -22,6 +22,8 @@ const NOTES: Record<ConfigPart, Record<string, TranslationKey>> = {
         user: "config.line.serverUser",
         compression: "config.line.compression",
         stricthostkeychecking: "config.line.strictHostKeyChecking",
+        userknownhostsfile: "config.line.userKnownHostsFile",
+        hostkeyalias: "config.line.hostKeyAlias",
     },
     device: {
         host: "config.line.deviceHost",
@@ -60,8 +62,9 @@ export function ConfigStanzaCard({ n, part, title, hint, stanza, active, onActiv
         { key: "Host", value: stanza.alias, indent: false },
         ...stanza.options.map((o) => ({ ...o, indent: true })),
     ];
-    const note = (key: string) => {
-        const k = NOTES[part][key.toLowerCase()];
+    const note = (key: string, value: string) => {
+        // 伺服器區塊釘住了 Telepy 的主機金鑰時，StrictHostKeyChecking 的意思相反。/ With pinning, the line means the opposite.
+        const k = key.toLowerCase() === "stricthostkeychecking" && value.toLowerCase() === "yes" ? "config.line.strictHostKeyCheckingYes" : NOTES[part][key.toLowerCase()];
         return k ? t(k, { alias: stanza.alias }) : null;
     };
 
@@ -95,7 +98,7 @@ export function ConfigStanzaCard({ n, part, title, hint, stanza, active, onActiv
             <div className="overflow-x-auto px-4 py-3">
                 <div className="grid grid-cols-1 gap-y-1 sm:grid-cols-[max-content_minmax(12rem,1fr)] sm:gap-x-6 sm:gap-y-0.5">
                     {lines.map((l, i) => {
-                        const text = note(l.key);
+                        const text = note(l.key, l.value);
                         return (
                             <React.Fragment key={i}>
                                 <code className="whitespace-pre font-mono text-[0.8125rem] leading-relaxed">

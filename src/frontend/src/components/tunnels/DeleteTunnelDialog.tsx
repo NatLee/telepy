@@ -228,7 +228,9 @@ function CheckView({
                         disabled={!check.online}
                         onChange={(v) => setOption("removeServiceKey", v)}
                         title={t("deleteTunnel.removeServiceKey", { accounts: check.accounts.join(", ") })}
-                        description={t("deleteTunnel.removeServiceKeyHint")}
+                        description={check.last_on_machine
+                            ? t("deleteTunnel.removeServiceKeyLast")
+                            : t("deleteTunnel.removeServiceKeyOthers", { names: check.same_machine.map((s) => s.name).join(", ") || t("deleteTunnel.anotherTunnel") })}
                     />
                 )}
             </Section>

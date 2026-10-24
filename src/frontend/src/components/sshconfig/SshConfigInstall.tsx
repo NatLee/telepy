@@ -16,7 +16,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { guessShell, installCommand, openEditorCommand, removeCommand, type ConfigShell, type ConfigStanza } from "@/lib/sshConfig";
+import { guessShell, installCommand, openEditorCommand, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza } from "@/lib/sshConfig";
 import { ConfigStanzaCard } from "./ConfigStanzaCard";
 import type { ConfigPart } from "./ConfigRouteMap";
 
@@ -51,11 +51,13 @@ function Disclosure({ title, open, onToggle, children }: { title: React.ReactNod
 interface Props {
     serverStanza: ConfigStanza | null;
     deviceStanzas: ConfigStanza[];
+    /** 後端給的 known_hosts 行（Telepy 的主機金鑰）；沒有就不釘。/ The backend's known_hosts lines (Telepy's host key); none = not pinned. */
+    knownHosts?: string | null;
     active: ConfigPart | null;
     onActive: (part: ConfigPart | null) => void;
 }
 
-export function SshConfigInstall({ serverStanza, deviceStanzas, active, onActive }: Props) {
+export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, active, onActive }: Props) {
     const { t, tn } = useI18n();
     // 只在對話框打開後才掛載，直接讀 localStorage 不會有 hydration 不一致。/ Mounted only inside an open dialog.
     const [shell, setShellState] = useState<ConfigShell>(readShell);
@@ -131,9 +133,10 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, active, onActive
             {method === "command" ? (
                 <>
                     <p className="text-muted-foreground">{t(shell === "posix" ? "config.cmd.introPosix" : "config.cmd.introPowershell")}</p>
-                    <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={installCommand(shell, all)} />
+                    <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={installCommand(shell, all, knownHosts)} />
                     <ul className="space-y-1 text-xs text-muted-foreground">
                         {[
+                            ...(knownHosts?.trim() ? [tn("config.cmd.knownHosts", { path: code(KNOWN_HOSTS_PATH) })] : []),
                             tn("config.cmd.backup", { path: code(shell === "posix" ? "~/.ssh/config.bak" : "config.bak") }),
                             t("config.cmd.rerun"),
                             t("config.cmd.untouched"),
@@ -166,6 +169,12 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, active, onActive
                         <li><span className="text-foreground">2.</span> {t("config.manual.paste")}</li>
                     </ol>
                     {cards}
+                    {knownHosts?.trim() && (
+                        <div className="space-y-1.5 text-muted-foreground">
+                            <p><span className="text-foreground">3.</span> {tn("config.manual.knownHosts", { path: code(KNOWN_HOSTS_PATH) })}</p>
+                            <CodeBlock language="text" value={knownHosts.trim() + "\n"} />
+                        </div>
+                    )}
                 </>
             )}
         </div>

@@ -125,11 +125,17 @@ async fn tunnel_lifecycle_and_dashboard() {
     assert_eq!(r.json["hosts"][0]["username"], "ubuntu");
     assert_eq!(r.json["hosts"][0]["username_id"], uname_id);
     assert_eq!(r.json["reverse_port"], 1024);
+    // 這個測試 app 的 gateway 沒有 host key：退回不驗證（lab 上的測試走釘住的那條路）。
+    // This test app's gateway has no host keys: the no-check fallback (the lab tests cover pinning).
+    assert_eq!(r.json["known_hosts"], "", "{}", r.text);
+    assert_eq!(r.json["known_hosts_path"], "~/.ssh/telepy_known_hosts");
+    assert!(cfg.contains("StrictHostKeyChecking no"), "{cfg}");
 
     let r = app.get(&format!("/tunnels/server/script/ssh/{id}/22"), Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(r.json["language"], "bash");
     assert!(r.json["script"].as_str().unwrap().contains("-NR '*:1024:localhost:22'"));
+    assert!(r.json["script"].as_str().unwrap().contains("StrictHostKeyChecking=no"));
     let r = app.get(&format!("/tunnels/server/script/autossh-service/{id}/22"), Some(&admin)).await;
     assert!(r.json["script"].as_str().unwrap().contains("User=ubuntu"), "{}", r.text);
     let r = app.get(&format!("/tunnels/server/script/docker-compose/{id}/22"), Some(&admin)).await;

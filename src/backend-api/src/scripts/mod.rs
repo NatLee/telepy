@@ -49,6 +49,26 @@ pub struct ScriptContext<'a> {
     pub key_path: Option<&'a str>,
     /// docker 模板用：第一把 service key。/ For the docker templates.
     pub telepy_public_key: Option<&'a str>,
+    /// gateway 的 host key（`type base64`）：有的話腳本把它釘住，裝置就只會連到真的 Telepy；沒有就退回不驗證（舊行為）。
+    /// The gateway's host keys; when known the scripts pin them, otherwise they fall back to not checking (the old behaviour).
+    pub gateway_host_keys: &'a [String],
+}
+
+/// known_hosts 裡的別名（與一鍵加入相同）。/ The known_hosts alias (the same one the join script uses).
+pub fn gateway_alias(server_domain: &str, reverse_server_ssh_port: &str) -> String {
+    format!("telepy-{server_domain}-{reverse_server_ssh_port}")
+}
+
+/// `<alias> <type> <base64>` 行（搭配 `HostKeyAlias`）。/ known_hosts lines keyed by the alias (for `HostKeyAlias`).
+pub fn known_hosts_lines(alias: &str, keys: &[String]) -> String {
+    keys.iter().map(|k| format!("{alias} {k}\n")).collect()
+}
+
+/// 依主機名稱的 known_hosts 行（容器版不能用 HostKeyAlias；非 22 port 寫成 `[host]:port`）。
+/// known_hosts lines keyed by host for the container flavour (no HostKeyAlias there; `[host]:port` unless port 22).
+pub fn known_hosts_lines_for_host(server_domain: &str, reverse_server_ssh_port: &str, keys: &[String]) -> String {
+    let host = if reverse_server_ssh_port == "22" { server_domain.to_string() } else { format!("[{server_domain}]:{reverse_server_ssh_port}") };
+    keys.iter().map(|k| format!("{host} {k}\n")).collect()
 }
 
 fn base_mapping(ctx: &ScriptContext) -> HashMap<&'static str, String> {
@@ -62,21 +82,82 @@ fn base_mapping(ctx: &ScriptContext) -> HashMap<&'static str, String> {
     m
 }
 
+/// 「不驗證」的 ssh 選項（gateway 沒有 host key 時）。/ The no-check options (no gateway host key known).
+const NO_CHECK_OPTIONS: &str = "-o \"StrictHostKeyChecking=no\" \\\n-o \"UserKnownHostsFile=/dev/null\" \\\n";
+
+/// 使用者層級的 bash 腳本：先寫 `~/.ssh/telepy_known_hosts`，再用 `HostKeyAlias` 比對。回 (setup 區塊, ssh 選項)。
+/// User-level bash scripts: write `~/.ssh/telepy_known_hosts`, then pin through `HostKeyAlias`. Returns (setup, options).
+fn bash_pinning(ctx: &ScriptContext) -> (String, String) {
+    if ctx.gateway_host_keys.is_empty() {
+        return (String::new(), NO_CHECK_OPTIONS.to_string());
+    }
+    let alias = gateway_alias(ctx.server_domain, ctx.reverse_server_ssh_port);
+    let setup = format!(
+        "\n# Telepy's SSH host key: this tunnel only ever talks to the real server (no prompt, no impostor).\n\
+         KNOWN_HOSTS=\"$HOME/.ssh/telepy_known_hosts\"\n\
+         mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\"\n\
+         cat > \"$KNOWN_HOSTS\" <<'TELEPY_HOST_KEYS'\n{}TELEPY_HOST_KEYS\n\
+         chmod 600 \"$KNOWN_HOSTS\"\n",
+        known_hosts_lines(&alias, ctx.gateway_host_keys)
+    );
+    let options = format!("-o \"StrictHostKeyChecking=yes\" \\\n-o \"UserKnownHostsFile=$KNOWN_HOSTS\" \\\n-o \"HostKeyAlias={alias}\" \\\n");
+    (setup, options)
+}
+
 /// `ssh_tunnel_script_factory(tunnel_type, ...).render()`；回 (script, language)。
 pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, &'static str), String> {
     let mut m = base_mapping(ctx);
+    let alias = gateway_alias(ctx.server_domain, ctx.reverse_server_ssh_port);
+    let pinned = !ctx.gateway_host_keys.is_empty();
     match tunnel_type.to_ascii_lowercase().as_str() {
         "ssh" | "autossh" => {
             m.insert("key_option", ctx.key_path.map(|k| format!(" \\\n-i {k} ")).unwrap_or_else(|| " ".into()));
+            let (setup, options) = bash_pinning(ctx);
+            m.insert("known_hosts_setup", setup);
+            m.insert("host_key_options", options);
             let tpl = if tunnel_type.eq_ignore_ascii_case("ssh") { SSH } else { AUTOSSH };
             Ok((safe_substitute(tpl, &m), "bash"))
         }
         "autossh-service" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i {k} ")).unwrap_or_default());
+            // 系統服務：known_hosts 放 /etc/ssh（服務跑在別的帳號下，家目錄不一定在）；unit 檔是引號 heredoc，路徑要寫死。
+            // System service: the known_hosts goes to /etc/ssh (the service runs as another account); the unit is a
+            // quoted heredoc, so the path is spelled out.
+            if pinned {
+                m.insert(
+                    "known_hosts_setup",
+                    format!(
+                        "\n# Telepy's SSH host key: the service only ever talks to the real server (no prompt, no impostor).\n\
+                         KNOWN_HOSTS=/etc/ssh/telepy_known_hosts\n\
+                         printf '%s' '{}' | $SUDO tee \"$KNOWN_HOSTS\" > /dev/null\n\
+                         $SUDO chmod 644 \"$KNOWN_HOSTS\"\n",
+                        known_hosts_lines(&alias, ctx.gateway_host_keys)
+                    ),
+                );
+                m.insert("host_key_options", format!("-o \"StrictHostKeyChecking=yes\" -o \"UserKnownHostsFile=/etc/ssh/telepy_known_hosts\" -o \"HostKeyAlias={alias}\" "));
+            } else {
+                m.insert("known_hosts_setup", String::new());
+                m.insert("host_key_options", "-o \"StrictHostKeyChecking=no\" -o \"UserKnownHostsFile=/dev/null\" ".into());
+            }
             Ok((safe_substitute(AUTOSSH_SERVICE, &m), "bash"))
         }
         "powershell" => {
             m.insert("key_option", ctx.key_path.map(|k| format!("-i '{k}' ")).unwrap_or_default());
+            // 模板裡已經有 $knownHosts / $hostKeyOptions 的預設（不驗證）；有金鑰就寫檔並改成釘住。
+            // The template defaults $knownHosts / $hostKeyOptions to no checking; with keys, write the file and pin.
+            m.insert(
+                "known_hosts_setup",
+                if pinned {
+                    format!(
+                        "New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\" | Out-Null\n\
+                         [IO.File]::WriteAllText($knownHosts, @'\n{}'@ + \"`n\")\n\
+                         $hostKeyOptions = \"-o StrictHostKeyChecking=yes -o UserKnownHostsFile=`\"$knownHosts`\" -o HostKeyAlias={alias}\"",
+                        known_hosts_lines(&alias, ctx.gateway_host_keys)
+                    )
+                } else {
+                    String::new()
+                },
+            );
             Ok((safe_substitute(POWERSHELL, &m), "powershell"))
         }
         "docker-run" | "docker-compose" => {
@@ -88,6 +169,33 @@ pub fn render_script(tunnel_type: &str, ctx: &ScriptContext) -> Result<(String, 
             let compose = tunnel_type.eq_ignore_ascii_case("docker-compose");
             let default_key = if compose { "~/.ssh/id_rsa" } else { "$HOME/.ssh/id_rsa" };
             m.insert("key_path", ctx.key_path.unwrap_or(default_key).to_string());
+            // jnovack/autossh：/known_hosts 存在就 StrictHostKeyChecking=yes；沒有 HostKeyAlias，所以依主機名稱寫。
+            // jnovack/autossh pins when /known_hosts exists; no HostKeyAlias there, so the lines are keyed by host.
+            let host_lines = known_hosts_lines_for_host(ctx.server_domain, ctx.reverse_server_ssh_port, ctx.gateway_host_keys);
+            if pinned {
+                m.insert(
+                    "known_hosts_setup",
+                    format!(
+                        "\n# Telepy's SSH host key: the container only ever talks to the real server (no impostor).\n\
+                         KNOWN_HOSTS=\"$HOME/.ssh/telepy_known_hosts\"\n\
+                         mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\"\n\
+                         cat > \"$KNOWN_HOSTS\" <<'TELEPY_HOST_KEYS'\n{host_lines}TELEPY_HOST_KEYS\n\
+                         chmod 644 \"$KNOWN_HOSTS\"\n"
+                    ),
+                );
+                m.insert("known_hosts_mount", "  -v \"$KNOWN_HOSTS\":/known_hosts:ro \\\n  -e SSH_STRICT_HOST_IP_CHECK=false \\\n".into());
+                let args: Vec<String> = host_lines.lines().map(|l| format!("'{l}'")).collect();
+                m.insert(
+                    "known_hosts_step",
+                    format!("#\n# 3) Pin Telepy's SSH host key, so the container only ever talks to the real server (save next to this file):\n#\n#      printf '%s\\n' {} > telepy_known_hosts\n", args.join(" ")),
+                );
+                m.insert("known_hosts_volume", "      - \"./telepy_known_hosts:/known_hosts:ro\"\n".into());
+                m.insert("known_hosts_env", "      SSH_STRICT_HOST_IP_CHECK: \"false\"\n".into());
+            } else {
+                for k in ["known_hosts_setup", "known_hosts_mount", "known_hosts_step", "known_hosts_volume", "known_hosts_env"] {
+                    m.insert(k, String::new());
+                }
+            }
             m.insert(
                 "telepy_public_key",
                 match ctx.telepy_public_key {
@@ -123,7 +231,11 @@ fn ensure_newline(mut s: String) -> String {
     s
 }
 
-/// `SshClientTemplate`：裝置端 `~/.ssh/config` 的 Host 區塊（經 telepy-ssh-server 跳板）。
+/// 筆電端 `~/.ssh/known_hosts` 旁的檔案。/ The laptop-side file next to `~/.ssh/known_hosts`.
+pub const LAPTOP_KNOWN_HOSTS: &str = "~/.ssh/telepy_known_hosts";
+
+/// `SshClientTemplate`：裝置端 `~/.ssh/config` 的 Host 區塊（經 telepy-ssh-server 跳板）。裝置的 host key 不在這裡釘
+///（ProxyCommand 後面那一跳照舊不驗證）。/ The device stanza; the device's own host key is not pinned here.
 pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, reverse_port: i64) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
@@ -133,12 +245,15 @@ pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, revers
     m.insert("reverse_server_ssh_port", String::new());
     m.insert("ssh_username", ssh_username.into());
     m.insert("host_friendly_name", sanitize_host_alias(host_friendly_name));
+    m.insert("host_key_lines", "StrictHostKeyChecking no".into());
     m.insert("client_proxy_command", "ProxyCommand ssh -W %h:%p telepy-ssh-server".into());
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
 
-/// `SshServerTemplate`：`Host telepy-ssh-server` 區塊。
-pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str) -> String {
+/// `SshServerTemplate`：`Host telepy-ssh-server` 區塊。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
+/// `HostKeyAlias`，檔案內容見 [`known_hosts_lines`]），沒有就照舊不驗證。
+/// The `Host telepy-ssh-server` stanza; pins the gateway's host keys when known, else no checking as before.
+pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String]) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
     m.insert("server_domain", server_domain.into());
@@ -147,6 +262,14 @@ pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str) 
     m.insert("reverse_server_ssh_port", reverse_server_ssh_port.into());
     m.insert("ssh_username", "telepy".into());
     m.insert("host_friendly_name", "telepy-ssh-server".into());
+    m.insert(
+        "host_key_lines",
+        if gateway_host_keys.is_empty() {
+            "StrictHostKeyChecking no".into()
+        } else {
+            format!("StrictHostKeyChecking yes\n    UserKnownHostsFile {LAPTOP_KNOWN_HOSTS}\n    HostKeyAlias {}", gateway_alias(server_domain, reverse_server_ssh_port))
+        },
+    );
     m.insert("client_proxy_command", String::new());
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
@@ -173,6 +296,7 @@ mod tests {
             username: "root",
             key_path: None,
             telepy_public_key: None,
+            gateway_host_keys: &[],
         };
         let (s, lang) = render_script("ssh", &ctx).unwrap();
         assert_eq!(lang, "bash");
@@ -200,6 +324,7 @@ mod tests {
             username: "root",
             key_path: None,
             telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
+            gateway_host_keys: &[],
         };
         let (s, lang) = render_script("docker-compose", &ctx).unwrap();
         assert_eq!(lang, "yaml");
@@ -230,9 +355,70 @@ mod tests {
         assert!(s.contains("TELEPY_KEY=''"), "no service key → nothing appended: {s}");
     }
 
+    /// gateway 有 host key：每種腳本都把它釘住（known_hosts + StrictHostKeyChecking=yes），沒有就照舊不驗證。
+    /// With gateway host keys every script pins them; without, the old no-check options stay.
+    #[test]
+    fn scripts_pin_the_gateway_host_key_when_known() {
+        let keys = vec!["ssh-ed25519 AAAAgateway".to_string(), "ssh-rsa AAAArsa".to_string()];
+        let ctx = ScriptContext {
+            host_friendly_name: "My Box",
+            server_domain: "telepy.test",
+            reverse_port: 12345,
+            ssh_port: 22,
+            reverse_server_ssh_port: "24242",
+            username: "ubuntu",
+            key_path: Some("~/.ssh/id_rsa"),
+            telepy_public_key: Some("ssh-ed25519 AAAAtest web-service"),
+            gateway_host_keys: &keys,
+        };
+        for kind in ["ssh", "autossh"] {
+            let (s, _) = render_script(kind, &ctx).unwrap();
+            assert!(s.contains("telepy-telepy.test-24242 ssh-ed25519 AAAAgateway\ntelepy-telepy.test-24242 ssh-rsa AAAArsa\nTELEPY_HOST_KEYS"), "{kind}: {s}");
+            assert!(s.contains("-o \"StrictHostKeyChecking=yes\" \\\n-o \"UserKnownHostsFile=$KNOWN_HOSTS\" \\\n-o \"HostKeyAlias=telepy-telepy.test-24242\" \\\n"), "{kind}: {s}");
+            assert!(!s.contains("StrictHostKeyChecking=no"), "{kind}: {s}");
+            assert!(s.contains("chmod 600 \"$KNOWN_HOSTS\""), "{kind}: {s}");
+        }
+        let (s, _) = render_script("autossh-service", &ctx).unwrap();
+        assert!(s.contains("| $SUDO tee \"$KNOWN_HOSTS\""), "{s}");
+        assert!(s.contains("-o \"UserKnownHostsFile=/etc/ssh/telepy_known_hosts\" -o \"HostKeyAlias=telepy-telepy.test-24242\" -i ~/.ssh/id_rsa -p 24242"), "{s}");
+        let (s, _) = render_script("powershell", &ctx).unwrap();
+        assert!(s.contains("[IO.File]::WriteAllText($knownHosts, @'\ntelepy-telepy.test-24242 ssh-ed25519 AAAAgateway\ntelepy-telepy.test-24242 ssh-rsa AAAArsa\n'@"), "{s}");
+        assert!(s.contains("$hostKeyOptions = \"-o StrictHostKeyChecking=yes -o UserKnownHostsFile=`\"$knownHosts`\" -o HostKeyAlias=telepy-telepy.test-24242\""), "{s}");
+        assert!(s.contains("-o ServerAliveCountMax=3 $hostKeyOptions\""), "{s}");
+        // 容器版依主機名稱（非 22 port → [host]:port），掛到 /known_hosts。/ Container: keyed by host, mounted at /known_hosts.
+        let (s, _) = render_script("docker-run", &ctx).unwrap();
+        assert!(s.contains("[telepy.test]:24242 ssh-ed25519 AAAAgateway\n[telepy.test]:24242 ssh-rsa AAAArsa\nTELEPY_HOST_KEYS"), "{s}");
+        assert!(s.contains("-v \"$KNOWN_HOSTS\":/known_hosts:ro \\\n  -e SSH_STRICT_HOST_IP_CHECK=false \\\n  -e SSH_REMOTE_USER=telepy"), "{s}");
+        let (s, _) = render_script("docker-compose", &ctx).unwrap();
+        assert!(s.contains("printf '%s\\n' '[telepy.test]:24242 ssh-ed25519 AAAAgateway' '[telepy.test]:24242 ssh-rsa AAAArsa' > telepy_known_hosts"), "{s}");
+        assert!(s.contains("- \"./telepy_known_hosts:/known_hosts:ro\"\n    environment:\n      SSH_STRICT_HOST_IP_CHECK: \"false\"\n"), "{s}");
+        assert!(!s.contains("${"), "{s}");
+        let port22 = ScriptContext { reverse_server_ssh_port: "22", ..ctx.clone() };
+        let (s, _) = render_script("docker-run", &port22).unwrap();
+        assert!(s.contains("\ntelepy.test ssh-ed25519 AAAAgateway\n"), "port 22 is keyed by the bare host: {s}");
+
+        // 沒有金鑰：舊行為。/ No keys: the old behaviour.
+        let bare = ScriptContext { gateway_host_keys: &[], ..ctx.clone() };
+        for kind in ["ssh", "autossh", "autossh-service"] {
+            let (s, _) = render_script(kind, &bare).unwrap();
+            assert!(s.contains("StrictHostKeyChecking=no") && s.contains("UserKnownHostsFile=/dev/null") && !s.contains("telepy_known_hosts"), "{kind}: {s}");
+        }
+        let (s, _) = render_script("powershell", &bare).unwrap();
+        assert!(s.contains("$hostKeyOptions = \"-o StrictHostKeyChecking=no\"") && !s.contains("WriteAllText($knownHosts"), "{s}");
+        for kind in ["docker-run", "docker-compose"] {
+            let (s, _) = render_script(kind, &bare).unwrap();
+            assert!(!s.contains("known_hosts") && !s.contains("${"), "{kind}: {s}");
+        }
+    }
+
     #[test]
     fn ssh_config_blocks() {
-        let server = render_server_config("telepy.test", "24242");
+        let server = render_server_config("telepy.test", "24242", &[]);
+        assert!(server.contains("StrictHostKeyChecking no\n"), "{server}");
+        let pinned = render_server_config("telepy.test", "24242", &["ssh-ed25519 AAAAgateway".to_string()]);
+        assert!(pinned.contains("    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.test-24242\n    User telepy\n"), "{pinned}");
+        assert_eq!(known_hosts_lines("telepy-telepy.test-24242", &["ssh-ed25519 AAAAgateway".to_string()]), "telepy-telepy.test-24242 ssh-ed25519 AAAAgateway\n");
+        let server = render_server_config("telepy.test", "24242", &[]);
         assert!(server.starts_with("Host telepy-ssh-server\n"));
         assert!(server.contains("Port  24242\n"));
         assert!(server.contains("User telepy\n"));

@@ -13,7 +13,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 command -v autossh >/dev/null 2>&1 || { echo 'autossh not found. Please install autossh (e.g. apt/yum) before running this script.'; exit 1; }
-
+${known_hosts_setup}
 SERVICE_PATH="/etc/systemd/system/telepy-tunnel.service"
 
 cat << 'EOF' | $SUDO tee "$SERVICE_PATH" > /dev/null
@@ -31,7 +31,7 @@ Environment="AUTOSSH_DEBUG=1"
 Environment="AUTOSSH_LOGFILE=/var/log/telepy-autossh/autossh.log"
 Environment="AUTOSSH_GATETIME=0"
 
-ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -o "StrictHostKeyChecking=no" -o "UserKnownHostsFile=/dev/null" ${key_option}-p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
+ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" ${host_key_options}${key_option}-p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
 
 # Restart service after it exits
 Restart=always

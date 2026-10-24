@@ -106,6 +106,8 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
         actions: { handleUserChange }
     } = useConfigModal(isOpen, tunnelId);
     const [active, setActive] = useState<ConfigPart | null>(null);
+    // Telepy 的主機金鑰（伺服器區塊釘住它）。/ Telepy's host key, pinned by the server stanza.
+    const knownHosts = data?.known_hosts ?? null;
 
     const keysData = deviceKeys.data;
     const online = keysData ? keysData.tunnel.online : null;
@@ -183,7 +185,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
 
                     <ol className="list-none">
                         <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
-                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} active={active} onActive={setActive} />
+                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} active={active} onActive={setActive} />
                         </Step>
 
                         {hosts.length > 0 && (

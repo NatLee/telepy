@@ -552,6 +552,10 @@ pub struct ConfigResponse {
     pub hosts: Vec<ConfigHost>,
     #[schema(example = 10022)]
     pub reverse_port: i64,
+    /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`, one per gateway host key); empty when the gateway has no host keys
+    pub known_hosts: String,
+    #[schema(example = "~/.ssh/telepy_known_hosts")]
+    pub known_hosts_path: String,
 }
 
 #[derive(ToSchema)]
@@ -1919,6 +1923,10 @@ pub struct TunnelDeleteGrant {
 pub struct TunnelDeleteCheck {
     pub tunnel: TunnelDeleteTunnel,
     pub online: bool,
+    /// No other tunnel pins this machine's host key: removing the service key is the default, or the machine stays reachable with it and has no owner
+    pub last_on_machine: bool,
+    /// Your other tunnels on the same machine (the ones you can see)
+    pub same_machine: Vec<SameMachineTunnel>,
     /// Login accounts (target usernames) of the tunnel
     pub accounts: Vec<String>,
     pub sharees: Vec<TunnelDeleteSharee>,
