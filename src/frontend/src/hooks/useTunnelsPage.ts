@@ -23,6 +23,7 @@ export function useTunnelsPage() {
     const [usersModal, setUsersModal] = useState<{ isOpen: boolean, tunnelId: number | null, readOnly: boolean }>({ isOpen: false, tunnelId: null, readOnly: false });
     const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [shareModal, setShareModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
+    const [requestModal, setRequestModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
     const [leaveConfirm, setLeaveConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
 
@@ -140,7 +141,27 @@ export function useTunnelsPage() {
             fetchData();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_PERMISSION_UPDATED]: (msg) => {
-            if (msg.details) showSuccess(msg.details);
+            // 暫時授權到期是提醒。/ A temporary grant ending is a heads-up.
+            if (msg.details) {
+                if (msg.temporary_ended) showToast(msg.details, "warning");
+                else showSuccess(msg.details);
+            }
+            fetchData();
+        },
+        // 存取申請：新申請（給 owner / ADMIN）、決定（給申請人）、其他變動只刷新。
+        // Access requests: new (owner / ADMIN), decided (requester), other changes just refresh.
+        [NOTIFICATION_ACTIONS.ACCESS_REQUEST_CREATED]: (msg) => {
+            if (msg.details) showToast(msg.details, "info");
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.ACCESS_REQUEST_DECIDED]: (msg) => {
+            if (msg.details) {
+                if (msg.status === "approved") showSuccess(msg.details);
+                else showToast(msg.details, "warning");
+            }
+            fetchData();
+        },
+        [NOTIFICATION_ACTIONS.ACCESS_REQUEST_UPDATED]: () => {
             fetchData();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_USERNAMES_UPDATED]: (msg) => {
@@ -200,6 +221,7 @@ export function useTunnelsPage() {
             usersModal, setUsersModal,
             detailsModal, setDetailsModal,
             shareModal, setShareModal,
+            requestModal, setRequestModal,
             deleteConfirm, setDeleteConfirm,
             leaveConfirm, setLeaveConfirm
         }

@@ -209,6 +209,7 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
             handleUnshare,
             handleSaveAllowed,
             handleUpdateExpiry,
+            refresh: fetchUsers,
         }
     };
 }

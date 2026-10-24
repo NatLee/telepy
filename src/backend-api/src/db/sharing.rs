@@ -18,6 +18,20 @@ pub struct Sharing {
     pub updated_at: String,
     /// 分享到什麼時候（None = 一直有效）。/ When the share ends (None = never).
     pub expires_at: Option<String>,
+    /// 核准的存取申請暫時提升了權限：原本的權限與到期時間。/ A temporary raise from an access request.
+    pub base_permission: Option<String>,
+    pub permission_until: Option<String>,
+}
+
+impl Sharing {
+    /// 現在有效的權限：暫時提升過期了（回收前那 30 秒內）就算回原本的。
+    /// The permission in force now: once a temporary raise has run out it counts as the original, even before the reaper reverts it.
+    pub fn permission(&self) -> &str {
+        match (&self.base_permission, &self.permission_until) {
+            (Some(base), Some(until)) if until.as_str() <= now_db().as_str() => base,
+            _ => &self.permission_type,
+        }
+    }
 }
 
 /// Sharing joined with the sharee's user row (for the shared-users list).
@@ -31,10 +45,12 @@ pub struct SharingWithUser {
     pub username: String,
     pub email: String,
     pub expires_at: Option<String>,
+    pub base_permission: Option<String>,
+    pub permission_until: Option<String>,
 }
 
 const S: &str = "tunnels_tunnelsharing";
-const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at, expires_at";
+const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at, expires_at, base_permission, permission_until";
 const A: &str = "tunnels_tunnelsharingallowedusername";
 
 pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<Sharing>> {
@@ -47,7 +63,7 @@ pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<S
 
 pub async fn for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<SharingWithUser>> {
     sqlx::query_as(&format!(
-        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email, s.expires_at \
+        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email, s.expires_at, s.base_permission, s.permission_until \
          FROM {S} s JOIN auth_user a ON a.id = s.shared_with_id WHERE s.tunnel_id = ? ORDER BY s.id"
     ))
     .bind(tunnel_id)
@@ -66,7 +82,11 @@ pub async fn user_has_any_share(db: &Db, user_id: i64) -> sqlx::Result<bool> {
 
 /// `tunnel_permission_context`：一次載入 {tunnel_id: my permission} 與 {tunnel_id: share count}。
 pub async fn permission_context(db: &Db, user_id: i64) -> sqlx::Result<(HashMap<i64, String>, HashMap<i64, i64>)> {
-    let mine: Vec<(i64, String)> = sqlx::query_as(&format!("SELECT tunnel_id, permission_type FROM {S} WHERE shared_with_id = ?"))
+    let mine: Vec<(i64, String)> = sqlx::query_as(&format!(
+        "SELECT tunnel_id, CASE WHEN base_permission IS NOT NULL AND permission_until <= ? THEN base_permission ELSE permission_type END \
+         FROM {S} WHERE shared_with_id = ?"
+    ))
+        .bind(now_db())
         .bind(user_id)
         .fetch_all(&db.read)
         .await?;
@@ -95,8 +115,9 @@ pub async fn create(db: &Db, tunnel_id: i64, shared_by: i64, shared_with: i64, p
     sqlx::query_as(&format!("SELECT {S_COLS} FROM {S} WHERE id = ?")).bind(id).fetch_one(&db.read).await
 }
 
+/// 手動設定權限；暫時提升（存取申請）就此結束。/ Set the permission by hand; any temporary raise ends here.
 pub async fn set_permission(db: &Db, id: i64, permission: &str) -> sqlx::Result<()> {
-    sqlx::query(&format!("UPDATE {S} SET permission_type = ?, updated_at = ? WHERE id = ?"))
+    sqlx::query(&format!("UPDATE {S} SET permission_type = ?, base_permission = NULL, permission_until = NULL, updated_at = ? WHERE id = ?"))
         .bind(permission)
         .bind(now_db())
         .bind(id)
@@ -135,8 +156,9 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
 // ---------------------------------------------------------------- allowed usernames
 
 pub async fn allowed_username_ids(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar(&format!("SELECT reverse_server_username_id FROM {A} WHERE tunnel_sharing_id = ? ORDER BY id"))
+    sqlx::query_scalar(&format!("SELECT reverse_server_username_id FROM {A} a WHERE tunnel_sharing_id = ? AND (a.expires_at IS NULL OR a.expires_at > ?) ORDER BY id"))
         .bind(sharing_id)
+        .bind(now_db())
         .fetch_all(&db.read)
         .await
 }
@@ -155,9 +177,10 @@ pub async fn tunnels_with_allowed_usernames(db: &Db, user_id: i64) -> sqlx::Resu
     let ids: Vec<i64> = sqlx::query_scalar(&format!(
         "SELECT DISTINCT s.tunnel_id FROM {S} s JOIN {A} a ON a.tunnel_sharing_id = s.id \
          JOIN authorized_keys_reverseserverusernames u ON u.id = a.reverse_server_username_id AND u.reverse_server_id = s.tunnel_id \
-         WHERE s.shared_with_id = ?"
+         WHERE s.shared_with_id = ? AND (a.expires_at IS NULL OR a.expires_at > ?)"
     ))
     .bind(user_id)
+    .bind(now_db())
     .fetch_all(&db.read)
     .await?;
     Ok(ids.into_iter().collect())
@@ -167,23 +190,35 @@ pub async fn tunnels_with_allowed_usernames(db: &Db, user_id: i64) -> sqlx::Resu
 pub async fn allowed_usernames(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<(i64, String)>> {
     sqlx::query_as(&format!(
         "SELECT u.id, u.username FROM {A} a JOIN authorized_keys_reverseserverusernames u ON u.id = a.reverse_server_username_id \
-         WHERE a.tunnel_sharing_id = ? ORDER BY a.id"
+         WHERE a.tunnel_sharing_id = ? AND (a.expires_at IS NULL OR a.expires_at > ?) ORDER BY a.id"
     ))
     .bind(sharing_id)
+    .bind(now_db())
     .fetch_all(&db.read)
     .await
 }
 
-/// 以 ids 取代整組（只接受屬於該隧道的 username id）。/ Replace the allow-list (validated against the tunnel).
+/// 以 ids 取代整組（只接受屬於該隧道的 username id）。留下來的暫時帳號保留原本的期限——改清單不會讓它變成永久的。
+/// Replace the allow-list (validated against the tunnel). Temporary accounts that stay keep their end, so editing
+/// the list never makes one permanent.
 pub async fn replace_allowed_usernames(db: &Db, sharing_id: i64, tunnel_id: i64, ids: &[i64]) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;
+    let ends: HashMap<i64, String> = sqlx::query_as::<_, (i64, String)>(&format!(
+        "SELECT reverse_server_username_id, expires_at FROM {A} WHERE tunnel_sharing_id = ? AND expires_at IS NOT NULL"
+    ))
+    .bind(sharing_id)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
     sqlx::query(&format!("DELETE FROM {A} WHERE tunnel_sharing_id = ?")).bind(sharing_id).execute(&mut *tx).await?;
     for id in ids {
         sqlx::query(&format!(
-            "INSERT OR IGNORE INTO {A} (tunnel_sharing_id, reverse_server_username_id) \
-             SELECT ?, id FROM authorized_keys_reverseserverusernames WHERE id = ? AND reverse_server_id = ?"
+            "INSERT OR IGNORE INTO {A} (tunnel_sharing_id, reverse_server_username_id, expires_at) \
+             SELECT ?, id, ? FROM authorized_keys_reverseserverusernames WHERE id = ? AND reverse_server_id = ?"
         ))
         .bind(sharing_id)
+        .bind(ends.get(id))
         .bind(id)
         .bind(tunnel_id)
         .execute(&mut *tx)

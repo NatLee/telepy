@@ -56,7 +56,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                             :{tunnel.reverse_port}
                         </span>
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
-                        <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} />
+                        <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} />
                         <TunnelPresenceButton presence={tunnel.presence} />
                         <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} />
                     </div>

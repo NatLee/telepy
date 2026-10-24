@@ -47,6 +47,8 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
     // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
     db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
     state.device_keys.kick(t.id);
+    // 還在等的存取申請一併取消。/ Their pending access requests go too.
+    db::access_requests::cancel_pending_of(&state.db, t.id, uid).await?;
 
     let name = &t.host_friendly_name;
     let (to_sharee, to_owner) = match &reason {
@@ -90,6 +92,10 @@ pub async fn run_expiry(state: AppState) {
     loop {
         if let Err(e) = expire_once(&state).await {
             tracing::warn!(error = ?e, "share expiry failed");
+        }
+        // 存取申請給的暫時授權也在這裡收回。/ Temporary grants from access requests end here too.
+        if let Err(e) = super::access_requests::revert_once(&state).await {
+            tracing::warn!(error = ?e, "temporary access revert failed");
         }
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }
@@ -243,14 +249,19 @@ async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     let mut users = Vec::new();
     for s in db::sharing::for_tunnel(&state.db, t.id).await? {
         let allowed = db::sharing::allowed_usernames(&state.db, s.id).await?;
+        let ends = db::access_requests::username_ends(&state.db, s.id).await?;
+        // 暫時提升（存取申請）：期滿還沒被收回的那幾秒就當作已經回去了。/ A raise past its end already counts as reverted.
+        let raise = s.base_permission.as_deref().zip(s.permission_until.as_deref()).filter(|(_, until)| *until > crate::util::now_db().as_str());
         users.push(json!({
             "id": s.shared_with_id,
             "username": s.username,
             "email": s.email,
-            "permission_type": s.permission_type,
+            "permission_type": if s.base_permission.is_some() && raise.is_none() { s.base_permission.clone().unwrap_or_default() } else { s.permission_type.clone() },
             "shared_at": db_to_iso_utc_offset(&s.shared_at),
             "expires_at": s.expires_at.as_deref().map(crate::util::db_to_iso_utc_z),
-            "allowed_target_usernames": allowed.iter().map(|(id, u)| json!({ "id": id, "username": u })).collect::<Vec<_>>(),
+            "permission_until": raise.map(|(_, until)| crate::util::db_to_iso_utc_z(until)),
+            "base_permission": raise.map(|(base, _)| base),
+            "allowed_target_usernames": allowed.iter().map(|(id, u)| json!({ "id": id, "username": u, "until": ends.get(id).map(|e| crate::util::db_to_iso_utc_z(e)) })).collect::<Vec<_>>(),
         }));
     }
     Ok(Json(json!({ "users": users })))

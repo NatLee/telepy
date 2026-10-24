@@ -72,6 +72,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let seen = db::tunnel_endpoints::last_seen_visible_to(&state.db, user_id).await?;
     let pins = db::tunnel_tags::pinned_by(&state.db, user_id).await?;
     let my_expiries = db::sharing::my_expiries(&state.db, user_id).await?;
+    let requests = db::access_requests::pending_counts(&state.db).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
     let tz = state.config.tz_offset_minutes;
@@ -96,6 +97,9 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             v["pinned"] = json!(pins.contains(&t.id));
             // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
             v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
+            // owner / ADMIN：還在等我決定的存取申請。/ Owner / ADMIN: access requests waiting for a decision.
+            let decides = eff.is_some_and(|e| e.satisfies(permissions::Permission::Admin));
+            v["access_requests"] = json!(if decides { requests.get(&t.id).copied().unwrap_or(0) } else { 0 });
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
