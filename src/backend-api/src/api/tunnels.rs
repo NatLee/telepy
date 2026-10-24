@@ -74,6 +74,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let my_expiries = db::sharing::my_expiries(&state.db, user_id).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
+    let key_alerts = db::host_keys::tunnels_with_rejected(&state.db).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -97,6 +98,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
             v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
+            // 裝置出示了和釘選不同的 host key、正等擁有者確認。/ The device presented a different host key; waiting for review.
+            v["host_key_changed"] = json!(key_alerts.contains(&t.id));
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
                 _ => Value::Null,

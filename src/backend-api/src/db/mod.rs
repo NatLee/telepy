@@ -4,6 +4,7 @@
 pub mod ai_audit;
 pub mod audit_chain;
 pub mod device_keys;
+pub mod host_keys;
 pub mod keys;
 pub mod lan;
 pub mod mfa;

@@ -53,7 +53,7 @@ fn free_port() -> u16 {
 
 async fn gw_client(port: u16) -> russh::client::Handle<telepy_server::ssh::device::ClientHandler> {
     let cfg = Arc::new(russh::client::Config::default());
-    russh::client::connect(cfg, ("127.0.0.1", port), telepy_server::ssh::device::ClientHandler).await.unwrap()
+    russh::client::connect(cfg, ("127.0.0.1", port), telepy_server::ssh::device::ClientHandler::unchecked()).await.unwrap()
 }
 
 async fn gw_auth(h: &mut russh::client::Handle<telepy_server::ssh::device::ClientHandler>, key_path: &std::path::Path) -> bool {
@@ -183,7 +183,7 @@ async fn reverse_tunnel_through_real_openssh_client() {
     {
         let key = Arc::new(russh::keys::load_secret_key(&user_key, None).unwrap());
         let cfg = Arc::new(russh::client::Config::default());
-        let mut h = russh::client::connect(cfg.clone(), ("127.0.0.1", gw_port), telepy_server::ssh::device::ClientHandler).await.unwrap();
+        let mut h = russh::client::connect(cfg.clone(), ("127.0.0.1", gw_port), telepy_server::ssh::device::ClientHandler::unchecked()).await.unwrap();
         let ok = h.authenticate_publickey("telepy", russh::keys::PrivateKeyWithHashAlg::new(key, None)).await.unwrap();
         assert!(ok.success(), "user key must authenticate");
         let ch = h.channel_open_direct_tcpip("localhost", reverse_port as u32, "127.0.0.1", 0).await.unwrap();

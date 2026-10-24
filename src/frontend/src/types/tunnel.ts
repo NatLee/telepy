@@ -29,6 +29,8 @@ export interface Tunnel {
     labels?: string[];
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
+    /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */
+    host_key_changed?: boolean;
 }
 
 /**

@@ -779,6 +779,40 @@ pub struct RemoteBrowserError {
     pub code: Option<String>,
 }
 
+// ---------------------------------------------------------------- Device host key pinning
+
+#[derive(ToSchema)]
+pub struct DeviceHostKey {
+    #[schema(example = "ssh-ed25519")]
+    pub key_type: String,
+    #[schema(example = "SHA256:…")]
+    pub fingerprint: String,
+    /// `type base64`
+    pub public_key: String,
+    /// first_use | accepted
+    pub source: String,
+    /// Connections that presented this key (rejected keys)
+    pub attempts: i64,
+    pub first_seen: String,
+    pub last_seen: String,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceHostKeys {
+    /// Keys Telepy trusts for this device (pinned on first use, or confirmed by the owner)
+    pub pinned: Vec<DeviceHostKey>,
+    /// Different keys the device presented since; connections were refused
+    pub rejected: Vec<DeviceHostKey>,
+    /// Owner or ADMIN sharee: may accept or forget
+    pub can_manage: bool,
+}
+
+#[derive(ToSchema)]
+pub struct HostKeyAccept {
+    /// Fingerprint of the refused key to trust
+    pub fingerprint: String,
+}
+
 // ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
 
 #[derive(ToSchema)]
