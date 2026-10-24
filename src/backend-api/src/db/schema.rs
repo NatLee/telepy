@@ -307,6 +307,25 @@ const TABLES: &[(&str, &str)] = &[
             "ends_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：網頁終端機錄影（asciicast v2 檔放在 DATA_DIR/recordings；這裡是索引）。
+    // Web terminal recordings (asciicast v2 files under DATA_DIR/recordings; this is the index).
+    (
+        "telepy_terminal_recording",
+        r#"CREATE TABLE "telepy_terminal_recording" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "username" varchar(150) NOT NULL,
+            "os_user" varchar(150) NOT NULL,
+            "lan_host" varchar(255) NULL,
+            "file" varchar(255) NOT NULL,
+            "started_at" datetime NOT NULL,
+            "ended_at" datetime NULL,
+            "duration_ms" integer NOT NULL DEFAULT 0,
+            "bytes" integer NOT NULL DEFAULT 0,
+            "truncated" bool NOT NULL DEFAULT 0
+        )"#,
+    ),
     // Rust 自有：隧道標籤（所有看得到隧道的人共用）。/ Tunnel labels, shared by everyone who sees the tunnel.
     (
         "telepy_tunnel_label",
@@ -447,6 +466,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
@@ -514,6 +534,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 管理員要求每個帳號都要有 TOTP / passkey（各自獨立）。/ Admin-required second factors, one switch each.
     ("site_settings_sitesettings", "mfa_require_totp", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "mfa_require_passkey", "bool NOT NULL DEFAULT 0"),
+    // 終端機錄影留幾天（0 = 一直留）。/ How long terminal recordings are kept (0 = forever).
+    ("site_settings_sitesettings", "recording_retention_days", "integer NOT NULL DEFAULT 30"),
+    // 這條隧道的網頁終端機要錄影。/ Record this tunnel's web terminal sessions.
+    ("authorized_keys_reverseserverauthorizedkeys", "record_sessions", "bool NOT NULL DEFAULT 0"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

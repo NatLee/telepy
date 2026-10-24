@@ -292,6 +292,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             require_step_up: false,
+            record_sessions: false,
         }
     }
 

@@ -25,6 +25,7 @@ pub mod oui;
 pub mod oauth;
 pub mod permissions;
 pub mod presence;
+pub mod recording;
 pub mod remote_browser;
 pub mod scripts;
 pub mod session_audit;

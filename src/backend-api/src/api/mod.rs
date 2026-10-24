@@ -15,6 +15,7 @@ pub mod mfa;
 pub mod notify;
 pub mod oauth;
 pub mod remote_browser;
+pub mod recordings;
 pub mod reverse_keys;
 pub mod schemas;
 pub mod scripts;

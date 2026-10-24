@@ -17,6 +17,7 @@ import {
 import {
     ArrowLeftRight,
     ChevronDown,
+    Clapperboard,
     FileCode2,
     Info,
     KeyRound,
@@ -92,6 +93,7 @@ export function TunnelActions({
     onLeave,
     onDelete,
     onRequestAccess,
+    onRecordings,
 }: TunnelActionsProps) {
     const { t } = useI18n();
 
@@ -195,6 +197,14 @@ export function TunnelActions({
                         hint={t("tunnelActions.logsHint")}
                         onSelect={() => onLogs(tunnel.id)}
                     />
+                    {tunnel.record_sessions && (
+                        <ActionItem
+                            icon={Clapperboard}
+                            label={t("recordings.menu")}
+                            hint={t("recordings.menuHint")}
+                            onSelect={() => onRecordings?.(tunnel.id)}
+                        />
+                    )}
                 </DropdownMenuGroup>
 
                 {(tunnel.can_delete || !tunnel.is_owner) && <DropdownMenuSeparator />}
