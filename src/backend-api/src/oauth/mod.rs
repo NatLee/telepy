@@ -245,9 +245,73 @@ pub fn append_query(uri: &str, params: &[(&str, &str)]) -> String {
     }
 }
 
+/// 一個 grant 怎麼涵蓋某條隧道（刪隧道前的檢查與刪除時的處理）。/ How a grant covers one tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coverage {
+    /// 不限隧道（使用者看得到的全部）：刪掉一條不影響其他的。/ Unrestricted: keeps every other tunnel.
+    All,
+    /// 只限這一條：刪掉之後這個授權什麼都碰不到。/ Restricted to this tunnel alone: useless afterwards.
+    Only,
+    /// 這條加上其他 n 條：刪除時把這條從清單拿掉。/ This tunnel plus `n` others: it is dropped from the list.
+    Shared(usize),
+}
+
+impl Coverage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Coverage::All => "all",
+            Coverage::Only => "only",
+            Coverage::Shared(_) => "shared",
+        }
+    }
+}
+
+/// `tunnel_ids`：None = 不限隧道。沒涵蓋這條隧道回 None。/ None when the grant does not cover the tunnel.
+pub fn coverage(tunnel_ids: Option<&[i64]>, tunnel_id: i64) -> Option<Coverage> {
+    let ids = match tunnel_ids {
+        None => return Some(Coverage::All),
+        Some(ids) => ids,
+    };
+    if !ids.contains(&tunnel_id) {
+        return None;
+    }
+    let others: std::collections::BTreeSet<i64> = ids.iter().copied().filter(|&i| i != tunnel_id).collect();
+    Some(if others.is_empty() { Coverage::Only } else { Coverage::Shared(others.len()) })
+}
+
+/// 刪隧道時能不能把整個 grant 撤銷（不只拿掉這條隧道）：自己的、管理員，或本來就只限這條（刪完也沒用了）。
+/// 別人涵蓋多條隧道的授權只會拿掉這一條——不能順手斷掉他對自己其他隧道的存取。
+/// Whether the delete dialog may revoke a whole grant: your own, an admin, or one limited to this tunnel.
+/// Someone else's multi-tunnel grant only loses this tunnel; deleting a tunnel must not cut their other access.
+pub fn may_revoke_whole(mine: bool, superuser: bool, coverage: Coverage) -> bool {
+    mine || superuser || coverage == Coverage::Only
+}
+
+/// 把隧道從限制清單拿掉。/ Drop a tunnel from a restriction list.
+pub fn without_tunnel(ids: &[i64], tunnel_id: i64) -> Vec<i64> {
+    ids.iter().copied().filter(|&i| i != tunnel_id).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grant_coverage_of_a_tunnel() {
+        assert_eq!(coverage(None, 3), Some(Coverage::All));
+        assert_eq!(coverage(Some(&[3]), 3), Some(Coverage::Only));
+        assert_eq!(coverage(Some(&[3, 3]), 3), Some(Coverage::Only));
+        assert_eq!(coverage(Some(&[1, 3, 5, 5]), 3), Some(Coverage::Shared(2)));
+        assert_eq!(coverage(Some(&[1, 5]), 3), None);
+        assert_eq!(coverage(Some(&[]), 3), None);
+        assert_eq!(without_tunnel(&[1, 3, 5, 3], 3), vec![1, 5]);
+        assert_eq!(Coverage::Shared(1).as_str(), "shared");
+        assert!(may_revoke_whole(true, false, Coverage::All));
+        assert!(may_revoke_whole(false, true, Coverage::Shared(2)));
+        assert!(may_revoke_whole(false, false, Coverage::Only));
+        assert!(!may_revoke_whole(false, false, Coverage::Shared(1)));
+        assert!(!may_revoke_whole(false, false, Coverage::All));
+    }
 
     #[test]
     fn scopes_parse_in_canonical_order() {

@@ -8,7 +8,7 @@
  * key lists, the keys × devices matrix (a tick makes Telepy install the key on the device) and the per-device
  * panel (`?device=<id>`, linked from the tunnel menu).
  */
-import React, { Suspense, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useMemo, useState } from "react";
 import { CircleHelp, Key as KeyIcon, Plus, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,12 @@ import { DeviceMatrix } from "@/components/keys/DeviceMatrix";
 import { KeyCard } from "@/components/keys/KeyCard";
 import { KeyDetailsModal } from "@/components/keys/KeyDetailsModal";
 import { KeyListExplainer } from "@/components/keys/KeyListExplainer";
+import { KeyListFilterBar, KeyListFilterFooter, useKeyListFilter } from "@/components/keys/KeyListFilter";
 import { useKeysPage } from "@/hooks/useKeysPage";
 import { useI18n } from "@/lib/i18n";
 import type { UserKey } from "@/types/keys";
+import { expiryState } from "@/lib/keyExpiry";
+import { Callout } from "@/components/ui/callout";
 
 const EXPLAINER_KEY = "telepy.keysExplainer";
 
@@ -62,7 +65,14 @@ function UserKeysPage() {
     };
 
     const details = useMemo(() => page.keys.find((k) => k.id === detailsId) ?? null, [page.keys, detailsId]);
+    // 金鑰多時：搜尋 / 分類 / 排序；裝置矩陣的欄位跟著同一份結果。/ Many keys: one filter for the cards and the matrix columns.
+    const devicesOf = useCallback((id: number) => (page.placements.get(id) ?? []).length, [page.placements]);
+    const keyFilter = useKeyListFilter(page.keys, devicesOf);
     const deletingOn = deleting ? (page.placements.get(deleting.id) ?? []).length : 0;
+    const expiry = useMemo(() => {
+        const states = page.keys.map((k) => expiryState(k.expires_at));
+        return { expired: states.filter((s) => s === "expired").length, soon: states.filter((s) => s === "soon").length };
+    }, [page.keys]);
 
     return (
         <div className="animate-fade-in-up space-y-8">
@@ -91,6 +101,16 @@ function UserKeysPage() {
 
             {explainer && <KeyListExplainer onHide={() => showExplainer(false)} />}
 
+            {/* 到期提醒：已到期的被拒絕、也從裝置移除；7 天內到期的先提醒。/ Expired keys are refused and removed; warn a week ahead. */}
+            {(expiry.expired > 0 || expiry.soon > 0) && (
+                <Callout tone={expiry.expired > 0 ? "danger" : "warning"}>
+                    {expiry.expired > 0 && t("keys.expiry.bannerExpired", { count: expiry.expired })}
+                    {expiry.expired > 0 && expiry.soon > 0 && " "}
+                    {expiry.soon > 0 && t("keys.expiry.bannerSoon", { count: expiry.soon })}{" "}
+                    {t("keys.expiry.bannerHow")}
+                </Callout>
+            )}
+
             <section aria-labelledby="keys-mine">
                 <div id="keys-mine">
                     <SectionHeader title={t("keys.mine")} count={page.loading ? undefined : page.keys.length} description={t("keys.mineDescription")} />
@@ -110,17 +130,21 @@ function UserKeysPage() {
                         </Button>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                        {page.keys.map((k) => (
-                            <KeyCard
-                                key={k.id}
-                                keyItem={k}
-                                placements={page.placements.get(k.id) ?? []}
-                                onDetails={() => setDetailsId(k.id)}
-                                onDelete={() => setDeleting(k)}
-                            />
-                        ))}
-                    </div>
+                    <>
+                        <KeyListFilterBar filter={keyFilter} />
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            {keyFilter.visible.map((k) => (
+                                <KeyCard
+                                    key={k.id}
+                                    keyItem={k}
+                                    placements={page.placements.get(k.id) ?? []}
+                                    onDetails={() => setDetailsId(k.id)}
+                                    onDelete={() => setDeleting(k)}
+                                />
+                            ))}
+                        </div>
+                        <KeyListFilterFooter filter={keyFilter} />
+                    </>
                 )}
             </section>
 
@@ -131,7 +155,8 @@ function UserKeysPage() {
                     </div>
                     <DeviceMatrix
                         devices={page.devices}
-                        keys={page.keys}
+                        keys={keyFilter.keys}
+                        totalKeys={page.keys.length}
                         pending={page.pending}
                         syncing={page.syncing}
                         onToggle={page.toggle}
@@ -145,7 +170,9 @@ function UserKeysPage() {
 
             <KeyDetailsModal
                 keyItem={details}
-                placements={details ? (page.placements.get(details.id) ?? []) : []}
+                devices={page.devices}
+                pending={page.pending}
+                onToggle={page.toggle}
                 onClose={() => setDetailsId(null)}
                 onSave={page.updateKey}
                 onManageDevice={(d) => {

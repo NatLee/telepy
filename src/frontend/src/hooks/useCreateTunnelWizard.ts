@@ -278,10 +278,11 @@ export function useCreateTunnelWizard() {
         setKeysLoading(true);
         try {
             const [uRes, sRes] = await Promise.all([apiFetch("/api/reverse/user/keys"), apiFetch("/api/reverse/service/keys")]);
-            type RawKey = { id: number; host_friendly_name?: string; service?: string; key?: string };
+            type RawKey = { id: number; host_friendly_name?: string; service?: string; key?: string; expired?: boolean };
             const toItems = (rows: RawKey[] | null, fallback: (n: number) => string): PublicKeyItem[] =>
                 (rows ?? [])
-                    .filter((r) => r.key)
+                    // 到期的個人金鑰 Telepy 不會接受，不放進授權指令。/ Expired keys are refused, so leave them out.
+                    .filter((r) => r.key && !r.expired)
                     .map((r, i) => ({ id: r.id, name: r.host_friendly_name || r.service || fallback(i + 1), key: (r.key ?? "").trim() }));
             if (uRes.ok) setUserKeys(toItems(await readJson<RawKey[]>(uRes), (n) => t("wizard.userKeyN", { n })));
             if (sRes.ok) setServiceKeys(toItems(await readJson<RawKey[]>(sRes), (n) => t("wizard.serviceKeyN", { n })));

@@ -25,6 +25,12 @@ pub async fn purge(db: &Db) -> sqlx::Result<u64> {
             deleted += audit_chain::prune_through(db, t, cut).await?;
         }
     }
+    // 連線紀錄也帶 IP：結束超過保留期的刪掉。/ Connection history carries IPs too.
+    deleted += sqlx::query("DELETE FROM telepy_tunnel_session WHERE disconnected_at IS NOT NULL AND disconnected_at < ?")
+        .bind(&cutoff)
+        .execute(&db.write)
+        .await?
+        .rows_affected();
     sqlx::query("DELETE FROM telepy_audit_anchor WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM telepy_audit_anchor WHERE kind = 'prune' GROUP BY table_name)")
         .bind(&cutoff)
         .execute(&db.write)

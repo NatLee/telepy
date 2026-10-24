@@ -20,6 +20,8 @@ pub enum Kind {
     /// 筆電的 ssh 經 gateway（ProxyCommand / ProxyJump）。/ A laptop's ssh through the gateway.
     Ssh,
     Ai,
+    /// 網頁內遠端桌面（RDP / VNC）。/ In-browser remote desktop.
+    Desktop,
 }
 
 impl Kind {
@@ -30,6 +32,7 @@ impl Kind {
             Kind::Browser => "browser",
             Kind::Ssh => "ssh",
             Kind::Ai => "ai",
+            Kind::Desktop => "desktop",
         }
     }
 }

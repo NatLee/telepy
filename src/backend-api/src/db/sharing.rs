@@ -16,6 +16,8 @@ pub struct Sharing {
     pub permission_type: String,
     pub shared_at: String,
     pub updated_at: String,
+    /// 分享到什麼時候（None = 一直有效）。/ When the share ends (None = never).
+    pub expires_at: Option<String>,
 }
 
 /// Sharing joined with the sharee's user row (for the shared-users list).
@@ -28,10 +30,11 @@ pub struct SharingWithUser {
     pub shared_at: String,
     pub username: String,
     pub email: String,
+    pub expires_at: Option<String>,
 }
 
 const S: &str = "tunnels_tunnelsharing";
-const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at";
+const S_COLS: &str = "id, tunnel_id, shared_by_id, shared_with_id, permission_type, shared_at, updated_at, expires_at";
 const A: &str = "tunnels_tunnelsharingallowedusername";
 
 pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<Sharing>> {
@@ -44,7 +47,7 @@ pub async fn get(db: &Db, tunnel_id: i64, user_id: i64) -> sqlx::Result<Option<S
 
 pub async fn for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<SharingWithUser>> {
     sqlx::query_as(&format!(
-        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email \
+        "SELECT s.id, s.tunnel_id, s.shared_with_id, s.permission_type, s.shared_at, a.username, a.email, s.expires_at \
          FROM {S} s JOIN auth_user a ON a.id = s.shared_with_id WHERE s.tunnel_id = ? ORDER BY s.id"
     ))
     .bind(tunnel_id)
@@ -76,15 +79,16 @@ pub async fn all_pairs(db: &Db) -> sqlx::Result<Vec<(i64, i64)>> {
     sqlx::query_as(&format!("SELECT tunnel_id, shared_with_id FROM {S}")).fetch_all(&db.read).await
 }
 
-pub async fn create(db: &Db, tunnel_id: i64, shared_by: i64, shared_with: i64, permission: &str) -> sqlx::Result<Sharing> {
+pub async fn create(db: &Db, tunnel_id: i64, shared_by: i64, shared_with: i64, permission: &str, expires_at: Option<&str>) -> sqlx::Result<Sharing> {
     let now = now_db();
-    let id = sqlx::query(&format!("INSERT INTO {S} (shared_at, updated_at, shared_by_id, shared_with_id, tunnel_id, permission_type) VALUES (?, ?, ?, ?, ?, ?)"))
+    let id = sqlx::query(&format!("INSERT INTO {S} (shared_at, updated_at, shared_by_id, shared_with_id, tunnel_id, permission_type, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)"))
         .bind(&now)
         .bind(&now)
         .bind(shared_by)
         .bind(shared_with)
         .bind(tunnel_id)
         .bind(permission)
+        .bind(expires_at)
         .execute(&db.write)
         .await?
         .last_insert_rowid();
@@ -101,6 +105,25 @@ pub async fn set_permission(db: &Db, id: i64, permission: &str) -> sqlx::Result<
     Ok(())
 }
 
+pub async fn set_expiry(db: &Db, id: i64, expires_at: Option<&str>) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {S} SET expires_at = ?, updated_at = ? WHERE id = ?")).bind(expires_at).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
+/// 已經到期、還沒收掉的分享。/ Shares past their end that haven't been removed yet.
+pub async fn expired(db: &Db) -> sqlx::Result<Vec<Sharing>> {
+    sqlx::query_as(&format!("SELECT {S_COLS} FROM {S} WHERE expires_at IS NOT NULL AND expires_at <= ? ORDER BY id")).bind(now_db()).fetch_all(&db.read).await
+}
+
+/// 我被分享的隧道各自到什麼時候（只列有期限的）。/ When each share I hold ends (timed ones only).
+pub async fn my_expiries(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, String>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!("SELECT tunnel_id, expires_at FROM {S} WHERE shared_with_id = ? AND expires_at IS NOT NULL"))
+        .bind(user_id)
+        .fetch_all(&db.read)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;
     sqlx::query(&format!("DELETE FROM {A} WHERE tunnel_sharing_id = ?")).bind(id).execute(&mut *tx).await?;
@@ -114,6 +137,14 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
 pub async fn allowed_username_ids(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(&format!("SELECT reverse_server_username_id FROM {A} WHERE tunnel_sharing_id = ? ORDER BY id"))
         .bind(sharing_id)
+        .fetch_all(&db.read)
+        .await
+}
+
+/// 這條隧道的 ADMIN sharee（管理它的人；收安全通知用）。/ ADMIN sharees of a tunnel (they manage it).
+pub async fn admin_sharee_ids(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(&format!("SELECT shared_with_id FROM {S} WHERE tunnel_id = ? AND permission_type = 'admin' ORDER BY id"))
+        .bind(tunnel_id)
         .fetch_all(&db.read)
         .await
 }

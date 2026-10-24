@@ -1,11 +1,10 @@
 //! 內建 SSH gateway：後端自己終結裝置的反向隧道（取代 OpenSSH 容器 + AuthorizedKeysCommand + ss/探測腳本）。
 //!
 //! 只實作裝置端 `ssh -NR '*:<port>:localhost:22' telepy@server` 需要的最小子集：
-//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰）。後端自己走 loopback、不經 gateway 認證，所以**不接受服務金鑰**：
+//! - 公鑰認證（查自己的 DB：隧道金鑰 / 使用者金鑰）。後端自己在行程內開通道、不經 gateway 認證，所以**不接受服務金鑰**：
 //!   那把金鑰在每台裝置的 authorized_keys 裡，若也能登入 gateway，外洩一把就能從外網進所有裝置。
-//! - `tcpip-forward`：記住 port → 連線，並在 **127.0.0.1:<port>** 綁一個 loopback listener，把進來的 TCP
-//!   橋到 `forwarded-tcpip` channel（= sshd 在 GatewayPorts no 下的行為），所以 OpenSSH 客戶端（terminal、
-//!   `ssh -D`）與 russh（SFTP）都能用 `127.0.0.1:<port>` 單跳到裝置。
+//! - `tcpip-forward`：只**記住** port → 這條連線（不綁任何本機 port；`reverse_port` 只是識別號碼）。後端要連裝置時
+//!   用 [`Gateway::open_stream`] 在行程內開 `forwarded-tcpip` channel（終端機、檔案、SFTP、SOCKS、AI 都是）。
 //! - `direct-tcpip`（使用者金鑰的 `ProxyCommand ssh -W localhost:<port> telepy-ssh-server`）：橋到同一條 forward。
 //! - 其餘（session/shell/exec/pty/subsystem/agent/x11）一律拒絕，等同現在 `Match User telepy` 的 sshd 設定。
 //!
@@ -14,14 +13,16 @@
 //! 日誌：sshd 風格的 `Accepted publickey … / Disconnected …` 行寫到 ssh-gateway.log，Logs 頁沿用。
 //! In-process SSH gateway terminating the devices' reverse tunnels (pubkey + tcpip-forward only).
 
-use std::collections::HashMap;
+pub mod proxy_protocol;
+
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use dashmap::DashMap;
 use russh::keys::{load_secret_key, HashAlg, PrivateKey};
 use russh::server::{self, Auth, Config as ServerConfig, Handle, Handler, Msg, Session};
@@ -33,6 +34,7 @@ use tokio::sync::Mutex;
 use crate::config::Config;
 use crate::db::{self, tunnels::like_prefix, Db};
 use crate::monitor::{Endpoint, StatusState};
+use crate::hub::Hub;
 use crate::presence::{self, Presence, PresenceGuard};
 
 /// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
@@ -48,7 +50,6 @@ pub struct Forward {
     pub address: String,
     pub conn_id: u64,
     pub handle: Handle,
-    listener: tokio::task::JoinHandle<()>,
 }
 
 struct ConnInfo {
@@ -70,6 +71,9 @@ pub struct Gateway {
     db: Db,
     status: Arc<StatusState>,
     presence: Arc<Presence>,
+    hub: Arc<Hub>,
+    /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
+    proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
     /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
@@ -144,15 +148,26 @@ fn bare_key(key: &russh::keys::PublicKey) -> anyhow::Result<String> {
 }
 
 impl Gateway {
-    pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>) -> Self {
+    pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>, hub: Arc<Hub>) -> Self {
         let keys = config.gateway_host_keys_dir.as_deref().map(load_host_keys).unwrap_or_default();
         let host_keys_loaded = keys.len();
+        let proxy_from = match proxy_protocol::Trusted::parse(&config.gateway_proxy_protocol_from) {
+            Ok(t) => t,
+            Err(e) => {
+                // 設錯就不啟用：代理送來的 header 會讓 SSH 握手失敗（看得出來），而不是讓人冒用 IP。
+                // Disabled on a bad value: the proxy's connections then fail visibly instead of trusting anyone.
+                tracing::error!(error = %e, "GATEWAY_PROXY_PROTOCOL_FROM is invalid; PROXY protocol disabled");
+                proxy_protocol::Trusted::default()
+            }
+        };
         Self {
             server_config: server_config(keys),
             config,
             db,
             status,
             presence,
+            hub,
+            proxy_from,
             forwards: DashMap::new(),
             conns: DashMap::new(),
             live: AtomicUsize::new(0),
@@ -220,6 +235,11 @@ impl Gateway {
         }
     }
 
+    /// gateway 用的通知 hub（AppState 共用同一個）。/ The notification hub, shared with AppState.
+    pub fn hub(&self) -> Arc<Hub> {
+        self.hub.clone()
+    }
+
     pub fn active_ports(&self) -> Vec<u16> {
         let mut v: Vec<u16> = self.forwards.iter().map(|e| *e.key()).collect();
         v.sort_unstable();
@@ -248,6 +268,23 @@ impl Gateway {
         Ok(channel.into_stream())
     }
 
+    /// 隧道刪除：斷開這條隧道金鑰的連線（forward 跟著釋放；裝置重連會因金鑰已刪而被拒）。回傳斷開的連線數。
+    /// 只看有 forward 的連線：沒 forward 的連線碰不到任何東西，下次重連一樣會被拒。
+    /// Tunnel deleted: drop the device's connections (their forwards go with them; it cannot reconnect).
+    pub async fn disconnect_tunnel(&self, tunnel_id: i64) -> usize {
+        let mut handles: HashMap<u64, Handle> = HashMap::new();
+        for f in self.forwards.iter() {
+            let is_tunnel = self.conns.get(&f.conn_id).is_some_and(|c| matches!(c.identity, Identity::Tunnel { tunnel_id: t, .. } if t == tunnel_id));
+            if is_tunnel {
+                handles.entry(f.conn_id).or_insert_with(|| f.handle.clone());
+            }
+        }
+        for h in handles.values() {
+            let _ = h.disconnect(Disconnect::ByApplication, "tunnel deleted".into(), String::new()).await;
+        }
+        handles.len()
+    }
+
     fn publish_status(&self) {
         self.status.set_listen_ports(self.forwards.iter().map(|e| *e.key()).collect());
         let endpoints = self.forwards.iter().filter_map(|f| self.conns.get(&f.conn_id).map(|c| (*f.key(), c.endpoint()))).collect();
@@ -255,11 +292,39 @@ impl Gateway {
     }
 
     /// forward 註冊好之後：記下這條隧道最後一次從哪裡連上來（離線時 tunnel list 顯示「最後 IP」）。
+    /// IP 跟上次不同時記 `ip_changed` 事件，並通知擁有者與 ADMIN sharee（可能是金鑰外流，也可能只是浮動 IP）。
+    /// On an address change, log `ip_changed` and tell the owner and ADMIN sharees (a leaked key, or just a dynamic IP).
     async fn remember_endpoint(&self, conn_id: u64, port: u16) {
-        let Some(ep) = self.conns.get(&conn_id).map(|c| c.endpoint()) else { return };
-        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
-            tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+        let Some((ep, peer)) = self.conns.get(&conn_id).map(|c| (c.endpoint(), c.peer)) else { return };
+        let change = match db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+                None
+            }
+        };
+        // 連線歷史每次都記（不管 IP 有沒有換）。/ The connection history records every connect.
+        if let Err(e) = db::tunnel_sessions::open(&self.db, port, &ep.ip, &ep.since).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record tunnel session");
         }
+        let Some(ch) = change else { return };
+        let message = format!("Tunnel {} now connects from {} (was {})", ch.tunnel_name, ep.ip, ch.previous);
+        self.event("ip_changed", Some(peer), Some(port), Some(ch.tunnel_id), message.clone()).await;
+        let mut users = vec![ch.owner_id];
+        users.extend(db::sharing::admin_sharee_ids(&self.db, ch.tunnel_id).await.unwrap_or_default());
+        self.hub.notify_users(
+            users,
+            &serde_json::json!({
+                "action": "TUNNEL-IP-CHANGED",
+                "tunnel_id": ch.tunnel_id,
+                "tunnel_name": ch.tunnel_name,
+                "ip": ep.ip,
+                "previous_ip": ch.previous,
+                "details": message,
+            }),
+        );
+        // 站台設定了 webhook 時也送過去（沒設就立刻返回）。/ Also to the site webhook when one is set.
+        crate::monitor::alerts::send_ip_change(&self.db, self.config.public_url.as_deref(), ch.tunnel_id, &ch.tunnel_name, i64::from(port), &ch.previous, &ep.ip).await;
     }
 
     /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。
@@ -272,8 +337,12 @@ impl Gateway {
     }
 
     async fn remember_release(&self, port: u16) {
-        if let Err(e) = db::tunnel_endpoints::record_released(&self.db, port, &crate::util::now_db()).await {
+        let now = crate::util::now_db();
+        if let Err(e) = db::tunnel_endpoints::record_released(&self.db, port, &now).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel release");
+        }
+        if let Err(e) = db::tunnel_sessions::close(&self.db, port, &now).await {
+            tracing::warn!(port, error = %e, "gateway: cannot close tunnel session");
         }
     }
 
@@ -324,7 +393,8 @@ impl Gateway {
         })
     }
 
-    async fn register_forward(self: &Arc<Self>, conn_id: u64, address: &str, port: u16, handle: Handle) -> anyhow::Result<()> {
+    /// 記住 port → 這條連線（不綁本機 port）。/ Remember port → connection; nothing is bound locally.
+    fn register_forward(&self, conn_id: u64, address: &str, port: u16, handle: Handle) -> anyhow::Result<()> {
         if let Some(existing) = self.forwards.get(&port).map(|f| f.clone()) {
             if existing.conn_id == conn_id {
                 return Ok(());
@@ -333,27 +403,9 @@ impl Gateway {
                 bail!("port {port} is already forwarded by another live connection");
             }
             // 擁有者已斷線但尚未清理：接手。/ Stale owner: take over.
-            existing.listener.abort();
             self.forwards.remove(&port);
         }
-        let listener = TcpListener::bind(("127.0.0.1", port)).await.with_context(|| format!("bind 127.0.0.1:{port}"))?;
-        let gw = self.clone();
-        let task_handle = handle.clone();
-        let task_address = address.to_string();
-        let listener_task = tokio::spawn(async move {
-            loop {
-                let Ok((tcp, peer)) = listener.accept().await else { break };
-                let h = task_handle.clone();
-                let addr = task_address.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = bridge_tcp(h, addr, port, tcp, peer).await {
-                        tracing::debug!(port, error = %e, "gateway: loopback bridge ended with error");
-                    }
-                });
-            }
-            let _ = gw; // keep the gateway alive for the task's lifetime
-        });
-        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), conn_id, handle, listener: listener_task }));
+        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), conn_id, handle }));
         self.publish_status();
         Ok(())
     }
@@ -361,9 +413,7 @@ impl Gateway {
     fn unregister_forward(&self, conn_id: u64, port: u16) -> bool {
         let owned = self.forwards.get(&port).map(|f| f.conn_id == conn_id).unwrap_or(false);
         if owned {
-            if let Some((_, f)) = self.forwards.remove(&port) {
-                f.listener.abort();
-            }
+            self.forwards.remove(&port);
             self.publish_status();
         }
         owned
@@ -374,7 +424,6 @@ impl Gateway {
         let mut dropped = Vec::new();
         self.forwards.retain(|port, f| {
             if f.conn_id == conn_id {
-                f.listener.abort();
                 dropped.push(*port);
                 false
             } else {
@@ -388,6 +437,7 @@ impl Gateway {
     /// 每條 forward 開一條 forwarded-tcpip 通道、讀裝置 sshd banner 的第一個 byte，當作 RTT。
     pub async fn probe_latency(&self) -> HashMap<u16, f64> {
         let forwards: Vec<Arc<Forward>> = self.forwards.iter().map(|e| e.value().clone()).collect();
+        let probed: Vec<u16> = forwards.iter().map(|f| f.port).collect();
         let probes = forwards.into_iter().map(|f| async move {
             let started = Instant::now();
             let res = tokio::time::timeout(PROBE_TIMEOUT, async {
@@ -408,8 +458,27 @@ impl Gateway {
         });
         let results = futures::future::join_all(probes).await;
         let map: HashMap<u16, f64> = results.into_iter().flatten().collect();
-        self.status.set_latency(map.clone());
+        let before = self.status.degraded_ports();
+        self.status.record_probes(&probed, map.clone());
+        self.log_health_changes(&before, &self.status.degraded_ports()).await;
         map
+    }
+
+    /// 降級 / 恢復寫進 gateway 事件（隧道的 Logs 頁看得到）。forward 已經不在的不記：斷線事件已經說明了。
+    /// Degraded / recovered go to the gateway events (the tunnel's Logs); ports whose forward is gone are skipped.
+    async fn log_health_changes(&self, before: &HashSet<u16>, after: &HashSet<u16>) {
+        for port in after.difference(before) {
+            let tunnel_id = db::tunnels::by_port(&self.db, *port as i64).await.ok().and_then(|t| t.into_iter().next()).map(|t| t.id);
+            let n = self.status.probe_failures(*port);
+            self.event("degraded", None, Some(*port), tunnel_id, format!("Tunnel on port {port} is up but the device's SSH server is not answering ({n} probes in a row failed)")).await;
+        }
+        for port in before.difference(after) {
+            if !self.forwards.contains_key(port) {
+                continue;
+            }
+            let tunnel_id = db::tunnels::by_port(&self.db, *port as i64).await.ok().and_then(|t| t.into_iter().next()).map(|t| t.id);
+            self.event("recovered", None, Some(*port), tunnel_id, format!("The device's SSH server answers again on port {port}")).await;
+        }
     }
 
     pub async fn run_probes(self: Arc<Self>, interval: Duration) {
@@ -418,18 +487,6 @@ impl Gateway {
             self.probe_latency().await;
         }
     }
-}
-
-/// loopback TCP ↔ forwarded-tcpip channel。
-async fn bridge_tcp(handle: Handle, address: String, port: u16, mut tcp: TcpStream, peer: SocketAddr) -> anyhow::Result<()> {
-    let channel = handle
-        .channel_open_forwarded_tcpip(address, port as u32, peer.ip().to_string(), peer.port() as u32)
-        .await
-        .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
-    let mut stream = channel.into_stream();
-    let _ = tcp.set_nodelay(true);
-    tokio::io::copy_bidirectional(&mut tcp, &mut stream).await?;
-    Ok(())
 }
 
 /// direct-tcpip channel ↔ forwarded-tcpip channel（使用者金鑰的 `ssh -W`）。
@@ -472,6 +529,11 @@ impl Handler for GatewayHandler {
                 Ok(Auth::Accept)
             }
             None => {
+                // 到期的個人金鑰：講清楚是到期，不是不認得。/ An expired personal key says so, not just "failed".
+                if let Ok(Some((name, at))) = db::keys::expired_user_key_by_prefix(&self.gw.db, &like_prefix(&bare)).await {
+                    self.gw.event("expired_key", Some(self.peer), None, None, format!("Expired key \"{name}\" (expired {at} UTC) for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
+                    return Ok(Auth::reject());
+                }
                 self.gw.event("failed_publickey", Some(self.peer), None, None, format!("Failed publickey for {user} from {} port {} ssh2: {} {}", self.peer.ip(), self.peer.port(), alg_label(key), key.fingerprint(HashAlg::Sha256))).await;
                 Ok(Auth::reject())
             }
@@ -525,7 +587,7 @@ impl Handler for GatewayHandler {
             self.gw.event("refused_forward", Some(self.peer), Some(p), tunnel_id, format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
             return Ok(false);
         }
-        match self.gw.register_forward(self.conn_id, address, p, session.handle()).await {
+        match self.gw.register_forward(self.conn_id, address, p, session.handle()) {
             Ok(()) => {
                 self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
                 self.gw.remember_endpoint(self.conn_id, p).await;
@@ -624,8 +686,35 @@ impl Drop for GatewayHandler {
     }
 }
 
-async fn handle_connection(gw: Arc<Gateway>, stream: TcpStream, peer: SocketAddr) {
+/// 等代理送 PROXY header 最多多久。/ How long a proxy gets to send its header.
+const PROXY_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_nodelay(true);
+    // 前面有 L4 代理時，真正的來源在它送的 PROXY header 裡；只有列出的代理要送、也才會被讀。
+    // Behind an L4 proxy the real source is in its PROXY header; only listed proxies send one (and are read).
+    let peer = if gw.proxy_from.contains(peer.ip()) {
+        match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
+            Ok(Ok(proxy_protocol::Header::Proxied(source))) => source,
+            Ok(Ok(proxy_protocol::Header::Local)) => peer,
+            Ok(Err(proxy_protocol::ProxyError::Closed)) => {
+                tracing::debug!(%peer, "gateway: proxy connection closed before its header (health check)");
+                return;
+            }
+            Ok(Err(e)) => {
+                let message = format!("Refused connection from {} port {}: {e}", peer.ip(), peer.port());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
+                return;
+            }
+            Err(_) => {
+                let message = format!("Refused connection from {} port {}: no PROXY protocol header within {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
+                return;
+            }
+        }
+    } else {
+        peer
+    };
     let conn_id = gw.next_id.fetch_add(1, Ordering::SeqCst);
     let authed = Arc::new(AtomicBool::new(false));
     // `live` 在 GatewayHandler::drop 歸還，握手失敗 / 逾時時 handler 也會被 drop。/ Released in GatewayHandler::drop.

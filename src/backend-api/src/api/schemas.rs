@@ -115,6 +115,14 @@ pub struct UserProfile {
     #[schema(example = "system")]
     pub theme: String,
     pub terminal_font_size: i64,
+    /// UI display scale in percent (85–130).
+    pub ui_scale: i64,
+    /// Terminal font id (the frontend's list; default `hack`)
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    /// Terminal colour-scheme id (the frontend's list; default `telepy`)
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
 }
@@ -146,6 +154,63 @@ pub struct Tunnel {
     pub endpoint: Option<TunnelEndpoint>,
     /// 只有列表帶：誰正在用。/ List / dashboard only: who is using the tunnel right now.
     pub presence: Option<TunnelPresence>,
+    /// 只有列表帶：`online`（經由隧道讀得到裝置 sshd）/ `degraded`（forward 在但 sshd 連續沒回應）/ `offline` / `never`（從沒連上過）。
+    /// List / dashboard only: online, degraded (forward up, device sshd not answering), offline or never (never connected).
+    #[schema(example = "online")]
+    pub health: Option<String>,
+    /// 只有列表帶：離線時最後一次有連線的時間（UTC，`…Z`）；連著或從沒連過時 null。不含 IP，所有人都看得到。
+    /// List / dashboard only: when the tunnel was last connected (UTC); null while connected or if it never was.
+    pub last_seen_at: Option<String>,
+    /// 只有列表帶：我有沒有釘選（每個人自己的）。/ List / dashboard only: whether I pinned it (per user).
+    pub pinned: Option<bool>,
+    /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
+    /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
+    pub share_expires_at: Option<String>,
+    /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
+    #[schema(example = json!(["home", "env=prod"]))]
+    pub labels: Option<Vec<String>>,
+}
+
+/// 連線紀錄與在線率。在線率是 0..1，從第一筆紀錄算起；沒有紀錄時是 null。
+/// Connection history and uptime (0..1, counted from the first recorded session; null without data).
+#[derive(ToSchema)]
+pub struct TunnelConnections {
+    /// 第一筆紀錄的時間（UTC）。/ When the history begins (UTC).
+    pub tracked_since: Option<String>,
+    pub uptime: UptimePair,
+    /// 最近 24 小時每小時的在線率（舊到新）；紀錄開始前是 null。/ Last 24 hours, hour by hour, oldest first.
+    pub hourly: Vec<Option<f64>>,
+    /// 最近 20 次連線（新到舊）。/ The latest 20 sessions, newest first.
+    pub sessions: Vec<ConnectionSession>,
+}
+
+#[derive(ToSchema)]
+pub struct UptimePair {
+    pub h24: Option<f64>,
+    pub d7: Option<f64>,
+}
+
+#[derive(ToSchema)]
+pub struct ConnectionSession {
+    /// 只給能登入裝置的人（同 `endpoint`）。/ Only for people who can log in to the device (like `endpoint`).
+    pub ip: Option<String>,
+    pub connected_at: String,
+    /// 連著時是 null。/ null while connected.
+    pub disconnected_at: Option<String>,
+    pub seconds: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct PinState {
+    pub pinned: bool,
+}
+
+/// 小寫英數開頭，可含 `. _ - =`，最多 32 字元、12 個；送進來的會被整理（小寫、去重複、排序）。
+/// Lowercase letters / digits first, then `. _ - =`; up to 32 characters and 12 labels; normalised on save.
+#[derive(ToSchema)]
+pub struct LabelsRequest {
+    #[schema(example = json!(["home", "env=prod"]))]
+    pub labels: Vec<String>,
 }
 
 #[derive(ToSchema)]
@@ -165,6 +230,7 @@ pub struct PresenceSession {
     pub kind: String,
     #[schema(example = "198.51.100.7")]
     pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
     #[schema(example = "2026-10-23T01:02:03.123456Z")]
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
@@ -182,6 +248,28 @@ pub struct TunnelEndpoint {
     pub connected_at: String,
     /// 離線時：forward 釋放的時間；連著時 null。/ When the forward went away; null while live.
     pub last_seen_at: Option<String>,
+    pub geo: Option<IpGeo>,
+    /// 最近一次換 IP 之前的位址（從沒換過是 null）。/ The address before the latest change; null if it never changed.
+    #[schema(example = "198.51.100.20")]
+    pub previous_ip: Option<String>,
+    pub changed_at: Option<String>,
+}
+
+/// IP 的位址範圍與（有離線 GeoIP 資料庫時的）國家 / 網路業者。/ Address scope plus country / network owner when a GeoIP database is installed.
+#[derive(ToSchema)]
+pub struct IpGeo {
+    /// public / private / loopback / link_local / shared_nat / reserved —— 裝置是非 public 通常代表前面有 proxy 吃掉了真實來源。
+    #[schema(example = "public")]
+    pub scope: String,
+    /// ISO 3166-1 alpha-2
+    #[schema(example = "TW")]
+    pub country: Option<String>,
+    #[schema(example = "Chunghwa Telecom Co., Ltd.")]
+    pub org: Option<String>,
+    #[schema(example = 3462)]
+    pub asn: Option<i64>,
+    /// DB-IP / MaxMind（顯示出處用）。/ Data source, for attribution.
+    pub source: Option<String>,
 }
 
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
@@ -199,6 +287,7 @@ pub struct SignInEvent {
     /// 依 X-Forwarded-For（`TRUSTED_PROXY_HOPS`）或 `CLIENT_IP_HEADER` 判定。/ Resolved from the proxy chain.
     #[schema(example = "198.51.100.7")]
     pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
     pub user_agent: Option<String>,
     /// bad_password / inactive / mfa_failed / google_account_conflict
     pub reason: Option<String>,
@@ -298,6 +387,9 @@ pub struct UserKey {
     /// Last successful SSH gateway login with this key
     pub last_used_at: Option<String>,
     pub last_used_ip: Option<String>,
+    /// 到期時間；null = 不到期。到期後 gateway 拒絕它、裝置清單把它移除。/ Expiry; null = never. Expired keys are refused and removed from devices.
+    pub expires_at: Option<String>,
+    pub expired: bool,
 }
 
 #[derive(ToSchema)]
@@ -305,11 +397,25 @@ pub struct UserKeyWrite {
     pub host_friendly_name: String,
     pub key: String,
     pub description: Option<String>,
+    /// RFC 3339 時間或 `YYYY-MM-DD`（那天 UTC 結束）；null = 不到期。沒給時用站台的 `user_key_max_days`（0 = 不到期）。
+    /// RFC 3339 or `YYYY-MM-DD` (end of that day, UTC); null = never. Omitted = the site's `user_key_max_days` (0 = never).
+    #[schema(example = "2026-12-31")]
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
 pub struct UserKeyPatch {
     pub description: Option<String>,
+    /// 續期或改到期時間（null = 不到期，站台有上限時不允許）。/ Renew or change the expiry (null = never, refused under a site limit).
+    pub expires_at: Option<String>,
+}
+
+/// 分享到什麼時候：RFC 3339 或 `YYYY-MM-DD`（那天 UTC 結束），null = 一直有效。到期後 30 秒內自動取消分享。
+/// When a share ends: RFC 3339 or `YYYY-MM-DD` (end of that day, UTC), null = never. Ended within 30 s of expiry.
+#[derive(ToSchema)]
+pub struct ShareExpiryRequest {
+    #[schema(example = "2026-12-31T18:00:00+08:00")]
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -427,6 +533,8 @@ pub struct ShareRequest {
     #[schema(example = "view")]
     pub permission_type: Option<String>,
     pub allowed_target_username_ids: Option<Vec<i64>>,
+    /// 分享到什麼時候（RFC 3339 / `YYYY-MM-DD`）；不給 = 一直有效。/ When the share ends; omitted = never.
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -489,6 +597,10 @@ pub struct UserSettings {
     pub terminal_font_size: i64,
     /// UI display scale in percent (85–130).
     pub ui_scale: i64,
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
 }
 
 #[derive(ToSchema)]
@@ -500,6 +612,31 @@ pub struct UserSettingsPatch {
     pub terminal_font_size: Option<i64>,
     #[schema(example = 100)]
     pub ui_scale: Option<i64>,
+    /// 1-32 lowercase letters, digits or '-' (ids are defined by the frontend)
+    #[schema(example = "jetbrains-mono")]
+    pub terminal_font: Option<String>,
+    #[schema(example = "solarized-dark")]
+    pub terminal_scheme: Option<String>,
+}
+
+/// The caller's terminal appearance override for one tunnel; a null field follows the personal default
+#[derive(ToSchema)]
+pub struct TerminalProfile {
+    pub tunnel_id: i64,
+    #[schema(example = "fira-code")]
+    pub font: Option<String>,
+    /// 10-24
+    pub font_size: Option<i64>,
+    #[schema(example = "nord")]
+    pub scheme: Option<String>,
+}
+
+/// PUT body: a missing or null field means "follow my default"; all three null removes the override
+#[derive(ToSchema)]
+pub struct TerminalProfilePatch {
+    pub font: Option<String>,
+    pub font_size: Option<i64>,
+    pub scheme: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -636,6 +773,60 @@ pub struct RemoteBrowserError {
     pub error: String,
     #[schema(example = "device_offline")]
     pub code: Option<String>,
+}
+
+// ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
+
+#[derive(ToSchema)]
+pub struct DesktopStartRequest {
+    /// `rdp` or `vnc`
+    #[schema(example = "rdp")]
+    pub protocol: String,
+    /// Device account for the SSH hop; omitted = the tunnel's default (or only) allowed username
+    pub username: Option<String>,
+    /// A LAN host of this tunnel (see `/lan/hosts`); omitted = the device itself
+    pub lan_host_id: Option<i64>,
+    /// Desktop port on the target; default 3389 (RDP) / 5900 (VNC)
+    pub port: Option<u16>,
+    /// Desktop login (the RDP user, or the VNC username where the server uses one); memory only
+    pub login: Option<String>,
+    /// Desktop password; memory only, dropped after the guacd handshake
+    pub password: Option<String>,
+    /// RDP domain
+    pub domain: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopTarget {
+    /// As seen from the device: `127.0.0.1` for the device itself
+    pub host: String,
+    pub port: u16,
+    pub label: String,
+    pub lan_host_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopSession {
+    pub session_id: String,
+    #[schema(example = "/ws/desktop/<session_id>/")]
+    pub ws_path: String,
+    /// One-time ticket, passed as `?ticket=` when opening ws_path (subprotocol `guacamole`)
+    pub ticket: String,
+    /// Seconds the ticket stays valid
+    pub expires_in: u64,
+    pub protocol: String,
+    /// Effective clipboard policy: both | to_remote | off
+    pub clipboard: String,
+    pub target: DesktopTarget,
+    /// The device account used for the hop
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopError {
+    pub error: String,
+    #[schema(example = "device_offline")]
+    pub code: String,
 }
 
 // ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)
@@ -826,6 +1017,46 @@ pub struct OAuthGrant {
     pub last_used_at: Option<String>,
     /// When the refresh token expires without further use
     pub expires_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantClient {
+    pub redirect_uris: Vec<String>,
+    /// Hosts the app sends you back to (registration is open, so the name alone proves nothing)
+    pub redirect_hosts: Vec<String>,
+    pub logo_uri: Option<String>,
+    /// Public client (PKCE only, no secret)
+    pub public: bool,
+    pub registered_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantStats {
+    pub calls: i64,
+    pub failed: i64,
+    pub last_call_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthGrantDetail {
+    pub id: i64,
+    pub client_id: String,
+    pub client_name: String,
+    pub client_uri: Option<String>,
+    pub scopes: Vec<String>,
+    /// null = every tunnel
+    pub tunnels: Option<Vec<OAuthGrantTunnel>>,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+    /// Who authorized it (admins can open other users' grants)
+    pub user: AiUserRef,
+    pub client: OAuthGrantClient,
+    /// Open AI sessions of this app
+    pub sessions: Vec<AiSession>,
+    pub stats: OAuthGrantStats,
+    /// The latest tool calls, newest first
+    pub activity: Vec<AiActivity>,
 }
 
 // ---------------------------------------------------------------- AI sessions (MCP)
@@ -1209,6 +1440,8 @@ pub struct MyKeyChoice {
 #[derive(ToSchema)]
 pub struct DeviceKeys {
     pub tunnel: DeviceKeyTunnel,
+    /// Per-account merged view: the list × what Telepy installed × the file as last read
+    pub view: DeviceKeyView,
     /// Owner or ADMIN sharee
     pub can_manage: bool,
     /// OS accounts the caller may use here (their keys go into exactly these)
@@ -1218,6 +1451,51 @@ pub struct DeviceKeys {
     pub removals: Vec<DeviceKeyRemoval>,
     pub sync: Vec<DeviceKeySync>,
     pub my_keys: Vec<MyKeyChoice>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyView {
+    pub accounts: Vec<DeviceKeyViewAccount>,
+}
+
+#[derive(ToSchema)]
+pub struct DeviceKeyViewAccount {
+    pub username: String,
+    /// When Telepy last read this account's authorized_keys (null = never; "sync" re-reads)
+    pub checked_at: Option<String>,
+    /// Whether the file exists (null until read)
+    pub exists: Option<bool>,
+    /// Last sync or read error of this account
+    pub error: Option<String>,
+    pub rows: Vec<DeviceKeyViewRow>,
+}
+
+/// One key in one account. Owners / ADMIN sharees see every row; other users only their own keys.
+#[derive(ToSchema)]
+pub struct DeviceKeyViewRow {
+    /// service / installed / pending / error / removing / manual (a Telepy user's key added by hand) / unknown / invalid
+    pub state: String,
+    /// Seen in the file at `checked_at`
+    pub verified: bool,
+    /// On the device's key list
+    pub on_list: bool,
+    /// The viewer's own key
+    pub mine: bool,
+    pub user_key_id: Option<i64>,
+    pub name: Option<String>,
+    pub owner: Option<String>,
+    pub fingerprint: Option<String>,
+    pub key_type: Option<String>,
+    pub bits: Option<u32>,
+    pub comment: Option<String>,
+    pub options: Option<String>,
+    /// First line holding this key
+    pub line_no: Option<i64>,
+    /// Lines holding this key (more than 1 when it was pasted twice; removing it removes every one)
+    pub line_count: i64,
+    pub error: Option<String>,
+    /// First 120 characters of an unreadable line
+    pub raw: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1260,16 +1538,31 @@ pub struct AuthorizedKeysAudit {
     pub accounts: Vec<AuthorizedKeysAccount>,
 }
 
+/// Send `fingerprint` for one key (errors if it can't be removed) or `fingerprints` for a batch
+/// (one rewrite of the file; keys that can't be removed are reported in `skipped`).
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemove {
     pub username: String,
-    pub fingerprint: String,
+    pub fingerprint: Option<String>,
+    /// 1 to 10000 fingerprints
+    pub fingerprints: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]
 pub struct AuthorizedKeyRemoved {
     /// Lines removed
     pub removed: i64,
+    /// Keys removed
+    pub keys: i64,
+    pub skipped: Vec<AuthorizedKeySkipped>,
+}
+
+/// A key the batch left alone.
+#[derive(ToSchema)]
+pub struct AuthorizedKeySkipped {
+    pub fingerprint: String,
+    /// `not_found` | `service_key` | `in_key_list`
+    pub code: String,
 }
 
 #[derive(ToSchema)]
@@ -1350,4 +1643,127 @@ pub struct JoinError {
     pub error: String,
     /// too_many_join_tokens
     pub code: String,
+}
+
+// ---------------------------------------------------------------- tunnel delete
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteTunnel {
+    pub id: i64,
+    pub name: String,
+    pub reverse_port: i64,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteSharee {
+    pub id: i64,
+    pub username: String,
+    #[schema(example = "view")]
+    pub permission: String,
+}
+
+/// A key Telepy installed on the device (from the device key list)
+#[derive(ToSchema)]
+pub struct TunnelDeleteKey {
+    #[schema(example = "SHA256:…")]
+    pub fingerprint: String,
+    pub owner: Option<String>,
+    /// Key name; null when the key already left the list (pending removal)
+    pub name: Option<String>,
+    pub in_list: bool,
+    /// Login accounts it is installed in
+    pub accounts: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteGrant {
+    pub id: i64,
+    pub client_name: String,
+    pub user: AiUserRef,
+    pub mine: bool,
+    /// `only` = restricted to this tunnel alone, `shared` = this and `other_tunnels` more, `all` = every tunnel
+    #[schema(example = "only")]
+    pub coverage: String,
+    pub other_tunnels: i64,
+    /// The caller may revoke the whole authorization here (own grant, admin, or limited to this tunnel);
+    /// otherwise deleting only drops this tunnel from it
+    pub can_revoke: bool,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteCheck {
+    pub tunnel: TunnelDeleteTunnel,
+    pub online: bool,
+    /// Login accounts (target usernames) of the tunnel
+    pub accounts: Vec<String>,
+    pub sharees: Vec<TunnelDeleteSharee>,
+    /// People using the tunnel right now (distinct users)
+    pub in_use: i64,
+    pub lan_hosts: i64,
+    pub device_keys: Vec<TunnelDeleteKey>,
+    pub grants: Vec<TunnelDeleteGrant>,
+    pub ai_sessions: Vec<AiSession>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteAccount {
+    pub account: String,
+    /// Telepy-managed keys removed from authorized_keys
+    pub removed: i64,
+    pub service_key_removed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelDeleteReport {
+    pub deleted: bool,
+    /// The device was online, so its accounts could be cleaned
+    pub online: bool,
+    pub accounts: Vec<TunnelDeleteAccount>,
+    /// Keys Telepy installed that are still on the device (offline, failed or kept)
+    pub keys_left: i64,
+    pub grants_revoked: i64,
+    /// Authorizations that keep other tunnels; this one was dropped from their list
+    pub grants_detached: i64,
+    pub ai_sessions_closed: i64,
+    pub device_disconnected: bool,
+    /// Removal of the tunnel's service from the device (null unless remove_service and the device was online)
+    pub service: Option<TunnelServiceRemoval>,
+}
+
+/// One result line of the device-side removal script
+#[derive(ToSchema)]
+pub struct TunnelServiceItem {
+    /// platform / found / removed / scheduled / needs_root / kept / note / failed / stopscript / launched / done
+    #[schema(example = "found")]
+    pub kind: String,
+    /// What it is about: systemd, systemd-user, launchd, cron, loop, docker, process, script, task, service, run-key, startup, file, unit, key, log, stop…
+    #[schema(example = "systemd")]
+    pub what: String,
+    /// Path, unit name, command line, or the command to run by hand (needs_root)
+    pub detail: String,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelServiceAccount {
+    pub account: String,
+    #[schema(example = "posix")]
+    pub platform: Option<String>,
+    #[schema(example = "Linux")]
+    pub os: Option<String>,
+    pub items: Vec<TunnelServiceItem>,
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelServiceRemoval {
+    pub accounts: Vec<TunnelServiceAccount>,
+    /// At least one install method or running process was found
+    pub found: bool,
+    /// A stop script was started on the device
+    pub launched: bool,
+    /// The device dropped the tunnel by itself afterwards (the service really stopped)
+    pub stopped: bool,
+    /// …and it came back: something still restarts it
+    pub came_back: bool,
 }

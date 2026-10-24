@@ -4,12 +4,13 @@
  * 終端機頁面：連線、xterm 與檔案管理。
  * Terminal page: connection, xterm and file manager.
  */
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Terminal as TerminalIcon, X, Server } from "lucide-react";
 import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent } from "@/components/tunnels/TerminalContent";
+import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
 import { StatusCard } from "@/components/ui/StatusCard";
 import "xterm/css/xterm.css";
 
@@ -52,7 +53,9 @@ export default function TerminalPage() {
         username, setUsername,
         availableUsernames,
         lanHost,
+        appearance,
     } = state;
+    const [appearanceOpen, setAppearanceOpen] = useState(false);
     const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab } = actions;
 
     // Set initial tab from URL param (mount only)
@@ -123,6 +126,8 @@ export default function TerminalPage() {
                     setShowFiles={setShowFiles}
                     isBrowserActive={isBrowserActive}
                     onLoadServiceKeys={fetchServiceKeys}
+                    onOpenAppearance={() => setAppearanceOpen(true)}
+                    appearanceCustomized={appearance.customized}
                     lan={lanHostId ? { host: lanHost, login: lanUser || lanHost?.username || null } : null}
                 />
 
@@ -156,8 +161,11 @@ export default function TerminalPage() {
                     loadingServiceKeys={loadingServiceKeys}
                     serviceKeys={serviceKeys}
                     onReconnect={reconnect}
+                    palette={appearance.resolved.scheme.theme}
                 />
             </div>
+
+            <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
         </div>
     );
 }

@@ -20,15 +20,9 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { useMcpPage } from "@/hooks/useMcpPage";
+import { SCOPES } from "@/lib/aiAccess";
 
 type ClientId = "claudeCode" | "claudeApp" | "other";
-
-/** 同意頁上的 scope 與它開放的工具(與後端 mcp/ 的檢查一致)。/ Scopes and the tools they unlock (mirrors mcp/). */
-const SCOPES: { scope: string; label: TranslationKey; description: TranslationKey; tools: string[] }[] = [
-    { scope: "tunnels:read", label: "oauth.scope.tunnelsRead", description: "oauth.scope.tunnelsReadDescription", tools: ["list_tunnels", "tunnel_status"] },
-    { scope: "ssh:exec", label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription", tools: ["ssh_session_open", "ssh_exec"] },
-    { scope: "ssh:files", label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription", tools: ["ssh_session_open", "sftp_list", "sftp_read", "sftp_write"] },
-];
 
 const SESSION_RULES: TranslationKey[] = [
     "mcp.ruleTimers",

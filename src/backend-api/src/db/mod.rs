@@ -14,7 +14,10 @@ pub mod schema;
 pub mod settings;
 pub mod sharing;
 pub mod sign_ins;
+pub mod terminal_profile;
 pub mod tunnel_endpoints;
+pub mod tunnel_sessions;
+pub mod tunnel_tags;
 pub mod tunnels;
 pub mod users;
 

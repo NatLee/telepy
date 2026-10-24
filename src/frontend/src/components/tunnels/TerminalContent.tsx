@@ -16,6 +16,7 @@ import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw, Key
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { ShellTabBar } from "@/components/tunnels/ShellTabBar";
 import type { ShellTab } from "@/hooks/useTerminalPage";
+import type { TerminalPalette } from "@/lib/terminalAppearance";
 import { useI18n } from "@/lib/i18n";
 
 export interface TerminalContentProps {
@@ -48,6 +49,8 @@ export interface TerminalContentProps {
     loadingServiceKeys: boolean;
     serviceKeys: unknown[];
     onReconnect?: () => void;
+    /** 目前的配色:終端機外框與分頁列跟著它的背景 / 前景色。/ Current scheme; the frame and tab bar follow it. */
+    palette: TerminalPalette;
 }
 
 export function TerminalContent({
@@ -80,6 +83,7 @@ export function TerminalContent({
     loadingServiceKeys,
     serviceKeys,
     onReconnect,
+    palette,
 }: TerminalContentProps) {
     const { t } = useI18n();
     const groupRef = useRef<GroupImperativeHandle>(null);
@@ -193,13 +197,18 @@ export function TerminalContent({
                         className="min-h-0 flex flex-col relative"
                     >
                         {/* Terminal — always mounted */}
-                        <div className={`absolute inset-0 flex flex-col bg-black rounded-lg shadow-inner border border-border transition-opacity duration-200 ${mainView === "terminal" ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"}`}>
+                        {/* --term-bg / --term-fg = 目前配色,外框、分頁列與捲軸跟著它(淺色配色也不會被黑框包住)。
+                            --term-bg / --term-fg carry the scheme so the frame, tab bar and scrollbar match it (light schemes too). */}
+                        <div
+                            className={`absolute inset-0 flex flex-col bg-(--term-bg) rounded-lg shadow-inner border border-border transition-[opacity,background-color] duration-200 ${mainView === "terminal" ? "opacity-100 z-10" : "opacity-0 pointer-events-none z-0"}`}
+                            style={{ "--term-bg": palette.background, "--term-fg": palette.foreground } as React.CSSProperties}
+                        >
                             <style dangerouslySetInnerHTML={{
                                 __html: `
 .terminal-container .xterm-viewport::-webkit-scrollbar { width: 14px; background: transparent; }
 .terminal-container .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); border: 4px solid #000; border-radius: 8px; }
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.4); }
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--term-fg) 22%, transparent); border: 4px solid var(--term-bg); border-radius: 8px; }
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--term-fg) 42%, transparent); }
 .terminal-container .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
 ` }} />
                             {/* Shell 分頁列：每個分頁 = 獨立 shell（各自的 WS + PTY）。/ One tab = one independent shell. */}
@@ -210,7 +219,7 @@ export function TerminalContent({
                                 onAdd={onAddShellTab}
                                 onClose={onCloseShellTab}
                             />
-                            <div className="flex-1 relative min-h-0 bg-black terminal-container">
+                            <div className="flex-1 relative min-h-0 bg-(--term-bg) terminal-container">
                                 <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
                                 {!connected && !connecting && (
                                     <div className="absolute inset-0 bg-black/70 z-20 flex items-center justify-center rounded-lg">

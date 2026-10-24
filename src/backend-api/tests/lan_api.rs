@@ -199,7 +199,7 @@ async fn lan_discovery_through_the_device() {
     assert!(err && v.as_str().unwrap().contains("owner and ADMIN"), "{v}");
 
     // 刪隧道 → 它的區網主機一起刪。/ Deleting the tunnel removes its LAN hosts.
-    assert_eq!(app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&alice.token)).await.status, StatusCode::OK);
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_lan_host").fetch_one(&app.state.db.read).await.unwrap();
     assert_eq!(n, 0);
 }

@@ -14,6 +14,8 @@ use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::json_str;
+use crate::expiry::{check_expiry, parse_expiry};
+use chrono::{Duration, Utc};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -85,7 +87,17 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     let (name, key) = validate_full(&body)?;
     let key = checked_key(&state, &key, None).await?;
     let description = json_str(&body, "description");
-    let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref()).await.map_err(unique_error)?;
+    // 沒給到期時間：站台有上限就用上限，否則不到期。/ No expiry given: the site limit when set, else never.
+    let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
+    let now = Utc::now();
+    let expires = match body.get("expires_at") {
+        Some(v) => check_expiry(parse_expiry(v).map_err(|m| ApiError::field("expires_at", m))?, now, max_days),
+        None if max_days > 0 => Ok(Some(now + Duration::days(max_days))),
+        None => Ok(None),
+    }
+    .map_err(|m| ApiError::field("expires_at", m))?;
+    let expires = expires.map(crate::util::db_time);
+    let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref(), expires.as_deref()).await.map_err(unique_error)?;
     state.hub.notify_user(
         user.id,
         &json!({
@@ -111,10 +123,26 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         None => None,
     };
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));
-    let k = db::keys::user_key_update(&state.db, id, name.as_deref(), key.as_deref(), description.as_ref().map(|d| d.as_deref()))
-        .await
-        .map_err(unique_error)?;
-    if key.is_some() {
+    // 續期 / 改到期時間（null = 不到期，站台有上限時不行）。/ Renew or change the expiry.
+    let expires: Option<Option<String>> = match body.get("expires_at") {
+        Some(v) => {
+            let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
+            let t = check_expiry(parse_expiry(v).map_err(|m| ApiError::field("expires_at", m))?, Utc::now(), max_days).map_err(|m| ApiError::field("expires_at", m))?;
+            Some(t.map(crate::util::db_time))
+        }
+        None => None,
+    };
+    let k = db::keys::user_key_update(
+        &state.db,
+        id,
+        name.as_deref(),
+        key.as_deref(),
+        description.as_ref().map(|d| d.as_deref()),
+        expires.as_ref().map(|e| e.as_deref()),
+    )
+    .await
+    .map_err(unique_error)?;
+    if key.is_some() || expires.is_some() {
         // 公鑰換了：裝置上的舊金鑰換成新的。/ New key material: replace it on every device.
         state.device_keys.kick_many(db::device_keys::tunnels_with_key(&state.db, id).await?);
     }

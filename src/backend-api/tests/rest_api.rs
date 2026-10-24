@@ -1,7 +1,7 @@
 //! REST parity tests：對照 Django 版的回應形狀、狀態碼與錯誤字串。
 mod common;
 
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use serde_json::{json, Value};
 
 const KEY_A: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq4u5n7tS1kO6o4m3yQ0tYQd6v7Jc5Zq8Hh3n5Vt7Wk device-a";
@@ -161,7 +161,8 @@ async fn tunnel_lifecycle_and_dashboard() {
 
     // delete tunnel cascades usernames
     let r = app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
-    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json["deleted"], true, "{}", r.text);
     let r = app.get("/api/reverse/server/usernames", Some(&admin)).await;
     assert_eq!(r.json, json!([]));
     let r = app.get(&format!("/api/reverse/server/keys/{id}"), Some(&admin)).await;
@@ -328,10 +329,16 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100}));
-    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115})).await;
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy"}));
+    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark"}));
+    // 字型 / 配色 id 只檢查形狀（清單在前端）。/ Font / scheme ids are shape-checked only.
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_font": "Hack Nerd Font"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["terminal_font"][0], "Use 1-32 lowercase letters, digits or '-'.");
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_scheme": ""})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
     let r = app.post("/api/user/settings", Some(&admin), json!({"ui_scale": 200})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json["ui_scale"][0], "ui_scale must be between 85 and 130.");
@@ -344,6 +351,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["language"], "zh-TW");
     assert_eq!(r.json["terminal_font_size"], 16);
     assert_eq!(r.json["ui_scale"], 115);
+    assert_eq!(r.json["terminal_font"], "fira-code");
+    assert_eq!(r.json["terminal_scheme"], "solarized-dark");
 
     // admin users
     let r = app.get("/api/user/users", Some(&admin)).await;
@@ -380,7 +389,11 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 14);
+    assert_eq!(keys.len(), 22);
+    assert_eq!(r.json["values"]["user_key_max_days"], 0, "personal keys don't expire by default");
+    assert_eq!(r.json["values"]["notify_webhook_url"], "", "alerts are off by default");
+    assert_eq!(r.json["values"]["notify_down_delay"], 60);
+    assert_eq!(r.json["meta"]["notify_webhook_url"]["type"], "url");
     assert_eq!(r.json["meta"]["remote_browser_homepage"]["label"], "Remote Browser Homepage");
     assert_eq!(r.json["values"]["ai_session_idle_timeout"], 600);
     assert_eq!(r.json["values"]["ai_session_max_lifetime"], 7200);
@@ -406,8 +419,8 @@ async fn legacy_sharee_usernames_are_dropped_once() {
     let admin = users::create(db, mk("admin2")).await.unwrap();
     let gone = users::create(db, mk("gone")).await.unwrap();
     let t = tunnels::create(db, tunnels::NewTunnel { user_id: owner.id, host_friendly_name: "box", key: KEY_A, reverse_port: 40001, description: None, default_username_id: None }).await.unwrap();
-    let s_editor = sharing::create(db, t.id, owner.id, editor.id, "edit").await.unwrap();
-    sharing::create(db, t.id, owner.id, admin.id, "admin").await.unwrap();
+    let s_editor = sharing::create(db, t.id, owner.id, editor.id, "edit", None).await.unwrap();
+    sharing::create(db, t.id, owner.id, admin.id, "admin", None).await.unwrap();
 
     let ubuntu = tunnels::username_create(db, owner.id, t.id, "ubuntu").await.unwrap();
     let by_editor = tunnels::username_create(db, editor.id, t.id, "root").await.unwrap();
@@ -430,4 +443,83 @@ async fn legacy_sharee_usernames_are_dropped_once() {
     assert!(tunnels::username_by_id(db, later.id).await.unwrap().is_some());
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(schema::DROP_SHAREE_USERNAMES).fetch_one(&db.read).await.unwrap();
     assert_eq!(n, 1);
+}
+
+async fn put_profile(app: &common::TestApp, path: &str, token: &str, body: Value) -> common::Resp {
+    app.request(Method::PUT, path, Some(token), Some(body)).await
+}
+
+/// 每個使用者對每條隧道的終端機外觀覆寫：看得到就能設、只影響自己、PUT 整列覆寫、全 null = 刪列、隧道刪了一起刪。
+/// Per-user, per-tunnel terminal appearance override: visible → settable, affects only the caller, PUT replaces
+/// the row, all null removes it, and it goes with the tunnel.
+#[tokio::test]
+async fn terminal_profile_per_tunnel() {
+    let app = common::spawn().await;
+    let owner = app.login("owner", "pw").await;
+    let r = app.post("/api/site/settings", Some(&owner), json!({"allow_registration": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let bob = app.login("bob", "pw").await;
+    let bob_id = app.get("/api/auth/user/profile", Some(&bob)).await.json["id"].as_i64().unwrap();
+    let t = create_tunnel(&app, &owner, "box", KEY_A).await;
+    let id = t["id"].as_i64().unwrap();
+    let path = format!("/api/reverse/server/{id}/terminal-profile");
+
+    // 還沒有覆寫 = 全 null。/ No override yet.
+    let r = app.get(&path, Some(&owner)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null}));
+    // 看不到隧道 → 404（讀寫皆然）。/ Not visible → 404 for reads and writes.
+    assert_eq!(app.get(&path, Some(&bob)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(put_profile(&app, &path, &bob, json!({"scheme": "nord"})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get("/api/reverse/server/999/terminal-profile", Some(&owner)).await.status, StatusCode::NOT_FOUND);
+
+    let r = put_profile(&app, &path, &owner, json!({"font": "fira-code", "scheme": "nord"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": "fira-code", "font_size": null, "scheme": "nord"}));
+    assert_eq!(app.get(&path, Some(&owner)).await.json["scheme"], "nord");
+
+    // 驗證：字級範圍、id 形狀。/ Validation: size range, id shape.
+    let r = put_profile(&app, &path, &owner, json!({"font_size": 30})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["font_size"][0], "font_size must be between 10 and 24.");
+    let r = put_profile(&app, &path, &owner, json!({"font": "Hack Nerd Font"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["font"][0], "Use 1-32 lowercase letters, digits or '-'.");
+    let r = put_profile(&app, &path, &owner, json!({"font_size": "big"})).await;
+    assert_eq!(r.json["font_size"][0], "A valid integer is required.");
+    // 錯誤的 PUT 不動原本的覆寫。/ A rejected PUT leaves the stored override alone.
+    assert_eq!(app.get(&path, Some(&owner)).await.json["font"], "fira-code");
+
+    // PUT 是整列覆寫：只給 font_size → font / scheme 回到跟隨預設。/ PUT replaces the whole row.
+    let r = put_profile(&app, &path, &owner, json!({"font_size": 18, "font": null})).await;
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": 18, "scheme": null}));
+    // 全部跟隨預設 = 刪掉覆寫列。/ Everything inherits = the row goes away.
+    let r = put_profile(&app, &path, &owner, json!({})).await;
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null}));
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_terminal_profile").fetch_one(&app.state.db.read).await.unwrap();
+    assert_eq!(n, 0);
+
+    // 覆寫是每個人自己的：分享給 bob 後，他看到的是自己的（空），兩邊互不影響。
+    // Overrides are personal: once shared, bob sees his own (empty) one and neither side affects the other.
+    assert_eq!(put_profile(&app, &path, &owner, json!({"scheme": "dracula"})).await.status, StatusCode::OK);
+    let r = app.post(&format!("/tunnels/share/{id}"), Some(&owner), json!({"shared_with_user_id": bob_id})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(app.get(&path, Some(&bob)).await.json["scheme"], Value::Null);
+    assert_eq!(put_profile(&app, &path, &bob, json!({"scheme": "nord", "font_size": 12})).await.status, StatusCode::OK);
+    assert_eq!(app.get(&path, Some(&owner)).await.json["scheme"], "dracula");
+    assert_eq!(app.get(&path, Some(&bob)).await.json["font_size"], 12);
+
+    // DELETE 只刪自己的。/ DELETE removes only the caller's row.
+    assert_eq!(app.delete(&path, Some(&owner)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.delete(&path, Some(&owner)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.get(&path, Some(&owner)).await.json["scheme"], Value::Null);
+    assert_eq!(app.get(&path, Some(&bob)).await.json["scheme"], "nord");
+
+    // 隧道刪除連帶刪掉覆寫列。/ Deleting the tunnel removes the remaining rows.
+    let r = app.delete(&format!("/api/reverse/server/keys/{id}"), Some(&owner)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["deleted"], true, "{}", r.text);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_terminal_profile").fetch_one(&app.state.db.read).await.unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(app.get(&path, Some(&bob)).await.status, StatusCode::NOT_FOUND);
 }

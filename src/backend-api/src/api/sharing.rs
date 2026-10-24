@@ -23,6 +23,86 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(shared_users))
         .routes(routes!(available_users))
         .routes(routes!(update_allowed_usernames))
+        .routes(routes!(update_expiry))
+}
+
+/// 分享為什麼結束：被撤銷、自己離開、或到期。/ Why a share ended.
+pub enum EndReason<'a> {
+    Revoked { by: &'a str },
+    Left,
+    Expired,
+}
+
+/// 結束一筆分享（撤銷、離開、到期共用）：他用的帳號交還給 owner、刪分享與釘選、他的金鑰離開這台裝置的清單，
+/// 然後通知他和 owner。`actor` = 做這件事的人（到期時是 None）。
+/// End a share (revoke, leave or expiry): hand their accounts back to the owner, drop the share and their pin,
+/// take their keys off this device's list, then tell them and the owner. `actor` is None on expiry.
+pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Sharing, actor: Option<i64>, reason: EndReason<'_>) -> ApiResult<()> {
+    let uid = sharing.shared_with_id;
+    let target_name = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_default();
+    db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, uid).await?;
+    db::sharing::delete(&state.db, sharing.id).await?;
+    // 看不到了，他的釘選也沒意義。/ They can't see it any more, so their pin goes too.
+    db::tunnel_tags::set_pin(&state.db, uid, t.id, false).await?;
+    // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
+    db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
+    state.device_keys.kick(t.id);
+
+    let name = &t.host_friendly_name;
+    let (to_sharee, to_owner) = match &reason {
+        EndReason::Revoked { by } => (Some(format!("Access to tunnel \"{name}\" has been revoked by {by}")), format!("{by} revoked access from {target_name} for your tunnel \"{name}\"")),
+        EndReason::Left => (None, format!("{target_name} left your tunnel \"{name}\"")),
+        EndReason::Expired => (Some(format!("Your access to tunnel \"{name}\" has ended: the share expired")), format!("{target_name}'s access to your tunnel \"{name}\" expired")),
+    };
+    if let Some(details) = to_sharee {
+        let mut msg = json!({ "action": "TUNNEL-UNSHARED", "details": details, "tunnel_id": t.id });
+        if let EndReason::Revoked { by } = &reason {
+            msg["revoked_by"] = json!(by);
+        }
+        if matches!(reason, EndReason::Expired) {
+            msg["expired"] = json!(true);
+        }
+        state.hub.notify_user(uid, &msg);
+    }
+    if Some(t.user_id) != actor {
+        state.hub.notify_user(t.user_id, &json!({ "action": "TUNNEL-UNSHARED", "details": to_owner, "tunnel_id": t.id, "revoked_from": target_name }));
+    }
+    if let Some(actor) = actor {
+        state.hub.notify_user(actor, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
+    }
+    Ok(())
+}
+
+/// 收掉所有已到期的分享，回傳收了幾筆。/ End every share past its expiry; returns how many.
+pub async fn expire_once(state: &AppState) -> ApiResult<usize> {
+    let mut n = 0;
+    for s in db::sharing::expired(&state.db).await? {
+        let Some(t) = db::tunnels::by_id(&state.db, s.tunnel_id).await? else { continue };
+        end_share(state, &t, &s, None, EndReason::Expired).await?;
+        tracing::info!(tunnel = %t.host_friendly_name, user_id = s.shared_with_id, "share expired");
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// 每 30 秒收一次到期的分享。/ Ends expired shares every 30 seconds.
+pub async fn run_expiry(state: AppState) {
+    loop {
+        if let Err(e) = expire_once(&state).await {
+            tracing::warn!(error = ?e, "share expiry failed");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    }
+}
+
+/// 請求裡的 `expires_at`：沒給 = None（不改 / 不到期），給了就要是未來的時間或 null。
+/// The request's `expires_at`: absent = None; otherwise a future time or null.
+fn requested_expiry(body: &Value) -> ApiResult<Option<Option<String>>> {
+    let Some(v) = body.get("expires_at") else { return Ok(None) };
+    let t = crate::expiry::parse_expiry(v)
+        .and_then(|t| crate::expiry::check_expiry(t, chrono::Utc::now(), 0))
+        .map_err(|m| ApiError::field("expires_at", m))?;
+    Ok(Some(t.map(crate::util::db_time)))
 }
 
 fn invalid_permission(raw: &str) -> ApiError {
@@ -56,7 +136,8 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
     let raw_perm = json_str(&body, "permission_type").unwrap_or_else(|| "view".to_string());
     let perm = Permission::parse(&raw_perm).ok_or_else(|| invalid_permission(&raw_perm))?;
 
-    let sharing = db::sharing::create(&state.db, t.id, me.id, target.id, perm.as_str()).await?;
+    let expires = requested_expiry(&body)?.flatten();
+    let sharing = db::sharing::create(&state.db, t.id, me.id, target.id, perm.as_str(), expires.as_deref()).await?;
 
     state.hub.notify_user(
         target.id,
@@ -100,39 +181,8 @@ async fn unshare(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id
         return Err(ApiError::bad_request("You do not have permission to manage sharing for this tunnel"));
     }
     let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing not found"))?;
-    let target = db::users::by_id(&state.db, uid).await?;
-    let target_name = target.as_ref().map(|u| u.username.clone()).unwrap_or_default();
-
-    db::tunnels::transfer_usernames_to_owner(&state.db, t.id, t.user_id, uid).await?;
-    db::sharing::delete(&state.db, sharing.id).await?;
-    // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
-    db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
-    state.device_keys.kick(t.id);
-
-    if !is_self {
-        state.hub.notify_user(
-            uid,
-            &json!({
-                "action": "TUNNEL-UNSHARED",
-                "details": format!("Access to tunnel \"{}\" has been revoked by {}", t.host_friendly_name, me.username),
-                "tunnel_id": t.id,
-                "revoked_by": me.username,
-            }),
-        );
-    }
-    if t.user_id != me.id {
-        let action_str = if is_self { "left".to_string() } else { format!("revoked access from {target_name} for") };
-        state.hub.notify_user(
-            t.user_id,
-            &json!({
-                "action": "TUNNEL-UNSHARED",
-                "details": format!("{} {} your tunnel \"{}\"", me.username, action_str, t.host_friendly_name),
-                "tunnel_id": t.id,
-                "revoked_from": target_name,
-            }),
-        );
-    }
-    state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
+    let reason = if is_self { EndReason::Left } else { EndReason::Revoked { by: &me.username } };
+    end_share(&state, &t, &sharing, Some(me.id), reason).await?;
     Ok(Json(json!({ "message": "Tunnel unshared successfully" })))
 }
 
@@ -199,6 +249,7 @@ async fn shared_users(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
             "email": s.email,
             "permission_type": s.permission_type,
             "shared_at": db_to_iso_utc_offset(&s.shared_at),
+            "expires_at": s.expires_at.as_deref().map(crate::util::db_to_iso_utc_z),
             "allowed_target_usernames": allowed.iter().map(|(id, u)| json!({ "id": id, "username": u })).collect::<Vec<_>>(),
         }));
     }
@@ -241,4 +292,26 @@ async fn update_allowed_usernames(State(state): State<AppState>, AuthUser(me): A
         &json!({ "action": "TUNNEL-USERNAMES-UPDATED", "details": "Allowed target usernames updated", "tunnel_id": t.id }),
     );
     Ok(Json(json!({ "message": "Allowed usernames updated" })))
+}
+
+/// 改分享的期限（延長、改日期或改成一直有效）：ADMIN / owner。/ Change when a share ends (ADMIN / owner).
+#[utoipa::path(patch, path = "/tunnels/share/{id}/{uid}/expiry", tag = "Tunnel Sharing", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("uid" = i64, Path, description = "User id")), request_body = super::schemas::ShareExpiryRequest, responses((status = 200, body = super::schemas::ShareExpiryRequest), (status = 400, body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn update_expiry(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, uid)): Path<(i64, i64)>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let t = tunnel_or_404(&state, id).await?;
+    if !permissions::check_share_access(&state.db, me.id, &t).await? {
+        return Err(ApiError::forbidden("You do not have permission to manage sharing for this tunnel"));
+    }
+    let sharing = db::sharing::get(&state.db, t.id, uid).await?.ok_or_else(|| ApiError::not_found("Sharing not found"))?;
+    let Some(expires) = requested_expiry(&body)? else {
+        return Err(ApiError::field("expires_at", "expires_at is required (null = no end)."));
+    };
+    db::sharing::set_expiry(&state.db, sharing.id, expires.as_deref()).await?;
+    let iso = expires.as_deref().map(crate::util::db_to_iso_utc_z);
+    let name = &t.host_friendly_name;
+    let details = match expires.as_deref().and_then(crate::util::parse_db_datetime) {
+        Some(at) => format!("Your access to tunnel \"{name}\" now ends {} UTC", at.format("%Y-%m-%d %H:%M")),
+        None => format!("Your access to tunnel \"{name}\" no longer has an end date"),
+    };
+    state.hub.notify_user(uid, &json!({ "action": "TUNNEL-PERMISSION-UPDATED", "details": details, "tunnel_id": t.id, "expires_at": iso }));
+    Ok(Json(json!({ "expires_at": iso })))
 }

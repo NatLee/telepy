@@ -27,14 +27,17 @@ const OPEN_ACTIONS: { view: TerminalMainView; icon: LucideIcon; label: Translati
 interface TunnelOpenButtonsProps {
     tunnel: Tunnel;
     online: boolean;
+    /** 隧道在但 sshd 沒回應：看起來跟離線一樣（點了也連不上），提示換成降級的說明。/ Degraded: styled as offline, with the degraded hint. */
+    degraded?: boolean;
     variant?: "tiles" | "compact";
 }
 
-export function TunnelOpenButtons({ tunnel, online, variant = "tiles" }: TunnelOpenButtonsProps) {
+export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = "tiles" }: TunnelOpenButtonsProps) {
     const { t } = useI18n();
     // 離線時仍可點（terminal 頁會自己顯示錯誤），但以淡色 + 提示說明現在連不上。
     // Still clickable while offline (the terminal page reports it), but muted with a hint explaining why.
-    const offlineHint = online ? "" : ` — ${t("tunnelActions.offlineHint")}`;
+    const offlineHint = degraded ? ` — ${t("tunnels.degradedHint")}` : online ? "" : ` — ${t("tunnelActions.offlineHint")}`;
+    online = online && !degraded;
 
     if (variant === "compact") {
         return (

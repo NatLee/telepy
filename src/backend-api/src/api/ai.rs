@@ -30,7 +30,7 @@ fn can_manage(me: &User, s: &AiSession) -> bool {
     me.is_superuser || s.user_id == me.id || s.tunnel_owner_id == me.id
 }
 
-fn session_json(s: &AiSession, tz: i32) -> Value {
+pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
     json!({
         "id": s.id,
         "user": { "id": s.user_id, "username": s.user_name },
@@ -70,43 +70,45 @@ struct ActivityQuery {
     limit: Option<i64>,
     tunnel_id: Option<i64>,
     user_id: Option<i64>,
+    grant_id: Option<i64>,
 }
 
 #[utoipa::path(get, path = "/api/ai/activity", tag = "AI", security(("bearer" = [])), params(
     ("limit" = Option<i64>, Query, description = "Max rows, newest first (default 200, max 1000)"),
     ("tunnel_id" = Option<i64>, Query),
     ("user_id" = Option<i64>, Query),
+    ("grant_id" = Option<i64>, Query, description = "Only the calls of one connected app (OAuth grant)"),
 ), responses((status = 200, description = "MCP tool calls: admins see everything, others their own calls plus calls on tunnels they own", body = Vec<super::schemas::AiActivity>)))]
 async fn activity(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Query<ActivityQuery>) -> ApiResult<Json<Value>> {
     let filter = db::ai_audit::Filter {
         visible_to: (!me.is_superuser).then_some(me.id),
         user_id: q.user_id,
         tunnel_id: q.tunnel_id,
+        grant_id: q.grant_id,
         limit: q.limit.unwrap_or(200).clamp(1, 1000),
     };
     let tz = state.config.tz_offset_minutes;
     let rows = db::ai_audit::list(&state.db, &filter).await?;
-    Ok(Json(Value::Array(
-        rows.into_iter()
-            .map(|e| {
-                json!({
-                    "id": e.id,
-                    "at": db_to_iso(&e.at, tz),
-                    "user": { "id": e.user_id, "username": e.username },
-                    "client_name": e.client_name,
-                    "tool": e.tool,
-                    "tunnel": e.tunnel_id.map(|id| json!({ "id": id, "name": e.tunnel_name })),
-                    "session_id": e.session_id,
-                    "target_username": e.target_username,
-                    "detail": e.detail,
-                    "ok": e.ok,
-                    "exit_code": e.exit_code,
-                    "duration_ms": e.duration_ms,
-                    "bytes_out": e.bytes_out,
-                    "error": e.error,
-                    "ip": e.ip,
-                })
-            })
-            .collect(),
-    )))
+    Ok(Json(Value::Array(rows.iter().map(|e| activity_json(e, tz)).collect())))
+}
+
+pub(crate) fn activity_json(e: &db::ai_audit::Event, tz: i32) -> Value {
+    json!({
+        "id": e.id,
+        "at": db_to_iso(&e.at, tz),
+        "user": { "id": e.user_id, "username": e.username },
+        "client_name": e.client_name,
+        "grant_id": e.grant_id,
+        "tool": e.tool,
+        "tunnel": e.tunnel_id.map(|id| json!({ "id": id, "name": e.tunnel_name })),
+        "session_id": e.session_id,
+        "target_username": e.target_username,
+        "detail": e.detail,
+        "ok": e.ok,
+        "exit_code": e.exit_code,
+        "duration_ms": e.duration_ms,
+        "bytes_out": e.bytes_out,
+        "error": e.error,
+        "ip": e.ip,
+    })
 }

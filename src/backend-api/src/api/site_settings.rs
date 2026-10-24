@@ -13,7 +13,7 @@ use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(get_settings, update_settings))
+    OpenApiRouter::new().routes(routes!(get_settings, update_settings)).routes(routes!(notify_test))
 }
 
 #[derive(Clone, Copy)]
@@ -21,6 +21,8 @@ enum Kind {
     Bool,
     Int,
     Str(usize),
+    /// 可以空白（= 關閉）；有值就必須是 http(s) 網址。/ May be blank (= off); otherwise an http(s) URL.
+    Url(usize),
 }
 
 struct FieldMeta {
@@ -44,7 +46,15 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_idle_timeout", kind: Kind::Int, label: "AI Session Idle Timeout (seconds)", description: "AI 工具（MCP）開的 SSH session 閒置多久沒有指令就自動關閉(秒)。執行中的指令不算閒置。變更後對新開的 session 生效。" },
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許隧道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。" },
+    FieldMeta { name: "notify_webhook_url", kind: Kind::Url(512), label: "Status alert webhook", description: "隧道離線、恢復、降級(連著但 SSH 沒回應)時 POST 到這個網址。內容同時有 text(Slack、Google Chat、Mattermost)與 content(Discord)欄位,另附 event / tunnel 等結構化欄位。留空 = 關閉。只有管理員能設定,伺服器會從自己這裡連到這個網址。" },
+    FieldMeta { name: "notify_down_delay", kind: Kind::Int, label: "Alert delay (seconds)", description: "狀況要持續多久才發告警(秒);在這之前恢復就什麼都不發,所以裝置閃斷不會洗版。只有發過「離線」的隧道,回來時才會發「恢復」。設 0 = 立刻通知。" },
+    FieldMeta { name: "user_key_max_days", kind: Kind::Int, label: "Personal key lifetime (days)", description: "個人 SSH 金鑰最長可以用幾天。設了之後,新增或續期的金鑰都必須在這個天數內到期(沒填就自動用最長效期);到期的金鑰會被 gateway 拒絕,並從裝置的 authorized_keys 移除。設 0 = 不限制。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
+    FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
+    FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
+    FieldMeta { name: "desktop_session_idle_timeout", kind: Kind::Int, label: "Remote Desktop Idle Timeout (seconds)", description: "遠端桌面多久沒有鍵盤 / 滑鼠 / 剪貼簿輸入就自動斷線(秒)。設 0 = 不自動斷線。變更後即時生效。" },
+    FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard", description: "剪貼簿方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。下次開桌面時生效。" },
+    FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -63,6 +73,14 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
+    m.insert("notify_webhook_url".into(), json!(s.notify_webhook_url));
+    m.insert("notify_down_delay".into(), json!(s.notify_down_delay));
+    m.insert("user_key_max_days".into(), json!(s.user_key_max_days));
+    m.insert("desktop_enabled".into(), json!(s.desktop_enabled));
+    m.insert("desktop_max_sessions".into(), json!(s.desktop_max_sessions));
+    m.insert("desktop_session_idle_timeout".into(), json!(s.desktop_session_idle_timeout));
+    m.insert("desktop_clipboard".into(), json!(s.desktop_clipboard));
+    m.insert("desktop_max_resolution".into(), json!(s.desktop_max_resolution));
     Value::Object(m)
 }
 
@@ -73,6 +91,7 @@ fn meta_json() -> Value {
             Kind::Bool => "boolean",
             Kind::Int => "integer",
             Kind::Str(_) => "string",
+            Kind::Url(_) => "url",
         };
         m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
     }
@@ -111,6 +130,15 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             Value::Null => Err(ApiError::field(f.name, "This field may not be null.")),
             other => Ok(SettingValue::Str(other.to_string())),
         },
+        Kind::Url(max) => match v {
+            Value::String(s) if s.trim().is_empty() => Ok(SettingValue::Str(String::new())),
+            Value::String(s) if s.chars().count() > max => Err(ApiError::field(f.name, format!("Ensure this field has no more than {max} characters."))),
+            Value::String(s) => match reqwest::Url::parse(s.trim()) {
+                Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => Ok(SettingValue::Str(s.trim().to_string())),
+                _ => Err(ApiError::field(f.name, "Enter a valid http:// or https:// URL, or leave it blank.")),
+            },
+            _ => Err(ApiError::field(f.name, "Enter a valid http:// or https:// URL, or leave it blank.")),
+        },
     }
 }
 
@@ -122,7 +150,9 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     let mut updates = Vec::new();
     for f in META {
         if let Some(v) = body.get(f.name) {
-            updates.push((f.name, parse_value(f, v)?));
+            let value = parse_value(f, v)?;
+            validate(f.name, &value)?;
+            updates.push((f.name, value));
         }
     }
     for (name, value) in updates {
@@ -131,4 +161,44 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     }
     let s = db::settings::get_solo(&state.db).await?;
     Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+}
+
+/// 個別欄位的值域（型別檢查之外）。/ Per-field value constraints beyond the type check.
+fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
+    match (name, value) {
+        ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
+            Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
+        }
+        ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
+        ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
+        _ => Ok(()),
+    }
+}
+
+/// 用目前存的 webhook 網址送一則測試告警，回傳結果（管理員）。/ Send a test alert to the saved webhook (admins).
+#[utoipa::path(post, path = "/api/site/settings/notify-test", tag = "Site Settings", security(("bearer" = [])), responses((status = 200, description = "{\"ok\": bool, \"status\": http status | null, \"error\": message | null}", body = Object), (status = 400, description = "No webhook URL saved", body = super::schemas::ErrorBody), (status = 403, body = super::schemas::ErrorBody)))]
+async fn notify_test(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+    if !me.is_superuser {
+        return Err(ApiError::forbidden("Permission denied. Only administrators can modify system settings."));
+    }
+    let s = db::settings::get_solo(&state.db).await?;
+    if s.notify_webhook_url.trim().is_empty() {
+        return Err(ApiError::bad_request("Save a webhook URL first."));
+    }
+    let mut body = crate::monitor::alerts::payload(
+        crate::monitor::alerts::Alert::Online,
+        0,
+        "test-tunnel",
+        0,
+        state.config.public_url.as_deref(),
+        &crate::util::db_to_iso_utc_z(&crate::util::now_db()),
+    );
+    let text = format!("[Telepy] Test alert from {}: the webhook works.", me.username);
+    body["text"] = json!(text);
+    body["content"] = json!(text);
+    body["event"] = json!("test");
+    Ok(Json(match crate::monitor::alerts::deliver(&state.http, &s.notify_webhook_url, &body).await {
+        Ok(status) => json!({ "ok": true, "status": status, "error": null }),
+        Err(e) => json!({ "ok": false, "status": null, "error": e }),
+    }))
 }

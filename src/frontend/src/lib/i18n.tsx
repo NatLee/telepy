@@ -28,7 +28,8 @@ import {
     type LanguagePreference,
 } from "./locale";
 import { DICTIONARIES, readCookiePreference, resolveLocale, setActiveLocale } from "./translate";
-import { applyTerminalFontSize, applyTheme, applyUiScale, isTheme, readStoredTheme, readTerminalFontSize, readUiScale } from "./userPrefs";
+import { applyTerminalDefaults, applyTheme, applyUiScale, isTheme, readStoredTheme, readTerminalDefaults, readUiScale } from "./userPrefs";
+import { isKnownFont, isKnownScheme, type TerminalDefaults } from "./terminalAppearance";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -181,10 +182,14 @@ export function UserSettingsSync() {
         if (isTheme(user.theme) && user.theme !== readStoredTheme()) {
             applyTheme(user.theme);
         }
-        if (typeof user.terminal_font_size === "number"
-            && user.terminal_font_size !== readTerminalFontSize()) {
-            applyTerminalFontSize(user.terminal_font_size);
-        }
+        // 終端機的個人預設(字型 / 字級 / 配色);後端給了前端不認得的 id(較新的版本加的字型)就保留本機的。
+        // Terminal defaults (font / size / scheme); an id this frontend doesn't know keeps the local value.
+        const local = readTerminalDefaults();
+        const terminal: Partial<TerminalDefaults> = {};
+        if (typeof user.terminal_font_size === "number" && user.terminal_font_size !== local.fontSize) terminal.fontSize = user.terminal_font_size;
+        if (isKnownFont(user.terminal_font) && user.terminal_font !== local.font) terminal.font = user.terminal_font;
+        if (isKnownScheme(user.terminal_scheme) && user.terminal_scheme !== local.scheme) terminal.scheme = user.terminal_scheme;
+        if (Object.keys(terminal).length > 0) applyTerminalDefaults(terminal);
         if (typeof user.ui_scale === "number" && user.ui_scale !== readUiScale()) {
             applyUiScale(user.ui_scale);
         }

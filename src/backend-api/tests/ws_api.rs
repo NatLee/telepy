@@ -144,17 +144,11 @@ async fn tunnel_connection_status_and_monitor_cycle() {
     assert_eq!(r.json["latency"][port.to_string()], 87.3);
 }
 
+/// 終端機在開 SSH 之前就由 Telepy 拒絕的關閉碼（PTY、resize、pong 等真正連到裝置的部分在 tests/terminal_e2e.rs）。
+/// Close codes decided before any SSH happens; the PTY path itself is covered on the SSH lab (terminal_e2e).
 #[tokio::test]
-async fn terminal_pty_roundtrip_with_fake_ssh() {
-    let mut app = common::spawn().await;
-    // 假的 ssh：印出收到的參數，然後把 stdin 回聲（cat）。/ Fake ssh: echo argv, then cat stdin.
-    let dir = tempfile::tempdir().unwrap();
-    let script = dir.path().join("fake-ssh");
-    std::fs::write(&script, "#!/bin/sh\necho \"FAKE-SSH:$*\"\nexec cat\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    app.set_ssh_binary(script.to_str().unwrap()).await;
-
+async fn terminal_close_codes() {
+    let app = common::spawn().await;
     let token = app.login("admin", "pw").await;
     let r = app.get("/api/reverse/issue/token", Some(&token)).await;
     let t = r.json["token"].as_str().unwrap().to_string();
@@ -174,40 +168,11 @@ async fn terminal_pty_roundtrip_with_fake_ssh() {
     send_json(&mut ws, json!({"type": "auth", "token": token, "server_id": tunnel_id.to_string(), "username": "nobody"})).await;
     assert_eq!(close_code(&next(&mut ws).await), Some(4003));
 
-    // happy path
+    // unknown tunnel → 4004; nothing listening for the device → 4005
+    let mut ws = connect(&base, "/ws/terminal/").await;
+    send_json(&mut ws, json!({"type": "auth", "token": token, "server_id": "999", "username": "ubuntu"})).await;
+    assert_eq!(close_code(&next(&mut ws).await), Some(4004));
     let mut ws = connect(&base, "/ws/terminal/").await;
     send_json(&mut ws, json!({"type": "auth", "token": token, "server_id": tunnel_id.to_string(), "username": "ubuntu"})).await;
-    let mut seen = String::new();
-    while !seen.contains("FAKE-SSH:") {
-        match next(&mut ws).await {
-            Message::Text(t) => seen.push_str(&t),
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-    assert!(seen.contains("ubuntu@127.0.0.1"), "{seen}");
-    assert!(seen.contains("ControlMaster=auto"), "{seen}");
-
-    send_json(&mut ws, json!({"action": "pty_resize", "payload": {"size": {"rows": 30, "cols": 100, "height": 600, "width": 900}}})).await;
-    send_json(&mut ws, json!({"action": "ping"})).await;
-    // pong arrives as a binary frame (PTY output may interleave; skip text)
-    loop {
-        match next(&mut ws).await {
-            Message::Binary(b) => {
-                assert_eq!(&b[..], b"pong");
-                break;
-            }
-            Message::Text(_) => continue,
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-    send_json(&mut ws, json!({"action": "pty_input", "payload": {"input": "hello-pty\n"}})).await;
-    let mut seen = String::new();
-    while !seen.contains("hello-pty") {
-        match next(&mut ws).await {
-            Message::Text(t) => seen.push_str(&t),
-            Message::Binary(_) => {}
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-    ws.close(None).await.unwrap();
+    assert_eq!(close_code(&next(&mut ws).await), Some(4005));
 }

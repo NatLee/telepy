@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message as UpMsg;
 use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
-use super::{auth, close, send_json};
+use super::{auth, close, send, send_json, Heartbeat};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -112,7 +112,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         return;
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
-    let _presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
+    let presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
+    let mut heartbeat = Heartbeat::new(&state.config);
 
     // VNC WS 連著 = session 在用：每 20s 續命（伺服器端計時，不受瀏覽器背景分頁節流影響）。
     let keepalive = {
@@ -130,7 +131,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut close_code: Option<u16> = None;
     loop {
         tokio::select! {
-            incoming = socket.recv() => match incoming {
+            incoming = heartbeat.recv(&mut socket) => match incoming {
                 Some(Ok(Message::Text(t))) => {
                     if !begun && serde_json::from_str::<serde_json::Value>(&t).ok().and_then(|v| v.get("type").and_then(|x| x.as_str()).map(|x| x == "begin")).unwrap_or(false) {
                         begun = true;
@@ -147,10 +148,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             },
             up = upstream.next(), if begun => match up {
                 Some(Ok(UpMsg::Binary(b))) => {
-                    if socket.send(Message::Binary(b)).await.is_err() { break; }
+                    if !send(&mut socket, Message::Binary(b)).await { break; }
                 }
                 Some(Ok(UpMsg::Text(t))) => {
-                    if socket.send(Message::Text(Utf8Bytes::from(t.to_string()))).await.is_err() { break; }
+                    if !send(&mut socket, Message::Text(Utf8Bytes::from(t.to_string()))).await { break; }
                 }
                 Some(Ok(UpMsg::Ping(_))) | Some(Ok(UpMsg::Pong(_))) | Some(Ok(UpMsg::Frame(_))) => {}
                 Some(Ok(UpMsg::Close(_))) | None | Some(Err(_)) => {
@@ -161,6 +162,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         }
     }
     keepalive.abort();
+    // 人已經走了：先移出「使用中」再收尾（收 kasm session 要一點時間）。/ Leave presence before the teardown.
+    drop(presence);
     if let Some(code) = close_code {
         close(&mut socket, code).await;
     }

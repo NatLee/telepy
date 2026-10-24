@@ -22,6 +22,7 @@ import {
     KeyRound,
     LogOut,
     Rocket,
+    ScreenShare,
     ScrollText,
     Share2,
     Trash2,
@@ -84,6 +85,7 @@ export function TunnelActions({
     onCommands,
     onKeys,
     onNetwork,
+    onDesktop,
     onUsers,
     onShare,
     onLeave,
@@ -130,6 +132,12 @@ export function TunnelActions({
                         label={t("tunnelActions.network")}
                         hint={t("tunnelActions.networkHint")}
                         onSelect={() => onNetwork(tunnel.id)}
+                    />
+                    <ActionItem
+                        icon={ScreenShare}
+                        label={t("tunnelActions.desktop")}
+                        hint={t("tunnelActions.desktopHint")}
+                        onSelect={() => onDesktop(tunnel.id)}
                     />
                 </DropdownMenuGroup>
 

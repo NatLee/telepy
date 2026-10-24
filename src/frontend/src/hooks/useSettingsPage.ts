@@ -13,7 +13,7 @@ import { useI18n } from "@/lib/i18n";
 export interface SettingMeta {
     label: string;
     description: string;
-    type: "boolean" | "integer" | "string";
+    type: "boolean" | "integer" | "string" | "url";
 }
 
 export function useSettingsPage() {

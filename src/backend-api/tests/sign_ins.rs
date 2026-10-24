@@ -68,6 +68,7 @@ async fn sign_ins_record_ip_agent_and_outcome() {
     assert_eq!(ev[0]["method"], "password");
     assert!(ev[0]["second_factor"].is_null());
     assert_eq!(ev[0]["ip"], "198.51.100.7");
+    assert_eq!(ev[0]["geo"]["scope"], "public", "{}", ev[0]);
     assert_eq!(ev[0]["user_agent"], CHROME_MAC);
     assert!(ev[0]["at"].as_str().unwrap().ends_with('Z'));
     assert_eq!(ev[1]["ok"], false);

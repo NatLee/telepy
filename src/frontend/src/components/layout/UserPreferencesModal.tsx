@@ -1,33 +1,34 @@
 "use client";
 
 /**
- * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟,分頁放在對話框的工具列(不會被內容擠掉或截斷):
- * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機字型大小。
+ * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
+ * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
+ * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機的預設字型 / 字級 / 配色
+ *   (單一裝置的覆寫在終端機頁的「外觀」按鈕)。
  *   變更即時套用並寫入本機(cookie/localStorage),已登入時同步到後端 UserSettings(跨裝置)。
  * - 安全性:登入安全性(passkey / 驗證器 App / 復原碼)。
  * - 已連接的應用程式:授權過的 MCP / AI 客戶端(OAuth grants),可撤銷;另有連到 MCP 頁的設定入口。
- * User preferences modal, opened from the sidebar footer gear button; the tabs sit in the dialog's
- * toolbar row so they are never squashed or truncated. Tabs:
- * - General: account, language, theme, display size (S/M/L + fine slider), terminal font size.
+ * User preferences modal, opened from the sidebar footer gear button. A rail + content layout: on
+ * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
+ * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
+ * - General: account, language, theme, display size (S/M/L + fine slider), the terminal's default font /
+ *   size / colour scheme (a device's own override lives behind the terminal page's Appearance button).
  *   Changes apply instantly, persist locally, and sync to the backend UserSettings for cross-device use.
  * - Security: sign-in security (passkeys, authenticator app, recovery codes).
  * - Connected apps: authorized MCP / AI clients with revoke, plus a pointer to the MCP page.
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
+import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
-import { Button } from "@/components/ui/button";
+import { NavTabs } from "@/components/ui/nav-tabs";
 import { Segmented } from "@/components/ui/segmented";
 import { Section } from "@/components/ui/section";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import {
-    applyTerminalFontSize,
-    persistUserSetting,
-    readTerminalFontSize,
-    TERMINAL_FONT_SIZE_MAX,
-    TERMINAL_FONT_SIZE_MIN,
     UI_SCALE_MAX,
     UI_SCALE_MIN,
     UI_SCALE_PRESET_ORDER,
@@ -39,6 +40,9 @@ import {
 } from "@/lib/userPrefs";
 import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
+import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
+import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
+import { TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import type { TranslationKey } from "@/locales/en";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
@@ -59,14 +63,27 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     // Synced over THEME_EVENT / UI_SCALE_EVENT so this modal and the sidebar switchers never disagree.
     const [theme, changeTheme] = useThemePreference();
     const [scale, changeScale] = useUiScale();
-    const [fontSize, setFontSizeState] = useState<number>(() => readTerminalFontSize());
+    const [terminalDefaults, changeTerminalDefaults] = useTerminalDefaults();
     const [tab, setTab] = useState<PrefsTab>("general");
+    const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
+    const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
+    const changeDesktopNotify = async (value: "on" | "off") => {
+        const r = await setDesktopNotify(value === "on");
+        setNotifyProblem(r === "denied" || r === "unsupported" ? r : null);
+    };
 
-    const tabs: { value: PrefsTab; label: string; icon: React.ReactNode }[] = [
-        { value: "general", label: t("prefs.tabGeneral"), icon: <SlidersHorizontal size={15} /> },
-        { value: "security", label: t("prefs.tabSecurity"), icon: <ShieldCheck size={15} /> },
-        { value: "apps", label: t("prefs.tabApps"), icon: <Bot size={15} /> },
+    const tabs = [
+        { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
+        { value: "security" as const, label: t("prefs.tabSecurity"), hint: t("prefs.tabSecurityHint"), icon: <ShieldCheck /> },
+        { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
     ];
+
+    const initial = user?.username?.slice(0, 1);
+    const role = (
+        <span className={`shrink-0 rounded-sm px-1.5 py-px text-xs ${user?.is_superuser ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+            {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
+        </span>
+    );
 
     const languageOptions: { value: LanguagePreference; label: string }[] = [
         { value: "auto", label: t("language.auto") },
@@ -87,40 +104,42 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
         label: `${t(SCALE_LABEL[p])} · ${UI_SCALE_PRESETS[p]}%`,
     }));
 
-    const changeFontSize = (next: number) => {
-        setFontSizeState(next);
-        applyTerminalFontSize(next);
-        persistUserSetting({ terminal_font_size: next });
-    };
-
     return (
         <Modal
             isOpen={isOpen}
             onClose={onClose}
             title={t("prefs.title")}
             icon={<SlidersHorizontal />}
-            size="xl"
-            toolbar={<Segmented kind="tabs" fullWidth options={tabs} value={tab} onChange={setTab} aria-label={t("prefs.title")} />}
-            footer={
-                <Button type="button" variant="outline" onClick={onClose}>
-                    {t("common.close")}
-                </Button>
+            size="3xl"
+            fixedHeight
+            nav={
+                <div className="space-y-4">
+                    {/* 帳號(桌面在側欄上方;手機放在「一般」分頁裡)。/ Account: top of the rail on desktop, in General on phones. */}
+                    <div className="hidden items-center gap-2.5 px-1.5 sm:flex" aria-label={t("settings.accountTitle")}>
+                        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background uppercase" aria-hidden>
+                            {initial}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm text-foreground">{user?.username}</span>
+                            {role}
+                        </span>
+                    </div>
+                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("prefs.title")} />
+                </div>
             }
         >
             {tab === "general" && (
                 <div className="space-y-6">
-                    {/* 帳號 / Account */}
-                    <section className="flex items-center gap-3.5 rounded-xl bg-surface p-3.5 ring-1 ring-inset ring-border/80" aria-label={t("settings.accountTitle")}>
+                    {/* 帳號:只在手機上(桌面在側欄)。/ Account: phones only (the rail shows it on desktop). */}
+                    <section className="flex items-center gap-3.5 rounded-xl border border-border bg-surface p-3.5 sm:hidden" aria-label={t("settings.accountTitle")}>
                         <span className="grid size-11 shrink-0 place-items-center rounded-full bg-foreground text-lg text-background uppercase" aria-hidden>
-                            {user?.username?.slice(0, 1)}
+                            {initial}
                         </span>
                         <div className="min-w-0 flex-1">
                             <p className="truncate text-foreground">{user?.username}</p>
                             {user?.email && <p className="truncate text-sm text-muted-foreground">{user.email}</p>}
                         </div>
-                        <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${user?.is_superuser ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
-                            {user?.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
-                        </span>
+                        {role}
                     </section>
 
                     {/* 語言 / Language */}
@@ -175,20 +194,34 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         </div>
                     </Section>
 
-                    {/* 終端機字型 / Terminal font size */}
-                    <Section icon={<TerminalIcon />} title={t("prefs.terminalFontSize")} description={t("prefs.terminalFontSizeDescription")}>
-                        <div className="flex items-center gap-3 rounded-xl bg-surface px-3.5 py-3 ring-1 ring-inset ring-border/80">
-                            <input
-                                type="range"
-                                min={TERMINAL_FONT_SIZE_MIN}
-                                max={TERMINAL_FONT_SIZE_MAX}
-                                value={fontSize}
-                                onChange={(e) => changeFontSize(parseInt(e.target.value, 10))}
-                                className="min-w-0 flex-1 accent-primary"
-                                aria-label={t("prefs.terminalFontSize")}
-                            />
-                            <span className="w-14 shrink-0 rounded-lg bg-muted py-1 text-center font-mono text-sm tabular-nums">{fontSize}px</span>
-                        </div>
+                    {/* 終端機:預設字型 / 字級 / 配色(與終端機頁「外觀 → 我的預設」是同一份)。
+                        Terminal: default font / size / colour scheme (the same values as the terminal's Appearance → My default). */}
+                    <Section icon={<TerminalIcon />} title={t("prefs.terminal")} description={t("prefs.terminalDescription")}>
+                        <TerminalPreview look={resolveTerminalAppearance(terminalDefaults, null)} />
+                        <TerminalAppearanceFields
+                            value={terminalDefaults}
+                            onChange={(patch) => changeTerminalDefaults({
+                                ...(patch.font ? { font: patch.font } : {}),
+                                ...(patch.fontSize ? { fontSize: patch.fontSize } : {}),
+                                ...(patch.scheme ? { scheme: patch.scheme } : {}),
+                            })}
+                        />
+                    </Section>
+
+                    {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}
+                    <Section icon={<Bell />} title={t("prefs.desktopNotify")} description={t("prefs.desktopNotifyDescription")}>
+                        <Segmented
+                            fullWidth
+                            options={[
+                                { value: "off" as const, label: t("prefs.desktopNotifyOff"), icon: <BellOff size={15} /> },
+                                { value: "on" as const, label: t("prefs.desktopNotifyOn"), icon: <Bell size={15} /> },
+                            ]}
+                            value={desktopNotify ? "on" : "off"}
+                            onChange={(v) => void changeDesktopNotify(v)}
+                            aria-label={t("prefs.desktopNotify")}
+                        />
+                        {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
+                        {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
                     </Section>
                 </div>
             )}
@@ -211,9 +244,9 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         href="/tunnels/mcp"
                         prefetch={false}
                         onClick={onClose}
-                        className="group flex items-center gap-3 rounded-xl bg-surface px-4 py-3 ring-1 ring-inset ring-border/80 transition-colors hover:bg-primary/5 hover:ring-primary/40"
+                        className="group flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 transition-colors hover:border-foreground/25 hover:bg-muted/50"
                     >
-                        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                        <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border bg-card text-foreground/70">
                             <Plug size={16} />
                         </span>
                         <span className="min-w-0 flex-1">

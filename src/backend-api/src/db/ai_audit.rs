@@ -93,6 +93,7 @@ pub struct Filter {
     pub visible_to: Option<i64>,
     pub user_id: Option<i64>,
     pub tunnel_id: Option<i64>,
+    pub grant_id: Option<i64>,
     pub limit: i64,
 }
 
@@ -112,6 +113,9 @@ pub async fn list(db: &Db, f: &Filter) -> sqlx::Result<Vec<Event>> {
     if f.tunnel_id.is_some() {
         sql.push_str(" AND e.tunnel_id = ?");
     }
+    if f.grant_id.is_some() {
+        sql.push_str(" AND e.grant_id = ?");
+    }
     sql.push_str(" ORDER BY e.id DESC LIMIT ?");
     let mut q = sqlx::query_as::<_, Event>(&sql);
     if let Some(v) = f.visible_to {
@@ -123,5 +127,16 @@ pub async fn list(db: &Db, f: &Filter) -> sqlx::Result<Vec<Event>> {
     if let Some(t) = f.tunnel_id {
         q = q.bind(t);
     }
+    if let Some(g) = f.grant_id {
+        q = q.bind(g);
+    }
     q.bind(f.limit).fetch_all(&db.read).await
+}
+
+/// 一個 grant 的工具呼叫統計：(總數, 失敗數, 最後一次的時間)。/ Tool-call totals of one grant.
+pub async fn grant_stats(db: &Db, grant_id: i64) -> sqlx::Result<(i64, i64, Option<String>)> {
+    sqlx::query_as(&format!("SELECT COUNT(*), COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0), MAX(at) FROM {T} WHERE grant_id = ?"))
+        .bind(grant_id)
+        .fetch_one(&db.read)
+        .await
 }

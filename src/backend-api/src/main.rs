@@ -101,6 +101,14 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     let state = AppState::new(config.clone(), db);
     tokio::spawn(telepy_server::monitor::runner::run(state.clone(), std::time::Duration::from_secs(5)));
     state.remote_browser.cleanup_orphans(&state.db).await;
+    // 限時分享：到期的每 30 秒收掉。/ Timed shares end within 30 s of their expiry.
+    tokio::spawn(telepy_server::api::sharing::run_expiry(state.clone()));
+    // 上次沒關到的連線紀錄（後端重啟 = 所有 forward 都斷了）。/ Connection rows left open by the last run.
+    match telepy_server::db::tunnel_sessions::close_orphans(&state.db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "closed connection history rows left open by the previous run"),
+        Err(e) => tracing::warn!(error = %e, "cannot close orphaned connection history rows"),
+    }
     if config.gateway_enabled {
         match tokio::net::TcpListener::bind(&config.gateway_bind).await {
             Ok(listener) => match telepy_server::gateway::start(state.gateway.clone(), listener) {
@@ -117,6 +125,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(telepy_server::db::audit_chain::run(state.db.clone()));
     tokio::spawn(telepy_server::ai::run_reaper(state.clone(), telepy_server::ai::REAP_INTERVAL));
     tokio::spawn(state.pool.clone().run_reaper());
+    tokio::spawn(state.desktop.clone().run_reaper(state.db.clone()));
     tokio::spawn(telepy_server::device_keys::run(state.clone()));
     if config.remote_browser_gc {
         tokio::spawn(state.remote_browser.clone().run_reaper(state.db.clone()));

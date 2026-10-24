@@ -4,7 +4,7 @@
 //! - `DELETE /api/reverse/server/{id}/device-keys/{key_id}`：移出清單（金鑰擁有者；擁有者 / ADMIN 可移任何人的）
 //! - `POST   /api/reverse/server/{id}/device-keys/sync`：立刻同步（重讀每個帳號的 authorized_keys）
 //! - `GET    /api/reverse/server/{id}/authorized-keys`：稽核——實際讀裝置每個帳號的 authorized_keys（擁有者 / ADMIN）
-//! - `POST   /api/reverse/server/{id}/authorized-keys/remove`：從某帳號移除一把清單外的金鑰（擁有者 / ADMIN）
+//! - `POST   /api/reverse/server/{id}/authorized-keys/remove`：從某帳號移除清單外的金鑰（一把或一批；擁有者 / ADMIN）
 //! - `GET    /api/reverse/user/keys/devices`：金鑰頁的矩陣——我的金鑰 × 我能用的裝置
 //! REST endpoints for per-device key lists, the live authorized_keys audit and the keys-page matrix.
 
@@ -19,12 +19,13 @@ use serde_json::{json, Value};
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, device_keys::Installed, device_keys::SyncStatus, tunnels::Tunnel};
-use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, remove_key};
+use crate::device_keys::authorized_keys::{parse_authorized_keys, parse_public_key, plan_removal, remove_keys};
+use crate::device_keys::view::{self, KnownKey};
 use crate::device_keys::{self as dk, remote::AuthorizedKeysFile, Desired};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Effective, Permission};
 use crate::state::AppState;
-use crate::util::{db_to_iso, json_str};
+use crate::util::{db_to_iso, json_str, parse_db_datetime};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -39,6 +40,9 @@ pub fn router() -> OpenApiRouter<AppState> {
 
 /// 稽核讀檔的整體逾時（每個帳號一條 SSH 連線，並行）。/ Overall audit deadline.
 const AUDIT_TIMEOUT: Duration = Duration::from_secs(45);
+/// 「立即同步」時，這麼新的讀檔結果就不再讀一次（連按也不會一直連裝置）。
+/// A read this recent is reused by "sync now" (repeated clicks don't keep dialing the device).
+const FRESH: Duration = Duration::from_secs(5);
 
 fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
     ApiError::new(status, json!({ "error": msg.into(), "code": code }))
@@ -100,6 +104,88 @@ impl Snapshot {
     fn removals(&self) -> Vec<&Installed> {
         self.installed.iter().filter(|i| !self.desired.get(&i.username).is_some_and(|k| k.contains_key(&i.key_bare))).collect()
     }
+}
+
+/// 面板要顯示的帳號：擁有者 / ADMIN = 隧道上的帳號 ∪ 清單會用到的 ∪ Telepy 裝過的；其他人 = 自己被允許的。
+/// Accounts the panel shows: owner / ADMIN see every account involved; others only the ones they may use.
+async fn visible_accounts(state: &AppState, t: &Tunnel, user_id: i64, manager: bool, desired: &Desired) -> ApiResult<Vec<String>> {
+    if !manager {
+        return Ok(permissions::allowed_usernames(&state.db, user_id, t).await?.into_iter().map(|u| u.username).collect());
+    }
+    let mut set: BTreeSet<String> = audit_accounts(state, t).await?.into_iter().collect();
+    set.extend(desired.keys().cloned());
+    Ok(set.into_iter().collect())
+}
+
+/// 合併檢視：清單 × Telepy 裝過的 × 最近一次讀到的檔案（`device_keys::view`）。不連裝置。
+/// The merged per-account view; never dials the device.
+async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[String], viewer: i64, manager: bool) -> ApiResult<Vec<view::AccountView>> {
+    let desired: BTreeMap<String, BTreeSet<String>> = snap.desired.iter().map(|(a, keys)| (a.clone(), keys.keys().cloned().collect())).collect();
+    let installed: Vec<(String, String, String, Option<i64>)> = snap.installed.iter().map(|i| (i.username.clone(), i.key_bare.clone(), i.fingerprint.clone(), i.user_id)).collect();
+    let mut errors: HashMap<String, String> = snap.sync.values().filter(|s| !s.ok).filter_map(|s| s.error.clone().map(|e| (s.username.clone(), e))).collect();
+    // 同一個 port 以前那條隧道留下的不算。/ Ignore snapshots left by an earlier tunnel on the same port.
+    let since = parse_db_datetime(&t.created_at).map(|d| d.and_utc());
+    let mut snapshots: HashMap<String, view::Snapshot> = HashMap::new();
+    for a in accounts {
+        let Some(s) = state.device_keys.snapshot(t.reverse_port, a) else { continue };
+        if since.is_some_and(|c| s.at < c) {
+            continue;
+        }
+        match s.error {
+            Some(e) => {
+                errors.entry(a.clone()).or_insert(e);
+            }
+            None => {
+                snapshots.insert(a.clone(), (s.content, s.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)));
+            }
+        }
+    }
+    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
+    let mut known: HashMap<String, KnownKey> = HashMap::new();
+    let mut users: HashMap<i64, String> = HashMap::new();
+    for (id, key, name, uid, username) in db::keys::all_with_owner(&state.db).await? {
+        users.insert(uid, username.clone());
+        if let Some(parsed) = parse_public_key(&key) {
+            known.insert(parsed.bare.clone(), KnownKey { user_key_id: id, name, owner_id: uid, owner: username, parsed });
+        }
+    }
+    for uid in snap.installed.iter().filter_map(|i| i.user_id) {
+        if !users.contains_key(&uid) {
+            if let Some(u) = db::users::by_id(&state.db, uid).await? {
+                users.insert(uid, u.username);
+            }
+        }
+    }
+    Ok(view::build(&view::Inputs {
+        accounts,
+        desired: &desired,
+        installed: &installed,
+        sync_errors: &errors,
+        snapshots: &snapshots,
+        service: &service,
+        known: &known,
+        users: &users,
+        viewer,
+        manager,
+    }))
+}
+
+/// 重讀這些帳號的檔案（最近 `fresh` 內讀過的跳過），失敗的記下原因。/ Re-read accounts not read within `fresh`.
+async fn refresh_snapshots(state: &AppState, t: &Tunnel, accounts: &[String], fresh: Duration) {
+    let cutoff = chrono::Utc::now() - chrono::Duration::from_std(fresh).unwrap_or_default();
+    let reads = accounts
+        .iter()
+        .filter(|a| state.device_keys.snapshot(t.reverse_port, a).is_none_or(|s| s.at < cutoff))
+        .map(|acct| {
+            let (state, acct, port) = (state.clone(), acct.clone(), t.reverse_port);
+            async move {
+                let read = async { AuthorizedKeysFile::open(&state, &acct, port, false).await?.read().await }.await;
+                if let Err(e) = read {
+                    state.device_keys.record_failure(port, &acct, format!("{e:#}"));
+                }
+            }
+        });
+    let _ = tokio::time::timeout(AUDIT_TIMEOUT, futures::future::join_all(reads)).await;
 }
 
 async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective) -> ApiResult<Value> {
@@ -170,11 +256,15 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
                 "fingerprint": p.as_ref().map(|p| p.fingerprint.clone()),
                 "key_type": p.as_ref().map(|p| p.label),
                 "in_list": in_list.contains(&k.id),
+                "expired": k.expired(),
             })
         })
         .collect();
+    let view_accounts = visible_accounts(state, t, user_id, manager, &snap.desired).await?;
+    let view = build_view(state, t, &snap, &view_accounts, user_id, manager).await?;
     Ok(json!({
         "tunnel": { "id": t.id, "host_friendly_name": t.host_friendly_name, "online": dk::online(state, t.reverse_port), "role": eff.label() },
+        "view": { "accounts": view },
         "can_manage": manager,
         "accounts": accounts,
         "entries": entry_values,
@@ -228,7 +318,14 @@ async fn sync_now(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id
     let (t, eff) = access(&state, me.id, id).await?;
     match dk::sync_tunnel(&state, t.id, true).await.map_err(|e| ApiError::error(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))? {
         dk::SyncOutcome::Offline => Err(coded(StatusCode::CONFLICT, "device_offline", "The device is offline; changes will be applied when it reconnects.")),
-        dk::SyncOutcome::Done { .. } => Ok(Json(device_json(&state, me.id, &t, eff).await?)),
+        dk::SyncOutcome::Done { .. } => {
+            // 同步只碰有金鑰要處理的帳號；面板上的其他帳號也要重讀，「裝置上實際有什麼」才是現在的。
+            // The sync only touches accounts with work to do; re-read the rest so the panel shows the device as it is now.
+            let desired = dk::desired(&state.db, &t).await?;
+            let accounts = visible_accounts(&state, &t, me.id, eff.satisfies(Permission::Admin), &desired).await?;
+            refresh_snapshots(&state, &t, &accounts, FRESH).await;
+            Ok(Json(device_json(&state, me.id, &t, eff).await?))
+        }
     }
 }
 
@@ -325,7 +422,11 @@ async fn audit(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
 async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let (t, eff) = access(&state, me.id, id).await?;
     require_manager(eff)?;
-    let (Some(acct), Some(fp)) = (json_str(&body, "username"), json_str(&body, "fingerprint")) else {
+    // `fingerprint`：一把（找不到 / 不能移時回錯誤）；`fingerprints`：一次多把，不能移的列在 `skipped`。
+    // One key (errors as before) or a batch (`fingerprints`; what can't be removed is listed in `skipped`).
+    let batch = body.get("fingerprints").is_some();
+    let fps = if batch { batch_fingerprints(&body)? } else { json_str(&body, "fingerprint").into_iter().collect() };
+    let (Some(acct), false) = (json_str(&body, "username"), fps.is_empty()) else {
         return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "username and fingerprint are required"));
     };
     if !audit_accounts(&state, &t).await?.contains(&acct) {
@@ -338,24 +439,50 @@ async fn audit_remove(State(state): State<AppState>, AuthUser(me): AuthUser, Pat
     let _guard = lock.lock().await;
     let file = AuthorizedKeysFile::open(&state, &acct, t.reverse_port, false).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
     let content = file.read().await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
-    let found: Option<String> = parse_authorized_keys(&content).into_iter().filter_map(|l| l.key).find(|k| k.fingerprint == fp).map(|k| k.bare);
-    let Some(bare) = found else {
-        return Err(ApiError::not_found("That key is not in this account's authorized_keys"));
-    };
-    if db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).any(|k| k.bare == bare) {
-        return Err(coded(StatusCode::BAD_REQUEST, "service_key", "This is Telepy's service key; removing it would cut Telepy off from this account."));
-    }
+    let service: BTreeSet<String> = db::keys::service_keys(&state.db).await?.iter().filter_map(|k| parse_public_key(&k.key)).map(|k| k.bare).collect();
     let desired: BTreeMap<String, _> = dk::desired(&state.db, &t).await?;
-    if desired.get(&acct).is_some_and(|d| d.contains_key(&bare)) {
-        return Err(coded(StatusCode::CONFLICT, "in_key_list", "This key is in the device's key list; remove it from the list instead."));
+    let listed: BTreeSet<String> = desired.get(&acct).map(|d| d.keys().cloned().collect()).unwrap_or_default();
+    let plan = plan_removal(&content, &fps, &service, &listed);
+    if !batch {
+        match plan.skipped.first().map(|(_, code)| *code) {
+            Some("not_found") => return Err(ApiError::not_found("That key is not in this account's authorized_keys")),
+            Some("service_key") => return Err(coded(StatusCode::BAD_REQUEST, "service_key", "This is Telepy's service key; removing it would cut Telepy off from this account.")),
+            Some(_) => return Err(coded(StatusCode::CONFLICT, "in_key_list", "This key is in the device's key list; remove it from the list instead.")),
+            None => {}
+        }
     }
-    let (new, removed) = remove_key(&content, &bare);
-    file.write(&new).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
-    db::device_keys::installed_delete(&state.db, t.id, &acct, &bare).await?;
-    tracing::info!(tunnel_id = t.id, account = %acct, fingerprint = %fp, by = %me.username, "device keys: removed a key from authorized_keys");
-    let audience = super::notify::tunnel_audience(&state, &t).await?;
-    state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": t.id }));
-    Ok(Json(json!({ "removed": removed })))
+    let mut removed = 0;
+    if !plan.remove.is_empty() {
+        let (new, n) = remove_keys(&content, &plan.remove);
+        file.write(&new).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, "device_error", format!("{e:#}")))?;
+        for bare in &plan.remove {
+            db::device_keys::installed_delete(&state.db, t.id, &acct, bare).await?;
+        }
+        removed = n;
+        tracing::info!(tunnel_id = t.id, account = %acct, keys = plan.remove.len(), lines = n, by = %me.username, "device keys: removed keys from authorized_keys");
+        let audience = super::notify::tunnel_audience(&state, &t).await?;
+        state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": t.id }));
+    }
+    let skipped: Vec<Value> = plan.skipped.iter().map(|(fp, code)| json!({ "fingerprint": fp, "code": code })).collect();
+    Ok(Json(json!({ "removed": removed, "keys": plan.remove.len(), "skipped": skipped })))
+}
+
+/// 一次最多移除幾把（1 MiB 的檔案大約一萬把 Ed25519）。/ Batch cap (a 1 MiB file holds about 10k Ed25519 keys).
+const MAX_BATCH: usize = 10_000;
+
+/// `fingerprints`：非空、全是字串、不超過 `MAX_BATCH`；重複的只留一個（保留順序）。
+fn batch_fingerprints(body: &Value) -> ApiResult<Vec<String>> {
+    let bad = || coded(StatusCode::BAD_REQUEST, "bad_request", format!("fingerprints must be a list of 1 to {MAX_BATCH} fingerprints"));
+    let list = body.get("fingerprints").and_then(Value::as_array).filter(|l| !l.is_empty() && l.len() <= MAX_BATCH).ok_or_else(bad)?;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for v in list {
+        let fp = v.as_str().filter(|s| !s.is_empty()).ok_or_else(bad)?;
+        if seen.insert(fp) {
+            out.push(fp.to_string());
+        }
+    }
+    Ok(out)
 }
 
 #[utoipa::path(get, path = "/api/reverse/user/keys/devices", tag = "Device Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::KeyDevice>)))]

@@ -75,6 +75,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
 urlencoding = "2"
 url = "2"
+maxminddb = "0.32"
 
 [dev-dependencies]
 tempfile = "3"

@@ -61,3 +61,7 @@ Third-party code in this repository keeps its own license:
   Font License 1.1.
 - The kasm-browser image (docker/kasm-browser/) installs KasmVNC (GPL-2.0)
   and Chromium, which run there as separate programs.
+- The frontend bundles guacamole-common-js (Apache-2.0) for the remote desktop
+  viewer.
+- The guacd image (guacamole/guacd, Apache-2.0; links FreeRDP and libvncclient,
+  GPL-2.0-or-later) runs as a separate program in its own container.

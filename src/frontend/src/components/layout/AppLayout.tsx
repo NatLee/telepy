@@ -6,6 +6,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useNotificationWebSocket, type SocketPhase } from "@/lib/websocket";
+import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -30,6 +31,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
     // Establish global notification websocket when logged in
     const { isConnected, phase, messageCount, reconnect } = useNotificationWebSocket();
+    // 背景分頁的桌面通知（偏好設定裡每台瀏覽器自己開）。/ Desktop notifications for background tabs (opt-in per browser).
+    useDesktopNotifications();
     const wsStatus = useMemo(
         () => ({ isConnected, phase, messageCount, reconnect }),
         [isConnected, phase, messageCount, reconnect],

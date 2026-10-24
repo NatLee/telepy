@@ -53,13 +53,18 @@ pub struct Config {
     pub kasm_ws_path: String,
     pub kasm_ws_subprotocol: String,
     pub remote_browser_gc: bool,
+    // --- remote desktop / guacd ---
+    /// guacd 的 `host:port`。/ guacd address.
+    pub guacd_addr: String,
+    /// guacd 連回後端的主機名稱（預設 = 自己的 hostname）。/ Host name guacd dials back to (default: our hostname).
+    pub desktop_callback_host: String,
     /// `ssh` client config/keys live here (mounted from ./ssh/backend_ssh_key in compose).
     pub ssh_home: PathBuf,
     /// OpenSSH 客戶端執行檔（測試可換成假程式）。/ The ssh client binary (swappable in tests).
     pub ssh_binary: String,
     /// russh 原生連線用的私鑰（預設 ~/.ssh/id_rsa，與 ssh 客戶端同一把）。
     pub ssh_identity: PathBuf,
-    /// terminal / file manager / `ssh -D` 連線的目標主機：內建 gateway 的 loopback listener（單跳）。
+    /// gateway 沒啟用時（開發環境、自帶 sshd 的測試）russh 直連裝置用的主機；有 gateway 時不用（行程內開通道）。
     pub ssh_target_host: String,
     /// Swagger UI + /api/openapi.json，登入後可見（OPENAPI_ENABLED=false 可關）。/ Login-gated API docs.
     pub openapi_enabled: bool,
@@ -71,6 +76,9 @@ pub struct Config {
     pub gateway_max_connections: usize,
     pub gateway_login_grace: Duration,
     pub gateway_probe_interval: Duration,
+    /// gateway 前面送 PROXY protocol header 的 L4 代理（IP / CIDR，逗號分隔）；空 = 不啟用。
+    /// L4 proxies in front of the gateway that send a PROXY protocol header (IPs / CIDRs); empty = off.
+    pub gateway_proxy_protocol_from: String,
     // --- client IP (sign-in history, presence) ---
     /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
     /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
@@ -79,6 +87,14 @@ pub struct Config {
     pub trusted_proxy_hops: usize,
     /// 直接採用這個標頭當來源 IP（例 `CF-Connecting-IP`）；只在上游一定會覆寫它時設定。/ Trusted client-IP header.
     pub client_ip_header: Option<String>,
+    /// 離線 GeoIP 資料庫所在目錄（DB-IP Lite / GeoLite2 mmdb）；沒有檔案就不顯示國家 / ISP。/ GeoIP database directory.
+    pub geoip_dir: PathBuf,
+    // --- WebSocket liveness (terminal / file manager / remote browser) ---
+    /// 每隔多久送一次 WebSocket Ping（瀏覽器自動回 Pong，背景分頁也一樣）。/ How often the server pings.
+    pub ws_ping_interval: Duration,
+    /// Ping 送出後這麼久什麼都沒收到、或一個 frame 這麼久送不出去 = 對方已經不在（睡眠、換網路、代理斷線），
+    /// 結束連線並移出「使用中」。/ No answer to a ping (or a send stuck) this long = the client is gone.
+    pub ws_peer_timeout: Duration,
 }
 
 fn env(name: &str) -> Option<String> {
@@ -125,6 +141,7 @@ impl Config {
         let ssh_logs_path = env("SSH_LOGS_PATH").map(PathBuf::from);
         let gateway_enabled = env("GATEWAY_ENABLED").map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")).unwrap_or(gateway_host_keys_dir.is_some());
         let ssh_logs_path = ssh_logs_path.unwrap_or_else(|| log_root.join("ssh-gateway.log"));
+        let geoip_dir = env("GEOIP_DIR").map(PathBuf::from).unwrap_or_else(|| data_dir.join("geoip"));
         Self {
             debug,
             bind: env("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".to_string()),
@@ -152,6 +169,8 @@ impl Config {
                 .unwrap_or(8 * 60),
             project_name: env("PROJECT_NAME").unwrap_or_else(|| "main".to_string()),
             hostname: env("HOSTNAME").unwrap_or_else(|| "backend".to_string()),
+            guacd_addr: env("GUACD_ADDR").unwrap_or_else(|| "guacd:4822".to_string()),
+            desktop_callback_host: env("DESKTOP_CALLBACK_HOST").or_else(|| env("HOSTNAME")).unwrap_or_else(|| "backend".to_string()),
             kasm_api: env("KASM_BROWSER_API").unwrap_or_else(|| "http://kasm-browser:7000".to_string()),
             kasm_host: env("KASM_BROWSER_HOST").unwrap_or_else(|| "kasm-browser".to_string()),
             kasm_ws_user: std::env::var("KASM_WS_USER").unwrap_or_else(|_| "telepy".to_string()),
@@ -172,8 +191,12 @@ impl Config {
             gateway_max_connections: env("GATEWAY_MAX_CONNECTIONS").and_then(|v| v.parse().ok()).unwrap_or(4096),
             gateway_login_grace: Duration::from_secs(env("GATEWAY_LOGIN_GRACE_SECS").and_then(|v| v.parse().ok()).unwrap_or(60)),
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
+            gateway_proxy_protocol_from: env("GATEWAY_PROXY_PROTOCOL_FROM").unwrap_or_default(),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
+            geoip_dir,
+            ws_ping_interval: Duration::from_secs(env("WS_PING_INTERVAL_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(20)),
+            ws_peer_timeout: Duration::from_secs(env("WS_PEER_TIMEOUT_SECS").and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(40)),
         }
     }
 

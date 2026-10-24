@@ -77,6 +77,9 @@ impl TestApp {
     pub async fn post(&self, path: &str, token: Option<&str>, body: Value) -> Resp {
         self.request(Method::POST, path, token, Some(body)).await
     }
+    pub async fn put(&self, path: &str, token: Option<&str>, body: Value) -> Resp {
+        self.request(Method::PUT, path, token, Some(body)).await
+    }
     pub async fn patch(&self, path: &str, token: Option<&str>, body: Value) -> Resp {
         self.request(Method::PATCH, path, token, Some(body)).await
     }

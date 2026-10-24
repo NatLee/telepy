@@ -196,6 +196,46 @@ pub async fn active_grants_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<G
     .await
 }
 
+/// 有效 grant 的摘要（刪隧道前的檢查：誰的哪個 app、限制在哪些隧道）。
+/// Active grants with their app and user names (the tunnel delete check).
+#[derive(Debug, Clone, FromRow)]
+pub struct GrantOverview {
+    pub id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub client_name: String,
+    pub tunnel_ids: Option<String>,
+}
+
+impl GrantOverview {
+    pub fn tunnel_id_list(&self) -> Option<Vec<i64>> {
+        self.tunnel_ids.as_deref().map(|s| serde_json::from_str(s).unwrap_or_default())
+    }
+}
+
+pub async fn active_grant_overview(db: &Db) -> sqlx::Result<Vec<GrantOverview>> {
+    sqlx::query_as(&format!(
+        "SELECT g.id, g.user_id, u.username, c.client_name, g.tunnel_ids \
+         FROM {G} g JOIN {C} c ON c.client_id = g.client_id JOIN auth_user u ON u.id = g.user_id \
+         WHERE g.revoked_at IS NULL AND g.refresh_expires_at > ? ORDER BY g.id"
+    ))
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await
+}
+
+/// 限制清單裡有這條隧道的 grant（含已撤銷 / 過期的）。/ Grants whose restriction list names the tunnel.
+pub async fn grants_naming_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Grant>> {
+    let rows: Vec<Grant> = sqlx::query_as(&format!("SELECT {G_COLS} FROM {G} WHERE tunnel_ids IS NOT NULL")).fetch_all(&db.read).await?;
+    Ok(rows.into_iter().filter(|g| g.tunnel_id_list().is_some_and(|ids| ids.contains(&tunnel_id))).collect())
+}
+
+pub async fn grant_set_tunnels(db: &Db, id: i64, tunnel_ids: &[i64]) -> sqlx::Result<()> {
+    let raw = serde_json::to_string(tunnel_ids).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query(&format!("UPDATE {G} SET tunnel_ids = ? WHERE id = ?")).bind(raw).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
 /// 例行清理：從沒換到 token 的 client、撤銷/過期很久的 grant、使用者已刪除的 grant。回刪除列數。
 /// Housekeeping: never-used clients, long-dead grants, grants of deleted users.
 pub async fn cleanup(db: &Db) -> sqlx::Result<u64> {

@@ -8,7 +8,7 @@
  * when nobody is connected.
  */
 import React, { useMemo } from "react";
-import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
 import { MoreBelow } from "@/components/ui/Modal";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { PresenceSession, TunnelPresence } from "@/types/tunnel";
+import { IpPlace } from "@/components/ui/IpPlace";
 
 const KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
     terminal: { icon: TerminalSquare, label: "tunnels.presenceKind.terminal" },
@@ -23,11 +24,13 @@ const KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
     browser: { icon: MonitorPlay, label: "tunnels.presenceKind.browser" },
     ssh: { icon: Laptop, label: "tunnels.presenceKind.ssh" },
     ai: { icon: Bot, label: "tunnels.presenceKind.ai" },
+    desktop: { icon: ScreenShare, label: "tunnels.presenceKind.desktop" },
 };
 
 interface PresenceLine {
     kind: string;
     ip: string | null;
+    geo: PresenceSession["geo"];
     client: string | null;
     /** 這組裡最早的一條。/ The earliest session in the group. */
     since: string;
@@ -52,7 +55,7 @@ function groupSessions(sessions: PresenceSession[]): PresenceUser[] {
         }
         const line = u.lines.find(l => l.kind === s.kind && l.ip === s.ip && l.client === s.client);
         if (line) line.count += 1;
-        else u.lines.push({ kind: s.kind, ip: s.ip, client: s.client, since: s.since, count: 1 });
+        else u.lines.push({ kind: s.kind, ip: s.ip, geo: s.geo, client: s.client, since: s.since, count: 1 });
     }
     return [...users.values()];
 }
@@ -93,7 +96,12 @@ function PresenceUserRow({ group }: { group: PresenceUser }) {
                                         {formatRelativeTime(l.since, locale)}
                                     </span>
                                 </div>
-                                {l.ip && <p className="truncate pl-5 font-mono text-[0.75rem]">{l.ip}</p>}
+                                {l.ip && (
+                                    <p className="flex min-w-0 items-center gap-2 pl-5">
+                                        <span className="truncate font-mono text-[0.75rem]">{l.ip}</span>
+                                        <IpPlace geo={l.geo} className="text-[0.75rem]" />
+                                    </p>
+                                )}
                             </li>
                         );
                     })}
