@@ -45,9 +45,15 @@ pub enum Identity {
 }
 
 pub struct Forward {
+    /// 隧道自己的號碼（內部 key）。/ The tunnel's own number (the internal key).
     pub port: u16,
     /// 客戶端在 tcpip-forward 要求的位址字串（開 forwarded-tcpip 時必須原樣回傳，OpenSSH 用它比對）。
     pub address: String,
+    /// 客戶端以為它轉發的 port：要求 0 時是我們回的號碼，否則就是它要求的（OpenSSH 開 forwarded-tcpip 時用
+    /// (address, port) 比對自己的轉發表，不符就 administratively prohibited）。
+    /// The port the client believes it forwarded (our reply for 0, else what it asked for); OpenSSH matches
+    /// forwarded-tcpip channels against it.
+    pub client_port: u32,
     pub conn_id: u64,
     pub handle: Handle,
 }
@@ -302,7 +308,7 @@ impl Gateway {
         let fwd = self.forwards.get(&port).map(|f| f.clone()).ok_or_else(|| anyhow::anyhow!("device offline (no tunnel on port {port})"))?;
         let channel = fwd
             .handle
-            .channel_open_forwarded_tcpip(fwd.address.clone(), port as u32, "127.0.0.1", 0)
+            .channel_open_forwarded_tcpip(fwd.address.clone(), fwd.client_port, "127.0.0.1", 0)
             .await
             .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
         Ok(channel.into_stream())
@@ -454,7 +460,7 @@ impl Gateway {
     }
 
     /// 記住 port → 這條連線（不綁本機 port）。/ Remember port → connection; nothing is bound locally.
-    fn register_forward(&self, conn_id: u64, address: &str, port: u16, handle: Handle) -> anyhow::Result<()> {
+    fn register_forward(&self, conn_id: u64, address: &str, port: u16, client_port: u32, handle: Handle) -> anyhow::Result<()> {
         if let Some(existing) = self.forwards.get(&port).map(|f| f.clone()) {
             if existing.conn_id == conn_id {
                 return Ok(());
@@ -465,7 +471,7 @@ impl Gateway {
             // 擁有者已斷線但尚未清理：接手。/ Stale owner: take over.
             self.forwards.remove(&port);
         }
-        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), conn_id, handle }));
+        self.forwards.insert(port, Arc::new(Forward { port, address: address.to_string(), client_port, conn_id, handle }));
         self.publish_status();
         Ok(())
     }
@@ -501,7 +507,7 @@ impl Gateway {
         let probes = forwards.into_iter().map(|f| async move {
             let started = Instant::now();
             let res = tokio::time::timeout(PROBE_TIMEOUT, async {
-                let ch = f.handle.channel_open_forwarded_tcpip(f.address.clone(), f.port as u32, "127.0.0.1", 0).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+                let ch = f.handle.channel_open_forwarded_tcpip(f.address.clone(), f.client_port, "127.0.0.1", 0).await.map_err(|e| anyhow::anyhow!("{e}"))?;
                 let mut s = ch.into_stream();
                 let mut b = [0u8; 1];
                 let n = s.read(&mut b).await?;
@@ -553,7 +559,7 @@ impl Gateway {
 async fn bridge_channels(fwd: Arc<Forward>, client: Channel<Msg>, originator: String, originator_port: u32) -> anyhow::Result<()> {
     let device = fwd
         .handle
-        .channel_open_forwarded_tcpip(fwd.address.clone(), fwd.port as u32, originator, originator_port)
+        .channel_open_forwarded_tcpip(fwd.address.clone(), fwd.client_port, originator, originator_port)
         .await
         .map_err(|e| anyhow::anyhow!("open forwarded-tcpip: {e}"))?;
     let mut a = client.into_stream();
@@ -649,21 +655,34 @@ impl Handler for GatewayHandler {
 
     async fn tcpip_forward(&mut self, address: &str, port: &mut u32, session: &mut Session) -> Result<bool, Self::Error> {
         let Some(id) = self.identity.clone() else { return Ok(false) };
-        let Ok(p) = u16::try_from(*port) else { return Ok(false) };
-        if p == 0 {
-            return Ok(false);
-        }
-        let tunnel_id = match &id {
-            Identity::Tunnel { tunnel_id, .. } => Some(*tunnel_id),
-            _ => None,
+        let requested = *port;
+        // 隧道金鑰已經認出是哪條隧道：裝置要求哪個號碼都無所謂（0 也行），forward 一律記在隧道自己的號碼下，
+        // 回給裝置的也是那個號碼。使用者金鑰認不出隧道，照舊只能開自己擁有的隧道的號碼。
+        // A tunnel key identifies the tunnel: whatever number the device asks for (0 included), the forward is
+        // registered under the tunnel's own number, which is also what the device is told. A user key cannot
+        // identify a tunnel, so it still has to ask for the number of a tunnel the user owns.
+        let (p, tunnel_id) = match &id {
+            Identity::Tunnel { tunnel_id, reverse_port, .. } => match u16::try_from(*reverse_port) {
+                Ok(p) => (p, Some(*tunnel_id)),
+                Err(_) => return Ok(false),
+            },
+            Identity::User { .. } => {
+                let Ok(p) = u16::try_from(requested) else { return Ok(false) };
+                if p == 0 || !self.gw.may_forward(&id, p).await? {
+                    self.gw.event("refused_forward", Some(self.peer), Some(p), None, format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
+                    return Ok(false);
+                }
+                (p, None)
+            }
         };
-        if !self.gw.may_forward(&id, p).await? {
-            self.gw.event("refused_forward", Some(self.peer), Some(p), tunnel_id, format!("Refused remote forward for port {p} from {} port {} (not authorized)", self.peer.ip(), self.peer.port())).await;
-            return Ok(false);
-        }
-        match self.gw.register_forward(self.conn_id, address, p, session.handle()) {
+        *port = u32::from(p);
+        // 裝置要求了一個號碼（不是 0）時，它的 OpenSSH 只記得那個號碼：之後開 forwarded-tcpip 要用它。
+        // A device that asked for a number (not 0) only remembers that one: forwarded-tcpip channels must use it.
+        let client_port = if requested == 0 { u32::from(p) } else { requested };
+        let asked = if requested != u32::from(p) { format!(" (the device asked for {requested})") } else { String::new() };
+        match self.gw.register_forward(self.conn_id, address, p, client_port, session.handle()) {
             Ok(()) => {
-                self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}", self.peer.ip(), self.peer.port())).await;
+                self.gw.event("forward", Some(self.peer), Some(p), tunnel_id, format!("Remote forward registered on port {p} for {} port {}{asked}", self.peer.ip(), self.peer.port())).await;
                 self.gw.remember_endpoint(self.conn_id, p).await;
                 Ok(true)
             }
@@ -675,7 +694,17 @@ impl Handler for GatewayHandler {
     }
 
     async fn cancel_tcpip_forward(&mut self, _address: &str, port: u32, _session: &mut Session) -> Result<bool, Self::Error> {
-        let Ok(p) = u16::try_from(port) else { return Ok(false) };
+        // 隧道金鑰：取消的是它自己的號碼（不管當初要求的是什麼）。/ A tunnel key cancels its own number.
+        let p = match &self.identity {
+            Some(Identity::Tunnel { reverse_port, .. }) => match u16::try_from(*reverse_port) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            },
+            _ => match u16::try_from(port) {
+                Ok(p) => p,
+                Err(_) => return Ok(false),
+            },
+        };
         let released = self.gw.unregister_forward(self.conn_id, p);
         if released {
             self.gw.remember_release(p).await;
@@ -699,10 +728,19 @@ impl Handler for GatewayHandler {
         reply: server::ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
+        // `localhost:<號碼>`（舊寫法）或 `<隧道名稱>:<任意 port>`：名稱全站唯一，直接換成那條隧道的號碼。
+        // `localhost:<number>` (the old form) or `<tunnel name>:<any port>`: names are unique, so the name picks the tunnel.
         let loopback = matches!(host_to_connect, "localhost" | "127.0.0.1" | "::1");
-        let port = u16::try_from(port_to_connect).ok();
-        let allowed = match (loopback, port, &self.identity) {
-            (true, Some(p), Some(id)) => self.gw.may_connect(id, p).await?,
+        let port = if loopback {
+            u16::try_from(port_to_connect).ok()
+        } else {
+            match db::tunnels::by_name(&self.gw.db, host_to_connect).await? {
+                Some(t) => u16::try_from(t.reverse_port).ok(),
+                None => None,
+            }
+        };
+        let allowed = match (port, &self.identity) {
+            (Some(p), Some(id)) => self.gw.may_connect(id, p).await?,
             _ => false,
         };
         let Some(fwd) = port.and_then(|p| self.gw.forwards.get(&p).map(|f| f.clone())).filter(|_| allowed) else {

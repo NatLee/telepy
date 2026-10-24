@@ -288,13 +288,16 @@ fn ensure_newline(mut s: String) -> String {
 /// 筆電端 `~/.ssh/known_hosts` 旁的檔案。/ The laptop-side file next to `~/.ssh/known_hosts`.
 pub const LAPTOP_KNOWN_HOSTS: &str = "~/.ssh/telepy_known_hosts";
 
-/// `SshClientTemplate`：裝置端 `~/.ssh/config` 的 Host 區塊（經 telepy-ssh-server 跳板）。裝置的 host key 不在這裡釘
-///（ProxyCommand 後面那一跳照舊不驗證）。/ The device stanza; the device's own host key is not pinned here.
-pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, reverse_port: i64) -> String {
+/// `SshClientTemplate`：筆電 `~/.ssh/config` 的裝置區塊（經 telepy-ssh-server 跳板）。`HostName` 是隧道的名稱：
+/// gateway 的 direct-tcpip 以名稱認隧道（名稱全站唯一），port 只是給 ssh 看的（裝置的 sshd 在隧道另一端），舊的
+/// `localhost:<號碼>` 寫法照常可用。裝置的 host key 不在這裡釘（ProxyCommand 後面那一跳照舊不驗證）。
+/// The laptop's device stanza: `HostName` is the tunnel's name (the gateway resolves it; the old
+/// `localhost:<number>` form keeps working). The device's own host key is not pinned here.
+pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel_name: &str) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
-    m.insert("server_domain", "localhost".into());
-    m.insert("reverse_port", reverse_port.to_string());
+    m.insert("server_domain", tunnel_name.into());
+    m.insert("reverse_port", "22".into());
     m.insert("ssh_port", "-1".into());
     m.insert("reverse_server_ssh_port", String::new());
     m.insert("ssh_username", ssh_username.into());
@@ -487,10 +490,10 @@ mod tests {
         assert!(server.contains("Port  24242\n"));
         assert!(server.contains("User telepy\n"));
         assert!(server.ends_with('\n'));
-        let client = render_client_config("My Box!", "ubuntu", 12345);
+        let client = render_client_config("My Box!", "ubuntu", "My Box!");
         assert!(client.starts_with("Host My-Box\n"), "{client}");
-        assert!(client.contains("HostName localhost"));
-        assert!(client.contains("Port 12345 \n"));
+        assert!(client.contains("HostName My Box!\n"), "the tunnel's name picks the tunnel at the gateway: {client}");
+        assert!(client.contains("Port 22 \n"));
         assert!(client.contains("ProxyCommand ssh -W %h:%p telepy-ssh-server"));
         assert_eq!(sanitize_host_alias("   "), "telepy-endpoint");
     }
