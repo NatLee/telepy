@@ -85,6 +85,7 @@ export default function CreateTunnelWizard() {
                 <>
                     <section className={`${CARD} p-4 sm:p-6`}>
                         <SetupDiagram
+                            variant="join"
                             step={joinStep}
                             deviceName={jt?.tunnel_name ?? jt?.name ?? join.form.name.trim()}
                             sshPort={String(jt?.ssh_port ?? 22)}
@@ -108,7 +109,9 @@ export default function CreateTunnelWizard() {
             <>
             <section className={`${CARD} space-y-6 p-4 sm:p-6`}>
                 <WizardStepper wizard={wizard} />
+                {/* 圖只跟著上面的步驟走，不另外播一套編號的原理。/ The scene follows the stepper above; no numbered sequence of its own. */}
                 <SetupDiagram
+                    variant="wizard"
                     step={step}
                     deviceName={deviceName}
                     sshPort={wizard.device.sshPort}

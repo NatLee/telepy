@@ -3,8 +3,10 @@
  * 從外面直接連進去會被擋（沒有公開 IP、擋連入），但裝置可以「往外」連；所以它主動連到 Telepy、把線留著，
  * 你再經 Telepy 沿這條線反向進去。全部是直線與直角：Telepy、牆上的缺口、裝置排在同一列，通道是一條直線；
  * 「你」在下面一列，被擋的直接連線也是直線撞上牆。兩種模式：
- * - 故事（Step 1、或按「怎麼運作」）：① 直接連被擋 → ② 裝置往外撥 → ③ 你經通道進來，自動輪播。
- * - 即時：跟著目前步驟與真實連線狀態（未建立 / 撥號中 / 上線），Step 3 有 Telepy 的鑰匙送進裝置。
+ * - 原理（一行指令等待中、或按「原理是什麼？」）：直接連被擋 → 裝置往外撥 → 你經通道進來，自動輪播。
+ *   分頁不編號：逐步設定上方就是編號的步驟 1–5，這三段是原理、不是步驟。
+ * - 即時：跟著目前步驟與真實連線狀態（未建立 / 撥號中 / 上線）。逐步設定一律是即時圖，說明列標出
+ *   「步驟 N · 名稱」，和上方的步驟列同名；Step 1 裝置的金鑰送到 Telepy，Step 3 Telepy 的鑰匙送進裝置。
  * 不能擠到表單：手機預設、或一聚焦表單欄位就收成一行（SceneStrip），可再展開。
  *
  * The create page's network scene: the device sits in a private network (home / office LAN) behind a router /
@@ -12,9 +14,12 @@
  * so it dials Telepy, keeps that line open, and you come back in along it. Straight lines and right angles only:
  * Telepy, the gap in the wall and the device share one row, so the tunnel is a single straight line; "you" sit on a
  * lower row and the blocked direct connection runs straight into the wall. Two modes:
- * - story (step 1, or "How it works"): ① direct connection blocked → ② the device dials out → ③ you come in through
- *   the tunnel, auto-playing;
- * - live: follows the current step and the real connection (not open / dialing / online); step 3 sends Telepy's key in.
+ * - how it works (the one-command page while waiting, or "How it works"): direct connection blocked → the device dials
+ *   out → you come in through the tunnel, auto-playing. Its tabs are not numbered: the step-by-step wizard right above
+ *   is numbered 1–5, and these three parts explain the idea, they are not steps;
+ * - live: follows the current step and the real connection (not open / dialing / online). The step-by-step wizard
+ *   always shows the live scene, captioned "Step N · name" exactly like the stepper; step 1 sends the device's key to
+ *   Telepy, step 3 sends Telepy's key in.
  * It must not crowd the form: on phones, and as soon as a form field gets focus, it folds into one row (SceneStrip).
  */
 "use client";
@@ -27,6 +32,7 @@ import {
     House,
     KeyRound,
     Laptop,
+    Lightbulb,
     Maximize2,
     MonitorSmartphone,
     Pause,
@@ -46,6 +52,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
+import { WIZARD_STEPS } from "./WizardStepper";
 import type { TranslationKey } from "@/locales/en";
 import type { WizardStep } from "@/hooks/useCreateTunnelWizard";
 
@@ -187,7 +194,9 @@ function liveView(step: WizardStep, created: boolean, connected: boolean): View 
         access: step === 5 && connected ? "live" : "off",
         gate: connected ? "open" : tunnel === "pending" ? "pending" : "idle",
         blockedActive: false,
-        token: step === 3 ? "in" : null,
+        // Step 1 把裝置的公鑰交給 Telepy；Step 3 把 Telepy 的金鑰放進裝置。
+        // Step 1 hands the device's public key to Telepy; step 3 puts Telepy's key on the device.
+        token: step === 3 ? "in" : step === 1 && !connected ? "out" : null,
         active: { you: step === 5, telepy: step !== 2, device: true, others: false },
     };
 }
@@ -638,6 +647,11 @@ function storeScene(m: SceneMode) {
 }
 
 export interface SetupDiagramProps {
+    /**
+     * wizard：逐步設定，即時圖 + 「步驟 N」說明；join：一行指令，等待時播原理。
+     * wizard: step-by-step, live scene captioned "Step N"; join: the one-command page, which plays how it works while waiting.
+     */
+    variant?: "wizard" | "join";
     step: WizardStep;
     deviceName: string;
     sshPort: string;
@@ -648,16 +662,19 @@ export interface SetupDiagramProps {
     allLoginsOk: boolean;
 }
 
-export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts, connected, rttMs, allLoginsOk }: SetupDiagramProps) {
+export function SetupDiagram({ variant = "wizard", step, deviceName, sshPort, reversePort, accounts, connected, rttMs, allLoginsOk }: SetupDiagramProps) {
     const { t } = useI18n();
     const reduced = useReducedMotion();
     const created = reversePort !== null;
     const name = deviceName || t("wizard.scene.yourDevice");
     const sentenceName = deviceName || t("wizard.scene.theDevice");
 
-    // 故事模式：Step 1（還沒連上）預設播放；其他步驟可以按「怎麼運作」打開，換步驟就自動收起。
-    // Story mode: plays by default on step 1 (until connected); elsewhere "How it works" opens it until the step changes.
-    const storyDefault = step === 1 && !connected;
+    // 原理：只有一行指令在等裝置時預設播放；逐步設定要按「原理是什麼？」才打開，換步驟就自動收起，
+    // 免得編號的步驟上面又自己播另一套。
+    // How it works: plays by default only on the one-command page while it waits for the device; the step-by-step
+    // wizard opens it from "How it works" until the step changes, so it never plays a sequence of its own over the
+    // numbered steps.
+    const storyDefault = variant === "join" && step === 1 && !connected;
     const [storyStep, setStoryStep] = useState<WizardStep | null>(null);
     const story = storyDefault || storyStep === step;
     const [phase, setPhase] = useState(0);
@@ -717,9 +734,12 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
     let captionDot = "bg-primary";
     switch (step) {
         case 1:
-            // Step 1 沒連上時播故事，這裡只剩「已連上」。/ Step 1 plays the story until connected, so only "online" lands here.
-            caption = t("wizard.scene.caption4Online", { name: sentenceName });
-            captionDot = "bg-success";
+            if (connected) {
+                caption = t("wizard.scene.caption4Online", { name: sentenceName });
+                captionDot = "bg-success";
+            } else {
+                caption = t("wizard.scene.caption1");
+            }
             break;
         case 2:
             caption = t("wizard.scene.caption2", { name: sentenceName });
@@ -762,7 +782,7 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                     <div className="min-w-0 flex-1">
                         <SceneStrip view={live} name={name} connected={connected} created={created} rttMs={rttMs} />
                     </div>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => expand(step === 1 && !connected)} aria-label={t("wizard.scene.showDiagram")} className="shrink-0">
+                    <Button type="button" variant="ghost" size="sm" onClick={() => expand(storyDefault)} aria-label={t("wizard.scene.showDiagram")} className="shrink-0">
                         <Maximize2 /> <span className="hidden @min-[400px]:inline">{t("wizard.scene.showDiagram")}</span>
                     </Button>
                 </div>
@@ -785,6 +805,10 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                         {story ? (
                             <div className="space-y-2.5">
                                 <div className="flex flex-wrap items-center gap-2">
+                                    {/* 標明這是「原理」，不是設定步驟。/ Says this is how it works, not a setup step. */}
+                                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                                        <Lightbulb size={14} aria-hidden /> {t("wizard.scene.howItWorksLabel")}
+                                    </span>
                                     <div className="max-w-full overflow-x-auto [scrollbar-width:none]">
                                         <Segmented
                                             kind="tabs"
@@ -798,10 +822,12 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                                             options={STORY_TEXT.map((s, i) => ({
                                                 value: String(i),
                                                 title: t(s.title),
+                                                // 不編號（上面的步驟列才是 1–5）：窄的時候一個點，寬了顯示標題。
+                                                // No numbers (the stepper above owns 1–5): a dot when narrow, the title when wide.
                                                 label: (
                                                     <>
-                                                        {i + 1}
-                                                        <span className="hidden @min-[520px]:inline"> · {t(s.title)}</span>
+                                                        <span className="inline-block size-1.5 rounded-full bg-current @min-[520px]:hidden" aria-hidden />
+                                                        <span className="hidden @min-[520px]:inline">{t(s.title)}</span>
                                                     </>
                                                 ),
                                             }))}
@@ -836,7 +862,16 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                                     basis-60: when both don't fit the buttons wrap below instead of squeezing the sentence. */}
                                 <p className="flex min-w-0 flex-1 basis-60 items-baseline gap-2 text-sm leading-relaxed text-foreground/85" aria-live="polite">
                                     <span className={cn("relative top-[-1px] size-2 shrink-0 rounded-full", captionDot)} aria-hidden />
-                                    <span>{caption}</span>
+                                    <span>
+                                        {/* 逐步設定：和上方步驟列同一個名字，一看就知道圖在講哪一步。
+                                            Step-by-step: the stepper's own name, so it's clear which step the scene shows. */}
+                                        {variant === "wizard" && (
+                                            <Chip className="mr-2 align-[1px]">
+                                                {t("wizard.stepN", { n: step })} · {t(WIZARD_STEPS[step - 1].title)}
+                                            </Chip>
+                                        )}
+                                        {caption}
+                                    </span>
                                 </p>
                                 <span className="ml-auto flex shrink-0 items-center gap-1">
                                     <Button type="button" variant="outline" size="sm" onClick={() => expand(true)}>
