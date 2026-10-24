@@ -111,7 +111,7 @@ async fn reverse_tunnel_through_real_openssh_client() {
     // backend service key (in every device's authorized_keys) and a guest with a VIEW share + own user key
     db::keys::service_key_upsert(&app.state.db, "web-service", &service_pub, "test").await.unwrap();
     let guest = db::users::create(&app.state.db, db::users::NewUser { username: "guest", password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
-    db::sharing::create(&app.state.db, tunnel.id, uid, guest.id, "view").await.unwrap();
+    db::sharing::create(&app.state.db, tunnel.id, uid, guest.id, "view", None).await.unwrap();
     db::keys::user_key_create(&app.state.db, guest.id, "guest-laptop", &guest_pub, None, None).await.unwrap();
 
     let gw = app.state.gateway.clone();

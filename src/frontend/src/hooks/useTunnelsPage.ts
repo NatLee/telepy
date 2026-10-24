@@ -132,7 +132,11 @@ export function useTunnelsPage() {
             fetchData();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_UNSHARED]: (msg) => {
-            if (msg.details) showSuccess(msg.details);
+            // 限時分享到期是提醒，不是成功。/ A timed share ending is a heads-up, not a success.
+            if (msg.details) {
+                if (msg.expired) showToast(msg.details, "warning");
+                else showSuccess(msg.details);
+            }
             fetchData();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_PERMISSION_UPDATED]: (msg) => {

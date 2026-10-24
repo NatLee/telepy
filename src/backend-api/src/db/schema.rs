@@ -420,6 +420,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
     // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).
     ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
+    // 限時分享：到期時間（NULL = 一直有效）。/ Timed sharing: when the share ends (NULL = never).
+    ("tunnels_tunnelsharing", "expires_at", "datetime NULL"),
     ("site_settings_sitesettings", "valid_register_domains", "varchar(512) NOT NULL DEFAULT 'gmail.com'"),
     ("site_settings_sitesettings", "remote_browser_session_idle_timeout", "integer NOT NULL DEFAULT 60"),
     ("site_settings_sitesettings", "remote_browser_max_sessions", "integer NOT NULL DEFAULT 10"),
