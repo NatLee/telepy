@@ -1396,6 +1396,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "logs.event.disconnect": "已斷線",
     "logs.event.refused_forward": "拒絕轉發",
     "logs.event.refused_direct": "拒絕直連",
+    "logs.event.refused_proxy": "缺少代理標頭",
     "logs.event.failed_publickey": "金鑰被拒",
     "logs.event.invalid_user": "無效使用者",
     "logs.event.preauth_close": "認證前關閉",

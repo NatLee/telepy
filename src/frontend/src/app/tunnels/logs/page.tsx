@@ -30,6 +30,7 @@ const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant 
     disconnect: { key: "logs.event.disconnect", variant: "secondary" },
     refused_forward: { key: "logs.event.refused_forward", variant: "destructive" },
     refused_direct: { key: "logs.event.refused_direct", variant: "destructive" },
+    refused_proxy: { key: "logs.event.refused_proxy", variant: "destructive" },
     failed_publickey: { key: "logs.event.failed_publickey", variant: "destructive" },
     invalid_user: { key: "logs.event.invalid_user", variant: "destructive" },
     preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
