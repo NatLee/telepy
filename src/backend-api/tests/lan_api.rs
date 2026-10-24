@@ -244,7 +244,8 @@ async fn web_terminal_to_a_lan_host() {
         assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "lan_username": bad})).await.err(), Some(4003), "{bad}");
     }
     assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": anon})).await.err(), Some(4003));
-    let other = lab.device(&bob, "other", &boxm).await;
+    let other_box = lab.machine("other-box", &[("ubuntu", &[&lab.service])], true).await;
+    let other = lab.device(&bob, "other", &other_box).await;
     let r = app.post(&format!("/api/reverse/server/{}/lan/hosts", other.tunnel_id), Some(&bob.token), json!({"address": "127.0.0.1", "username": "admin", "ssh_port": nas.port})).await;
     let foreign = r.json["id"].as_i64().unwrap();
     for hid in [json!(foreign), json!(999_999), json!("nope")] {

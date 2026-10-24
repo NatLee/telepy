@@ -161,6 +161,9 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
             {ticket.phase === "verified" && ticket.tunnel_id && ticket.reverse_port && (
                 <Callout tone="tip">{t("join.done", { name: device, user: ticket.username ?? "" })}</Callout>
             )}
+            {ticket.same_machine_as && ticket.phase !== "waiting" && (
+                <Callout tone="warning" title={t("join.sameMachineTitle", { name: ticket.same_machine_as.name })}>{t("join.sameMachine", { name: ticket.same_machine_as.name })}</Callout>
+            )}
             {failed && <Callout tone="danger">{t("join.failedHint")}</Callout>}
 
             <StepFooter>

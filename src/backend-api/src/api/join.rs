@@ -13,12 +13,14 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
+use super::reverse_keys::KeyProblem;
 use super::{notify, AppJson};
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::NewTunnel};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::join::{self, Phase, Registration, TakeError, Ticket};
 use crate::monitor::find_free_port;
+use crate::ssh::host_keys;
 use crate::state::AppState;
 use crate::util::json_str;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -162,6 +164,18 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     if !super::serialize::is_valid_ssh_public_key(&key) {
         return Err(bad("public_key is not a valid SSH public key"));
     }
+    // 腳本自己產的金鑰不會撞到，但 gateway 先認隧道金鑰：把某人的個人金鑰登記成裝置金鑰會讓那個人再也登不上 gateway。
+    // The script's own key never collides, but a personal or service key registered here would shadow its real use.
+    match super::reverse_keys::device_key_problem(state, &key).await.map_err(|e| internal(e.body))? {
+        Some(p @ (KeyProblem::Personal | KeyProblem::Service | KeyProblem::Invalid(_))) => return Err(bad(p.message())),
+        _ => {}
+    }
+    // 這台機器的 SSH host key（腳本用 ssh-keyscan 讀的）：辨認機器用。/ The machine's host keys (ssh-keyscan on the device).
+    let host_keys: Vec<host_keys::KeyInfo> = body
+        .get("host_keys")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).filter_map(host_keys::parse_line).take(8).collect())
+        .unwrap_or_default();
     let username = json_str(body, "username").unwrap_or_default();
     if !crate::ssh::process::valid_login(&username) {
         return Err(bad("username must use letters, digits, '.', '_' or '-'"));
@@ -178,15 +192,53 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
 
     // 同一把裝置金鑰再跑一次 = 重新加入同一條隧道（只限同一個使用者）。/ Same key again = rejoin the same tunnel.
     let prefix = db::tunnels::like_prefix(&format!("{kind} {b64}"));
-    let (tunnel, is_new) = match db::tunnels::by_key_prefix(&state.db, &prefix).await.map_err(internal)? {
-        Some(existing) if existing.user_id == user.id => (existing, false),
-        Some(_) => return Err((StatusCode::CONFLICT, "This machine's tunnel key is already registered by another Telepy user.".into())),
+    let existing = db::tunnels::by_key_prefix(&state.db, &prefix).await.map_err(internal)?;
+    if existing.as_ref().is_some_and(|e| e.user_id != user.id) {
+        return Err((StatusCode::CONFLICT, "This machine's tunnel key is already registered by another Telepy user.".into()));
+    }
+    // 這台機器已經是誰的（host key 被哪些隧道釘選）？別的帳號的 → 拒絕並告訴那位擁有者；自己的 → 提醒。
+    // Whose machine is this already (who pins its host key)? Another account's → refuse and tell its owner; mine → a note.
+    let proposed_name = requested.clone().or_else(|| t.name.clone()).unwrap_or_else(|| if hostname.is_empty() { "device".into() } else { hostname.clone() });
+    let mut same_machine_as = None;
+    for hk in &host_keys {
+        let others = db::host_keys::claimants(&state.db, &hk.line, existing.as_ref().map_or(0, |e| e.id)).await.map_err(internal)?;
+        if let Some(foreign) = host_keys::foreign_claimant(&others, user.id) {
+            host_keys::report_claim_attempt(state, foreign, &user.username, &proposed_name, hk).await;
+            return Err((StatusCode::CONFLICT, format!("This machine is already managed by another Telepy account: {}.", host_keys::CLAIMED_HINT)));
+        }
+        if same_machine_as.is_none() {
+            same_machine_as = others.first().map(|c| join::SameMachine { id: c.tunnel_id, name: c.host_friendly_name.clone() });
+        }
+    }
+    let (tunnel, is_new) = match existing {
+        Some(existing) => (existing, false),
         None => {
-            let base = join::tunnel_name_from(requested.as_deref().or(t.name.as_deref()).unwrap_or(if hostname.is_empty() { "device" } else { &hostname }));
+            let base = join::tunnel_name_from(&proposed_name);
             let description = if hostname.is_empty() { format!("Joined with one command ({os})") } else { format!("Joined from {hostname} ({os})") };
             (create_tunnel(state, user.id, &base, &key, &description).await?, true)
         }
     };
+    // 釘住腳本送來的 host key（第一次連線就不用「看到什麼信什麼」）。重新加入時只在還沒釘、或至少一把對得上時才加：
+    // 全都不同就留給連線時的比對去拒絕（金鑰外流 + 冒充的機器也會重跑腳本）。
+    // Pin the host keys the script sent. On a rejoin only when nothing is pinned yet or one of them matches: an impostor
+    // with a stolen tunnel key would run the script too, so a complete change is left to the mismatch path.
+    let pinned = db::host_keys::pinned_lines(&state.db, tunnel.id).await.map_err(internal)?;
+    if !host_keys.is_empty() && (pinned.is_empty() || host_keys.iter().any(|k| pinned.contains(&k.line))) {
+        let mut added = Vec::new();
+        for hk in &host_keys {
+            if db::host_keys::pin(&state.db, tunnel.id, &hk.key_type, &hk.fingerprint, &hk.line, "join").await.map_err(internal)? {
+                added.push(format!("{} {}", hk.key_type, hk.fingerprint));
+            }
+        }
+        state.host_keys.invalidate(tunnel.id);
+        if !added.is_empty() {
+            let same = host_keys::same_machine_note(&db::host_keys::same_machine(&state.db, tunnel.id).await.map_err(internal)?);
+            state
+                .gateway
+                .event("host_key_pinned", None, u16::try_from(tunnel.reverse_port).ok(), Some(tunnel.id), format!("Pinned the device host key {} of '{}' (sent by the install script){same}", added.join(", "), tunnel.host_friendly_name))
+                .await;
+        }
+    }
     if t.key_list_mine && is_new {
         super::device_keys::seed_key_list(state, tunnel.id, user.id).await.map_err(|_| internal("could not seed the device key list"))?;
     }
@@ -214,7 +266,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     }
     let gateway_port = Some(state.config.reverse_server_ssh_port.trim()).filter(|p| !p.is_empty()).unwrap_or("22").to_string();
 
-    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), ssh_port, hostname: hostname.clone(), os: os.clone() };
+    let reg = Registration { tunnel_id: tunnel.id, tunnel_name: tunnel.host_friendly_name.clone(), reverse_port: tunnel.reverse_port, username: username.clone(), ssh_port, hostname: hostname.clone(), os: os.clone(), same_machine_as: same_machine_as.clone() };
     if let Some(updated) = state.join.registered(&t.token_hash, reg) {
         notify_owner(state, &updated);
     }
@@ -240,6 +292,10 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     ];
     for k in state.gateway.host_public_keys() {
         lines.push(("HOST_KEY", k));
+    }
+    if let Some(same) = &same_machine_as {
+        lines.push(("SAME_MACHINE_AS", same.name.clone()));
+        lines.push(("SAME_MACHINE_ID", same.id.to_string()));
     }
     lines.push(("WEB_URL", format!("{}/tunnels", base_url(state, headers))));
     Ok(text(StatusCode::CREATED, join::kv_lines(&lines)))

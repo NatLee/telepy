@@ -1,6 +1,9 @@
-//! 裝置 SSH host key 的釘選紀錄（`telepy_device_host_key`）。每條隧道：`pinned` = 信任的金鑰（第一次連線時記下，
-//! 或擁有者確認過的），`rejected` = 之後出現、與釘選不符的金鑰（連線被拒，等擁有者確認）。邏輯在 `ssh::host_keys`。
-//! Pinned and rejected SSH host keys of each tunnel's device; the logic lives in `ssh::host_keys`.
+//! 裝置 SSH host key 的釘選紀錄（`telepy_device_host_key`）。每條隧道：`pinned` = 信任的金鑰（第一次連線時記下、
+//! 加入腳本送來的，或擁有者確認過的），`rejected` = 之後出現、與釘選不符的金鑰（連線被拒，等擁有者確認）。
+//! 釘選的金鑰同時是「這台機器」的身分：同一把被哪些隧道信任，就是同一台機器（`claimants` / `same_machine`）。
+//! 邏輯在 `ssh::host_keys`。
+//! Pinned and rejected SSH host keys of each tunnel's device; a pinned key doubles as the machine's identity.
+//! The logic lives in `ssh::host_keys`.
 
 use std::collections::HashSet;
 
@@ -11,6 +14,41 @@ use crate::util::now_db;
 
 pub const PINNED: &str = "pinned";
 pub const REJECTED: &str = "rejected";
+
+const TUNNELS: &str = "authorized_keys_reverseserverauthorizedkeys";
+
+/// 另一條信任同一把 host key 的隧道（= 同一台機器）。/ Another tunnel that trusts the same host key (= the same machine).
+#[derive(Debug, Clone, FromRow)]
+pub struct Claimant {
+    pub tunnel_id: i64,
+    pub user_id: i64,
+    pub host_friendly_name: String,
+}
+
+/// 除了 `except_tunnel` 之外，還有哪些隧道釘選了這把金鑰。/ Tunnels other than `except_tunnel` that pin this key.
+pub async fn claimants(db: &Db, line: &str, except_tunnel: i64) -> sqlx::Result<Vec<Claimant>> {
+    sqlx::query_as(&format!(
+        "SELECT h.tunnel_id, t.user_id, t.host_friendly_name FROM telepy_device_host_key h JOIN {TUNNELS} t ON t.id = h.tunnel_id \
+         WHERE h.status = 'pinned' AND h.public_key = ? AND h.tunnel_id <> ? ORDER BY h.tunnel_id"
+    ))
+    .bind(line)
+    .bind(except_tunnel)
+    .fetch_all(&db.read)
+    .await
+}
+
+/// 跟這條隧道釘選了同一把金鑰的其他隧道（同一台機器上的其他隧道）。/ Other tunnels on the same machine as this one.
+pub async fn same_machine(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Claimant>> {
+    sqlx::query_as(&format!(
+        "SELECT DISTINCT o.tunnel_id, t.user_id, t.host_friendly_name FROM telepy_device_host_key h \
+         JOIN telepy_device_host_key o ON o.public_key = h.public_key AND o.status = 'pinned' AND o.tunnel_id <> h.tunnel_id \
+         JOIN {TUNNELS} t ON t.id = o.tunnel_id \
+         WHERE h.tunnel_id = ? AND h.status = 'pinned' ORDER BY o.tunnel_id"
+    ))
+    .bind(tunnel_id)
+    .fetch_all(&db.read)
+    .await
+}
 
 #[derive(Debug, Clone, FromRow)]
 pub struct HostKeyRow {
@@ -46,10 +84,11 @@ pub async fn pinned_lines(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<String>> 
         .await
 }
 
-/// 第一次見到：記成釘選（已經有同一把就不動）。/ First use: pin it (no-op when the same key is already there).
-pub async fn pin(db: &Db, tunnel_id: i64, key_type: &str, fingerprint: &str, line: &str, source: &str) -> sqlx::Result<()> {
+/// 記成釘選（已經有同一把就不動）。`source` = `first_use` | `join` | `accepted`。回傳是否真的新增。
+/// Pin it (no-op when the same key is already there). Returns whether a row was added.
+pub async fn pin(db: &Db, tunnel_id: i64, key_type: &str, fingerprint: &str, line: &str, source: &str) -> sqlx::Result<bool> {
     let now = now_db();
-    sqlx::query(
+    let done = sqlx::query(
         "INSERT INTO telepy_device_host_key (tunnel_id, status, key_type, fingerprint, public_key, source, attempts, first_seen, last_seen) \
          VALUES (?, 'pinned', ?, ?, ?, ?, 0, ?, ?) ON CONFLICT (tunnel_id, public_key) DO NOTHING",
     )
@@ -62,7 +101,7 @@ pub async fn pin(db: &Db, tunnel_id: i64, key_type: &str, fingerprint: &str, lin
     .bind(&now)
     .execute(&db.write)
     .await?;
-    Ok(())
+    Ok(done.rows_affected() > 0)
 }
 
 /// 記下一把被拒絕的金鑰（同一把再出現就累加次數）。回傳累計次數（1 = 第一次見到）。
@@ -85,7 +124,17 @@ pub async fn reject(db: &Db, tunnel_id: i64, key_type: &str, fingerprint: &str, 
     .await
 }
 
+/// 被拒絕、等確認的那把（依 fingerprint）。/ The rejected key with this fingerprint.
+pub async fn rejected_by_fingerprint(db: &Db, tunnel_id: i64, fingerprint: &str) -> sqlx::Result<Option<HostKeyRow>> {
+    sqlx::query_as(&format!("SELECT {COLS} FROM telepy_device_host_key WHERE tunnel_id = ? AND status = 'rejected' AND fingerprint = ?"))
+        .bind(tunnel_id)
+        .bind(fingerprint)
+        .fetch_optional(&db.read)
+        .await
+}
+
 /// 擁有者確認：被拒絕的那把（依 fingerprint）變成唯一的釘選金鑰，其餘全部清掉。回傳是否找到。
+/// 呼叫前先用 [`claimants`] 確認那把金鑰不屬於別人的機器（`ssh::host_keys` 的規則）。
 /// Owner confirmation: the rejected key with this fingerprint becomes the only pinned key. Returns whether it existed.
 pub async fn accept(db: &Db, tunnel_id: i64, fingerprint: &str) -> sqlx::Result<Option<HostKeyRow>> {
     let mut tx = db.write.begin().await?;

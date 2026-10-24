@@ -187,11 +187,17 @@ export function useCreateTunnelWizard() {
                 body: JSON.stringify(payload),
             });
             if (!dupRes.ok) {
-                const dup = await readJson<{ host_friendly_name_exists?: boolean; key_exists?: boolean }>(dupRes);
+                const dup = await readJson<{ host_friendly_name_exists?: boolean; key_exists?: boolean; key_reason?: string | null }>(dupRes);
                 if (dup?.host_friendly_name_exists || dup?.key_exists) {
+                    // 金鑰不能用的原因：別人的裝置金鑰、個人金鑰、服務金鑰、太弱。/ Why the key cannot be used.
+                    const keyError = !dup.key_exists ? undefined
+                        : dup.key_reason === "personal" ? t("wizard.device.keyPersonal")
+                        : dup.key_reason === "service" ? t("wizard.device.keyService")
+                        : dup.key_reason === "invalid" ? t("wizard.device.keyWeak")
+                        : t("wizard.device.keyTaken");
                     setErrors({
                         name: dup.host_friendly_name_exists ? t("wizard.device.nameTaken") : undefined,
-                        key: dup.key_exists ? t("wizard.device.keyTaken") : undefined,
+                        key: keyError,
                     });
                     return;
                 }

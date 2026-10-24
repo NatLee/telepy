@@ -532,7 +532,10 @@ pub struct DuplicateCheckRequest {
 #[derive(ToSchema)]
 pub struct DuplicateCheck {
     pub host_friendly_name_exists: bool,
+    /// The key cannot be used: it is any user's device key already (comment ignored), a personal key, or Telepy's service key
     pub key_exists: bool,
+    /// Why: taken | personal | service (null when the key is free)
+    pub key_reason: Option<String>,
     pub message: Option<String>,
     pub error: Option<String>,
 }
@@ -861,7 +864,7 @@ pub struct DeviceHostKey {
     pub fingerprint: String,
     /// `type base64`
     pub public_key: String,
-    /// first_use | accepted
+    /// first_use | join (sent by the install script) | accepted
     pub source: String,
     /// Connections that presented this key (rejected keys)
     pub attempts: i64,
@@ -871,12 +874,29 @@ pub struct DeviceHostKey {
 
 #[derive(ToSchema)]
 pub struct DeviceHostKeys {
-    /// Keys Telepy trusts for this device (pinned on first use, or confirmed by the owner)
+    /// Keys Telepy trusts for this device (pinned on first use, sent by the install script, or confirmed by the owner)
     pub pinned: Vec<DeviceHostKey>,
     /// Different keys the device presented since; connections were refused
     pub rejected: Vec<DeviceHostKey>,
     /// Owner or ADMIN sharee: may accept or forget
     pub can_manage: bool,
+    /// Other tunnels of yours that trust the same host key, i.e. the same machine (only those you can see)
+    pub same_machine: Vec<SameMachineTunnel>,
+    /// The last connection refused because the machine's host key is pinned by another account's tunnel (null = none)
+    pub refused_claim: Option<RefusedClaim>,
+}
+
+#[derive(ToSchema)]
+pub struct SameMachineTunnel {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct RefusedClaim {
+    pub key_type: String,
+    pub fingerprint: String,
+    pub at: String,
 }
 
 #[derive(ToSchema)]
@@ -1809,6 +1829,8 @@ pub struct JoinTicket {
     pub ssh_port: Option<i64>,
     pub hostname: Option<String>,
     pub os: Option<String>,
+    /// Your other tunnel on this very machine (same SSH host key), when there is one
+    pub same_machine_as: Option<SameMachineTunnel>,
     pub created_at: String,
     pub expires_at: String,
 }
@@ -1837,6 +1859,8 @@ pub struct JoinRegistration {
     pub ssh_port: Option<i64>,
     pub os: Option<String>,
     pub name: Option<String>,
+    /// This machine's SSH host keys (`type base64`, from ssh-keyscan). Pinned at once; a machine another account's tunnel already pins is refused (409)
+    pub host_keys: Option<Vec<String>>,
 }
 
 #[derive(ToSchema)]

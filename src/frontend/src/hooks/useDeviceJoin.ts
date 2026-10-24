@@ -26,6 +26,8 @@ export interface JoinTicket {
     ssh_port: number | null;
     hostname: string | null;
     os: string | null;
+    /** 這台機器已經是我的另一條隧道（同一組 SSH host key）。/ My other tunnel on this very machine (same host key). */
+    same_machine_as: { id: number; name: string } | null;
     created_at: string;
     expires_at: string;
 }

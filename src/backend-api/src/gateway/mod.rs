@@ -390,10 +390,18 @@ impl Gateway {
         })
     }
 
-    /// 使用者是否可以經 direct-tcpip 連到 port（owner 或被分享）。
+    /// 使用者是否可以經 direct-tcpip 連到 port：擁有者、ADMIN sharee，或至少有一個允許帳號的 sharee。
+    /// 只看狀態的 sharee（沒有允許帳號）連不到裝置的 sshd：允許清單是唯一邊界（裝置分不出 Telepy 使用者），
+    /// 沒有金鑰他登不進去，但裝置若開了密碼登入就能一直試。
+    /// Owner, ADMIN sharee, or a sharee with at least one allowed account; a status-only sharee never reaches the device's sshd.
     async fn user_can_reach(&self, user_id: i64, port: u16) -> anyhow::Result<bool> {
         for t in db::tunnels::by_port(&self.db, port as i64).await? {
-            if t.user_id == user_id || db::sharing::get(&self.db, t.id, user_id).await?.is_some() {
+            if t.user_id == user_id {
+                return Ok(true);
+            }
+            let Some(share) = db::sharing::get(&self.db, t.id, user_id).await? else { continue };
+            let admin = crate::permissions::effective(user_id, t.user_id, Some(share.permission())).is_some_and(|e| e.satisfies(crate::permissions::Permission::Admin));
+            if admin || !db::sharing::allowed_usernames(&self.db, share.id).await?.is_empty() {
                 return Ok(true);
             }
         }
@@ -649,7 +657,12 @@ impl Handler for GatewayHandler {
             _ => false,
         };
         let Some(fwd) = port.and_then(|p| self.gw.forwards.get(&p).map(|f| f.clone())).filter(|_| allowed) else {
-            self.gw.event("refused_direct", Some(self.peer), port, None, format!("Refused direct-tcpip to {host_to_connect}:{port_to_connect} from {} port {}", self.peer.ip(), self.peer.port())).await;
+            // 記在那條隧道上（有的話）：擁有者在 Logs 看得到誰敲過門。/ On the tunnel when there is one, so its owner sees it in Logs.
+            let tunnel_id = match port {
+                Some(p) => db::tunnels::by_port(&self.gw.db, p as i64).await?.first().map(|t| t.id),
+                None => None,
+            };
+            self.gw.event("refused_direct", Some(self.peer), port, tunnel_id, format!("Refused direct-tcpip to {host_to_connect}:{port_to_connect} from {} port {}", self.peer.ip(), self.peer.port())).await;
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         };

@@ -405,7 +405,8 @@ async fn desktop_refusals() {
     assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("forwarding_disabled")), "{}", r.text);
 
     // 別條隧道的區網主機 → 404。/ A LAN host of another tunnel → 404.
-    let other = lab.device(&bob, "other", &pc).await;
+    let other_pc = lab.machine("other-pc", &[("ubuntu", &[&lab.service])], true).await;
+    let other = lab.device(&bob, "other", &other_pc).await;
     let r = app.post(&format!("/api/reverse/server/{}/lan/hosts", other.tunnel_id), Some(&bob.token), json!({"address": "127.0.0.1"})).await;
     let foreign = r.json["id"].as_i64().unwrap();
     let r = start(alice.token.clone(), json!({"protocol": "rdp", "username": "ubuntu", "lan_host_id": foreign, "port": desktop})).await;

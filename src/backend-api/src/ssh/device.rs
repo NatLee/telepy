@@ -24,8 +24,8 @@ struct PinCheck {
     state: AppState,
     tunnel_id: i64,
     reverse_port: u16,
-    /// 被拒絕時記下這次看到的指紋（給錯誤訊息用）。/ The fingerprint we refused, for the error message.
-    refused: Arc<std::sync::Mutex<Option<String>>>,
+    /// 被拒絕時記下原因與這次看到的指紋（給錯誤訊息用）。/ Why and which fingerprint we refused, for the error message.
+    refused: Arc<std::sync::Mutex<Option<(host_keys::Decision, String)>>>,
 }
 
 pub struct ClientHandler {
@@ -46,15 +46,15 @@ impl Handler for ClientHandler {
         let Some(pin) = &self.pin else { return Ok(true) };
         let info = host_keys::key_info(key);
         match host_keys::verify(&pin.state, pin.tunnel_id, pin.reverse_port, &info).await {
-            Ok(true) => Ok(true),
-            Ok(false) => {
-                *pin.refused.lock().unwrap() = Some(info.fingerprint);
+            Ok(host_keys::Decision::Trust) => Ok(true),
+            Ok(why) => {
+                *pin.refused.lock().unwrap() = Some((why, info.fingerprint));
                 Ok(false)
             }
             // 查不到就拒絕（fail closed）。/ Fail closed when the check itself fails.
             Err(e) => {
                 tracing::error!(tunnel_id = pin.tunnel_id, error = %e, "device host key check failed; refusing the connection");
-                *pin.refused.lock().unwrap() = Some(info.fingerprint);
+                *pin.refused.lock().unwrap() = Some((host_keys::Decision::Changed, info.fingerprint));
                 Ok(false)
             }
         }
@@ -110,10 +110,11 @@ async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> a
     let mut device = match connected {
         Ok(d) => d,
         Err(e) => {
-            if let Some(fp) = refused.lock().unwrap().take() {
-                bail!("{}: the device presented {fp}, which is not the key Telepy pinned for this tunnel. The owner can review it in the tunnel's details.", host_keys::CHANGED);
+            match refused.lock().unwrap().take() {
+                Some((host_keys::Decision::Claimed, fp)) => bail!("{}: the device presented {fp}; {}.", host_keys::CLAIMED, host_keys::CLAIMED_HINT),
+                Some((_, fp)) => bail!("{}: the device presented {fp}, which is not the key Telepy pinned for this tunnel. The owner can review it in the tunnel's details.", host_keys::CHANGED),
+                None => return Err(e),
             }
-            return Err(e);
         }
     };
     authenticate(&mut device, username, &key).await.context("device auth")?;

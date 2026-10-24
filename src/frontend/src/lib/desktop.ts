@@ -88,6 +88,8 @@ export function startFailure(code: string | undefined, status: number, vars: { a
             return { key: "desktop.err.deviceAuth", vars: { account: vars.account }, at: "device" };
         case "host_key_changed":
             return { key: "desktop.err.hostKeyChanged", at: "device" };
+        case "device_claimed":
+            return { key: "desktop.err.deviceClaimed", at: "device" };
         case "forwarding_disabled":
             return { key: "desktop.err.forwardingDisabled", at: "device" };
         case "target_unreachable":

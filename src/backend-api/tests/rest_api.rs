@@ -524,3 +524,54 @@ async fn terminal_profile_per_tunnel() {
     assert_eq!(n, 0);
     assert_eq!(app.get(&path, Some(&bob)).await.status, StatusCode::NOT_FOUND);
 }
+
+/// 裝置金鑰全站唯一（不看註解、不分誰的），也不能是任何人的個人金鑰或 Telepy 的服務金鑰：公鑰不是祕密，別人拿你裝置的
+/// 公鑰換個註解就能登記，而 gateway 只認金鑰。/ Device keys are unique across users (comment ignored) and never a personal or service key.
+#[tokio::test]
+async fn device_keys_are_unique_across_users_and_never_personal_or_service_keys() {
+    let app = common::spawn().await;
+    let admin = app.login("admin", "pw").await;
+    // 第二個帳號直接建在 DB（註冊預設只開給第一個人）。/ The second account goes straight into the DB.
+    let bob_user = telepy_server::db::users::create(&app.state.db, telepy_server::db::users::NewUser { username: "bob", password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
+    let bob = app.state.jwt.access(bob_user.id);
+    create_tunnel(&app, &admin, "box-a", KEY_A).await;
+    let renamed = KEY_A.replace("device-a", "stolen");
+    let issue = |token: String| { let app = &app; async move { app.get("/api/reverse/issue/token", Some(&token)).await.json["token"].as_str().unwrap().to_string() } };
+
+    // 別人的裝置金鑰、換個註解：查重與建立都擋。/ Another user's device key under a new comment: refused by both calls.
+    let t = issue(bob.clone()).await;
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": renamed})).await;
+    assert_eq!((r.status, r.json["key_exists"].as_bool(), r.json["key_reason"].as_str(), r.json["error"].as_str()), (StatusCode::BAD_REQUEST, Some(true), Some("taken"), Some("Key already exists")), "{}", r.text);
+    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": renamed})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().starts_with("This key is already registered as a device key"), "{}", r.text);
+
+    // 某人的個人金鑰。/ Someone's personal key.
+    let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "laptop", "key": USER_KEY})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY.replace("laptop", "x")})).await;
+    assert_eq!((r.status, r.json["key_reason"].as_str()), (StatusCode::BAD_REQUEST, Some("personal")), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().starts_with("This is a personal key"), "{}", r.text);
+    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+
+    // Telepy 的服務金鑰。/ Telepy's own service key.
+    telepy_server::db::keys::service_key_upsert(&app.state.db, "web-service", USER_KEY_2, "").await.unwrap();
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY_2})).await;
+    assert_eq!((r.status, r.json["key_reason"].as_str()), (StatusCode::BAD_REQUEST, Some("service")), "{}", r.text);
+
+    // 太弱的金鑰在查重就說明；名稱撞到時兩件事一起講。/ Weak keys are explained by the check too; with a taken name, both.
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": RSA_1024})).await;
+    assert_eq!((r.status, r.json["key_reason"].as_str()), (StatusCode::BAD_REQUEST, Some("invalid")), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().contains("2048"), "{}", r.text);
+    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": RSA_1024})).await;
+    assert!(r.json["error"].as_str().unwrap().contains("2048"), "{}", r.text);
+    let t2 = issue(admin.clone()).await;
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t2}"), Some(&admin), json!({"host_friendly_name": "box-a", "key": renamed})).await;
+    assert_eq!((r.json["host_friendly_name_exists"].as_bool(), r.json["key_reason"].as_str(), r.json["error"].as_str()), (Some(true), Some("taken"), Some("Host friendly name and key already exists")), "{}", r.text);
+
+    // 一把新的金鑰照常。/ A fresh key is fine.
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": KEY_B})).await;
+    assert_eq!((r.status, r.json["key_exists"].as_bool(), r.json["key_reason"].is_null()), (StatusCode::OK, Some(false), true), "{}", r.text);
+    assert_eq!(app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": KEY_B})).await.status, StatusCode::OK);
+}

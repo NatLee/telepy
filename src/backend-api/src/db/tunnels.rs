@@ -111,15 +111,6 @@ pub async fn exists_name_for_user(db: &Db, user_id: i64, name: &str) -> sqlx::Re
     Ok(n > 0)
 }
 
-pub async fn exists_key_for_user(db: &Db, user_id: i64, key: &str) -> sqlx::Result<bool> {
-    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE user_id = ? AND key = ?"))
-        .bind(user_id)
-        .bind(key)
-        .fetch_one(&db.read)
-        .await?;
-    Ok(n > 0)
-}
-
 pub struct NewTunnel<'a> {
     pub user_id: i64,
     pub host_friendly_name: &'a str,

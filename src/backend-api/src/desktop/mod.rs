@@ -192,6 +192,9 @@ pub enum PrepareError {
     /// 裝置出示的 host key 和釘選的不同。/ The device presented a host key that is not the pinned one.
     #[error("{0}")]
     HostKeyChanged(String),
+    /// 這台機器屬於別的帳號的隧道。/ The machine belongs to another account's tunnel.
+    #[error("{0}")]
+    DeviceClaimed(String),
     #[error("the device could not reach {0}")]
     Unreachable(String),
     /// 裝置的 sshd 不允許轉發（`AllowTcpForwarding no`，例如 Alpine 的預設）。/ The device's sshd forbids forwarding.
@@ -207,6 +210,7 @@ impl PrepareError {
             Self::Offline => "device_offline",
             Self::Auth => "device_auth",
             Self::HostKeyChanged(_) => "host_key_changed",
+            Self::DeviceClaimed(_) => "device_claimed",
             Self::Unreachable(_) => "target_unreachable",
             Self::ForwardingDisabled => "forwarding_disabled",
             Self::Other(_) => "device_unreachable",
@@ -220,6 +224,8 @@ pub async fn prepare(state: &AppState, reverse_port: i64, hop_username: &str, ta
         let m = format!("{e:#}");
         if m.contains(crate::ssh::host_keys::CHANGED) {
             PrepareError::HostKeyChanged(m)
+        } else if m.contains(crate::ssh::host_keys::CLAIMED) {
+            PrepareError::DeviceClaimed(m)
         } else if m.contains("device offline") {
             PrepareError::Offline
         } else if m.contains("device auth") || m.contains("authentication failed") {

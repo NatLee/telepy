@@ -37,6 +37,8 @@ export interface Tunnel {
     access_requests?: number;
     /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */
     host_key_changed?: boolean;
+    /** 這條隧道指到的機器屬於別的帳號的隧道，連線被拒。/ The machine behind this tunnel belongs to another account's tunnel; refused. */
+    device_claimed?: boolean;
 }
 
 /**
