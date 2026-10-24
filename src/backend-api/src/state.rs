@@ -14,6 +14,7 @@ use crate::device_keys::DeviceKeys;
 use crate::gateway::Gateway;
 use crate::geoip::GeoIp;
 use crate::oui::Oui;
+use crate::vault::Vault;
 use crate::hub::Hub;
 use crate::join::JoinTickets;
 use crate::lan::scan::LanScans;
@@ -40,6 +41,8 @@ pub struct Inner {
     pub geoip: Arc<GeoIp>,
     /// 網卡廠商表（IEEE OUI）。/ NIC vendor table.
     pub oui: Arc<Oui>,
+    /// 憑證庫的加解密（金鑰由 SECRET_KEY 衍生）。/ Credential vault cipher (key derived from SECRET_KEY).
+    pub vault: Vault,
     pub gateway: Arc<Gateway>,
     pub remote_browser: Arc<RemoteBrowser>,
     /// 網頁內遠端桌面（RDP / VNC，經 guacd）的 session。/ In-browser remote desktop sessions (guacd).
@@ -105,6 +108,7 @@ impl AppState {
             status,
             geoip: Arc::new(GeoIp::load(&config.geoip_dir)),
             oui: Arc::new(Oui::load(&config.oui_dir)),
+            vault: Vault::new(&config.secret_key),
             presence,
             gateway,
             pool: Arc::new(DevicePool::default()),

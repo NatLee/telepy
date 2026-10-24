@@ -36,4 +36,5 @@ pub mod step_up;
 pub mod tokens;
 pub mod tunnel_service;
 pub mod util;
+pub mod vault;
 pub mod ws;

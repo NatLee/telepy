@@ -98,8 +98,11 @@ pub async fn update(db: &Db, id: i64, p: HostPatch<'_>) -> sqlx::Result<()> {
 }
 
 pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
-    sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&db.write).await?;
-    Ok(())
+    let mut tx = db.write.begin().await?;
+    // 存給這台主機的登入一起刪。/ Saved logins for this host go too.
+    sqlx::query("DELETE FROM telepy_credential WHERE lan_host_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
+    tx.commit().await
 }
 
 /// 合併一次掃描的結果：新的插入（source = scan），已知的更新「看到的」欄位（名稱 / MAC / port / banner / last_seen），

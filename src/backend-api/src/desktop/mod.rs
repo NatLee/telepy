@@ -218,6 +218,7 @@ pub struct Session {
     pub protocol: Protocol,
     pub target: Target,
     pub clipboard: Clipboard,
+    pub saved_label: Option<String>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     handoff: Mutex<Option<Handoff>>,
@@ -262,7 +263,8 @@ impl Session {
     /// One-line description for the logs.
     pub fn describe(&self) -> String {
         let to = if self.target.lan_host_id.is_some() { format!("{}:{}", self.target.host, self.target.port) } else { format!("device:{}", self.target.port) };
-        format!("Remote desktop ({}) by {} to {} through {}@{}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
+        let saved = self.saved_label.as_deref().map(|l| format!(" with saved login '{l}'")).unwrap_or_default();
+        format!("Remote desktop ({}) by {} to {} through {}@{}{saved}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
@@ -278,6 +280,8 @@ pub struct NewSession {
     pub clipboard: Clipboard,
     pub credentials: Credentials,
     pub prepared: Prepared,
+    /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
+    pub saved_label: Option<String>,
 }
 
 pub struct Desktop {
@@ -316,6 +320,7 @@ impl Desktop {
             protocol: new.protocol,
             target: new.target,
             clipboard: new.clipboard,
+            saved_label: new.saved_label,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             handoff: Mutex::new(Some(Handoff { credentials: new.credentials, prepared: new.prepared })),

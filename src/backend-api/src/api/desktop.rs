@@ -76,7 +76,14 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         }
         None => Target::device(port),
     };
-    let credentials = Credentials { login: bounded(&body, "login", 256)?, password: bounded(&body, "password", 1024)?, domain: bounded(&body, "domain", 256)? };
+    // 存在憑證庫的登入：後端自己解開，瀏覽器不必（也拿不到）密碼。/ A saved login: unsealed here, never sent to the browser.
+    let (credentials, saved_label) = match json_i64(&body, "credential_id") {
+        Some(cid) => {
+            let (c, password) = crate::api::credentials::unseal_for(&state, user.id, cid, tunnel.id, target.lan_host_id, protocol).await?;
+            (Credentials { login: c.login.clone(), password, domain: c.domain.clone() }, Some(c.label))
+        }
+        None => (Credentials { login: bounded(&body, "login", 256)?, password: bounded(&body, "password", 1024)?, domain: bounded(&body, "domain", 256)? }, None),
+    };
     let max = settings.desktop_max_sessions;
     if max > 0 && state.desktop.count() as i64 >= max {
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
@@ -95,6 +102,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         clipboard,
         credentials,
         prepared,
+        saved_label,
     });
     tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), "desktop: session created");
     Ok(Json(json!({

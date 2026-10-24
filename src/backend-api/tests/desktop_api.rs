@@ -217,6 +217,30 @@ async fn desktop_session_through_the_device() {
     let ev = events(&lab, &alice.token, id).await;
     assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (VNC) by alice to device:")), "{ev:?}");
 
+    // 憑證庫：用存好的登入開桌面，guacd 拿到的是存的密碼；綁定不同的桌面就拒絕。
+    // Vault: a saved login reaches guacd; a login saved for another desktop is refused.
+    let r = app.post("/api/credentials", Some(&alice.token), json!({"label": "pc vnc", "protocol": "vnc", "tunnel_id": id, "password": "from-the-vault"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let cred = r.json["id"].as_i64().unwrap();
+    let r = app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&alice.token), json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "credential_id": cred})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "an RDP start cannot use a VNC login: {}", r.text);
+    let r = app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&alice.token), json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "credential_id": cred})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let mut ws2 = open_ws(&lab, &r.json).await.unwrap();
+    assert!(recv(&mut ws2).await.is_ok());
+    wait_for("the vault password at guacd", || seen.lock().unwrap().connect.iter().any(|(k, v)| k == "password" && v == "from-the-vault")).await;
+    let mut found = false;
+    for _ in 0..50 {
+        let ev = events(&lab, &alice.token, id).await;
+        if ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap_or("").contains("with saved login 'pc vnc'")) {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(found, "the open event names the saved login");
+    drop(ws2);
+
     // 別人不能停；自己可以（連線中 → 伺服器送 disconnect、關閉碼 4014）。
     // Others can't stop it; the owner can (connected → disconnect + close 4014).
     let bob = lab.user("bob").await;
@@ -234,7 +258,7 @@ async fn desktop_session_through_the_device() {
     }
     wait_for("desktop_close event", || app.state.desktop.get(&sid).is_none()).await;
     let ev = events(&lab, &alice.token, id).await;
-    let close = ev.iter().find(|e| e["event"] == "desktop_close").expect("close event");
+    let close = ev.iter().find(|e| e["event"] == "desktop_close" && e["message"].as_str().unwrap_or("").contains(&sid[..8])).expect("close event");
     let msg = close["message"].as_str().unwrap();
     assert!(msg.contains("closed after") && msg.contains("(stopped,"), "{msg}");
     wait_for("presence cleared", || app.state.presence.for_tunnel(id).iter().all(|e| e.kind.as_str() != "desktop")).await;

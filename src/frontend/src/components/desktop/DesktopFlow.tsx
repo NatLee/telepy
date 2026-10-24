@@ -28,6 +28,8 @@ export interface FlowContext {
     /** null = 裝置自己。/ null = the device itself. */
     lanHost: { name: string; address: string } | null;
     clipboard: ClipboardPolicy | null;
+    /** 用憑證庫的登入（密碼只在伺服器上解開）。/ Using a saved login (unsealed on the server only). */
+    savedLogin?: boolean;
 }
 
 const STATE_TEXT: Record<SpotState, TranslationKey> = {
@@ -193,7 +195,7 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
             </ol>
 
             <ul className="space-y-1.5 border-t border-border pt-4 text-sm text-muted-foreground">
-                <li>{t("desktop.flow.noteCredentials")}</li>
+                <li>{t(ctx.savedLogin ? "desktop.flow.noteVault" : "desktop.flow.noteCredentials")}</li>
                 <li>{t(ctx.clipboard === "off" ? "desktop.flow.noteClipboardOff" : ctx.clipboard === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}</li>
                 <li>{t("desktop.flow.noteLogged")}</li>
                 <li>{t("desktop.flow.noteDevice")}</li>

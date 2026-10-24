@@ -19,7 +19,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -44,11 +44,12 @@ import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
 import { TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import type { TranslationKey } from "@/locales/en";
+import { SavedLogins } from "@/components/layout/SavedLogins";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 
-type PrefsTab = "general" | "security" | "apps";
+type PrefsTab = "general" | "security" | "logins" | "apps";
 
 const SCALE_LABEL: Record<UiScalePreset, TranslationKey> = {
     small: "prefs.uiScaleSmall",
@@ -75,6 +76,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const tabs = [
         { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
         { value: "security" as const, label: t("prefs.tabSecurity"), hint: t("prefs.tabSecurityHint"), icon: <ShieldCheck /> },
+        { value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> },
         { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
     ];
 
@@ -233,6 +235,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                     <SignInHistory endpoint="/api/auth/sign-ins" description={t("security.signInsDescription")} />
                 </div>
             )}
+
+            {tab === "logins" && <SavedLogins onNavigate={onClose} />}
 
             {tab === "apps" && (
                 <div className="space-y-6">
