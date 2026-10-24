@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sqlx::FromRow;
 
+use super::audit_chain::{self, Field, Table};
 use super::Db;
 use crate::util::now_db;
 
@@ -42,23 +43,26 @@ pub struct NewSignIn<'a> {
 const COLS: &str = "id, at, user_id, ok, method, second_factor, ip, user_agent, reason";
 
 pub async fn insert(db: &Db, e: &NewSignIn<'_>) -> sqlx::Result<()> {
-    sqlx::query("INSERT INTO telepy_sign_in_event (at, user_id, ok, method, second_factor, ip, user_agent, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(now_db())
-        .bind(e.user_id)
-        .bind(e.ok)
-        .bind(e.method)
-        .bind(e.second_factor)
-        .bind(e.ip)
-        .bind(e.user_agent)
-        .bind(e.reason)
-        .execute(&db.write)
-        .await?;
-    // 列數上限：每 64 筆順手清一次（90 天由 `db::retention` 清）。/ Row cap, every 64 inserts.
+    let row = [
+        ("at", Field::text(now_db())),
+        ("user_id", Field::Int(Some(e.user_id))),
+        ("ok", Field::Bool(e.ok)),
+        ("method", Field::text(e.method)),
+        ("second_factor", Field::opt_text(e.second_factor)),
+        ("ip", Field::opt_text(e.ip)),
+        ("user_agent", Field::opt_text(e.user_agent)),
+        ("reason", Field::opt_text(e.reason)),
+    ];
+    audit_chain::append(db, Table::SignIn, &row).await?;
+    // 列數上限：每 64 筆順手清一次（90 天由 `db::retention` 清；先寫 prune 錨點）。/ Row cap, every 64 inserts.
     if INSERTS.fetch_add(1, Ordering::Relaxed) % 64 == 0 {
-        sqlx::query("DELETE FROM telepy_sign_in_event WHERE id <= (SELECT id FROM telepy_sign_in_event ORDER BY id DESC LIMIT 1 OFFSET ?)")
+        let cut: Option<i64> = sqlx::query_scalar("SELECT id FROM telepy_sign_in_event ORDER BY id DESC LIMIT 1 OFFSET ?")
             .bind(RETENTION_ROWS)
-            .execute(&db.write)
+            .fetch_optional(&db.read)
             .await?;
+        if let Some(cut) = cut {
+            audit_chain::prune_through(db, Table::SignIn, cut).await?;
+        }
     }
     Ok(())
 }

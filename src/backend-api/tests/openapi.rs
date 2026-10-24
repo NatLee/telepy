@@ -46,6 +46,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/sftp/upload/{id}/{username}", vec!["post"]),
         ("/api/reverse/server/{id}/remote-browser/start", vec!["post"]),
         ("/api/log/ssh/events", vec!["get"]),
+        ("/api/log/audit/verify", vec!["get"]),
         ("/.well-known/oauth-authorization-server", vec!["get"]),
         ("/api/oauth/authorize", vec!["get", "post"]),
         ("/api/oauth/token", vec!["post"]),

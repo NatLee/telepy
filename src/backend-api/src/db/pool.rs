@@ -3,6 +3,7 @@
 //! Two pools: a single-connection writer (serialises writes in-process) and a reader pool.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
@@ -11,6 +12,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 pub struct Db {
     pub read: SqlitePool,
     pub write: SqlitePool,
+    /// 稽核表雜湊鏈的鎖與鏈頭（所有 clone 共用）。/ Audit hash-chain locks and heads, shared by all clones.
+    pub audit: Arc<super::audit_chain::AuditChains>,
 }
 
 impl Db {
@@ -33,7 +36,7 @@ impl Db {
             .max_connections(8)
             .connect_with(opts.read_only(false))
             .await?;
-        Ok(Self { read, write })
+        Ok(Self { read, write, audit: Default::default() })
     }
 
     /// 測試用：記憶體資料庫（讀寫同一條連線才看得到同一份資料）。
@@ -43,6 +46,6 @@ impl Db {
             .filename(":memory:")
             .journal_mode(SqliteJournalMode::Memory);
         let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await?;
-        Ok(Self { read: pool.clone(), write: pool })
+        Ok(Self { read: pool.clone(), write: pool, audit: Default::default() })
     }
 }
