@@ -264,7 +264,13 @@ const TABLES: &[(&str, &str)] = &[
             "connected_at" datetime NOT NULL,
             "last_seen_at" datetime NOT NULL,
             "previous_ip" varchar(64) NULL,
-            "changed_at" datetime NULL
+            "changed_at" datetime NULL,
+            "public_ip" varchar(64) NULL,
+            "public_source" varchar(16) NULL,
+            "lan" text NULL,
+            "hostname" varchar(255) NULL,
+            "probed_at" datetime NULL,
+            "probe_error" text NULL
         )"#,
     ),
     // Rust 自有：隧道連線紀錄（一個 forward 一列），給連線紀錄與在線率。/ Connection history, one row per forward.
@@ -587,6 +593,12 @@ const INDEXES: &[&str] = &[
 const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_endpoint", "previous_ip", "varchar(64) NULL"),
     ("telepy_tunnel_endpoint", "changed_at", "datetime NULL"),
+    ("telepy_tunnel_endpoint", "public_ip", "varchar(64) NULL"),
+    ("telepy_tunnel_endpoint", "public_source", "varchar(16) NULL"),
+    ("telepy_tunnel_endpoint", "lan", "text NULL"),
+    ("telepy_tunnel_endpoint", "hostname", "varchar(255) NULL"),
+    ("telepy_tunnel_endpoint", "probed_at", "datetime NULL"),
+    ("telepy_tunnel_endpoint", "probe_error", "text NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     // 稽核雜湊鏈（升級前的列為 NULL）。/ Audit hash chain (NULL on rows written before the upgrade).
     ("telepy_gateway_event", "prev_hash", "varchar(64) NULL"),

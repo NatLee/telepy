@@ -16,12 +16,23 @@ pub struct LastEndpoint {
     pub ip: String,
     pub connected_at: String,
     pub last_seen_at: String,
-    /// 上一次的 IP（最近一次換 IP 之前的）。/ The address before the latest change.
+    /// 上一個公網 IP（最近一次換之前的）。/ The public address before the latest change.
     pub previous_ip: Option<String>,
     pub changed_at: Option<String>,
+    /// 裝置真正的公網 IP：gateway 看到的（是公網位址時）或裝置經 `/api/whoami` 回報的。
+    /// The device's real public IP: the gateway's peer when public, else what the device reported via /api/whoami.
+    pub public_ip: Option<String>,
+    /// gateway / device
+    pub public_source: Option<String>,
+    /// 裝置的內網網卡（JSON：`[{iface, ip, prefix}]`）。/ The device's LAN interfaces (JSON).
+    pub lan: Option<String>,
+    pub hostname: Option<String>,
+    /// 最後一次登入裝置查位址的時間與錯誤。/ When the device was last asked for its addresses, and the error.
+    pub probed_at: Option<String>,
+    pub probe_error: Option<String>,
 }
 
-/// 這次連線的 IP 跟上次不同。/ The device connected from a different address than last time.
+/// 裝置的公網 IP 跟上次不同。/ The device's public address differs from last time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IpChange {
     pub tunnel_id: i64,
@@ -33,23 +44,14 @@ pub struct IpChange {
 const E: &str = "telepy_tunnel_endpoint";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
 
-/// forward 註冊好時：這個 port 的隧道現在從 `ip` 連進來（`at` = 連上的時間）。IP 跟上次不同時記下舊的
-/// （`previous_ip` / `changed_at`）並回傳，給 gateway 發警示。第一次連線不算換。
-/// Record the connection; when the address differs from last time, keep the old one and return the change.
-pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::Result<Option<IpChange>> {
-    let before: Option<(i64, String, String, i64)> = sqlx::query_as(&format!(
-        "SELECT e.tunnel_id, e.ip, t.host_friendly_name, t.user_id FROM {E} e JOIN {T} t ON t.id = e.tunnel_id WHERE t.reverse_port = ?"
-    ))
-    .bind(port as i64)
-    .fetch_optional(&db.read)
-    .await?;
-    // SET 右邊讀到的都是更新前的值（SQLite 語意），所以順序不影響。/ RHS values are the pre-update row in SQLite.
+/// forward 註冊好時：這個 port 的隧道現在從 `ip`（gateway 看到的 TCP 來源）連進來，`at` = 連上的時間。
+/// 公網 IP 與換 IP 的判斷在 [`update_public_ip`]（gateway 看到的可能是代理 / Docker 的內部位址）。
+/// Record the connection (the gateway's TCP peer). Public-IP tracking and change detection live in
+/// [`update_public_ip`], since the peer may be a proxy's or Docker's internal address.
+pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::Result<()> {
     sqlx::query(&format!(
         "INSERT INTO {E} (tunnel_id, ip, connected_at, last_seen_at) SELECT id, ?, ?, ? FROM {T} WHERE reverse_port = ? \
-         ON CONFLICT(tunnel_id) DO UPDATE SET \
-           previous_ip = CASE WHEN ip <> excluded.ip THEN ip ELSE previous_ip END, \
-           changed_at = CASE WHEN ip <> excluded.ip THEN excluded.connected_at ELSE changed_at END, \
-           ip = excluded.ip, connected_at = excluded.connected_at, last_seen_at = excluded.last_seen_at"
+         ON CONFLICT(tunnel_id) DO UPDATE SET ip = excluded.ip, connected_at = excluded.connected_at, last_seen_at = excluded.last_seen_at"
     ))
     .bind(ip)
     .bind(at)
@@ -57,9 +59,61 @@ pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::R
     .bind(port as i64)
     .execute(&db.write)
     .await?;
-    Ok(before
-        .filter(|(_, previous, ..)| previous != ip)
-        .map(|(tunnel_id, previous, tunnel_name, owner_id)| IpChange { tunnel_id, tunnel_name, owner_id, previous }))
+    Ok(())
+}
+
+/// 記下裝置的公網 IP（`source` = gateway / device）。跟上次不同時保留舊的（`previous_ip` / `changed_at`）並回傳，
+/// 給 gateway 發警示；第一次不算換。SET 右邊讀到的都是更新前的值（SQLite 語意）。
+/// Store the device's public IP; when it differs from the stored one, keep the old one and return the change.
+pub async fn update_public_ip(db: &Db, tunnel_id: i64, ip: &str, source: &str, at: &str) -> sqlx::Result<Option<IpChange>> {
+    let before: Option<(Option<String>, String, i64)> = sqlx::query_as(&format!(
+        "SELECT e.public_ip, t.host_friendly_name, t.user_id FROM {E} e JOIN {T} t ON t.id = e.tunnel_id WHERE e.tunnel_id = ?"
+    ))
+    .bind(tunnel_id)
+    .fetch_optional(&db.read)
+    .await?;
+    sqlx::query(&format!(
+        "UPDATE {E} SET \
+           previous_ip = CASE WHEN public_ip IS NOT NULL AND public_ip <> ? THEN public_ip ELSE previous_ip END, \
+           changed_at = CASE WHEN public_ip IS NOT NULL AND public_ip <> ? THEN ? ELSE changed_at END, \
+           public_ip = ?, public_source = ? WHERE tunnel_id = ?"
+    ))
+    .bind(ip)
+    .bind(ip)
+    .bind(at)
+    .bind(ip)
+    .bind(source)
+    .bind(tunnel_id)
+    .execute(&db.write)
+    .await?;
+    Ok(before.and_then(|(previous, tunnel_name, owner_id)| {
+        previous.filter(|p| p != ip).map(|previous| IpChange { tunnel_id, tunnel_name, owner_id, previous })
+    }))
+}
+
+/// 登入裝置查到的位址（hostname、內網網卡 JSON）與錯誤。/ What the device reported, or why asking failed.
+pub async fn record_probe(db: &Db, tunnel_id: i64, hostname: Option<&str>, lan: Option<&str>, error: Option<&str>, at: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {E} SET hostname = COALESCE(?, hostname), lan = COALESCE(?, lan), probe_error = ?, probed_at = ? WHERE tunnel_id = ?"))
+        .bind(hostname)
+        .bind(lan)
+        .bind(error)
+        .bind(at)
+        .bind(tunnel_id)
+        .execute(&db.write)
+        .await?;
+    Ok(())
+}
+
+/// 該再問一次位址的隧道（還沒在這次連線問過，或上次問是 `stale_before` 之前）：(tunnel_id, reverse_port)。
+/// Tunnels due for an address probe: never asked during the current connection, or asked before `stale_before`.
+pub async fn probe_due(db: &Db, stale_before: &str) -> sqlx::Result<Vec<(i64, i64)>> {
+    sqlx::query_as(&format!(
+        "SELECT t.id, t.reverse_port FROM {E} e JOIN {T} t ON t.id = e.tunnel_id \
+         WHERE e.probed_at IS NULL OR e.probed_at < e.connected_at OR e.probed_at < ?"
+    ))
+    .bind(stale_before)
+    .fetch_all(&db.read)
+    .await
 }
 
 /// forward 釋放時：最後一次看到它的時間。/ When the forward went away.
@@ -96,7 +150,7 @@ pub async fn last_seen_visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap
 /// 使用者看得到的隧道（owned ∪ shared）的最後已知來源，以 tunnel id 為鍵。
 pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, LastEndpoint>> {
     let rows: Vec<LastEndpoint> = sqlx::query_as(&format!(
-        "SELECT tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at FROM {E} \
+        "SELECT tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at, public_ip, public_source, lan, hostname, probed_at, probe_error FROM {E} \
          WHERE tunnel_id IN (SELECT id FROM {T} WHERE user_id = ? UNION SELECT tunnel_id FROM tunnels_tunnelsharing WHERE shared_with_id = ?)"
     ))
     .bind(user_id)

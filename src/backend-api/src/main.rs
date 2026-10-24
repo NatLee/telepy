@@ -128,6 +128,10 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     }
     tokio::spawn(telepy_server::oauth::run_cleanup(state.db.clone()));
     tokio::spawn(telepy_server::db::retention::run(state.db.clone()));
+    // 裝置自己的位址（hostname / 內網 / 公網 IP），每次連上問一次。/ Ask each device for its addresses once per connection.
+    if config.gateway_enabled && config.device_probe {
+        tokio::spawn(telepy_server::device_info::run(state.clone()));
+    }
     // 終端機錄影：收重啟前沒收尾的、每小時清過期的。/ Terminal recordings: close leftovers, purge hourly.
     tokio::spawn(telepy_server::recording::run(state.clone()));
     // 指令規則：逾時的核准申請。/ Command rules: expire approval requests nobody answered.

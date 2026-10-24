@@ -75,9 +75,19 @@ export interface TunnelEndpoint {
     last_seen_at: string | null;
     /** 位址範圍與（有 GeoIP 時的）國家 / 業者。/ Scope plus country / network owner. */
     geo?: IpGeo | null;
-    /** 最近一次換 IP 之前的位址與換的時間。/ The address before the latest change, and when it changed. */
+    /** 最近一次換「公網 IP」之前的位址與換的時間。/ The public address before the latest change, and when. */
     previous_ip?: string | null;
     changed_at?: string | null;
+    /** 裝置真正的公網 IP（gateway 看到的公網來源，或裝置經 /api/whoami 回報的）。/ The device's real public IP. */
+    public_ip?: string | null;
+    /** gateway / device */
+    public_source?: string | null;
+    public_geo?: IpGeo | null;
+    /** 裝置自己網卡上的位址（每次連上問一次）。/ The device's own interfaces (asked once per connection). */
+    lan?: { iface: string; ip: string; prefix: number }[];
+    hostname?: string | null;
+    probed_at?: string | null;
+    probe_error?: string | null;
 }
 
 export interface ReverseServerUsername {

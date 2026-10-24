@@ -308,25 +308,38 @@ impl Gateway {
         self.status.set_endpoints(endpoints);
     }
 
-    /// forward 註冊好之後：記下這條隧道最後一次從哪裡連上來（離線時 tunnel list 顯示「最後 IP」）。
-    /// IP 跟上次不同時記 `ip_changed` 事件，並通知擁有者與 ADMIN sharee（可能是金鑰外流，也可能只是浮動 IP）。
-    /// On an address change, log `ip_changed` and tell the owner and ADMIN sharees (a leaked key, or just a dynamic IP).
+    /// forward 註冊好之後：記下這條隧道最後一次從哪裡連上來（離線時 tunnel list 顯示「最後 IP」）；
+    /// 來源是公網位址時它就是裝置的公網 IP（換了就警示）。
+    /// Record where the tunnel connected from; a public peer is also the device's public IP (alerting on change).
     async fn remember_endpoint(&self, conn_id: u64, port: u16) {
         let Some((ep, peer)) = self.conns.get(&conn_id).map(|c| (c.endpoint(), c.peer)) else { return };
-        let change = match db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
-                None
-            }
-        };
+        if let Err(e) = db::tunnel_endpoints::record_connected(&self.db, port, &ep.ip, &ep.since).await {
+            tracing::warn!(port, error = %e, "gateway: cannot record tunnel endpoint");
+        }
         // 連線歷史每次都記（不管 IP 有沒有換）。/ The connection history records every connect.
         if let Err(e) = db::tunnel_sessions::open(&self.db, port, &ep.ip, &ep.since).await {
             tracing::warn!(port, error = %e, "gateway: cannot record tunnel session");
         }
-        let Some(ch) = change else { return };
-        let message = format!("Tunnel {} now connects from {} (was {})", ch.tunnel_name, ep.ip, ch.previous);
-        self.event("ip_changed", Some(peer), Some(port), Some(ch.tunnel_id), message.clone()).await;
+        // 只有公網來源才算裝置的公網 IP；代理 / Docker 的內部位址交給 `device_info` 向裝置問。
+        // Only a public peer is the device's public IP; behind a proxy / Docker forward `device_info` asks the device.
+        let Ok(addr) = ep.ip.parse::<std::net::IpAddr>() else { return };
+        if crate::geoip::scope(addr) != crate::geoip::Scope::Public {
+            return;
+        }
+        let Some(tunnel) = db::tunnels::by_port(&self.db, port as i64).await.ok().and_then(|v| v.into_iter().next()) else { return };
+        match db::tunnel_endpoints::update_public_ip(&self.db, tunnel.id, &ep.ip, "gateway", &ep.since).await {
+            Ok(Some(ch)) => self.announce_ip_change(port, &ch, &ep.ip, Some(peer)).await,
+            Ok(None) => {}
+            Err(e) => tracing::warn!(port, error = %e, "gateway: cannot record public ip"),
+        }
+    }
+
+    /// 裝置的公網 IP 換了：記 `ip_changed`、通知擁有者與 ADMIN sharee（可能是金鑰外流，也可能只是浮動 IP），
+    /// 站台設了 webhook 也送過去。gateway 與 `device_info` 共用。
+    /// The device's public IP changed: log `ip_changed`, tell the owner and ADMIN sharees, and post to the webhook.
+    pub async fn announce_ip_change(&self, port: u16, ch: &db::tunnel_endpoints::IpChange, ip: &str, peer: Option<SocketAddr>) {
+        let message = format!("Tunnel {} now connects from {} (was {})", ch.tunnel_name, ip, ch.previous);
+        self.event("ip_changed", peer, Some(port), Some(ch.tunnel_id), message.clone()).await;
         let mut users = vec![ch.owner_id];
         users.extend(db::sharing::admin_sharee_ids(&self.db, ch.tunnel_id).await.unwrap_or_default());
         self.hub.notify_users(
@@ -335,13 +348,12 @@ impl Gateway {
                 "action": "TUNNEL-IP-CHANGED",
                 "tunnel_id": ch.tunnel_id,
                 "tunnel_name": ch.tunnel_name,
-                "ip": ep.ip,
+                "ip": ip,
                 "previous_ip": ch.previous,
                 "details": message,
             }),
         );
-        // 站台設定了 webhook 時也送過去（沒設就立刻返回）。/ Also to the site webhook when one is set.
-        crate::monitor::alerts::send_ip_change(&self.db, self.config.public_url.as_deref(), ch.tunnel_id, &ch.tunnel_name, i64::from(port), &ch.previous, &ep.ip).await;
+        crate::monitor::alerts::send_ip_change(&self.db, self.config.public_url.as_deref(), ch.tunnel_id, &ch.tunnel_name, i64::from(port), &ch.previous, ip).await;
     }
 
     /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。

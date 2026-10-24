@@ -81,6 +81,8 @@ services:
       # gateway 前面有 L4 代理（nginx stream / HAProxy / NLB）時填它的 IP / CIDR，讓它送 PROXY protocol header 帶出裝置真正的 IP。
       # IPs / CIDRs of an L4 proxy in front of the gateway that sends a PROXY protocol header (the device's real IP).
       - GATEWAY_PROXY_PROTOCOL_FROM=${GATEWAY_PROXY_PROTOCOL_FROM:-}
+      # 裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（false 關閉）。/ Ask each device for its addresses once per connection.
+      - DEVICE_PROBE=${DEVICE_PROBE:-true}
     volumes:
       # Mutable data (SQLite db)
       - ./telepy-data:/data
