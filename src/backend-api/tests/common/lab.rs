@@ -128,6 +128,10 @@ impl Machine {
     pub fn logged_in(&self, user: &str, key: &LabKey) -> bool {
         self.logins().iter().any(|l| l.user == user && (l.key == key.name || l.bare == key.bare()))
     }
+    /// 用這把公鑰（`type base64`）登入過 `user`。/ A login as `user` with this bare public key happened.
+    pub fn logged_in_bare(&self, user: &str, bare: &str) -> bool {
+        self.logins().iter().any(|l| l.user == user && l.bare == bare)
+    }
     pub fn any_login_with(&self, key: &LabKey) -> bool {
         self.logins().iter().any(|l| l.key == key.name || l.bare == key.bare())
     }
@@ -827,9 +831,32 @@ impl Lab {
         )
         .await
         .unwrap();
+        // 和正式的建立一樣：隧道自己的服務金鑰馬上產生。/ Like the real create: the tunnel's own service key exists at once.
+        telepy_server::ssh::tunnel_keys::ensure(&self.app.state, t.id).await.unwrap();
         let ssh = self.spawn_tunnel(&key, reverse_port, target.port, name).await;
         self.tunnels.lock().unwrap().insert(t.id, ssh);
         Device { tunnel_id: t.id, name: name.to_string(), reverse_port, target: target.clone(), key }
+    }
+
+    /// 這條隧道自己的服務公鑰（`type base64 comment`）。/ The tunnel's own service public key.
+    pub async fn tunnel_service_key(&self, device: &Device) -> String {
+        telepy_server::ssh::tunnel_keys::ensure(&self.app.state, device.tunnel_id).await.unwrap()
+    }
+
+    /// 像裝置上的 `authorized_keys` 已經有這條隧道的服務金鑰（精靈 / 一鍵加入做的事）。
+    /// As if the device's authorized_keys already held the tunnel's own key (what the wizard / join do).
+    pub async fn trust_tunnel_key(&self, device: &Device, account: &str) {
+        let line = self.tunnel_service_key(device).await;
+        let dir = device.target.account_home(account).join(".ssh");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("authorized_keys");
+        let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&line);
+        content.push('\n');
+        std::fs::write(&path, content).unwrap();
     }
 
     /// 裝置斷線（殺掉它的 `ssh -NR`），等到 forward 釋放。/ Drop the device's tunnel and wait for the release.

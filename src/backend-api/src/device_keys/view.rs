@@ -33,6 +33,8 @@ pub enum RowState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Row {
     pub state: RowState,
+    /// `service` 列：全站共用的舊服務金鑰（隧道都改用自己的金鑰後會被移掉）。/ `service` rows: the legacy shared key.
+    pub legacy: bool,
     /// 最近一次讀檔時在檔案裡看到。/ Seen in the file at the last read.
     pub verified: bool,
     pub on_list: bool,
@@ -86,7 +88,10 @@ pub struct Inputs<'a> {
     pub installed: &'a [(String, String, String, Option<i64>)],
     pub sync_errors: &'a HashMap<String, String>,
     pub snapshots: &'a HashMap<String, Snapshot>,
+    /// Telepy 的服務金鑰（這條隧道自己的 + 全站共用的）。/ Telepy's service keys (the tunnel's own + the shared one).
     pub service: &'a BTreeSet<String>,
+    /// 其中全站共用的那把（舊；隧道都用自己的金鑰後會被移掉）。/ The shared one among them (legacy).
+    pub shared: &'a BTreeSet<String>,
     /// bare → 金鑰。/ bare → key.
     pub known: &'a HashMap<String, KnownKey>,
     /// user id → username（金鑰已刪除時找擁有者用）。/ For keys that were deleted since.
@@ -99,6 +104,7 @@ pub struct Inputs<'a> {
 fn base(state: RowState) -> Row {
     Row {
         state,
+        legacy: false,
         verified: false,
         on_list: false,
         mine: false,
@@ -240,6 +246,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
             RowState::Unknown
         };
         let mut r = with_key(base(state), k);
+        r.legacy = state == RowState::Service && i.shared.contains(&k.bare);
         r.verified = true;
         r.options = l.options.clone();
         r.line_no = Some(l.line_no);
@@ -316,6 +323,7 @@ mod tests {
                 sync_errors: &self.errors,
                 snapshots: &self.snapshots,
                 service: &self.service,
+                shared: &self.service,
                 known: &self.known,
                 users: &self.users,
                 viewer,

@@ -233,6 +233,7 @@ function CheckView({
                             : t("deleteTunnel.removeServiceKeyOthers", { names: check.same_machine.map((s) => s.name).join(", ") || t("deleteTunnel.anotherTunnel") })}
                     />
                 )}
+                {check.accounts.length > 0 && check.online && <p className="text-xs text-muted-foreground">{t("deleteTunnel.ownKeyRemoved")}</p>}
             </Section>
 
             {/* 你的選擇:每個 AI app / Your choices: each AI app */}

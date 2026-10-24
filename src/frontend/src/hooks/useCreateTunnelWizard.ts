@@ -29,6 +29,8 @@ export interface CreatedTunnel {
     id: number;
     reversePort: number;
     name: string;
+    /** 這條通道自己的服務公鑰（裝置要授權的那把）。/ The tunnel's own service key, the one the device authorizes. */
+    serviceKey: string | null;
 }
 
 export interface Account {
@@ -93,7 +95,8 @@ export function useCreateTunnelWizard() {
     const [addingAccount, setAddingAccount] = useState(false);
 
     // ── Step 3：授權金鑰 / Authorize keys ──
-    const [serviceKeys, setServiceKeys] = useState<PublicKeyItem[]>([]);
+    // 舊後端沒有每條通道的金鑰時才用全站的服務金鑰清單。/ The site-wide list is only a fallback for a backend without per-tunnel keys.
+    const [fetchedServiceKeys, setServiceKeys] = useState<PublicKeyItem[]>([]);
     const [userKeys, setUserKeys] = useState<PublicKeyItem[]>([]);
     const [keysLoading, setKeysLoading] = useState(false);
     const [excludedUserKeys, setExcludedUserKeys] = useState<Set<number>>(new Set());
@@ -207,12 +210,12 @@ export function useCreateTunnelWizard() {
                 method: "POST",
                 body: JSON.stringify(payload),
             });
-            const data = await readJson<{ id?: number; reverse_port?: number; host_friendly_name?: string }>(res);
+            const data = await readJson<{ id?: number; reverse_port?: number; host_friendly_name?: string; service_key?: string }>(res);
             if (!res.ok || !data?.id || !data.reverse_port) {
                 showError(responseError(res, data, t("wizard.createFailed")));
                 return;
             }
-            setCreated({ id: data.id, reversePort: data.reverse_port, name: data.host_friendly_name ?? name });
+            setCreated({ id: data.id, reversePort: data.reverse_port, name: data.host_friendly_name ?? name, serviceKey: typeof data.service_key === "string" ? data.service_key : null });
             showSuccess(t("wizard.tunnelCreated", { name, port: data.reverse_port }));
             setStep(2);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -308,6 +311,11 @@ export function useCreateTunnelWizard() {
         });
     };
 
+    // 授權指令裡的服務金鑰 = 這條通道自己的那把（建立時後端給的）。/ The service key in the command is the tunnel's own.
+    const serviceKeys = useMemo<PublicKeyItem[]>(
+        () => (created?.serviceKey ? [{ id: 0, name: t("wizard.deviceKeyName"), key: created.serviceKey.trim() }] : fetchedServiceKeys),
+        [created?.serviceKey, fetchedServiceKeys, t],
+    );
     // 個人金鑰在裝置清單上（key_list = mine）時由 Telepy 自己裝，指令裡只放服務金鑰。
     // With key_list = "mine" Telepy installs the personal keys itself, so the command only carries the service key.
     const keysInstalledByTelepy = keyList === "mine" && userKeys.length > 0;

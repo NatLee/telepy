@@ -178,8 +178,8 @@ function KeyRowView({
     selection?: RowSelection;
 }) {
     const { t } = useI18n();
-    // 服務金鑰：標籤已寫「Telepy 服務」，標題用它自己的註解。/ The badge already says "Telepy service"; title it by its comment.
-    const title = row.state === "service" ? row.comment ?? t("keys.row.serviceName") : row.name ?? row.comment ?? shortFingerprint(row.fingerprint ?? null);
+    // 服務金鑰：標籤已寫「Telepy 服務」，標題說是這條通道的金鑰、還是舊的共用金鑰。/ Service rows: this tunnel's key or the legacy shared one.
+    const title = row.state === "service" ? (row.legacy ? t("keys.row.sharedName") : t("keys.row.serviceName")) : row.name ?? row.comment ?? shortFingerprint(row.fingerprint ?? null);
     const canRemoveFromList = row.on_list && row.user_key_id !== null && (row.mine || d.can_manage);
     const canAddToList = !row.on_list && row.mine && row.user_key_id !== null && row.state === "manual";
     const canRemoveFromDevice = d.can_manage && (row.state === "manual" || row.state === "unknown") && !!row.fingerprint;
@@ -207,6 +207,7 @@ function KeyRowView({
                     <StateBadge row={row} online={d.tunnel.online} />
                     <span className="min-w-0 truncate text-sm text-foreground">{row.state === "invalid" ? t("keys.row.invalidLine", { line: row.line_no ?? "?" }) : title}</span>
                     {row.owner && row.state !== "service" && <Chip tone={row.mine ? "primary" : "neutral"}>{row.mine ? t("keys.device.you") : row.owner}</Chip>}
+                    {row.state === "service" && row.legacy && <Chip tone="warning" title={t("keys.row.legacySharedTip")}>{t("keys.row.legacyShared")}</Chip>}
                     {row.line_count > 1 && (
                         <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
                             {t("keys.rows.lines", { count: row.line_count })}

@@ -180,6 +180,8 @@ pub struct Tunnel {
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
+    /// Single retrieve only: this tunnel's own service key (`type base64 comment`), the one the device authorizes
+    pub service_key: Option<String>,
 }
 
 /// 連線紀錄與在線率。在線率是 0..1，從第一筆紀錄算起；沒有紀錄時是 null。
@@ -516,6 +518,8 @@ pub struct CreatedKey {
     pub id: i64,
     pub host_friendly_name: String,
     pub key: String,
+    /// This tunnel's own service key (`type base64 comment`): the device authorizes it so Telepy can log in
+    pub service_key: String,
     /// The SSH port devices connect to (REVERSE_SERVER_SSH_PORT), as a string
     pub port: String,
     pub issuer: UserRef,
@@ -1700,6 +1704,8 @@ pub struct DeviceKeyViewAccount {
 pub struct DeviceKeyViewRow {
     /// service / installed / pending / error / removing / manual (a Telepy user's key added by hand) / unknown / invalid
     pub state: String,
+    /// `service` rows: the legacy shared service key (removed once every tunnel on the machine uses its own key)
+    pub legacy: bool,
     /// Seen in the file at `checked_at`
     pub verified: bool,
     /// On the device's key list

@@ -96,6 +96,9 @@ pub async fn device_key_problem(state: &AppState, key: &str) -> ApiResult<Option
     if service.iter().any(|s| parse_public_key(&s.key).is_some_and(|p| p.bare == parsed.bare)) {
         return Ok(Some(KeyProblem::Service));
     }
+    if db::tunnel_keys::tunnel_by_key_prefix(&state.db, &like).await?.is_some() {
+        return Ok(Some(KeyProblem::Service));
+    }
     Ok(None)
 }
 
@@ -124,6 +127,8 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
     if seed {
         super::device_keys::seed_key_list(&state, t.id, user.id).await?;
     }
+    // 這條隧道自己的服務金鑰：精靈的「授權 Telepy」步驟把它寫進裝置。/ The tunnel's own key for the wizard's authorize step.
+    let service_key = crate::ssh::tunnel_keys::ensure(&state, t.id).await?;
     notify::tunnel_updated(&state, &t).await?;
     Ok(Json(json!({
         "id": t.id,
@@ -133,6 +138,7 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
         "issuer": { "id": user.id, "username": user.username },
         "reverse_port": t.reverse_port,
         "description": t.description,
+        "service_key": service_key,
     })))
 }
 

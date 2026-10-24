@@ -714,11 +714,18 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         }
     }, [keyboardExpanded]);
 
-    // Service Keys：開啟彈窗並呼叫 API。/ Service keys: open modal and call API.
+    // Service Keys：開啟彈窗並呼叫 API。顯示這條通道自己的服務金鑰（裝置要授權的那把）；舊後端沒有時退回全站清單。
+    // Service keys: open the modal and load the tunnel's own key (the one the device authorizes); fall back to the site list.
     const fetchServiceKeys = async () => {
         setServiceKeyModalOpen(true);
         setLoadingServiceKeys(true);
         try {
+            const own = serverId ? await apiFetch(`/api/reverse/server/keys/${serverId}`) : null;
+            const ownKey = own?.ok ? (await own.json())?.service_key : null;
+            if (typeof ownKey === "string" && ownKey) {
+                setServiceKeys([{ key: ownKey, name: t("terminal.deviceKeyName") }]);
+                return;
+            }
             const res = await apiFetch("/api/reverse/service/keys");
             if (res.ok) {
                 const data = await res.json();
