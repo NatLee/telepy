@@ -1,9 +1,13 @@
 //! HAProxy PROXY protocol（v1 文字 / v2 二進位）：gateway 前面有 L4 代理（nginx stream、HAProxy `mode tcp`、
 //! 雲端 NLB…）時，代理在每條 TCP 連線開頭先送一個 header 說出真正的來源，之後才是 SSH。
-//! 只有 `GATEWAY_PROXY_PROTOCOL_FROM` 列出的來源要（也才會被讀）header；其他來源照舊——不然任何人都能自稱別的 IP。
+//! 只有 `GATEWAY_PROXY_PROTOCOL_FROM` 列出的來源才會被讀 header；其他來源照舊——不然任何人都能自稱別的 IP。
+//! 列出的來源可以有、也可以沒有 header：看第一個 byte 就分得出來（SSH 一定以 `SSH-` 開頭，header 是 `P` / `\r`），
+//! 所以設定錯了也不會把直連的裝置擋在外面。
 //! 讀取剛好讀到 header 結尾（v1 到 `\r\n`、v2 到宣告的長度），一個 byte 都不多讀，後面的 SSH 資料原封不動。
 //! HAProxy PROXY protocol v1/v2 for an L4 proxy in front of the gateway. Only sources listed in
-//! GATEWAY_PROXY_PROTOCOL_FROM must (and may) send a header — otherwise anyone could claim any address.
+//! GATEWAY_PROXY_PROTOCOL_FROM may send a header — otherwise anyone could claim any address. From those
+//! sources the header is optional: the first byte tells it apart from SSH (`SSH-` vs `P` / `\r`), so a
+//! listed address never locks out a device that connects directly.
 //! Reads stop exactly at the end of the header, so the SSH bytes that follow are untouched.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -138,6 +142,12 @@ impl std::fmt::Display for ProxyError {
     }
 }
 
+/// 連線的第一個 byte 是不是 PROXY header 的開頭（v1 `PROXY `、v2 簽章 `\r\n…`）；SSH 一定是 `S`。
+/// Whether a connection's first byte starts a PROXY header (v1 `PROXY `, v2 signature); SSH always starts with `S`.
+pub fn starts_header(first: u8) -> bool {
+    first == b'P' || first == V2_SIGNATURE[0]
+}
+
 /// 從連線開頭讀一個 header，剛好讀到它的結尾。/ Read one header from the start of the stream, and nothing more.
 pub async fn read_header<R: AsyncRead + Unpin>(r: &mut R) -> Result<Header, ProxyError> {
     let first = r.read_u8().await.map_err(|_| ProxyError::Closed)?;
@@ -189,6 +199,14 @@ mod tests {
         assert!(Trusted::parse("10.0.0.0/33").is_err());
         assert!(Trusted::parse("proxy.local").is_err());
         assert!(Trusted::parse("0.0.0.0/0").unwrap().contains("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn tells_a_header_from_ssh_by_the_first_byte() {
+        assert!(starts_header(b'P'));
+        assert!(starts_header(b'\r'));
+        assert!(!starts_header(b'S'), "SSH identification strings start with SSH-");
+        assert!(!starts_header(0));
     }
 
     #[test]
