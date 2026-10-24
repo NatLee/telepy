@@ -115,3 +115,15 @@ async fn sign_ins_record_ip_agent_and_outcome() {
     assert_eq!(ev[1]["second_factor"], "totp");
     assert_eq!(ev[1]["reason"], "mfa_failed");
 }
+
+#[tokio::test]
+async fn whoami_returns_the_callers_own_address() {
+    let app = common::spawn().await;
+    let mut req = Request::builder().method(Method::GET).uri("/api/whoami").header("x-forwarded-for", "6.6.6.6, 114.34.69.11").body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(TRAEFIK.parse::<SocketAddr>().unwrap()));
+    let r = app.send(req).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.text.trim(), "114.34.69.11", "read from the right of X-Forwarded-For");
+    assert!(r.headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/plain"));
+    assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
+}

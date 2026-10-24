@@ -12,7 +12,7 @@ import { TunnelOpenButtons } from "@/components/tunnels/TunnelOpenButtons";
 import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } from "@/components/tunnels/TunnelStatus";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
-import { TunnelEndpointChip } from "@/components/tunnels/TunnelEndpoint";
+import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { HostKeyAlert } from "@/components/tunnels/HostKeyAlert";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { LatencyIndicator } from "@/components/ui/LatencyIndicator";
@@ -67,6 +67,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                 <div className="flex flex-col items-start gap-1">
                     <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
                     <TunnelEndpointChip endpoint={tunnel.endpoint} />
+                    <TunnelLanChip endpoint={tunnel.endpoint} />
                     <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id)} />
                 </div>
             </td>

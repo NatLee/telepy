@@ -44,6 +44,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::ai::router())
         .merge(api::mfa::router())
         .merge(api::sign_ins::router())
+        .merge(api::whoami::router())
         .merge(api::lan::router())
         .merge(api::join::router())
         .merge(api::terminal_profile::router())
