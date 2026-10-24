@@ -2,14 +2,15 @@
 
 /**
  * 遠端桌面頁（`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`）：在瀏覽器裡看、操作裝置（或它區網裡主機）的
- * RDP / VNC 桌面。沒連線時是表單；連上後是畫面 + 工具列（貼上、Ctrl+Alt+Del、全螢幕、說明、中斷）。
- * 「怎麼運作」（info）打開即時路徑圖，顯示現在在哪一段、卡在哪一段。
- * Remote desktop page: a form while idle, the screen plus a toolbar once connected; the info button opens the live
- * path diagram that shows what is happening and where it stopped.
+ * RDP / VNC 桌面。沒連線時是表單（含畫質預設）；連上後是畫面 + 工具列：延遲 / 串流狀態（點開看每一段）、
+ * 螢幕選單（VNC 多螢幕只看一個）、鍵盤選單（送出文字 —— IME 的備援、Ctrl+Alt+Del、Ctrl 當 ⌘）、貼上、全螢幕、
+ * 說明、中斷。「怎麼運作」（info）打開即時路徑圖，顯示現在在哪一段、卡在哪一段，連線中每段線標上往返時間。
+ * Remote desktop page: a form while idle, the screen plus a toolbar once connected (latency / stream button,
+ * screen menu, keyboard menu with the type-text fallback); the info button opens the live path diagram.
  */
-import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ClipboardPaste, Info, KeyRound, Keyboard, Maximize2, Minimize2, MonitorX, Plus, ScreenShare, Waypoints } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Info, KeyRound, Keyboard, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, ScreenShare, TextCursorInput, Waypoints } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -22,17 +23,47 @@ import { Modal } from "@/components/ui/Modal";
 import { Textarea } from "@/components/ui/textarea";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useToast } from "@/components/ui/Toast";
+import {
+    DropdownMenu,
+    DropdownMenuCheckboxItem,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuRadioGroup,
+    DropdownMenuRadioItem,
+    DropdownMenuSeparator,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { DesktopViewer, loadGuacamole, type DesktopViewerHandle } from "@/components/desktop/DesktopViewer";
 import { DesktopInfoDialog } from "@/components/desktop/DesktopInfoDialog";
+import { DesktopStatsButton } from "@/components/desktop/DesktopStats";
 import type { FlowContext } from "@/components/desktop/DesktopFlow";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { desktopPorts, formatElapsed, isValidPort, type DesktopProtocol } from "@/lib/desktop";
+import { desktopPorts, formatElapsed, isValidPort, type DesktopProtocol, type DesktopQuality } from "@/lib/desktop";
+import { screenChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { hostName } from "@/lib/lanConnect";
+import type { TranslationKey } from "@/locales/en";
 
 const CARD = "rounded-xl border border-border bg-card shadow-card";
+
+const PRESET_KEY: Record<NonNullable<ScreenChoice["preset"]>, TranslationKey> = {
+    left: "desktop.screen.preset.left",
+    right: "desktop.screen.preset.right",
+    top: "desktop.screen.preset.top",
+    bottom: "desktop.screen.preset.bottom",
+    third1: "desktop.screen.preset.third1",
+    third2: "desktop.screen.preset.third2",
+    third3: "desktop.screen.preset.third3",
+};
+
+const QUALITY_HINT: Record<DesktopQuality, TranslationKey> = {
+    auto: "desktop.quality.hint.auto",
+    speed: "desktop.quality.hint.speed",
+    sharp: "desktop.quality.hint.sharp",
+};
 
 export default function DesktopPage() {
     // useSearchParams 需要 Suspense 邊界。/ useSearchParams needs a Suspense boundary.
@@ -47,17 +78,32 @@ function DesktopPageInner() {
     const { t } = useI18n();
     const { showSuccess } = useToast();
     const { state, actions } = useDesktopPage();
-    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address } = state;
+    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, ctrlAsCmd, pixelRatio } = state;
     const viewerRef = useRef<DesktopViewerHandle | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const [infoOpen, setInfoOpen] = useState(false);
     const [pasteOpen, setPasteOpen] = useState(false);
     const [pasteText, setPasteText] = useState("");
+    const [typeOpen, setTypeOpen] = useState(false);
+    const [typeText, setTypeText] = useState("");
     // 遠端複製的文字，綁在當時的 session 上（換 session 就不顯示）。/ Remote clipboard text, tied to its session.
     const [remoteClipState, setRemoteClipState] = useState<{ sid: string; text: string } | null>(null);
     const remoteClip = remoteClipState && session && remoteClipState.sid === session.session_id ? remoteClipState.text : null;
     const [fullscreen, setFullscreen] = useState(false);
     const [now, setNow] = useState(() => Date.now());
+    // 螢幕配置（整個桌面以外的選項）。重算的時機：螢幕清單或畫面大小變了、選單打開時、偵測完兩秒後
+    // （macOS 的排列靠畫面裡的黑色區域判斷，要等畫面畫出來）。計算讀 canvas，所以在事件 / 計時器裡做，不在 render 裡。
+    // The screen choices. Recomputed when the list or framebuffer changes, when the menu opens and two seconds
+    // after detection (the black-area sampling needs a painted frame); it reads the canvas, so never during render.
+    const [choices, setChoices] = useState<ScreenChoice[]>([]);
+    const protocol = session?.protocol ?? null;
+    const recomputeChoices = useCallback(() => {
+        if (!framebuffer || protocol !== "vnc") {
+            setChoices([]);
+            return;
+        }
+        setChoices(screenChoices(screens.list, framebuffer, (x, y) => viewerRef.current?.isBlack(x, y) ?? false));
+    }, [framebuffer, protocol, screens.list]);
 
     useEffect(() => {
         if (phase !== "connected") return;
@@ -69,6 +115,18 @@ function DesktopPageInner() {
         document.addEventListener("fullscreenchange", onChange);
         return () => document.removeEventListener("fullscreenchange", onChange);
     }, []);
+    useEffect(() => {
+        const soon = setTimeout(recomputeChoices, 0);
+        const painted = setTimeout(recomputeChoices, 2000);
+        return () => {
+            clearTimeout(soon);
+            clearTimeout(painted);
+        };
+    }, [recomputeChoices]);
+
+    const chosen = choices.find((c) => c.id === viewportId) ?? null;
+    const viewport = chosen?.viewport ?? null;
+    const choiceLabel = (c: ScreenChoice) => (c.preset ? t(PRESET_KEY[c.preset]) : c.name);
 
     const clipboard = session?.clipboard ?? null;
     const ctx: FlowContext = useMemo(() => ({
@@ -81,7 +139,8 @@ function DesktopPageInner() {
         lanHost: host ? { name: hostName(host), address: host.address } : null,
         clipboard,
         savedLogin: !!state.savedLogin,
-    }), [phase, failure, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin]);
+        stats,
+    }), [phase, failure, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin, stats]);
 
     const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -102,12 +161,22 @@ function DesktopPageInner() {
         showSuccess(t("desktop.pasteSent"));
         viewerRef.current?.focus();
     };
+    const sendTyped = () => {
+        if (!typeText) return;
+        viewerRef.current?.typeText(typeText);
+        setTypeOpen(false);
+        setTypeText("");
+        showSuccess(t("desktop.typeText.sent"));
+        viewerRef.current?.focus();
+    };
 
     const infoButton = (
         <Button variant="outline" onClick={() => setInfoOpen(true)}>
             <Info size={16} /> {t("desktop.howItWorks")}
         </Button>
     );
+    const connected = phase === "connected";
+    const isDeviceDesktop = !!session && session.target.lan_host_id === null;
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -116,19 +185,79 @@ function DesktopPageInner() {
             {session ? (
                 <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
                     <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
-                        <StatusDot online={phase === "connected"} />
+                        <StatusDot online={connected} />
                         <span className="min-w-0 truncate text-sm text-foreground" title={targetLabel}>{targetLabel}</span>
                         <Chip mono>{form.protocol.toUpperCase()}</Chip>
-                        {phase === "connected" && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                        {connected && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                        {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={framebuffer} viewport={viewport} scale={scale} />}
                         <span className="flex-1" />
-                        {clipboard !== "off" && (
-                            <Button size="sm" variant="ghost" onClick={() => setPasteOpen(true)} disabled={phase !== "connected"} title={t("desktop.pasteTitle")}>
-                                <ClipboardPaste size={15} /> <span className="hidden sm:inline">{t("desktop.paste")}</span>
-                            </Button>
+                        {session.protocol === "vnc" && (
+                            <DropdownMenu onOpenChange={(open) => { if (open) recomputeChoices(); }}>
+                                <DropdownMenuTrigger asChild>
+                                    <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.screen.menu")}>
+                                        <Monitor size={15} />
+                                        <span className="hidden max-w-32 truncate sm:inline">{chosen ? choiceLabel(chosen) : t("desktop.screen.whole")}</span>
+                                        <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-64">
+                                    <DropdownMenuLabel>{t("desktop.screen.menu")}</DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup value={chosen ? chosen.id : ""} onValueChange={(v) => { actions.setViewportId(v); viewerRef.current?.focus(); }}>
+                                        <DropdownMenuRadioItem value="">
+                                            <span className="flex-1">{t("desktop.screen.whole")}</span>
+                                            {framebuffer && <span className="font-mono text-xs text-muted-foreground">{framebuffer.width}×{framebuffer.height}</span>}
+                                        </DropdownMenuRadioItem>
+                                        {choices.map((c) => (
+                                            <DropdownMenuRadioItem key={c.id} value={c.id}>
+                                                <span className="min-w-0 flex-1 truncate">{choiceLabel(c)}{c.primary ? ` · ${t("desktop.screen.primary")}` : ""}</span>
+                                                <span className="font-mono text-xs text-muted-foreground">{c.viewport.width}×{c.viewport.height}</span>
+                                            </DropdownMenuRadioItem>
+                                        ))}
+                                    </DropdownMenuRadioGroup>
+                                    {choices.length === 0 && screens.state !== "loading" && (
+                                        <p className="px-2 py-1.5 text-xs text-muted-foreground">{isDeviceDesktop ? t("desktop.screen.single") : t("desktop.screen.lanNote")}</p>
+                                    )}
+                                    {screens.state === "loading" && <p className="px-2 py-1.5 text-xs text-muted-foreground">{t("desktop.screen.detecting")}</p>}
+                                    {screens.state === "failed" && <p className="px-2 py-1.5 text-xs text-destructive">{t("desktop.screen.failed")}</p>}
+                                    {isDeviceDesktop && (
+                                        <>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem disabled={screens.state === "loading"} onSelect={() => void actions.detectScreens()}>
+                                                <RefreshCw size={14} /> {t("desktop.screen.detect")}
+                                            </DropdownMenuItem>
+                                        </>
+                                    )}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
                         )}
-                        {form.protocol === "rdp" && (
-                            <Button size="sm" variant="ghost" onClick={() => viewerRef.current?.sendCtrlAltDel()} disabled={phase !== "connected"} title={t("desktop.ctrlAltDel")}>
-                                <Keyboard size={15} /> <span className="hidden md:inline">Ctrl+Alt+Del</span>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.keyboard.menu")}>
+                                    <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
+                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-72">
+                                <DropdownMenuItem onSelect={() => setTypeOpen(true)}>
+                                    <TextCursorInput size={14} /> {t("desktop.keyboard.typeText")}
+                                </DropdownMenuItem>
+                                {session.protocol === "rdp" && (
+                                    <DropdownMenuItem onSelect={() => viewerRef.current?.sendCtrlAltDel()}>
+                                        <Keyboard size={14} /> Ctrl+Alt+Del
+                                    </DropdownMenuItem>
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuCheckboxItem checked={ctrlAsCmd} onCheckedChange={(on) => actions.setCtrlMode(on ? "on" : "off")}>
+                                    <span className="block">
+                                        {t("desktop.keyboard.ctrlAsCmd")}
+                                        <span className="block text-xs text-muted-foreground">{t("desktop.keyboard.ctrlAsCmdHint")}</span>
+                                    </span>
+                                </DropdownMenuCheckboxItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                        {clipboard !== "off" && (
+                            <Button size="sm" variant="ghost" onClick={() => setPasteOpen(true)} disabled={!connected} title={t("desktop.pasteTitle")}>
+                                <ClipboardPaste size={15} /> <span className="hidden md:inline">{t("desktop.paste")}</span>
                             </Button>
                         )}
                         <Button size="sm" variant="ghost" onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
@@ -149,8 +278,21 @@ function DesktopPageInner() {
                         </div>
                     )}
                     <div className={cn("relative", fullscreen ? "flex-1" : "h-[calc(100dvh-15rem)] min-h-80")}>
-                        <DesktopViewer ref={viewerRef} start={session} onConnected={actions.onConnected} onEnded={actions.onEnded} onRemoteClipboard={onRemoteClipboard} />
-                        {phase !== "connected" && (
+                        <DesktopViewer
+                            ref={viewerRef}
+                            start={session}
+                            viewport={viewport}
+                            pixelRatio={pixelRatio}
+                            ctrlAsCmd={ctrlAsCmd}
+                            onConnected={actions.onConnected}
+                            onEnded={actions.onEnded}
+                            onRemoteClipboard={onRemoteClipboard}
+                            onStats={actions.onStats}
+                            onTunnelUnstable={actions.onTunnelUnstable}
+                            onDisplaySize={actions.onDisplaySize}
+                            onScale={actions.onScale}
+                        />
+                        {!connected && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-sm text-white">
                                 <span className="size-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden />
                                 <span>{t("desktop.flow.now.connecting")}</span>
@@ -190,6 +332,23 @@ function DesktopPageInner() {
             >
                 <Textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={6} autoFocus className="font-mono text-sm" aria-label={t("desktop.pasteTitle")} />
             </Modal>
+            <Modal
+                isOpen={typeOpen}
+                onClose={() => setTypeOpen(false)}
+                title={t("desktop.typeText.title")}
+                description={t("desktop.typeText.description")}
+                icon={<TextCursorInput />}
+                size="lg"
+                footer={
+                    <>
+                        <Button variant="outline" onClick={() => setTypeOpen(false)}>{t("common.cancel")}</Button>
+                        <Button onClick={sendTyped} disabled={!typeText}>{t("desktop.typeText.send")}</Button>
+                    </>
+                }
+            >
+                <Textarea value={typeText} onChange={(e) => setTypeText(e.target.value)} rows={4} autoFocus className="text-sm" aria-label={t("desktop.typeText.title")} />
+                <p className="mt-2 text-xs text-muted-foreground">{t("desktop.typeText.hint")}</p>
+            </Modal>
         </div>
     );
 }
@@ -199,7 +358,7 @@ type PageActions = ReturnType<typeof useDesktopPage>["actions"];
 
 function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
     const { t, tn } = useI18n();
-    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin } = state;
+    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality } = state;
     const portOk = isValidPort(form.port);
     const busy = phase === "starting";
     // 預熱畫面元件的 chunk（與填表並行）。/ Warm up the client chunk while the form is filled in.
@@ -211,6 +370,11 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
     const protocolOptions: { value: DesktopProtocol; label: string }[] = [
         { value: "rdp", label: t("desktop.protocol.rdp") },
         { value: "vnc", label: t("desktop.protocol.vnc") },
+    ];
+    const qualityOptions: { value: DesktopQuality; label: string }[] = [
+        { value: "auto", label: t("desktop.quality.auto") },
+        { value: "speed", label: t("desktop.quality.speed") },
+        { value: "sharp", label: t("desktop.quality.sharp") },
     ];
     const noAccounts = !!tunnel && tunnel.usernames.length === 0;
 
@@ -283,6 +447,10 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
 
                 <Field label={t("desktop.field.port")} hint={t("desktop.field.portHint")} error={portOk ? undefined : t("desktop.field.portInvalid")}>
                     <Input inputMode="numeric" value={form.port} onChange={(e) => actions.update({ port: e.target.value.replace(/[^\d]/g, "") })} />
+                </Field>
+
+                <Field label={t("desktop.field.quality")} hint={t(QUALITY_HINT[quality])}>
+                    <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
 
                 {savedLogins.length > 0 && (

@@ -21,6 +21,8 @@
 
 pub mod bridge;
 pub mod guac;
+pub mod screens;
+pub mod stats;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,6 +112,36 @@ impl Clipboard {
             Self::Both => "both",
             Self::ToRemote => "to_remote",
             Self::Off => "off",
+        }
+    }
+}
+
+/// 畫質偏好（瀏覽器在 start 時選）：auto = guacd 自己的啟發式；speed = 少一點位元（16 位色、不平滑字型、
+/// VNC 壓更多）給慢的隧道；sharp = 24 位色、只用無損壓縮。/ Quality preset chosen at start.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Quality {
+    #[default]
+    Auto,
+    Speed,
+    Sharp,
+}
+
+impl Quality {
+    pub const VALUES: &'static [&'static str] = &["auto", "speed", "sharp"];
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "auto" | "" => Some(Self::Auto),
+            "speed" => Some(Self::Speed),
+            "sharp" => Some(Self::Sharp),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Speed => "speed",
+            Self::Sharp => "sharp",
         }
     }
 }
@@ -218,6 +250,7 @@ pub struct Session {
     pub protocol: Protocol,
     pub target: Target,
     pub clipboard: Clipboard,
+    pub quality: Quality,
     pub saved_label: Option<String>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
@@ -278,6 +311,7 @@ pub struct NewSession {
     pub protocol: Protocol,
     pub target: Target,
     pub clipboard: Clipboard,
+    pub quality: Quality,
     pub credentials: Credentials,
     pub prepared: Prepared,
     /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
@@ -320,6 +354,7 @@ impl Desktop {
             protocol: new.protocol,
             target: new.target,
             clipboard: new.clipboard,
+            quality: new.quality,
             saved_label: new.saved_label,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
@@ -434,12 +469,22 @@ fn constant_eq(a: &str, b: &str) -> bool {
 }
 
 /// guacd 的連線參數。`hostname` / `port` 指向後端的 rendezvous（guacd 連回來），真正的目標在通道另一端。
-/// 參數名依 guacd 的 `args` 清單查表，用不到的自然留空。
+/// 參數名依 guacd 的 `args` 清單查表，用不到的自然留空。畫質預設：speed 少位元（慢隧道用）、sharp 無損。
 /// guacd connection parameters; `hostname`/`port` point at the rendezvous, the real target sits behind the channel.
-pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboard, callback_host: &str, callback_port: u16, size: guac::Size) -> HashMap<String, String> {
+pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboard, quality: Quality, callback_host: &str, callback_port: u16, size: guac::Size) -> HashMap<String, String> {
     let mut p: HashMap<String, String> = HashMap::new();
     p.insert("hostname".into(), callback_host.to_string());
     p.insert("port".into(), callback_port.to_string());
+    match quality {
+        Quality::Auto => {}
+        Quality::Speed => {
+            p.insert("color-depth".into(), "16".into());
+        }
+        Quality::Sharp => {
+            p.insert("color-depth".into(), "24".into());
+            p.insert("force-lossless".into(), "true".into());
+        }
+    }
     match clipboard {
         Clipboard::Both => {}
         Clipboard::ToRemote => {
@@ -464,13 +509,26 @@ pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboar
             p.insert("dpi".into(), size.dpi.to_string());
             p.insert("resize-method".into(), "display-update".into());
             p.insert("client-name".into(), "Telepy".into());
-            p.insert("enable-font-smoothing".into(), "true".into());
+            // speed：鋸齒字型的位元少得多（平滑字型讓每一塊圖都更難壓）。/ Smoothed text compresses badly.
+            if quality != Quality::Speed {
+                p.insert("enable-font-smoothing".into(), "true".into());
+            }
         }
         Protocol::Vnc => {
             if !creds.login.is_empty() {
                 p.insert("username".into(), creds.login.clone());
             }
             p.insert("password".into(), creds.password.clone());
+            match quality {
+                Quality::Speed => {
+                    p.insert("compress-level".into(), "6".into());
+                    p.insert("quality-level".into(), "5".into());
+                }
+                Quality::Sharp => {
+                    p.insert("quality-level".into(), "9".into());
+                }
+                Quality::Auto => {}
+            }
         }
     }
     p
@@ -498,18 +556,44 @@ mod tests {
     fn rdp_params_point_guacd_at_the_rendezvous_and_apply_the_clipboard_policy() {
         let creds = Credentials { login: "alice".into(), password: "pw".into(), domain: "CORP".into() };
         let size = guac::Size { width: 1280, height: 720, dpi: 96 };
-        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::ToRemote, "backend", 40123, size);
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::ToRemote, Quality::Auto, "backend", 40123, size);
         assert_eq!(p["hostname"], "backend");
         assert_eq!(p["port"], "40123");
         assert_eq!(p["domain"], "CORP");
         assert_eq!(p["security"], "any");
         assert_eq!(p["resize-method"], "display-update");
         assert_eq!(p["disable-copy"], "true");
+        assert_eq!(p["enable-font-smoothing"], "true");
         assert!(!p.contains_key("disable-paste"));
-        let p = guacd_params(Protocol::Vnc, &Credentials { password: "secret".into(), ..Default::default() }, Clipboard::Off, "backend", 1, size);
+        assert!(!p.contains_key("color-depth"), "auto leaves the depth to guacd");
+        let p = guacd_params(Protocol::Vnc, &Credentials { password: "secret".into(), ..Default::default() }, Clipboard::Off, Quality::Auto, "backend", 1, size);
         assert_eq!(p["password"], "secret");
         assert!(!p.contains_key("username"));
         assert_eq!(p["disable-paste"], "true");
+    }
+
+    #[test]
+    fn quality_presets_change_depth_and_compression() {
+        let creds = Credentials::default();
+        let size = guac::Size { width: 1280, height: 720, dpi: 96 };
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Speed, "backend", 1, size);
+        assert_eq!(p["color-depth"], "16");
+        assert!(!p.contains_key("enable-font-smoothing"));
+        assert!(!p.contains_key("force-lossless"));
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Sharp, "backend", 1, size);
+        assert_eq!(p["color-depth"], "24");
+        assert_eq!(p["force-lossless"], "true");
+        assert_eq!(p["enable-font-smoothing"], "true");
+        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Speed, "backend", 1, size);
+        assert_eq!((p["color-depth"].as_str(), p["compress-level"].as_str(), p["quality-level"].as_str()), ("16", "6", "5"));
+        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Sharp, "backend", 1, size);
+        assert_eq!((p["color-depth"].as_str(), p["quality-level"].as_str(), p["force-lossless"].as_str()), ("24", "9", "true"));
+        assert_eq!(Quality::parse(""), Some(Quality::Auto));
+        assert_eq!(Quality::parse("sharp"), Some(Quality::Sharp));
+        assert_eq!(Quality::parse("ultra"), None);
+        for v in Quality::VALUES {
+            assert_eq!(Quality::parse(v).unwrap().as_str(), *v);
+        }
     }
 
     #[test]

@@ -5,6 +5,8 @@
 //! [`ALLOWED_OPCODES`]；guacd→瀏覽器透傳（含 `error`，瀏覽器自己顯示），並記下 guacd 的錯誤給日誌。
 //! 關閉碼：4404 session / 票證無效或過期、4403 無權限、4011 guacd 連不上或握手失敗、4013 guacd 斷線、
 //! 4014 伺服器端結束（閒置 / stop / 權限被收回）、4400 瀏覽器送了壞指令。
+//! 串流統計（`desktop/stats.rs`）：每秒給瀏覽器 `telepy-ping` + `telepy-stats`（畫面往返、網路往返、隧道延遲、
+//! fps、流量、落後幾幀）；瀏覽器回的 `telepy-pong` 在這裡結算、不轉給 guacd。
 //! Browser ↔ guacd relay for the in-browser remote desktop; see `desktop/mod.rs` for the design.
 
 use std::collections::HashMap;
@@ -18,6 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::desktop::guac::{self, Guacd, Parser, Size, Unit};
+use crate::desktop::stats::Stats;
 use crate::desktop::{self, bridge, fmt_duration};
 use crate::presence::{Entry, Kind};
 use crate::state::AppState;
@@ -125,7 +128,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             b.abort();
         }
     };
-    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, &state.desktop.callback_host, callback_port, size);
+    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, session.quality, &state.desktop.callback_host, callback_port, size);
     drop(credentials);
     let connection_id = match guacd.handshake(session.protocol.as_str(), size, &params, desktop::HANDSHAKE_TIMEOUT).await {
         Ok(id) => id,
@@ -160,6 +163,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut buf = vec![0u8; 64 * 1024];
     let mut last_error: Option<String> = None;
     let mut close_code: Option<u16> = None;
+    let mut stats = Stats::new(Instant::now());
+    let mut stats_tick = tokio::time::interval(desktop::stats::INTERVAL);
+    stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let reverse_port = u16::try_from(session.reverse_port).ok();
     // guacd 常把 `ready` 和第一批畫面指令放在同一個封包：握手時已讀進解析器的部分要先送出，
     // 否則它們會一直躺在緩衝區裡，直到 guacd 再送下一批。
     // guacd often sends `ready` and the first drawing instructions in one packet; forward what the handshake
@@ -169,7 +176,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         last_error = Some(format!("{} ({})", i.element(1).unwrap_or(""), i.element(2).unwrap_or("")));
     }
     if !pending.is_empty() {
-        let out: String = pending.iter().map(|i| i.wire(Unit::Utf16)).collect();
+        let now = Instant::now();
+        let out: String = pending.iter().map(|i| { stats.sent(i, now); i.wire(Unit::Utf16) }).collect();
+        stats.add_down(out.len());
         if socket.send(Message::Text(Utf8Bytes::from(out))).await.is_err() {
             abort_bridge(&accept);
             state.desktop.remove(&session_id);
@@ -183,11 +192,18 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         tokio::select! {
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(t))) => {
+                    stats.add_up(t.len());
                     from_browser.push(t.as_bytes());
                     let (list, err) = from_browser.drain();
                     let mut out = String::new();
                     let mut disconnect = false;
+                    let now = Instant::now();
                     for i in list {
+                        // sync 回音結算那一幀的往返；telepy-pong 是我們自己的 ping，不轉給 guacd。
+                        // A sync echo settles its frame; a pong answers our own ping and stops here.
+                        if stats.received(&i, now) {
+                            continue;
+                        }
                         let op = i.opcode();
                         if !is_allowed(op) {
                             tracing::debug!(session = %session_id, opcode = op, "desktop: dropped a browser instruction");
@@ -225,14 +241,17 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     let (list, err) = from_guacd.drain();
                     let mut out = String::new();
                     let mut disconnect = false;
+                    let now = Instant::now();
                     for i in list {
                         match i.opcode() {
                             "error" => last_error = Some(format!("{} ({})", i.element(1).unwrap_or(""), i.element(2).unwrap_or(""))),
                             "disconnect" => disconnect = true,
                             _ => {}
                         }
+                        stats.sent(&i, now);
                         out.push_str(&i.wire(Unit::Utf16));
                     }
+                    stats.add_down(out.len());
                     if !out.is_empty() && socket.send(Message::Text(Utf8Bytes::from(out))).await.is_err() {
                         break "user";
                     }
@@ -247,6 +266,17 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     }
                 }
             },
+            // 每秒：一個 ping（網路往返）+ 這一秒的統計；隧道延遲取 monitor 最近量到的。
+            // Every second: a ping for the network round trip and this second's stats, with the monitor's latency.
+            _ = stats_tick.tick() => {
+                let now = Instant::now();
+                let tunnel_ms = reverse_port.and_then(|p| state.status.latency().and_then(|m| m.get(&p).copied()));
+                let mut out = stats.ping(now);
+                out.push_str(&stats.tick(now, tunnel_ms));
+                if socket.send(Message::Text(Utf8Bytes::from(out))).await.is_err() {
+                    break "user";
+                }
+            }
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
                 ended_by = Some(by);
@@ -261,7 +291,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         }
     } };
     let duration = connected_at.elapsed();
-    let mut message = format!("{opened} closed after {} ({reason}, session {})", fmt_duration(duration), short(&session_id));
+    let mut message = format!("{opened} closed after {} ({reason}, session {}; {})", fmt_duration(duration), short(&session_id), stats.summary());
     if let Some(e) = &last_error {
         message.push_str(&format!("; guacd: {e}"));
     }

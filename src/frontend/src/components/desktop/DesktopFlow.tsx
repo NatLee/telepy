@@ -15,6 +15,7 @@ import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { spotStates, type ClipboardPolicy, type DesktopFailure, type DesktopPhase, type DesktopProtocol, type FlowSpot, type SpotState } from "@/lib/desktop";
+import { formatMs, laggingHop, type StreamStats } from "@/lib/desktopStats";
 import type { TranslationKey } from "@/locales/en";
 
 export interface FlowContext {
@@ -30,6 +31,8 @@ export interface FlowContext {
     clipboard: ClipboardPolicy | null;
     /** 用憑證庫的登入（密碼只在伺服器上解開）。/ Using a saved login (unsealed on the server only). */
     savedLogin?: boolean;
+    /** 連線中的串流統計：每段線標上往返時間，最慢的那段標黃。/ Live stats: a round trip on each link. */
+    stats?: StreamStats | null;
 }
 
 const STATE_TEXT: Record<SpotState, TranslationKey> = {
@@ -80,7 +83,7 @@ function Node({ icon, brand, title, sub, state }: { icon?: LucideIcon; brand?: b
     );
 }
 
-function Link({ label, state, motion }: { label: string; state: SpotState; motion: boolean }) {
+function Link({ label, state, motion, note, slow }: { label: string; state: SpotState; motion: boolean; note?: string; slow?: boolean }) {
     const animate = motion && (state === "active" || state === "ok");
     const dash = state === "waiting" ? "4 5" : state === "failed" ? "2 6" : "7 5";
     const line = (vertical: boolean) => (
@@ -102,6 +105,7 @@ function Link({ label, state, motion }: { label: string; state: SpotState; motio
             <span className={cn("text-xs leading-tight @3xl:text-center", state === "failed" ? "text-destructive" : "text-muted-foreground")}>
                 {state === "failed" && <XCircle size={12} className="mr-1 inline-block align-[-2px]" aria-hidden />}
                 {label}
+                {note && <span className={cn("block font-mono tabular-nums", slow ? "text-warning" : "text-foreground")}>{note}</span>}
             </span>
         </li>
     );
@@ -139,20 +143,29 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
                 : ctx.phase === "connected" ? "desktop.flow.now.connected"
                     : ctx.phase === "failed" ? "desktop.flow.now.failed"
                         : "desktop.flow.now.idle";
+    const stats = ctx.phase === "connected" ? ctx.stats ?? null : null;
+    const where = stats ? laggingHop(stats) : null;
+    const whereKey: TranslationKey | null = where === "web" ? "desktop.stats.where.web" : where === "tunnel" ? "desktop.stats.where.tunnel" : where === "browser" ? "desktop.stats.where.browser" : null;
 
     return (
         <div className="space-y-5">
             <p className={cn("rounded-md border px-3 py-2 text-sm", ctx.phase === "failed" ? "border-destructive/40 bg-destructive/5 text-destructive" : "border-border bg-surface text-foreground")} role="status">
                 {t(nowKey)}
                 {ctx.phase === "failed" && ctx.failure && <span className="mt-0.5 block text-xs text-muted-foreground">{t(ctx.failure.key, ctx.failure.vars)}</span>}
+                {stats && (
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                        {t("desktop.stats.flowLine", { frame: formatMs(stats.frameMs), fps: stats.fps })}
+                        {whereKey && ` ${t(whereKey)}`}
+                    </span>
+                )}
             </p>
 
             <div className="@container">
                 <ol className="flex flex-col items-stretch @3xl:flex-row @3xl:items-center">
                     <Node icon={Laptop} title={t("desktop.flow.you")} sub={t("desktop.flow.youSub")} state={s.browser} />
-                    <Link label={t("desktop.flow.linkWeb")} state={s.web} motion={motion} />
+                    <Link label={t("desktop.flow.linkWeb")} state={s.web} motion={motion} note={stats ? formatMs(stats.netMs) : undefined} slow={where === "web"} />
                     <Node brand title="Telepy" sub={t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />
-                    <Link label={t("desktop.flow.linkTunnel")} state={s.tunnel} motion={motion} />
+                    <Link label={t("desktop.flow.linkTunnel")} state={s.tunnel} motion={motion} note={stats ? formatMs(stats.tunnelMs) : undefined} slow={where === "tunnel"} />
                     <Node icon={Server} title={ctx.deviceName} sub={t("desktop.flow.deviceSub")} state={s.device} />
                     <Link label={ctx.lanHost ? t("desktop.flow.linkLan", { port: ctx.port }) : t("desktop.flow.linkLocal", { port: ctx.port })} state={s.reach} motion={motion} />
                     <Node
@@ -199,6 +212,7 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
                 <li>{t(ctx.clipboard === "off" ? "desktop.flow.noteClipboardOff" : ctx.clipboard === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}</li>
                 <li>{t("desktop.flow.noteLogged")}</li>
                 <li>{t("desktop.flow.noteDevice")}</li>
+                <li>{t("desktop.flow.noteIme")}</li>
             </ul>
         </div>
     );

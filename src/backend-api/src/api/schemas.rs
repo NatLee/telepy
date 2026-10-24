@@ -946,6 +946,8 @@ pub struct DesktopStartRequest {
     pub login: Option<String>,
     /// Desktop password; memory only, dropped after the guacd handshake
     pub password: Option<String>,
+    /// Quality preset: auto (default) | speed (16-bit colour, more compression) | sharp (24-bit, lossless only)
+    pub quality: Option<String>,
     /// RDP domain
     pub domain: Option<String>,
     /// Use a saved login from the credential vault instead of login / password / domain
@@ -973,8 +975,35 @@ pub struct DesktopSession {
     pub protocol: String,
     /// Effective clipboard policy: both | to_remote | off
     pub clipboard: String,
+    /// Quality preset in effect: auto | speed | sharp
+    pub quality: String,
     pub target: DesktopTarget,
     /// The device account used for the hop
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopScreen {
+    /// Monitor name as the device reports it (`eDP-1`, `Color LCD`, `DISPLAY1`)
+    pub name: String,
+    /// Position in the device's combined framebuffer; null when the OS does not report it (macOS)
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
+/// The device's monitor layout, asked over SSH (`xrandr`, `system_profiler`, PowerShell). Used by the
+/// VNC viewer to show one screen of a multi-monitor desktop.
+#[derive(ToSchema)]
+pub struct DesktopScreens {
+    /// darwin | linux | windows | unknown
+    pub os: String,
+    /// xrandr | system_profiler | powershell; null when nothing answered
+    pub source: Option<String>,
+    pub screens: Vec<DesktopScreen>,
+    /// The device account the commands ran as
     pub username: String,
 }
 
