@@ -1,84 +1,115 @@
 "use client";
 
 /**
- * SSH gateway 日誌頁：結構化事件、隧道篩選（?tunnel=<id>，可從隧道列表深連結）、關鍵字搜尋、事件種類標籤。
- * SSH gateway logs page: structured events, tunnel filter (?tunnel=<id>, deep-linkable from the tunnel list),
- * keyword search and event-kind badges.
+ * SSH gateway 日誌頁：結構化事件依日期分組、隧道篩選（?tunnel=<id>，可從隧道列表深連結）、事件類型篩選、關鍵字搜尋（命中處標示）。
+ * 整頁捲動：篩選列黏在 Header 下方（sm 以上），每天的標題再黏在篩選列下方。
+ * SSH gateway logs page: structured events grouped by day, tunnel filter (?tunnel=<id>, deep-linkable from the tunnel
+ * list), event-type filter and keyword search (hits highlighted). The page itself scrolls: the filter bar sticks under
+ * the header (sm and up) and each day's heading under the filter bar.
  */
-import React, { Suspense } from "react";
-import { Search, FileText, AlertCircle, RefreshCw, Filter, X, ShieldCheck } from "lucide-react";
+import React, { Suspense, useEffect, useRef, useState } from "react";
+import { Search, FileText, AlertCircle, RefreshCw, Filter, X, ShieldCheck, ChevronDown } from "lucide-react";
 import { AuditVerifyDialog } from "@/components/logs/AuditVerifyDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Segmented } from "@/components/ui/segmented";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { ALL_TUNNELS, useLogsPage } from "@/hooks/useLogsPage";
+import { ALL_TUNNELS, useLogsPage, type LogEntry, type TunnelOption } from "@/hooks/useLogsPage";
+import { CATEGORY_FILTERS, EVENT_KINDS, highlightSegments, type CategoryFilter } from "@/lib/gatewayLogs";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
-
-// 標籤依 gateway 的 `event` 欄位決定（不是比對訊息字串），所以可以翻譯。
-// Badges key off the gateway's `event` field (not message text), so their labels are translatable.
-const EVENT_BADGES: Record<string, { key: TranslationKey; variant: BadgeVariant }> = {
-    listening: { key: "logs.event.listening", variant: "outline" },
-    accepted: { key: "logs.event.accepted", variant: "default" },
-    forward: { key: "logs.event.forward", variant: "default" },
-    forward_released: { key: "logs.event.forward_released", variant: "secondary" },
-    disconnect: { key: "logs.event.disconnect", variant: "secondary" },
-    refused_forward: { key: "logs.event.refused_forward", variant: "destructive" },
-    refused_direct: { key: "logs.event.refused_direct", variant: "destructive" },
-    refused_proxy: { key: "logs.event.refused_proxy", variant: "destructive" },
-    failed_publickey: { key: "logs.event.failed_publickey", variant: "destructive" },
-    invalid_user: { key: "logs.event.invalid_user", variant: "destructive" },
-    preauth_close: { key: "logs.event.preauth_close", variant: "outline" },
-    degraded: { key: "logs.event.degraded", variant: "warning" },
-    recovered: { key: "logs.event.recovered", variant: "success" },
-    ip_changed: { key: "logs.event.ip_changed", variant: "warning" },
-    expired_key: { key: "logs.event.expired_key", variant: "destructive" },
-    recording_setting: { key: "logs.event.recording_setting", variant: "outline" },
-    recording_deleted: { key: "logs.event.recording_deleted", variant: "outline" },
-    session_ended: { key: "logs.event.session_ended", variant: "warning" },
-    terminal_open: { key: "logs.event.terminal_open", variant: "default" },
-    lan_terminal: { key: "logs.event.lan_terminal", variant: "default" },
-    terminal_close: { key: "logs.event.terminal_close", variant: "secondary" },
-    files_open: { key: "logs.event.files_open", variant: "default" },
-    files_close: { key: "logs.event.files_close", variant: "secondary" },
-    browser_open: { key: "logs.event.browser_open", variant: "default" },
-    browser_close: { key: "logs.event.browser_close", variant: "secondary" },
-    step_up_required: { key: "logs.event.step_up_required", variant: "warning" },
-    step_up_setting: { key: "logs.event.step_up_setting", variant: "outline" },
-    desktop_open: { key: "logs.event.desktop_open", variant: "default" },
-    desktop_close: { key: "logs.event.desktop_close", variant: "secondary" },
-    access_request: { key: "logs.event.access_request", variant: "outline" },
-    host_key_pinned: { key: "logs.event.host_key_pinned", variant: "outline" },
-    host_key_mismatch: { key: "logs.event.host_key_mismatch", variant: "destructive" },
-    host_key_accepted: { key: "logs.event.host_key_accepted", variant: "warning" },
-    host_key_forgotten: { key: "logs.event.host_key_forgotten", variant: "secondary" },
+const CATEGORY_LABELS: Record<CategoryFilter, TranslationKey> = {
+    all: "logs.cat.all",
+    problem: "logs.cat.problem",
+    connection: "logs.cat.connection",
+    session: "logs.cat.session",
+    change: "logs.cat.change",
 };
+
+function Highlighted({ text, query }: { text: string; query: string }) {
+    return (
+        <>
+            {highlightSegments(text, query).map((seg, i) =>
+                seg.hit ? (
+                    <mark key={i} className="rounded-sm bg-primary/20 text-foreground">
+                        {seg.text}
+                    </mark>
+                ) : (
+                    <React.Fragment key={i}>{seg.text}</React.Fragment>
+                )
+            )}
+        </>
+    );
+}
+
+function LogRow({ log, query, tunnel, onTunnel }: { log: LogEntry; query: string; tunnel: TunnelOption | null; onTunnel: (id: number) => void }) {
+    const { t } = useI18n();
+    const known = EVENT_KINDS[log.event];
+    return (
+        // 寬螢幕三欄（時間 / 事件 / 訊息）；窄的時候時間 + 標籤一行、訊息在下一行，不會把訊息擠成幾個字寬。
+        // Three columns on wide screens; narrower, time + badge share a line above the message, which is never squeezed.
+        <li className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-1 px-4 py-2.5 hover:bg-muted/40 lg:grid-cols-[4.5rem_8.5rem_minmax(0,1fr)] lg:gap-x-4 lg:px-5 lg:py-2">
+            <time dateTime={log.at} title={log.full} className="font-mono text-xs leading-5 text-muted-foreground tabular-nums">
+                {log.time}
+            </time>
+            <span className="flex h-5 min-w-0 items-center">
+                <Badge variant={known?.tone ?? "outline"} className="text-[0.6875rem] leading-none py-0.5">
+                    {known ? t(known.key) : log.event}
+                </Badge>
+            </span>
+            <p className="col-span-2 min-w-0 font-mono text-xs leading-5 text-foreground whitespace-pre-wrap wrap-anywhere lg:col-span-1">
+                {tunnel && (
+                    <button
+                        type="button"
+                        onClick={() => onTunnel(tunnel.id)}
+                        title={t("logs.onlyTunnel", { name: tunnel.host_friendly_name })}
+                        className="mr-2 inline-flex max-w-full items-center rounded-sm border border-border bg-muted px-1.5 align-[1px] font-sans text-[0.6875rem] leading-4 text-foreground/80 transition-colors hover:bg-foreground/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                        <span className="truncate">{tunnel.host_friendly_name}</span>
+                        <span className="ml-1 text-muted-foreground tabular-nums">· {tunnel.reverse_port}</span>
+                    </button>
+                )}
+                <Highlighted text={log.message} query={query} />
+            </p>
+        </li>
+    );
+}
 
 function LogsPageInner() {
     const { t } = useI18n();
     const { state, actions } = useLogsPage();
-    const { logs, filteredLogs, loading, search, setSearch, tunnels, tunnelFilter, selectedTunnel, isAdmin, verifyOpen, verifying, verifyReport } = state;
-    const { fetchLogs, setTunnelFilter, runVerify, closeVerify } = actions;
+    const { logs, filteredLogs, groups, counts, category, hasMore, noOlder, loading, initialLoading, search, setSearch, tunnels, tunnelsById, tunnelFilter, selectedTunnel, isAdmin, verifyOpen, verifying, verifyReport } = state;
+    const { fetchLogs, loadMore, setCategory, setTunnelFilter, runVerify, closeVerify } = actions;
 
-    const eventBadge = (event: string) => {
-        const known = EVENT_BADGES[event];
-        return (
-            <Badge variant={known?.variant ?? "outline"} className="text-[0.6875rem] leading-none py-0.5 whitespace-nowrap">
-                {known ? t(known.key) : event}
-            </Badge>
-        );
+    // 每天的標題黏在篩選列下方，所以要知道篩選列多高（會換行，選了隧道也會變）。
+    // Day headings stick under the filter bar, so they need its height (it wraps, and grows with a tunnel selected).
+    const barRef = useRef<HTMLDivElement>(null);
+    const [barHeight, setBarHeight] = useState(0);
+    useEffect(() => {
+        const bar = barRef.current;
+        if (!bar) return;
+        const ro = new ResizeObserver(() => setBarHeight(bar.offsetHeight));
+        ro.observe(bar);
+        return () => ro.disconnect();
+    }, []);
+
+    // 從某一列的隧道標籤切過去：換成那條隧道並回到頂端。/ From a row's tunnel chip: filter to it and go back to the top.
+    const showTunnel = (id: number) => {
+        setTunnelFilter(String(id));
+        window.scrollTo({ top: 0 });
     };
 
+    const filtering = search.trim() !== "" || category !== "all";
+
     return (
-        <div className="flex flex-col h-[calc(100vh-8rem)] animate-fade-in-up">
+        <div className="flex flex-col animate-fade-in-up" style={{ "--logs-bar": `${barHeight}px` } as React.CSSProperties}>
             <PageHeader
-                className="mb-6 shrink-0"
+                className="mb-6"
                 icon={<FileText />}
                 title={t("logs.title")}
                 description={t("logs.subtitle")}
@@ -90,8 +121,8 @@ function LogsPageInner() {
                                 {t("logs.verify.button")}
                             </Button>
                         )}
-                        <Button onClick={fetchLogs} variant="outline">
-                            <RefreshCw size={16} />
+                        <Button onClick={fetchLogs} variant="outline" disabled={loading}>
+                            <RefreshCw size={16} className={loading ? "animate-spin" : undefined} />
                             {t("common.refresh")}
                         </Button>
                     </>
@@ -99,96 +130,125 @@ function LogsPageInner() {
             />
             {isAdmin && <AuditVerifyDialog isOpen={verifyOpen} onClose={closeVerify} onRerun={runVerify} loading={verifying} report={verifyReport} />}
 
-            <Callout tone="info" className="mb-4 shrink-0">{t("logs.banner")}</Callout>
+            <Callout tone="info" className="mb-1">{t("logs.banner")}</Callout>
 
-            <div className="mb-4 shrink-0 flex flex-col sm:flex-row gap-2">
-                <div className="flex items-center gap-2 sm:w-72">
-                    <Filter size={16} className="text-muted-foreground shrink-0" aria-hidden />
-                    <Select value={tunnelFilter} onValueChange={setTunnelFilter}>
-                        <SelectTrigger className="h-10 flex-1 text-sm" aria-label={t("logs.tunnelFilter")}>
-                            <SelectValue placeholder={t("logs.tunnelFilter")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL_TUNNELS}>{t("logs.allTunnels")}</SelectItem>
-                            {tunnels.map((tunnel) => (
-                                <SelectItem key={tunnel.id} value={String(tunnel.id)}>
-                                    {tunnel.host_friendly_name} · {tunnel.reverse_port}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-                <div className="relative flex-1">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <Search size={18} className="text-muted-foreground" />
+            {/* 手機上三列篩選太占高度，所以 sm 以上才黏住。/ On phones the three-row bar would eat the screen, so it only sticks from sm. */}
+            <div ref={barRef} className="z-20 flex flex-col gap-2 bg-background py-3 sm:sticky sm:top-16">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                    <div className="flex items-center gap-2 sm:w-64 xl:w-80">
+                        <Filter size={16} className="text-muted-foreground shrink-0" aria-hidden />
+                        <Select value={tunnelFilter} onValueChange={setTunnelFilter}>
+                            <SelectTrigger className="h-10 flex-1 min-w-0 text-sm" aria-label={t("logs.tunnelFilter")}>
+                                <SelectValue placeholder={t("logs.tunnelFilter")} />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value={ALL_TUNNELS}>{t("logs.allTunnels")}</SelectItem>
+                                {tunnels.map((tunnel) => (
+                                    <SelectItem key={tunnel.id} value={String(tunnel.id)}>
+                                        {tunnel.host_friendly_name} · {tunnel.reverse_port}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        {selectedTunnel && (
+                            <Button variant="ghost" size="icon" className="size-10 shrink-0" onClick={() => setTunnelFilter(ALL_TUNNELS)} aria-label={t("logs.showAll")} title={t("logs.showAll")}>
+                                <X size={16} />
+                            </Button>
+                        )}
                     </div>
-                    <Input
-                        type="text"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        placeholder={t("logs.searchPlaceholder")}
-                        className="pl-10"
-                    />
+                    <div className="relative flex-1">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <Search size={18} className="text-muted-foreground" />
+                        </div>
+                        <Input
+                            type="search"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder={t("logs.searchPlaceholder")}
+                            className="pl-10"
+                        />
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="max-w-full overflow-x-auto">
+                        <Segmented
+                            size="sm"
+                            aria-label={t("logs.filterCategory")}
+                            value={category}
+                            onChange={setCategory}
+                            options={CATEGORY_FILTERS.map((c) => ({
+                                value: c,
+                                title: t(CATEGORY_LABELS[c]),
+                                label: (
+                                    <>
+                                        {t(CATEGORY_LABELS[c])}
+                                        <span className={`ml-1.5 tabular-nums ${c === "problem" && counts.problem > 0 ? "text-destructive" : "text-muted-foreground"}`}>{counts[c]}</span>
+                                    </>
+                                ),
+                            }))}
+                        />
+                    </div>
+                    {!initialLoading && logs.length > 0 && (
+                        <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                            {filtering ? t("logs.count", { shown: filteredLogs.length, total: logs.length }) : t("logs.countAll", { total: logs.length })}
+                        </span>
+                    )}
                 </div>
             </div>
 
-            {selectedTunnel && (
-                <div className="mb-4 shrink-0 flex items-center justify-between gap-2 text-sm text-muted-foreground">
-                    <span>{t("logs.showingTunnel", { name: selectedTunnel.host_friendly_name, port: selectedTunnel.reverse_port })}</span>
-                    <Button variant="ghost" size="sm" className="gap-1 h-7" onClick={() => setTunnelFilter(ALL_TUNNELS)}>
-                        <X size={14} /> {t("logs.showAll")}
-                    </Button>
-                </div>
-            )}
-
-            <div className="flex-1 bg-card text-card-foreground border border-border rounded-lg shadow-sm overflow-hidden flex flex-col min-h-0">
-                {loading ? (
-                    <div className="flex-1 flex justify-center items-center">
+            {/* overflow-clip 只裁圓角、不建立捲動容器，所以裡面的 sticky 日期標題仍然跟著整頁黏住。
+                overflow-clip trims the rounded corners without creating a scroll container, so the sticky day headings
+                inside still stick to the page. */}
+            <div className="bg-card text-card-foreground border border-border rounded-xl shadow-card overflow-clip">
+                {initialLoading ? (
+                    <div className="flex justify-center items-center py-24">
                         <div className="flex flex-col items-center">
                             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-4"></div>
-                            <p className="text-muted-foreground font-medium">{t("logs.loading")}</p>
+                            <p className="text-muted-foreground">{t("logs.loading")}</p>
                         </div>
                     </div>
                 ) : logs.length === 0 ? (
-                    <div className="flex-1 flex justify-center items-center">
+                    <div className="flex justify-center items-center py-24">
                         <div className="text-center">
-                            <AlertCircle size={48} className="mx-auto text-muted mb-4 opacity-50" />
-                            <p className="text-muted-foreground font-medium text-lg">{t("logs.empty")}</p>
+                            <AlertCircle size={48} className="mx-auto text-muted-foreground mb-4 opacity-50" />
+                            <p className="text-muted-foreground text-lg">{t("logs.empty")}</p>
                         </div>
                     </div>
+                ) : filteredLogs.length === 0 ? (
+                    <p className="px-6 py-10 text-center text-sm text-muted-foreground">{t("logs.noMatch")}</p>
                 ) : (
-                    <div className="flex-1 overflow-auto bg-muted/10 font-mono text-sm">
-                        <table className="min-w-full divide-y divide-border border-collapse">
-                            <thead className="bg-muted/50 sticky top-0 border-b border-border shadow-sm z-10">
-                                <tr>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-44 border-r border-border/50">{t("logs.thTime")}</th>
-                                    <th scope="col" className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider w-36 border-r border-border/50">{t("logs.thEvent")}</th>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-semibold text-muted-foreground tracking-wider">{t("logs.thMessage")}</th>
-                                </tr>
-                            </thead>
-                            <tbody className="bg-card divide-y divide-border">
-                                {filteredLogs.map((log) => (
-                                    <tr key={log.id} className="hover:bg-muted/50 transition-colors group">
-                                        <td className="px-6 py-2 whitespace-nowrap text-xs text-muted-foreground border-r border-border/50 group-hover:bg-muted/30">
-                                            {log.time}
-                                        </td>
-                                        <td className="px-4 py-2 whitespace-nowrap text-xs border-r border-border/50 group-hover:bg-muted/30">
-                                            {eventBadge(log.event)}
-                                        </td>
-                                        <td className="px-6 py-2 text-xs text-foreground break-words group-hover:bg-muted/30">
-                                            <span className="leading-relaxed whitespace-pre-wrap break-all">{log.message}</span>
-                                        </td>
-                                    </tr>
-                                ))}
-                                {filteredLogs.length === 0 && (
-                                    <tr>
-                                        <td colSpan={3} className="px-6 py-8 text-center text-sm text-muted-foreground">
-                                            {t("logs.noMatch")}
-                                        </td>
-                                    </tr>
+                    <div className={loading ? "opacity-60 transition-opacity" : undefined} aria-busy={loading}>
+                        {groups.map((group) => (
+                            <section key={group.day} aria-label={group.label} className="border-t border-border first:border-t-0">
+                                <h2 className="sticky top-16 z-10 flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-2 text-xs text-foreground sm:top-[calc(4rem+var(--logs-bar))] lg:px-5">
+                                    <span>{group.label}</span>
+                                    <span className="text-muted-foreground tabular-nums">{t("logs.dayCount", { count: group.items.length })}</span>
+                                </h2>
+                                <ol className="divide-y divide-border">
+                                    {group.items.map((log) => (
+                                        <LogRow
+                                            key={log.id}
+                                            log={log}
+                                            query={search}
+                                            tunnel={tunnelFilter === ALL_TUNNELS && log.tunnelId !== null ? tunnelsById.get(log.tunnelId) ?? null : null}
+                                            onTunnel={showTunnel}
+                                        />
+                                    ))}
+                                </ol>
+                            </section>
+                        ))}
+                        {(hasMore || noOlder) && (
+                            <div className="flex justify-center border-t border-border px-4 py-3">
+                                {hasMore ? (
+                                    <Button variant="ghost" size="sm" onClick={loadMore} disabled={loading}>
+                                        <ChevronDown size={16} />
+                                        {t("logs.loadMore")}
+                                    </Button>
+                                ) : (
+                                    <span className="py-1 text-xs text-muted-foreground">{t("logs.end")}</span>
                                 )}
-                            </tbody>
-                        </table>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

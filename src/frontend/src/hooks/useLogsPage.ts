@@ -4,6 +4,7 @@ import { apiFetch } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
+import { EVENT_KINDS, countByCategory, dayKey, dayRelation, filterLogs, groupByDay, type CategoryFilter } from "@/lib/gatewayLogs";
 
 /**
  * SSH gateway 事件（/api/log/ssh/events 的一筆）。後端已依權限過濾：管理員全看，其他人只看自己擁有／被分享的隧道。
@@ -21,8 +22,14 @@ export interface GatewayEvent {
 
 export interface LogEntry {
     id: number;
-    /** 依 locale 格式化的時間。/ Locale-formatted time. */
+    /** 依 locale 格式化的時:分:秒（日期在分組標題）。/ Locale-formatted time of day (the date is in the group heading). */
     time: string;
+    /** 依 locale 格式化的日期，例如「10月24日 週五」。/ Locale-formatted date, e.g. "Fri, Oct 24". */
+    date: string;
+    /** 本地日期鍵 YYYY-MM-DD。/ Local day key. */
+    day: string;
+    /** 完整時間戳（含時區），滑過時間時顯示。/ Full timestamp with time zone, shown on hover. */
+    full: string;
     at: string;
     event: string;
     message: string;
@@ -61,7 +68,16 @@ export interface AuditVerifyReport {
 /** 隧道篩選的「全部」值（URL 上不帶 ?tunnel=）。/ The "all tunnels" filter value (no ?tunnel= in the URL). */
 export const ALL_TUNNELS = "all";
 
-const PAGE_LIMIT = 500;
+/** 一次多載幾筆；後端最多 5000。/ Events per page; the backend caps `limit` at 5000. */
+export const PAGE_LIMIT = 500;
+const MAX_LIMIT = 5000;
+
+export interface LogDayGroup {
+    day: string;
+    /** 「今天 · 10月24日 週五」。/ "Today · Fri, Oct 24". */
+    label: string;
+    items: LogEntry[];
+}
 
 export function useLogsPage() {
     const router = useRouter();
@@ -72,9 +88,16 @@ export function useLogsPage() {
     const tunnelFilter = searchParams.get("tunnel") ?? ALL_TUNNELS;
 
     const [logs, setLogs] = useState<LogEntry[]>([]);
+    const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
+    // 目前的 logs 屬於哪個隧道篩選；換隧道時舊資料不留在畫面上。/ Which tunnel filter `logs` belongs to, so a switch never shows the old tunnel's events.
+    const [logsFor, setLogsFor] = useState<string | null>(null);
     const [tunnels, setTunnels] = useState<TunnelOption[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
+    const [category, setCategory] = useState<CategoryFilter>("all");
+    // 「載入更早的」會加大 limit；換隧道就回到第一頁。/ "Load older" raises the limit; switching tunnels starts over.
+    const [paging, setPaging] = useState({ tunnel: tunnelFilter, limit: PAGE_LIMIT });
+    const limit = paging.tunnel === tunnelFilter ? paging.limit : PAGE_LIMIT;
     const { showError } = useToast();
     const { t, locale } = useI18n();
     const { user } = useAuth();
@@ -139,32 +162,34 @@ export function useLogsPage() {
     const fetchLogs = useCallback(async () => {
         setLoading(true);
         try {
-            const qs = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+            const qs = new URLSearchParams({ limit: String(limit) });
             if (tunnelFilter !== ALL_TUNNELS) qs.set("tunnel_id", tunnelFilter);
             const res = await apiFetch(`/api/log/ssh/events?${qs.toString()}`);
             if (!res.ok) {
                 setLogs([]);
+                setLogsFor(tunnelFilter);
                 showError(t("logs.fetchFailed"));
                 return;
             }
             const events: GatewayEvent[] = await res.json();
-            const fmt = new Intl.DateTimeFormat(locale, {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-                hour12: false,
-            });
+            const now = new Date();
+            const timeFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+            const dateFmt = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", weekday: "short" });
+            const dateYearFmt = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", weekday: "short" });
+            const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "long" });
             // 後端回舊→新，頁面要新的在上。/ The API is oldest-first; the page shows newest first.
             setLogs(
                 events
                     .map((e) => {
                         const d = new Date(e.at);
+                        const valid = !isNaN(d.getTime());
                         return {
                             id: e.id,
                             at: e.at,
-                            time: isNaN(d.getTime()) ? e.at : fmt.format(d),
+                            time: valid ? timeFmt.format(d) : e.at,
+                            date: valid ? (d.getFullYear() === now.getFullYear() ? dateFmt : dateYearFmt).format(d) : "",
+                            day: valid ? dayKey(d) : "",
+                            full: valid ? fullFmt.format(d) : e.at,
                             event: e.event,
                             message: e.message,
                             tunnelId: e.tunnel_id,
@@ -173,28 +198,42 @@ export function useLogsPage() {
                     })
                     .reverse()
             );
+            setFetchedAt(now);
+            setLogsFor(tunnelFilter);
         } catch (e) {
             showError(e instanceof Error ? e.message : t("logs.fetchFailed"));
         } finally {
             setLoading(false);
         }
-    }, [tunnelFilter, showError, t, locale]);
+    }, [tunnelFilter, limit, showError, t, locale]);
 
     useEffect(() => {
         fetchLogs();
     }, [fetchLogs]);
 
-    const filteredLogs = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return logs;
-        return logs.filter(
-            (log) =>
-                log.message.toLowerCase().includes(q) ||
-                log.event.includes(q) ||
-                log.time.toLowerCase().includes(q) ||
-                log.at.toLowerCase().includes(q)
-        );
-    }, [logs, search]);
+    // 搜尋也比對翻譯後的事件標籤。/ The search also matches the translated badge text.
+    const label = useCallback((event: string) => (EVENT_KINDS[event] ? t(EVENT_KINDS[event].key) : event), [t]);
+    const counts = useMemo(() => countByCategory(logs, search, label), [logs, search, label]);
+    const filteredLogs = useMemo(() => filterLogs(logs, { query: search, category, label }), [logs, search, category, label]);
+
+    const groups = useMemo<LogDayGroup[]>(() => {
+        const now = fetchedAt ?? new Date(0);
+        return groupByDay(filteredLogs).map((g) => {
+            const rel = dayRelation(g.day, now);
+            const date = g.items[0].date;
+            return { day: g.day, label: rel ? `${t(rel === "today" ? "logs.today" : "logs.yesterday")} · ${date}` : date, items: g.items };
+        });
+    }, [filteredLogs, fetchedAt, t]);
+
+    // 第一次載入或換了隧道才整個換成轉圈；重新整理 / 載入更早的保留列表，頁面高度與捲動位置不跳。
+    // Spinner only for the first load or a tunnel switch; refresh / load older keep the list so nothing jumps.
+    const initialLoading = loading && (logs.length === 0 || logsFor !== tunnelFilter);
+    // 回來的比要的少 = 沒有更早的了；到了後端上限就兩者都不說。/ Fewer than asked = nothing older; at the backend cap, neither.
+    const noOlder = logs.length < limit;
+    const hasMore = !noOlder && limit < MAX_LIMIT;
+    const loadMore = useCallback(() => setPaging({ tunnel: tunnelFilter, limit: Math.min(limit + PAGE_LIMIT, MAX_LIMIT) }), [tunnelFilter, limit]);
+
+    const tunnelsById = useMemo(() => new Map(tunnels.map((x) => [x.id, x])), [tunnels]);
 
     const selectedTunnel = useMemo(
         () => tunnels.find((x) => String(x.id) === tunnelFilter) ?? null,
@@ -205,10 +244,17 @@ export function useLogsPage() {
         state: {
             logs,
             filteredLogs,
+            groups,
+            counts,
+            category,
+            hasMore,
+            noOlder,
             loading,
+            initialLoading,
             search,
             setSearch,
             tunnels,
+            tunnelsById,
             tunnelFilter,
             selectedTunnel,
             isAdmin,
@@ -218,6 +264,8 @@ export function useLogsPage() {
         },
         actions: {
             fetchLogs,
+            loadMore,
+            setCategory,
             setTunnelFilter,
             runVerify,
             closeVerify,
