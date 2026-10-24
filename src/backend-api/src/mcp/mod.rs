@@ -380,7 +380,7 @@ impl TelepyMcp {
             _ => return Ok(fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id))),
         };
         let tz = self.state.config.tz_offset_minutes;
-        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz)).collect();
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui)).collect();
         self.audit(&p, "lan_hosts", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(format!("{} hosts", hosts.len())), ..Default::default() }).await;
         Ok(CallToolResult::structured(json!({ "tunnel": { "id": tunnel.id, "name": tunnel.host_friendly_name }, "hosts": hosts, "last_scan": self.state.lan_scans.get(tunnel.id) })))
     }
@@ -412,7 +412,7 @@ impl TelepyMcp {
         };
         let summary = crate::lan::scan::execute(self.state.clone(), req).await;
         let tz = self.state.config.tz_offset_minutes;
-        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz)).collect();
+        let hosts: Vec<Value> = db::lan::hosts_for_tunnel(db, tunnel.id).await.unwrap_or_default().iter().map(|h| crate::api::lan::host_json(h, tz, &self.state.oui)).collect();
         let detail = format!("{} — {} host(s)", summary.status.networks.join(", "), summary.status.hosts_found);
         self.audit(&p, "lan_scan", started, Audit { tunnel_id: Some(tunnel.id), detail: Some(detail), error: summary.status.error.clone(), ..Default::default() }).await;
         if let Some(e) = &summary.status.error {

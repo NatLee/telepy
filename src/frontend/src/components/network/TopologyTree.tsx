@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
-import { hasSsh, hostKind, hostName, scanPercent, scanRunning, type HostKind } from "@/lib/lanConnect";
+import { hasSsh, hostKind, hostName, shortVendor, scanPercent, scanRunning, type HostKind } from "@/lib/lanConnect";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
 const KIND_ICON: Record<HostKind, React.ReactNode> = {
@@ -104,6 +104,7 @@ function HostChip({ host, selected, onOpen }: { host: LanHost; selected: boolean
                 <span className="flex items-center gap-1.5">
                     <span className="truncate text-sm text-foreground">{name}</span>
                     {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
+                    {host.vendor && <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground" title={host.vendor}>{shortVendor(host.vendor)}</span>}
                 </span>
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                     {name !== host.address && <span className="truncate font-mono">{host.address}</span>}

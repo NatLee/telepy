@@ -174,6 +174,13 @@ pub async fn run(config: &Config) -> Vec<Check> {
         check("GeoIP", Status::Info, "not installed (optional): IPs show without country / network. Run ./telepy.sh geoip")
     });
 
+    let oui = crate::oui::Oui::load(&config.oui_dir);
+    out.push(if oui.enabled() {
+        check("OUI vendors", Status::Ok, format!("{} vendors from {}", oui.len(), config.oui_dir.display()))
+    } else {
+        check("OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Run ./telepy.sh oui")
+    });
+
     // 審計鏈。/ Audit chain.
     if let Some(db) = &db {
         db.audit.set_anchors_file(config.log_root.join(db::audit_chain::ANCHORS_FILE));

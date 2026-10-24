@@ -2317,6 +2317,8 @@ export const en = {
     "network.field.address": "Address",
     "network.field.hostname": "Hostname",
     "network.field.mac": "MAC",
+    "network.field.vendor": "Vendor",
+    "network.macPrivate": "private (randomized) address",
     "network.field.openPorts": "Open ports",
     "network.field.banner": "SSH banner",
     "network.field.source": "Added by",

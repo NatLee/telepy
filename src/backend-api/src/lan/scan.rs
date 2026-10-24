@@ -14,7 +14,7 @@ use russh::ChannelMsg;
 use serde::Serialize;
 use serde_json::json;
 
-use super::{parse_getent, parse_neighbours, parse_networks, parse_ssh_banner, targets, Network};
+use super::{parse_avahi, parse_getent, parse_nmblookup, parse_neighbours, parse_networks, parse_ssh_banner, targets, Network};
 use crate::db::{self, lan::Found, tunnels::Tunnel, users::User};
 use crate::ssh::device::{self, ClientHandler};
 use crate::state::AppState;
@@ -336,6 +336,20 @@ async fn run(state: &AppState, req: &ScanRequest) -> Result<Vec<Found>, String> 
     for chunk in live.chunks(64) {
         let cmd = format!("getent hosts {} 2>/dev/null", chunk.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(" "));
         names.extend(parse_getent(&device_exec(handle, &cmd).await));
+    }
+    // getent 叫不出名字的：mDNS（avahi-resolve），有開 SMB 的再試 NetBIOS（nmblookup）。裝置上沒有這些工具就略過。
+    // Hosts getent could not name: mDNS via avahi-resolve, then NetBIOS for hosts with SMB open. Skipped when absent.
+    let unnamed = |names: &BTreeMap<Ipv4Addr, String>| live.iter().filter(|ip| !names.contains_key(ip)).copied().collect::<Vec<_>>();
+    for chunk in unnamed(&names).chunks(32) {
+        let ips = chunk.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(" ");
+        let cmd = format!("command -v avahi-resolve >/dev/null 2>&1 && timeout 8 avahi-resolve -a {ips} 2>/dev/null");
+        names.extend(parse_avahi(&device_exec(handle, &cmd).await));
+    }
+    let smb: Vec<Ipv4Addr> = unnamed(&names).into_iter().filter(|ip| open.get(ip).is_some_and(|(ports, _)| ports.contains(&445) || ports.contains(&139))).collect();
+    for chunk in smb.chunks(16) {
+        let ips = chunk.iter().map(Ipv4Addr::to_string).collect::<Vec<_>>().join(" ");
+        let cmd = format!("command -v nmblookup >/dev/null 2>&1 && for ip in {ips}; do echo \"@@ $ip\"; timeout 3 nmblookup -A $ip 2>/dev/null; done");
+        names.extend(parse_nmblookup(&device_exec(handle, &cmd).await));
     }
 
     let found: Vec<Found> = live

@@ -309,7 +309,7 @@ export function useNetworkPage() {
             .map((tn) => {
                 if (tn.name.toLowerCase().includes(q)) return tn;
                 const hosts = tn.hosts.filter((h) =>
-                    [h.address, h.hostname, h.label, h.mac, h.ssh_banner].some((v) => v && v.toLowerCase().includes(q)) ||
+                    [h.address, h.hostname, h.label, h.mac, h.vendor, h.ssh_banner].some((v) => v && v.toLowerCase().includes(q)) ||
                     h.open_ports.some((p) => String(p) === q)
                 );
                 return hosts.length ? { ...tn, hosts } : null;

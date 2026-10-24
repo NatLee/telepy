@@ -213,7 +213,13 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                     <dl className="divide-y divide-border">
                         <Row label={t("network.field.address")}><span className="font-mono">{host.address}</span></Row>
                         {host.hostname && <Row label={t("network.field.hostname")}><span className="font-mono">{host.hostname}</span></Row>}
-                        {host.mac && <Row label={t("network.field.mac")}><span className="font-mono">{host.mac}</span></Row>}
+                        {host.mac && (
+                            <Row label={t("network.field.mac")}>
+                                <span className="font-mono">{host.mac}</span>
+                                {host.mac_private && <span className="ml-2 text-xs text-muted-foreground">{t("network.macPrivate")}</span>}
+                            </Row>
+                        )}
+                        {host.vendor && <Row label={t("network.field.vendor")}>{host.vendor}</Row>}
                         <Row label={t("network.field.openPorts")}>
                             {host.open_ports.length ? (
                                 <span className="flex flex-wrap gap-1">
