@@ -11,12 +11,14 @@
  */
 import React from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FolderOpen, MonitorPlay, TerminalSquare, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { getTerminalPageUrl, type TerminalMainView } from "@/lib/tunnelUrls";
 import { Tunnel } from "@/types/tunnel";
+import { requestStepUp, stepUpToken } from "@/lib/stepUp";
 
 const OPEN_ACTIONS: { view: TerminalMainView; icon: LucideIcon; label: TranslationKey; hint: TranslationKey }[] = [
     { view: "terminal", icon: TerminalSquare, label: "common.terminal", hint: "tunnelActions.terminalHint" },
@@ -34,6 +36,14 @@ interface TunnelOpenButtonsProps {
 
 export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = "tiles" }: TunnelOpenButtonsProps) {
     const { t } = useI18n();
+    const router = useRouter();
+    // 敏感隧道：先確認是你再進去（免得一進去就被擋）；按著修飾鍵開新分頁就照常，交給那一頁處理。
+    // Sensitive tunnel: confirm it's you before navigating (instead of failing on arrival); modified clicks pass through.
+    const gate = (href: string) => (e: React.MouseEvent) => {
+        if (!tunnel.require_step_up || stepUpToken() || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        void requestStepUp().then((ok) => ok && router.push(href));
+    };
     // 離線時仍可點（terminal 頁會自己顯示錯誤），但以淡色 + 提示說明現在連不上。
     // Still clickable while offline (the terminal page reports it), but muted with a hint explaining why.
     const offlineHint = degraded ? ` — ${t("tunnels.degradedHint")}` : online ? "" : ` — ${t("tunnelActions.offlineHint")}`;
@@ -46,6 +56,7 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                     <Link
                         key={view}
                         href={getTerminalPageUrl(tunnel, { mainView: view })}
+                        onClick={gate(getTerminalPageUrl(tunnel, { mainView: view }))}
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(
@@ -71,6 +82,7 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                     <Link
                         key={view}
                         href={getTerminalPageUrl(tunnel, { mainView: view })}
+                        onClick={gate(getTerminalPageUrl(tunnel, { mainView: view }))}
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(

@@ -16,6 +16,7 @@ import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
 import { terminalFontFamily } from "@/lib/terminalAppearance";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { translate } from "@/lib/translate";
+import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import type { TranslationKey } from "@/locales/en";
 import type { LanTerminalSession, LanTerminalStatus } from "@/hooks/useLanTerminals";
 
@@ -120,6 +121,7 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                     username: deviceUser,
                     lan_host_id: String(hostId),
                     ...(login ? { lan_username: login } : {}),
+                    step_up: stepUpToken() ?? undefined,
                 }));
                 write(`\x1b[90m${translate("terminal.connectingToServer")}\x1b[0m\r\n`);
                 onStatus(key, "connected");
@@ -146,6 +148,16 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                             write(`\r\n\x1b[31m${translate("terminal.authFailedXterm")}\x1b[0m\r\n`);
                             onStatus(key, "closed");
                         }
+                    });
+                    return;
+                }
+                // 敏感隧道：確認是你之後重連。/ Sensitive tunnel: reconnect after the step-up.
+                if (ev.code === STEP_UP_CLOSE_CODE) {
+                    write(`\r\n\x1b[33m${translate("stepUp.neededXterm")}\x1b[0m\r\n`);
+                    requestStepUp().then((ok) => {
+                        if (closedByUs) return;
+                        if (ok) connect();
+                        else onStatus(key, "closed");
                     });
                     return;
                 }

@@ -98,6 +98,9 @@ async fn require_token(State(state): State<AppState>, mut req: Request, next: Ne
 
 // ---------------------------------------------------------------- tool parameters
 
+
+/// 敏感隧道（要人確認身分）上 agent 不能開 session。/ Agents can't open sessions on step-up tunnels.
+pub const STEP_UP_REFUSAL: &str = "This tunnel asks people to confirm it's them (step-up) before every session, which an AI agent can't do. Ask the user to run this in the Telepy web app, or to turn the setting off for this tunnel.";
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct TunnelArgs {
     /// Tunnel id from list_tunnels
@@ -308,6 +311,8 @@ impl TelepyMcp {
                     "description": t.description,
                     "labels": labels.get(&t.id).cloned().unwrap_or_default(),
                     "online": self.online(t.reverse_port),
+                    // 要人在網頁確認身分的隧道：agent 在上面開不了 session。/ Agents can't open sessions on these.
+                    "requires_step_up": t.require_step_up,
                     "health": self.health(t.reverse_port),
                     "rtt_ms": self.rtt(t.reverse_port),
                     "permission": eff.map(|e| e.label()),
@@ -394,6 +399,9 @@ impl TelepyMcp {
         }
         let Some(tunnel) = db::tunnels::by_id(db, args.tunnel_id).await.ok().flatten() else { return Ok(not_found()) };
         let Some(eff) = permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten() else { return Ok(not_found()) };
+        if tunnel.require_step_up {
+            return Ok(fail(STEP_UP_REFUSAL.to_string()));
+        }
         let req = match crate::api::lan::prepare_scan(&self.state, &p.user, &tunnel, eff, args.username.as_deref(), args.subnets, args.ports).await {
             Ok(r) => r,
             Err(e) => {

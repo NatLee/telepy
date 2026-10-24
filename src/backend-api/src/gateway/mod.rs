@@ -72,6 +72,8 @@ pub struct Gateway {
     status: Arc<StatusState>,
     presence: Arc<Presence>,
     hub: Arc<Hub>,
+    /// 敏感隧道的 step-up（網頁與 gateway 共用）。/ Step-up confirmations, shared with the web side.
+    step_ups: Arc<crate::step_up::StepUps>,
     /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
     proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
@@ -167,6 +169,7 @@ impl Gateway {
             status,
             presence,
             hub,
+            step_ups: Arc::new(crate::step_up::StepUps::default()),
             proxy_from,
             forwards: DashMap::new(),
             conns: DashMap::new(),
@@ -238,6 +241,20 @@ impl Gateway {
     /// gateway 用的通知 hub（AppState 共用同一個）。/ The notification hub, shared with AppState.
     pub fn hub(&self) -> Arc<Hub> {
         self.hub.clone()
+    }
+
+    /// step-up 紀錄（AppState 共用同一份）。/ Step-up confirmations, shared with AppState.
+    pub fn step_ups(&self) -> Arc<crate::step_up::StepUps> {
+        self.step_ups.clone()
+    }
+
+    /// 筆電經 gateway 連敏感隧道：這個人最近沒在網頁確認過就回那條隧道（要擋）。
+    /// Laptop SSH to a sensitive tunnel: the tunnel when the user hasn't confirmed in the web recently (block it).
+    async fn step_up_blocks(&self, user_id: i64, port: u16) -> anyhow::Result<Option<db::tunnels::Tunnel>> {
+        if self.step_ups.recent(user_id) {
+            return Ok(None);
+        }
+        Ok(db::tunnels::by_port(&self.db, port as i64).await?.into_iter().find(|t| t.require_step_up))
     }
 
     pub fn active_ports(&self) -> Vec<u16> {
@@ -636,6 +653,21 @@ impl Handler for GatewayHandler {
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         };
+        // 敏感隧道：這個人 15 分鐘內在網頁確認過才放行；沒有就拒絕，並請他到網頁確認。
+        // Sensitive tunnel: only after a web confirmation within the window; otherwise refuse and ask in the web.
+        if let (Some(Identity::User { user_id }), Some(p)) = (&self.identity, port) {
+            if let Some(t) = self.gw.step_up_blocks(*user_id, p).await? {
+                let msg = format!("Refused direct-tcpip to tunnel {} for user {user_id}: confirm it's you in Telepy first (step-up) from {} port {}", t.host_friendly_name, self.peer.ip(), self.peer.port());
+                self.gw.event("step_up_required", Some(self.peer), port, Some(t.id), msg).await;
+                self.gw.hub.notify_user(
+                    *user_id,
+                    &serde_json::json!({ "action": "STEP-UP-REQUIRED", "tunnel_id": t.id, "tunnel_name": t.host_friendly_name,
+                                         "details": format!("SSH to \"{}\" needs you to confirm it's you in Telepy first", t.host_friendly_name) }),
+                );
+                reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
+                return Ok(());
+            }
+        }
         reply.accept().await;
         let originator = originator_address.to_string();
         let guard = match (&self.identity, port) {

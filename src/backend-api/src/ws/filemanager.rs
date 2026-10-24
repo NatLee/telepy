@@ -218,6 +218,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4004).await;
         return;
     }
+    if !crate::step_up::allows(tunnel.require_step_up, &state.step_up, user.id, msg.get("step_up").and_then(|v| v.as_str())) {
+        close(&mut socket, crate::step_up::CLOSE_CODE).await;
+        return;
+    }
     if tunnel.reverse_port <= 0 {
         close(&mut socket, 4002).await;
         return;

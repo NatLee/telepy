@@ -278,6 +278,9 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
     if tunnel.reverse_port <= 0 {
         return Err("This tunnel has no reverse port configured.".into());
     }
+    if tunnel.require_step_up {
+        return Err(crate::mcp::STEP_UP_REFUSAL.into());
+    }
     let allowed = permissions::allowed_usernames(&state.db, p.user.id, &tunnel).await.map_err(db_err)?;
     let username = permissions::choose_username(&allowed, tunnel.default_username_id, req.username.as_deref(), &tunnel.host_friendly_name)?;
     if let Some(listen) = state.status.listen_ports() {

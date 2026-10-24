@@ -920,9 +920,17 @@ impl Lab {
 
     /// 檔案管理（`/ws/filemanager/`）：送 auth，再送一個 action，回第一個 JSON 回應（Telepy 拒絕時回關閉碼）。
     pub async fn filemanager(&self, user: &LabUser, device: &Device, os_user: &str, action: Value) -> Result<Value, u16> {
+        self.filemanager_with(user, device, os_user, json!({}), action).await
+    }
+
+    /// 同上，auth 訊息多帶 `extra` 的欄位（例如 `step_up`）。/ Same, with extra auth-message fields.
+    pub async fn filemanager_with(&self, user: &LabUser, device: &Device, os_user: &str, extra: Value, action: Value) -> Result<Value, u16> {
         let base = self.ws_base().await;
         let (mut ws, _) = connect_async(format!("{base}/ws/filemanager/")).await.unwrap();
-        let auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        let mut auth = json!({"type": "auth", "token": user.token, "server_id": device.tunnel_id.to_string(), "username": os_user});
+        if let (Some(a), Some(e)) = (auth.as_object_mut(), extra.as_object()) {
+            a.extend(e.clone());
+        }
         ws.send(Message::Text(auth.to_string().into())).await.unwrap();
         ws.send(Message::Text(action.to_string().into())).await.unwrap();
         loop {

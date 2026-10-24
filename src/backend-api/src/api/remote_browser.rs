@@ -23,11 +23,12 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/remote-browser/start", tag = "Remote Browser", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::RemoteBrowserStartRequest, responses((status = 200, description = "Session started; connect the KasmVNC client to ws_path", body = super::schemas::RemoteBrowserSession), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 500, description = "code = device_offline when the SOCKS proxy never came up", body = super::schemas::RemoteBrowserError)))]
-async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let tunnel = db::tunnels::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
     if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
         return Err(ApiError::forbidden("Permission denied"));
     }
+    super::step_up::check(&state, user.id, &tunnel, &headers)?;
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let username = match json_str(&body, "username").filter(|u| !u.is_empty()) {
         Some(u) => {

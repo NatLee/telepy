@@ -239,8 +239,9 @@ async fn notify_updated(state: &AppState, t: &Tunnel) {
     (status = 403, description = "lan_scan_disabled / lan_scan_forbidden", body = super::schemas::LanError),
     (status = 409, description = "lan_scan_running", body = super::schemas::LanError),
 ))]
-async fn start_scan(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+async fn start_scan(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (t, eff) = visible(&state, user.id, id).await?;
+    super::step_up::check(&state, user.id, &t, &headers)?;
     let subnets = body.get("subnets").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
     let ports = body.get("ports").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_i64().unwrap_or(-1)).collect());
     let req = prepare_scan(&state, &user, &t, eff, json_str(&body, "username").as_deref(), subnets, ports).await?;

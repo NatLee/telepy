@@ -22,6 +22,7 @@ pub mod serialize;
 pub mod sftp;
 pub mod sharing;
 pub mod sign_ins;
+pub mod step_up;
 pub mod site_settings;
 pub mod terminal_profile;
 pub mod tunnels;
