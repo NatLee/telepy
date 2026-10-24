@@ -17,7 +17,7 @@ use axum::extract::ws::{Message, WebSocket};
 use bytes::Bytes;
 use serde_json::Value;
 
-use super::{auth, close, send_text};
+use super::{auth, close, send, send_text, Heartbeat};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -208,14 +208,15 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     let started = Instant::now();
     // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
     let tunnel_id: i64 = server_id.parse().unwrap_or(0);
-    let _presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
+    let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
+    let mut heartbeat = Heartbeat::new(&state.config);
 
     let mut decoder = Utf8Decoder::default();
     let mut buf = vec![0u8; 8192];
     let mut close_code: Option<u16> = None;
     loop {
         tokio::select! {
-            incoming = socket.recv() => match incoming {
+            incoming = heartbeat.recv(&mut socket) => match incoming {
                 Some(Ok(Message::Text(t))) => {
                     let Ok(data) = serde_json::from_str::<Value>(&t) else {
                         tracing::warn!("Terminal received malformed JSON; ignoring frame");
@@ -223,7 +224,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                     };
                     match data.get("action").and_then(|a| a.as_str()) {
                         Some("ping") => {
-                            if socket.send(Message::Binary(Bytes::from_static(b"pong"))).await.is_err() {
+                            if !send(&mut socket, Message::Binary(Bytes::from_static(b"pong"))).await {
                                 break;
                             }
                         }
@@ -262,7 +263,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             read = read_pty(&mut pty, &mut buf) => match read {
                 Ok(0) => {
                     // shell 已結束 → 正常關閉。/ EOF: the shell exited; close normally.
-                    let _ = socket.send(Message::Close(None)).await;
+                    send(&mut socket, Message::Close(None)).await;
                     close_code = Some(1000);
                     break;
                 }
@@ -274,13 +275,15 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "PTY read failed");
-                    let _ = socket.send(Message::Close(None)).await;
+                    send(&mut socket, Message::Close(None)).await;
                     break;
                 }
             },
         }
     }
 
+    // 人已經走了：先移出「使用中」，收 channel / 程序再慢也不影響。/ Leave presence before the (possibly slow) teardown.
+    drop(presence);
     tracing::info!(code = ?close_code, lived = started.elapsed().as_secs_f64(), "Terminal session closed");
     match &mut pty {
         Pty::Channel(s) => s.close().await,
