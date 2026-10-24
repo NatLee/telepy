@@ -77,6 +77,7 @@ docker compose up -d --build frontend
 ./telepy.sh migration         # Reconcile the DB schema (runs automatically on start)
 ./telepy.sh backend-debug     # Recreate the backend container and follow its logs
 ./telepy.sh geoip             # Download DB-IP Lite (country + ASN) into ./telepy-data/geoip; re-run monthly, then restart the backend
+./telepy.sh doctor            # Read-only health check: .env, containers, web + gateway ports, then `telepy-server doctor` in the backend (exit 1 on ✗)
 ```
 
 ### Backend (local, needs rustup)
@@ -87,6 +88,7 @@ cargo test                    # unit + integration tests (needs ssh/ssh-keygen a
 cargo run -- serve            # DATA_DIR / LOG_ROOT default to ./data ./logs; gateway only when GATEWAY_HOST_KEYS_DIR points at host keys
 cargo run -- create-superuser --username admin --password 1234
 cargo run -- openapi > openapi.json   # dump the OpenAPI document (no DB / server / login needed)
+cargo run -- doctor           # read-only checks: config, DB, service key, gateway host keys, guacd, kasm, GeoIP, audit chain (`--json`; exit 1 on a failure)
 ```
 
 ### Frontend

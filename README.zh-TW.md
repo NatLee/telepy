@@ -137,11 +137,13 @@ Sub-commands:
   shell: Open a shell in the backend container.
   migration: Reconcile the database schema (also runs automatically on start).
   backend-debug: Recreate the backend container and follow its logs.
+  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken.
 ```
 
 ## 延伸閱讀
 
 - [遠端瀏覽器架構](./docs/remote-browser.md)
+- [遠端桌面（RDP / VNC）架構](./docs/remote-desktop.md)
 - [延遲量測深入解析](./docs/latency-deep-dive.md)
 - [後端效能比較：Django vs Rust](./docs/benchmarks.md)
 - [文章](./docs/articles/)
