@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -32,6 +32,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
             { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
             { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} /> },
             { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} /> },
+            { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
             { key: "nav.keys", href: "/tunnels/keys", icon: <Key size={18} /> },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
         ],

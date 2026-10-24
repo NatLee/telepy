@@ -66,6 +66,7 @@ pub fn presence_json(entries: &[Entry], details: bool, geo: &GeoIp) -> Value {
             .iter()
             .map(|e| {
                 json!({
+                    "id": e.id,
                     "user": e.username,
                     "kind": e.kind.as_str(),
                     "ip": e.ip,

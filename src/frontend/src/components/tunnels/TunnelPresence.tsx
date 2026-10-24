@@ -8,6 +8,7 @@
  * when nobody is connected.
  */
 import React, { useMemo } from "react";
+import Link from "next/link";
 import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
 import { MoreBelow } from "@/components/ui/Modal";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -18,7 +19,8 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { PresenceSession, TunnelPresence } from "@/types/tunnel";
 import { IpPlace } from "@/components/ui/IpPlace";
 
-const KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
+/** 連線種類的圖示與名稱（即時 session 頁也用）。/ Icon and label per connection kind (also used by the live sessions page). */
+export const PRESENCE_KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
     terminal: { icon: TerminalSquare, label: "tunnels.presenceKind.terminal" },
     files: { icon: FolderOpen, label: "tunnels.presenceKind.files" },
     browser: { icon: MonitorPlay, label: "tunnels.presenceKind.browser" },
@@ -64,7 +66,7 @@ function groupSessions(sessions: PresenceSession[]): PresenceUser[] {
 function PresenceUserRow({ group }: { group: PresenceUser }) {
     const { t, locale } = useI18n();
     const kindLabel = (l: PresenceLine) => {
-        const k = KINDS[l.kind] ? t(KINDS[l.kind].label) : l.kind;
+        const k = PRESENCE_KINDS[l.kind] ? t(PRESENCE_KINDS[l.kind].label) : l.kind;
         return l.kind === "ai" && l.client ? `${k} · ${l.client}` : k;
     };
     return (
@@ -81,7 +83,7 @@ function PresenceUserRow({ group }: { group: PresenceUser }) {
                 </p>
                 <ul className="mt-1 space-y-1.5">
                     {group.lines.map(l => {
-                        const Icon = KINDS[l.kind]?.icon ?? Plug;
+                        const Icon = PRESENCE_KINDS[l.kind]?.icon ?? Plug;
                         return (
                             <li key={`${l.kind}|${l.ip}|${l.client}`} className="text-xs text-muted-foreground">
                                 <div className="flex items-center gap-1.5">
@@ -111,7 +113,7 @@ function PresenceUserRow({ group }: { group: PresenceUser }) {
     );
 }
 
-export function TunnelPresenceButton({ presence, className }: { presence?: TunnelPresence | null; className?: string }) {
+export function TunnelPresenceButton({ presence, tunnelId, className }: { presence?: TunnelPresence | null; tunnelId?: number; className?: string }) {
     const { t } = useI18n();
     const sessions = presence?.sessions;
     const groups = useMemo(() => groupSessions(sessions ?? []), [sessions]);
@@ -156,7 +158,13 @@ export function TunnelPresenceButton({ presence, className }: { presence?: Tunne
                         </ul>
                         <MoreBelow className="bottom-0 -mt-12 h-12 from-popover via-popover/85" />
                     </div>
-                ) : (
+                ) : null}
+                {detailed && tunnelId !== undefined ? (
+                    <Link href={`/tunnels/sessions?tunnel=${tunnelId}`} className="shrink-0 border-t border-border px-3 py-2 text-xs text-foreground/80 hover:bg-muted hover:text-foreground">
+                        {t("sessions.manageLink")}
+                    </Link>
+                ) : null}
+                {detailed ? null : (
                     <p className="px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">{t("tunnels.presenceHidden")}</p>
                 )}
             </PopoverContent>
