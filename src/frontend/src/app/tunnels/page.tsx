@@ -104,6 +104,7 @@ export default function TunnelsPage() {
         onShare: (tunnelId) => setShareModal({ isOpen: true, tunnelId }),
         onRequestAccess: (tunnelId) => setRequestModal({ isOpen: true, tunnelId }),
         onRecordings: (tunnelId) => router.push(`/tunnels/recordings?tunnel=${tunnelId}`),
+        onCommandRules: (tunnelId) => router.push(`/tunnels/commands?tunnel=${tunnelId}`),
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),

@@ -6,6 +6,7 @@ pub mod api;
 pub mod app;
 pub mod auth;
 pub mod client_ip;
+pub mod command_rules;
 pub mod config;
 pub mod db;
 pub mod desktop;

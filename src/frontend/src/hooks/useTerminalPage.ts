@@ -25,6 +25,7 @@ import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
 import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import { terminalFontFamily, type ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
@@ -83,6 +84,8 @@ type Session = {
     /** 4001 時每個 session 只 refresh 重連一次；收到真正 PTY 輸出即歸零。 */
     authRetried: boolean;
     disposed: boolean;
+    /** 指令規則的提示列（每個分頁各自的）。/ This tab's command-rule banner. */
+    commandBanner: HoldBanner | null;
 };
 
 export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null) {
@@ -119,6 +122,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
     // 「你↔伺服器」RTT（毫秒）：作用中分頁的 ping/pong 量測。/ Active tab's WS RTT.
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
+    /** 作用中分頁的指令規則提示列。/ The active tab's command-rule banner. */
+    const [commandBanner, setCommandBanner] = useState<HoldBanner | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [noUsers, setNoUsers] = useState(false);
     const [showFiles, setShowFiles] = useState(false);
@@ -210,6 +215,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         xtermRef.current = target.term;
         wsRef.current = target.ws;
         setLatencyMs(target.lastLatency);
+        setCommandBanner(target.commandBanner);
         // 等 display 生效後再量尺寸；手機不自動聚焦（避免切分頁就彈出原生鍵盤）。
         // Measure after the display change lands; skip autofocus on mobile (no surprise keyboard).
         requestAnimationFrame(() => {
@@ -262,10 +268,17 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
         ws.onmessage = (event) => {
             if (s.disposed) return;
-            // 二進位 frame = pong 控制訊息（量 RTT），不可寫進畫面。/ Binary frame = pong (RTT only).
+            // 二進位 frame = 控制訊息，不可寫進畫面：pong（量 RTT）或指令規則通知。
+            // Binary frame = control message, never drawn: a pong (RTT) or a command-rule notice.
             if (typeof event.data !== "string") {
-                s.lastLatency = Math.max(0, Date.now() - s.pingSentAt);
-                if (activeIdRef.current === s.id) setLatencyMs(s.lastLatency);
+                const frame = parseTerminalFrame(event.data as ArrayBuffer);
+                if (frame === "pong") {
+                    s.lastLatency = Math.max(0, Date.now() - s.pingSentAt);
+                    if (activeIdRef.current === s.id) setLatencyMs(s.lastLatency);
+                } else if (frame) {
+                    s.commandBanner = nextBanner(s.commandBanner, frame);
+                    if (activeIdRef.current === s.id) setCommandBanner(s.commandBanner);
+                }
                 return;
             }
             // 收到真正的 PTY 輸出 = 認證成功，歸零 4001 refresh 重試旗標。
@@ -279,8 +292,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             if (s.disposed) return;
             stopPing(s);
             if (s.ws === ws) s.ws = null;
+            // 連線斷了：伺服器已撤回等核准的指令。/ Disconnected: the server already withdrew a pending command.
+            if (s.commandBanner?.state === "pending") s.commandBanner = null;
             if (activeIdRef.current === s.id) {
                 setLatencyMs(null);
+                setCommandBanner(s.commandBanner);
                 if (wsRef.current === ws) wsRef.current = null;
             }
             updateTab(s.id, { status: "closed" });
@@ -400,6 +416,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             lastLatency: null,
             authRetried: false,
             disposed: false,
+            commandBanner: null,
         };
 
         // OSC 7 同步當前路徑（僅作用中分頁，避免背景分頁改動檔案面板路徑）。
@@ -716,6 +733,17 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         }
     };
 
+    /** 撤回作用中分頁等核准的指令。/ Withdraw the active tab's command that waits for approval. */
+    const withdrawCommand = useCallback(() => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "command_cancel" }));
+    }, []);
+    const dismissCommandBanner = useCallback(() => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s) s.commandBanner = null;
+        setCommandBanner(null);
+    }, []);
+
     return {
         refs: { terminalRef, xtermRef, wsRef },
         state: {
@@ -739,6 +767,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             availableUsernames, setAvailableUsernames,
             lanHost,
             appearance,
+            commandBanner,
         },
         actions: {
             fetchServiceKeys,
@@ -749,6 +778,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             addTab,
             closeTab,
             selectTab,
+            withdrawCommand,
+            dismissCommandBanner,
         },
     };
 }

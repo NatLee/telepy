@@ -3,8 +3,9 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -34,6 +35,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
             { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} /> },
             { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
             { key: "nav.recordings", href: "/tunnels/recordings", icon: <Clapperboard size={18} /> },
+            { key: "nav.commands", href: "/tunnels/commands", icon: <ShieldCheck size={18} /> },
             { key: "nav.keys", href: "/tunnels/keys", icon: <Key size={18} /> },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
         ],
@@ -87,6 +89,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
     const pathname = usePathname();
     const { user, logout } = useAuth();
     const { t } = useI18n();
+    const approvals = useCommandApprovals();
     const [prefsOpen, setPrefsOpen] = useState(false);
 
     const handleLogout = () => {
@@ -104,6 +107,8 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                         <SectionLabel collapsed={collapsed}>{t(section.key)}</SectionLabel>
                         {section.links.map((link) => {
                             const active = isNavActive(pathname, link.href);
+                            // 等我核准的指令數。/ Commands waiting for my approval.
+                            const badge = link.href === "/tunnels/commands" && approvals.pending.length > 0 ? approvals.pending.length : null;
                             return (
                                 <Link
                                     key={link.key}
@@ -120,8 +125,16 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                                     aria-current={active ? "page" : undefined}
                                     className={navItemClass(active, collapsed)}
                                 >
-                                    {link.icon}
+                                    <span className="relative inline-flex">
+                                        {link.icon}
+                                        {badge !== null && collapsed && <span className="absolute -right-1 -top-1 size-2 rounded-full bg-warning" aria-hidden />}
+                                    </span>
                                     {!collapsed && t(link.key)}
+                                    {badge !== null && !collapsed && (
+                                        <span className="ml-auto rounded-sm bg-warning/15 px-1.5 text-xs leading-5 text-warning tabular-nums" title={t("commands.waitingPill", { count: badge })}>
+                                            {badge}
+                                        </span>
+                                    )}
                                 </Link>
                             );
                         })}

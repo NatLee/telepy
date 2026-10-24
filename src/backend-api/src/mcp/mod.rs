@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 
 use crate::ai::{self, AiSession, CloseReason, OpenRequest};
 use crate::client_ip::ClientMeta;
+use crate::command_rules::{self, Action, AgentApproval, Requester, Source};
 use crate::auth::mcp::{self as mcp_auth, McpAuthError, McpPrincipal};
 use crate::db;
 use crate::oauth;
@@ -40,7 +41,9 @@ ssh_session_close when you are done. Sessions close themselves after a period of
 lifetime, when the device goes offline, or when the user revokes this app, so open a new one if a session_id stops \
 working. Commands run without a TTY: avoid interactive programs and pagers (use e.g. `--no-pager`, `-y`, `| cat`). \
 Output is truncated to max_output_bytes per stream (start and end are kept). The tunnel owner is notified when you \
-open a session on a tunnel shared with the user.";
+open a session on a tunnel shared with the user. Command rules may block a command or hold it until the tunnel owner \
+approves it in Telepy: don't try to get around a rule; for a held command, tell the user and run exactly the same \
+command again once they approve it.";
 
 // ---------------------------------------------------------------- HTTP wiring
 
@@ -445,7 +448,7 @@ impl TelepyMcp {
         }
     }
 
-    #[tool(description = "Run a shell command in an open session (no TTY). Returns exit_code, stdout, stderr and whether the output was truncated or the command timed out (it is killed after timeout_s).", annotations(title = "Run command", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
+    #[tool(description = "Run a shell command in an open session (no TTY). Returns exit_code, stdout, stderr and whether the output was truncated or the command timed out (it is killed after timeout_s). Command rules set in Telepy may refuse a command, or hold it until the tunnel owner approves it (the call then waits up to 45 seconds; if it is still waiting, run exactly the same command again after the user approves).", annotations(title = "Run command", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
     async fn ssh_exec(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ExecArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -458,6 +461,48 @@ impl TelepyMcp {
         };
         if args.command.trim().is_empty() {
             return Ok(fail("command is empty"));
+        }
+        // 指令規則：擋下，或等 owner / ADMIN 核准。/ Command rules: refused, or held until the owner or an ADMIN approves.
+        let requester = Requester {
+            tunnel_id: s.tunnel_id,
+            user_id: p.user.id,
+            username: p.user.username.clone(),
+            source: Source::Agent,
+            account: s.target_username.clone(),
+            lan_host: None,
+            client: Some(p.client_name.clone()),
+            grant_id: Some(p.grant_id),
+            session_ref: Some(s.id.clone()),
+        };
+        if let Some(rule) = command_rules::check(&self.state, &requester, std::slice::from_ref(&args.command)).await {
+            let why = if rule.note.is_empty() { String::new() } else { format!(" The rule says: {}", rule.note) };
+            let refused = |msg: String| Audit { session: Some(&s), detail: Some(args.command.clone()), error: Some(msg), ..Default::default() };
+            match rule.action {
+                Action::Block => {
+                    command_rules::record_block(&self.state, &requester, &args.command, &rule).await;
+                    self.audit(&p, "ssh_exec", started, refused(format!("blocked by the rule `{}`", rule.pattern))).await;
+                    return Ok(fail(format!("Telepy's command rules don't allow this command (rule `{}`).{why} Don't try to get around the rule; ask the user if it really has to run.", rule.pattern)));
+                }
+                Action::Approve => match command_rules::agent_approval(&self.state, &requester, &args.command, &rule).await {
+                    Ok(AgentApproval::Approved { .. }) => {}
+                    Ok(AgentApproval::Denied { id, message }) => {
+                        self.audit(&p, "ssh_exec", started, refused(format!("approval request #{id}: {message}"))).await;
+                        return Ok(fail(format!("{message} (rule `{}`, request #{id}). Don't run it another way.", rule.pattern)));
+                    }
+                    Ok(AgentApproval::Waiting { id }) => {
+                        self.audit(&p, "ssh_exec", started, refused(format!("waiting for approval (request #{id})"))).await;
+                        return Ok(fail(format!(
+                            "This command needs the tunnel owner's approval (rule `{}`).{why} Request #{id} is waiting in Telepy. Tell the user, and once they approve it run ssh_exec again with exactly the same command; an approval is good for one run within 10 minutes.",
+                            rule.pattern
+                        )));
+                    }
+                    Err(e) => {
+                        let msg = format!("{e:#}");
+                        self.audit(&p, "ssh_exec", started, refused(msg.clone())).await;
+                        return Ok(fail(format!("This command needs approval, but the request could not be filed: {msg}")));
+                    }
+                },
+            }
         }
         let timeout = Duration::from_secs(args.timeout_s.unwrap_or(ai::DEFAULT_COMMAND_TIMEOUT.as_secs()).max(1)).min(ai::MAX_COMMAND_TIMEOUT);
         let max_output = args.max_output_bytes.unwrap_or(ai::DEFAULT_MAX_OUTPUT).clamp(1024, ai::MAX_OUTPUT);

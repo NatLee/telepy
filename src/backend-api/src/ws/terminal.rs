@@ -15,11 +15,13 @@ use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket};
 use bytes::Bytes;
-use serde_json::Value;
+use serde_json::{json, Value};
+use tokio::sync::watch;
 
 use crate::recording::Recorder;
 use super::{auth, close, close_with, device_offline, send, send_text, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
+use crate::command_rules::{self, terminal::TerminalGuard, Action, Outcome, Requester, Source};
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::presence::{Entry, Kind};
@@ -27,6 +29,83 @@ use crate::session_audit::{ConsoleKind, ConsoleSession};
 use crate::ssh::process::{lan_terminal_args, spawn_in_pty, valid_login, PtyChild};
 use crate::ssh::terminal::{Output, PtySession, WindowSize};
 use crate::state::AppState;
+
+/// 指令規則停住的那個 Enter。/ The Enter that a command rule holds.
+enum Hold {
+    /// 剛按下：等回顯到齊再讀畫面；這段時間打的字排在 `rest`。/ Just pressed: wait for the echo, then read the screen.
+    Settle { rest: String, enter_at: std::time::Instant },
+    /// 等 owner / ADMIN 核准；只認 Ctrl+C（撤回）。/ Waiting for approval; only Ctrl+C (withdraw) counts.
+    Pending { rest: String, id: i64, rx: watch::Receiver<Outcome> },
+}
+
+enum HoldEvent {
+    Read,
+    Decided(Outcome),
+}
+
+/// 停住的 Enter 什麼時候有下一步。/ When the held Enter has its next step.
+async fn hold_event(hold: &mut Option<Hold>, guard: &TerminalGuard) -> HoldEvent {
+    match hold {
+        Some(Hold::Settle { enter_at, .. }) => {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(guard.read_at(*enter_at))).await;
+            HoldEvent::Read
+        }
+        Some(Hold::Pending { rx, .. }) => loop {
+            let now = rx.borrow().clone();
+            if now != Outcome::Pending {
+                return HoldEvent::Decided(now);
+            }
+            if rx.changed().await.is_err() {
+                return HoldEvent::Decided(Outcome::Cancelled { reason: "the request is gone".into() });
+            }
+        },
+        None => std::future::pending().await,
+    }
+}
+
+/// 送出瀏覽器的輸入；碰到要決定的 Enter 就停下來（沒有規則、沒打東西的 Enter 直接送）。
+/// Send browser input; stop at an Enter that needs a decision (Enter with no rules or nothing typed goes straight out).
+async fn feed(state: &AppState, guard: &mut TerminalGuard, pty: &Pty, tunnel_id: i64, mut input: String) -> Option<Hold> {
+    loop {
+        let split = guard.split(&input, std::time::Instant::now());
+        if !split.send.is_empty() {
+            pty_write(pty, split.send.as_bytes()).await;
+        }
+        let rest = split.enter?;
+        if !guard.tracker.started() || command_rules::rules_for(state, tunnel_id).await.is_empty() {
+            pty_write(pty, b"\r").await;
+            guard.reset();
+            input = rest;
+            continue;
+        }
+        return Some(Hold::Settle { rest, enter_at: std::time::Instant::now() });
+    }
+}
+
+async fn pty_write(pty: &Pty, bytes: &[u8]) {
+    let r = match pty {
+        Pty::Channel(s) => s.write(bytes).await,
+        Pty::Process(p) => p.write_nonblocking(bytes).map(|_| ()).map_err(Into::into),
+    };
+    if let Err(e) = r {
+        tracing::warn!(error = %e, "Terminal input failed");
+    }
+}
+
+/// 指令規則的通知走 binary frame（text frame 都會寫進 xterm）。/ Command notices go out as binary frames.
+async fn notice(socket: &mut WebSocket, v: Value) {
+    let _ = send(socket, Message::Binary(Bytes::from(v.to_string()))).await;
+}
+
+fn outcome_notice(id: i64, o: &Outcome) -> Value {
+    let (by, reason) = match o {
+        Outcome::Approved { by } => (Some(by.as_str()), None),
+        Outcome::Denied { by, reason } => (Some(by.as_str()), Some(reason.as_str())),
+        Outcome::Cancelled { reason } => (None, Some(reason.as_str())),
+        _ => (None, None),
+    };
+    json!({ "type": "command", "state": o.status(), "request_id": id, "by": by, "reason": reason })
+}
 
 /// 兩種後端：裝置本身（池子裡的 PTY channel）或區網主機（OpenSSH 子程序）。
 enum Pty {
@@ -214,7 +293,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
 
     // 這條隧道要錄影：先告訴使用者，再開始錄（只錄輸出與視窗大小，不錄鍵盤）。
     // Recorded tunnel: tell the user first, then record (output and resizes only, never keystrokes).
-    let mut recorder = match db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten().filter(|t| t.record_sessions) {
+    let tunnel_row = db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten();
+    let mut recorder = match tunnel_row.as_ref().filter(|t| t.record_sessions) {
         Some(t) => {
             let _ = send_text(&mut socket, "\x1b[90m[Telepy] This session is recorded.\x1b[0m\r\n".into()).await;
             let title = format!("{} on {} as {}", user.username, t.host_friendly_name, lan_label.as_deref().unwrap_or(&username));
@@ -222,6 +302,22 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         }
         None => None,
     };
+
+    // 指令規則：輸出餵進畫面模型，Enter 先比對規則。/ Command rules: output feeds a screen model, Enter is checked first.
+    let mut guard = TerminalGuard::new(24, 80);
+    let mut hold: Option<Hold> = None;
+    let requester = Requester {
+        tunnel_id,
+        user_id: user.id,
+        username: user.username.clone(),
+        source: Source::Terminal,
+        account: username.clone(),
+        lan_host: lan_label.clone(),
+        client: None,
+        grant_id: None,
+        session_ref: Some(presence.id().to_string()),
+    };
+    let tunnel_name = tunnel_row.as_ref().map(|t| t.host_friendly_name.clone());
 
     let mut decoder = Utf8Decoder::default();
     let mut buf = vec![0u8; 8192];
@@ -241,18 +337,35 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                             }
                         }
                         Some("pty_input") => {
-                            if let Some(input) = data.pointer("/payload/input").and_then(|i| i.as_str()) {
-                                let r = match &pty {
-                                    Pty::Channel(s) => s.write(input.as_bytes()).await,
-                                    Pty::Process(p) => p.write_nonblocking(input.as_bytes()).map(|_| ()).map_err(Into::into),
-                                };
-                                if let Err(e) = r {
-                                    tracing::warn!(error = %e, "Terminal input failed");
+                            let Some(input) = data.pointer("/payload/input").and_then(|i| i.as_str()) else { continue };
+                            let ctrl_c = input.contains('\x03');
+                            match &mut hold {
+                                // 等核准：只認 Ctrl+C（撤回），其他按鍵丟掉。/ Waiting for approval: only Ctrl+C (withdraw) counts.
+                                Some(Hold::Pending { id, .. }) => {
+                                    if ctrl_c {
+                                        command_rules::cancel(&state, *id, "withdrawn in the terminal").await;
+                                    }
                                 }
+                                // 正在讀畫面：其他按鍵排在後面。/ Reading the screen: other keys queue up.
+                                Some(Hold::Settle { rest, .. }) if !ctrl_c => rest.push_str(input),
+                                // Ctrl+C：不送這次的 Enter。/ Ctrl+C: drop the held Enter.
+                                Some(Hold::Settle { .. }) => {
+                                    hold = None;
+                                    guard.reset();
+                                    pty_write(&pty, b"\x03").await;
+                                }
+                                None => hold = feed(&state, &mut guard, &pty, tunnel_id, input.to_string()).await,
+                            }
+                        }
+                        // 終端機上方提示列的「撤回」。/ The banner's withdraw button.
+                        Some("command_cancel") => {
+                            if let Some(Hold::Pending { id, .. }) = &hold {
+                                command_rules::cancel(&state, *id, "withdrawn in the terminal").await;
                             }
                         }
                         Some("pty_resize") => {
                             if let Some(size) = window_size(&data) {
+                                guard.tracker.resize(size.rows.min(u32::from(u16::MAX)) as u16, size.cols.min(u32::from(u16::MAX)) as u16);
                                 if let Some(r) = recorder.as_mut() {
                                     r.resize(size.cols, size.rows).await;
                                 }
@@ -275,6 +388,60 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
+            ev = hold_event(&mut hold, &guard) => match ev {
+                // 回顯到齊：讀畫面上那一行，比對規則。/ The echo is in: read the line and match the rules.
+                HoldEvent::Read => {
+                    let Some(Hold::Settle { rest, .. }) = hold.take() else { continue };
+                    let lines = guard.tracker.candidates();
+                    let shown = lines.first().cloned().unwrap_or_default();
+                    match command_rules::check(&state, &requester, &lines).await {
+                        None => {
+                            pty_write(&pty, b"\r").await;
+                            guard.reset();
+                            hold = feed(&state, &mut guard, &pty, tunnel_id, rest).await;
+                        }
+                        Some(rule) if rule.action == Action::Block => {
+                            pty_write(&pty, b"\x03").await;
+                            guard.reset();
+                            command_rules::record_block(&state, &requester, &shown, &rule).await;
+                            notice(&mut socket, json!({ "type": "command", "state": "blocked", "command": shown, "rule": command_rules::matched_json(&rule) })).await;
+                        }
+                        Some(rule) => match command_rules::request(&state, &requester, &shown, &rule).await {
+                            Ok((row, rx)) => {
+                                let can_decide = command_rules::approves(&state, user.id, tunnel_id).await;
+                                notice(&mut socket, json!({
+                                    "type": "command",
+                                    "state": "pending",
+                                    "command": shown,
+                                    "rule": command_rules::matched_json(&rule),
+                                    "request": command_rules::event_json(&row, tunnel_name.as_deref()),
+                                    "can_decide": can_decide,
+                                })).await;
+                                hold = Some(Hold::Pending { rest, id: row.id, rx });
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = format!("{e:#}"), "command rules: could not file an approval request");
+                                pty_write(&pty, b"\x03").await;
+                                guard.reset();
+                                notice(&mut socket, json!({ "type": "command", "state": "error", "command": shown, "rule": command_rules::matched_json(&rule) })).await;
+                            }
+                        },
+                    }
+                }
+                // 有結果了：核准就送出 Enter，其他都取消這一行。/ Decided: approved sends the Enter, anything else cancels the line.
+                HoldEvent::Decided(outcome) => {
+                    let Some(Hold::Pending { rest, id, .. }) = hold.take() else { continue };
+                    let approved = matches!(outcome, Outcome::Approved { .. }) && command_rules::mark_used(&state, id).await;
+                    guard.reset();
+                    notice(&mut socket, outcome_notice(id, &outcome)).await;
+                    if approved {
+                        pty_write(&pty, b"\r").await;
+                        hold = feed(&state, &mut guard, &pty, tunnel_id, rest).await;
+                    } else {
+                        pty_write(&pty, b"\x03").await;
+                    }
+                }
+            },
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
                 close_with(&mut socket, CLOSE_ENDED, &by).await;
@@ -289,6 +456,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                     break;
                 }
                 Ok(n) => {
+                    guard.output(&buf[..n], std::time::Instant::now());
                     let text = decoder.decode(&buf[..n]);
                     if let (Some(r), false) = (recorder.as_mut(), text.is_empty()) {
                         r.output(&text).await;
@@ -306,6 +474,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         }
     }
 
+    // 還在等核准的指令跟著取消。/ A command still waiting for approval is withdrawn.
+    if let Some(Hold::Pending { id, .. }) = &hold {
+        command_rules::cancel(&state, *id, "the terminal was closed").await;
+    }
     // 人已經走了：先移出「使用中」，收 channel / 程序再慢也不影響。/ Leave presence before the (possibly slow) teardown.
     drop(presence);
     tracing::info!(code = ?close_code, lived = started.elapsed().as_secs_f64(), "Terminal session closed");

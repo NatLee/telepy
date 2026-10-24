@@ -51,6 +51,8 @@ export interface TerminalContentProps {
     onReconnect?: () => void;
     /** 目前的配色:終端機外框與分頁列跟著它的背景 / 前景色。/ Current scheme; the frame and tab bar follow it. */
     palette: TerminalPalette;
+    /** 指令規則的提示列，疊在終端機上方。/ The command-rule banner, overlaid on top of the terminal. */
+    commandBanner?: React.ReactNode;
 }
 
 export function TerminalContent({
@@ -84,6 +86,7 @@ export function TerminalContent({
     serviceKeys,
     onReconnect,
     palette,
+    commandBanner,
 }: TerminalContentProps) {
     const { t } = useI18n();
     const groupRef = useRef<GroupImperativeHandle>(null);
@@ -236,6 +239,11 @@ export function TerminalContent({
                             />
                             <div className="flex-1 relative min-h-0 bg-(--term-bg) terminal-container">
                                 <div ref={terminalRef} className="absolute inset-x-0 inset-y-1 sm:inset-y-0 pl-1" />
+                                {commandBanner && (
+                                    <div className="pointer-events-none absolute inset-x-2 top-2 z-30 flex justify-end">
+                                        <div className="pointer-events-auto w-full max-w-md">{commandBanner}</div>
+                                    </div>
+                                )}
                                 {!connected && !connecting && (
                                     <div className="absolute inset-0 bg-black/70 z-20 flex items-center justify-center rounded-lg">
                                         <div className="text-center space-y-3">

@@ -10,6 +10,7 @@ import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { SessionEndedNotice } from "@/components/layout/SessionEndedNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
+import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -77,11 +78,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
     return (
         <NotificationWsContext.Provider value={wsStatus}>
+            <CommandApprovalsProvider>
             <div className="flex min-h-screen w-full bg-background font-sans">
                 {/* 敏感隧道的「確認是你」流程（REST 403 / WebSocket 4008 時開）。/ Step-up prompts for sensitive tunnels. */}
                 <StepUpProvider />
                 {/* 有人結束了你的 session 時提醒。/ A heads-up when someone ends one of your sessions. */}
                 <SessionEndedNotice />
+                {/* 等你核准的指令（任何頁面右下角）。/ Commands waiting for your approval, bottom right on any page. */}
+                <CommandApprovalCenter />
                 <Sidebar />
                 <div className="relative flex flex-col flex-1 w-full min-w-0">
                     <Header />
@@ -90,6 +94,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                     </main>
                 </div>
             </div>
+            </CommandApprovalsProvider>
         </NotificationWsContext.Provider>
     );
 }

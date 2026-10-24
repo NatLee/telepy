@@ -63,6 +63,8 @@ pub struct Inner {
     pub join: JoinTickets,
     /// 敏感隧道的 step-up（跟 gateway 共用）。/ Step-up confirmations (shared with the gateway).
     pub step_up: Arc<crate::step_up::StepUps>,
+    /// 指令規則快取與等待中的核准。/ Command rule cache and pending approvals.
+    pub commands: crate::command_rules::CommandRules,
 }
 
 #[derive(Clone)]
@@ -119,6 +121,7 @@ impl AppState {
             device_keys: DeviceKeys::default(),
             join: JoinTickets::default(),
             step_up,
+            commands: Default::default(),
             config,
             db,
         }))

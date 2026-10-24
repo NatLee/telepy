@@ -41,6 +41,10 @@ export const NOTIFICATION_ACTIONS = {
     ACCESS_REQUEST_CREATED: "ACCESS-REQUEST-CREATED",
     ACCESS_REQUEST_DECIDED: "ACCESS-REQUEST-DECIDED",
     ACCESS_REQUEST_UPDATED: "ACCESS-REQUEST-UPDATED",
+    // 指令規則：有指令等核准 {request, approver_ids}（送給 owner / ADMIN 與申請人）；有結果了 {request}（同一群人）。
+    // Command rules: a command waits for approval {request, approver_ids} (owner / ADMINs + the requester); decided {request}.
+    COMMAND_APPROVAL_REQUESTED: "COMMAND-APPROVAL-REQUESTED",
+    COMMAND_APPROVAL_DECIDED: "COMMAND-APPROVAL-DECIDED",
 } as const;
 
 export type NotificationAction = typeof NOTIFICATION_ACTIONS[keyof typeof NOTIFICATION_ACTIONS];

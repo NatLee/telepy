@@ -326,6 +326,56 @@ const TABLES: &[(&str, &str)] = &[
             "truncated" bool NOT NULL DEFAULT 0
         )"#,
     ),
+    // Rust 自有：指令規則（網頁終端機與 MCP agent 的指令；tunnel_id NULL = 全站）。
+    // Command rules for the web terminal and MCP agents (NULL tunnel_id = site-wide).
+    (
+        "telepy_command_rule",
+        r#"CREATE TABLE "telepy_command_rule" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NULL,
+            "action" varchar(16) NOT NULL,
+            "kind" varchar(16) NOT NULL,
+            "pattern" text NOT NULL,
+            "who" varchar(16) NOT NULL,
+            "via" varchar(16) NOT NULL,
+            "note" text NOT NULL,
+            "enabled" bool NOT NULL DEFAULT 1,
+            "created_by_id" integer NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // Rust 自有：被規則擋下或送去核准的指令（誰、哪裡、哪條規則、結果）。
+    // Commands a rule blocked or held for approval (who, where, which rule, outcome).
+    (
+        "telepy_command_event",
+        r#"CREATE TABLE "telepy_command_event" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "username" varchar(150) NOT NULL,
+            "source" varchar(16) NOT NULL,
+            "client" varchar(255) NULL,
+            "grant_id" integer NULL,
+            "session_ref" varchar(64) NULL,
+            "account" varchar(150) NOT NULL,
+            "lan_host" varchar(255) NULL,
+            "command" text NOT NULL,
+            "rule_id" integer NULL,
+            "rule_pattern" text NOT NULL,
+            "rule_kind" varchar(16) NOT NULL,
+            "rule_scope" varchar(16) NOT NULL,
+            "rule_note" text NOT NULL,
+            "status" varchar(16) NOT NULL,
+            "created_at" datetime NOT NULL,
+            "expires_at" datetime NULL,
+            "decided_by_id" integer NULL,
+            "decided_by" varchar(150) NULL,
+            "decided_at" datetime NULL,
+            "reason" text NOT NULL,
+            "used_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：隧道標籤（所有看得到隧道的人共用）。/ Tunnel labels, shared by everyone who sees the tunnel.
     (
         "telepy_tunnel_label",
@@ -489,6 +539,9 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_tunnel" ON "telepy_command_event" ("tunnel_id", "status")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_user" ON "telepy_command_event" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "social_account_user_id_5e6e9a7d" ON "social_account" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "authorized_keys_reverseserverusernames_reverse_server_id_567b60c7" ON "authorized_keys_reverseserverusernames" ("reverse_server_id")"#,
@@ -559,6 +612,7 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "recording_retention_days", "integer NOT NULL DEFAULT 30"),
     // 這條隧道的網頁終端機要錄影。/ Record this tunnel's web terminal sessions.
     ("authorized_keys_reverseserverauthorizedkeys", "record_sessions", "bool NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "command_approval_timeout", "integer NOT NULL DEFAULT 300"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

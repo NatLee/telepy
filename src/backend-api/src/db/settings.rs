@@ -32,6 +32,7 @@ pub struct SiteSettings {
     pub mfa_require_totp: bool,
     pub mfa_require_passkey: bool,
     pub recording_retention_days: i64,
+    pub command_approval_timeout: i64,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -61,13 +62,14 @@ pub const FIELDS: &[&str] = &[
     "mfa_require_totp",
     "mfa_require_passkey",
     "recording_retention_days",
+    "command_approval_timeout",
 ];
 
 const COLS: &str = "id, allow_registration, valid_register_domains, remote_browser_session_idle_timeout, \
     remote_browser_max_sessions, remote_browser_geometry, remote_browser_ssh_timeout, remote_browser_ssh_attempts, \
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
     ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, notify_webhook_url, notify_down_delay, user_key_max_days, \
-    desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, mfa_require_totp, mfa_require_passkey, recording_retention_days";
+    desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))
