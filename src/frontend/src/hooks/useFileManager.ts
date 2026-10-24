@@ -13,6 +13,12 @@ import { ReconnectingSocket } from "@/lib/reconnectingSocket";
 import { FileItem } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 
+/**
+ * 每個（隧道, 帳號）上次看的目錄：面板收起來就卸載、斷線，再打開回到同一個目錄。
+ * Last directory per (tunnel, account): closing the panel unmounts it, reopening returns there.
+ */
+const lastPaths = new Map<string, string>();
+
 export function useFileManager(serverId: string, username: string, accessToken: string, initialPath?: string) {
     const { showError, showSuccess } = useToast();
     const { t } = useI18n();
@@ -113,6 +119,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     useEffect(() => {
         if (!serverId || !username || !accessToken) return;
         setConnecting(true);
+        const pathKey = `${serverId}\u0000${username}`;
 
         const socket = new ReconnectingSocket({
             path: "/ws/filemanager/",
@@ -134,13 +141,14 @@ export function useFileManager(serverId: string, username: string, accessToken: 
 
                     if (action === "shell_detect" && d.status === "success") {
                         setShellType(d.shell);
-                        const defaultPath = d.shell === "powershell" ? "C:\\" : "~/";
-                        setCurrentPath(defaultPath);
-                        loadDirectoryRef.current(defaultPath);
+                        const startPath = lastPaths.get(pathKey) ?? (d.shell === "powershell" ? "C:\\" : "~/");
+                        setCurrentPath(startPath);
+                        loadDirectoryRef.current(startPath);
                     } else if (action === "list_files") {
                         if (d.status === "success") {
                             setItems(d.files || []);
                             setCurrentPath(d.path);
+                            if (typeof d.path === "string") lastPaths.set(pathKey, d.path);
                             setError(null);
                         } else {
                             setError(d.error || tRef.current("files.listFailed"));

@@ -168,6 +168,12 @@ impl Heartbeat {
     }
 }
 
+/// 裝置離線（gateway 沒有它的隧道）。gateway 沒啟用時（開發、自帶 sshd 的測試）交給連線去判斷。
+/// The device is offline (no tunnel at the gateway); without a gateway the connection attempt decides.
+pub fn device_offline(state: &AppState, reverse_port: i64) -> bool {
+    state.config.gateway_enabled && !state.gateway.has_forward(u16::try_from(reverse_port).unwrap_or(0))
+}
+
 /// `{"type":"ping"}` → `{"type":"pong"}`（notifications / tunnel_connection / filemanager 的心跳）。
 pub fn is_ping(text: &str) -> bool {
     serde_json::from_str::<Value>(text).ok().and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == "ping")).unwrap_or(false)

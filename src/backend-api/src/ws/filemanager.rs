@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use serde_json::{json, Value};
 
-use super::{auth, close, close_with, is_ping, send_json, Heartbeat, CLOSE_ENDED};
+use super::{auth, close, close_with, device_offline, is_ping, send_json, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -236,6 +236,14 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     }
 
+    // 裝置離線就拒絕（和終端機一樣 4005，前端會退避重連）：exec 後備走的也是這條隧道，接受了只會留下一條
+    // 什麼都做不了、卻算「檔案使用中」的連線（例如裝置斷線後還開著的分頁）。
+    // Refuse an offline device with 4005 like the terminal (the client retries with backoff): the exec fallback
+    // rides the same tunnel, so accepting left a useless connection that still counted as "Files in use".
+    if device_offline(&state, tunnel.reverse_port) {
+        close(&mut socket, 4005).await;
+        return;
+    }
     let Some(backend) = open_backend(&state, &username, tunnel.reverse_port).await else {
         tracing::error!("Failed to initialize SSH session");
         close(&mut socket, 4005).await;

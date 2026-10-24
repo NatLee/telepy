@@ -18,7 +18,7 @@ use bytes::Bytes;
 use serde_json::Value;
 
 use crate::recording::Recorder;
-use super::{auth, close, close_with, send, send_text, Heartbeat, CLOSE_ENDED};
+use super::{auth, close, close_with, device_offline, send, send_text, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -38,11 +38,6 @@ fn window_size(v: &Value) -> Option<WindowSize> {
     let size = v.pointer("/payload/size")?.as_object()?;
     let g = |k: &str| size.get(k).and_then(|v| v.as_u64()).map(|v| v.min(u64::from(u16::MAX)) as u32);
     Some(WindowSize { rows: g("rows")?, cols: g("cols")?, height: g("height")?, width: g("width")? })
-}
-
-/// 裝置離線（gateway 沒有它的隧道）。gateway 沒啟用時（開發、自帶 sshd 的測試）交給連線去判斷。
-fn device_offline(state: &AppState, reverse_port: i64) -> bool {
-    state.config.gateway_enabled && !state.gateway.has_forward(u16::try_from(reverse_port).unwrap_or(0))
 }
 
 /// 增量 UTF-8 解碼器：未完成的尾端位元組留到下一塊；非法位元組換成 U+FFFD（Python `'replace'`）。
