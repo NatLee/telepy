@@ -615,6 +615,11 @@ pub struct Lab {
 impl Lab {
     /// 起 gateway + 後端；沒有 ssh / ssh-keygen 就回 None（呼叫端 `return`）。
     pub async fn start() -> Option<Lab> {
+        Self::start_with(|_| {}).await
+    }
+
+    /// 同 [`Lab::start`]，但 gateway 啟動前可以先改設定（例如 PROXY protocol）。/ Same, with a config hook before the gateway starts.
+    pub async fn start_with(customize: impl FnOnce(&mut telepy_server::config::Config)) -> Option<Lab> {
         if !have("ssh") || !have("ssh-keygen") {
             eprintln!("skipping: ssh / ssh-keygen not available");
             return None;
@@ -649,6 +654,7 @@ impl Lab {
         config.server_domain = Some("127.0.0.1".to_string());
         config.reverse_server_ssh_port = gw_port.to_string();
         config.ssh_logs_path = dir.path().join("ssh-gateway.log");
+        customize(&mut config);
         app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
         app.router = telepy_server::app::build(app.state.clone());
         telepy_server::gateway::start(app.state.gateway.clone(), listener).unwrap();

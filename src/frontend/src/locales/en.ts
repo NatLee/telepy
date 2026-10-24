@@ -1406,6 +1406,7 @@ export const en = {
     "logs.event.disconnect": "Disconnected",
     "logs.event.refused_forward": "Forward refused",
     "logs.event.refused_direct": "Direct connect refused",
+    "logs.event.refused_proxy": "Proxy header missing",
     "logs.event.failed_publickey": "Key rejected",
     "logs.event.invalid_user": "Invalid user",
     "logs.event.preauth_close": "Closed before auth",

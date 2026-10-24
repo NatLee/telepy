@@ -13,6 +13,8 @@
 //! 日誌：sshd 風格的 `Accepted publickey … / Disconnected …` 行寫到 ssh-gateway.log，Logs 頁沿用。
 //! In-process SSH gateway terminating the devices' reverse tunnels (pubkey + tcpip-forward only).
 
+pub mod proxy_protocol;
+
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -70,6 +72,8 @@ pub struct Gateway {
     status: Arc<StatusState>,
     presence: Arc<Presence>,
     hub: Arc<Hub>,
+    /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
+    proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
     /// 已認證的連線。/ Authenticated connections.
     conns: DashMap<u64, ConnInfo>,
@@ -147,6 +151,15 @@ impl Gateway {
     pub fn new(config: Config, db: Db, status: Arc<StatusState>, presence: Arc<Presence>, hub: Arc<Hub>) -> Self {
         let keys = config.gateway_host_keys_dir.as_deref().map(load_host_keys).unwrap_or_default();
         let host_keys_loaded = keys.len();
+        let proxy_from = match proxy_protocol::Trusted::parse(&config.gateway_proxy_protocol_from) {
+            Ok(t) => t,
+            Err(e) => {
+                // 設錯就不啟用：代理送來的 header 會讓 SSH 握手失敗（看得出來），而不是讓人冒用 IP。
+                // Disabled on a bad value: the proxy's connections then fail visibly instead of trusting anyone.
+                tracing::error!(error = %e, "GATEWAY_PROXY_PROTOCOL_FROM is invalid; PROXY protocol disabled");
+                proxy_protocol::Trusted::default()
+            }
+        };
         Self {
             server_config: server_config(keys),
             config,
@@ -154,6 +167,7 @@ impl Gateway {
             status,
             presence,
             hub,
+            proxy_from,
             forwards: DashMap::new(),
             conns: DashMap::new(),
             live: AtomicUsize::new(0),
@@ -661,8 +675,35 @@ impl Drop for GatewayHandler {
     }
 }
 
-async fn handle_connection(gw: Arc<Gateway>, stream: TcpStream, peer: SocketAddr) {
+/// 等代理送 PROXY header 最多多久。/ How long a proxy gets to send its header.
+const PROXY_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn handle_connection(gw: Arc<Gateway>, mut stream: TcpStream, peer: SocketAddr) {
     let _ = stream.set_nodelay(true);
+    // 前面有 L4 代理時，真正的來源在它送的 PROXY header 裡；只有列出的代理要送、也才會被讀。
+    // Behind an L4 proxy the real source is in its PROXY header; only listed proxies send one (and are read).
+    let peer = if gw.proxy_from.contains(peer.ip()) {
+        match tokio::time::timeout(PROXY_HEADER_TIMEOUT, proxy_protocol::read_header(&mut stream)).await {
+            Ok(Ok(proxy_protocol::Header::Proxied(source))) => source,
+            Ok(Ok(proxy_protocol::Header::Local)) => peer,
+            Ok(Err(proxy_protocol::ProxyError::Closed)) => {
+                tracing::debug!(%peer, "gateway: proxy connection closed before its header (health check)");
+                return;
+            }
+            Ok(Err(e)) => {
+                let message = format!("Refused connection from {} port {}: {e}", peer.ip(), peer.port());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
+                return;
+            }
+            Err(_) => {
+                let message = format!("Refused connection from {} port {}: no PROXY protocol header within {}s", peer.ip(), peer.port(), PROXY_HEADER_TIMEOUT.as_secs());
+                gw.event("refused_proxy", Some(peer), None, None, message).await;
+                return;
+            }
+        }
+    } else {
+        peer
+    };
     let conn_id = gw.next_id.fetch_add(1, Ordering::SeqCst);
     let authed = Arc::new(AtomicBool::new(false));
     // `live` 在 GatewayHandler::drop 歸還，握手失敗 / 逾時時 handler 也會被 drop。/ Released in GatewayHandler::drop.

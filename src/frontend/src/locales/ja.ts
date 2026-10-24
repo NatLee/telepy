@@ -1396,6 +1396,7 @@ export const ja: Record<TranslationKey, string> = {
     "logs.event.disconnect": "切断",
     "logs.event.refused_forward": "転送拒否",
     "logs.event.refused_direct": "直接接続拒否",
+    "logs.event.refused_proxy": "プロキシヘッダーなし",
     "logs.event.failed_publickey": "鍵拒否",
     "logs.event.invalid_user": "無効なユーザー",
     "logs.event.preauth_close": "認証前に切断",

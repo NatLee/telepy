@@ -71,6 +71,9 @@ pub struct Config {
     pub gateway_max_connections: usize,
     pub gateway_login_grace: Duration,
     pub gateway_probe_interval: Duration,
+    /// gateway 前面送 PROXY protocol header 的 L4 代理（IP / CIDR，逗號分隔）；空 = 不啟用。
+    /// L4 proxies in front of the gateway that send a PROXY protocol header (IPs / CIDRs); empty = off.
+    pub gateway_proxy_protocol_from: String,
     // --- client IP (sign-in history, presence) ---
     /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
     /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
@@ -175,6 +178,7 @@ impl Config {
             gateway_max_connections: env("GATEWAY_MAX_CONNECTIONS").and_then(|v| v.parse().ok()).unwrap_or(4096),
             gateway_login_grace: Duration::from_secs(env("GATEWAY_LOGIN_GRACE_SECS").and_then(|v| v.parse().ok()).unwrap_or(60)),
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
+            gateway_proxy_protocol_from: env("GATEWAY_PROXY_PROTOCOL_FROM").unwrap_or_default(),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,
