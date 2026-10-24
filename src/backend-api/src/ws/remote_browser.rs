@@ -113,6 +113,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
     let presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
+    let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
     // VNC WS 連著 = session 在用：每 20s 續命（伺服器端計時，不受瀏覽器背景分頁節流影響）。
@@ -164,6 +165,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     keepalive.abort();
     // 人已經走了：先移出「使用中」再收尾（收 kasm session 要一點時間）。/ Leave presence before the teardown.
     drop(presence);
+    audit.close(&state).await;
     if let Some(code) = close_code {
         close(&mut socket, code).await;
     }

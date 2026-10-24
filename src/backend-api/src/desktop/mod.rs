@@ -471,17 +471,7 @@ pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboar
     p
 }
 
-/// `12s` / `1m32s` / `2h05m`。/ Short duration for log lines.
-pub fn fmt_duration(d: Duration) -> String {
-    let s = d.as_secs();
-    if s < 60 {
-        format!("{s}s")
-    } else if s < 3600 {
-        format!("{}m{:02}s", s / 60, s % 60)
-    } else {
-        format!("{}h{:02}m", s / 3600, (s % 3600) / 60)
-    }
-}
+pub use crate::util::fmt_duration;
 
 #[cfg(test)]
 mod tests {

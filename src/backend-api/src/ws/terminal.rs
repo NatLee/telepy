@@ -22,6 +22,7 @@ use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
 use crate::presence::{Entry, Kind};
+use crate::session_audit::{ConsoleKind, ConsoleSession};
 use crate::ssh::process::{lan_terminal_args, spawn_in_pty, valid_login, PtyChild};
 use crate::ssh::terminal::{Output, PtySession, WindowSize};
 use crate::state::AppState;
@@ -128,6 +129,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         }
     };
 
+    // 區網終端機的稽核說明（連上之後才記開始）。/ The LAN terminal's audit line, recorded once it is open.
+    let mut lan_audit: Option<String> = None;
     // 區網主機（經裝置跳過去）：主機要屬於這條隧道，帳號要是安全字元。/ A LAN host behind the device.
     let mut pty = match auth::id_field(&msg, "lan_host_id") {
         None => {
@@ -166,16 +169,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                 close(&mut socket, 4003).await;
                 return;
             };
-            state
-                .gateway
-                .event(
-                    "lan_terminal",
-                    None,
-                    None,
-                    Some(tunnel_id),
-                    format!("Web terminal by {} to {}@{}:{} through {}@device", user.username, login, host.address, host.ssh_port, username),
-                )
-                .await;
+            lan_audit = Some(format!("Web terminal by {} to {}@{}:{} through {}@device", user.username, login, host.address, host.ssh_port, username));
             if device_offline(&state, reverse_port) {
                 close(&mut socket, 4005).await;
                 return;
@@ -209,6 +203,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
     let tunnel_id: i64 = server_id.parse().unwrap_or(0);
     let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip));
+    let audit = match lan_audit {
+        Some(what) => ConsoleSession::open(&state, ConsoleKind::LanTerminal, tunnel_id, what).await,
+        None => ConsoleSession::open_for(&state, ConsoleKind::Terminal, tunnel_id, &user.username, Some(&username)).await,
+    };
     let mut heartbeat = Heartbeat::new(&state.config);
 
     let mut decoder = Utf8Decoder::default();
@@ -285,6 +283,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
     // 人已經走了：先移出「使用中」，收 channel / 程序再慢也不影響。/ Leave presence before the (possibly slow) teardown.
     drop(presence);
     tracing::info!(code = ?close_code, lived = started.elapsed().as_secs_f64(), "Terminal session closed");
+    audit.close(&state).await;
     match &mut pty {
         Pty::Channel(s) => s.close().await,
         Pty::Process(p) => p.terminate().await,

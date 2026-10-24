@@ -25,6 +25,7 @@ pub mod permissions;
 pub mod presence;
 pub mod remote_browser;
 pub mod scripts;
+pub mod session_audit;
 pub mod sftp;
 pub mod ssh;
 pub mod state;

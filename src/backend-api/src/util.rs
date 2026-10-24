@@ -8,6 +8,18 @@ use serde_json::Value;
 
 /// Django 以 USE_TZ=True 存進 SQLite 的格式：UTC、無時區、6 位微秒。
 /// How Django stores aware datetimes in SQLite: naive UTC with microseconds.
+/// `12s` / `1m32s` / `2h05m`（日誌用的短持續時間）。/ Short duration for log lines.
+pub fn fmt_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m{:02}s", s / 60, s % 60)
+    } else {
+        format!("{}h{:02}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
 pub fn now_db() -> String {
     db_time(Utc::now())
 }
