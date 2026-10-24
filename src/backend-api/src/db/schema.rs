@@ -402,6 +402,23 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：裝置 SSH host key 釘選（pinned / rejected），隧道刪除時一併刪。
+    // Pinned and rejected device SSH host keys per tunnel; deleted with the tunnel.
+    (
+        "telepy_device_host_key",
+        r#"CREATE TABLE "telepy_device_host_key" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "status" varchar(16) NOT NULL,
+            "key_type" varchar(64) NOT NULL,
+            "fingerprint" varchar(128) NOT NULL,
+            "public_key" text NOT NULL,
+            "source" varchar(16) NOT NULL,
+            "attempts" integer NOT NULL DEFAULT 0,
+            "first_seen" datetime NOT NULL,
+            "last_seen" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -427,6 +444,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,

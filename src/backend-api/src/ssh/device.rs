@@ -2,7 +2,8 @@
 //! 傳輸在行程內：向內建 gateway 要一條裝置隧道上的 forwarded-tcpip 通道（`Gateway::open_stream`），直接在上面做
 //! 對裝置 sshd 的 SSH 握手 —— 不經 loopback TCP、不占本機 port。共用連線見 `ssh::pool`。
 //! gateway 沒啟用（沒有 host key 的開發環境、自帶 sshd 的測試）時才退回 TCP `ssh_target_host:port`。
-//! 主機金鑰不驗證（與 `StrictHostKeyChecking no` 一致，邊界不變）。
+//! 主機金鑰依隧道釘選（第一次使用時記下，之後不同就拒絕），見 `ssh::host_keys`。
+//! The device's host key is pinned per tunnel (trust on first use, refused when it changes), see `ssh::host_keys`.
 //! Native SSH connection to a device over an in-process gateway channel (no loopback TCP).
 
 use std::path::Path;
@@ -15,15 +16,48 @@ use russh::{Channel, ChannelMsg};
 use russh::keys::{load_secret_key, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 
+use crate::ssh::host_keys;
 use crate::state::AppState;
 
-pub struct ClientHandler;
+/// 握手時要比對的隧道（沒有對應的隧道列時不檢查，例如測試自帶的 sshd）。/ The tunnel to check the host key against.
+struct PinCheck {
+    state: AppState,
+    tunnel_id: i64,
+    reverse_port: u16,
+    /// 被拒絕時記下這次看到的指紋（給錯誤訊息用）。/ The fingerprint we refused, for the error message.
+    refused: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+pub struct ClientHandler {
+    pin: Option<PinCheck>,
+}
+
+impl ClientHandler {
+    /// 不比對 host key（測試連 gateway 本身用；連裝置一律經 [`connect`]）。/ No host-key check (tests that dial the gateway itself).
+    pub fn unchecked() -> Self {
+        Self { pin: None }
+    }
+}
 
 impl Handler for ClientHandler {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
-        Ok(true)
+    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+        let Some(pin) = &self.pin else { return Ok(true) };
+        let info = host_keys::key_info(key);
+        match host_keys::verify(&pin.state, pin.tunnel_id, pin.reverse_port, &info).await {
+            Ok(true) => Ok(true),
+            Ok(false) => {
+                *pin.refused.lock().unwrap() = Some(info.fingerprint);
+                Ok(false)
+            }
+            // 查不到就拒絕（fail closed）。/ Fail closed when the check itself fails.
+            Err(e) => {
+                tracing::error!(tunnel_id = pin.tunnel_id, error = %e, "device host key check failed; refusing the connection");
+                *pin.refused.lock().unwrap() = Some(info.fingerprint);
+                Ok(false)
+            }
+        }
     }
 }
 
@@ -63,12 +97,24 @@ async fn authenticate(handle: &mut Handle<ClientHandler>, user: &str, key: &Arc<
 async fn connect_inner(state: &AppState, username: &str, reverse_port: i64) -> anyhow::Result<DeviceConn> {
     let key = load_identity(&state.config.ssh_identity).await?;
     let port = u16::try_from(reverse_port).context("invalid reverse port")?;
-    let mut device = if state.config.gateway_enabled {
+    let refused = Arc::new(std::sync::Mutex::new(None));
+    let tunnel_id = crate::db::tunnels::by_port(&state.db, reverse_port).await.ok().and_then(|t| t.first().map(|t| t.id));
+    let handler = || ClientHandler { pin: tunnel_id.map(|tunnel_id| PinCheck { state: state.clone(), tunnel_id, reverse_port: port, refused: refused.clone() }) };
+    let connected = if state.config.gateway_enabled {
         let stream = state.gateway.open_stream(port).await?;
-        client::connect_stream(client_config(), stream, ClientHandler).await.context("ssh handshake with the device")?
+        client::connect_stream(client_config(), stream, handler()).await.context("ssh handshake with the device")
     } else {
         let host = state.config.ssh_target_host.as_str();
-        client::connect(client_config(), (host, port), ClientHandler).await.with_context(|| format!("connect to {host}:{port}"))?
+        client::connect(client_config(), (host, port), handler()).await.with_context(|| format!("connect to {host}:{port}"))
+    };
+    let mut device = match connected {
+        Ok(d) => d,
+        Err(e) => {
+            if let Some(fp) = refused.lock().unwrap().take() {
+                bail!("{}: the device presented {fp}, which is not the key Telepy pinned for this tunnel. The owner can review it in the tunnel's details.", host_keys::CHANGED);
+            }
+            return Err(e);
+        }
     };
     authenticate(&mut device, username, &key).await.context("device auth")?;
     Ok(DeviceConn { device })

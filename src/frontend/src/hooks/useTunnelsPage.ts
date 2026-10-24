@@ -178,6 +178,12 @@ export function useTunnelsPage() {
         [NOTIFICATION_ACTIONS.AI_SESSION_CLOSED]: (msg) => {
             if (msg.details && msg.by && msg.by !== user?.username) showSuccess(msg.details);
         },
+        // 裝置的 host key 變了：連線已被擋，提示去詳細資訊核對。/ A device's host key changed: connections are blocked.
+        [NOTIFICATION_ACTIONS.HOST_KEY_CHANGED]: (msg) => {
+            const name = tunnels.find((tn) => tn.id === msg.tunnel_id)?.host_friendly_name ?? `#${msg.tunnel_id ?? "?"}`;
+            showError(t("hostKey.notify", { name }));
+            fetchData();
+        },
     });
 
     const handleLeaveTunnel = async (tunnelId: number, tunnelName: string) => {

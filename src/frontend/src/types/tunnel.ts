@@ -31,6 +31,8 @@ export interface Tunnel {
     share_expires_at?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
     access_requests?: number;
+    /** 裝置出示了和釘選不同的 SSH host key，等擁有者確認。/ The device presented a different host key; waiting for review. */
+    host_key_changed?: boolean;
 }
 
 /**

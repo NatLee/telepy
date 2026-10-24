@@ -75,6 +75,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let requests = db::access_requests::pending_counts(&state.db).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
     let listen = state.status.listen_ports().unwrap_or_default();
+    let key_alerts = db::host_keys::tunnels_with_rejected(&state.db).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(tunnels
         .iter()
@@ -101,6 +102,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             let decides = eff.is_some_and(|e| e.satisfies(permissions::Permission::Admin));
             v["access_requests"] = json!(if decides { requests.get(&t.id).copied().unwrap_or(0) } else { 0 });
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
+            // 裝置出示了和釘選不同的 host key、正等擁有者確認。/ The device presented a different host key; waiting for review.
+            v["host_key_changed"] = json!(key_alerts.contains(&t.id));
             v["last_seen_at"] = match (listening, seen.get(&t.id)) {
                 (false, Some(at)) => json!(crate::util::db_to_iso_utc_z(at)),
                 _ => Value::Null,

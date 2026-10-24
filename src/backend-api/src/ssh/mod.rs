@@ -7,6 +7,7 @@
 
 pub mod bridge;
 pub mod device;
+pub mod host_keys;
 pub mod exec;
 pub mod pool;
 pub mod process;

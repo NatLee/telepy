@@ -12,6 +12,7 @@ import { Modal } from "@/components/ui/Modal";
 import { useTunnelDetailsModal } from "@/hooks/useTunnelDetailsModal";
 import { useTunnelConnections } from "@/hooks/useTunnelConnections";
 import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections";
+import { DeviceHostKeySection } from "@/components/tunnels/DeviceHostKeySection";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -169,6 +170,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                         <KeyPreview value={form.key} />
                         {keyChanged && !errors.key && <Callout tone="warning">{t("tunnelDetails.keyChanged")}</Callout>}
                     </Section>
+
+                    {/* 裝置身分（host key 釘選）/ Device identity (pinned host key) */}
+                    <DeviceHostKeySection tunnelId={tunnelId} isOpen={isOpen} onChanged={onUpdate} />
 
                     {/* 連線紀錄 / Connection history */}
                     <TunnelConnectionsSection data={connections.data} failed={connections.failed} />

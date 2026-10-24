@@ -21,6 +21,8 @@ export const NOTIFICATION_ACTIONS = {
     // AI（MCP）工具開/關 SSH session：送給 session 的使用者與隧道擁有者。/ AI session lifecycle (user + tunnel owner).
     AI_SESSION_OPENED: "AI-SESSION-OPENED",
     AI_SESSION_CLOSED: "AI-SESSION-CLOSED",
+    // 裝置出示了和釘選不同的 SSH host key（送給隧道擁有者與被分享者）。/ A device presented a different host key (tunnel audience).
+    HOST_KEY_CHANGED: "HOST-KEY-CHANGED",
     // 裝置金鑰清單同步完（送給隧道擁有者與被分享者）。/ A device's key list was synced (tunnel audience).
     DEVICE_KEYS_UPDATED: "DEVICE-KEYS-UPDATED",
     // 區網掃描（#20）：進度 / 完成只送給發起的人，主機表更新送給看得到隧道的人。
