@@ -155,6 +155,17 @@ async fn offline_device_is_refused_quickly() {
     let code = lab.terminal(&alice, &dev, "ubuntu").await.err();
     assert_eq!(code, Some(4005));
     assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+
+    // 檔案管理也是 4005，不再接受一條沒用、卻算「檔案使用中」的 exec 後備連線。
+    // The file manager is refused too, instead of a useless exec-fallback connection that counted as in use.
+    let code = lab.filemanager(&alice, &dev, "ubuntu", json!({"action": "shell_detect"})).await.err();
+    assert_eq!(code, Some(4005));
+    assert!(lab.app.state.presence.for_tunnel(dev.tunnel_id).is_empty());
+
+    // 裝置回來就又能用。/ Works again once the device is back.
+    lab.reconnect_device(&dev).await;
+    let r = lab.filemanager(&alice, &dev, "ubuntu", json!({"action": "shell_detect"})).await.expect("file manager after reconnect");
+    assert_eq!(r["data"]["status"], "success", "{r}");
 }
 
 /// 經裝置跳到區網主機的終端機（#20）：第一跳服務金鑰，第二跳是那台機器自己的帳號；兩台都看到登入。

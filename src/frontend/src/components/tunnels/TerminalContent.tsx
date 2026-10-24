@@ -89,10 +89,13 @@ export function TerminalContent({
     const groupRef = useRef<GroupImperativeHandle>(null);
     const filesPanelRef = usePanelRef();
 
-    // 依斷點只掛載「桌面版」或「手機版」其中一邊的 File 面板，避免兩者同時掛載而各開一條
-    // filemanager WebSocket + 一個持久 SSH 連線。undefined（尚未量測）時兩邊都先不掛。
-    // Mount only one File panel (desktop OR mobile) per breakpoint so they don't each open a
-    // filemanager WebSocket + SSH session. While undefined (not yet measured), neither mounts.
+    // File 面板只在「看得到」時掛載：桌面版右側面板打開、手機版切到檔案畫面。掛著就是一條 filemanager
+    // WebSocket（會自動重連）並算「檔案使用中」，以前收起來也一直連著，沒人用卻顯示有人在用。
+    // 依斷點只掛其中一邊；undefined（尚未量測）時兩邊都先不掛。
+    // The File panel mounts only while it is visible (desktop side panel open, phone files view). A mounted
+    // panel holds a reconnecting filemanager WebSocket and counts as "Files in use"; it used to stay connected
+    // while collapsed, so tunnels showed files in use with nobody there. One breakpoint at a time; neither
+    // mounts while the breakpoint is not yet measured.
     const isDesktop = useMediaQuery("(min-width: 768px)");
 
     // 桌面版沒有「檔案」主畫面（檔案是右側面板，主畫面只有終端機 / 瀏覽器）：從 ?mainView=files（卡片的「檔案」按鈕）
@@ -278,7 +281,7 @@ export function TerminalContent({
                         collapsedSize={0}
                         className="hidden md:flex min-h-0 min-w-0 bg-card rounded-lg border border-border flex-col"
                     >
-                        {isDesktop === true && username && accessToken && (
+                        {isDesktop === true && showFiles && username && accessToken && (
                             <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                         )}
                     </ResizablePanel>
@@ -286,7 +289,7 @@ export function TerminalContent({
 
                 {/* Mobile-only full-screen Files view */}
                 <div className={`md:hidden absolute inset-0 bg-card rounded-lg border border-border flex flex-col transition-opacity duration-200 ${mainView === "files" ? "opacity-100 z-30 pointer-events-auto" : "opacity-0 pointer-events-none z-0"}`}>
-                    {isDesktop === false && username && accessToken && (
+                    {isDesktop === false && mainView === "files" && username && accessToken && (
                         <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
                     )}
                 </div>
