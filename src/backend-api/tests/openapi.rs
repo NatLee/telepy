@@ -45,6 +45,8 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/tunnels/server/script/{kind}/{id}/{ssh_port}", vec!["get"]),
         ("/api/sftp/upload/{id}/{username}", vec!["post"]),
         ("/api/reverse/server/{id}/remote-browser/start", vec!["post"]),
+        ("/api/credentials", vec!["get", "post"]),
+        ("/api/credentials/{id}", vec!["patch", "delete"]),
         ("/api/log/ssh/events", vec!["get"]),
         ("/api/log/audit/verify", vec!["get"]),
         ("/.well-known/oauth-authorization-server", vec!["get"]),

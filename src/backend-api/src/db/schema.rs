@@ -419,6 +419,26 @@ const TABLES: &[(&str, &str)] = &[
             "last_seen" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：憑證庫（遠端桌面的登入，密碼只存密文），隧道 / 區網主機刪除時一併刪。
+    // Credential vault (saved desktop logins, password sealed); deleted with the tunnel or the LAN host.
+    (
+        "telepy_credential",
+        r#"CREATE TABLE "telepy_credential" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "label" varchar(100) NOT NULL,
+            "protocol" varchar(8) NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "lan_host_id" integer NULL,
+            "port" integer NULL,
+            "login" varchar(256) NOT NULL,
+            "domain" varchar(256) NOT NULL,
+            "secret" text NOT NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL,
+            "last_used_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -445,6 +465,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,

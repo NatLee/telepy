@@ -881,6 +881,50 @@ pub struct HostKeyAccept {
     pub fingerprint: String,
 }
 
+// ---------------------------------------------------------------- Credential vault
+
+#[derive(ToSchema)]
+pub struct SavedCredential {
+    pub id: i64,
+    pub label: String,
+    /// rdp | vnc
+    pub protocol: String,
+    pub tunnel_id: i64,
+    pub tunnel_name: Option<String>,
+    /// null = the device itself
+    pub lan_host_id: Option<i64>,
+    pub lan_host: Option<String>,
+    pub port: Option<i64>,
+    pub login: String,
+    pub domain: String,
+    /// The password itself is never returned
+    pub has_password: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SavedCredentialCreate {
+    pub label: String,
+    pub protocol: String,
+    pub tunnel_id: i64,
+    pub lan_host_id: Option<i64>,
+    pub port: Option<u16>,
+    pub login: Option<String>,
+    pub domain: Option<String>,
+    pub password: String,
+}
+
+#[derive(ToSchema)]
+pub struct SavedCredentialUpdate {
+    pub label: Option<String>,
+    pub port: Option<u16>,
+    pub login: Option<String>,
+    pub domain: Option<String>,
+    /// Leave out to keep the current password
+    pub password: Option<String>,
+}
+
 // ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
 
 #[derive(ToSchema)]
@@ -900,6 +944,8 @@ pub struct DesktopStartRequest {
     pub password: Option<String>,
     /// RDP domain
     pub domain: Option<String>,
+    /// Use a saved login from the credential vault instead of login / password / domain
+    pub credential_id: Option<i64>,
 }
 
 #[derive(ToSchema)]
