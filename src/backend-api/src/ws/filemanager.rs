@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use serde_json::{json, Value};
 
-use super::{auth, close, is_ping, send_json};
+use super::{auth, close, is_ping, send_json, Heartbeat};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -238,8 +238,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     };
     let _presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
+    let mut heartbeat = Heartbeat::new(&state.config);
 
-    while let Some(Ok(frame)) = socket.recv().await {
+    while let Some(Ok(frame)) = heartbeat.recv(&mut socket).await {
         let text = match frame {
             Message::Text(t) => t.to_string(),
             Message::Close(_) => break,

@@ -6,7 +6,10 @@ mod common;
 
 use std::time::Duration;
 
-use serde_json::Value;
+use futures::SinkExt;
+use serde_json::{json, Value};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 
 use common::lab::{Hop, Lab, LabUser};
 
@@ -88,4 +91,47 @@ async fn presence_counts_sessions_and_hides_details_from_sharees() {
     assert_eq!(s["kind"], "ssh");
     assert_eq!(s["ip"], "127.0.0.1");
     wait_presence(&lab, &alice, dev.tunnel_id, "laptop ssh ended", |p| p["count"] == 0).await;
+}
+
+/// 筆電睡著、換網路、代理斷線：瀏覽器不會送 close，TCP 也可能一直不報錯。伺服器的 Ping 沒人回就自己結束連線、
+/// 移出「使用中」；開著但沒在打字的分頁（會自動回 Ping）不受影響。
+/// A client that vanishes without a close frame (laptop asleep, network switch, dropped proxy) stops answering the
+/// server's pings and is dropped from presence; an open tab nobody types in still answers and stays.
+#[tokio::test]
+async fn vanished_clients_leave_presence() {
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.ws_ping_interval = Duration::from_millis(300);
+        c.ws_peer_timeout = Duration::from_millis(900);
+    });
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+
+    // 開著沒打字的分頁：撐過好幾個逾時，還在、也還能用。/ An idle open tab survives several timeouts and still works.
+    let mut term = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    term.input("echo ready\n").await;
+    term.expect("ready").await;
+    wait_presence(&lab, &alice, dev.tunnel_id, "terminal", |p| p["count"] == 1).await;
+    term.idle(Duration::from_secs(3)).await;
+    assert_eq!(presence(&lab, &alice, dev.tunnel_id).await["count"], 1, "a live idle tab must stay");
+    term.input("echo still-here\n").await;
+    term.expect("still-here").await;
+
+    // 同一條連線從此不讀也不送（= 睡著的筆電，socket 還開著）：伺服器自己收掉。
+    // The same connection now neither reads nor writes (a sleeping laptop, socket still open): the server drops it.
+    let frozen = term;
+    wait_presence(&lab, &alice, dev.tunnel_id, "the frozen terminal to leave", |p| p["count"] == 0).await;
+    drop(frozen);
+
+    // 檔案管理也一樣。/ Same for the file manager.
+    let base = lab.ws_base().await;
+    let (mut fm, _) = connect_async(format!("{base}/ws/filemanager/")).await.unwrap();
+    let auth = json!({"type": "auth", "token": alice.token, "server_id": dev.tunnel_id.to_string(), "username": "ubuntu"});
+    fm.send(Message::Text(auth.to_string().into())).await.unwrap();
+    let p = wait_presence(&lab, &alice, dev.tunnel_id, "file manager", |p| p["count"] == 1).await;
+    assert_eq!(p["sessions"][0]["kind"], "files", "{p}");
+    wait_presence(&lab, &alice, dev.tunnel_id, "the frozen file manager to leave", |p| p["count"] == 0).await;
+    drop(fm);
 }
