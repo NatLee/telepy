@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::db::{self, users::{User, UserSettings}};
+use crate::db::{self, users::{SettingsPatch, User, UserSettings}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -24,7 +24,31 @@ const LANGUAGES: [&str; 4] = ["auto", "en", "zh-TW", "ja"];
 const THEMES: [&str; 3] = ["system", "light", "dark"];
 
 fn settings_json(s: &UserSettings) -> Value {
-    json!({ "language": s.language, "theme": s.theme, "terminal_font_size": s.terminal_font_size, "ui_scale": s.ui_scale })
+    json!({
+        "language": s.language,
+        "theme": s.theme,
+        "terminal_font_size": s.terminal_font_size,
+        "ui_scale": s.ui_scale,
+        "terminal_font": s.terminal_font,
+        "terminal_scheme": s.terminal_scheme,
+    })
+}
+
+pub const CHOICE_ID_RULE: &str = "Use 1-32 lowercase letters, digits or '-'.";
+
+/// 字型 / 配色 id 的形狀：清單在前端（lib/terminalAppearance.ts），後端不認得的 id 前端會回到預設，
+/// 所以這裡只擋垃圾。/ Shape of a font / colour-scheme id. The list lives in the frontend, which falls
+/// back to its default for an unknown id, so the backend only rejects garbage.
+pub fn is_choice_id(s: &str) -> bool {
+    (1..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn parse_choice(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
+    match body.get(key) {
+        None => Ok(None),
+        Some(Value::String(s)) if is_choice_id(s) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::field(key, CHOICE_ID_RULE)),
+    }
 }
 
 /// `validate_language`：空字串 → None；不在清單 → 錯誤（選項依 Python sorted 順序）。
@@ -80,7 +104,15 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         }
         None => None,
     };
-    let s = db::users::settings_update(&state.db, user.id, language, theme, font, scale).await?;
+    let patch = SettingsPatch {
+        language,
+        theme,
+        terminal_font_size: font,
+        ui_scale: scale,
+        terminal_font: parse_choice(&body, "terminal_font")?,
+        terminal_scheme: parse_choice(&body, "terminal_scheme")?,
+    };
+    let s = db::users::settings_update(&state.db, user.id, patch).await?;
     Ok(Json(settings_json(&s)))
 }
 
@@ -139,7 +171,7 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     db::users::set_flags(&state.db, id, is_active, is_superuser).await?;
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
-        db::users::settings_update(&state.db, id, Some(lang), None, None, None).await?;
+        db::users::settings_update(&state.db, id, SettingsPatch { language: Some(lang), ..SettingsPatch::default() }).await?;
     }
     let target = db::users::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("User not found."))?;
     let lang = db::users::settings_for(&state.db, id).await?.and_then(|s| s.language);

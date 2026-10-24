@@ -63,10 +63,14 @@ export function MobileKeyboard({ controller, mode, setMode, isVisible, expanded,
     const collapse = () => { triggerHaptic(); setMode("hidden"); };
     const restore = () => { triggerHaptic(); setMode(lastOpenMode.current); };
 
+    // z-40:蓋過終端機(斷線遮罩 z-20、手機檔案頁 z-30),但在對話框 / 側欄抽屜(z-50)之下;
+    // 原本的 z-[100] 會蓋住底部 sheet 的下半與按鈕列。
+    // z-40: above the terminal (disconnected overlay z-20, phone files view z-30) but under dialogs and the
+    // nav drawer (z-50); the old z-[100] covered the bottom of every bottom sheet, footer buttons included.
     return (
         <div
             className={cn(
-                "md:hidden absolute left-0 w-full z-[100] transition-transform duration-300 ease-in-out",
+                "md:hidden absolute left-0 w-full z-40 transition-transform duration-300 ease-in-out",
                 isVisible ? "translate-y-0" : "translate-y-full pointer-events-none"
             )}
             style={{ bottom: nativeKbHeight, paddingBottom: "env(safe-area-inset-bottom)" }}

@@ -27,6 +27,21 @@ pub struct UserSettings {
     pub terminal_font_size: i64,
     /// 介面顯示大小（%）。/ UI display scale in percent (85–130).
     pub ui_scale: i64,
+    /// 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
+    pub terminal_font: String,
+    pub terminal_scheme: String,
+}
+
+/// 個人設定的部分更新：None = 不動。/ Partial settings update: None leaves the field alone.
+#[derive(Debug, Clone, Default)]
+pub struct SettingsPatch {
+    /// Some(None) 把語言清成 NULL（= 從未選過）。/ Some(None) clears the language.
+    pub language: Option<Option<String>>,
+    pub theme: Option<String>,
+    pub terminal_font_size: Option<i64>,
+    pub ui_scale: Option<i64>,
+    pub terminal_font: Option<String>,
+    pub terminal_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -141,7 +156,7 @@ pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: 
 // ---------------------------------------------------------------- settings
 
 pub async fn settings_for(db: &Db, user_id: i64) -> sqlx::Result<Option<UserSettings>> {
-    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale FROM user_management_usersettings WHERE user_id = ?")
+    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme FROM user_management_usersettings WHERE user_id = ?")
         .bind(user_id)
         .fetch_optional(&db.read)
         .await
@@ -152,21 +167,15 @@ pub async fn settings_get_or_create(db: &Db, user_id: i64) -> sqlx::Result<UserS
     if let Some(s) = settings_for(db, user_id).await? {
         return Ok(s);
     }
-    sqlx::query("INSERT OR IGNORE INTO user_management_usersettings (language, theme, terminal_font_size, ui_scale, user_id) VALUES (NULL, 'system', 14, 100, ?)")
+    sqlx::query("INSERT OR IGNORE INTO user_management_usersettings (language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, user_id) VALUES (NULL, 'system', 14, 100, 'hack', 'telepy', ?)")
         .bind(user_id)
         .execute(&db.write)
         .await?;
     Ok(settings_for(db, user_id).await?.expect("settings row just inserted"))
 }
 
-pub async fn settings_update(
-    db: &Db,
-    user_id: i64,
-    language: Option<Option<String>>,
-    theme: Option<String>,
-    terminal_font_size: Option<i64>,
-    ui_scale: Option<i64>,
-) -> sqlx::Result<UserSettings> {
+pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sqlx::Result<UserSettings> {
+    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme } = patch;
     settings_get_or_create(db, user_id).await?;
     if let Some(lang) = language {
         sqlx::query("UPDATE user_management_usersettings SET language = ? WHERE user_id = ?")
@@ -191,6 +200,20 @@ pub async fn settings_update(
     }
     if let Some(s) = ui_scale {
         sqlx::query("UPDATE user_management_usersettings SET ui_scale = ? WHERE user_id = ?")
+            .bind(s)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(f) = terminal_font {
+        sqlx::query("UPDATE user_management_usersettings SET terminal_font = ? WHERE user_id = ?")
+            .bind(f)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(s) = terminal_scheme {
+        sqlx::query("UPDATE user_management_usersettings SET terminal_scheme = ? WHERE user_id = ?")
             .bind(s)
             .bind(user_id)
             .execute(&db.write)

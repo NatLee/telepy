@@ -20,6 +20,7 @@ pub mod sftp;
 pub mod sharing;
 pub mod sign_ins;
 pub mod site_settings;
+pub mod terminal_profile;
 pub mod tunnels;
 pub mod user_keys;
 pub mod usernames;

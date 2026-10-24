@@ -53,8 +53,8 @@ export function ShellTabBar({ tabs, activeTabId, onSelect, onAdd, onClose }: She
                         title={`${t("terminal.shellTabTitle", { title: tab.title, user: tab.username })}${tab.status === "closed" ? t("terminal.shellDisconnectedSuffix") : ""}`}
                         className={`group flex items-center gap-1.5 h-8 md:h-7 px-2.5 rounded-md text-xs font-mono whitespace-nowrap transition-colors select-none ${
                             active
-                                ? "bg-white/15 text-white"
-                                : "text-white/50 hover:text-white/80 hover:bg-white/5"
+                                ? "bg-(--term-fg)/15 text-(--term-fg)"
+                                : "text-(--term-fg)/55 hover:text-(--term-fg)/85 hover:bg-(--term-fg)/5"
                         }`}
                     >
                         <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${statusDotClass(tab.status)}`} />
@@ -67,7 +67,7 @@ export function ShellTabBar({ tabs, activeTabId, onSelect, onAdd, onClose }: She
                                 e.stopPropagation();
                                 onClose(tab.id);
                             }}
-                            className={`ml-0.5 -mr-1 rounded p-0.5 transition-opacity hover:bg-white/20 ${
+                            className={`ml-0.5 -mr-1 rounded p-0.5 transition-opacity hover:bg-(--term-fg)/20 ${
                                 active ? "opacity-70 hover:opacity-100" : "opacity-0 group-hover:opacity-70 max-md:opacity-50"
                             }`}
                         >
@@ -83,7 +83,7 @@ export function ShellTabBar({ tabs, activeTabId, onSelect, onAdd, onClose }: She
                 disabled={!canAdd}
                 title={canAdd ? t("terminal.newShell") : t("terminal.maxShells", { max: MAX_SHELL_TABS })}
                 aria-label={t("terminal.newShell")}
-                className="flex items-center justify-center h-8 w-8 md:h-7 md:w-7 rounded-md text-white/60 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent shrink-0 transition-colors"
+                className="flex items-center justify-center h-8 w-8 md:h-7 md:w-7 rounded-md text-(--term-fg)/60 hover:text-(--term-fg) hover:bg-(--term-fg)/10 disabled:opacity-30 disabled:hover:bg-transparent shrink-0 transition-colors"
             >
                 <Plus size={14} />
             </button>

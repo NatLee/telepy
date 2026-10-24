@@ -3,14 +3,16 @@
 /**
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
  * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
- * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機字型大小。
+ * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機的預設字型 / 字級 / 配色
+ *   (單一裝置的覆寫在終端機頁的「外觀」按鈕)。
  *   變更即時套用並寫入本機(cookie/localStorage),已登入時同步到後端 UserSettings(跨裝置)。
  * - 安全性:登入安全性(passkey / 驗證器 App / 復原碼)。
  * - 已連接的應用程式:授權過的 MCP / AI 客戶端(OAuth grants),可撤銷;另有連到 MCP 頁的設定入口。
  * User preferences modal, opened from the sidebar footer gear button. A rail + content layout: on
  * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
  * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
- * - General: account, language, theme, display size (S/M/L + fine slider), terminal font size.
+ * - General: account, language, theme, display size (S/M/L + fine slider), the terminal's default font /
+ *   size / colour scheme (a device's own override lives behind the terminal page's Appearance button).
  *   Changes apply instantly, persist locally, and sync to the backend UserSettings for cross-device use.
  * - Security: sign-in security (passkeys, authenticator app, recovery codes).
  * - Connected apps: authorized MCP / AI clients with revoke, plus a pointer to the MCP page.
@@ -27,11 +29,6 @@ import { Section } from "@/components/ui/section";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import {
-    applyTerminalFontSize,
-    persistUserSetting,
-    readTerminalFontSize,
-    TERMINAL_FONT_SIZE_MAX,
-    TERMINAL_FONT_SIZE_MIN,
     UI_SCALE_MAX,
     UI_SCALE_MIN,
     UI_SCALE_PRESET_ORDER,
@@ -43,6 +40,9 @@ import {
 } from "@/lib/userPrefs";
 import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
+import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
+import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
+import { TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import type { TranslationKey } from "@/locales/en";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
@@ -63,7 +63,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     // Synced over THEME_EVENT / UI_SCALE_EVENT so this modal and the sidebar switchers never disagree.
     const [theme, changeTheme] = useThemePreference();
     const [scale, changeScale] = useUiScale();
-    const [fontSize, setFontSizeState] = useState<number>(() => readTerminalFontSize());
+    const [terminalDefaults, changeTerminalDefaults] = useTerminalDefaults();
     const [tab, setTab] = useState<PrefsTab>("general");
     const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
     const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
@@ -103,12 +103,6 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
         value: p,
         label: `${t(SCALE_LABEL[p])} · ${UI_SCALE_PRESETS[p]}%`,
     }));
-
-    const changeFontSize = (next: number) => {
-        setFontSizeState(next);
-        applyTerminalFontSize(next);
-        persistUserSetting({ terminal_font_size: next });
-    };
 
     return (
         <Modal
@@ -200,20 +194,18 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                         </div>
                     </Section>
 
-                    {/* 終端機字型 / Terminal font size */}
-                    <Section icon={<TerminalIcon />} title={t("prefs.terminalFontSize")} description={t("prefs.terminalFontSizeDescription")}>
-                        <div className="flex items-center gap-3 rounded-xl bg-surface px-3.5 py-3 ring-1 ring-inset ring-border/80">
-                            <input
-                                type="range"
-                                min={TERMINAL_FONT_SIZE_MIN}
-                                max={TERMINAL_FONT_SIZE_MAX}
-                                value={fontSize}
-                                onChange={(e) => changeFontSize(parseInt(e.target.value, 10))}
-                                className="min-w-0 flex-1 accent-primary"
-                                aria-label={t("prefs.terminalFontSize")}
-                            />
-                            <span className="w-14 shrink-0 rounded-lg bg-muted py-1 text-center font-mono text-sm tabular-nums">{fontSize}px</span>
-                        </div>
+                    {/* 終端機:預設字型 / 字級 / 配色(與終端機頁「外觀 → 我的預設」是同一份)。
+                        Terminal: default font / size / colour scheme (the same values as the terminal's Appearance → My default). */}
+                    <Section icon={<TerminalIcon />} title={t("prefs.terminal")} description={t("prefs.terminalDescription")}>
+                        <TerminalPreview look={resolveTerminalAppearance(terminalDefaults, null)} />
+                        <TerminalAppearanceFields
+                            value={terminalDefaults}
+                            onChange={(patch) => changeTerminalDefaults({
+                                ...(patch.font ? { font: patch.font } : {}),
+                                ...(patch.fontSize ? { fontSize: patch.fontSize } : {}),
+                                ...(patch.scheme ? { scheme: patch.scheme } : {}),
+                            })}
+                        />
                     </Section>
 
                     {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}

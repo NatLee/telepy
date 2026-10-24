@@ -115,6 +115,14 @@ pub struct UserProfile {
     #[schema(example = "system")]
     pub theme: String,
     pub terminal_font_size: i64,
+    /// UI display scale in percent (85–130).
+    pub ui_scale: i64,
+    /// Terminal font id (the frontend's list; default `hack`)
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    /// Terminal colour-scheme id (the frontend's list; default `telepy`)
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
 }
@@ -576,6 +584,10 @@ pub struct UserSettings {
     pub terminal_font_size: i64,
     /// UI display scale in percent (85–130).
     pub ui_scale: i64,
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
 }
 
 #[derive(ToSchema)]
@@ -587,6 +599,31 @@ pub struct UserSettingsPatch {
     pub terminal_font_size: Option<i64>,
     #[schema(example = 100)]
     pub ui_scale: Option<i64>,
+    /// 1-32 lowercase letters, digits or '-' (ids are defined by the frontend)
+    #[schema(example = "jetbrains-mono")]
+    pub terminal_font: Option<String>,
+    #[schema(example = "solarized-dark")]
+    pub terminal_scheme: Option<String>,
+}
+
+/// The caller's terminal appearance override for one tunnel; a null field follows the personal default
+#[derive(ToSchema)]
+pub struct TerminalProfile {
+    pub tunnel_id: i64,
+    #[schema(example = "fira-code")]
+    pub font: Option<String>,
+    /// 10-24
+    pub font_size: Option<i64>,
+    #[schema(example = "nord")]
+    pub scheme: Option<String>,
+}
+
+/// PUT body: a missing or null field means "follow my default"; all three null removes the override
+#[derive(ToSchema)]
+pub struct TerminalProfilePatch {
+    pub font: Option<String>,
+    pub font_size: Option<i64>,
+    pub scheme: Option<String>,
 }
 
 #[derive(ToSchema)]
