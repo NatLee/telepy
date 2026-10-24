@@ -291,6 +291,7 @@ mod tests {
             default_username_id: None,
             created_at: String::new(),
             updated_at: String::new(),
+            require_step_up: false,
         }
     }
 

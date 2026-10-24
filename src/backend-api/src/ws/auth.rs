@@ -1,7 +1,8 @@
 //! 「連線後第一則訊息帶 JWT」認證（FirstMessageAuthConsumer）。
 //! JWT 只在 WS payload 內，不進 URL / subprotocol / header。逾時或無效以對應關閉碼關閉：
 //!   4000 第一則不是 auth 訊息或缺 token、4001 token 無效/過期/逾時未認證、
-//!   4007 管理員要求兩步驟、這個帳號還沒設好（只有 notifications 不受限）。
+//!   4007 管理員要求兩步驟、這個帳號還沒設好（只有 notifications 不受限）；
+//!   4008 敏感隧道要 step-up、auth 訊息沒帶有效的 `step_up`（terminal / 檔案管理，見 `crate::step_up`）。
 //! First-message JWT auth shared by every WebSocket endpoint; same close codes as the Django base class.
 
 use std::time::Duration;

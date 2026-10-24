@@ -8,6 +8,7 @@ import { Header } from "./Header";
 import { useNotificationWebSocket, type SocketPhase } from "@/lib/websocket";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
+import { StepUpProvider } from "@/components/auth/StepUpProvider";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -76,6 +77,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     return (
         <NotificationWsContext.Provider value={wsStatus}>
             <div className="flex min-h-screen w-full bg-background font-sans">
+                {/* 敏感隧道的「確認是你」流程（REST 403 / WebSocket 4008 時開）。/ Step-up prompts for sensitive tunnels. */}
+                <StepUpProvider />
                 <Sidebar />
                 <div className="relative flex flex-col flex-1 w-full min-w-0">
                     <Header />

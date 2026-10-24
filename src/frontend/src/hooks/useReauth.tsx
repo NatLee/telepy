@@ -7,16 +7,17 @@ import { ReauthDialog } from "@/components/auth/ReauthDialog";
 import type { MfaMethod, MfaProof } from "@/lib/mfa";
 
 export function useReauth() {
-    const [pending, setPending] = useState<{ methods: MfaMethod[]; resolve: (proof: MfaProof | null) => void } | null>(null);
+    const [pending, setPending] = useState<{ methods: MfaMethod[]; description?: string; resolve: (proof: MfaProof | null) => void } | null>(null);
 
     const request = useCallback(
-        (methods: MfaMethod[]) => new Promise<MfaProof | null>((resolve) => setPending({ methods, resolve })),
+        (methods: MfaMethod[], description?: string) => new Promise<MfaProof | null>((resolve) => setPending({ methods, description, resolve })),
         []
     );
 
     const dialog = pending ? (
         <ReauthDialog
             methods={pending.methods}
+            description={pending.description}
             onDone={(proof) => {
                 pending.resolve(proof);
                 setPending(null);

@@ -19,6 +19,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, refreshAccessToken } from "@/lib/api";
+import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
@@ -245,6 +246,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 token: typeof window !== "undefined" ? localStorage.getItem("accessToken") : null,
                 server_id: serverId,
                 username: s.username,
+                // 敏感隧道的 step-up（這個分頁有才帶）。/ This tab's step-up token for sensitive tunnels.
+                step_up: stepUpToken() ?? undefined,
                 // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
                 ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
             }));
@@ -316,6 +319,19 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             } else if (code === 4002) {
                 setPermissionDenied(t("terminal.notFoundCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.notFoundXterm")}\x1b[0m\r\n`);
+            } else if (code === STEP_UP_CLOSE_CODE) {
+                // 敏感隧道：先確認是你（同時好幾個分頁也只問一次），成功就重連這個分頁。
+                // Sensitive tunnel: confirm it's you (asked once for every tab), then reconnect this tab.
+                s.term.write(`\r\n\x1b[33m${t("stepUp.neededXterm")}\x1b[0m\r\n`);
+                requestStepUp().then((ok) => {
+                    if (s.disposed) return;
+                    if (ok) {
+                        updateTab(s.id, { status: "connecting" });
+                        connectSession(s);
+                    } else {
+                        setPermissionDenied(t("stepUp.deniedCard"));
+                    }
+                });
             } else if (code === 4006) {
                 setNoUsers(true);
                 s.term.write(`\r\n\x1b[31m${t("terminal.noUsersXterm")}\x1b[0m\r\n`);

@@ -172,6 +172,9 @@ pub struct Tunnel {
     pub share_expires_at: Option<String>,
     /// 只有列表帶：owner / ADMIN 看得到還在等的存取申請數；其他人 0。/ List only: pending access requests (owner / ADMIN; else 0).
     pub access_requests: Option<i64>,
+    /// 開 session 前要 step-up（`POST /api/auth/step-up`，token 放 `X-Telepy-Step-Up` 或 WebSocket auth 的 `step_up`）。
+    /// Sessions need a step-up first (token in `X-Telepy-Step-Up` or the WebSocket auth field `step_up`).
+    pub require_step_up: bool,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -1261,6 +1264,22 @@ pub struct MfaVerifyRequest {
 #[derive(ToSchema)]
 pub struct ReauthRequest {
     /// Required when the account already has a second factor
+    pub reauth: Option<MfaProof>,
+}
+
+/// 15 分鐘、只屬於這個瀏覽器的 step-up token。/ A 15-minute, browser-bound step-up token.
+#[derive(ToSchema)]
+pub struct StepUpGrant {
+    #[schema(example = "tps_9f2c…")]
+    pub token: String,
+    pub until: String,
+    pub window_secs: i64,
+}
+
+/// 開關隧道的 step-up；關掉要 `reauth`。/ Turn a tunnel's step-up on or off; turning it off needs `reauth`.
+#[derive(ToSchema)]
+pub struct StepUpSetting {
+    pub required: bool,
     pub reauth: Option<MfaProof>,
 }
 

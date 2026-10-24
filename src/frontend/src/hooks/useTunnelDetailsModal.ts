@@ -25,6 +25,8 @@ export interface TunnelDetails {
     updated_at?: string;
     shared_with_count?: number;
     labels?: string[];
+    /** 開 session 前要確認是你。/ Sessions ask for a step-up first. */
+    require_step_up?: boolean;
 }
 
 export type TunnelForm = { host_friendly_name: string; key: string; description: string };

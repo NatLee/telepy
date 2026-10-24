@@ -16,7 +16,7 @@ import { useI18n } from "@/lib/i18n";
 import { getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
 import { mfaErrorMessage, type MfaMethod, type MfaProof } from "@/lib/mfa";
 
-export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone: (proof: MfaProof | null) => void }) {
+export function ReauthDialog({ methods, onDone, description }: { methods: MfaMethod[]; onDone: (proof: MfaProof | null) => void; description?: string }) {
     const { t } = useI18n();
     const canPasskey = methods.includes("passkey") && passkeySupported();
     const codeMethods = methods.filter((m): m is "totp" | "recovery_code" => m === "totp" || m === "recovery_code");
@@ -54,7 +54,7 @@ export function ReauthDialog({ methods, onDone }: { methods: MfaMethod[]; onDone
             isOpen
             onClose={() => onDone(null)}
             title={t("security.reauthTitle")}
-            description={t("security.reauthDescription")}
+            description={description ?? t("security.reauthDescription")}
             icon={<ShieldCheck />}
             size="md"
             footer={
