@@ -3,6 +3,7 @@
 
 pub mod ai;
 pub mod auth;
+pub mod desktop;
 pub mod device_keys;
 pub mod doc;
 pub mod join;
@@ -20,6 +21,7 @@ pub mod sftp;
 pub mod sharing;
 pub mod sign_ins;
 pub mod site_settings;
+pub mod terminal_profile;
 pub mod tunnels;
 pub mod user_keys;
 pub mod usernames;

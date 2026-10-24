@@ -52,6 +52,11 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "mfa_require_totp", kind: Kind::Bool, label: "Require an authenticator app", description: "要求每個帳號都設定驗證器 App(TOTP)。還沒設定的使用者登入後只能先完成設定,才能使用其他功能。開啟前你自己的帳號必須已經設定好。變更後立即生效。" },
     FieldMeta { name: "mfa_require_passkey", kind: Kind::Bool, label: "Require a passkey", description: "要求每個帳號都至少註冊一把 passkey。還沒註冊的使用者登入後只能先完成註冊,才能使用其他功能。passkey 需要以網域名稱(不是 IP)開啟網站。開啟前你自己的帳號必須已經有 passkey。變更後立即生效。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
+    FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
+    FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
+    FieldMeta { name: "desktop_session_idle_timeout", kind: Kind::Int, label: "Remote Desktop Idle Timeout (seconds)", description: "遠端桌面多久沒有鍵盤 / 滑鼠 / 剪貼簿輸入就自動斷線(秒)。設 0 = 不自動斷線。變更後即時生效。" },
+    FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard", description: "剪貼簿方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。下次開桌面時生效。" },
+    FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -73,6 +78,11 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("notify_webhook_url".into(), json!(s.notify_webhook_url));
     m.insert("notify_down_delay".into(), json!(s.notify_down_delay));
     m.insert("user_key_max_days".into(), json!(s.user_key_max_days));
+    m.insert("desktop_enabled".into(), json!(s.desktop_enabled));
+    m.insert("desktop_max_sessions".into(), json!(s.desktop_max_sessions));
+    m.insert("desktop_session_idle_timeout".into(), json!(s.desktop_session_idle_timeout));
+    m.insert("desktop_clipboard".into(), json!(s.desktop_clipboard));
+    m.insert("desktop_max_resolution".into(), json!(s.desktop_max_resolution));
     m.insert("mfa_require_totp".into(), json!(s.mfa_require_totp));
     m.insert("mfa_require_passkey".into(), json!(s.mfa_require_passkey));
     Value::Object(m)
@@ -144,7 +154,9 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     let mut updates = Vec::new();
     for f in META {
         if let Some(v) = body.get(f.name) {
-            updates.push((f.name, parse_value(f, v)?));
+            let value = parse_value(f, v)?;
+            validate(f.name, &value)?;
+            updates.push((f.name, value));
         }
     }
     // 開啟「必須有 TOTP / passkey」前，管理員自己要先有，否則會把自己鎖在設定畫面外（關閉永遠可以）。
@@ -172,6 +184,18 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
     }
     let s = db::settings::get_solo(&state.db).await?;
     Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))
+}
+
+/// 個別欄位的值域（型別檢查之外）。/ Per-field value constraints beyond the type check.
+fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
+    match (name, value) {
+        ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
+            Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
+        }
+        ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
+        ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
+        _ => Ok(()),
+    }
 }
 
 /// 用目前存的 webhook 網址送一則測試告警，回傳結果（管理員）。/ Send a test alert to the saved webhook (admins).

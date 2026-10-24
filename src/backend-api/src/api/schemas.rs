@@ -115,6 +115,14 @@ pub struct UserProfile {
     #[schema(example = "system")]
     pub theme: String,
     pub terminal_font_size: i64,
+    /// UI display scale in percent (85–130).
+    pub ui_scale: i64,
+    /// Terminal font id (the frontend's list; default `hack`)
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    /// Terminal colour-scheme id (the frontend's list; default `telepy`)
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
     /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
@@ -159,6 +167,9 @@ pub struct Tunnel {
     pub last_seen_at: Option<String>,
     /// 只有列表帶：我有沒有釘選（每個人自己的）。/ List / dashboard only: whether I pinned it (per user).
     pub pinned: Option<bool>,
+    /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
+    /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
+    pub share_expires_at: Option<String>,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -403,6 +414,14 @@ pub struct UserKeyPatch {
     pub expires_at: Option<String>,
 }
 
+/// 分享到什麼時候：RFC 3339 或 `YYYY-MM-DD`（那天 UTC 結束），null = 一直有效。到期後 30 秒內自動取消分享。
+/// When a share ends: RFC 3339 or `YYYY-MM-DD` (end of that day, UTC), null = never. Ended within 30 s of expiry.
+#[derive(ToSchema)]
+pub struct ShareExpiryRequest {
+    #[schema(example = "2026-12-31T18:00:00+08:00")]
+    pub expires_at: Option<String>,
+}
+
 #[derive(ToSchema)]
 pub struct ServiceKey {
     pub id: i64,
@@ -518,6 +537,8 @@ pub struct ShareRequest {
     #[schema(example = "view")]
     pub permission_type: Option<String>,
     pub allowed_target_username_ids: Option<Vec<i64>>,
+    /// 分享到什麼時候（RFC 3339 / `YYYY-MM-DD`）；不給 = 一直有效。/ When the share ends; omitted = never.
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -580,6 +601,10 @@ pub struct UserSettings {
     pub terminal_font_size: i64,
     /// UI display scale in percent (85–130).
     pub ui_scale: i64,
+    #[schema(example = "hack")]
+    pub terminal_font: String,
+    #[schema(example = "telepy")]
+    pub terminal_scheme: String,
 }
 
 #[derive(ToSchema)]
@@ -591,6 +616,31 @@ pub struct UserSettingsPatch {
     pub terminal_font_size: Option<i64>,
     #[schema(example = 100)]
     pub ui_scale: Option<i64>,
+    /// 1-32 lowercase letters, digits or '-' (ids are defined by the frontend)
+    #[schema(example = "jetbrains-mono")]
+    pub terminal_font: Option<String>,
+    #[schema(example = "solarized-dark")]
+    pub terminal_scheme: Option<String>,
+}
+
+/// The caller's terminal appearance override for one tunnel; a null field follows the personal default
+#[derive(ToSchema)]
+pub struct TerminalProfile {
+    pub tunnel_id: i64,
+    #[schema(example = "fira-code")]
+    pub font: Option<String>,
+    /// 10-24
+    pub font_size: Option<i64>,
+    #[schema(example = "nord")]
+    pub scheme: Option<String>,
+}
+
+/// PUT body: a missing or null field means "follow my default"; all three null removes the override
+#[derive(ToSchema)]
+pub struct TerminalProfilePatch {
+    pub font: Option<String>,
+    pub font_size: Option<i64>,
+    pub scheme: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -699,6 +749,60 @@ pub struct RemoteBrowserError {
     pub error: String,
     #[schema(example = "device_offline")]
     pub code: Option<String>,
+}
+
+// ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
+
+#[derive(ToSchema)]
+pub struct DesktopStartRequest {
+    /// `rdp` or `vnc`
+    #[schema(example = "rdp")]
+    pub protocol: String,
+    /// Device account for the SSH hop; omitted = the tunnel's default (or only) allowed username
+    pub username: Option<String>,
+    /// A LAN host of this tunnel (see `/lan/hosts`); omitted = the device itself
+    pub lan_host_id: Option<i64>,
+    /// Desktop port on the target; default 3389 (RDP) / 5900 (VNC)
+    pub port: Option<u16>,
+    /// Desktop login (the RDP user, or the VNC username where the server uses one); memory only
+    pub login: Option<String>,
+    /// Desktop password; memory only, dropped after the guacd handshake
+    pub password: Option<String>,
+    /// RDP domain
+    pub domain: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopTarget {
+    /// As seen from the device: `127.0.0.1` for the device itself
+    pub host: String,
+    pub port: u16,
+    pub label: String,
+    pub lan_host_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopSession {
+    pub session_id: String,
+    #[schema(example = "/ws/desktop/<session_id>/")]
+    pub ws_path: String,
+    /// One-time ticket, passed as `?ticket=` when opening ws_path (subprotocol `guacamole`)
+    pub ticket: String,
+    /// Seconds the ticket stays valid
+    pub expires_in: u64,
+    pub protocol: String,
+    /// Effective clipboard policy: both | to_remote | off
+    pub clipboard: String,
+    pub target: DesktopTarget,
+    /// The device account used for the hop
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct DesktopError {
+    pub error: String,
+    #[schema(example = "device_offline")]
+    pub code: String,
 }
 
 // ---------------------------------------------------------------- OAuth 2.1 (MCP connectors)

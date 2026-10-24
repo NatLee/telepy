@@ -36,8 +36,12 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
         setSelectedAllowedIds,
         editTargetUsersModal,
         setEditTargetUsersModal,
+        expiryPreset,
+        setExpiryPreset,
+        expiryDate,
+        setExpiryDate,
     } = state;
-    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed } = actions;
+    const { handleShare, handleUpdatePermission, handleUnshare, handleSaveAllowed, handleUpdateExpiry } = actions;
 
     return (
         <>
@@ -52,6 +56,10 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                             tunnelUsernames={tunnelUsernames}
                             selectedAllowedIds={selectedAllowedIds}
                             setSelectedAllowedIds={setSelectedAllowedIds}
+                            expiryPreset={expiryPreset}
+                            setExpiryPreset={setExpiryPreset}
+                            expiryDate={expiryDate}
+                            setExpiryDate={setExpiryDate}
                             onShare={handleShare}
                         />
                     )}
@@ -69,6 +77,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                             })
                         }
                         onUpdatePermission={handleUpdatePermission}
+                        onUpdateExpiry={handleUpdateExpiry}
                         onUnshare={(payload) => setUnshareConfirm({ isOpen: true, userId: payload.userId, username: payload.username })}
                     />
 

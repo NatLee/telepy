@@ -1,15 +1,24 @@
 /**
- * 使用者外觀/終端機偏好(主題、終端機字型大小)的常數與 helper。
+ * 使用者外觀/終端機偏好(主題、顯示大小、終端機字型 / 字級 / 配色)的常數與 helper。
  * 儲存規則:localStorage 供繪製前(layout.tsx 的 inline script)與 xterm 初始化同步讀取;
  * 本機 → 後端由這裡的 persistUserSetting() 上傳,登入時後端 → 本機的套用
  * 見 lib/i18n.tsx 的 UserSettingsSync(server 為準)。
- * Appearance/terminal preference helpers (theme, terminal font size). localStorage feeds the
+ * Appearance/terminal preference helpers (theme, display scale, terminal font / size / colour scheme). localStorage feeds the
  * pre-paint bootstrap script and xterm init synchronously. Local→server uploads go through
  * persistUserSetting() below; the login-time server→local direction lives in UserSettingsSync
  * (lib/i18n.tsx, server-authoritative).
  */
 
 import { apiFetch } from "./api";
+import {
+    clampTerminalFontSize,
+    DEFAULT_TERMINAL_FONT,
+    DEFAULT_TERMINAL_SCHEME,
+    isKnownFont,
+    isKnownScheme,
+    TERMINAL_FONT_SIZE_RANGE,
+    type TerminalDefaults,
+} from "./terminalAppearance";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -19,12 +28,20 @@ export const THEMES: Theme[] = ["system", "light", "dark"];
  *  Theme-change broadcast keeping the sidebar switcher and the prefs modal in sync. */
 export const THEME_EVENT = "telepy:theme";
 
+/**
+ * 終端機外觀的個人預設(字型 / 字級 / 配色);某台裝置自己的覆寫存在後端,見 hooks/useTerminalAppearance.ts。
+ * 任何一項變更都廣播 TERMINAL_APPEARANCE_EVENT,開著的終端機與偏好設定 modal 靠它即時同步。
+ * Personal terminal defaults (font / size / colour scheme); per-device overrides live on the backend
+ * (hooks/useTerminalAppearance.ts). Every change broadcasts TERMINAL_APPEARANCE_EVENT so open terminals
+ * and the preferences modal update live.
+ */
 export const TERMINAL_FONT_SIZE_KEY = "telepy.terminalFontSize";
+export const TERMINAL_FONT_KEY = "telepy.terminalFont";
+export const TERMINAL_SCHEME_KEY = "telepy.terminalScheme";
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
-export const TERMINAL_FONT_SIZE_MIN = 10;
-export const TERMINAL_FONT_SIZE_MAX = 24;
-/** 開著的終端機即時套用字型大小用的事件。/ Event for live-applying font size to open terminals. */
-export const TERMINAL_FONT_SIZE_EVENT = "telepy:terminal-font-size";
+export const TERMINAL_FONT_SIZE_MIN = TERMINAL_FONT_SIZE_RANGE.min;
+export const TERMINAL_FONT_SIZE_MAX = TERMINAL_FONT_SIZE_RANGE.max;
+export const TERMINAL_APPEARANCE_EVENT = "telepy:terminal-appearance";
 
 /**
  * 介面顯示大小(百分比):設成 <html> 的 font-size,所有 rem 尺寸一起縮放(見 globals.css)。
@@ -76,23 +93,52 @@ export function persistUserSetting(patch: Record<string, unknown>) {
     }
 }
 
-export function clampTerminalFontSize(value: number): number {
-    if (Number.isNaN(value)) return TERMINAL_FONT_SIZE_DEFAULT;
-    return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, Math.round(value)));
+export const TERMINAL_DEFAULTS_FALLBACK: TerminalDefaults = {
+    font: DEFAULT_TERMINAL_FONT,
+    fontSize: TERMINAL_FONT_SIZE_DEFAULT,
+    scheme: DEFAULT_TERMINAL_SCHEME,
+};
+
+function readItem(key: string): string | null {
+    try {
+        return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+    } catch {
+        return null;
+    }
 }
 
-export function readTerminalFontSize(): number {
-    if (typeof localStorage === "undefined") return TERMINAL_FONT_SIZE_DEFAULT;
-    const raw = parseInt(localStorage.getItem(TERMINAL_FONT_SIZE_KEY) ?? "", 10);
-    return Number.isNaN(raw) ? TERMINAL_FONT_SIZE_DEFAULT : clampTerminalFontSize(raw);
+/** localStorage 裡的個人預設;不認得的值回到預設。/ The stored personal defaults; unknown values fall back. */
+export function readTerminalDefaults(): TerminalDefaults {
+    const size = parseInt(readItem(TERMINAL_FONT_SIZE_KEY) ?? "", 10);
+    const font = readItem(TERMINAL_FONT_KEY);
+    const scheme = readItem(TERMINAL_SCHEME_KEY);
+    return {
+        font: isKnownFont(font) ? font : DEFAULT_TERMINAL_FONT,
+        fontSize: Number.isNaN(size) ? TERMINAL_FONT_SIZE_DEFAULT : clampTerminalFontSize(size, TERMINAL_FONT_SIZE_DEFAULT),
+        scheme: isKnownScheme(scheme) ? scheme : DEFAULT_TERMINAL_SCHEME,
+    };
 }
 
-/** 存字型大小並廣播給開著的終端機即時套用。/ Persist and broadcast to open terminals. */
-export function applyTerminalFontSize(size: number) {
+/** 存個人預設(只寫有給的欄位)並廣播。/ Persist the given default fields and broadcast. */
+export function applyTerminalDefaults(patch: Partial<TerminalDefaults>) {
     if (typeof document === "undefined") return;
-    const clamped = clampTerminalFontSize(size);
-    localStorage.setItem(TERMINAL_FONT_SIZE_KEY, String(clamped));
-    window.dispatchEvent(new CustomEvent(TERMINAL_FONT_SIZE_EVENT, { detail: clamped }));
+    try {
+        if (patch.fontSize !== undefined) {
+            localStorage.setItem(TERMINAL_FONT_SIZE_KEY, String(clampTerminalFontSize(patch.fontSize, TERMINAL_FONT_SIZE_DEFAULT)));
+        }
+        if (patch.font !== undefined && isKnownFont(patch.font)) localStorage.setItem(TERMINAL_FONT_KEY, patch.font);
+        if (patch.scheme !== undefined && isKnownScheme(patch.scheme)) localStorage.setItem(TERMINAL_SCHEME_KEY, patch.scheme);
+    } catch { /* localStorage 不可用:這一頁仍會套用(事件照發)/ storage unavailable: still broadcast */ }
+    window.dispatchEvent(new CustomEvent(TERMINAL_APPEARANCE_EVENT));
+}
+
+/** 個人預設欄位 → `/api/user/settings` 的欄位名。/ Default fields → `/api/user/settings` keys. */
+export function terminalDefaultsToSettings(patch: Partial<TerminalDefaults>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    if (patch.font !== undefined) out.terminal_font = patch.font;
+    if (patch.fontSize !== undefined) out.terminal_font_size = patch.fontSize;
+    if (patch.scheme !== undefined) out.terminal_scheme = patch.scheme;
+    return out;
 }
 
 /** 夾到 85–130 並對齊 5% 一格。/ Clamp to 85–130 and snap to 5% steps. */

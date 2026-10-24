@@ -24,6 +24,11 @@ pub struct SiteSettings {
     pub notify_webhook_url: String,
     pub notify_down_delay: i64,
     pub user_key_max_days: i64,
+    pub desktop_enabled: bool,
+    pub desktop_max_sessions: i64,
+    pub desktop_session_idle_timeout: i64,
+    pub desktop_clipboard: String,
+    pub desktop_max_resolution: i64,
     pub mfa_require_totp: bool,
     pub mfa_require_passkey: bool,
 }
@@ -47,6 +52,11 @@ pub const FIELDS: &[&str] = &[
     "notify_webhook_url",
     "notify_down_delay",
     "user_key_max_days",
+    "desktop_enabled",
+    "desktop_max_sessions",
+    "desktop_session_idle_timeout",
+    "desktop_clipboard",
+    "desktop_max_resolution",
     "mfa_require_totp",
     "mfa_require_passkey",
 ];
@@ -55,7 +65,7 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     remote_browser_max_sessions, remote_browser_geometry, remote_browser_ssh_timeout, remote_browser_ssh_attempts, \
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
     ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, notify_webhook_url, notify_down_delay, user_key_max_days, \
-    mfa_require_totp, mfa_require_passkey";
+    desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, mfa_require_totp, mfa_require_passkey";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

@@ -7,7 +7,8 @@
  * (generated here), details and editing. Fresh state per host (keyed by id).
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { Terminal, Trash2, Save, Loader2, X } from "lucide-react";
+import Link from "next/link";
+import { Terminal, Trash2, Save, Loader2, X, ScreenShare } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +20,7 @@ import { LanCommands } from "@/components/network/LanCommands";
 import { sessionLabel } from "@/components/network/TerminalDock";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { desktopPorts } from "@/lib/desktop";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
 import { hasSsh, hostName, isValidLogin } from "@/lib/lanConnect";
 import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
@@ -167,6 +169,11 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                         <div className="flex flex-wrap items-center gap-2">
                             <Button onClick={openTerminal} disabled={!online || !loginOk || noDeviceUser} title={!online ? t("network.deviceOffline") : undefined}>
                                 <Terminal size={16} /> {t("network.openTerminal")}
+                            </Button>
+                            <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "outline"} asChild>
+                                <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>
+                                    <ScreenShare size={16} /> {t("network.openDesktop")}
+                                </Link>
                             </Button>
                             {!online && <span className="text-sm text-muted-foreground">{t("network.deviceOffline")}</span>}
                         </div>

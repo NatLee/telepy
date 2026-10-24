@@ -5,6 +5,7 @@ import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
 import { ReverseServerUsername } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import { shareExpiryValue, type ShareExpiryPreset } from "@/lib/shareExpiry";
 
 export function useShareModal(tunnelId: number | null, isOpen: boolean) {
     const { t } = useI18n();
@@ -18,6 +19,9 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
     const [tunnelUsernames, setTunnelUsernames] = useState<ReverseServerUsername[]>([]);
     const [selectedAllowedIds, setSelectedAllowedIds] = useState<number[]>([]);
     const [editTargetUsersModal, setEditTargetUsersModal] = useState<{ userId: number, username: string, allowedIds: number[] } | null>(null);
+    // 新分享的期限。/ How long a new share lasts.
+    const [expiryPreset, setExpiryPreset] = useState<ShareExpiryPreset>("never");
+    const [expiryDate, setExpiryDate] = useState("");
     const { showSuccess, showError } = useToast();
 
     const fetchUsers = useCallback(async () => {
@@ -52,6 +56,8 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
         if (isOpen) {
             fetchUsers();
             setSelectedUser("");
+            setExpiryPreset("never");
+            setExpiryDate("");
         }
     }, [isOpen, fetchUsers]);
 
@@ -74,19 +80,24 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
     const handleShare = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedUser || !tunnelId) return;
+        const expiresAt = shareExpiryValue(expiryPreset, expiryDate);
+        if (expiresAt === undefined) return;
 
         try {
             const res = await apiFetch(`/tunnels/share/${tunnelId}`, {
                 method: "POST",
                 body: JSON.stringify({
                     shared_with_user_id: selectedUser,
-                    allowed_target_username_ids: selectedAllowedIds.length > 0 ? selectedAllowedIds : undefined
+                    allowed_target_username_ids: selectedAllowedIds.length > 0 ? selectedAllowedIds : undefined,
+                    expires_at: expiresAt ?? undefined,
                 }),
             });
             if (res.ok) {
                 showSuccess(t("share.shared"));
                 setSelectedUser("");
                 setSelectedAllowedIds([]);
+                setExpiryPreset("never");
+                setExpiryDate("");
                 fetchUsers();
             } else {
                 const data = await readJson(res);
@@ -137,6 +148,28 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
         }
     };
 
+    /** 改某人的期限；成功回 true（浮層才關）。/ Change when someone's access ends; true on success. */
+    const handleUpdateExpiry = async (userId: number, expiresAt: string | null): Promise<boolean> => {
+        if (!tunnelId) return false;
+        try {
+            const res = await apiFetch(`/tunnels/share/${tunnelId}/${userId}/expiry`, {
+                method: "PATCH",
+                body: JSON.stringify({ expires_at: expiresAt }),
+            });
+            if (res.ok) {
+                showSuccess(t("share.expiry.updated"));
+                fetchUsers();
+                return true;
+            }
+            const data = await readJson(res);
+            showError(responseError(res, data, t("share.expiry.updateFailed")));
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (e: any) {
+            showError(e.message || t("share.expiry.updateFailed"));
+        }
+        return false;
+    };
+
     const handleSaveAllowed = async () => {
         if (!tunnelId || !editTargetUsersModal) return;
         try {
@@ -166,13 +199,16 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
             unshareConfirm, setUnshareConfirm,
             tunnelUsernames, setTunnelUsernames,
             selectedAllowedIds, setSelectedAllowedIds,
-            editTargetUsersModal, setEditTargetUsersModal
+            editTargetUsersModal, setEditTargetUsersModal,
+            expiryPreset, setExpiryPreset,
+            expiryDate, setExpiryDate,
         },
         actions: {
             handleShare,
             handleUpdatePermission,
             handleUnshare,
-            handleSaveAllowed
+            handleSaveAllowed,
+            handleUpdateExpiry,
         }
     };
 }

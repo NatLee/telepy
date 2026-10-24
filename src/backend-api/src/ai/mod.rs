@@ -583,6 +583,11 @@ mod tests {
             notify_webhook_url: String::new(),
             notify_down_delay: 60,
             user_key_max_days: 0,
+            desktop_enabled: true,
+            desktop_max_sessions: 4,
+            desktop_session_idle_timeout: 900,
+            desktop_clipboard: "both".into(),
+            desktop_max_resolution: 2560,
             mfa_require_totp: false,
             mfa_require_passkey: false,
         };

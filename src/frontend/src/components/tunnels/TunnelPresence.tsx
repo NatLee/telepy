@@ -8,7 +8,7 @@
  * when nobody is connected.
  */
 import React, { useMemo } from "react";
-import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
 import { MoreBelow } from "@/components/ui/Modal";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,7 @@ const KINDS: Record<string, { icon: LucideIcon; label: TranslationKey }> = {
     browser: { icon: MonitorPlay, label: "tunnels.presenceKind.browser" },
     ssh: { icon: Laptop, label: "tunnels.presenceKind.ssh" },
     ai: { icon: Bot, label: "tunnels.presenceKind.ai" },
+    desktop: { icon: ScreenShare, label: "tunnels.presenceKind.desktop" },
 };
 
 interface PresenceLine {
