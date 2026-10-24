@@ -38,6 +38,12 @@ enum Command {
     SeedServiceKey,
     /// Print the OpenAPI document (JSON) to stdout and exit.
     Openapi,
+    /// Check the configuration and companion services (read-only); exit 1 when something is broken.
+    Doctor {
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn init_logging(config: &Config) -> Vec<tracing_appender::non_blocking::WorkerGuard> {
@@ -156,6 +162,20 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", telepy_server::app::openapi().to_pretty_json()?);
         return Ok(());
     }
+    if let Some(Command::Doctor { json }) = cli.command {
+        // 也不開 log：報告本身就是輸出。/ No logging either: the report is the output.
+        let config = Config::from_env();
+        let checks = telepy_server::doctor::run(&config).await;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&checks)?);
+        } else {
+            print!("{}", telepy_server::doctor::render(&checks));
+        }
+        if telepy_server::doctor::failed(&checks) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let config = Config::from_env();
     let _guards = init_logging(&config);
     match cli.command.unwrap_or(Command::Serve) {
@@ -181,6 +201,6 @@ async fn main() -> anyhow::Result<()> {
             let db = open_db(&config).await?;
             seed_service_key(&db, &config.web_service_pubkey_path).await
         }
-        Command::Openapi => unreachable!("handled above"),
+        Command::Openapi | Command::Doctor { .. } => unreachable!("handled above"),
     }
 }

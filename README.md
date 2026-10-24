@@ -142,11 +142,13 @@ Sub-commands:
   shell: Open a shell in the backend container.
   migration: Reconcile the database schema (also runs automatically on start).
   backend-debug: Recreate the backend container and follow its logs.
+  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken.
 ```
 
 ## Further reading
 
 - [Remote browser architecture](./docs/remote-browser.md)
+- [Remote desktop (RDP / VNC) architecture](./docs/remote-desktop.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
 - [Rust backend migration plan](./docs/rust-migration-plan.md)
 - [Backend benchmark: Django vs Rust](./docs/benchmarks.md)
