@@ -277,6 +277,13 @@ async fn mcp_requires_an_oauth_token() {
     let exec = r.json["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "ssh_exec").unwrap();
     assert!(exec["inputSchema"]["properties"]["command"].is_object());
     assert_eq!(exec["annotations"]["destructiveHint"], true);
+
+    // 管理員要求 TOTP、這個帳號還沒設：token 一律無效。/ Required TOTP not set up yet: the token is refused.
+    sqlx::query("UPDATE site_settings_sitesettings SET mfa_require_totp = 1 WHERE id = 1").execute(&app.state.db.write).await.unwrap();
+    app.state.mfa.requirement.invalidate_all();
+    let r = mcp_raw(&app, Some(&token), json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "{}", r.text);
+    assert!(r.headers.get(header::WWW_AUTHENTICATE).unwrap().to_str().unwrap().contains(r#"error="invalid_token""#));
 }
 
 #[tokio::test]

@@ -49,6 +49,8 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "notify_webhook_url", kind: Kind::Url(512), label: "Status alert webhook", description: "隧道離線、恢復、降級(連著但 SSH 沒回應)時 POST 到這個網址。內容同時有 text(Slack、Google Chat、Mattermost)與 content(Discord)欄位,另附 event / tunnel 等結構化欄位。留空 = 關閉。只有管理員能設定,伺服器會從自己這裡連到這個網址。" },
     FieldMeta { name: "notify_down_delay", kind: Kind::Int, label: "Alert delay (seconds)", description: "狀況要持續多久才發告警(秒);在這之前恢復就什麼都不發,所以裝置閃斷不會洗版。只有發過「離線」的隧道,回來時才會發「恢復」。設 0 = 立刻通知。" },
     FieldMeta { name: "user_key_max_days", kind: Kind::Int, label: "Personal key lifetime (days)", description: "個人 SSH 金鑰最長可以用幾天。設了之後,新增或續期的金鑰都必須在這個天數內到期(沒填就自動用最長效期);到期的金鑰會被 gateway 拒絕,並從裝置的 authorized_keys 移除。設 0 = 不限制。" },
+    FieldMeta { name: "mfa_require_totp", kind: Kind::Bool, label: "Require an authenticator app", description: "要求每個帳號都設定驗證器 App(TOTP)。還沒設定的使用者登入後只能先完成設定,才能使用其他功能。開啟前你自己的帳號必須已經設定好。變更後立即生效。" },
+    FieldMeta { name: "mfa_require_passkey", kind: Kind::Bool, label: "Require a passkey", description: "要求每個帳號都至少註冊一把 passkey。還沒註冊的使用者登入後只能先完成註冊,才能使用其他功能。passkey 需要以網域名稱(不是 IP)開啟網站。開啟前你自己的帳號必須已經有 passkey。變更後立即生效。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
     FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
     FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
@@ -81,6 +83,8 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("desktop_session_idle_timeout".into(), json!(s.desktop_session_idle_timeout));
     m.insert("desktop_clipboard".into(), json!(s.desktop_clipboard));
     m.insert("desktop_max_resolution".into(), json!(s.desktop_max_resolution));
+    m.insert("mfa_require_totp".into(), json!(s.mfa_require_totp));
+    m.insert("mfa_require_passkey".into(), json!(s.mfa_require_passkey));
     Value::Object(m)
 }
 
@@ -155,9 +159,28 @@ async fn update_settings(State(state): State<AppState>, AuthUser(me): AuthUser, 
             updates.push((f.name, value));
         }
     }
+    // 開啟「必須有 TOTP / passkey」前，管理員自己要先有，否則會把自己鎖在設定畫面外（關閉永遠可以）。
+    // Turning a requirement on needs that factor on the admin's own account first; turning it off is always allowed.
+    let current = db::settings::get_solo(&state.db).await?;
+    let turning_on = |name: &str, was: bool| !was && updates.iter().any(|(n, v)| *n == name && matches!(v, SettingValue::Bool(true)));
+    let need_totp = turning_on("mfa_require_totp", current.mfa_require_totp);
+    let need_passkey = turning_on("mfa_require_passkey", current.mfa_require_passkey);
+    if need_totp || need_passkey {
+        let mine = super::mfa::factors(&state, me.id).await?;
+        if need_totp && !mine.totp {
+            return Err(ApiError::field("mfa_require_totp", "Set up an authenticator app on your own account first."));
+        }
+        if need_passkey && mine.passkeys == 0 {
+            return Err(ApiError::field("mfa_require_passkey", "Register a passkey on your own account first."));
+        }
+    }
+    let touches_mfa = updates.iter().any(|(n, _)| n.starts_with("mfa_require_"));
     for (name, value) in updates {
         debug_assert!(FIELDS.contains(&name));
         db::settings::update_field(&state.db, name, value).await?;
+    }
+    if touches_mfa {
+        state.mfa.requirement.invalidate_all();
     }
     let s = db::settings::get_solo(&state.db).await?;
     Ok(Json(json!({ "values": values_json(&s), "meta": meta_json() })))

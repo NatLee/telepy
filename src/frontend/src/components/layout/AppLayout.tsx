@@ -1,12 +1,13 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useRouter, usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
 import { useNotificationWebSocket, type SocketPhase } from "@/lib/websocket";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
+import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -26,7 +27,13 @@ const NotificationWsContext = createContext<NotificationWsStatus>({
 export const useNotificationWsStatus = () => useContext(NotificationWsContext);
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
-    const { isAuthenticated, isLoading } = useAuth();
+    const { isAuthenticated, isLoading, user } = useAuth();
+    const missing = user?.mfa_missing ?? [];
+    // 管理員要求兩步驟而帳號還沒設好 → 設定畫面；設好後等使用者按「繼續」才放行（見 EnrollmentGate）。
+    // Required factors missing → the enrollment gate, held until the user presses Continue.
+    const [gated, setGated] = useState(false);
+    if (missing.length > 0 && !gated) setGated(true);
+    if (!user && gated) setGated(false);
     const router = useRouter();
 
     // Establish global notification websocket when logged in
@@ -56,6 +63,14 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
     if (!isAuthenticated) {
         return null; // Will redirect in useEffect
+    }
+
+    if (gated) {
+        return (
+            <NotificationWsContext.Provider value={wsStatus}>
+                <EnrollmentGate missing={missing} onDone={() => setGated(false)} />
+            </NotificationWsContext.Provider>
+        );
     }
 
     return (

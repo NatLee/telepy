@@ -9,6 +9,7 @@ use serde_json::json;
 use super::jwt::TokenType;
 use crate::db::{self, users::User};
 use crate::error::ApiError;
+use crate::mfa;
 use crate::state::AppState;
 
 /// 已認證的使用者（`request.user`）。
@@ -49,6 +50,18 @@ impl FromRequestParts<AppState> for AuthUser {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
         let token = bearer_token(parts).ok_or_else(ApiError::unauthenticated)?;
-        Ok(AuthUser(user_from_access_token(state, &token).await?))
+        let user = user_from_access_token(state, &token).await?;
+        // 管理員要求兩步驟、這個帳號還沒設好：只開放設定所需的路徑。403 而不是 401（web 遇到 401 會登出）。
+        // The admin requires two-step sign-in and this account has not enrolled: only the enrollment paths stay open.
+        if !mfa::allowed_while_enrolling(parts.uri.path()) {
+            let missing = crate::api::mfa::enrollment_missing(state, user.id).await?;
+            if !missing.is_empty() {
+                return Err(ApiError::new(
+                    StatusCode::FORBIDDEN,
+                    json!({"error": mfa::ENROLLMENT_REQUIRED_MSG, "code": mfa::ENROLLMENT_REQUIRED, "missing": missing}),
+                ));
+            }
+        }
+        Ok(AuthUser(user))
     }
 }

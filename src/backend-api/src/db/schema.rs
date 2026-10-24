@@ -466,6 +466,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "desktop_session_idle_timeout", "integer NOT NULL DEFAULT 900"),
     ("site_settings_sitesettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
     ("site_settings_sitesettings", "desktop_max_resolution", "integer NOT NULL DEFAULT 2560"),
+    // 管理員要求每個帳號都要有 TOTP / passkey（各自獨立）。/ Admin-required second factors, one switch each.
+    ("site_settings_sitesettings", "mfa_require_totp", "bool NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "mfa_require_passkey", "bool NOT NULL DEFAULT 0"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.
@@ -521,9 +524,9 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
             remote_browser_ssh_timeout, remote_browser_ssh_attempts, remote_browser_kasm_create_timeout, \
             remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, ai_session_max_lifetime, \
             ai_max_sessions_per_user, lan_scan_enabled, desktop_enabled, desktop_max_sessions, \
-            desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution) \
+            desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, mfa_require_totp, mfa_require_passkey) \
          SELECT 1, 0, 'gmail.com', 60, 10, '1280x720', 30, 2, 30, 'https://www.google.com', 'zh-TW', 600, 7200, 3, 1, \
-            1, 4, 900, 'both', 2560 \
+            1, 4, 900, 'both', 2560, 0, 0 \
          WHERE NOT EXISTS (SELECT 1 FROM site_settings_sitesettings WHERE id = 1)",
     )
     .execute(pool)

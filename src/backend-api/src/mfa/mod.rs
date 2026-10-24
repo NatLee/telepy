@@ -69,6 +69,9 @@ pub struct MfaStores {
     pub failures: moka::sync::Cache<i64, u32>,
     pub ceremonies: passkey::Ceremonies,
     pub secrets: SecretBox,
+    /// 站台「必須設定 TOTP / passkey」兩個開關的快取（最多 5 秒）；開關都關時每個請求不必多讀一次 DB。
+    /// Cached site requirement flags (≤ 5 s) so the common "both off" case costs no DB read per request.
+    pub requirement: moka::sync::Cache<(), Requirement>,
 }
 
 impl MfaStores {
@@ -78,6 +81,7 @@ impl MfaStores {
             failures: moka::sync::Cache::builder().time_to_live(LOCKOUT_WINDOW).max_capacity(100_000).build(),
             ceremonies: passkey::Ceremonies::default(),
             secrets: SecretBox::new(secret_key),
+            requirement: moka::sync::Cache::builder().time_to_live(REQUIREMENT_TTL).max_capacity(1).build(),
         }
     }
     pub fn locked(&self, user_id: i64) -> bool {
@@ -242,9 +246,72 @@ pub fn hash_recovery_code(code: &str) -> String {
     crate::oauth::hash_token(&normalize_recovery_code(code))
 }
 
+// ---------------------------------------------------------------- required factors (site settings)
+
+/// 站台要求的第二因素開關快取多久。/ How long the site's requirement flags are cached.
+pub const REQUIREMENT_TTL: Duration = Duration::from_secs(5);
+/// 缺少必要因素時 403 的 `code`。/ The `code` of the 403 for a user who still has to enroll.
+pub const ENROLLMENT_REQUIRED: &str = "mfa_enrollment_required";
+pub const ENROLLMENT_REQUIRED_MSG: &str = "Your administrator requires two-step sign-in. Set it up to continue.";
+
+/// 站台設定 `mfa_require_totp` / `mfa_require_passkey`。/ The site's `mfa_require_*` switches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Requirement {
+    pub totp: bool,
+    pub passkey: bool,
+}
+
+impl Requirement {
+    pub fn any(&self) -> bool {
+        self.totp || self.passkey
+    }
+}
+
+/// 管理員要求、但這個帳號還沒有的因素（`"totp"` / `"passkey"`）。/ Required factors the account still lacks.
+pub fn missing_factors(require_totp: bool, require_passkey: bool, has_totp: bool, passkey_count: usize) -> Vec<&'static str> {
+    let mut m = Vec::new();
+    if require_totp && !has_totp {
+        m.push("totp");
+    }
+    if require_passkey && passkey_count == 0 {
+        m.push("passkey");
+    }
+    m
+}
+
+/// 還沒設好必要因素的帳號仍可呼叫的 REST 路徑（個人資料、偏好、設定因素本身、登入紀錄）。
+/// REST paths still open to an account that has to enroll first.
+pub fn allowed_while_enrolling(path: &str) -> bool {
+    const EXACT: &[&str] = &["/api/auth/user/profile", "/api/user/settings", "/api/auth/sign-ins"];
+    const PREFIXES: &[&str] = &["/api/auth/mfa", "/api/auth/passkeys"];
+    let path = path.trim_end_matches('/');
+    EXACT.contains(&path) || PREFIXES.iter().any(|p| path == *p || path.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_factors_per_requirement() {
+        assert!(missing_factors(false, false, false, 0).is_empty());
+        assert_eq!(missing_factors(true, false, false, 3), vec!["totp"]);
+        assert!(missing_factors(true, false, true, 0).is_empty());
+        assert_eq!(missing_factors(false, true, true, 0), vec!["passkey"]);
+        assert!(missing_factors(false, true, false, 1).is_empty());
+        assert_eq!(missing_factors(true, true, false, 0), vec!["totp", "passkey"]);
+        assert!(missing_factors(true, true, true, 2).is_empty());
+    }
+
+    #[test]
+    fn enrollment_allowlist() {
+        for ok in ["/api/auth/user/profile", "/api/user/settings", "/api/auth/sign-ins", "/api/auth/mfa", "/api/auth/mfa/totp/setup", "/api/auth/passkeys/register", "/api/auth/passkeys/3"] {
+            assert!(allowed_while_enrolling(ok), "{ok}");
+        }
+        for no in ["/api/reverse/server/dashboard", "/api/auth/mfaX", "/api/auth/passkeysfoo", "/api/user/users", "/api/site/settings", "/api/user/users/1/mfa"] {
+            assert!(!allowed_while_enrolling(no), "{no}");
+        }
+    }
 
     #[test]
     fn base32_roundtrip_and_rfc4648_vectors() {

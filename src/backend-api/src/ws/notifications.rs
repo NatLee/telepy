@@ -8,7 +8,7 @@ use super::{auth, close, is_ping, send_json, send_text};
 use crate::state::AppState;
 
 pub async fn handle(state: AppState, mut socket: WebSocket) {
-    let (user, _) = match auth::first_message(&state, &mut socket).await {
+    let (user, _) = match auth::first_message_any(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
         Err(code) => {
