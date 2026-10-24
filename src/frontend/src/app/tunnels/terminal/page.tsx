@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth";
 import { Terminal as TerminalIcon, X, Server } from "lucide-react";
 import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent } from "@/components/tunnels/TerminalContent";
+import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
 import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
 import { StatusCard } from "@/components/ui/StatusCard";
 import "xterm/css/xterm.css";
@@ -58,9 +59,10 @@ export default function TerminalPage() {
         availableUsernames,
         lanHost,
         appearance,
+        commandBanner,
     } = state;
     const [appearanceOpen, setAppearanceOpen] = useState(false);
-    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab } = actions;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner } = actions;
 
     // Set initial tab from URL param (mount only)
     useEffect(() => {
@@ -157,6 +159,7 @@ export default function TerminalPage() {
                     serviceKeys={serviceKeys}
                     onReconnect={reconnect}
                     palette={appearance.resolved.scheme.theme}
+                    commandBanner={commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
                 />
             </div>
 

@@ -27,6 +27,7 @@ import {
     ScreenShare,
     ScrollText,
     Share2,
+    ShieldCheck,
     Trash2,
     Users,
     Waypoints,
@@ -94,6 +95,7 @@ export function TunnelActions({
     onDelete,
     onRequestAccess,
     onRecordings,
+    onCommandRules,
 }: TunnelActionsProps) {
     const { t } = useI18n();
 
@@ -203,6 +205,14 @@ export function TunnelActions({
                             label={t("recordings.menu")}
                             hint={t("recordings.menuHint")}
                             onSelect={() => onRecordings?.(tunnel.id)}
+                        />
+                    )}
+                    {onCommandRules && (
+                        <ActionItem
+                            icon={ShieldCheck}
+                            label={t("commands.menu")}
+                            hint={t("commands.menuHint")}
+                            onSelect={() => onCommandRules(tunnel.id)}
                         />
                     )}
                 </DropdownMenuGroup>

@@ -46,6 +46,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "Service Keys", description = "Public keys of the Telepy service itself"),
         (name = "Device Keys", description = "Per-device key lists: Telepy installs users' public keys into a device's authorized_keys over SSH, removes them when access is revoked, and audits what is there"),
         (name = "Tunnel Sharing", description = "Share tunnels with other users (view / edit / admin)"),
+        (name = "Command Rules", description = "Commands that the web terminal and MCP agents may not run, or only after the tunnel owner or an ADMIN approves: site-wide rules (admins), per-tunnel rules (owner / ADMIN), and the approval requests"),
         (name = "Script", description = "Connection scripts and ssh config for a tunnel"),
         (name = "SFTP", description = "File manager REST endpoints"),
         (name = "Remote Browser", description = "KasmVNC proxy browser sessions"),

@@ -599,6 +599,7 @@ mod tests {
             mfa_require_totp: false,
             mfa_require_passkey: false,
             recording_retention_days: 30,
+            command_approval_timeout: 300,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

@@ -112,9 +112,14 @@ pub struct Machine {
     ptys: Arc<Mutex<Vec<PtyState>>>,
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
     resolves: Arc<Mutex<Vec<String>>>,
+    commands: Arc<Mutex<Vec<String>>>,
 }
 
 impl Machine {
+    /// echo_shell：真的跑了的指令（按 Enter 送到 shell 的行）。/ echo_shell: lines that reached the shell with Enter.
+    pub fn commands(&self) -> Vec<String> {
+        self.commands.lock().unwrap().clone()
+    }
     pub fn logins(&self) -> Vec<Login> {
         self.logins.lock().unwrap().clone()
     }
@@ -178,6 +183,11 @@ pub struct MachineOpts {
     /// 而且像 Apple 的 sshd-session 一樣，**名稱**的 direct-tcpip 讓整條連線斷掉（IP 才正常）。
     /// Pretend to be macOS, including the sshd-session crash on hostname direct-tcpip targets.
     pub pretend_darwin: bool,
+    /// 像真的 tty 的 shell：印 `$ ` 提示字元、打字就回顯（退格、Ctrl+C 也照做），Enter 才「執行」：印 `ran:<指令>`
+    /// 並記在 [`Machine::commands`]。指令規則要讀畫面上的那一行，所以需要回顯。
+    /// A tty-like shell: a `$ ` prompt, keystrokes echoed (backspace and Ctrl+C too), and Enter "runs" the line:
+    /// prints `ran:<line>` and records it in [`Machine::commands`]. Command rules read the echoed line.
+    pub echo_shell: bool,
 }
 
 struct MachineState {
@@ -192,6 +202,8 @@ struct MachineState {
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
     /// pretend_darwin 時被要求解析過的名稱。/ Names the backend asked the (fake) macOS device to resolve.
     resolves: Arc<Mutex<Vec<String>>>,
+    /// echo_shell 真的「執行」了的指令。/ Lines the echo shell actually ran.
+    commands: Arc<Mutex<Vec<String>>>,
 }
 
 /// 一個 session channel 的 PTY 狀態（term + 視窗大小），`tty` 指令與 shell 的 `tty` 行會印出來。
@@ -282,6 +294,56 @@ impl server::Handler for SshdHandler {
         let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
         let pty = self.ptys.get(&channel).cloned();
         let banner = format!("login:{}@{}\r\n", self.user.clone().unwrap_or_default(), self.m.name);
+        if self.m.opts.echo_shell {
+            let commands = self.m.commands.clone();
+            tokio::spawn(async move {
+                let _ = ch.data_bytes(format!("{banner}$ ").into_bytes()).await;
+                let mut s = ch.into_stream();
+                let mut buf = [0u8; 4096];
+                let mut line = String::new();
+                'echo: while let Ok(n) = s.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let mut out = String::new();
+                    for c in String::from_utf8_lossy(&buf[..n]).chars() {
+                        match c {
+                            '\r' | '\n' => {
+                                let cmd = std::mem::take(&mut line).trim().to_string();
+                                out.push_str("\r\n");
+                                if cmd == "exit" {
+                                    let _ = s.write_all(out.as_bytes()).await;
+                                    break 'echo;
+                                }
+                                if !cmd.is_empty() {
+                                    out.push_str(&format!("ran:{cmd}\r\n"));
+                                    commands.lock().unwrap().push(cmd);
+                                }
+                                out.push_str("$ ");
+                            }
+                            '\x03' => {
+                                line.clear();
+                                out.push_str("^C\r\n$ ");
+                            }
+                            '\x7f' | '\x08' => {
+                                if line.pop().is_some() {
+                                    out.push_str("\x08 \x08");
+                                }
+                            }
+                            c if !c.is_control() => {
+                                line.push(c);
+                                out.push(c);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if s.write_all(out.as_bytes()).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            return Ok(());
+        }
         tokio::spawn(async move {
             let _ = ch.data_bytes(banner.into_bytes()).await;
             let mut s = ch.into_stream();
@@ -478,6 +540,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let ptys = Arc::new(Mutex::new(Vec::new()));
     let resizes = Arc::new(Mutex::new(Vec::new()));
     let resolves = Arc::new(Mutex::new(Vec::new()));
+    let commands = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
@@ -487,6 +550,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         ptys: ptys.clone(),
         resizes: resizes.clone(),
         resolves: resolves.clone(),
+        commands: commands.clone(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -501,7 +565,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
             });
         }
     });
-    Machine { name: name.to_string(), port, home, logins, ptys, resizes, resolves }
+    Machine { name: name.to_string(), port, home, logins, ptys, resizes, resolves, commands }
 }
 
 // ------------------------------------------------------------------ lab
@@ -538,6 +602,8 @@ pub struct Terminal {
     ws: Ws,
     /// 到目前為止收到的 PTY 輸出。
     pub seen: String,
+    /// 收到的指令規則通知（binary JSON frame）。/ Command-rule notices received (binary JSON frames).
+    pub notices: Vec<Value>,
 }
 
 impl Terminal {
@@ -599,6 +665,32 @@ impl Terminal {
         }
     }
 
+    /// 收一則 binary frame：pong 以外的是指令規則通知。/ A binary frame: anything but a pong is a command notice.
+    fn binary(&mut self, b: &[u8]) {
+        if b != b"pong" {
+            if let Ok(v) = serde_json::from_slice::<Value>(b) {
+                self.notices.push(v);
+            }
+        }
+    }
+
+    /// 等一則 `state` 的指令規則通知（10 秒逾時），取走並回傳它。/ Wait for a command notice with this `state` and take it.
+    pub async fn expect_notice(&mut self, state: &str) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(i) = self.notices.iter().position(|n| n["state"] == state) {
+                return self.notices.remove(i);
+            }
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
+                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+                Ok(other) => panic!("terminal ended before a {state:?} notice: {other:?}; output so far: {:?}", self.seen),
+                Err(_) => panic!("timed out waiting for a {state:?} notice; notices {:?}; output so far: {:?}", self.notices, self.seen),
+            }
+        }
+    }
+
     /// 讀 PTY 輸出直到出現 `needle`（10 秒逾時）。
     pub async fn expect(&mut self, needle: &str) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -606,8 +698,9 @@ impl Terminal {
             let frame = tokio::time::timeout_at(deadline, self.ws.next()).await;
             match frame {
                 Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
                 // 伺服器心跳的 Ping（tungstenite 讀的時候自動回 Pong）。/ Server heartbeat pings, answered on read.
-                Ok(Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_)))) => {}
+                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
                 Ok(other) => panic!("terminal ended before {needle:?}: {other:?}; output so far: {:?}", self.seen),
                 Err(_) => panic!("timed out waiting for {needle:?}; output so far: {:?}", self.seen),
             }
@@ -964,8 +1057,8 @@ impl Lab {
         ws.send(Message::Text(auth.to_string().into())).await.unwrap();
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("no terminal frame") {
             Some(Ok(Message::Close(Some(f)))) => Err(u16::from(f.code)),
-            Some(Ok(Message::Text(t))) => Ok(Terminal { ws, seen: t.to_string() }),
-            Some(Ok(_)) => Ok(Terminal { ws, seen: String::new() }),
+            Some(Ok(Message::Text(t))) => Ok(Terminal { ws, seen: t.to_string(), notices: Vec::new() }),
+            Some(Ok(_)) => Ok(Terminal { ws, seen: String::new(), notices: Vec::new() }),
             other => panic!("terminal socket ended: {other:?}"),
         }
     }

@@ -506,3 +506,84 @@ async fn sharees_agents_notify_the_owner_and_can_be_closed_by_them() {
     telepy_server::ai::reap_once(&app.state).await;
     assert!(app.state.ai.get(&sid).is_none());
 }
+
+/// 指令規則也管 agent：擋下的回錯誤；要核准的停在 tool call 裡，owner 在網頁核准就跑、拒絕就回錯誤（agent 用 owner 的身分也一樣要按）。
+/// Command rules apply to agents: blocked commands fail; held ones wait inside the tool call until the owner approves
+/// in the web (even when the agent acts as the owner) and fail when denied.
+#[tokio::test]
+async fn command_rules_block_and_hold_agent_commands() {
+    let Some(s) = setup().await else { return };
+    let app = &s.app;
+    let rules = format!("/api/reverse/server/{}/command-rules", s.tunnel_id);
+    for body in [
+        json!({"action": "block", "pattern": "rm", "note": "Nothing gets deleted here"}),
+        json!({"action": "approve", "pattern": "touch"}),
+        json!({"action": "block", "pattern": "cat", "via": "terminal"}),
+    ] {
+        let r = app.post(&rules, Some(&s.web), body).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    }
+    let (token, _) = oauth_token(app, &s.web, "", json!(null)).await;
+    let (_, v) = call(app, &token, "ssh_session_open", json!({"tunnel_id": s.tunnel_id})).await;
+    let sid = v["session_id"].as_str().unwrap().to_string();
+    std::fs::write(s.home.path().join("keep.txt"), "x").unwrap();
+
+    // 擋下：沒跑，錯誤裡有規則與說明。/ Blocked: not run; the error names the rule and its note.
+    let (err, v) = call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "rm -f keep.txt"})).await;
+    assert!(err, "{v}");
+    let msg = v.as_str().unwrap();
+    assert!(msg.contains("`rm`") && msg.contains("Nothing gets deleted here"), "{msg}");
+    assert!(s.home.path().join("keep.txt").exists());
+    // 只管終端機的規則不管 agent。/ A terminal-only rule leaves agents alone.
+    let (err, v) = call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "cat keep.txt"})).await;
+    assert!(!err && v["stdout"] == "x", "{v}");
+
+    // 要核准：tool call 等著，owner 核准後才跑。/ Held: the call waits until the owner approves.
+    let mut owner_rx = app.state.hub.subscribe_user(s.admin_id);
+    let first_pending = || async {
+        loop {
+            let r = app.get("/api/command-requests?status=pending", Some(&s.web)).await;
+            if let Some(q) = r.json["requests"].as_array().and_then(|a| a.first()) {
+                return q.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    };
+    let approve_soon = async {
+        let q = first_pending().await;
+        assert_eq!(q["source"], "agent");
+        assert_eq!(q["client"], "Test Agent");
+        assert_eq!(q["command"], "touch approved.txt");
+        assert_eq!(q["can_decide"], true, "the owner decides on their own agent's commands");
+        assert!(!s.home.path().join("approved.txt").exists(), "nothing runs before the approval");
+        let r = app.post(&format!("/api/command-requests/{}/approve", q["id"]), Some(&s.web), json!({})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    };
+    let ((err, v), ()) = tokio::join!(call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "touch approved.txt"})), approve_soon);
+    assert!(!err, "{v}");
+    assert_eq!(v["exit_code"], 0);
+    assert!(s.home.path().join("approved.txt").exists());
+    let mut actions = Vec::new();
+    while let Ok(m) = owner_rx.try_recv() {
+        let m: Value = serde_json::from_str(&m).unwrap();
+        actions.push(m["message"]["action"].as_str().unwrap_or_default().to_string());
+    }
+    assert!(actions.contains(&"COMMAND-APPROVAL-REQUESTED".to_string()) && actions.contains(&"COMMAND-APPROVAL-DECIDED".to_string()), "{actions:?}");
+
+    // 拒絕：回錯誤、沒跑。/ Denied: an error, nothing ran.
+    let deny_soon = async {
+        let q = first_pending().await;
+        let r = app.post(&format!("/api/command-requests/{}/deny", q["id"]), Some(&s.web), json!({"reason": "use the staging box"})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    };
+    let ((err, v), ()) = tokio::join!(call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "touch denied.txt"})), deny_soon);
+    assert!(err, "{v}");
+    assert!(v.as_str().unwrap().contains("use the staging box"), "{v}");
+    assert!(!s.home.path().join("denied.txt").exists());
+
+    // 每次都進 AI 稽核（被擋的算失敗）。/ Every call is audited; refused ones as failures.
+    let r = app.get("/api/ai/activity", Some(&s.web)).await;
+    let failed: Vec<&str> = r.json.as_array().unwrap().iter().filter(|e| e["tool"] == "ssh_exec" && e["ok"] == false).map(|e| e["error"].as_str().unwrap_or_default()).collect();
+    assert!(failed.iter().any(|e| e.contains("blocked by the rule `rm`")), "{failed:?}");
+    assert!(failed.iter().any(|e| e.contains("denied")), "{failed:?}");
+}

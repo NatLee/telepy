@@ -2032,3 +2032,131 @@ pub struct RecordingSetting {
     pub enabled: bool,
     pub reauth: Option<MfaProof>,
 }
+
+// ---------------------------------------------------------------- command rules
+
+/// 一條指令規則。/ A command rule.
+#[derive(ToSchema)]
+pub struct CommandRule {
+    pub id: i64,
+    /// None = 全站規則。/ None = a site-wide rule.
+    pub tunnel_id: Option<i64>,
+    /// site / tunnel
+    pub scope: String,
+    /// block / approve
+    pub action: String,
+    /// command（程式 + 必要參數）/ regex（整行）。/ command (program + required arguments) or regex (whole line).
+    pub kind: String,
+    pub pattern: String,
+    /// everyone / sharees（只管不能核准的人）。/ everyone, or sharees (people who can't approve).
+    pub who: String,
+    /// all / terminal / agents
+    pub via: String,
+    pub note: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 新增或修改規則（修改時只帶要改的欄位）。/ Create or change a rule (send only what changes on PATCH).
+#[derive(ToSchema)]
+pub struct CommandRuleInput {
+    pub action: Option<String>,
+    pub kind: Option<String>,
+    pub pattern: Option<String>,
+    pub who: Option<String>,
+    pub via: Option<String>,
+    pub note: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct CommandRuleList {
+    pub rules: Vec<CommandRule>,
+    pub can_edit: bool,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelCommandRules {
+    pub tunnel: UserRef,
+    pub rules: Vec<CommandRule>,
+    /// 也適用的全站規則。/ Site-wide rules that apply as well.
+    pub site_rules: Vec<CommandRule>,
+    pub can_edit: bool,
+    pub can_edit_site: bool,
+}
+
+#[derive(ToSchema)]
+pub struct CommandCheckInput {
+    pub command: String,
+    /// 不帶 = 只看全站規則。/ Omit to check the site-wide rules only.
+    pub tunnel_id: Option<i64>,
+    /// terminal（預設）/ agent。/ terminal (default) or agent.
+    pub source: Option<String>,
+    /// 還沒存的規則 `{kind, pattern}`。/ An unsaved rule `{kind, pattern}`.
+    #[schema(value_type = Option<Object>)]
+    pub rule: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct CommandVerdict {
+    /// allow / block / approve
+    pub action: String,
+    #[schema(value_type = Option<Object>)]
+    pub rule: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct CommandCheckResult {
+    /// 拆出來的簡單指令。/ The simple commands found.
+    #[schema(value_type = Vec<Object>)]
+    pub commands: Vec<serde_json::Value>,
+    pub for_approvers: CommandVerdict,
+    pub for_sharees: CommandVerdict,
+    /// 你能不能核准這條隧道。/ Whether you approve on this tunnel.
+    pub you_approve: bool,
+    /// `{matches, error}`，帶 `rule` 時才有。/ Only with `rule`.
+    #[schema(value_type = Option<Object>)]
+    pub draft: Option<serde_json::Value>,
+}
+
+/// 一筆被擋下或送核准的指令。/ A command that was blocked or held for approval.
+#[derive(ToSchema)]
+pub struct CommandRequest {
+    pub id: i64,
+    pub tunnel_id: i64,
+    pub tunnel_name: Option<String>,
+    pub user: UserRef,
+    /// terminal / agent
+    pub source: String,
+    /// agent 的 app 名稱。/ The agent's app name.
+    pub client: Option<String>,
+    pub account: String,
+    pub lan_host: Option<String>,
+    pub command: String,
+    /// {id, pattern, kind, scope, note}
+    #[schema(value_type = Object)]
+    pub rule: serde_json::Value,
+    /// blocked / pending / approved / denied / cancelled / expired
+    pub status: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<String>,
+    pub reason: String,
+    pub used: bool,
+    pub can_decide: Option<bool>,
+    pub can_cancel: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct CommandRequestList {
+    pub requests: Vec<CommandRequest>,
+    /// 等你決定的筆數。/ How many wait for your decision.
+    pub pending: i64,
+}
+
+#[derive(ToSchema)]
+pub struct CommandDecision {
+    pub reason: Option<String>,
+}

@@ -18,7 +18,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare, SquareTerminal } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
@@ -79,18 +79,19 @@ function formatDuration(seconds: number, locale: string): string {
 }
 
 /** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
-type SiteTabId = "general" | "browser" | "desktop" | "ai" | "notify";
+type SiteTabId = "general" | "browser" | "desktop" | "ai" | "notify" | "commands";
 type TabId = SiteTabId | "users";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_"),
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_"),
     browser: (k) => k.startsWith("remote_browser"),
     desktop: (k) => k.startsWith("desktop_"),
     ai: (k) => k.startsWith("ai_"),
     notify: (k) => k.startsWith("notify_"),
+    commands: (k) => k.startsWith("command_"),
 };
 
-const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "notify", "users"];
+const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "notify", "commands", "users"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -144,6 +145,7 @@ function AdminSettings() {
         { value: "desktop", label: t("settings.groupDesktop"), icon: <ScreenShare size={15} /> },
         { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
         { value: "notify", label: t("settings.groupNotify"), icon: <Bell size={15} /> },
+        { value: "commands", label: t("settings.groupCommands"), icon: <SquareTerminal size={15} /> },
         { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
     ];
 
@@ -173,6 +175,7 @@ const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
     desktop: "settings.desktopBanner",
     ai: "settings.aiBanner",
     notify: "settings.notifyBanner",
+    commands: "settings.commandsBanner",
 };
 
 function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnType<typeof useSettingsPage> }) {
@@ -219,6 +222,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
             {tab === "ai" && <McpEndpointPanel />}
             {tab === "notify" && <NotifyTestPanel configured={!!String(settingsObj.notify_webhook_url ?? "").trim()} />}
+            {tab === "commands" && <SiteCommandRulesPanel />}
 
             {loading ? (
                 <div className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-8 text-center text-muted-foreground">
@@ -573,6 +577,34 @@ function UserEditModal({
 }
 
 /** 通知分頁：送一則測試告警到存好的 webhook，並說明個人的桌面通知在哪裡開。/ Notifications tab: test send + where desktop notifications live. */
+/** 全站指令規則在指令規則頁編輯；這裡放入口與目前的數量。/ Site-wide rules are edited on the command rules page; this links there. */
+function SiteCommandRulesPanel() {
+    const { t } = useI18n();
+    const [count, setCount] = useState<number | null>(null);
+    React.useEffect(() => {
+        let cancelled = false;
+        void (async () => {
+            const res = await apiFetch("/api/command-rules");
+            const body = await readJson<{ rules?: unknown[] }>(res);
+            if (!cancelled && res.ok) setCount(body?.rules?.length ?? 0);
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    return (
+        <section className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
+            <SectionHeading icon={<SquareTerminal />} title={t("settings.commandsRulesTitle")} />
+            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{count === null ? "…" : t("settings.commandsRulesBody", { count })}</p>
+            <Button asChild variant="outline" size="sm" className="mt-3">
+                <Link href="/tunnels/commands">
+                    {t("settings.commandsRulesOpen")} <ArrowRight />
+                </Link>
+            </Button>
+        </section>
+    );
+}
+
 function NotifyTestPanel({ configured }: { configured: boolean }) {
     const { t } = useI18n();
     const { showSuccess, showError } = useToast();

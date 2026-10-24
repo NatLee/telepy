@@ -8,7 +8,7 @@
  * 外觀(字型 / 字級 / 配色)跟終端機頁一樣:個人預設 + 這台裝置(隧道)的覆寫,改了即時套用。
  * Appearance follows the terminal page: personal default + this device's (tunnel's) override, applied live.
  */
-import React, { useCallback, useEffect, useRef } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "xterm/css/xterm.css";
 import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
@@ -18,6 +18,8 @@ import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalA
 import { translate } from "@/lib/translate";
 import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import type { TranslationKey } from "@/locales/en";
+import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import type { LanTerminalSession, LanTerminalStatus } from "@/hooks/useLanTerminals";
 
 /** 關閉碼 → 寫進終端機的說明。/ Close code → the line written into the terminal. */
@@ -40,6 +42,8 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const termRef = useRef<{ term: any; fit: any } | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
+    /** 指令規則的提示列。/ The command-rule banner. */
+    const [banner, setBanner] = useState<HoldBanner | null>(null);
     const { key, tunnelId, hostId, login, deviceUser, attempt } = session;
     const { resolved } = useTerminalAppearance(String(tunnelId));
     // xterm 是 async 建的,要讀建立當下最新的外觀。/ The xterm is created asynchronously; read the latest look.
@@ -129,14 +133,19 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                 ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ action: "ping" })), 5000);
             };
             ws.onmessage = (ev) => {
-                // 二進位 frame 是 pong。/ Binary frames are pongs.
                 if (typeof ev.data === "string") {
                     authRetried = false;
                     write(ev.data);
+                    return;
                 }
+                // 二進位 frame：pong 或指令規則通知。/ Binary frames: pongs or command-rule notices.
+                const frame = parseTerminalFrame(ev.data as ArrayBuffer);
+                if (frame && frame !== "pong") setBanner((prev) => nextBanner(prev, frame));
             };
             ws.onclose = (ev) => {
                 if (ping) clearInterval(ping);
+                // 伺服器已撤回等核准的指令。/ The server already withdrew a pending command.
+                setBanner((prev) => (prev?.state === "pending" ? null : prev));
                 if (wsRef.current === ws) wsRef.current = null;
                 if (closedByUs) return;
                 if (ev.code === 4001 && !authRetried) {
@@ -201,6 +210,23 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
         });
     }, [visible, sendResize]);
 
+    const withdraw = useCallback(() => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "command_cancel" }));
+    }, []);
+    const dismiss = useCallback(() => setBanner(null), []);
+
     // 外框跟著配色的背景色(淺色配色不會留一圈黑邊)。/ The padding follows the scheme background (no black ring on light schemes).
-    return <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ display: visible ? "block" : "none", background: resolved.scheme.theme.background }} />;
+    return (
+        <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
+            <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ background: resolved.scheme.theme.background }} />
+            {banner && (
+                <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex justify-end">
+                    <div className="pointer-events-auto w-full max-w-md">
+                        <CommandHoldBanner banner={banner} onWithdraw={withdraw} onDismiss={dismiss} />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 }

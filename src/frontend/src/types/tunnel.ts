@@ -127,6 +127,8 @@ export interface TunnelActionHandlers {
     onRequestAccess?: (tunnelId: number) => void;
     /** 這條隧道的終端機錄影（/tunnels/recordings?tunnel=<id>）。/ This tunnel's terminal recordings. */
     onRecordings?: (tunnelId: number) => void;
+    /** 指令規則頁（這條隧道）。/ The command rules page for this tunnel. */
+    onCommandRules?: (tunnelId: number) => void;
     /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
     onTogglePin?: (tunnelId: number, pinned: boolean) => void;
     /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */
