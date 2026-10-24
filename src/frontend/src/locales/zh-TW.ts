@@ -658,6 +658,8 @@ export const zhTW: Record<TranslationKey, string> = {
     "wizard.scene.story2": "但「往外連」是允許的。所以{name}自己連到 Telepy、用自己的金鑰登入，並一直保持這條線——這條線就是通道。",
     "wizard.scene.story3Title": "你沿著通道連進去",
     "wizard.scene.story3": "你連到 Telepy，Telepy 再沿著{name}打開的那條線把你送進去。路由器上不用開任何埠，所以內網的隔離完全不變：其他裝置還是進不來，只有你在 Telepy 允許的人才能經通道連入。",
+    "wizard.scene.caption1": "把裝置的公鑰登記到 Telepy。只有 Telepy 認得金鑰的裝置，才能連進來、把通道一直開著。",
+    "wizard.scene.howItWorksLabel": "原理",
     "wizard.scene.caption2": "Telepy 會以真實的系統帳號登入 {name}，請選擇可以使用哪些帳號。",
     "wizard.scene.caption3": "把 Telepy 的金鑰放進 {name} 的 authorized_keys，它才能透過通道登入。",
     "wizard.scene.caption4Waiting": "正在等 {name} 穿過路由器往外撥號，請在裝置上執行下方的指令。",

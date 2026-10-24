@@ -664,6 +664,8 @@ export const en = {
     "wizard.scene.story2": "Going out is allowed, though. So {name} connects out to Telepy itself, signs in with its own key, and keeps that line open. That line is the tunnel.",
     "wizard.scene.story3Title": "You come in through the tunnel",
     "wizard.scene.story3": "You connect to Telepy, and Telepy forwards you down the line {name} opened. No port is opened on the router, so the isolation stays as it was: other devices still can't get in, and only people you allow in Telepy come through the tunnel.",
+    "wizard.scene.caption1": "Register the device's public key with Telepy. Only a device whose key Telepy knows can connect and keep the tunnel open.",
+    "wizard.scene.howItWorksLabel": "How it works",
     "wizard.scene.caption2": "Telepy logs in to {name} as a real OS account. Choose which accounts it may use.",
     "wizard.scene.caption3": "Put Telepy's key into authorized_keys on {name} so it can log in through the tunnel.",
     "wizard.scene.caption4Waiting": "Waiting for {name} to dial out through its router. Run the command below on the device.",

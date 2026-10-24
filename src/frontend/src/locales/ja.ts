@@ -658,6 +658,8 @@ export const ja: Record<TranslationKey, string> = {
     "wizard.scene.story2": "ただし外向きの接続は許可されています。そこで{name}が自分から Telepy に接続し、自身のキーでログインして回線を保ち続けます。この回線がトンネルです。",
     "wizard.scene.story3Title": "トンネルを通って入る",
     "wizard.scene.story3": "あなたは Telepy に接続し、Telepy が{name}の開いた回線を通してあなたを中へ送ります。ルーターのポートは開けないので隔離はそのまま。ほかのデバイスは入れず、Telepy で許可した人だけがトンネルを通れます。",
+    "wizard.scene.caption1": "デバイスの公開鍵を Telepy に登録します。Telepy が鍵を知っているデバイスだけが接続して、トンネルを開いておけます。",
+    "wizard.scene.howItWorksLabel": "仕組み",
     "wizard.scene.caption2": "Telepy は実在する OS アカウントとして {name} にログインします。使ってよいアカウントを選んでください。",
     "wizard.scene.caption3": "Telepy のキーを {name} の authorized_keys に追加すると、トンネル経由でログインできます。",
     "wizard.scene.caption4Waiting": "{name} がルーター越しに外へ発信するのを待っています。下のコマンドをデバイスで実行してください。",
