@@ -1189,6 +1189,28 @@ pub struct AuthorizeInfo {
     /// `{required, methods}`: accounts with a passkey or an authenticator app confirm the approval
     #[schema(value_type = Object)]
     pub reauth: serde_json::Value,
+    /// The user's active grants for this same client (reconnecting an app); `replace` on the decision revokes them
+    pub existing: Vec<OAuthExistingGrant>,
+}
+
+#[derive(ToSchema)]
+pub struct OAuthExistingGrant {
+    pub id: i64,
+    pub scopes: Vec<String>,
+    #[schema(example = "2026-10-20T09:15:00.000000+08:00")]
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+/// Public preview of an authorization request, shown on the OAuth sign-in page before a login
+#[derive(ToSchema)]
+pub struct AuthorizePreview {
+    pub client: OAuthClientInfo,
+    #[schema(example = "localhost:33418")]
+    pub redirect_host: String,
+    pub scopes: Vec<OAuthScope>,
+    /// Where "Cancel" sends the browser: the client's redirect URI with `error=access_denied`
+    pub cancel_to: String,
 }
 
 #[derive(ToSchema)]
@@ -1209,6 +1231,8 @@ pub struct AuthorizeDecision {
     pub tunnel_ids: Option<Vec<i64>>,
     /// Required (when approving) for accounts with a second factor
     pub reauth: Option<MfaProof>,
+    /// Revoke the user's earlier grants for this client once the new code is redeemed (default false)
+    pub replace: Option<bool>,
 }
 
 #[derive(ToSchema)]

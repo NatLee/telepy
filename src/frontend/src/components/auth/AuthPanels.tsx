@@ -19,7 +19,7 @@ const FEATURES: { Icon: LucideIcon; title: TranslationKey; body: TranslationKey 
     { Icon: Users, title: "auth.featureSharing", body: "auth.featureSharingBody" },
 ];
 
-function DiagramNode({ Icon, label, accent = false }: { Icon: LucideIcon; label: string; accent?: boolean }) {
+export function DiagramNode({ Icon, label, accent = false }: { Icon: LucideIcon; label: string; accent?: boolean }) {
     return (
         <div className="flex w-20 shrink-0 flex-col items-center gap-2">
             <span
@@ -30,13 +30,13 @@ function DiagramNode({ Icon, label, accent = false }: { Icon: LucideIcon; label:
             >
                 <Icon size={20} strokeWidth={2} />
             </span>
-            <span className="text-center text-xs font-medium text-muted-foreground">{label}</span>
+            <span className="line-clamp-2 w-full text-center text-xs font-medium break-words text-muted-foreground">{label}</span>
         </div>
     );
 }
 
 /** 一條連線 + 沿線移動的封包。/ A link with a packet travelling along it. */
-function DiagramLink({ label, reverse = false }: { label: string; reverse?: boolean }) {
+export function DiagramLink({ label, reverse = false }: { label: string; reverse?: boolean }) {
     return (
         <div className="mb-6 flex min-w-0 flex-1 flex-col items-center gap-1.5">
             <span className="font-mono text-[0.6875rem] text-muted-foreground/80">{label}</span>
@@ -91,6 +91,44 @@ const SETUP_STEPS: { title: TranslationKey; body: TranslationKey }[] = [
     { title: "firstLogin.step3Title", body: "firstLogin.step3Body" },
 ];
 
+/**
+ * 步驟清單：完成的打勾、目前的實心、之後的空心，中間一條直線。首次設定與 MCP 應用程式連接流程共用。
+ * Step list: done steps ticked, the current one filled, later ones hollow, joined by a straight line.
+ * Shared by the first-run guide and the app-connection flow.
+ */
+export function FlowSteps({ steps, current }: { steps: { title: string; body: string }[]; current: number }) {
+    return (
+        <ol className="space-y-0">
+            {steps.map(({ title, body }, i) => {
+                const done = i < current;
+                const now = i === current;
+                const last = i === steps.length - 1;
+                return (
+                    <li key={title} className="relative flex gap-4 pb-8 last:pb-0" aria-current={now ? "step" : undefined}>
+                        {!last && <span className="absolute left-4 top-9 bottom-1 w-px bg-border" aria-hidden />}
+                        <span
+                            className={cn(
+                                "relative grid size-8 shrink-0 place-items-center rounded-full border text-sm font-semibold",
+                                now
+                                    ? "border-transparent bg-primary text-primary-foreground"
+                                    : done
+                                      ? "border-success/40 bg-success/15 text-success"
+                                      : "border-input bg-card text-muted-foreground"
+                            )}
+                        >
+                            {done ? <Check size={15} aria-hidden /> : i + 1}
+                        </span>
+                        <span className="min-w-0 pt-1">
+                            <span className={cn("block text-sm font-medium", now || done ? "text-foreground" : "text-muted-foreground")}>{title}</span>
+                            <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{body}</span>
+                        </span>
+                    </li>
+                );
+            })}
+        </ol>
+    );
+}
+
 /** 首次設定：三步驟，第一步（建立管理員）是目前步驟。/ First run: three steps, the first one is current. */
 export function SetupSteps() {
     const { t } = useI18n();
@@ -99,33 +137,9 @@ export function SetupSteps() {
             <h2 className="text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">{t("firstLogin.panelTitle")}</h2>
             <p className="mt-4 text-base leading-relaxed text-muted-foreground">{t("firstLogin.panelBody")}</p>
 
-            <ol className="mt-10 space-y-0">
-                {SETUP_STEPS.map(({ title, body }, i) => {
-                    const current = i === 0;
-                    const last = i === SETUP_STEPS.length - 1;
-                    return (
-                        <li key={title} className="relative flex gap-4 pb-8 last:pb-0" aria-current={current ? "step" : undefined}>
-                            {!last && <span className="absolute left-4 top-9 bottom-1 w-px bg-border" aria-hidden />}
-                            <span
-                                className={cn(
-                                    "relative grid size-8 shrink-0 place-items-center rounded-full border text-sm font-semibold",
-                                    current
-                                        ? "border-transparent bg-primary text-primary-foreground"
-                                        : "border-input bg-card text-muted-foreground"
-                                )}
-                            >
-                                {i + 1}
-                            </span>
-                            <span className="min-w-0 pt-1">
-                                <span className={cn("block text-sm font-medium", current ? "text-foreground" : "text-muted-foreground")}>
-                                    {t(title)}
-                                </span>
-                                <span className="mt-1 block text-sm leading-relaxed text-muted-foreground">{t(body)}</span>
-                            </span>
-                        </li>
-                    );
-                })}
-            </ol>
+            <div className="mt-10">
+                <FlowSteps steps={SETUP_STEPS.map(({ title, body }) => ({ title: t(title), body: t(body) }))} current={0} />
+            </div>
 
             <p className="mt-10 flex items-center gap-2 text-xs text-muted-foreground">
                 <Check size={14} className="text-primary" />

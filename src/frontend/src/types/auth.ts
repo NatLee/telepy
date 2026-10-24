@@ -35,6 +35,7 @@ export interface AuthContextType {
     isLoading: boolean;
     user: UserProfile | null;
     login: (access: string, refresh: string) => void;
-    logout: () => void;
+    /** next：登入後回到的站內路徑。/ next: the same-origin path to return to after signing in. */
+    logout: (next?: string) => void;
     fetchUserProfile: () => Promise<void>;
 }

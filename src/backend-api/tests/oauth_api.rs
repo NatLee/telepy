@@ -203,6 +203,83 @@ async fn consent_page_validation() {
 }
 
 #[tokio::test]
+async fn preview_before_login() {
+    let app = common::spawn().await;
+    let client_id = register_public(&app).await;
+    let ch = challenge(VERIFIER);
+
+    // 公開：不用登入就能看到是誰在要求，以及取消時導回哪裡；不含任何帳號資料。
+    // Public: who is asking and where Cancel goes, without any account data.
+    let path = format!("/api/oauth/authorize/preview?{}", query(&authorize_params(&client_id, &ch, "ssh:exec tunnels:read")));
+    let r = app.get(&path, None).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["client"]["client_name"], "Claude Code");
+    assert_eq!(r.json["redirect_host"], "localhost:33418");
+    let scopes: Vec<&str> = r.json["scopes"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
+    assert_eq!(scopes, vec!["tunnels:read", "ssh:exec"]);
+    let cancel = r.json["cancel_to"].as_str().unwrap();
+    assert!(cancel.starts_with(REDIRECT) && cancel.contains("error=access_denied") && cancel.contains("state=xyz") && cancel.contains("iss="), "{cancel}");
+    for key in ["user", "tunnels", "existing", "reauth"] {
+        assert!(r.json.get(key).is_none(), "{key} must not be public: {}", r.text);
+    }
+
+    // 壞掉的請求在登入前就說清楚；client / redirect_uri 錯時不給導回網址。
+    // Broken requests fail before the login; no redirect for a bad client or redirect URI.
+    let r = app.get(&format!("/api/oauth/authorize/preview?{}", query(&authorize_params("nope", &ch, ""))), None).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["error"], "invalid_client");
+    assert!(r.json.get("redirect_to").is_none() && r.json.get("cancel_to").is_none(), "{}", r.text);
+    let bad: Vec<(&str, &str)> = authorize_params(&client_id, &ch, "").into_iter().map(|(k, v)| if k == "response_type" { (k, "token") } else { (k, v) }).collect();
+    let r = app.get(&format!("/api/oauth/authorize/preview?{}", query(&bad)), None).await;
+    assert_eq!(r.json["error"], "unsupported_response_type");
+    assert!(r.json["redirect_to"].as_str().unwrap().contains("error=unsupported_response_type"));
+}
+
+#[tokio::test]
+async fn reconnecting_an_app_can_replace_the_old_connection() {
+    let app = common::spawn().await;
+    let web = app.login("admin", "pw").await;
+    let client_id = register_public(&app).await;
+    let ch = challenge(VERIFIER);
+    let info_path = format!("/api/oauth/authorize?{}", query(&authorize_params(&client_id, &ch, "")));
+    assert_eq!(app.get(&info_path, Some(&web)).await.json["existing"], json!([]));
+
+    let code = approve(&app, &web, &client_id, "", json!({})).await;
+    let first = exchange(&app, &client_id, &code).await.json["access_token"].as_str().unwrap().to_string();
+    let info = app.get(&info_path, Some(&web)).await.json;
+    assert_eq!(info["existing"].as_array().unwrap().len(), 1, "{info}");
+    let first_id = info["existing"][0]["id"].as_i64().unwrap();
+    assert!(info["existing"][0]["created_at"].as_str().unwrap().ends_with("+08:00"));
+
+    // 不取代：兩個連線並存。/ Without replace both connections stay.
+    let code = approve(&app, &web, &client_id, "", json!({})).await;
+    let second = exchange(&app, &client_id, &code).await.json["access_token"].as_str().unwrap().to_string();
+    assert_eq!(app.get("/api/oauth/grants", Some(&web)).await.json.as_array().unwrap().len(), 2);
+
+    // 取代：核可時還不動舊的，客戶端兌換成功才撤銷。/ Replace: the old ones go only once the code is redeemed.
+    let code = approve(&app, &web, &client_id, "", json!({"replace": true})).await;
+    assert!(mcp::resolve(&app.state, &first).await.is_ok(), "nothing is revoked before the redemption");
+    let r = exchange(&app, &client_id, &code).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let third = r.json["access_token"].as_str().unwrap().to_string();
+    assert_eq!(mcp::resolve(&app.state, &first).await.unwrap_err(), McpAuthError::Invalid);
+    assert_eq!(mcp::resolve(&app.state, &second).await.unwrap_err(), McpAuthError::Invalid);
+    assert!(mcp::resolve(&app.state, &third).await.is_ok());
+    let grants = app.get("/api/oauth/grants", Some(&web)).await.json;
+    assert_eq!(grants.as_array().unwrap().len(), 1, "{grants}");
+    assert_ne!(grants[0]["id"].as_i64().unwrap(), first_id);
+
+    // 另一個 app 的連線不受影響。/ Another app's connection is untouched.
+    let other = register_public(&app).await;
+    let code = approve(&app, &web, &other, "", json!({})).await;
+    let other_access = exchange(&app, &other, &code).await.json["access_token"].as_str().unwrap().to_string();
+    let code = approve(&app, &web, &client_id, "", json!({"replace": true})).await;
+    assert_eq!(exchange(&app, &client_id, &code).await.status, StatusCode::OK);
+    assert!(mcp::resolve(&app.state, &other_access).await.is_ok());
+    assert_eq!(app.get("/api/oauth/grants", Some(&web)).await.json.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn code_exchange_refresh_rotation_and_revocation() {
     let app = common::spawn().await;
     let web = app.login("admin", "pw").await;

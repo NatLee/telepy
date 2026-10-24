@@ -2,6 +2,7 @@
 //! - `GET /.well-known/oauth-authorization-server`（RFC 8414）、`GET /.well-known/oauth-protected-resource[/mcp]`（RFC 9728）
 //! - `POST /api/oauth/register`（RFC 7591 動態註冊，公開）
 //! - `GET|POST /api/oauth/authorize`（前端同意頁用；要網頁登入）：GET 驗證請求並回顯示資料，POST 核可/拒絕 → `{redirect_to}`
+//! - `GET /api/oauth/authorize/preview`（公開）：登入前的 OAuth 登入頁要顯示「誰在要求、要什麼、取消回哪裡」，不含帳號資料
 //! - `POST /api/oauth/token`（authorization_code + PKCE S256、refresh_token 輪替）、`POST /api/oauth/revoke`（RFC 7009）
 //! - `GET /api/oauth/grants`、`GET|DELETE /api/oauth/grants/{id}`：Connected apps（列出 / 詳細 / 撤銷）
 //!
@@ -38,6 +39,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(protected_resource_metadata_mcp))
         .routes(routes!(register))
         .routes(routes!(authorize_info, authorize_decide))
+        .routes(routes!(authorize_preview))
         .routes(routes!(token))
         .routes(routes!(revoke))
         .routes(routes!(list_grants))
@@ -263,6 +265,45 @@ fn redirect_host(uri: &str) -> String {
         .unwrap_or_default()
 }
 
+fn client_json(c: &Client) -> Value {
+    json!({ "client_id": c.client_id, "client_name": c.client_name, "client_uri": c.client_uri, "logo_uri": c.logo_uri })
+}
+
+/// 拒絕 / 取消時導回客戶端的網址（error=access_denied）。/ Where a denial or a cancel sends the browser.
+fn denied_redirect(v: &ValidAuthorize, issuer: &str) -> String {
+    redirect_with(&v.redirect_uri, &[("error", "access_denied"), ("error_description", "The user denied the request")], v.state.as_deref(), issuer)
+}
+
+/// 這個使用者對同一個 client 還有效的 grant（重新連接同一個 app 時）。/ The user's active grants for this client.
+async fn active_grants_for_client(state: &AppState, user_id: i64, client_id: &str) -> sqlx::Result<Vec<db::oauth::GrantWithClient>> {
+    Ok(db::oauth::active_grants_for_user(&state.db, user_id).await?.into_iter().filter(|g| g.client_id == client_id).collect())
+}
+
+/// 登入前的預覽：OAuth 登入頁顯示是哪個 app、導回哪裡、要哪些權限，並提供「取消」導回客戶端。只有客戶端自己送來
+/// 或註冊時公開的資料，不碰帳號；請求有問題時跟同意頁一樣回錯誤，讓使用者不必先登入才發現連結壞了。
+/// Pre-login preview for the OAuth sign-in page: the app, where it returns, the requested scopes and a cancel
+/// URL. Only what the client itself sent or registered; invalid requests fail here the same way as on consent.
+#[utoipa::path(get, path = "/api/oauth/authorize/preview", tag = "OAuth", params(
+    ("response_type" = String, Query, description = "Must be `code`"),
+    ("client_id" = String, Query),
+    ("redirect_uri" = Option<String>, Query),
+    ("code_challenge" = String, Query, description = "PKCE S256 challenge"),
+    ("code_challenge_method" = String, Query, description = "Must be `S256`"),
+    ("scope" = Option<String>, Query, description = "Space-delimited; empty = every scope"),
+    ("state" = Option<String>, Query),
+    ("resource" = Option<String>, Query, description = "RFC 8707 resource (the MCP endpoint)"),
+), responses((status = 200, description = "Who is asking (no account data; public)", body = super::schemas::AuthorizePreview), (status = 400, description = "OAuth error; `redirect_to` is present when the error may be sent back to the client", body = super::schemas::OAuthErrorBody)))]
+async fn authorize_preview(State(state): State<AppState>, headers: HeaderMap, Query(p): Query<AuthorizeParams>) -> ApiResult<Json<Value>> {
+    let iss = issuer(&state, &headers);
+    let v = validate_authorize(&state, &iss, &p).await?;
+    Ok(Json(json!({
+        "client": client_json(&v.client),
+        "redirect_host": redirect_host(&v.redirect_uri),
+        "scopes": scope_json(&v.scopes),
+        "cancel_to": denied_redirect(&v, &iss),
+    })))
+}
+
 #[utoipa::path(get, path = "/api/oauth/authorize", tag = "OAuth", security(("bearer" = [])), params(
     ("response_type" = String, Query, description = "Must be `code`"),
     ("client_id" = String, Query),
@@ -279,13 +320,14 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
     let tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
     let (mine, _) = db::sharing::permission_context(&state.db, user.id).await?;
     let factors = super::mfa::factors(&state, user.id).await?;
+    let tz = state.config.tz_offset_minutes;
+    let existing: Vec<Value> = active_grants_for_client(&state, user.id, &v.client.client_id)
+        .await?
+        .iter()
+        .map(|g| json!({ "id": g.id, "scopes": oauth::scope_list(&g.scope), "created_at": db_to_iso(&g.created_at, tz), "last_used_at": opt_db_to_iso(&g.last_used_at, tz) }))
+        .collect();
     Ok(Json(json!({
-        "client": {
-            "client_id": v.client.client_id,
-            "client_name": v.client.client_name,
-            "client_uri": v.client.client_uri,
-            "logo_uri": v.client.logo_uri,
-        },
+        "client": client_json(&v.client),
         "redirect_uri": v.redirect_uri,
         "redirect_host": redirect_host(&v.redirect_uri),
         "scopes": scope_json(&v.scopes),
@@ -295,6 +337,7 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
         }).collect::<Vec<_>>(),
         "user": { "id": user.id, "username": user.username },
         "reauth": { "required": factors.any(), "methods": factors.methods() },
+        "existing": existing,
     })))
 }
 
@@ -310,6 +353,9 @@ struct AuthorizeDecision {
     tunnel_ids: Option<Vec<i64>>,
     /// 有第二因素的帳號核可時要再驗證（TOTP / passkey / 復原碼）。/ Step-up proof for accounts with a second factor.
     reauth: Option<Value>,
+    /// 重新連接同一個 app：客戶端換到新 token 時撤銷這個使用者對它的舊 grant。
+    /// Reconnecting the same app: revoke the user's earlier grants for it once the client redeems the new code.
+    replace: bool,
 }
 
 #[utoipa::path(post, path = "/api/oauth/authorize", tag = "OAuth", security(("bearer" = [])), request_body = super::schemas::AuthorizeDecision, responses((status = 200, description = "Where the browser goes next (the client's redirect URI with a code, or with error=access_denied)", body = super::schemas::AuthorizeRedirect), (status = 400, body = super::schemas::OAuthErrorBody)))]
@@ -318,8 +364,7 @@ async fn authorize_decide(State(state): State<AppState>, AuthUser(user): AuthUse
     let v = validate_authorize(&state, &iss, &body.params).await?;
     if !body.approve {
         tracing::info!(user = %user.username, client = %v.client.client_name, "OAuth authorization denied");
-        let to = redirect_with(&v.redirect_uri, &[("error", "access_denied"), ("error_description", "The user denied the request")], v.state.as_deref(), &iss);
-        return Ok(Json(json!({ "redirect_to": to })));
+        return Ok(Json(json!({ "redirect_to": denied_redirect(&v, &iss) })));
     }
     let scopes: Vec<String> = match &body.scopes {
         Some(kept) => v.scopes.iter().filter(|s| kept.contains(s)).cloned().collect(),
@@ -346,6 +391,9 @@ async fn authorize_decide(State(state): State<AppState>, AuthUser(user): AuthUse
             Some(ids)
         }
     };
+    // 舊的在兌換成功後才撤銷：客戶端沒完成這次連接的話，原本的連線照常可用。
+    // Revoked only after a successful redemption, so an abandoned reconnect leaves the old one working.
+    let replaces = if body.replace { active_grants_for_client(&state, user.id, &v.client.client_id).await?.iter().map(|g| g.id).collect() } else { Vec::new() };
     let code = state.tokens.issue_oauth_code(OAuthCode {
         client_id: v.client.client_id.clone(),
         redirect_uri: v.redirect_uri.clone(),
@@ -354,6 +402,7 @@ async fn authorize_decide(State(state): State<AppState>, AuthUser(user): AuthUse
         scope: oauth::scope_string(&scopes),
         tunnel_ids,
         resource: v.resource,
+        replaces,
     });
     tracing::info!(user = %user.username, client = %v.client.client_name, scope = %oauth::scope_string(&scopes), "OAuth authorization approved");
     let to = redirect_with(&v.redirect_uri, &[("code", &code)], v.state.as_deref(), &iss);
@@ -512,6 +561,9 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
             match grant {
                 Ok(g) => {
                     tracing::info!(grant_id = g.id, user_id = g.user_id, client = %client.client_name, "OAuth grant created");
+                    if let Err(e) = replace_grants(&state, &g, &c.replaces).await {
+                        tracing::warn!(grant_id = g.id, error = %e, "could not revoke the replaced OAuth grants");
+                    }
                     token_response(&state, &g, &g.scope, &refresh)
                 }
                 Err(e) => ApiError::from(e).into_response(),
@@ -553,6 +605,20 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
         Some(_) => token_error(StatusCode::BAD_REQUEST, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token"),
         None => token_error(StatusCode::BAD_REQUEST, "invalid_request", "grant_type is required"),
     }
+}
+
+/// 重新連接時同意頁勾了「取代」：撤銷同一使用者、同一 client 先前的 grant（新的那個除外）。
+/// The consent asked to replace earlier connections: revoke the same user's earlier grants for this client.
+async fn replace_grants(state: &AppState, new: &db::oauth::Grant, ids: &[i64]) -> sqlx::Result<()> {
+    let now = crate::util::now_db();
+    for &id in ids {
+        let Some(old) = db::oauth::grant_by_id(&state.db, id).await? else { continue };
+        if old.id != new.id && old.user_id == new.user_id && old.client_id == new.client_id && old.is_active(&now) {
+            revoke_grant_by_id(state, old.id).await?;
+            tracing::info!(grant_id = old.id, replaced_by = new.id, "OAuth grant replaced");
+        }
+    }
+    Ok(())
 }
 
 /// 撤銷 grant 的共同出口（Connected apps 的 DELETE 與 RFC 7009 都走這裡）。

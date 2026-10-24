@@ -14,6 +14,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { UserProfile, AuthContextType } from "../types/auth";
+import { isAuthorizePath, loginPathFor } from "./oauthFlow";
 const AuthContext = createContext<AuthContextType>({
     accessToken: null,
     isAuthenticated: false,
@@ -31,8 +32,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const router = useRouter();
 
     useEffect(() => {
+        // 在 MCP 應用程式的同意頁上登入過期：登出後回到同一個授權請求，不要把使用者丟到一般登入頁。
+        // Session expired on the consent page: come back to the same authorization request after signing in.
         const handleUnauthorized = () => {
-            logout();
+            const here = window.location.pathname + window.location.search;
+            logout(isAuthorizePath(here) ? here : undefined);
         };
         // 403 mfa_enrollment_required（lib/api.ts）→ 重抓 profile，mfa_missing 會帶出設定畫面。
         // 403 mfa_enrollment_required → refetch the profile; its mfa_missing brings up the enrollment gate.
@@ -155,12 +159,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         fetchUserProfileState(access);
     };
 
-    const logout = () => {
+    /** next = 登入後要回去的站內路徑（同意頁會走 OAuth 登入頁）。/ next = where to return after signing in. */
+    const logout = (next?: string) => {
         localStorage.removeItem("accessToken");
         localStorage.removeItem("refreshToken");
         setAccessToken(null);
         setUser(null);
-        router.push("/login");
+        router.push(loginPathFor(next));
     };
 
     return (

@@ -16,7 +16,7 @@ import { ThemeSwitcher } from "@/components/layout/ThemeSwitcher";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
-export function AuthShell({ aside, children }: { aside: React.ReactNode; children: React.ReactNode }) {
+export function AuthShell({ aside, wide = false, children }: { aside: React.ReactNode; /** 內容較多的頁面（OAuth 同意頁）用寬一點的欄。/ A wider column for content-heavy pages. */ wide?: boolean; children: React.ReactNode }) {
     const { t } = useI18n();
 
     return (
@@ -52,7 +52,7 @@ export function AuthShell({ aside, children }: { aside: React.ReactNode; childre
                     </header>
 
                     <div className="relative flex flex-1 items-center justify-center px-4 pb-16 pt-4 sm:px-6">
-                        <div className="w-full max-w-sm animate-fade-in-up">{children}</div>
+                        <div className={cn("w-full animate-fade-in-up", wide ? "max-w-lg" : "max-w-sm")}>{children}</div>
                     </div>
                 </main>
             </div>

@@ -12,16 +12,17 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { mfaErrorMessage, type MfaMethod } from "@/lib/mfa";
 import { loginErrorMessage } from "@/lib/loginErrors";
+import { isSafePath } from "@/lib/oauthFlow";
 import { conditionalMediationAvailable, getPasskey, isPasskeyCancel, passkeySupported } from "@/lib/webauthn";
 
 /**
- * 登入後要回去的路徑（?next=）：只接受站內路徑，避免 open redirect。OAuth 同意頁沒登入時會帶著自己的 URL 過來。
- * Where to go after login (?next=): same-origin paths only (no open redirect); the OAuth consent page uses it.
+ * 登入後要回去的路徑（?next=）：只接受站內路徑，避免 open redirect。OAuth 同意頁沒登入時會經 /oauth/login 帶著自己的 URL 過來。
+ * Where to go after login (?next=): same-origin paths only (no open redirect); the OAuth consent page uses it via /oauth/login.
  */
 export function safeNextPath(): string {
     if (typeof window === "undefined") return "/tunnels";
-    const next = new URLSearchParams(window.location.search).get("next") ?? "";
-    return next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/tunnels";
+    const next = new URLSearchParams(window.location.search).get("next");
+    return isSafePath(next) ? next : "/tunnels";
 }
 
 interface LoginResult {
