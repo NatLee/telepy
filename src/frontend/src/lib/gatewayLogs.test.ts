@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { categoryOf, countByCategory, dayKey, dayRelation, filterLogs, groupByDay, highlightSegments } from "./gatewayLogs.ts";
+import { categoryOf, countByCategory, filterLogs } from "./gatewayLogs.ts";
 
 const log = (id: number, event: string, message: string, day: string) => ({ id, event, message, day, at: `${day}T10:00:0${id % 10}+08:00`, time: "10:00:00", date: day });
 
@@ -36,37 +36,4 @@ test("filter by category and query", () => {
 test("counts follow the search", () => {
     assert.deepEqual(countByCategory(logs, ""), { all: 5, problem: 1, connection: 1, session: 1, change: 1 });
     assert.deepEqual(countByCategory(logs, "terminal"), { all: 1, problem: 0, connection: 0, session: 1, change: 0 });
-});
-
-test("group consecutive events per day", () => {
-    const groups = groupByDay(logs);
-    assert.deepEqual(groups.map((g) => [g.day, g.items.map((x) => x.id)]), [
-        ["2026-10-24", [1, 2]],
-        ["2026-10-23", [3, 4]],
-        ["2026-10-22", [5]],
-    ]);
-    assert.deepEqual(groupByDay([]), []);
-});
-
-test("day keys and today / yesterday", () => {
-    const now = new Date(2026, 0, 1, 0, 30); // 1 Jan, just after midnight
-    assert.equal(dayKey(now), "2026-01-01");
-    assert.equal(dayRelation("2026-01-01", now), "today");
-    assert.equal(dayRelation("2025-12-31", now), "yesterday");
-    assert.equal(dayRelation("2025-12-30", now), null);
-});
-
-test("highlight segments", () => {
-    assert.deepEqual(highlightSegments("abc", ""), [{ text: "abc", hit: false }]);
-    assert.deepEqual(highlightSegments("Port 22 to port 2222", "port"), [
-        { text: "Port", hit: true },
-        { text: " 22 to ", hit: false },
-        { text: "port", hit: true },
-        { text: " 2222", hit: false },
-    ]);
-    assert.deepEqual(highlightSegments("2222", "22"), [
-        { text: "22", hit: true },
-        { text: "22", hit: true },
-    ]);
-    assert.deepEqual(highlightSegments("nothing here", "zzz"), [{ text: "nothing here", hit: false }]);
 });

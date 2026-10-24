@@ -1,6 +1,6 @@
 /**
- * 日誌頁的小工具：事件種類 → 標籤色 / 分類、篩選、依日期分組、搜尋高亮切段。純函式，`gatewayLogs.test.ts` 有測試。
- * Logs page helpers: event kind → badge tone / category, filtering, grouping by day and highlight segments.
+ * 日誌頁的小工具：事件種類 → 標籤色 / 分類、篩選。純函式，`gatewayLogs.test.ts` 有測試；依日期分組與高亮在 `timeline.ts`。
+ * Logs page helpers: event kind → badge tone / category and filtering; day grouping and highlighting live in `timeline.ts`.
  */
 import type { TranslationKey } from "@/locales/en";
 
@@ -64,8 +64,6 @@ export interface LogLike {
     event: string;
     message: string;
     at: string;
-    /** 本地日期鍵 YYYY-MM-DD。/ Local day key, YYYY-MM-DD. */
-    day: string;
     /** 依 locale 格式化的時間與日期（給搜尋比對）。/ Locale-formatted time and date (searched too). */
     time: string;
     date: string;
@@ -110,56 +108,4 @@ export function countByCategory<T extends LogLike>(logs: T[], query: string, lab
         if (c) counts[c] += 1;
     }
     return counts;
-}
-
-export interface DayGroup<T> {
-    day: string;
-    items: T[];
-}
-
-/** 依本地日期把連續的事件分組，保留原順序（頁面是新的在上）。/ Group consecutive events per local day, keeping the order. */
-export function groupByDay<T extends LogLike>(logs: T[]): DayGroup<T>[] {
-    const groups: DayGroup<T>[] = [];
-    for (const log of logs) {
-        const last = groups[groups.length - 1];
-        if (last && last.day === log.day) last.items.push(log);
-        else groups.push({ day: log.day, items: [log] });
-    }
-    return groups;
-}
-
-/** 本地時區的 YYYY-MM-DD。/ YYYY-MM-DD in the local time zone. */
-export function dayKey(d: Date): string {
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** 這一天是今天、昨天，還是更早。/ Whether a day key is today, yesterday or earlier. */
-export function dayRelation(day: string, now: Date): "today" | "yesterday" | null {
-    if (day === dayKey(now)) return "today";
-    const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    return day === dayKey(y) ? "yesterday" : null;
-}
-
-export interface Segment {
-    text: string;
-    hit: boolean;
-}
-
-/** 把文字切成命中 / 未命中搜尋字的片段（不分大小寫）。/ Split text into search hits and the rest (case-insensitive). */
-export function highlightSegments(text: string, query: string): Segment[] {
-    const q = query.trim().toLowerCase();
-    if (!q) return [{ text, hit: false }];
-    const lower = text.toLowerCase();
-    // 少數字元轉小寫後長度會變（例如 İ），位置就對不上，乾脆不標。/ A few characters change length when lower-cased; skip then.
-    if (lower.length !== text.length) return [{ text, hit: false }];
-    const out: Segment[] = [];
-    let from = 0;
-    for (let i = lower.indexOf(q); i !== -1; i = lower.indexOf(q, from)) {
-        if (i > from) out.push({ text: text.slice(from, i), hit: false });
-        out.push({ text: text.slice(i, i + q.length), hit: true });
-        from = i + q.length;
-    }
-    if (from < text.length) out.push({ text: text.slice(from), hit: false });
-    return out;
 }
