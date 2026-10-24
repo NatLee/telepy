@@ -148,7 +148,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         state.desktop.remove(&session_id);
         return;
     }
-    let _presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::Desktop, meta.ip));
+    let mut presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::Desktop, meta.ip));
+    let mut ended_by: Option<String> = None;
     let opened = session.describe();
     tracing::info!(session = %session_id, connection = %connection_id, "desktop: {opened}");
     state.gateway.event("desktop_open", None, None, Some(session.tunnel_id), format!("{opened} (session {})", short(&session_id))).await;
@@ -246,6 +247,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     }
                 }
             },
+            // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
+            by = presence.ended() => {
+                ended_by = Some(by);
+                break "ended";
+            }
             _ = session.stop.notified() => {
                 // 不先送 `disconnect` 指令：瀏覽器會把它當成正常結束，看不到 4014 的原因。
                 // No `disconnect` instruction first: the browser would treat it as a normal end and miss the 4014.
@@ -261,12 +267,14 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     tracing::info!(session = %session_id, "desktop: {message}");
     state.gateway.event("desktop_close", None, None, Some(session.tunnel_id), message).await;
-    match close_code {
-        Some(code) => close_with_code(&mut socket, code).await,
-        None => {
+    match (ended_by, close_code) {
+        (Some(by), _) => super::close_with(&mut socket, super::CLOSE_ENDED, &by).await,
+        (None, Some(code)) => close_with_code(&mut socket, code).await,
+        (None, None) => {
             let _ = socket.send(Message::Close(None)).await;
         }
     }
+    drop(presence);
     let _ = tokio::time::timeout(Duration::from_secs(2), tx.shutdown()).await;
     abort_bridge(&accept);
     state.desktop.remove(&session_id);

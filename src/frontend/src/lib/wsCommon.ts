@@ -27,7 +27,8 @@ export const MAX_RECONNECT_DELAY_MS = 30000;
 export const STABLE_CONNECTION_MS = 10000;
 // 認證/權限類關閉碼（見 consumers.py），重連也不會成功，直接停止。
 // Auth/permission close codes (see consumers.py); retrying won't help, so stop.
-export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006]);
+// 4009 = 有人從即時 session 頁結束了它，不要自己連回去。/ 4009 = ended from the live sessions page; don't reconnect.
+export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006, 4009]);
 
 /** full-jitter 指數退避：delay ∈ [0, min(ceiling, base * 2^attempt)] */
 export function backoffDelay(attempt: number): number {

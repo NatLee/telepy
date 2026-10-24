@@ -21,6 +21,7 @@ pub mod schemas;
 pub mod scripts;
 pub mod serialize;
 pub mod sftp;
+pub mod sessions;
 pub mod sharing;
 pub mod sign_ins;
 pub mod step_up;

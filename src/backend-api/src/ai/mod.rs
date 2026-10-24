@@ -152,6 +152,11 @@ impl Drop for Busy<'_> {
 }
 
 impl AiSession {
+    /// 它在「誰在用」裡的 id（即時 session 頁用來結束它）。/ Its presence id (the live sessions page ends it by this).
+    pub fn presence_id(&self) -> u64 {
+        self._presence.id()
+    }
+
     fn touch(&self) {
         *self.activity.lock().unwrap() = (Instant::now(), now_db());
     }

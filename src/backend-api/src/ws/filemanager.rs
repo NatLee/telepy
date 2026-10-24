@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use serde_json::{json, Value};
 
-use super::{auth, close, is_ping, send_json, Heartbeat};
+use super::{auth, close, close_with, is_ping, send_json, Heartbeat, CLOSE_ENDED};
 use crate::client_ip::ClientMeta;
 use crate::db;
 use crate::permissions::{self, Permission};
@@ -241,11 +241,22 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4005).await;
         return;
     };
-    let _presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
+    let mut presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
     let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Files, tunnel.id, &user.username, Some(&username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
-    while let Some(Ok(frame)) = heartbeat.recv(&mut socket).await {
+    loop {
+        let frame = tokio::select! {
+            incoming = heartbeat.recv(&mut socket) => match incoming {
+                Some(Ok(frame)) => frame,
+                _ => break,
+            },
+            // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
+            by = presence.ended() => {
+                close_with(&mut socket, CLOSE_ENDED, &by).await;
+                break;
+            }
+        };
         let text = match frame {
             Message::Text(t) => t.to_string(),
             Message::Close(_) => break,

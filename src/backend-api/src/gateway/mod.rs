@@ -675,8 +675,20 @@ impl Handler for GatewayHandler {
             _ => None,
         };
         tokio::spawn(async move {
-            let _presence = guard;
-            if let Err(e) = bridge_channels(fwd, channel, originator, originator_port).await {
+            let bridge = bridge_channels(fwd, channel, originator, originator_port);
+            let result = match guard {
+                // 有人從即時 session 頁結束它：丟掉兩端的 stream，筆電的 ssh 跟著斷。
+                // Ended from the live sessions page: dropping both streams ends the laptop's ssh.
+                Some(mut presence) => tokio::select! {
+                    r = bridge => r,
+                    by = presence.ended() => {
+                        tracing::info!(by = %by, "gateway: laptop ssh session ended from the web");
+                        Ok(())
+                    }
+                },
+                None => bridge.await,
+            };
+            if let Err(e) = result {
                 tracing::debug!(error = %e, "gateway: direct-tcpip bridge ended with error");
             }
         });

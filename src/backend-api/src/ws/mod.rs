@@ -75,6 +75,19 @@ async fn tunnel_connection_upgrade(State(state): State<AppState>, Path(tunnel_id
     prepare(ws).on_upgrade(move |socket| tunnel_connection::handle(state, socket, tunnel_id))
 }
 
+/// 4009：有人從即時 session 頁結束了這個 session；關閉原因 = 是誰。/ 4009: ended from the live sessions page; the reason is who.
+pub const CLOSE_ENDED: u16 = 4009;
+
+/// 帶原因文字關閉（最多 120 bytes，WebSocket 上限 123）。/ Close with a reason text (at most 120 bytes; the limit is 123).
+pub async fn close_with(socket: &mut WebSocket, code: u16, reason: &str) {
+    let mut end = reason.len().min(120);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    let frame = Message::Close(Some(CloseFrame { code, reason: Utf8Bytes::from(reason[..end].to_string()) }));
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, socket.send(frame)).await;
+}
+
 /// 以自訂關閉碼關閉（對方已斷或卡住時靜默）。/ Close with an application close code; ignore a dead or stuck peer.
 pub async fn close(socket: &mut WebSocket, code: u16) {
     let frame = Message::Close(Some(CloseFrame { code, reason: Utf8Bytes::from_static("") }));

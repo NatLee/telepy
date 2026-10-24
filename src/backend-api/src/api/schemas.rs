@@ -232,6 +232,8 @@ pub struct TunnelPresence {
 
 #[derive(ToSchema)]
 pub struct PresenceSession {
+    /// `DELETE /api/sessions/{id}` 用。/ For `DELETE /api/sessions/{id}`.
+    pub id: u64,
     #[schema(example = "alice")]
     pub user: String,
     /// terminal / files / browser / ssh / ai
@@ -1934,4 +1936,34 @@ pub struct TunnelServiceRemoval {
     pub stopped: bool,
     /// …and it came back: something still restarts it
     pub came_back: bool,
+}
+
+// ---------------------------------------------------------------- live sessions
+
+#[derive(ToSchema)]
+pub struct LiveSessionTunnel {
+    pub id: i64,
+    pub name: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct LiveSession {
+    pub id: u64,
+    pub tunnel: LiveSessionTunnel,
+    pub user: UserRef,
+    /// terminal / files / browser / desktop / ssh / ai
+    #[schema(example = "terminal")]
+    pub kind: String,
+    pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
+    pub since: String,
+    /// MCP app name
+    pub client: Option<String>,
+    pub mine: bool,
+}
+
+/// 自己的、自己擁有或 ADMIN 的隧道上的（管理員看全部）。/ Yours plus everyone's on tunnels you own or ADMIN (all for admins).
+#[derive(ToSchema)]
+pub struct LiveSessions {
+    pub sessions: Vec<LiveSession>,
 }

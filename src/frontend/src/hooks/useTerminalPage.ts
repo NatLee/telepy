@@ -332,6 +332,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                         setPermissionDenied(t("stepUp.deniedCard"));
                     }
                 });
+            } else if (code === 4009) {
+                // 有人從即時 session 頁結束了它（原因 = 是誰）。/ Ended from the live sessions page (reason = who).
+                s.term.write(`\r\n\x1b[33m${t("sessions.endedXterm", { by: event.reason || "?" })}\x1b[0m\r\n`);
             } else if (code === 4006) {
                 setNoUsers(true);
                 s.term.write(`\r\n\x1b[31m${t("terminal.noUsersXterm")}\x1b[0m\r\n`);

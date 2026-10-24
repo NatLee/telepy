@@ -27,6 +27,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::reverse_keys::router())
         .merge(api::scripts::router())
         .merge(api::sharing::router())
+        .merge(api::sessions::router())
         .merge(api::step_up::router())
         .merge(api::access_requests::router())
         .merge(api::users::router())

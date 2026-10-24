@@ -161,6 +161,11 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                     });
                     return;
                 }
+                if (ev.code === 4009) {
+                    write(`\r\n\x1b[33m${translate("sessions.endedXterm", { by: ev.reason || "?" })}\x1b[0m\r\n`);
+                    onStatus(key, "closed");
+                    return;
+                }
                 const msg = ev.code === 4001 ? "terminal.authFailedXterm" : CLOSE_MESSAGES[ev.code];
                 write(`\r\n\x1b[31m${msg ? translate(msg) : translate("terminal.disconnectedCodeXterm", { code: ev.code })}\x1b[0m\r\n`);
                 onStatus(key, "closed");
