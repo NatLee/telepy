@@ -387,7 +387,8 @@ function CheatsheetInner() {
                                 aria-pressed={active}
                                 onClick={() => setRecipe(r.id)}
                                 className={cn(
-                                    "relative flex flex-col items-center gap-3 rounded-xl border px-3 pb-3.5 pt-5 text-center transition-colors duration-150",
+                                    // pt-8：插圖排在右上角的旗標底下，不跟它重疊。/ pt-8 keeps the illustration below the corner flag.
+                                    "@container relative flex flex-col items-center gap-3 rounded-xl border px-3 pb-3.5 pt-8 text-center transition-colors duration-150",
                                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                                     active ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border bg-card hover:border-foreground/30"
                                 )}

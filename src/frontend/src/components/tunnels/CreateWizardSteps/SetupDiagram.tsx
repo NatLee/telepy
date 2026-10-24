@@ -19,7 +19,7 @@
  */
 "use client";
 
-import React, { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
     ArrowUpRight,
     ChevronUp,
@@ -104,34 +104,44 @@ const WIDE: Layout = {
 };
 
 // 直式：你 ─ Telepy 在上面一列，Telepy 與裝置上下一直線穿過橫牆；左邊的其他裝置往下直直撞牆。
+// 牆上兩個標記之間放不下最長的牆名（日文），所以牆名貼在牆下、私有網路的左上角。
 // Portrait: you ─ Telepy on the top row, Telepy and the device in one vertical line through the horizontal wall;
-// other devices on the left run straight down into the wall.
+// other devices on the left run straight down into the wall. The longest wall label (Japanese) doesn't fit between
+// the two markers, so it hangs just under the wall, top-left of the private network.
 const TALL: Layout = {
-    w: 360,
-    h: 560,
+    w: 320,
+    h: 616,
     tall: true,
-    you: { x: 80, y: 130 },
-    telepy: { x: 264, y: 130 },
-    device: { x: 264, y: 440 },
-    others: { x: 80, y: 240 },
-    lan: { x: 10, y: 334, w: 340, h: 216 },
-    wall: { x: 16, y: 322, w: 328, h: 12 },
-    gate: { x: 264, y: 328 },
-    block: { x: 80, y: 328 },
-    direct: "M 80 240 L 80 328",
-    tunnel: "M 264 440 L 264 130",
-    access: "M 80 130 L 264 130",
+    you: { x: 64, y: 112 },
+    telepy: { x: 232, y: 112 },
+    device: { x: 232, y: 462 },
+    others: { x: 64, y: 226 },
+    lan: { x: 8, y: 324, w: 304, h: 282 },
+    wall: { x: 12, y: 312, w: 296, h: 12 },
+    gate: { x: 232, y: 318 },
+    block: { x: 64, y: 318 },
+    direct: "M 64 226 L 64 318",
+    tunnel: "M 232 462 L 232 112",
+    access: "M 64 112 L 232 112",
     labelAbove: { you: true, telepy: true, others: true },
     at: {
-        internet: { p: { x: 16, y: 20 }, a: "left" },
-        lan: { p: { x: 24, y: 360 }, a: "left" },
-        tunnel: { p: { x: 264, y: 232 }, a: "center" },
-        access: { p: { x: 172, y: 130 }, a: "center" },
-        gate: { p: { x: 264, y: 300 }, a: "center" },
-        block: { p: { x: 80, y: 300 }, a: "center" },
-        firewall: { p: { x: 172, y: 328 }, a: "center" },
+        internet: { p: { x: 12, y: 22 }, a: "left" },
+        lan: { p: { x: 20, y: 398 }, a: "left" },
+        tunnel: { p: { x: 232, y: 200 }, a: "center" },
+        access: { p: { x: 148, y: 112 }, a: "center" },
+        gate: { p: { x: 232, y: 288 }, a: "center" },
+        block: { p: { x: 64, y: 288 }, a: "center" },
+        firewall: { p: { x: 16, y: 352 }, a: "left" },
     },
 };
+
+/**
+ * 直式場景的設計寬度：1 單位 = 1px（100% 顯示大小）。320 是最長的字（日文牆名、英文通道）還放得下的最窄寬度，
+ * 這樣 402px 寬的手機幾乎不用縮小。
+ * Design width of the portrait scene: 1 unit = 1px at 100 %. 320 is the narrowest that still fits the longest labels
+ * (the Japanese wall label, the English tunnel label), so a 402px phone barely scales it.
+ */
+const TALL_REM = TALL.w / 16;
 
 const ANCHOR: Record<Anchor, string> = {
     center: "-translate-x-1/2 -translate-y-1/2",
@@ -249,7 +259,7 @@ function SceneNode({ l, at, icon: Icon, glyph, title, detail, active, online, ab
                 <div
                     className={cn(
                         "absolute left-1/2 flex -translate-x-1/2 flex-col items-center gap-0.5 text-center",
-                        l.tall ? "w-32" : roomy ? "w-52" : "w-40",
+                        l.tall ? (roomy ? "w-36" : "w-28") : roomy ? "w-52" : "w-40",
                         above ? "bottom-full mb-2" : "top-full mt-2"
                     )}
                 >
@@ -391,7 +401,8 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
                 <span className="inline-flex items-center gap-1.5 text-xs text-foreground/80">
                     <House size={13} aria-hidden /> {t("wizard.scene.lan")}
                 </span>
-                <span className={cn("whitespace-nowrap text-xs text-muted-foreground", !l.tall && "hidden @min-[760px]:block")}>{t("wizard.scene.lanDetail")}</span>
+                {/* 直式時折行，別碰到通道。/ Wraps in portrait so it stays clear of the tunnel. */}
+                <span className={cn("text-xs text-muted-foreground", l.tall ? "max-w-[12rem] text-balance" : "hidden whitespace-nowrap @min-[760px]:block")}>{t("wizard.scene.lanDetail")}</span>
             </span>
 
             {/* 牆上的標示 / Signs on the wall */}
@@ -416,9 +427,27 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
             </Tag>
 
             {/* 線上的標籤：點 + 文字 / Labels on the lines: dot + text */}
-            <Tag l={l} at={l.at.tunnel} className={cn(view.tunnel === "live" && "border-success/35", view.tunnel === "pending" && "border-warning/50")}>
+            <Tag
+                l={l}
+                at={l.at.tunnel}
+                className={cn(
+                    view.tunnel === "live" && "border-success/35",
+                    view.tunnel === "pending" && "border-warning/50",
+                    // 直式時線兩旁很窄，長句在「·」折成兩行；w-max：靠右邊的絕對定位不會被擠成窄欄。
+                    // Narrow on both sides of the line in portrait: long text wraps at the "·"; w-max keeps an absolute box
+                    // near the right edge from shrinking to the space left of it.
+                    l.tall && "w-max max-w-[10.5rem] whitespace-normal text-center"
+                )}
+            >
                 <span className={cn("size-1.5 shrink-0 rounded-full", status.dot)} aria-hidden />
-                <span className={status.tone}>{status.text}</span>
+                <span className={status.tone}>
+                    {status.text.split(" · ").map((part, i, parts) => (
+                        <React.Fragment key={i}>
+                            {i > 0 && " "}
+                            <span className="inline-block">{i < parts.length - 1 ? `${part} ·` : part}</span>
+                        </React.Fragment>
+                    ))}
+                </span>
             </Tag>
             {view.access === "live" && (
                 <Tag l={l} at={l.at.access} className="border-info/35 text-info">
@@ -442,6 +471,51 @@ function Scene({ l, view, reduced, name, sshPort, reversePort, accounts, connect
                     </Chip>
                 )}
             </SceneNode>
+        </div>
+    );
+}
+
+/**
+ * 直式場景：節點與線照比例縮放，標籤卻是 rem 字級；容器比設計寬度窄（手機、或顯示大小調大）時標籤會互相壓到。
+ * 所以比設計寬度窄就照設計寬度排版、整張等比例縮小，任何寬度與顯示大小看起來都一樣。
+ * The portrait scene: nodes and lines scale with the width but the labels are rem-sized, so a container narrower
+ * than the design width (phones, or a larger display size) makes them collide. Below the design width it is laid
+ * out at that width and scaled down as a whole, so it looks the same at any width and display size.
+ */
+function FitTall({ children }: { children: React.ReactNode }) {
+    const outer = useRef<HTMLDivElement>(null);
+    // 看不見的探針，寬度就是設計寬度（rem）：顯示大小一改它就變寬變窄，ResizeObserver 會叫我們重算。
+    // An invisible probe exactly the design width (rem): it resizes whenever the display size changes, which
+    // re-triggers the measurement even when the diagram itself keeps its width.
+    const probe = useRef<HTMLSpanElement>(null);
+    const [scale, setScale] = useState(1);
+
+    useLayoutEffect(() => {
+        const box = outer.current;
+        const design = probe.current;
+        if (!box || !design) return;
+        const measure = () => {
+            // 寬的容器會把直式藏起來（寬度 0），那時不用量。/ Hidden (zero width) in wide containers: nothing to fit.
+            if (!box.clientWidth || !design.offsetWidth) return;
+            setScale(Math.min(1, box.clientWidth / design.offsetWidth));
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(box);
+        ro.observe(design);
+        return () => ro.disconnect();
+    }, []);
+
+    const fit = scale < 1;
+    return (
+        <div ref={outer} className="relative w-full" style={{ aspectRatio: `${TALL.w} / ${TALL.h}` }}>
+            <span ref={probe} className="pointer-events-none invisible absolute left-0 top-0 h-0" style={{ width: `${TALL_REM}rem` }} aria-hidden />
+            <div
+                className="absolute left-0 top-0 origin-top-left"
+                style={fit ? { width: `${TALL_REM}rem`, transform: `scale(${scale})` } : { width: "100%" }}
+            >
+                {children}
+            </div>
         </div>
     );
 }
@@ -674,7 +748,9 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                         <Scene l={WIDE} {...sceneProps} />
                     </div>
                     <div className="relative mx-auto max-w-[400px] @min-[600px]:hidden">
-                        <Scene l={TALL} {...sceneProps} />
+                        <FitTall>
+                            <Scene l={TALL} {...sceneProps} />
+                        </FitTall>
                     </div>
 
                     <div className="mt-4 border-t border-border pt-3">
@@ -728,11 +804,13 @@ export function SetupDiagram({ step, deviceName, sshPort, reversePort, accounts,
                             </div>
                         ) : (
                             <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-                                <p className="flex min-w-0 flex-1 items-baseline gap-2 text-sm leading-relaxed text-foreground/85" aria-live="polite">
+                                {/* basis-60：放不下時按鈕換到下一行，句子不會被擠成一字一行。
+                                    basis-60: when both don't fit the buttons wrap below instead of squeezing the sentence. */}
+                                <p className="flex min-w-0 flex-1 basis-60 items-baseline gap-2 text-sm leading-relaxed text-foreground/85" aria-live="polite">
                                     <span className={cn("relative top-[-1px] size-2 shrink-0 rounded-full", captionDot)} aria-hidden />
                                     <span>{caption}</span>
                                 </p>
-                                <span className="flex shrink-0 items-center gap-1">
+                                <span className="ml-auto flex shrink-0 items-center gap-1">
                                     <Button type="button" variant="outline" size="sm" onClick={() => expand(true)}>
                                         <PlayCircle /> {t("wizard.scene.howItWorks")}
                                     </Button>
