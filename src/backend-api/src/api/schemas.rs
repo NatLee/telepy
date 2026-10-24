@@ -163,6 +163,9 @@ pub struct Tunnel {
     pub last_seen_at: Option<String>,
     /// 只有列表帶：我有沒有釘選（每個人自己的）。/ List / dashboard only: whether I pinned it (per user).
     pub pinned: Option<bool>,
+    /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
+    /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
+    pub share_expires_at: Option<String>,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -407,6 +410,14 @@ pub struct UserKeyPatch {
     pub expires_at: Option<String>,
 }
 
+/// 分享到什麼時候：RFC 3339 或 `YYYY-MM-DD`（那天 UTC 結束），null = 一直有效。到期後 30 秒內自動取消分享。
+/// When a share ends: RFC 3339 or `YYYY-MM-DD` (end of that day, UTC), null = never. Ended within 30 s of expiry.
+#[derive(ToSchema)]
+pub struct ShareExpiryRequest {
+    #[schema(example = "2026-12-31T18:00:00+08:00")]
+    pub expires_at: Option<String>,
+}
+
 #[derive(ToSchema)]
 pub struct ServiceKey {
     pub id: i64,
@@ -522,6 +533,8 @@ pub struct ShareRequest {
     #[schema(example = "view")]
     pub permission_type: Option<String>,
     pub allowed_target_username_ids: Option<Vec<i64>>,
+    /// 分享到什麼時候（RFC 3339 / `YYYY-MM-DD`）；不給 = 一直有效。/ When the share ends; omitted = never.
+    pub expires_at: Option<String>,
 }
 
 #[derive(ToSchema)]

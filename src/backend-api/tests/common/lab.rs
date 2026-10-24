@@ -571,6 +571,20 @@ impl Terminal {
         }
     }
 
+    /// 像開著但沒在打字的分頁：持續讀（自動回伺服器的 Ping）`d` 這麼久，什麼都不送；途中被關掉就 panic。
+    /// An open tab nobody types in: keep reading (answering the server's pings) for `d`, sending nothing.
+    pub async fn idle(&mut self, d: Duration) {
+        let deadline = tokio::time::Instant::now() + d;
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Err(_) => return,
+                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Close(_)))) | Ok(Some(Err(_))) | Ok(None) => panic!("an idle but live terminal was closed by the server"),
+                Ok(Some(Ok(_))) => {}
+            }
+        }
+    }
+
     /// `{action:"ping"}` → 伺服器回 **binary** `pong`（前端把 text frame 全寫進 xterm）。中間的 PTY 輸出照收。
     pub async fn ping(&mut self) -> bool {
         self.ws.send(Message::Text(json!({"action": "ping"}).to_string().into())).await.unwrap();
@@ -592,7 +606,8 @@ impl Terminal {
             let frame = tokio::time::timeout_at(deadline, self.ws.next()).await;
             match frame {
                 Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
-                Ok(Some(Ok(Message::Binary(_)))) => {}
+                // 伺服器心跳的 Ping（tungstenite 讀的時候自動回 Pong）。/ Server heartbeat pings, answered on read.
+                Ok(Some(Ok(Message::Binary(_) | Message::Ping(_) | Message::Pong(_)))) => {}
                 Ok(other) => panic!("terminal ended before {needle:?}: {other:?}; output so far: {:?}", self.seen),
                 Err(_) => panic!("timed out waiting for {needle:?}; output so far: {:?}", self.seen),
             }

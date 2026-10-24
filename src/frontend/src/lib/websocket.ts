@@ -100,24 +100,20 @@ export function useNotificationWebSocket() {
     const { accessToken } = useAuth();
     const [isConnected, setIsConnected] = useState(false);
     const [phase, setPhase] = useState<SocketPhase>({ state: "connecting" });
-    const [lastMessage, setLastMessage] = useState<unknown>(null);
     // 收到幾則訊息（給狀態燈「剛收到更新」的閃動用）。/ Messages received so far (drives the status dot's "update arrived" ping).
     const [messageCount, setMessageCount] = useState(0);
 
     useEffect(() => {
         if (!accessToken) return; // 未登入不連 / don't connect when logged out
         const listener: NotificationListener = {
-            onMessage: (msg) => {
-                setLastMessage(msg);
-                setMessageCount((n) => n + 1);
-            },
+            onMessage: () => setMessageCount((n) => n + 1),
             onStatus: setIsConnected,
             onPhase: setPhase,
         };
         return notificationHub.subscribe(listener);
     }, [accessToken]);
 
-    return { isConnected, phase, lastMessage, messageCount, reconnect: reconnectNotifications };
+    return { isConnected, phase, messageCount, reconnect: reconnectNotifications };
 }
 
 function reconnectNotifications() {
@@ -125,32 +121,36 @@ function reconnectNotifications() {
 }
 
 /**
- * Hook to abstract WebSocket notification dispatching based on action.
- * Maps incoming WS actions to provided handler functions.
+ * 依 action 把通知分派給 handler。每則訊息都直接從 socket 交給 handler，不經過 React state：
+ * 以前用一個 `lastMessage` state 轉手，兩則在同一次 render 前到達就只剩後一則（例如人數歸零的
+ * UPDATE-TUNNEL-PRESENCE 被吃掉，列表一直顯示「使用中」）。
+ * Dispatch notifications to handlers by action. Every message goes straight from the socket to its handler
+ * instead of through a `lastMessage` state, which kept only the last of messages arriving before a render
+ * (a lost "count: 0" presence update left a tunnel showing "in use").
  */
 export function useNotificationHandlers(
     handlers: Partial<Record<string, (msg: NotificationPayload) => void>>
 ) {
-    const { isConnected, lastMessage } = useNotificationWebSocket();
+    const { accessToken } = useAuth();
 
-    // Store handlers in a ref so we don't trigger the effect on every re-render
+    // Store handlers in a ref so we don't resubscribe on every re-render
     const handlersRef = useRef(handlers);
     useEffect(() => {
         handlersRef.current = handlers;
     }, [handlers]);
 
     useEffect(() => {
-        const lm = lastMessage as { message?: NotificationPayload } | null;
-        if (!lm?.message) return;
-        const msg = lm.message as NotificationPayload;
-        const action = msg.action as string;
-
-        if (action && handlersRef.current[action]) {
-            handlersRef.current[action]!(msg);
-        }
-    }, [lastMessage]);
-
-    return { isConnected };
+        if (!accessToken) return;
+        return notificationHub.subscribe({
+            onMessage: (raw) => {
+                const msg = (raw as { message?: NotificationPayload } | null)?.message;
+                const action = msg?.action as string | undefined;
+                if (msg && action) handlersRef.current[action]?.(msg);
+            },
+            onStatus: () => {},
+            onPhase: () => {},
+        });
+    }, [accessToken]);
 }
 
 /**
