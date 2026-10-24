@@ -95,6 +95,18 @@ export function TerminalContent({
     // filemanager WebSocket + SSH session. While undefined (not yet measured), neither mounts.
     const isDesktop = useMediaQuery("(min-width: 768px)");
 
+    // 桌面版沒有「檔案」主畫面（檔案是右側面板，主畫面只有終端機 / 瀏覽器）：從 ?mainView=files（卡片的「檔案」按鈕）
+    // 進來、或手機版的檔案畫面被拉寬時，主畫面會整片空白。改成終端機並打開檔案面板。
+    // Desktop has no full-screen files view (files is the side panel; the main view is terminal / browser), so
+    // ?mainView=files (the card's Files button) or widening the phone files view left the main area blank.
+    // Switch to the terminal and open the files panel instead.
+    useEffect(() => {
+        if (isDesktop && mainView === "files") {
+            setMainView("terminal");
+            setShowFiles(true);
+        }
+    }, [isDesktop, mainView, setMainView, setShowFiles]);
+
     // Open/close Files panel via group-level setLayout for authoritative control
     useEffect(() => {
         if (groupRef.current) {
@@ -109,7 +121,7 @@ export function TerminalContent({
         const collapsed = filesPanelRef.current.isCollapsed();
         if (collapsed && showFiles) setShowFiles(false);
         else if (!collapsed && !showFiles) setShowFiles(true);
-    }, [showFiles, setShowFiles]);
+    }, [showFiles, setShowFiles, filesPanelRef]);
 
     const sendInput = useCallback((input: string) => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
