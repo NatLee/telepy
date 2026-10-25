@@ -34,6 +34,8 @@ export interface FlowContext {
     savedLogin?: boolean;
     /** 連線中的串流統計：每段線標上往返時間，最慢的那段標黃。/ Live stats: a round trip on each link. */
     stats?: StreamStats | null;
+    /** RustDesk 在瀏覽器裡連（核心在這個分頁，Telepy 中繼）而不是用 app。/ RustDesk in this tab through Telepy's relay, not the app. */
+    inBrowser?: boolean;
 }
 
 const STATE_TEXT: Record<SpotState, TranslationKey> = {
@@ -125,19 +127,40 @@ function currentStep(phase: DesktopPhase, failure: DesktopFailure | null): numbe
     return 0;
 }
 
+/** 網頁內 RustDesk 的那一步（三步）。/ The in-browser RustDesk step (three steps). */
+function currentRustDeskStep(phase: DesktopPhase, failure: DesktopFailure | null): number {
+    if (phase === "starting") return 1;
+    if (phase === "connecting") return 2;
+    if (phase === "connected") return 3;
+    if (phase === "failed" && failure) {
+        if (failure.at === "web") return 2;
+        if (failure.at === "target") return 3;
+        return 1;
+    }
+    return 0;
+}
+
 export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
     const { t } = useI18n();
     const motion = !useReducedMotion();
     const s: Record<FlowSpot, SpotState> = spotStates(ctx.phase, ctx.failure);
-    const rustdesk = ctx.protocol === "rustdesk";
+    const rdBrowser = ctx.protocol === "rustdesk" && !!ctx.inBrowser;
+    const rustdesk = ctx.protocol === "rustdesk" && !rdBrowser;
     const proto = ctx.protocol === "rdp" ? "RDP" : ctx.protocol === "vnc" ? "VNC" : "RustDesk";
     const target = ctx.lanHost ? `${ctx.lanHost.address}:${ctx.port}` : `127.0.0.1:${ctx.port}`;
-    const step = rustdesk ? (ctx.phase === "idle" ? 0 : ctx.phase === "failed" && ctx.failure ? (ctx.failure.at === "web" ? 1 : 2) : ctx.phase === "connected" ? 3 : 2) : currentStep(ctx.phase, ctx.failure);
+    const step = rustdesk
+        ? (ctx.phase === "idle" ? 0 : ctx.phase === "failed" && ctx.failure ? (ctx.failure.at === "web" ? 1 : 2) : ctx.phase === "connected" ? 3 : 2)
+        : rdBrowser ? currentRustDeskStep(ctx.phase, ctx.failure) : currentStep(ctx.phase, ctx.failure);
     const steps: { key: TranslationKey; vars?: Record<string, string | number> }[] = rustdesk
         ? [
             { key: "desktop.flow.rd.step1", vars: { device: ctx.deviceName } },
             { key: "desktop.flow.rd.step2", vars: { account: ctx.account || "?", target } },
             { key: "desktop.flow.rd.step3" },
+        ]
+        : rdBrowser ? [
+            { key: "desktop.flow.rdb.step1", vars: { account: ctx.account || "?", device: ctx.deviceName, target } },
+            { key: "desktop.flow.rdb.step2" },
+            { key: "desktop.flow.rdb.step3" },
         ]
         : [
             { key: "desktop.flow.step1", vars: { account: ctx.account || "?", device: ctx.deviceName, target } },
@@ -174,16 +197,16 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
 
             <div className="@container">
                 <ol className="flex flex-col items-stretch @3xl:flex-row @3xl:items-center">
-                    <Node icon={Laptop} title={rustdesk ? t("desktop.flow.rd.you") : t("desktop.flow.you")} sub={rustdesk ? t("desktop.flow.rd.youSub") : t("desktop.flow.youSub")} state={s.browser} />
+                    <Node icon={Laptop} title={rustdesk ? t("desktop.flow.rd.you") : t("desktop.flow.you")} sub={rustdesk ? t("desktop.flow.rd.youSub") : rdBrowser ? t("desktop.flow.rdb.youSub") : t("desktop.flow.youSub")} state={s.browser} />
                     <Link label={rustdesk ? t("desktop.flow.rd.linkSsh") : t("desktop.flow.linkWeb")} state={s.web} motion={motion} note={stats ? formatMs(stats.netMs) : undefined} slow={where === "web"} />
-                    <Node brand title="Telepy" sub={rustdesk ? t("desktop.flow.rd.telepySub") : t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />
+                    <Node brand title="Telepy" sub={rustdesk ? t("desktop.flow.rd.telepySub") : rdBrowser ? t("desktop.flow.rdb.telepySub") : t("desktop.flow.telepySub", { protocol: proto })} state={s.telepy} />
                     <Link label={t("desktop.flow.linkTunnel")} state={s.tunnel} motion={motion} note={stats ? formatMs(stats.tunnelMs) : undefined} slow={where === "tunnel"} />
                     <Node icon={Server} title={ctx.deviceName} sub={t("desktop.flow.deviceSub")} state={s.device} />
                     <Link label={ctx.lanHost ? t("desktop.flow.linkLan", { port: ctx.port }) : t("desktop.flow.linkLocal", { port: ctx.port })} state={s.reach} motion={motion} />
                     <Node
                         icon={Monitor}
                         title={ctx.lanHost ? ctx.lanHost.name : t("desktop.flow.deviceDesktop")}
-                        sub={rustdesk ? t("desktop.flow.rd.targetSub", { address: target }) : t("desktop.flow.targetSub", { protocol: proto, address: target })}
+                        sub={rustdesk || rdBrowser ? t("desktop.flow.rd.targetSub", { address: target }) : t("desktop.flow.targetSub", { protocol: proto, address: target })}
                         state={s.target}
                     />
                 </ol>
@@ -225,6 +248,14 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
                         <li>{t("desktop.flow.rd.notePrivate")}</li>
                         <li>{t("desktop.flow.rd.noteDirectIp")}</li>
                         <li>{t("desktop.flow.noteDevice")}</li>
+                    </>
+                ) : rdBrowser ? (
+                    <>
+                        <li>{t("desktop.flow.rdb.notePassword")}</li>
+                        <li>{t("desktop.flow.rdb.noteEngine")}</li>
+                        <li>{t("desktop.flow.rdb.noteClipboard")}</li>
+                        <li>{t("desktop.flow.rd.noteDirectIp")}</li>
+                        <li>{t("desktop.flow.noteLogged")}</li>
                     </>
                 ) : (
                     <>

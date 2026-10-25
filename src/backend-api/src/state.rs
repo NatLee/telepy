@@ -47,6 +47,8 @@ pub struct Inner {
     pub remote_browser: Arc<RemoteBrowser>,
     /// 網頁內遠端桌面（RDP / VNC，經 guacd）的 session。/ In-browser remote desktop sessions (guacd).
     pub desktop: Arc<Desktop>,
+    /// 網頁內 RustDesk（瀏覽器裡的 RustDesk 核心，後端只中繼）的 session。/ In-browser RustDesk sessions (relay only).
+    pub rustdesk: Arc<crate::rustdesk::RustDesk>,
     /// 依「隧道 + OS 帳號」共用的裝置 SSH 連線（SFTP / 檔案管理）。
     pub pool: Arc<DevicePool>,
     /// 裝置 host key 釘選的快取。/ Cache of the devices' pinned host keys.
@@ -97,6 +99,7 @@ impl AppState {
         let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         let desktop = Arc::new(Desktop::new(&config));
+        let rustdesk = Arc::new(crate::rustdesk::RustDesk::new());
         // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
         let hub = gateway.hub();
         let step_up = gateway.step_ups();
@@ -104,6 +107,7 @@ impl AppState {
         Self(Arc::new(Inner {
             remote_browser,
             desktop,
+            rustdesk,
             google: GoogleVerifier::new(http.clone()),
             jwt,
             hub,

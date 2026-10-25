@@ -29,6 +29,7 @@ pub mod permissions;
 pub mod presence;
 pub mod recording;
 pub mod remote_browser;
+pub mod rustdesk;
 pub mod scripts;
 pub mod session_audit;
 pub mod sftp;

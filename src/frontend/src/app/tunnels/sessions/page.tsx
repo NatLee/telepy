@@ -24,7 +24,7 @@ import { filterSessions, groupByTunnel, type KindFilter } from "@/lib/liveSessio
 import { formatRelativeTime } from "@/lib/relativeTime";
 import type { LiveSession } from "@/types/liveSession";
 
-const KIND_FILTERS: KindFilter[] = ["all", "terminal", "files", "browser", "desktop", "ssh", "ai"];
+const KIND_FILTERS: KindFilter[] = ["all", "terminal", "files", "browser", "desktop", "rustdesk", "ssh", "ai"];
 
 function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
     const { t, locale } = useI18n();

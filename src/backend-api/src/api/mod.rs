@@ -7,6 +7,7 @@ pub mod auth;
 pub mod command_rules;
 pub mod credentials;
 pub mod desktop;
+pub mod rustdesk;
 pub mod device_keys;
 pub mod host_keys;
 pub mod doc;

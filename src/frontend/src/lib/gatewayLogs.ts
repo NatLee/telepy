@@ -50,6 +50,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     browser_close: { key: "logs.event.browser_close", tone: "secondary", category: "session" },
     desktop_open: { key: "logs.event.desktop_open", tone: "default", category: "session" },
     desktop_close: { key: "logs.event.desktop_close", tone: "secondary", category: "session" },
+    rustdesk_open: { key: "logs.event.rustdesk_open", tone: "default", category: "session" },
+    rustdesk_close: { key: "logs.event.rustdesk_close", tone: "secondary", category: "session" },
     session_ended: { key: "logs.event.session_ended", tone: "warning", category: "session" },
     recording_setting: { key: "logs.event.recording_setting", tone: "outline", category: "change" },
     recording_deleted: { key: "logs.event.recording_deleted", tone: "outline", category: "change" },

@@ -3,7 +3,7 @@
  */
 import type { IpGeo } from "@/lib/geo";
 
-export type SessionKind = "terminal" | "files" | "browser" | "desktop" | "ssh" | "ai";
+export type SessionKind = "terminal" | "files" | "browser" | "desktop" | "rustdesk" | "ssh" | "ai";
 
 export interface LiveSession {
     id: number;

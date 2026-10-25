@@ -10,8 +10,11 @@
  * topology endpoint; the selection lives in the URL. Credentials are sent once and cleared once connected.
  * While connected: the relay's per-second stats, the tunnel's unstable flag, the framebuffer size and, for VNC
  * on the device itself, the detected screen layout; a custom crop area and the chosen screen are remembered per target.
- * RustDesk 模式：不開 guacd session，而是從裝置探測 Direct IP 埠（`GET …/desktop/probe`）並給出 `ssh -L` 指令
- * （別名來自 `/tunnels/server/config/{id}`，和命令表同一套）。/ RustDesk mode: a port probe plus the ssh -L command.
+ * RustDesk 模式：預設在瀏覽器裡連（`POST …/rustdesk/start` 發票證 → RustDeskViewer 裡的 RustDesk 核心經 Telepy 的中繼連上
+ * 裝置的 Direct IP 埠；密碼只交給核心，不送後端）；另有用 app 的路：從裝置探測埠（`GET …/desktop/probe`）並給出 `ssh -L`
+ * 指令（別名來自 `/tunnels/server/config/{id}`，和命令表同一套）。/ RustDesk: in the browser by default (a ticket from
+ * `…/rustdesk/start`; the vendored core connects through Telepy's relay and the password stays in the browser), or the
+ * native app with a port probe plus the ssh -L command.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -39,6 +42,7 @@ import {
     type DesktopStart,
 } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
+import type { RustDeskPeerInfo, RustDeskStart } from "@/lib/rustdesk";
 import { parseStoredArea, type DetectedScreen, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
 import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
@@ -123,6 +127,12 @@ export function useDesktopPage() {
     const [selecting, setSelecting] = useState(false);
     const [probeState, setProbeState] = useState<ProbeState>(NO_PROBE);
     const [config, setConfig] = useState<TunnelConfigData | null>(null);
+    // 網頁內 RustDesk 的 session（和 guacd 的 `session` 互斥）與對方回報的資訊（螢幕清單、目前螢幕）。
+    // The in-browser RustDesk session (never alongside a guacd one) and what the peer reported (its displays).
+    const [rdSession, setRdSession] = useState<RustDeskStart | null>(null);
+    const [rdInfo, setRdInfo] = useState<RustDeskPeerInfo | null>(null);
+    const rdSessionRef = useRef<RustDeskStart | null>(null);
+    rdSessionRef.current = rdSession;
     const sessionRef = useRef<DesktopStart | null>(null);
     sessionRef.current = session;
     const connectedRef = useRef(false);
@@ -208,14 +218,42 @@ export function useDesktopPage() {
     // 這個桌面（隧道 + 主機 + 協定）存過的登入。/ Logins saved for this desktop (tunnel + host + protocol).
     const saved = useSavedLogins(tunnel && form.protocol !== "rustdesk" ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel && !isRustDesk);
     const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
-    const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && !isRustDesk && (phase === "idle" || phase === "failed");
+    const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && (phase === "idle" || phase === "failed");
     const canProbe = !!tunnel && online && !!form.account && isValidPort(form.port) && probeState.state !== "checking";
 
     const connect = useCallback(async () => {
-        if (!tunnel || form.protocol === "rustdesk") return;
+        if (!tunnel) return;
         setFailure(null);
         setEndedNormally(false);
         setPhase("starting");
+        if (form.protocol === "rustdesk") {
+            // 網頁內 RustDesk：只要票證；密碼留在瀏覽器給核心。/ In-browser RustDesk: a ticket only; the password stays here.
+            try {
+                const res = await apiFetch(`/api/reverse/server/${tunnel.id}/rustdesk/start`, {
+                    method: "POST",
+                    body: JSON.stringify({ username: form.account, port: Number(form.port), lan_host_id: host?.id ?? null }),
+                });
+                const data = await readJson<RustDeskStart & { code?: string }>(res);
+                if (!res.ok || !data?.ticket) {
+                    setFailure(startFailure(data?.code, res.status, { account: form.account, address }));
+                    setPhase("failed");
+                    return;
+                }
+                setStats(null);
+                setUnstable(false);
+                setFramebuffer(null);
+                setScale(null);
+                setScreens(NO_SCREENS);
+                setSelecting(false);
+                setRdInfo(null);
+                setRdSession(data);
+                setPhase("connecting");
+            } catch {
+                setFailure({ key: "desktop.err.network", at: "web" });
+                setPhase("failed");
+            }
+            return;
+        }
         try {
             // 要存的話先存，之後用存好的那筆開（密碼只送一次）。/ Save first, then start with the saved row.
             let credentialId = savedLogin?.id ?? null;
@@ -297,6 +335,8 @@ export function useDesktopPage() {
 
     const onEnded = useCallback((f: DesktopFailure | null) => {
         setSession(null);
+        setRdSession(null);
+        setRdInfo(null);
         setConnectedAt(null);
         setStats(null);
         setSelecting(false);
@@ -309,20 +349,25 @@ export function useDesktopPage() {
         }
     }, []);
 
-    const postStop = useCallback((sid: string) => {
-        void apiFetch(`/api/reverse/server/desktop/${sid}/stop`, { method: "POST", body: "{}", keepalive: true }).catch(() => undefined);
+    const postStop = useCallback((sid: string, rustdesk = false) => {
+        void apiFetch(`/api/reverse/server/${rustdesk ? "rustdesk" : "desktop"}/${sid}/stop`, { method: "POST", body: "{}", keepalive: true }).catch(() => undefined);
     }, []);
 
     /**
      * 使用者按「中斷連線」。連線中的 session 由 viewer 關掉的 WebSocket 結束（中繼立刻移除它，再 POST stop 只會 404）；
      * 還沒連上的（票證剛發、WS 還沒開）才請後端作廢。
      * User disconnect: a connected session ends with the WebSocket the viewer closes; only an unclaimed ticket
-     * needs the REST stop.
+     * needs the REST stop. The same holds for an in-browser RustDesk session: the core closes its WebSocket
+     * on `session_close`, which ends the relay.
      */
     const stop = useCallback(() => {
         const s = sessionRef.current;
         if (s && !connectedRef.current) postStop(s.session_id);
+        const r = rdSessionRef.current;
+        if (r && !connectedRef.current) postStop(r.session_id, true);
         setSession(null);
+        setRdSession(null);
+        setRdInfo(null);
         setConnectedAt(null);
         setStats(null);
         setSelecting(false);
@@ -331,7 +376,7 @@ export function useDesktopPage() {
     }, [postStop]);
 
     useEffect(() => {
-        const onUnload = () => { const s = sessionRef.current; if (s) postStop(s.session_id); };
+        const onUnload = () => { const s = sessionRef.current; if (s) postStop(s.session_id); const r = rdSessionRef.current; if (r) postStop(r.session_id, true); };
         window.addEventListener("beforeunload", onUnload);
         return () => {
             window.removeEventListener("beforeunload", onUnload);
@@ -491,13 +536,13 @@ export function useDesktopPage() {
         state: {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
-            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig,
+            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo,
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
             setQuality, setCtrlMode, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
-            onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale,
+            onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },
             forgetSaved: async (id: number) => { if (await saved.remove(id)) setForm((f) => ({ ...f, savedId: null })); },
         },

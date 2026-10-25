@@ -26,6 +26,8 @@ pub enum Kind {
     Ai,
     /// 網頁內遠端桌面（RDP / VNC）。/ In-browser remote desktop.
     Desktop,
+    /// 網頁內 RustDesk。/ In-browser RustDesk.
+    RustDesk,
 }
 
 impl Kind {
@@ -37,6 +39,7 @@ impl Kind {
             Kind::Ssh => "ssh",
             Kind::Ai => "ai",
             Kind::Desktop => "desktop",
+            Kind::RustDesk => "rustdesk",
         }
     }
 }

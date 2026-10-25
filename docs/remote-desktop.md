@@ -98,19 +98,58 @@ VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x
 
 RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只有一個虛擬螢幕。
 
-## RustDesk（經隧道轉發，用原生 client）
+## RustDesk（瀏覽器裡連，或經隧道轉發給原生 client）
 
-RustDesk 用自己的協定，guacd 不認得，所以不在瀏覽器裡畫；Telepy 做的是把 RustDesk 的 **Direct IP Access**（TCP 21118）
-經裝置轉到使用者電腦，使用者用 RustDesk app 連 `127.0.0.1`。多螢幕切換、傳檔、聲音都是 RustDesk 自己的功能。
+RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，桌面頁協定選「RustDesk」時預設走第一條：
 
-- 桌面頁協定選「RustDesk」：不開 session，面板四步 —— 在那台 RustDesk 開 Direct IP Access 並設固定密碼 →
-  「從裝置檢查」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：和 start 同一道門、同一條路
-  —— 池的 lease + direct-tcpip 通道，通了立刻關；不看 `desktop_enabled`；錯誤碼同 start）→ `ssh -L 21118:<host>:21118 <alias>`
+### 瀏覽器裡連（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`；前端 `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
+
+RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendored 在 `src/frontend/public/vendor/rustdesk-web-core/`，
+來源與版本記在旁邊的 `README.md`）在瀏覽器裡跑：解碼影像（WebCodecs）、做密碼挑戰、送鍵鼠。Telepy **不架 hbbs / hbbr**：
+核心以為自己在連 ID 伺服器與 relay，其實兩條都連到同一個 WebSocket，後端看第一則訊息分角色，然後把 relay 那條
+重新分框成 RustDesk 的 TCP 線路格式，接到裝置 Direct IP 埠（21118）的 `direct-tcpip` 通道。研究紀錄與量測在
+`docs/rustdesk-spike.md`（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
+
+- `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?}`；和桌面同一道門：`desktop_enabled`、VIEW、
+  step-up、`choose_username` / `allowed_usernames`、`desktop_max_sessions` 算的是 guacd + RustDesk 的總數）：先 `desktop::prepare`
+  —— 池的 lease + 對目標 Direct IP 埠開好 `direct-tcpip`（`device_offline` / `target_unreachable` … 在這裡就是 502）——
+  再發 60 秒單次票證：`{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username}`。
+  **密碼不經後端**：固定密碼只交給瀏覽器裡的核心，它用 RustDesk 的雜湊挑戰回應；Telepy 只中繼。
+- `/ws/rustdesk/{sid}/?ticket=`：核心會連兩次（`custom-rendezvous-server` 與 `relay-server` 都設成這個網址）。第一則 binary
+  訊息是 `RendezvousMessage`：`punch_hole_request`（欄位 8）= hbbs 角色，後端回 `relay_response`（欄位 19：uuid + relay_server =
+  同一網址）後只等著、再有 punch 就再回；`request_relay`（欄位 18）= relay 角色，接過 `prepare` 好的通道，之後 WS 的每則
+  binary 訊息 → `codec::encode_frame`（1–4 byte LE 前綴，低 2 bits = 前綴長 − 1）→ 通道；通道的 bytes → `decode_frame`
+  （上限 16 MiB）→ 一則一訊息。presence kind `rustdesk`，gateway events `rustdesk_open` / `rustdesk_close`（含時長、原因、
+  兩個方向的 byte 數）。關閉碼：4404 票證無效 / 過期、4403 權限、4013 裝置端關閉、4014 被停止（`POST
+  /api/reverse/server/rustdesk/{sid}/stop`、reaper 收權限、閒置）、4400 協定錯、4009 從即時 session 頁結束。
+- 前端（桌面頁）：表單多「RustDesk 密碼」欄（留在瀏覽器），主要按鈕「在瀏覽器裡連線」；`RustDeskViewer` 載入核心（一頁
+  同時只能有一個，核心是 window 上的全域物件），設兩個 server 選項 = `rustdeskWsUrl()`、`session_add_sync` + `session_start`，
+  自動確認「不加密的直連」msgbox（隧道本身加密），`onVideoFrame` 畫到 canvas（等比縮小、不放大），鍵盤焦點在隱藏的
+  textarea（輸入法組字 → `input_string`；按鍵 → `input_key`，鍵名表在 `lib/rustdesk.ts`），滑鼠座標除以縮放比例，游標從
+  `cursor_data` 轉成 CSS cursor。工具列：延遲 / 串流按鈕（吃核心的 `update_quality_status`：延遲、fps、目標位元率）、
+  螢幕選單（對方 `peer_info` 的 displays → `switch_display`，RustDesk 原生切螢幕；畫質 best / balanced / low 對應 Telepy
+  的三個預設）、鍵盤選單（送出文字、Ctrl+Alt+Del）、全螢幕、說明、中斷。info 路徑圖用 `inBrowser` 變體（三步）。
+  剪貼簿：核心自己在分頁有焦點時讀瀏覽器剪貼簿送過去；遠端複製的文字顯示在工具列下方。
+- 範圍（MVP）：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質。沒有傳檔、聲音、終端機 —— 要這些用下面的 app 路。
+- 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
+  `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
+  `setTimeout(…, 0)` 下一個 tick 再答。裝置端 RustDesk 跑在 C locale（沒有 `LANG`）時 xdo 拒絕多位元組文字（log
+  `Invalid multi-byte sequence encountered`），`input_string` 的中文打不進去 —— 那是裝置的環境，不是 Telepy。
+- 實測（OrbStack 裡的 Debian + RustDesk 1.5.0 + Xvfb，headless Chrome）：連上 < 1 s，點擊 / 滾輪 / 移動落在裝置上的座標
+  分毫不差（`xev`），打字到達 xterm，即時 session 頁列出 `rustdesk`，Logs 有兩個事件。腳本：scratchpad 的
+  `pw/rd-browser-e2e.js`（見記憶 `rustdesk-browser`）。
+
+### 用 RustDesk app（埠轉發）
+
+桌面頁的「想用 RustDesk app？」展開：把 **Direct IP Access**（TCP 21118）經裝置轉到使用者電腦，用 app 連 `127.0.0.1`。
+多螢幕切換、傳檔、聲音都是 RustDesk 自己的功能。
+
+- 「從裝置檢查」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：和 start 同一道門、同一條路 ——
+  池的 lease + direct-tcpip 通道，通了立刻關；不看 `desktop_enabled`；錯誤碼同 start）→ `ssh -L 21118:<host>:21118 <alias>`
   （命令表的 `rustdesk` recipe，別名來自 `/tunnels/server/config/{id}`）→ app 的 ID 填 `127.0.0.1`（本機埠非 21118 時
-  `127.0.0.1:<port>`）。info 路徑圖在 RustDesk 模式顯示這條路（你的電腦 ─ssh─ Telepy ─隧道─ 裝置 ─ RustDesk），階段跟著探測。
+  `127.0.0.1:<port>`）。info 路徑圖在探測過、瀏覽器裡沒在連時顯示這條路（你的電腦 ─ssh─ Telepy ─隧道─ 裝置 ─ RustDesk）。
 - 命令表多了「用 RustDesk」情境（`-L`，欄位：主機 `localhost` = 裝置自己、RustDesk 埠、本機埠）；區網掃描預設探測
   21118，`lib/lanConnect.ts` 把它顯示成 RustDesk，網路頁的指令分頁也會列出它的 `-L`。
-- 做不到的：在瀏覽器裡直接看 RustDesk。RustDesk 的 web client 要自架 hbbs / hbbr 並另做 WebSocket 中繼，不在這裡。
 
 ## 輸入法（IME）與跨系統鍵盤
 

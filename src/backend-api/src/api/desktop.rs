@@ -29,7 +29,7 @@ pub fn router() -> OpenApiRouter<AppState> {
 }
 
 /// 桌面所在的主機：裝置自己，或這條隧道底下的區網主機（別條隧道的 → 404）。/ The device itself or one of this tunnel's LAN hosts.
-async fn target_for(state: &AppState, tunnel_id: i64, lan_host_id: Option<i64>, port: u16) -> Result<Target, ApiError> {
+pub(crate) async fn target_for(state: &AppState, tunnel_id: i64, lan_host_id: Option<i64>, port: u16) -> Result<Target, ApiError> {
     match lan_host_id {
         Some(hid) => {
             let host = db::lan::host_by_id(&state.db, hid).await?.filter(|h| h.tunnel_id == tunnel_id).ok_or_else(|| ApiError::not_found("LAN host not found"))?;
@@ -40,11 +40,11 @@ async fn target_for(state: &AppState, tunnel_id: i64, lan_host_id: Option<i64>, 
     }
 }
 
-fn target_json(t: &Target) -> Value {
+pub(crate) fn target_json(t: &Target) -> Value {
     json!({ "host": t.host, "port": t.port, "label": t.label, "lan_host_id": t.lan_host_id })
 }
 
-fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
+pub(crate) fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
     ApiError::new(status, json!({ "error": msg.into(), "code": code }))
 }
 

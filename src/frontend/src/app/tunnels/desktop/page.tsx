@@ -5,10 +5,11 @@
  * RDP / VNC 桌面。沒連線時是表單（含畫質預設）；連上後是畫面 + 工具列：延遲 / 串流狀態（點開看每一段）、
  * 螢幕選單（VNC：偵測到的螢幕、等分切法、自己框選的區域）、鍵盤選單（送出文字 —— IME 的備援、Ctrl+Alt+Del、
  * Ctrl 當 ⌘）、貼上、全螢幕、說明、中斷。「怎麼運作」（info）打開即時路徑圖，顯示現在在哪一段、卡在哪一段。
- * RustDesk 模式不開瀏覽器 session：從裝置探測 Direct IP 埠，給 `ssh -L` 指令，用 RustDesk app 連。
+ * RustDesk 模式預設在瀏覽器裡連（RustDeskViewer：vendored 的 RustDesk 核心 + Telepy 的中繼；螢幕選單列對方回報的螢幕、
+ * 畫質走 RustDesk 自己的設定），另可展開「用 RustDesk app」：從裝置探測 Direct IP 埠，給 `ssh -L` 指令。
  * Remote desktop page: a form while idle, the screen plus a toolbar once connected (latency / stream button,
- * screen menu with detected screens / even splits / a drag-selected area, keyboard menu); RustDesk mode is a
- * port probe plus the ssh -L command for the native app.
+ * screen menu with detected screens / even splits / a drag-selected area, keyboard menu); RustDesk connects in the
+ * browser by default (RustDeskViewer), with the native-app path (port probe + ssh -L) behind a disclosure.
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
@@ -38,6 +39,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { DesktopViewer, loadGuacamole, type DesktopViewerHandle } from "@/components/desktop/DesktopViewer";
+import { RustDeskViewer, type RustDeskQuality, type RustDeskViewerHandle } from "@/components/desktop/RustDeskViewer";
+import { loadRustDeskCore } from "@/lib/rustdesk";
 import { DesktopInfoDialog } from "@/components/desktop/DesktopInfoDialog";
 import { DesktopStatsButton } from "@/components/desktop/DesktopStats";
 import type { FlowContext } from "@/components/desktop/DesktopFlow";
@@ -45,7 +48,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { desktopPorts, formatElapsed, isValidPort, RUSTDESK_PORT, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { desktopPorts, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -71,6 +74,10 @@ const QUALITY_HINT: Record<DesktopQuality, TranslationKey> = {
 
 const MODE_LABEL: Record<DesktopMode, string> = { rdp: "RDP", vnc: "VNC", rustdesk: "RustDesk" };
 
+const QUALITY_LABEL: Record<DesktopQuality, TranslationKey> = { auto: "desktop.quality.auto", speed: "desktop.quality.speed", sharp: "desktop.quality.sharp" };
+/** Telepy 的畫質預設 → RustDesk 自己的畫質檔。/ Telepy's quality presets as RustDesk's own profiles. */
+const RD_QUALITY: Record<DesktopQuality, RustDeskQuality> = { auto: "balanced", speed: "low", sharp: "best" };
+
 export default function DesktopPage() {
     // useSearchParams 需要 Suspense 邊界。/ useSearchParams needs a Suspense boundary.
     return (
@@ -84,8 +91,9 @@ function DesktopPageInner() {
     const { t } = useI18n();
     const { showSuccess } = useToast();
     const { state, actions } = useDesktopPage();
-    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState } = state;
+    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState, rdSession, rdInfo, quality } = state;
     const viewerRef = useRef<DesktopViewerHandle | null>(null);
+    const rdViewerRef = useRef<RustDeskViewerHandle | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const [infoOpen, setInfoOpen] = useState(false);
     const [pasteOpen, setPasteOpen] = useState(false);
@@ -94,7 +102,8 @@ function DesktopPageInner() {
     const [typeText, setTypeText] = useState("");
     // 遠端複製的文字，綁在當時的 session 上（換 session 就不顯示）。/ Remote clipboard text, tied to its session.
     const [remoteClipState, setRemoteClipState] = useState<{ sid: string; text: string } | null>(null);
-    const remoteClip = remoteClipState && session && remoteClipState.sid === session.session_id ? remoteClipState.text : null;
+    const liveId = session?.session_id ?? rdSession?.session_id ?? null;
+    const remoteClip = remoteClipState && liveId !== null && remoteClipState.sid === liveId ? remoteClipState.text : null;
     const [fullscreen, setFullscreen] = useState(false);
     const [now, setNow] = useState(() => Date.now());
     // 偵測到的螢幕配置。重算的時機：螢幕清單或畫面大小變了、選單打開時、偵測完兩秒後
@@ -138,14 +147,17 @@ function DesktopPageInner() {
     const choiceLabel = (c: ScreenChoice) => (c.preset ? t(PRESET_KEY[c.preset]) : c.name);
 
     const clipboard = session?.clipboard ?? null;
-    // RustDesk 模式的「階段」來自探測。/ In RustDesk mode the phase follows the probe.
-    const flowPhase: DesktopPhase = isRustDesk
-        ? (probeState.state === "checking" ? "starting" : probeState.state === "ok" ? "connected" : probeState.state === "failed" ? "failed" : "idle")
+    // RustDesk 用 app 的路（探測過、瀏覽器裡沒在連）：階段跟著探測；其餘都是瀏覽器 session 的階段。
+    // The native-app path (probed, nothing connecting in the browser) follows the probe; everything else the session.
+    const rdNative = isRustDesk && phase === "idle" && !rdSession && probeState.state !== "idle";
+    const flowPhase: DesktopPhase = rdNative
+        ? (probeState.state === "checking" ? "starting" : probeState.state === "ok" ? "connected" : "failed")
         : phase;
-    const flowFailure = isRustDesk ? probeState.failure : failure;
+    const flowFailure = rdNative ? probeState.failure : failure;
     const ctx: FlowContext = useMemo(() => ({
         phase: flowPhase,
         failure: flowFailure,
+        inBrowser: !rdNative,
         protocol: form.protocol,
         port: isValidPort(form.port) ? Number(form.port) : 0,
         deviceName: tunnel?.name ?? t("desktop.flow.device"),
@@ -154,7 +166,7 @@ function DesktopPageInner() {
         clipboard,
         savedLogin: !!state.savedLogin,
         stats,
-    }), [flowPhase, flowFailure, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin, stats]);
+    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin, stats]);
 
     const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -164,7 +176,7 @@ function DesktopPageInner() {
         else void el.requestFullscreen?.().catch(() => undefined);
     };
     const onRemoteClipboard = (text: string) => {
-        if (session) setRemoteClipState({ sid: session.session_id, text });
+        if (liveId !== null) setRemoteClipState({ sid: liveId, text });
         void navigator.clipboard?.writeText(text).then(() => showSuccess(t("desktop.clipboardCopied"))).catch(() => undefined);
     };
     const sendPaste = () => {
@@ -177,11 +189,12 @@ function DesktopPageInner() {
     };
     const sendTyped = () => {
         if (!typeText) return;
-        viewerRef.current?.typeText(typeText);
+        (viewerRef.current ?? rdViewerRef.current)?.typeText(typeText);
         setTypeOpen(false);
         setTypeText("");
         showSuccess(t("desktop.typeText.sent"));
-        viewerRef.current?.focus();
+        // 對話框關掉後 Radix 會把焦點還給選單按鈕，所以晚一點再把焦點放回畫面。/ Radix returns focus to the menu trigger on close; refocus after that.
+        setTimeout(() => (viewerRef.current ?? rdViewerRef.current)?.focus(), 150);
     };
 
     const infoButton = (
@@ -191,10 +204,16 @@ function DesktopPageInner() {
     );
     const connected = phase === "connected";
     const isDeviceDesktop = !!session && session.target.lan_host_id === null;
+    // RustDesk：畫質預設換了就告訴核心（連上時套一次）。/ RustDesk: push the quality profile to the core (once on connect too).
+    useEffect(() => {
+        if (rdSession && connected) rdViewerRef.current?.setQuality(RD_QUALITY[quality]);
+    }, [rdSession, connected, quality]);
+    const rdCurrent = rdInfo?.displays[rdInfo.currentDisplay] ?? null;
+    const rdDisplay = rdCurrent ? { width: rdCurrent.width, height: rdCurrent.height } : null;
 
     return (
         <div className="animate-fade-in-up space-y-6">
-            <PageHeader icon={<ScreenShare />} title={t("desktop.title")} description={t("desktop.description")} actions={!session && infoButton} />
+            <PageHeader icon={<ScreenShare />} title={t("desktop.title")} description={t("desktop.description")} actions={!session && !rdSession && infoButton} />
 
             {session ? (
                 <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
@@ -349,11 +368,106 @@ function DesktopPageInner() {
                         )}
                     </div>
                 </div>
+            ) : rdSession ? (
+                <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
+                    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
+                        <StatusDot online={connected} />
+                        <span className="min-w-0 truncate text-sm text-foreground" title={targetLabel}>{targetLabel}</span>
+                        <Chip mono>RustDesk</Chip>
+                        {connected && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                        {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={rdDisplay} viewport={null} scale={null} />}
+                        <span className="flex-1" />
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.screen.menu")}>
+                                    <Monitor size={15} />
+                                    <span className="hidden max-w-32 truncate sm:inline">{rdInfo && rdInfo.displays.length > 1 ? t("desktop.screen.display", { n: rdInfo.currentDisplay + 1 }) : t("desktop.screen.whole")}</span>
+                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-64">
+                                <DropdownMenuLabel>{t("desktop.screen.menu")}</DropdownMenuLabel>
+                                {rdInfo && rdInfo.displays.length > 1 ? (
+                                    <DropdownMenuRadioGroup value={String(rdInfo.currentDisplay)} onValueChange={(v) => { rdViewerRef.current?.switchDisplay(Number(v)); rdViewerRef.current?.focus(); }}>
+                                        {rdInfo.displays.map((d, i) => (
+                                            <DropdownMenuRadioItem key={i} value={String(i)}>
+                                                <span className="min-w-0 flex-1 truncate">{t("desktop.screen.display", { n: i + 1 })}</span>
+                                                <span className="font-mono text-xs text-muted-foreground">{d.width}×{d.height}</span>
+                                            </DropdownMenuRadioItem>
+                                        ))}
+                                    </DropdownMenuRadioGroup>
+                                ) : (
+                                    <p className="px-2 py-1.5 text-xs text-muted-foreground">{t("desktop.screen.single")}</p>
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel className="text-xs text-muted-foreground">{t("desktop.field.quality")}</DropdownMenuLabel>
+                                <DropdownMenuRadioGroup value={quality} onValueChange={(v) => actions.setQuality(v as DesktopQuality)}>
+                                    {QUALITY_VALUES.map((q) => (
+                                        <DropdownMenuRadioItem key={q} value={q}>{t(QUALITY_LABEL[q])}</DropdownMenuRadioItem>
+                                    ))}
+                                </DropdownMenuRadioGroup>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.keyboard.menu")}>
+                                    <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
+                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-72">
+                                <DropdownMenuItem onSelect={() => setTypeOpen(true)}>
+                                    <TextCursorInput size={14} /> {t("desktop.keyboard.typeText")}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => rdViewerRef.current?.sendCtrlAltDel()}>
+                                    <Keyboard size={14} /> Ctrl+Alt+Del
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                        <Button size="sm" variant="ghost" onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
+                            {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setInfoOpen(true)} title={t("desktop.howItWorks")} aria-label={t("desktop.howItWorks")}>
+                            <Info size={15} />
+                        </Button>
+                        <Button size="sm" variant="destructive" onClick={() => { rdViewerRef.current?.disconnect(); actions.stop(); }}>
+                            <MonitorX size={15} /> {t("desktop.disconnect")}
+                        </Button>
+                    </div>
+                    {remoteClip !== null && (
+                        <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground">
+                            <span className="shrink-0">{t("desktop.remoteClipboard")}</span>
+                            <span className="min-w-0 flex-1 truncate font-mono text-foreground">{remoteClip}</span>
+                            <CopyButton value={remoteClip} />
+                        </div>
+                    )}
+                    <div className={cn("relative", fullscreen ? "flex-1" : "h-[calc(100dvh-15rem)] min-h-80")}>
+                        <RustDeskViewer
+                            ref={rdViewerRef}
+                            start={rdSession}
+                            password={form.password}
+                            onConnected={actions.onConnected}
+                            onEnded={actions.onEnded}
+                            onPeerInfo={actions.onRdPeerInfo}
+                            onStats={actions.onStats}
+                            onRemoteClipboard={onRemoteClipboard}
+                        />
+                        {!connected && (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-sm text-white">
+                                <span className="size-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-hidden />
+                                <span>{t("desktop.flow.now.connecting")}</span>
+                                <Button size="sm" variant="secondary" onClick={() => setInfoOpen(true)}>
+                                    <Info size={15} /> {t("desktop.whatsHappening")}
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                </div>
             ) : (
                 <ConnectPanel state={state} actions={actions} onInfo={() => setInfoOpen(true)} />
             )}
 
-            {!session && endedNormally && phase === "idle" && <Callout tone="info">{t("desktop.ended")}</Callout>}
+            {!session && !rdSession && endedNormally && phase === "idle" && <Callout tone="info">{t("desktop.ended")}</Callout>}
             {!loading && tunnels.length === 0 && (
                 <Callout tone="tip">
                     {t("desktop.noTunnels")}{" "}
@@ -404,11 +518,11 @@ type PageActions = ReturnType<typeof useDesktopPage>["actions"];
 
 function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
     const { t, tn } = useI18n();
-    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk, canProbe, probeState } = state;
+    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk } = state;
     const portOk = isValidPort(form.port);
-    const busy = isRustDesk ? probeState.state === "checking" : phase === "starting";
-    // 預熱畫面元件的 chunk（與填表並行）。/ Warm up the client chunk while the form is filled in.
-    useEffect(() => { void loadGuacamole().catch(() => undefined); }, []);
+    const busy = phase === "starting";
+    // 預熱畫面元件的 chunk（與填表並行）；RustDesk 是 vendored 的核心。/ Warm up the viewer chunk (the RustDesk core in that mode).
+    useEffect(() => { void (isRustDesk ? loadRustDeskCore() : loadGuacamole()).catch(() => undefined); }, [isRustDesk]);
 
     if (loading) return <div className={cn(CARD, "p-8 text-center text-sm text-muted-foreground")}>{t("common.loading")}</div>;
     if (tunnels.length === 0) return null;
@@ -424,23 +538,18 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
         { value: "sharp", label: t("desktop.quality.sharp") },
     ];
     const noAccounts = !!tunnel && tunnel.usernames.length === 0;
-    const shownFailure = isRustDesk ? probeState.failure : failure;
 
     return (
         <form
             className={cn(CARD, "space-y-5 p-4 sm:p-6")}
             onSubmit={(e) => {
                 e.preventDefault();
-                if (isRustDesk) {
-                    if (canProbe) void actions.runProbe();
-                } else if (canConnect) {
-                    void actions.connect();
-                }
+                if (canConnect) void actions.connect();
             }}
         >
-            {shownFailure && (isRustDesk ? probeState.state === "failed" : phase === "failed") && (
+            {failure && phase === "failed" && (
                 <Callout tone="danger">
-                    <p>{t(shownFailure.key, shownFailure.vars)}</p>
+                    <p>{t(failure.key, failure.vars)}</p>
                     <button type="button" onClick={onInfo} className="mt-1 text-sm text-destructive underline underline-offset-2">
                         {t("desktop.showWhere")}
                     </button>
@@ -501,11 +610,9 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                     <Input inputMode="numeric" value={form.port} onChange={(e) => actions.update({ port: e.target.value.replace(/[^\d]/g, "") })} />
                 </Field>
 
-                {!isRustDesk && (
-                    <Field label={t("desktop.field.quality")} hint={t(QUALITY_HINT[quality])}>
-                        <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
-                    </Field>
-                )}
+                <Field label={t("desktop.field.quality")} hint={isRustDesk ? t("desktop.rustdesk.qualityHint") : t(QUALITY_HINT[quality])}>
+                    <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
+                </Field>
 
                 {!isRustDesk && savedLogins.length > 0 && (
                     <Field label={t("desktop.field.saved")} hint={t("desktop.field.savedHint")}>
@@ -519,9 +626,14 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                 )}
 
                 {isRustDesk ? (
-                    <div className="sm:col-span-2">
-                        <RustDeskPanel state={state} />
-                    </div>
+                    <>
+                        <Field label={t("desktop.field.rdPassword")} hint={t("desktop.field.rdPasswordHint")}>
+                            <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
+                        </Field>
+                        <div className="sm:col-span-2">
+                            <RustDeskPanel state={state} actions={actions} />
+                        </div>
+                    </>
                 ) : savedLogin ? (
                     <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm sm:col-span-2">
                         <span className="flex flex-wrap items-center gap-2 text-foreground">
@@ -571,27 +683,24 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                     <Info size={14} className="shrink-0" aria-hidden />
                     <span className="truncate">{t("desktop.pathSummary", { device: tunnel?.name ?? "—", target: host ? address : t("desktop.targetDeviceShort", { address }) })}</span>
                 </button>
-                {isRustDesk ? (
-                    <Button type="submit" variant={probeState.state === "ok" ? "outline" : "default"} disabled={!canProbe || busy} className="sm:min-w-40">
-                        {busy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} {busy ? t("desktop.rustdesk.checking") : t("desktop.rustdesk.check")}
-                    </Button>
-                ) : (
-                    <Button type="submit" disabled={!canConnect || busy} className="sm:min-w-40">
-                        <ScreenShare size={16} /> {busy ? t("desktop.connecting") : t("desktop.connect")}
-                    </Button>
-                )}
+                <Button type="submit" disabled={!canConnect || busy} className="sm:min-w-40">
+                    <ScreenShare size={16} /> {busy ? t("desktop.connecting") : isRustDesk ? t("desktop.rustdesk.connectBrowser") : t("desktop.connect")}
+                </Button>
             </div>
         </form>
     );
 }
 
 /**
- * RustDesk：四步 —— 開 Direct IP、從裝置檢查、跑 ssh -L、用 app 連 127.0.0.1。指令和命令表同一套產生器。
- * RustDesk: enable Direct IP, probe from the device, run ssh -L, connect the app to 127.0.0.1.
+ * RustDesk 的說明與「用 app」的路（收起）：從裝置檢查 Direct IP 埠、跑 ssh -L、用 app 連 127.0.0.1。指令和命令表同一套產生器。
+ * The RustDesk notes plus the native-app path behind a disclosure: probe the port from the device, run ssh -L,
+ * connect the app to 127.0.0.1. The command comes from the same generator as the command sheet.
  */
-function RustDeskPanel({ state }: { state: PageState }) {
+function RustDeskPanel({ state, actions }: { state: PageState; actions: PageActions }) {
     const { t, tn } = useI18n();
-    const { tunnel, host, form, address, probeState, connectTarget } = state;
+    const { tunnel, host, form, address, probeState, connectTarget, canProbe } = state;
+    const [open, setOpen] = useState(false);
+    const probing = probeState.state === "checking";
     const port = isValidPort(form.port) ? form.port : String(RUSTDESK_PORT);
     const params = { lanHost: host ? host.address : "localhost", remotePort: port, localPort: port };
     const segments = connectTarget ? buildSegments("rustdesk", params, connectTarget, { background: false, keepAlive: true, exitOnFailure: false }) : null;
@@ -604,34 +713,50 @@ function RustDeskPanel({ state }: { state: PageState }) {
     );
 
     return (
-        <div className="space-y-4 rounded-md border border-border bg-surface px-3 py-3">
-            <p className="text-sm text-muted-foreground">{t("desktop.rustdesk.intro")}</p>
-            <ol className="space-y-3">
-                <li className={stepClass}>{num(1)}<span className="text-foreground">{t("desktop.rustdesk.step1")}</span></li>
-                <li className={stepClass}>
-                    {num(2, probeState.state === "ok")}
-                    <span className="min-w-0 flex-1 text-foreground">
-                        {t("desktop.rustdesk.step2")}
-                        {probeState.state === "ok" && (
-                            <span className="mt-1 flex items-center gap-1.5 text-success"><CheckCircle2 size={15} aria-hidden /> {t("desktop.rustdesk.reachable", { address })}</span>
-                        )}
-                        {probeState.state === "failed" && probeState.failure && (
-                            <span className="mt-1 flex items-start gap-1.5 text-destructive"><XCircle size={15} className="mt-0.5 shrink-0" aria-hidden /> <span>{t(probeState.failure.key, probeState.failure.vars)}</span></span>
-                        )}
-                    </span>
-                </li>
-                <li className={stepClass}>
-                    {num(3)}
-                    <span className="min-w-0 flex-1 space-y-2 text-foreground">
-                        <span className="block">{t("desktop.rustdesk.step3")}</span>
-                        {segments ? <CommandBar segments={segments} /> : <span className="block text-xs text-muted-foreground">{t("common.loading")}</span>}
-                        <Link href={sheetHref} prefetch={false} className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline">
-                            <ExternalLink size={12} aria-hidden /> {t("desktop.rustdesk.sheetLink")}
-                        </Link>
-                    </span>
-                </li>
-                <li className={stepClass}>{num(4)}<span className="text-foreground">{tn("desktop.rustdesk.step4", { addr: code(appAddr) })}</span></li>
-            </ol>
+        <div className="space-y-4">
+            <Callout tone="info">
+                <p>{t("desktop.rustdesk.intro")}</p>
+                <p className="mt-1">{t("desktop.rustdesk.step1")}</p>
+            </Callout>
+            <div className="rounded-md border border-border bg-surface">
+                <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-foreground">
+                    <ChevronDown size={15} className={cn("shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden />
+                    <span className="flex-1">{t("desktop.rustdesk.app")}</span>
+                </button>
+                {open && (
+                    <div className="space-y-4 border-t border-border px-3 py-3">
+                        <p className="text-sm text-muted-foreground">{t("desktop.rustdesk.appIntro")}</p>
+                        <ol className="space-y-3">
+                            <li className={stepClass}>
+                                {num(1, probeState.state === "ok")}
+                                <span className="min-w-0 flex-1 space-y-2 text-foreground">
+                                    <span className="block">{t("desktop.rustdesk.step2")}</span>
+                                    <Button type="button" size="sm" variant="outline" disabled={!canProbe} onClick={() => void actions.runProbe()}>
+                                        {probing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} {probing ? t("desktop.rustdesk.checking") : t("desktop.rustdesk.check")}
+                                    </Button>
+                                    {probeState.state === "ok" && (
+                                        <span className="flex items-center gap-1.5 text-success"><CheckCircle2 size={15} aria-hidden /> {t("desktop.rustdesk.reachable", { address })}</span>
+                                    )}
+                                    {probeState.state === "failed" && probeState.failure && (
+                                        <span className="flex items-start gap-1.5 text-destructive"><XCircle size={15} className="mt-0.5 shrink-0" aria-hidden /> <span>{t(probeState.failure.key, probeState.failure.vars)}</span></span>
+                                    )}
+                                </span>
+                            </li>
+                            <li className={stepClass}>
+                                {num(2)}
+                                <span className="min-w-0 flex-1 space-y-2 text-foreground">
+                                    <span className="block">{t("desktop.rustdesk.step3")}</span>
+                                    {segments ? <CommandBar segments={segments} /> : <span className="block text-xs text-muted-foreground">{t("common.loading")}</span>}
+                                    <Link href={sheetHref} prefetch={false} className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline">
+                                        <ExternalLink size={12} aria-hidden /> {t("desktop.rustdesk.sheetLink")}
+                                    </Link>
+                                </span>
+                            </li>
+                            <li className={stepClass}>{num(3)}<span className="text-foreground">{tn("desktop.rustdesk.step4", { addr: code(appAddr) })}</span></li>
+                        </ol>
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

@@ -9,7 +9,7 @@
  */
 import React, { useMemo } from "react";
 import Link from "next/link";
-import { Bot, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
+import { Bot, Cast, ChevronDown, FolderOpen, Laptop, MonitorPlay, Plug, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
 import { MoreBelow } from "@/components/ui/Modal";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -27,6 +27,7 @@ export const PRESENCE_KINDS: Record<string, { icon: LucideIcon; label: Translati
     ssh: { icon: Laptop, label: "tunnels.presenceKind.ssh" },
     ai: { icon: Bot, label: "tunnels.presenceKind.ai" },
     desktop: { icon: ScreenShare, label: "tunnels.presenceKind.desktop" },
+    rustdesk: { icon: Cast, label: "tunnels.presenceKind.rustdesk" },
 };
 
 interface PresenceLine {

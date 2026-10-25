@@ -462,11 +462,16 @@ impl Desktop {
 
 /// 使用者仍可用這條隧道的這個裝置帳號（VIEW + 允許清單）。/ The user still has VIEW and the hop account.
 pub async fn still_allowed(db: &Db, session: &Session) -> bool {
-    let Ok(Some(tunnel)) = db::tunnels::by_id(db, session.tunnel_id).await else { return false };
-    if !permissions::check_access(db, session.user_id, &tunnel, Permission::View).await.unwrap_or(false) {
+    allowed_for(db, session.user_id, session.tunnel_id, &session.hop_username).await
+}
+
+/// 同上，給沒有 `Session` 的呼叫者（網頁內 RustDesk 的 session）。/ The same check for other session kinds.
+pub async fn allowed_for(db: &Db, user_id: i64, tunnel_id: i64, hop_username: &str) -> bool {
+    let Ok(Some(tunnel)) = db::tunnels::by_id(db, tunnel_id).await else { return false };
+    if !permissions::check_access(db, user_id, &tunnel, Permission::View).await.unwrap_or(false) {
         return false;
     }
-    permissions::allowed_usernames(db, session.user_id, &tunnel).await.map(|list| list.iter().any(|u| u.username == session.hop_username)).unwrap_or(false)
+    permissions::allowed_usernames(db, user_id, &tunnel).await.map(|list| list.iter().any(|u| u.username == hop_username)).unwrap_or(false)
 }
 
 fn constant_eq(a: &str, b: &str) -> bool {
