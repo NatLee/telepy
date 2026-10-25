@@ -1,5 +1,5 @@
 #!/bin/bash
-# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port} (reverse port ${reverse_port})
+# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port}
 set -e
 
 command -v docker >/dev/null 2>&1 || { echo 'docker not found. Please install Docker first.'; exit 1; }
@@ -30,7 +30,7 @@ ${known_hosts_mount}  -e SSH_REMOTE_USER=telepy \
   -e SSH_REMOTE_PORT=${reverse_server_ssh_port} \
   -e SSH_MODE=-R \
   -e 'SSH_BIND_IP=*' \
-  -e SSH_TUNNEL_PORT=${reverse_port} \
+  -e SSH_TUNNEL_PORT=0 \
   -e SSH_TARGET_HOST=host.docker.internal \
   -e SSH_TARGET_PORT=${ssh_port} \
   -e SSH_SERVER_ALIVE_INTERVAL=30 \

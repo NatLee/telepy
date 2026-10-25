@@ -1,7 +1,7 @@
 # telepy-remove-tunnel: run by Telepy over SSH when a tunnel is deleted (Windows).
-# Same contract as remove_tunnel.sh: find what runs THIS tunnel (matched by its reverse port or key;
-# nothing else is touched), remove its files now and write the stopping part into a one-shot stop
-# script that Telepy starts last. Every result is a line "TELEPY|<kind>|<what>|<detail>".
+# Same contract as remove_tunnel.sh: find what runs THIS tunnel (matched by its key — the -i file of a
+# command — or, for older scripts, its reverse port; nothing else is touched), remove its files now and
+# write the stopping part into a one-shot stop script that Telepy starts last. Every result is a line "TELEPY|<kind>|<what>|<detail>".
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
 $TunnelId = ${t_id}
@@ -15,18 +15,49 @@ $Hosts = '(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+'
 # 檔案裡的 forward；命令列上的 -R forward（不碰同號碼的 -L）。/ The forward in files; a -R forward on a command line.
 $PortRe = '(^|[^0-9])' + $TunnelPort + ':' + $Hosts
 $ProcRe = '-[A-Za-z]*R ?[''"]?([^ :''"]*:)?' + $TunnelPort + ':' + $Hosts
+# 任何 -R forward（新腳本寫 0，改認金鑰）。/ Any -R forward at all (new scripts ask for 0; the key tells).
+$AnyRRe = '-[A-Za-z]*R ?[''"]?([^ :''"]*:)?[0-9]+:'
 $EnvRe = 'SSH_TUNNEL_PORT[=:][" ]*' + $TunnelPort + '([^0-9]|$)'
 $ScriptRe = '[A-Za-z]:\\[^"*?<>|]*?\.(ps1|bat|cmd|vbs)'
+$KeyRe = '(?:-i ?|IdentityFile[ =]|KEY_FILE=)[''"]?([^ ''"]+)'
 
+# ~ 與 $env:USERPROFILE 展開。/ Expand ~ and %USERPROFILE%-style prefixes.
+function Expand-KeyPath([string]$Path) {
+    $p = $Path -replace '^~', $HOME -replace '^\$env:USERPROFILE', $HOME -replace '^%USERPROFILE%', $HOME
+    return [Environment]::ExpandEnvironmentVariables($p)
+}
+# 這個私鑰檔是不是這條隧道的金鑰：先看旁邊的 .pub，沒有就用 ssh-keygen。/ The .pub next to it first, else ssh-keygen.
+function Test-KeyFile([string]$Path) {
+    $f = Expand-KeyPath $Path
+    if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
+    $pub = $f + '.pub'
+    if (Test-Path -LiteralPath $pub) {
+        $words = ([string](Get-Content -LiteralPath $pub -Raw)).Trim() -split '\s+'
+        if ($words.Count -ge 2 -and $words[1] -eq $TunnelKey) { return $true }
+    }
+    $keygen = Get-Command ssh-keygen -ErrorAction SilentlyContinue
+    if (-not $keygen) { return $false }
+    $out = [string](& $keygen.Source -y -f $f 2>$null)
+    $words = $out.Trim() -split '\s+'
+    return ($words.Count -ge 2 -and $words[1] -eq $TunnelKey)
+}
+# 這段文字引用到這條隧道的金鑰？/ Does this text refer to the tunnel's key?
+function Test-UsesKey([string]$Text) {
+    foreach ($m in [regex]::Matches([string]$Text, $KeyRe)) { if (Test-KeyFile $m.Groups[1].Value) { return $true } }
+    return $false
+}
+# 檔案是這條隧道的：寫著它的號碼（舊腳本），或引用它的金鑰。/ A file of this tunnel: its number, or its key.
 function Test-Port([string]$Path) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $text = [string](Get-Content -LiteralPath $Path -Raw)
-    return ($text -match $PortRe) -or ($text -match $EnvRe)
+    return ($text -match $PortRe) -or ($text -match $EnvRe) -or (Test-UsesKey $text)
 }
-# 命令列帶這條 forward，或指到含這條 forward 的腳本。/ A command line with the forward or pointing at a script with it.
+# 命令列是這條隧道的：-R 帶它的號碼、-R 任何號碼加上它的金鑰，或指到它的腳本（絕不碰只有 -L 的）。
+# A command line of this tunnel: -R with its number, any -R plus its key, or pointing at its script (never -L only).
 function Test-Command([string]$Text) {
     if (-not $Text) { return $false }
     if ($Text -match $ProcRe) { return $true }
+    if (($Text -match $AnyRRe) -and (Test-UsesKey $Text)) { return $true }
     foreach ($m in [regex]::Matches($Text, $ScriptRe)) { if (Test-Port $m.Value) { return $true } }
     return $false
 }
@@ -59,7 +90,8 @@ $ById = @{}
 foreach ($p in $Procs) { $ById[[int]$p.ProcessId] = $p }
 foreach ($p in $Procs) {
     $cl = [string]$p.CommandLine
-    if (-not $cl -or $cl -notmatch $ProcRe -or $cl -notmatch 'ssh' -or $cl -match 'telepy-remove-tunnel|telepy-stop-') { continue }
+    if (-not $cl -or $cl -notmatch 'ssh' -or $cl -match 'telepy-remove-tunnel|telepy-stop-') { continue }
+    if (-not (($cl -match $ProcRe) -or (($cl -match $AnyRRe) -and (Test-UsesKey $cl)))) { continue }
     Out-Telepy 'found' 'process' ('{0} {1}' -f $p.ProcessId, $cl)
     $Pids.Add([int]$p.ProcessId)
     $parent = $ById[[int]$p.ParentProcessId]
@@ -145,7 +177,11 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
     }
     foreach ($c in $ids) {
         $envs = @(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $c 2>$null)
-        if (-not ($envs | Where-Object { $_ -match ('^SSH_TUNNEL_PORT=' + $TunnelPort + '$') })) { continue }
+        if (-not ($envs | Where-Object { $_ -match ('^SSH_TUNNEL_PORT=' + $TunnelPort + '$') })) {
+            # 新容器：掛到 /id_rsa 的金鑰是這條隧道的。/ New containers: the key mounted at /id_rsa is the tunnel's.
+            $mounted = [string](docker inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' $c 2>$null)
+            if (-not $mounted -or -not (Test-KeyFile $mounted.Trim())) { continue }
+        }
         $cname = ([string](docker inspect -f '{{.Name}}' $c 2>$null)).TrimStart('/')
         Out-Telepy 'found' 'docker' $cname
         Add-Stop ('docker rm -f {0} | Out-Null' -f $c) 'stop' ('docker ' + $cname)

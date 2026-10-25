@@ -134,7 +134,7 @@ async fn tunnel_lifecycle_and_dashboard() {
     let r = app.get(&format!("/tunnels/server/script/ssh/{id}/22"), Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert_eq!(r.json["language"], "bash");
-    assert!(r.json["script"].as_str().unwrap().contains("-NR '*:1024:localhost:22'"));
+    assert!(r.json["script"].as_str().unwrap().contains("-NR '*:0:localhost:22'"), "{}", r.text);
     assert!(r.json["script"].as_str().unwrap().contains("StrictHostKeyChecking=no"));
     let r = app.get(&format!("/tunnels/server/script/autossh-service/{id}/22"), Some(&admin)).await;
     assert!(r.json["script"].as_str().unwrap().contains("User=ubuntu"), "{}", r.text);

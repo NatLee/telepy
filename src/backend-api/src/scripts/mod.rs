@@ -366,7 +366,7 @@ mod tests {
         let (s, lang) = render_script("ssh", &ctx).unwrap();
         assert_eq!(lang, "bash");
         assert!(s.contains("ssh  \\\n-o \"ServerAliveInterval 30\""), "{s}");
-        assert!(s.contains("-NR '*:12345:localhost:22'"));
+        assert!(s.contains("-NR '*:0:localhost:22'"), "the number is the gateway's business; the device asks for 0: {s}");
         assert!(s.contains("telepy@telepy.test"));
         let ctx2 = ScriptContext { key_path: Some("~/.ssh/id_rsa"), ..ctx.clone() };
         let (s, _) = render_script("autossh", &ctx2).unwrap();
@@ -398,7 +398,7 @@ mod tests {
         assert!(s.contains("- \"~/.ssh/id_rsa:/id_rsa:ro\""), "default key path: {s}");
         assert!(s.contains("- \"host.docker.internal:host-gateway\""));
         assert!(s.contains("SSH_TARGET_HOST: host.docker.internal"));
-        assert!(s.contains("SSH_TUNNEL_PORT: \"12345\"") && s.contains("SSH_TARGET_PORT: \"22\"") && s.contains("SSH_REMOTE_PORT: \"24242\""));
+        assert!(s.contains("SSH_TUNNEL_PORT: \"0\"") && s.contains("SSH_TARGET_PORT: \"22\"") && s.contains("SSH_REMOTE_PORT: \"24242\""));
         assert!(s.contains("SSH_REMOTE_HOST: \"telepy.test\"") && s.contains("SSH_REMOTE_USER: telepy"));
         assert!(s.contains("grep -qxF 'ssh-ed25519 AAAAtest web-service' ~/.ssh/authorized_keys"), "append, never overwrite: {s}");
         assert!(s.contains("docker compose -f telepy-docker-compose.yml up -d"));
@@ -411,7 +411,7 @@ mod tests {
         assert!(s.contains("KEY_FILE=/keys/dev.pem\n"), "{s}");
         assert!(s.contains("-v \"$KEY_FILE\":/id_rsa:ro"));
         assert!(s.contains("--add-host host.docker.internal:host-gateway"));
-        assert!(s.contains("-e SSH_TUNNEL_PORT=12345") && s.contains("-e SSH_TARGET_PORT=22") && s.contains("-e SSH_REMOTE_HOST=telepy.test"));
+        assert!(s.contains("-e SSH_TUNNEL_PORT=0") && s.contains("-e SSH_TARGET_PORT=22") && s.contains("-e SSH_REMOTE_HOST=telepy.test"));
         assert!(s.contains("TELEPY_KEY='ssh-ed25519 AAAAtest web-service'"));
         assert!(s.contains(">> ~/.ssh/authorized_keys") && !s.contains(" > ~/.ssh/authorized_keys"), "append only: {s}");
         assert!(s.contains("jnovack/autossh:latest"));
