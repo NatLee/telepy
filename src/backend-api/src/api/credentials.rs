@@ -2,8 +2,11 @@
 //! - `GET    /api/credentials[?tunnel_id=&lan_host_id=&protocol=]`：自己存的（永遠不回密碼）
 //! - `POST   /api/credentials`：存一筆（要看得到那條隧道；區網主機要屬於它）
 //! - `PATCH  /api/credentials/{id}`、`DELETE /api/credentials/{id}`：只能動自己的
-//! 用法：`POST …/desktop/start` 帶 `credential_id`，後端在握手時解開。見 `vault.rs`。
-//! Credential vault endpoints; the desktop start takes `credential_id` and the backend unseals it for the handshake.
+//!
+//! 用法：`POST …/desktop/start` 帶 `credential_id`，後端在握手時解開；`POST …/rustdesk/start` 帶 `credential_id` 則解開後
+//! 交給瀏覽器（RustDesk 的挑戰回應在瀏覽器裡的核心做）。見 `vault.rs`。
+//! Credential vault endpoints; the desktop start takes `credential_id` and the backend unseals it for the handshake,
+//! the RustDesk start hands the unsealed password to the browser (the core answers the challenge there).
 
 use std::collections::HashMap;
 
@@ -15,13 +18,22 @@ use serde_json::{json, Value};
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, credentials::Credential};
-use crate::desktop::Protocol;
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_to_iso_utc_z, json_i64, json_str};
 use crate::vault;
 use utoipa_axum::{router::OpenApiRouter, routes};
+
+/// 憑證能綁的協定：guacd 畫的兩種，加上瀏覽器裡的 RustDesk。/ Protocols a saved login can be bound to.
+pub fn parse_protocol(s: &str) -> Option<&'static str> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "rdp" => Some("rdp"),
+        "vnc" => Some("vnc"),
+        "rustdesk" => Some("rustdesk"),
+        _ => None,
+    }
+}
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list, create)).routes(routes!(update, remove))
@@ -110,7 +122,7 @@ async fn list(State(state): State<AppState>, AuthUser(user): AuthUser, Query(q):
 #[utoipa::path(post, path = "/api/credentials", tag = "Credential vault", security(("bearer" = [])), request_body = super::schemas::SavedCredentialCreate, responses((status = 201, body = super::schemas::SavedCredential), (status = 400, description = "{field: [message]}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let protocol = match json_str(&body, "protocol") {
-        Some(p) => Protocol::parse(&p).ok_or_else(|| ApiError::field("protocol", "Must be rdp or vnc."))?,
+        Some(p) => parse_protocol(&p).ok_or_else(|| ApiError::field("protocol", "Must be rdp, vnc or rustdesk."))?,
         None => return Err(ApiError::field("protocol", "This field is required.")),
     };
     let tunnel_id = json_i64(&body, "tunnel_id").ok_or_else(|| ApiError::field("tunnel_id", "This field is required."))?;
@@ -130,7 +142,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     let vault = &state.vault;
     let row = db::credentials::create(
         &state.db,
-        db::credentials::NewCredential { user_id: user.id, label: &label, protocol: protocol.as_str(), tunnel_id: tunnel.id, lan_host_id, port, login: &login, domain: &domain },
+        db::credentials::NewCredential { user_id: user.id, label: &label, protocol, tunnel_id: tunnel.id, lan_host_id, port, login: &login, domain: &domain },
         |id| vault.seal(&vault::aad(user.id, id), password.as_bytes()),
     )
     .await?;
@@ -167,10 +179,11 @@ async fn remove(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     }
 }
 
-/// 遠端桌面用：讀自己的那筆、確認綁定的是這個桌面、解開。/ For the desktop start: own row, same target, unsealed.
-pub async fn unseal_for(state: &AppState, user_id: i64, id: i64, tunnel_id: i64, lan_host_id: Option<i64>, protocol: Protocol) -> ApiResult<(Credential, String)> {
+/// 遠端桌面 / RustDesk 用：讀自己的那筆、確認綁定的是這個桌面（隧道、主機、協定）、解開。
+/// For the desktop and RustDesk starts: own row, same target (tunnel, host, protocol), unsealed.
+pub async fn unseal_for(state: &AppState, user_id: i64, id: i64, tunnel_id: i64, lan_host_id: Option<i64>, protocol: &str) -> ApiResult<(Credential, String)> {
     let c = db::credentials::by_id(&state.db, user_id, id).await?.ok_or_else(|| ApiError::field("credential_id", "Saved login not found."))?;
-    if c.tunnel_id != tunnel_id || c.lan_host_id != lan_host_id || c.protocol != protocol.as_str() {
+    if c.tunnel_id != tunnel_id || c.lan_host_id != lan_host_id || c.protocol != protocol {
         return Err(ApiError::field("credential_id", "This saved login belongs to a different desktop."));
     }
     let plain = state

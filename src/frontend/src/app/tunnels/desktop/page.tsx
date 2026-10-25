@@ -91,7 +91,7 @@ function DesktopPageInner() {
     const { t } = useI18n();
     const { showSuccess } = useToast();
     const { state, actions } = useDesktopPage();
-    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState, rdSession, rdInfo, quality } = state;
+    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState, rdSession, rdInfo, rdPassword, quality } = state;
     const viewerRef = useRef<DesktopViewerHandle | null>(null);
     const rdViewerRef = useRef<RustDeskViewerHandle | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -375,7 +375,7 @@ function DesktopPageInner() {
                         <span className="min-w-0 truncate text-sm text-foreground" title={targetLabel}>{targetLabel}</span>
                         <Chip mono>RustDesk</Chip>
                         {connected && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
-                        {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={rdDisplay} viewport={null} scale={null} />}
+                        {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={rdDisplay} viewport={null} scale={null} engine="rustdesk" />}
                         <span className="flex-1" />
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -445,11 +445,11 @@ function DesktopPageInner() {
                         <RustDeskViewer
                             ref={rdViewerRef}
                             start={rdSession}
-                            password={form.password}
+                            password={rdPassword}
                             onConnected={actions.onConnected}
                             onEnded={actions.onEnded}
                             onPeerInfo={actions.onRdPeerInfo}
-                            onStats={actions.onStats}
+                            onStats={actions.onRdStats}
                             onRemoteClipboard={onRemoteClipboard}
                         />
                         {!connected && (
@@ -614,8 +614,8 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
 
-                {!isRustDesk && savedLogins.length > 0 && (
-                    <Field label={t("desktop.field.saved")} hint={t("desktop.field.savedHint")}>
+                {savedLogins.length > 0 && (
+                    <Field label={t("desktop.field.saved")} hint={t(isRustDesk ? "desktop.field.savedHintRd" : "desktop.field.savedHint")}>
                         <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
                             <option value="">{t("desktop.field.savedNone")}</option>
                             {savedLogins.map((c) => (
@@ -627,9 +627,36 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
 
                 {isRustDesk ? (
                     <>
-                        <Field label={t("desktop.field.rdPassword")} hint={t("desktop.field.rdPasswordHint")}>
-                            <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
-                        </Field>
+                        {savedLogin ? (
+                            <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
+                                <span className="flex flex-wrap items-center gap-2 text-foreground">
+                                    <KeyRound size={15} className="text-muted-foreground" aria-hidden />
+                                    <span>{tn("desktop.savedUsesRd", { label: <strong>{savedLogin.label}</strong> })}</span>
+                                </span>
+                                <span className="text-xs text-muted-foreground">{t("desktop.savedNoteRd")}</span>
+                                <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
+                                    {t("desktop.savedForget")}
+                                </button>
+                            </div>
+                        ) : (
+                            <Field label={t("desktop.field.rdPassword")} hint={t("desktop.field.rdPasswordHint")}>
+                                <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
+                            </Field>
+                        )}
+                        {!savedLogin && (
+                            <label className="flex items-start gap-2 self-center text-sm text-foreground">
+                                <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
+                                <span>
+                                    {t("desktop.saveLogin")}
+                                    <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHintRd")}</span>
+                                </span>
+                            </label>
+                        )}
+                        {!savedLogin && form.save && (
+                            <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
+                                <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={`RustDesk@${host ? host.address : tunnel?.name ?? ""}`} maxLength={100} />
+                            </Field>
+                        )}
                         <div className="sm:col-span-2">
                             <RustDeskPanel state={state} actions={actions} />
                         </div>

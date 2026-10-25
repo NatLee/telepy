@@ -133,6 +133,14 @@ export function useDesktopPage() {
     const [rdInfo, setRdInfo] = useState<RustDeskPeerInfo | null>(null);
     const rdSessionRef = useRef<RustDeskStart | null>(null);
     rdSessionRef.current = rdSession;
+    // 交給 RustDesk 核心的密碼：手打的，或 start 回應裡解開的存檔；session 結束就清掉。
+    // The password for the RustDesk core: typed, or the saved one unsealed in the start response; cleared with the session.
+    const [rdPassword, setRdPassword] = useState("");
+    // 隧道延遲（monitor 量的）：RustDesk 的統計沒有這一段，從通知補上。/ The monitor's tunnel RTT, merged into RustDesk's stats.
+    const [tunnelMs, setTunnelMs] = useState<number | null>(null);
+    const tunnelMsRef = useRef<number | null>(null);
+    tunnelMsRef.current = tunnelMs;
+    const tunnelRef = useRef<TopologyTunnel | null>(null);
     const sessionRef = useRef<DesktopStart | null>(null);
     sessionRef.current = session;
     const connectedRef = useRef(false);
@@ -166,9 +174,15 @@ export function useDesktopPage() {
             for (const p of msg.data) map[String(p)] = true;
             setPorts(map);
         },
+        [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_LATENCY]: (msg: NotificationPayload) => {
+            const latency = (msg as { latency?: Record<string, number> }).latency;
+            const port = tunnelRef.current?.reverse_port;
+            if (latency && port !== undefined && typeof latency[String(port)] === "number") setTunnelMs(latency[String(port)]);
+        },
     });
 
     const tunnel = useMemo(() => tunnels.find((tn) => String(tn.id) === tunnelParam) ?? null, [tunnels, tunnelParam]);
+    tunnelRef.current = tunnel;
     const host: LanHost | null = useMemo(() => (tunnel && hostParam ? tunnel.hosts.find((h) => String(h.id) === hostParam) ?? null : null), [tunnel, hostParam]);
     const online = tunnel ? (ports[String(tunnel.reverse_port)] ?? tunnel.online ?? false) : false;
 
@@ -215,11 +229,25 @@ export function useDesktopPage() {
 
     const address = host ? `${host.address}:${form.port}` : `127.0.0.1:${form.port}`;
     const isRustDesk = form.protocol === "rustdesk";
-    // 這個桌面（隧道 + 主機 + 協定）存過的登入。/ Logins saved for this desktop (tunnel + host + protocol).
-    const saved = useSavedLogins(tunnel && form.protocol !== "rustdesk" ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel && !isRustDesk);
+    // 這個桌面（隧道 + 主機 + 協定）存過的登入；RustDesk 存的是固定密碼。/ Logins saved for this desktop (tunnel + host + protocol).
+    const saved = useSavedLogins(tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel);
     const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
     const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && (phase === "idle" || phase === "failed");
     const canProbe = !!tunnel && online && !!form.account && isValidPort(form.port) && probeState.state !== "checking";
+
+    /** 連線當下先讀一次隧道延遲（之後靠通知）。/ Read the tunnel RTT once at connect time (notifications keep it fresh). */
+    const refreshTunnelMs = useCallback(async (port: number) => {
+        try {
+            const res = await apiFetch("/api/reverse/server/dashboard");
+            const data = res.ok ? await readJson<{ latency?: Record<string, number> }>(res) : null;
+            const v = data?.latency?.[String(port)];
+            if (typeof v === "number") setTunnelMs(v);
+        } catch {
+            // 沒有就顯示「—」。/ Shown as unknown.
+        }
+    }, []);
+    /** RustDesk 核心的統計沒有隧道那一段：補上 monitor 的數字。/ RustDesk's stats lack the tunnel hop: merge the monitor's RTT. */
+    const onRdStats = useCallback((s: StreamStats) => setStats({ ...s, tunnelMs: tunnelMsRef.current }), []);
 
     const connect = useCallback(async () => {
         if (!tunnel) return;
@@ -227,18 +255,46 @@ export function useDesktopPage() {
         setEndedNormally(false);
         setPhase("starting");
         if (form.protocol === "rustdesk") {
-            // 網頁內 RustDesk：只要票證；密碼留在瀏覽器給核心。/ In-browser RustDesk: a ticket only; the password stays here.
+            // 網頁內 RustDesk：只要票證；手打的密碼留在瀏覽器給核心，存檔的由後端解開放進回應。
+            // In-browser RustDesk: a ticket; a typed password stays here, a saved one comes back unsealed in the response.
             try {
+                let credentialId = savedLogin?.id ?? null;
+                if (!credentialId && form.save && form.password) {
+                    const created = await saved.create({
+                        label: form.saveLabel.trim() || `RustDesk@${host ? (host.label || host.hostname || host.address) : tunnel.name}`,
+                        protocol: "rustdesk",
+                        tunnel_id: tunnel.id,
+                        lan_host_id: host?.id ?? null,
+                        port: Number(form.port),
+                        login: "",
+                        domain: "",
+                        password: form.password,
+                    });
+                    if (typeof created === "string") {
+                        setFailure({ key: "desktop.err.saveLogin", vars: { message: created }, at: "telepy" });
+                        setPhase("failed");
+                        return;
+                    }
+                    credentialId = created.id;
+                    setForm((f) => ({ ...f, savedId: created.id, save: false, saveLabel: "" }));
+                }
                 const res = await apiFetch(`/api/reverse/server/${tunnel.id}/rustdesk/start`, {
                     method: "POST",
-                    body: JSON.stringify({ username: form.account, port: Number(form.port), lan_host_id: host?.id ?? null }),
+                    body: JSON.stringify({ username: form.account, port: Number(form.port), lan_host_id: host?.id ?? null, ...(credentialId ? { credential_id: credentialId } : {}) }),
                 });
-                const data = await readJson<RustDeskStart & { code?: string }>(res);
+                const data = await readJson<RustDeskStart & { code?: string; credential_id?: string[]; password?: string }>(res);
                 if (!res.ok || !data?.ticket) {
+                    if (data?.credential_id?.[0]) {
+                        setFailure({ key: "desktop.err.savedLogin", vars: { message: data.credential_id[0] }, at: "telepy" });
+                        setPhase("failed");
+                        return;
+                    }
                     setFailure(startFailure(data?.code, res.status, { account: form.account, address }));
                     setPhase("failed");
                     return;
                 }
+                setRdPassword(typeof data.password === "string" ? data.password : form.password);
+                void refreshTunnelMs(tunnel.reverse_port);
                 setStats(null);
                 setUnstable(false);
                 setFramebuffer(null);
@@ -324,7 +380,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [tunnel, host, form, address, savedLogin, saved, quality]);
+    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs]);
 
     const onConnected = useCallback(() => {
         setPhase("connected");
@@ -337,6 +393,7 @@ export function useDesktopPage() {
         setSession(null);
         setRdSession(null);
         setRdInfo(null);
+        setRdPassword("");
         setConnectedAt(null);
         setStats(null);
         setSelecting(false);
@@ -368,6 +425,7 @@ export function useDesktopPage() {
         setSession(null);
         setRdSession(null);
         setRdInfo(null);
+        setRdPassword("");
         setConnectedAt(null);
         setStats(null);
         setSelecting(false);
@@ -536,13 +594,13 @@ export function useDesktopPage() {
         state: {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
-            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo,
+            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
             setQuality, setCtrlMode, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
-            onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo,
+            onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },
             forgetSaved: async (id: number) => { if (await saved.remove(id)) setForm((f) => ({ ...f, savedId: null })); },
         },

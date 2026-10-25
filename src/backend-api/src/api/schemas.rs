@@ -972,6 +972,7 @@ pub struct SavedCredential {
 #[derive(ToSchema)]
 pub struct SavedCredentialCreate {
     pub label: String,
+    /// `rdp`, `vnc` or `rustdesk`
     pub protocol: String,
     pub tunnel_id: i64,
     pub lan_host_id: Option<i64>,
@@ -1064,6 +1065,8 @@ pub struct RustDeskStartRequest {
     pub lan_host_id: Option<i64>,
     /// RustDesk's Direct IP Access port on the target; default 21118
     pub port: Option<u16>,
+    /// A saved login of yours (protocol `rustdesk`, same tunnel and LAN host): its password comes back in `password`
+    pub credential_id: Option<i64>,
 }
 
 /// An in-browser RustDesk session. The browser's RustDesk core connects to `ws_path` twice with `?ticket=`:
@@ -1082,6 +1085,9 @@ pub struct RustDeskSession {
     pub target: DesktopTarget,
     /// The device account used for the hop
     pub username: String,
+    /// Only with `credential_id`: the saved RustDesk password, unsealed for this start and handed to the browser's core
+    /// for the hash challenge (the backend cannot answer it itself). Never logged.
+    pub password: Option<String>,
 }
 
 /// A port on the target answered a TCP connection opened from the device (the same path a desktop session

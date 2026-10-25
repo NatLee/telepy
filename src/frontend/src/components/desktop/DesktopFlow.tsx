@@ -251,7 +251,7 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
                     </>
                 ) : rdBrowser ? (
                     <>
-                        <li>{t("desktop.flow.rdb.notePassword")}</li>
+                        <li>{t(ctx.savedLogin ? "desktop.flow.rdb.noteVault" : "desktop.flow.rdb.notePassword")}</li>
                         <li>{t("desktop.flow.rdb.noteEngine")}</li>
                         <li>{t("desktop.flow.rdb.noteClipboard")}</li>
                         <li>{t("desktop.flow.rd.noteDirectIp")}</li>

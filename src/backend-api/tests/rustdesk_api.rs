@@ -202,3 +202,42 @@ async fn rustdesk_refusals() {
     assert!(app.state.rustdesk.get(sid).is_none());
     assert_eq!(app.post(&format!("/api/reverse/server/rustdesk/{sid}/stop"), Some(&alice.token), json!({})).await.status, StatusCode::NOT_FOUND);
 }
+
+/// 憑證庫的 RustDesk 密碼：start 帶 `credential_id` 就把密碼解開放進回應（瀏覽器裡的核心要用），綁錯目標或協定就拒絕。
+/// A saved RustDesk password comes back unsealed from the start (the browser's core needs it); a wrong target is refused.
+#[tokio::test]
+async fn rustdesk_start_with_a_saved_password() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let (rd_port, _) = fake_rustdesk_device().await;
+    let id = dev.tunnel_id;
+
+    let r = app.post("/api/credentials", Some(&alice.token), json!({"label": "office box", "protocol": "rustdesk", "tunnel_id": id, "password": "rd-secret", "port": rd_port})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let saved = r.json["id"].as_i64().unwrap();
+    let r = app.post("/api/credentials", Some(&alice.token), json!({"label": "vnc", "protocol": "vnc", "tunnel_id": id, "password": "v"})).await;
+    let vnc = r.json["id"].as_i64().unwrap();
+
+    let r = app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&alice.token), json!({"username": "ubuntu", "port": rd_port, "credential_id": saved})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["password"], "rd-secret", "the saved password is handed to the browser");
+    let sid = r.json["session_id"].as_str().unwrap().to_string();
+    assert!(app.state.rustdesk.get(&sid).unwrap().describe().contains("with saved login 'office box'"));
+    let r = app.get("/api/credentials", Some(&alice.token)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|c| c["id"] == saved && !c["last_used_at"].is_null()), "{}", r.text);
+
+    // 沒帶 credential_id 就沒有 password 欄位。/ Without credential_id there is no password field.
+    let r = app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&alice.token), json!({"username": "ubuntu", "port": rd_port})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(r.json.get("password").is_none());
+    // 別的協定 / 不存在的那筆 → credential_id 欄位錯誤。/ Another protocol or an unknown row: field error.
+    for cid in [vnc, 999_999] {
+        let r = app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&alice.token), json!({"username": "ubuntu", "port": rd_port, "credential_id": cid})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+        assert!(r.json["credential_id"][0].is_string(), "{}", r.text);
+    }
+}

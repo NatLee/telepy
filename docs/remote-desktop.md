@@ -130,6 +130,10 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   螢幕選單（對方 `peer_info` 的 displays → `switch_display`，RustDesk 原生切螢幕；畫質 best / balanced / low 對應 Telepy
   的三個預設）、鍵盤選單（送出文字、Ctrl+Alt+Del）、全螢幕、說明、中斷。info 路徑圖用 `inBrowser` 變體（三步）。
   剪貼簿：核心自己在分頁有焦點時讀瀏覽器剪貼簿送過去；遠端複製的文字顯示在工具列下方。
+- 憑證庫：RustDesk 密碼也能存（`protocol: rustdesk`）；表單有「已存的登入」選單與「儲存這組登入」。start 帶
+  `credential_id` 時後端解開、放進回應交給核心（見憑證庫一節）；`rustdesk_open` 事件註明 with saved login '<label>'。
+  統計：隧道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
+  待畫幀（核心在瀏覽器解碼，沒有這兩個數字），「網路往返」是核心自己量的瀏覽器 ↔ 裝置。
 - 範圍（MVP）：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質。沒有傳檔、聲音、終端機 —— 要這些用下面的 app 路。
 - 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
   `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
@@ -184,12 +188,15 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 
 - 每位使用者自己的：`GET /api/credentials`（可用 `tunnel_id` / `lan_host_id` / `protocol` 篩選）、`POST`、
   `PATCH /api/credentials/{id}`、`DELETE`。只有本人看得到、用得到；管理員也不例外。
-- 每筆綁一個桌面：`protocol` + `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`。
+- 每筆綁一個桌面：`protocol`（`rdp` / `vnc` / `rustdesk`）+ `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`
+  （RustDesk 只有固定密碼，`login` 留空）。
   `start` 收到的 `credential_id` 若不是同一個目標（隧道、區網主機、協定）就回 `credential_id` 欄位錯誤，
   所以一筆 Windows 密碼不會被拿去登另一台。
 - 密碼以 AES-256-GCM 封存，金鑰由 `SECRET_KEY` 衍生（前綴 `telepy-vault-v1:`），AAD =
   `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`，密碼永不回傳；
   解密只發生在 `start`，結果跟手打的一樣只留在 session 記憶體。輪換 `SECRET_KEY` 會讓舊的存檔解不開（重存即可）。
+  **RustDesk 是唯一的例外**：挑戰回應由瀏覽器裡的核心做，後端代答不了，所以 `POST …/rustdesk/start` 帶 `credential_id`
+  時後端解開後放進回應的 `password`（只有這一次、走 TLS、不記錄），前端交給核心後不留在頁面狀態。
 - 隧道或區網主機刪除時，綁在上面的憑證一起刪。使用後更新 `last_used_at`；`desktop_open` 事件會註明
   「with saved login '<label>'」（只有名稱，沒有帳密）。
 - 前端：桌面頁的「已存的登入」選單（`hooks/useSavedLogins.ts`）與「儲存這組登入」勾選（連線前先存，再用
