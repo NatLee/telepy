@@ -7,6 +7,7 @@ pub mod filemanager;
 pub mod gateway;
 pub mod notifications;
 pub mod remote_browser;
+pub mod rustdesk;
 pub mod terminal;
 pub mod tunnel_connection;
 
@@ -42,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .route("/ws/tunnel_connection/{tunnel_id}/", get(tunnel_connection_upgrade))
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
         .route("/ws/desktop/{session_id}/", get(desktop_upgrade))
+        .route("/ws/rustdesk/{session_id}/", get(rustdesk_upgrade))
         .route("/ws/gateway/", get(gateway_upgrade))
 }
 
@@ -60,6 +62,12 @@ async fn remote_browser_upgrade(State(state): State<AppState>, Path(session_id):
 /// the `guacamole` subprotocol must be echoed or the browser drops the socket.
 async fn desktop_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, Query(query): Query<HashMap<String, String>>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
     prepare(ws).protocols(["guacamole"]).on_upgrade(move |socket| desktop::handle(state, socket, session_id, query, meta))
+}
+
+/// 網頁內 RustDesk：票證在 query（瀏覽器端核心只拿得到一條網址），兩條連線（hbbs 角色、relay 角色）都來這裡。
+/// In-browser RustDesk: the ticket rides in the query; both of the core's sockets land here.
+async fn rustdesk_upgrade(State(state): State<AppState>, Path(session_id): Path<String>, Query(query): Query<HashMap<String, String>>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| rustdesk::handle(state, socket, session_id, query, meta))
 }
 
 fn prepare(ws: WebSocketUpgrade) -> WebSocketUpgrade {

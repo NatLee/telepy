@@ -1056,6 +1056,34 @@ pub struct DesktopScreen {
     pub primary: bool,
 }
 
+#[derive(ToSchema)]
+pub struct RustDeskStartRequest {
+    /// Device account for the SSH hop; omitted = the tunnel's default (or only) allowed username
+    pub username: Option<String>,
+    /// A LAN host of this tunnel; omitted = the device itself
+    pub lan_host_id: Option<i64>,
+    /// RustDesk's Direct IP Access port on the target; default 21118
+    pub port: Option<u16>,
+}
+
+/// An in-browser RustDesk session. The browser's RustDesk core connects to `ws_path` twice with `?ticket=`:
+/// first as its ID server (it sends a punch-hole request and gets a relay response), then as its relay (it
+/// sends a relay request and the socket becomes the peer stream, bridged to the device's Direct IP port).
+/// The RustDesk password is handled by the core in the browser and never sent to Telepy.
+#[derive(ToSchema)]
+pub struct RustDeskSession {
+    pub session_id: String,
+    #[schema(example = "/ws/rustdesk/<session_id>/")]
+    pub ws_path: String,
+    /// One-time-per-role ticket, passed as `?ticket=`
+    pub ticket: String,
+    /// Seconds the ticket stays valid
+    pub expires_in: u64,
+    pub target: DesktopTarget,
+    /// The device account used for the hop
+    pub username: String,
+}
+
 /// A port on the target answered a TCP connection opened from the device (the same path a desktop session
 /// takes). Used for desktops Telepy forwards instead of rendering, such as RustDesk's Direct IP port.
 #[derive(ToSchema)]
