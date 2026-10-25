@@ -1243,6 +1243,7 @@ export const ja: Record<TranslationKey, string> = {
     "desktop.screen.menu": "画面",
     "desktop.screen.whole": "デスクトップ全体",
     "desktop.screen.primary": "メイン",
+    "desktop.screen.guessed": "画面の形から推定",
     "desktop.screen.detecting": "デバイスに画面構成を問い合わせ中…",
     "desktop.screen.detect": "画面を再検出",
     "desktop.screen.single": "このデスクトップは 1 画面として表示されています。",

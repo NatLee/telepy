@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arrangeBySize, fitScale, parseStoredArea, placePositioned, rectFromPoints, screenChoices, splitChoices, type DetectedScreen } from "./desktopScreens.ts";
+import { arrangeBySize, fitScale, guessScreens, parseStoredArea, placePositioned, rectFromPoints, screenChoices, splitChoices, type DetectedScreen } from "./desktopScreens.ts";
 
 const laptop: DetectedScreen = { name: "eDP-1", x: 0, y: 0, width: 1920, height: 1080, primary: true };
 const external: DetectedScreen = { name: "HDMI-1", x: 1920, y: 0, width: 2560, height: 1440, primary: false };
@@ -73,8 +73,54 @@ test("screenChoices lists detected screens and hides the whole-screen entry", ()
     const left: DetectedScreen = { name: "left-eye", x: 0, y: 0, width: 1024, height: 768, primary: false };
     const right: DetectedScreen = { name: "right-eye", x: 1024, y: 0, width: 1024, height: 768, primary: false };
     assert.deepEqual(screenChoices([left, right, whole], { width: 2048, height: 768 }).map((c) => c.name), ["left-eye", "right-eye"]);
-    assert.deepEqual(screenChoices([], { width: 3840, height: 1080 }), [], "nothing detected: the menu falls back to splits");
-    assert.deepEqual(screenChoices([laptop, external], { width: 1920, height: 1080 }), [], "detected screens that don't fit");
+    assert.deepEqual(screenChoices([], { width: 3840, height: 1080 }).map((c) => [c.guessed, c.viewport.x, c.viewport.width]), [[true, 0, 1920], [true, 1920, 1920]], "nothing detected: guessed from the shape");
+    assert.deepEqual(screenChoices([whole], { width: 2048, height: 768 }).map((c) => [c.guessed, c.viewport.width]), [[true, 1024], [true, 1024]], "only a whole-picture monitor reported: guessed too");
+    assert.deepEqual(screenChoices([laptop, external], { width: 1920, height: 1080 }), [], "detected screens that don't fit, one common ratio: nothing");
+});
+
+test("guessScreens reads the layout off the framebuffer shape", () => {
+    const rect = (s: DetectedScreen) => [s.x, s.y, s.width, s.height];
+    // 兩顆 16:9 並排。/ Two 16:9 side by side.
+    const two = guessScreens({ width: 3840, height: 1080 });
+    assert.deepEqual(two.map(rect), [[0, 0, 1920, 1080], [1920, 0, 1920, 1080]]);
+    assert.ok(two[0].name.startsWith("16:9") && two[0].primary && !two[1].primary);
+    // 三顆、四顆。/ Three and four.
+    assert.deepEqual(guessScreens({ width: 5760, height: 1080 }).map(rect), [[0, 0, 1920, 1080], [1920, 0, 1920, 1080], [3840, 0, 1920, 1080]]);
+    assert.equal(guessScreens({ width: 7680, height: 1080 }).length, 4);
+    // 兩顆 4:3（Xvfb 測試機）。/ Two 4:3 (the Xvfb device).
+    assert.deepEqual(guessScreens({ width: 2048, height: 768 }).map(rect), [[0, 0, 1024, 768], [1024, 0, 1024, 768]]);
+    // 16:10 + 16:9 等高 → 混合比例也找得到；沒有黑色區域可看時寬的在前。/ Mixed ratios at equal height; wider first.
+    const mixed = guessScreens({ width: 1920 + 2133, height: 1200 });
+    assert.deepEqual(mixed.map((s) => s.width), [2133, 1920]);
+    // 單一常見比例 = 一顆，不猜（含超寬）。/ One common ratio, ultrawide included: one screen.
+    assert.deepEqual(guessScreens({ width: 1920, height: 1080 }), []);
+    assert.deepEqual(guessScreens({ width: 3440, height: 1440 }), []);
+    assert.deepEqual(guessScreens({ width: 2560, height: 1080 }), []);
+    assert.deepEqual(guessScreens({ width: 1728, height: 1117 }), [], "MacBook");
+    // 疊放。/ Stacked.
+    assert.deepEqual(guessScreens({ width: 1920, height: 2160 }).map(rect), [[0, 0, 1920, 1080], [0, 1080, 1920, 1080]]);
+    // 怪形狀 → 空。/ Odd shapes: nothing.
+    assert.deepEqual(guessScreens({ width: 3000, height: 1080 }), []);
+    assert.deepEqual(guessScreens({ width: 100, height: 50 }), []);
+});
+
+test("guessScreens measures a shorter screen from the black area", () => {
+    // 1920×1080 筆電在左、2560×1440 螢幕在右，筆電貼下緣：左段上方 360px 是黑的。
+    // A 1920×1080 laptop left of a 2560×1440 monitor, bottom-aligned: the top 360px of the left segment are black.
+    const fb = { width: 4480, height: 1440 };
+    const probe = (x: number, y: number) => x < 1920 && y < 360;
+    const got = guessScreens(fb, probe);
+    assert.deepEqual(got.map((s) => [s.x, s.y, s.width, s.height]), [[0, 360, 1920, 1080], [1920, 0, 2560, 1440]]);
+    assert.ok(got[0].name.startsWith("16:9 · 1920×1080"), got[0].name);
+    // 全黑桌布：量到的高度湊不出常見比例就不採用，保留整張高。/ A black wallpaper: no common ratio, keep the full height.
+    const dark = (x: number, y: number) => !(x >= 100 && x < 700 && y >= 200 && y < 500);
+    assert.deepEqual(guessScreens({ width: 3840, height: 1080 }, dark).map((s) => s.height), [1080, 1080]);
+    // MacBook（1728×1117）在右、2560×1440 在左、貼上緣：1728 ÷ 1440 不是任何比例，只有量黑色區域才找得到。
+    // A MacBook right of a 2560×1440 monitor, top-aligned: only the black area reveals it.
+    const mac = { width: 4288, height: 1440 };
+    const macProbe = (x: number, y: number) => x >= 2560 && y >= 1117;
+    assert.deepEqual(guessScreens(mac, macProbe).map((s) => [s.x, s.y, s.width, s.height]), [[0, 0, 2560, 1440], [2560, 0, 1728, 1117]]);
+    assert.deepEqual(guessScreens(mac), [], "without a probe that shape is unknown");
 });
 
 test("a dragged rectangle becomes a custom area", () => {

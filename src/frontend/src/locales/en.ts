@@ -1253,6 +1253,7 @@ export const en = {
     "desktop.screen.menu": "Screen",
     "desktop.screen.whole": "Whole desktop",
     "desktop.screen.primary": "main",
+    "desktop.screen.guessed": "Guessed from the picture's shape",
     "desktop.screen.detecting": "Asking the device about its screens…",
     "desktop.screen.detect": "Detect screens again",
     "desktop.screen.single": "This desktop shows as one screen.",
