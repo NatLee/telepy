@@ -92,3 +92,24 @@ async fn saved_logins_are_private_and_never_return_the_password() {
     assert_eq!(app.delete(&format!("/api/credentials/{oid}"), Some(&alice)).await.status, StatusCode::NO_CONTENT);
     assert_eq!(app.delete(&format!("/api/credentials/{oid}"), Some(&alice)).await.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn rustdesk_passwords_can_be_saved_too() {
+    let app = common::spawn().await;
+    let (alice, _bob) = app.admin_and_user("alice", "bob").await;
+    let pc = tunnel(&app, &alice, "pc", KEY_A).await;
+    // 沒有登入帳號：RustDesk 只有固定密碼。/ No login: RustDesk has a permanent password only.
+    let r = app.post("/api/credentials", Some(&alice), json!({"label": "rd", "protocol": "rustdesk", "tunnel_id": pc, "password": "rd-secret", "port": 21118})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.json["protocol"], "rustdesk");
+    assert_eq!(r.json["login"], "");
+    assert_eq!(r.json["has_password"], true);
+    assert!(!r.text.contains("rd-secret"));
+    let r = app.get(&format!("/api/credentials?tunnel_id={pc}&protocol=rustdesk"), Some(&alice)).await;
+    assert_eq!(r.json.as_array().unwrap().len(), 1);
+    let r = app.get(&format!("/api/credentials?tunnel_id={pc}&protocol=vnc"), Some(&alice)).await;
+    assert_eq!(r.json.as_array().unwrap().len(), 0, "a RustDesk login is not a VNC login");
+    let r = app.post("/api/credentials", Some(&alice), json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "password": "p"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json["protocol"][0].as_str().unwrap().contains("rustdesk"), "{}", r.text);
+}

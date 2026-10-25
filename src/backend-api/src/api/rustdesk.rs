@@ -2,8 +2,10 @@
 //! - `POST /api/reverse/server/{id}/rustdesk/start`：和桌面同一道門，先對目標的 Direct IP 埠開通道、發票證
 //! - `POST /api/reverse/server/rustdesk/{sid}/stop`
 //!
-//! 密碼不經這裡：RustDesk 的固定密碼由瀏覽器端核心直接做挑戰回應。設計見 `rustdesk/mod.rs`。
-//! In-browser RustDesk endpoints; the password never reaches the backend.
+//! 手打的密碼不經這裡：RustDesk 的固定密碼由瀏覽器端核心直接做挑戰回應。存在憑證庫的（`credential_id`）在這裡解開、
+//! 放進回應交給瀏覽器 —— 和 guacd 不同，後端沒辦法代做 RustDesk 的挑戰回應。設計見 `rustdesk/mod.rs`。
+//! In-browser RustDesk endpoints. A typed password never reaches the backend; a saved one (`credential_id`) is unsealed
+//! here and returned to the browser, because unlike guacd the backend cannot answer RustDesk's challenge itself.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -55,6 +57,14 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
     let target = super::desktop::target_for(&state, tunnel.id, json_i64(&body, "lan_host_id"), port).await?;
+    // 憑證庫的 RustDesk 密碼：同一個目標才解得開，解開後只放進這一次的回應。/ A saved RustDesk password: same target only, returned once.
+    let (password, saved_label) = match json_i64(&body, "credential_id") {
+        Some(cid) => {
+            let (c, password) = super::credentials::unseal_for(&state, user.id, cid, tunnel.id, target.lan_host_id, "rustdesk").await?;
+            (Some(password), Some(c.label))
+        }
+        None => (None, None),
+    };
     let max = settings.desktop_max_sessions;
     if max > 0 && (state.desktop.count() + state.rustdesk.count()) as i64 >= max {
         return Err(super::desktop::coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
@@ -69,16 +79,21 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         hop_username,
         target,
         prepared,
+        saved_label,
     });
-    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, "rustdesk: session created");
-    Ok(Json(json!({
+    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, saved = session.saved_label.is_some(), "rustdesk: session created");
+    let mut out = json!({
         "session_id": session.id,
         "ws_path": format!("/ws/rustdesk/{}/", session.id),
         "ticket": ticket,
         "expires_in": TICKET_TTL.as_secs(),
         "target": super::desktop::target_json(&session.target),
         "username": session.hop_username,
-    })))
+    });
+    if let Some(p) = password {
+        out["password"] = json!(p);
+    }
+    Ok(Json(out))
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/rustdesk/{sid}/stop", tag = "Remote Desktop", security(("bearer" = [])), params(("sid" = String, Path, description = "Session id")), responses((status = 200, body = super::schemas::Status), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]

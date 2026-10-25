@@ -31,7 +31,7 @@ const HEALTH_DOT: Record<StreamHealth, string> = {
     idle: "bg-muted-foreground/50",
 };
 
-export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport, scale }: {
+export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport, scale, engine = "guacd" }: {
     stats: StreamStats | null;
     unstable: boolean;
     /** 每秒 tick 的現在時間（判斷統計有沒有停）。/ Ticks every second so stale stats show as stalled. */
@@ -40,8 +40,11 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
     viewport: Viewport | null;
     /** 顯示比例（1 = 1:1）。/ Display scale. */
     scale: number | null;
+    /** guacd（中繼量的畫面往返）或 RustDesk（核心自己量的往返，沒有畫面往返 / 待畫幀）。/ Which engine the numbers come from. */
+    engine?: "guacd" | "rustdesk";
 }) {
     const { t } = useI18n();
+    const rd = engine === "rustdesk";
     const health = streamHealth(stats, unstable, now);
     const where = stats ? laggingHop(stats) : null;
     return (
@@ -53,7 +56,7 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
                     aria-label={t("desktop.stats.button")}
                     title={t("desktop.stats.button")}
                 >
-                    <LatencyIndicator rttMs={stats?.frameMs ?? null} online={health !== "stalled"} size="xs" withTooltip={false} reserveWidth />
+                    <LatencyIndicator rttMs={rd ? stats?.netMs ?? null : stats?.frameMs ?? null} online={health !== "stalled"} size="xs" withTooltip={false} reserveWidth />
                     <span className="inline-flex items-center gap-1.5">
                         <span className={cn("size-1.5 rounded-full", HEALTH_DOT[health])} aria-hidden />
                         <span className={cn("hidden md:inline", health === "stalled" ? "text-destructive" : health === "slow" ? "text-warning" : "text-muted-foreground")}>{t(HEALTH_KEY[health])}</span>
@@ -74,10 +77,12 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
                 {stats ? (
                     <>
                         <PropertyList className="px-3">
-                            <Property label={<Label title={t("desktop.stats.frame")} hint={t("desktop.stats.frameHint")} />} mono>
-                                <LatencyIndicator rttMs={stats.frameMs} size="xs" withTooltip={false} />
-                            </Property>
-                            <Property label={<Label title={t("desktop.stats.net")} hint={t("desktop.stats.netHint")} />} mono>
+                            {!rd && (
+                                <Property label={<Label title={t("desktop.stats.frame")} hint={t("desktop.stats.frameHint")} />} mono>
+                                    <LatencyIndicator rttMs={stats.frameMs} size="xs" withTooltip={false} />
+                                </Property>
+                            )}
+                            <Property label={<Label title={t("desktop.stats.net")} hint={t(rd ? "desktop.stats.netHintRd" : "desktop.stats.netHint")} />} mono>
                                 <LatencyIndicator rttMs={stats.netMs} size="xs" withTooltip={false} />
                             </Property>
                             <Property label={<Label title={t("desktop.stats.tunnel")} hint={t("desktop.stats.tunnelHint")} />} mono>
@@ -86,10 +91,12 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
                             <Property label={t("desktop.stats.fps")} mono>{stats.fps}</Property>
                             <Property label={t("desktop.stats.down")} mono>{formatRate(stats.downBps)}</Property>
                             <Property label={t("desktop.stats.up")} mono>{formatRate(stats.upBps)}</Property>
-                            <Property label={<Label title={t("desktop.stats.behind")} hint={t("desktop.stats.behindHint")} />} mono>
-                                <span className={stats.behind >= 3 ? "text-warning" : undefined}>{stats.behind}</span>
-                                {stats.merged > 1 && <span className="ml-2 text-xs text-warning">{t("desktop.stats.merged", { n: stats.merged })}</span>}
-                            </Property>
+                            {!rd && (
+                                <Property label={<Label title={t("desktop.stats.behind")} hint={t("desktop.stats.behindHint")} />} mono>
+                                    <span className={stats.behind >= 3 ? "text-warning" : undefined}>{stats.behind}</span>
+                                    {stats.merged > 1 && <span className="ml-2 text-xs text-warning">{t("desktop.stats.merged", { n: stats.merged })}</span>}
+                                </Property>
+                            )}
                             {framebuffer && (
                                 <Property label={t("desktop.stats.resolution")} mono>
                                     {framebuffer.width}×{framebuffer.height}
@@ -99,6 +106,7 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
                             )}
                         </PropertyList>
                         <p className="text-xs leading-relaxed text-muted-foreground">
+                            {rd && `${t("desktop.stats.rdNote")} `}
                             {where === "web" && t("desktop.stats.where.web")}
                             {where === "tunnel" && t("desktop.stats.where.tunnel")}
                             {where === "browser" && t("desktop.stats.where.browser")}

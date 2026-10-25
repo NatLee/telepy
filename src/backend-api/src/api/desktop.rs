@@ -95,7 +95,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
     // 存在憑證庫的登入：後端自己解開，瀏覽器不必（也拿不到）密碼。/ A saved login: unsealed here, never sent to the browser.
     let (credentials, saved_label) = match json_i64(&body, "credential_id") {
         Some(cid) => {
-            let (c, password) = crate::api::credentials::unseal_for(&state, user.id, cid, tunnel.id, target.lan_host_id, protocol).await?;
+            let (c, password) = crate::api::credentials::unseal_for(&state, user.id, cid, tunnel.id, target.lan_host_id, protocol.as_str()).await?;
             (Credentials { login: c.login.clone(), password, domain: c.domain.clone() }, Some(c.label))
         }
         None => (Credentials { login: bounded(&body, "login", 256)?, password: bounded(&body, "password", 1024)?, domain: bounded(&body, "domain", 256)? }, None),

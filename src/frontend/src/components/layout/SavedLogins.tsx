@@ -36,7 +36,7 @@ export function SavedLogins({ onNavigate }: { onNavigate?: () => void }) {
                             <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-1.5">
                                     <span className="truncate text-sm text-foreground">{c.label}</span>
-                                    <Chip mono>{c.protocol.toUpperCase()}</Chip>
+                                    <Chip mono>{c.protocol === "rustdesk" ? "RustDesk" : c.protocol.toUpperCase()}</Chip>
                                 </div>
                                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
                                     {(c.tunnel_name ?? `#${c.tunnel_id}`) + (c.lan_host ? ` › ${c.lan_host}` : "")}

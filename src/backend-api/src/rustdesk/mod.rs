@@ -56,6 +56,8 @@ pub struct Session {
     pub reverse_port: i64,
     pub hop_username: String,
     pub target: Target,
+    /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
+    pub saved_label: Option<String>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     id_claimed: AtomicBool,
@@ -89,7 +91,8 @@ impl Session {
     /// 日誌用的一句話。/ One line for the logs.
     pub fn describe(&self) -> String {
         let to = if self.target.lan_host_id.is_some() { format!("{}:{}", self.target.host, self.target.port) } else { format!("device:{}", self.target.port) };
-        format!("RustDesk in the browser by {} to {} through {}@{}", self.user_name, to, self.hop_username, self.tunnel_name)
+        let saved = self.saved_label.as_deref().map(|l| format!(" with saved login '{l}'")).unwrap_or_default();
+        format!("RustDesk in the browser by {} to {} through {}@{}{saved}", self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
@@ -102,6 +105,7 @@ pub struct NewSession {
     pub hop_username: String,
     pub target: Target,
     pub prepared: Prepared,
+    pub saved_label: Option<String>,
 }
 
 #[derive(Default)]
@@ -134,6 +138,7 @@ impl RustDesk {
             reverse_port: new.reverse_port,
             hop_username: new.hop_username,
             target: new.target,
+            saved_label: new.saved_label,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             id_claimed: AtomicBool::new(false),

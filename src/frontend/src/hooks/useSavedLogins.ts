@@ -1,18 +1,20 @@
 "use client";
 
 /**
- * 憑證庫（遠端桌面的登入）：列出自己存的（可依桌面篩選）、新增、刪除。密碼只送出、從不取回。
+ * 憑證庫（遠端桌面的登入）：列出自己存的（可依桌面篩選）、新增、刪除。密碼只送出、從不取回 —— 例外是 RustDesk：
+ * `…/rustdesk/start` 帶 `credential_id` 時後端解開後交給瀏覽器裡的核心（挑戰回應在瀏覽器做）。
  * The credential vault: list your saved desktop logins (optionally for one desktop), add, delete.
  * Passwords are only ever sent, never read back.
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
-import type { DesktopProtocol } from "@/lib/desktop";
+import type { DesktopMode } from "@/lib/desktop";
 
 export interface SavedLogin {
     id: number;
     label: string;
-    protocol: DesktopProtocol;
+    /** rdp / vnc（guacd）或 rustdesk（瀏覽器裡的核心）。/ rdp / vnc (guacd) or rustdesk (the in-browser core). */
+    protocol: DesktopMode;
     tunnel_id: number;
     tunnel_name: string | null;
     lan_host_id: number | null;
@@ -28,12 +30,12 @@ export interface SavedLogin {
 export interface SavedLoginFilter {
     tunnelId: number;
     hostId: number | null;
-    protocol: DesktopProtocol;
+    protocol: DesktopMode;
 }
 
 export interface NewSavedLogin {
     label: string;
-    protocol: DesktopProtocol;
+    protocol: DesktopMode;
     tunnel_id: number;
     lan_host_id: number | null;
     port: number | null;
