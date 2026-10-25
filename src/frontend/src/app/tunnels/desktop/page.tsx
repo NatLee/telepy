@@ -221,10 +221,13 @@ function DesktopPageInner() {
                                             <span className="flex-1">{t("desktop.screen.whole")}</span>
                                             {framebuffer && <span className="font-mono text-xs text-muted-foreground">{framebuffer.width}×{framebuffer.height}</span>}
                                         </DropdownMenuRadioItem>
-                                        {choices.map((c) => (
+                                        {choices.some((c) => c.guessed) && (
+                                            <DropdownMenuLabel className="text-xs text-muted-foreground">{t("desktop.screen.guessed")}</DropdownMenuLabel>
+                                        )}
+                                        {choices.map((c, i) => (
                                             <DropdownMenuRadioItem key={c.id} value={c.id}>
-                                                <span className="min-w-0 flex-1 truncate">{choiceLabel(c)}{c.primary ? ` · ${t("desktop.screen.primary")}` : ""}</span>
-                                                <span className="font-mono text-xs text-muted-foreground">{c.viewport.width}×{c.viewport.height}</span>
+                                                <span className="min-w-0 flex-1 truncate">{c.guessed ? `${i + 1} · ` : ""}{choiceLabel(c)}{c.primary && !c.guessed ? ` · ${t("desktop.screen.primary")}` : ""}</span>
+                                                {!c.guessed && <span className="font-mono text-xs text-muted-foreground">{c.viewport.width}×{c.viewport.height}</span>}
                                             </DropdownMenuRadioItem>
                                         ))}
                                         {customArea && (

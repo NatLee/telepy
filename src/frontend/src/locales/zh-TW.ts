@@ -1243,6 +1243,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "desktop.screen.menu": "螢幕",
     "desktop.screen.whole": "整個桌面",
     "desktop.screen.primary": "主螢幕",
+    "desktop.screen.guessed": "依畫面形狀推測",
     "desktop.screen.detecting": "正在向裝置詢問螢幕配置…",
     "desktop.screen.detect": "重新偵測螢幕",
     "desktop.screen.single": "這個桌面只有一個畫面。",
