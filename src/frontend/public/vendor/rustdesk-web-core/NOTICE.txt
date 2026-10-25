@@ -1,0 +1,22 @@
+rustdesk-web — browser client for self-hosted RustDesk
+Copyright (C) 2026 contributors. Licensed under AGPL-3.0-only (see LICENSE).
+
+Fork of rustdesk-web-core by quietlydismantled
+  https://github.com/quietlydismantled/rustdesk-web-core (AGPL-3.0-only),
+  history preserved; changes on top are in this repository's git log.
+
+Built together with, and derived from the open sources of:
+  - RustDesk, https://github.com/rustdesk/rustdesk (AGPL-3.0)
+    Flutter web shell (flutter/), message.proto and English strings are taken
+    at build time from the commit pinned in RUSTDESK_REF.
+  - hbb_common, https://github.com/rustdesk/hbb_common (AGPL-3.0)
+    proto/rendezvous.proto is a copy of protos/rendezvous.proto.
+  - rdev (rustdesk-org fork), https://github.com/rustdesk-org/rdev (MIT)
+    tools/rdev/*.rs key code tables; license text in tools/rdev/LICENSE.
+  - Roboto font, https://github.com/googlefonts/roboto (Apache-2.0)
+    bundled by the release build under fonts/; license in fonts/ROBOTO-LICENSE.txt.
+  - Roboto Mono font, https://github.com/googlefonts/RobotoMono (SIL OFL 1.1)
+    bundled under fonts/ for the terminal; license in fonts/ROBOTO-MONO-OFL.txt.
+
+"RustDesk" is a trademark of its owners. This project is not affiliated with
+or endorsed by them. Icons in web/ are original to this project.
