@@ -1,4 +1,4 @@
-# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port} (reverse port ${reverse_port})
+# Telepy reverse tunnel "${host_friendly_name}": this machine -> ${server_domain}:${reverse_server_ssh_port}
 #
 # 1) Let the Telepy web terminal reach this machine: append the Telepy service key to the
 #    authorized_keys of the user you will log in as (keeps the keys that are already there):
@@ -33,7 +33,7 @@ ${known_hosts_env}
       SSH_REMOTE_PORT: "${reverse_server_ssh_port}"
       SSH_MODE: "-R"
       SSH_BIND_IP: "*"
-      SSH_TUNNEL_PORT: "${reverse_port}"
+      SSH_TUNNEL_PORT: "0"
       SSH_TARGET_HOST: host.docker.internal
       SSH_TARGET_PORT: "${ssh_port}"
       SSH_SERVER_ALIVE_INTERVAL: "30"

@@ -171,5 +171,8 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 裝置區塊改成 `HostName <名稱>` / `Port 22`，`ProxyCommand ssh -W %h:%p telepy-ssh-server` 不變；舊的設定檔照常可用。
 存取規則與以前相同（擁有者、ADMIN、或至少有一個允許帳號的 sharee；敏感隧道要先在網頁確認）。
 
-裝置端腳本仍寫著號碼（伺服器反正會忽略它），移除腳本也還靠 `<號碼>:localhost:` 辨認這條隧道的東西；
-`reverse_port` 的 u16 上限是純內部的，真的接近時再放寬型別。測試：`tests/key_identified.rs`。
+裝置端腳本一律寫 `-R 0`（Docker 版 `SSH_TUNNEL_PORT=0`，一鍵加入也是）：號碼只存在伺服器裡。網頁刪除隧道時的移除腳本
+改用**金鑰**辨認這條隧道的東西（命令列或檔案裡的 `-i <金鑰檔>`、`IdentityFile`、docker 的 `KEY_FILE=` / `<path>:/id_rsa`、
+容器掛在 `/id_rsa` 的金鑰；旁邊的 `.pub` 或 `ssh-keygen -y` 要算出隧道金鑰），以前寫著號碼的舊腳本照舊用號碼認；
+一鍵加入的背景迴圈重跑時也用金鑰檔找舊的 ssh（不再用號碼，否則同一台的其他隧道會被誤殺）。
+`reverse_port` 的 u16 上限是純內部的，真的接近時再放寬型別。測試：`tests/key_identified.rs`、`tests/tunnel_delete.rs`。

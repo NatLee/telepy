@@ -7,8 +7,9 @@ echo "[+] SSH Script start"
 # The {server_domain} is a placeholder for template rendering.
 $sshUserHost = "telepy@${server_domain}"    
 
-# The {reverse_port} and ${ssh_port} are placeholders for template rendering.
-$sshRemoteForward = "*:${reverse_port}:localhost:${ssh_port}"
+# The port after "*:" is 0 on purpose: Telepy identifies this tunnel by its key and assigns the number itself.
+# The ${ssh_port} is a placeholder for template rendering.
+$sshRemoteForward = "*:0:localhost:${ssh_port}"
 
 # The {reverse_server_ssh_port} is a placeholder for template rendering.
 $reverseServerSSHPort = "${reverse_server_ssh_port}"

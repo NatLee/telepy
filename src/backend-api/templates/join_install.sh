@@ -80,7 +80,8 @@ start_background() {
     } > "$RUNNER"
     chmod 700 "$RUNNER"
     # 先停掉舊的迴圈和它的 ssh（重跑時）。/ Stop a previous loop and its ssh child (re-runs).
-    PATTERN="R $REVERSE_PORT:localhost:"
+    # 舊的 ssh 子程序用它的金鑰檔認（-R 寫 0，號碼認不出來）。/ The old ssh child is found by its key file (-R asks for 0).
+    PATTERN="-i $KEY "
     pkill -f "$RUNNER" 2>/dev/null || true
     pkill -f "$PATTERN" 2>/dev/null || true
     nohup "$RUNNER" > "$LOG_FILE" 2>&1 &
@@ -396,7 +397,7 @@ main() {
         say "the tunnel will connect through $WS_URL"
     fi
 
-    SSH_ARGS="-NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=$STRICT -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$ALIAS ${PROXY_OPT}-i $KEY -p $GATEWAY_PORT -R $REVERSE_PORT:localhost:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST"
+    SSH_ARGS="-NT -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=$STRICT -o UserKnownHostsFile=$KNOWN_HOSTS -o HostKeyAlias=$ALIAS ${PROXY_OPT}-i $KEY -p $GATEWAY_PORT -R 0:localhost:$SSH_PORT $GATEWAY_USER@$GATEWAY_HOST"
 
     # --- run the tunnel -----------------------------------------------------------------------------
     UNIT="telepy-tunnel-$TUNNEL_ID"

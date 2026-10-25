@@ -1,7 +1,8 @@
 # telepy-remove-tunnel: run by Telepy over SSH when a tunnel is deleted (Linux / macOS / other POSIX).
-# Phase 1 (this script): find everything that runs THIS tunnel (matched by its reverse port, tunnel id,
-# name or key; nothing else is touched), remove its files right away and write the stopping part into a
-# one-shot stop script. Telepy starts the stop script last, because stopping the tunnel also cuts the
+# Phase 1 (this script): find everything that runs THIS tunnel (matched by its key — the -i file of a
+# command, the key next to a unit or compose file — or, for older scripts, its reverse port; tunnel id
+# and name for the one-command install; nothing else is touched), remove its files right away and write
+# the stopping part into a one-shot stop script. Telepy starts the stop script last, because stopping the tunnel also cuts the
 # SSH session this runs in. Every result is a line "TELEPY|<kind>|<what>|<detail>".
 T_ID=${t_id}
 T_PORT=${t_port}
@@ -9,11 +10,58 @@ T_NAME=${t_name}
 T_KEY=${t_key}
 
 out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
-# 檔案裡的 forward（unit、plist 的一行、腳本）。/ The forward as written in files.
+# 檔案裡的 forward（unit、plist 的一行、腳本）——舊腳本寫著號碼。/ The forward as older files wrote it, with the number.
 PORT_RE="(^|[^0-9])$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
 # 程序 / crontab 裡的 -R forward（不碰同號碼的 -L）。/ A -R forward on a command line (never -L).
 PROC_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
-has_port() { [ -f "$1" ] && grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null; }
+# 任何 -R forward（新腳本寫 0，號碼認不出來，改認金鑰）。/ Any -R forward at all (new scripts ask for 0).
+ANY_R_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?[0-9]+:"
+
+# ~ 與 $HOME 開頭的路徑展開。/ Expand a leading ~ or $HOME.
+expand_path() {
+    case "$1" in
+        "~") printf '%s' "$HOME" ;;
+        "~/"*) printf '%s%s' "$HOME" "${1#\~}" ;;
+        '$HOME'|'$HOME/'*) printf '%s%s' "$HOME" "${1#\$HOME}" ;;
+        '${HOME}'*) printf '%s%s' "$HOME" "${1#\$\{HOME\}}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+# 這個私鑰檔是不是這條隧道的金鑰：先看旁邊的 .pub，沒有就用 ssh-keygen 算出公鑰。
+# Is this private key the tunnel's: the .pub next to it first, else ssh-keygen derives the public key.
+# （sh 的函式沒有區域變數：這裡的變數名稱不能和呼叫端的迴圈變數撞到。/ No locals in sh: names must not clash with callers' loop variables.）
+key_matches() {
+    km_file=$(expand_path "$1")
+    [ -f "$km_file" ] || return 1
+    if [ -r "$km_file.pub" ] && awk '{print $2}' "$km_file.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then return 0; fi
+    command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -y -f "$km_file" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
+}
+# 一段文字（檔案內容或命令列）引用到的金鑰檔：`-i <path>`、`IdentityFile`、docker 的 `KEY_FILE=` / `<path>:/id_rsa`。
+# Key files a text refers to: -i, IdentityFile, docker's KEY_FILE= and <path>:/id_rsa.
+key_paths() {
+    printf '%s\n' "$1" | grep -oE -- "-i ?['\"]?[^ '\"]+" | sed -E "s/^-i ?['\"]?//"
+    printf '%s\n' "$1" | grep -oE -- "IdentityFile[ =]['\"]?[^ '\"]+" | sed -E "s/^IdentityFile[ =]['\"]?//"
+    printf '%s\n' "$1" | grep -oE -- "KEY_FILE=['\"]?[^ '\"]+" | sed -E "s/^KEY_FILE=['\"]?//"
+    printf '%s\n' "$1" | grep -oE -- "[^\"' ]+:/id_rsa" | sed 's#:/id_rsa$##'
+}
+# 這段文字用的是這條隧道的金鑰？/ Does this text use the tunnel's key?
+uses_key() {
+    for uk_path in $(key_paths "$1"); do key_matches "$uk_path" && return 0; done
+    return 1
+}
+# 檔案是這條隧道的：寫著它的號碼（舊腳本），或引用它的金鑰。/ A file of this tunnel: its number, or its key.
+has_port() {
+    [ -f "$1" ] || return 1
+    grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null && return 0
+    uses_key "$(cat "$1" 2>/dev/null)"
+}
+# 命令列是這條隧道的：-R 帶它的號碼，或 -R 任何號碼加上它的金鑰（絕不碰只有 -L 的）。
+# A command line of this tunnel: -R with its number, or any -R plus its key (never a -L only client).
+line_is_mine() {
+    printf '%s' "$1" | grep -Eq -- "$PROC_RE" && return 0
+    printf '%s' "$1" | grep -Eq -- "$ANY_R_RE" || return 1
+    uses_key "$1"
+}
 
 OS=$(uname -s 2>/dev/null || echo unknown)
 ME=$(id -un 2>/dev/null || echo "?")
@@ -158,7 +206,7 @@ if [ -r /proc/1/cmdline ]; then
 else
     ALL=$(ps -A -o pid= -o args= 2>/dev/null)
 fi
-MATCHED=$(printf '%s\n' "$ALL" | grep -E -- "$PROC_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-')
+MATCHED=$(printf '%s\n' "$ALL" | grep -E -- "$ANY_R_RE" | grep -E 'ssh' | grep -v 'telepy-remove-tunnel' | grep -v 'telepy-stop-' | while IFS= read -r l; do line_is_mine "$l" && printf '%s\n' "$l"; done)
 while IFS= read -r line; do
     pid=$(printf '%s' "$line" | awk '{print $1}')
     case "$pid" in ""|*[!0-9]*) continue ;; esac
@@ -190,7 +238,7 @@ EOF
 # crontab：指向這些腳本、或直接帶這條 forward 的行。/ Crontab lines pointing at the runners or with the forward.
 crontab_clean() {
     CR=$($1 crontab -l 2>/dev/null) || return 0
-    KEEP=$(printf '%s\n' "$CR" | grep -Ev -- "$PROC_RE")
+    KEEP=$(printf '%s\n' "$CR" | while IFS= read -r l; do line_is_mine "$l" || printf '%s\n' "$l"; done)
     for r in $RUNNERS; do KEEP=$(printf '%s\n' "$KEEP" | grep -vF -- "$r"); done
     [ "$KEEP" = "$CR" ] && return 0
     printf '%s\n' "$CR" | grep -v -x -F -- "$KEEP" | while IFS= read -r l; do [ -n "$l" ] && out found cron "$l"; done
@@ -227,7 +275,11 @@ if command -v docker >/dev/null 2>&1; then
 fi
 if [ -n "$DOCKER" ]; then
     for c in $($DOCKER ps -aq 2>/dev/null); do
-        $DOCKER inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -Eq "^SSH_TUNNEL_PORT=$T_PORT$" || continue
+        # 舊容器：環境變數帶號碼；新容器：掛到 /id_rsa 的金鑰是這條隧道的。/ Old: the port env; new: the key mounted at /id_rsa.
+        if ! $DOCKER inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -Eq "^SSH_TUNNEL_PORT=$T_PORT$"; then
+            mounted=$($DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' "$c" 2>/dev/null)
+            [ -n "$mounted" ] && key_matches "$mounted" || continue
+        fi
         cname=$($DOCKER inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's:^/::')
         out found docker "$cname"
         later "$DOCKER rm -f $c >/dev/null 2>&1" stop "docker $cname"

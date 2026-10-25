@@ -226,13 +226,14 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
     let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
     let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
     let home = boxm.account_home("pi");
-    let dev = lab.device(&alice, "box", &boxm).await;
+    // 裝置的 ssh 要求 -R 0（新腳本的寫法）：號碼認不出它，只有金鑰認得。/ The device asks for -R 0: only its key identifies it.
+    let dev = lab.device_requesting(&alice, "box", &boxm, 0).await;
     lab.username(&alice, &dev, "pi").await;
     let (id, port) = (dev.tunnel_id, dev.reverse_port);
     let ssh = home.join(".ssh");
     std::fs::create_dir_all(&ssh).unwrap();
     let write = |name: &str, body: String| std::fs::write(home.join(name), body).unwrap();
-    write(&format!(".ssh/telepy-tunnel-{id}.sh"), format!("#!/bin/sh\nwhile :; do\n    ssh -NT -R {port}:localhost:22 telepy@gw\n    sleep 10\ndone\n"));
+    write(&format!(".ssh/telepy-tunnel-{id}.sh"), format!("#!/bin/sh\nwhile :; do\n    ssh -NT -i $HOME/.ssh/telepy_tunnel_ed25519 -R 0:localhost:22 telepy@gw\n    sleep 10\ndone\n"));
     write(&format!(".ssh/telepy-tunnel-{id}.log"), "connected\n".into());
     write(&format!(".ssh/telepy-uninstall-{id}.sh"), format!("#!/bin/sh\n# Stops and removes the Telepy tunnel box (#{id}) installed by the join script.\n"));
     write(".ssh/telepy_tunnel_ed25519", "private\n".into());
@@ -240,8 +241,12 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
     write(".ssh/telepy_tunnel_other", "private\n".into());
     write(".ssh/telepy_tunnel_other.pub", "ssh-ed25519 AAAAother other\n".into());
     write(".ssh/telepy_known_hosts", "telepy-gw-1 ssh-ed25519 AAAAhost\n".into());
-    write("telepy-ssh.sh", format!("ssh -NR '*:{port}:localhost:22' telepy@gw\n"));
-    write("other.sh", format!("ssh -NR '*:{}:localhost:22' telepy@gw\n", port as u32 + 1));
+    // 新式腳本（-R 0 + 金鑰）、舊式腳本（號碼）都是這條隧道的；別把金鑰或號碼的留下。/ New (key) and old (number) scripts are
+    // this tunnel's; a stranger's key or number stays.
+    write("telepy-ssh.sh", "ssh -i ~/.ssh/telepy_tunnel_ed25519 -NR '*:0:localhost:22' telepy@gw\n".into());
+    write("telepy-old.sh", format!("ssh -NR '*:{port}:localhost:22' telepy@gw\n"));
+    write("other.sh", "ssh -i ~/.ssh/telepy_tunnel_other -NR '*:0:localhost:22' telepy@gw\n".into());
+    write("other-old.sh", format!("ssh -NR '*:{}:localhost:22' telepy@gw\n", port as u32 + 1));
 
     let r = lab.app.delete(&format!("/api/reverse/server/keys/{id}?remove_device_keys=true&remove_service=true"), Some(&alice.token)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
@@ -254,7 +259,7 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
         .collect();
     let has = |kind: &str, what: &str, detail: &str| items.iter().any(|(k, w, d)| k == kind && w == what && d.contains(detail));
     assert_eq!(svc["accounts"][0]["platform"], "posix", "{svc}");
-    assert!(has("found", "process", &format!(":{port}:")), "the running ssh was found: {items:?}");
+    assert!(has("found", "process", "-R *:0:"), "the running ssh (asking for 0, matched by its key) was found: {items:?}");
     assert!(has("found", "loop", &format!("telepy-tunnel-{id}.sh")), "{items:?}");
     assert!(has("removed", "key", "telepy_tunnel_ed25519.pub"), "{items:?}");
     assert!(has("kept", "key", "telepy_tunnel_other"), "{items:?}");
@@ -262,13 +267,13 @@ async fn delete_removes_the_tunnel_service_from_the_device() {
     assert_eq!((svc["found"].as_bool(), svc["launched"].as_bool(), svc["stopped"].as_bool(), svc["came_back"].as_bool()), (Some(true), Some(true), Some(true), Some(false)), "{svc}");
 
     // 檔案：這條隧道的都沒了（log 由停止腳本在停掉之後刪），其他的還在。/ Files: this tunnel's are gone, the rest stay.
-    let gone = [format!(".ssh/telepy-tunnel-{id}.sh"), format!(".ssh/telepy-uninstall-{id}.sh"), ".ssh/telepy_tunnel_ed25519".into(), ".ssh/telepy_tunnel_ed25519.pub".into(), ".ssh/telepy_known_hosts".into(), "telepy-ssh.sh".into(), format!(".ssh/telepy-tunnel-{id}.log")];
+    let gone = [format!(".ssh/telepy-tunnel-{id}.sh"), format!(".ssh/telepy-uninstall-{id}.sh"), ".ssh/telepy_tunnel_ed25519".into(), ".ssh/telepy_tunnel_ed25519.pub".into(), ".ssh/telepy_known_hosts".into(), "telepy-ssh.sh".into(), "telepy-old.sh".into(), format!(".ssh/telepy-tunnel-{id}.log")];
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while gone.iter().any(|f| home.join(f).exists()) {
         assert!(tokio::time::Instant::now() < deadline, "left behind: {:?}", gone.iter().filter(|f| home.join(f).exists()).collect::<Vec<_>>());
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    for kept in [".ssh/telepy_tunnel_other", ".ssh/telepy_tunnel_other.pub", "other.sh"] {
+    for kept in [".ssh/telepy_tunnel_other", ".ssh/telepy_tunnel_other.pub", "other.sh", "other-old.sh"] {
         assert!(home.join(kept).exists(), "{kept} must stay");
     }
     // 停止腳本刪掉了自己。/ The stop script deleted itself.

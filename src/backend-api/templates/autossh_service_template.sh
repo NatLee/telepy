@@ -31,7 +31,7 @@ Environment="AUTOSSH_DEBUG=1"
 Environment="AUTOSSH_LOGFILE=/var/log/telepy-autossh/autossh.log"
 Environment="AUTOSSH_GATETIME=0"
 
-ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" ${host_key_options}${proxy_option}${key_option}-p ${reverse_server_ssh_port} -NR '*:${reverse_port}:localhost:${ssh_port}' telepy@${server_domain}
+ExecStart=/usr/bin/autossh -M 0 -vv -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" ${host_key_options}${proxy_option}${key_option}-p ${reverse_server_ssh_port} -NR '*:0:localhost:${ssh_port}' telepy@${server_domain}
 
 # Restart service after it exits
 Restart=always
