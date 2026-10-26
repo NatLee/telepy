@@ -2,16 +2,13 @@
 
 /**
  * 即時 session 頁：誰現在連在哪台裝置上（網頁終端機 / 檔案 / 遠端瀏覽器 / 遠端桌面 / 筆電的 ssh / MCP agent），可結束。
- * 看得到自己的、自己擁有或 ADMIN 的隧道上與自己的 RustDesk 裝置上所有人的；管理員看全部。`?tunnel=<id>` /
- * `?device=<RustDesk 裝置 id>` 只看一處。
+ * 看得到自己的、自己擁有或 ADMIN 的隧道上所有人的；管理員看全部。`?tunnel=<id>` 只看一條。
  * Live sessions: who is connected to which device right now, with an End action. Shows your own plus everyone's on
- * tunnels you own or ADMIN and on your RustDesk devices (everything for admins); `?tunnel=<id>` / `?device=<id>`
- * narrows it to one place.
+ * tunnels you own or ADMIN (everything for admins); `?tunnel=<id>` narrows it to one tunnel.
  */
 import React, { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
-import { Activity, MonitorSmartphone, Plug, Power, RefreshCw, Server, X } from "lucide-react";
+import { Activity, Plug, Power, RefreshCw, Server, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -23,7 +20,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { PRESENCE_KINDS } from "@/components/tunnels/TunnelPresence";
 import { useLiveSessions } from "@/hooks/useLiveSessions";
 import { useI18n } from "@/lib/i18n";
-import { filterSessions, groupByPlace, parsePlaceKey, placeFromParams, placeKey, placeName, type KindFilter, type Place } from "@/lib/liveSessions";
+import { filterSessions, groupByTunnel, type KindFilter } from "@/lib/liveSessions";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import type { LiveSession } from "@/types/liveSession";
 
@@ -67,18 +64,17 @@ function LiveSessionsInner() {
     const { t } = useI18n();
     const router = useRouter();
     const params = useSearchParams();
-    const place = placeFromParams(params.get("tunnel"), params.get("device"));
+    const tunnelParam = Number(params.get("tunnel")) || null;
     const { sessions, failed, reload, end } = useLiveSessions();
     const [kind, setKind] = useState<KindFilter>("all");
     const [mineOnly, setMineOnly] = useState(false);
     const [pending, setPending] = useState<LiveSession | null>(null);
 
     const all = useMemo(() => sessions ?? [], [sessions]);
-    const places = useMemo(() => groupByPlace(all), [all]);
-    const placeValue = place ? placeKey(place) : "";
-    const groups = useMemo(() => groupByPlace(filterSessions(all, { kind, mineOnly, place: parsePlaceKey(placeValue) })), [all, kind, mineOnly, placeValue]);
+    const tunnels = useMemo(() => groupByTunnel(all).map((g) => ({ id: g.tunnelId, name: g.name })), [all]);
+    const groups = useMemo(() => groupByTunnel(filterSessions(all, { kind, mineOnly, tunnelId: tunnelParam })), [all, kind, mineOnly, tunnelParam]);
     const shown = groups.reduce((n, g) => n + g.sessions.length, 0);
-    const setPlace = (p: Place | null) => router.replace(p ? `/tunnels/sessions?${p.type}=${p.id}` : "/tunnels/sessions");
+    const setTunnel = (id: number | null) => router.replace(id ? `/tunnels/sessions?tunnel=${id}` : "/tunnels/sessions");
 
     return (
         <div className="flex flex-col animate-fade-in-up">
@@ -106,15 +102,15 @@ function LiveSessionsInner() {
                     />
                 </div>
                 <NativeSelect
-                    value={placeValue}
-                    onChange={(e) => setPlace(parsePlaceKey(e.target.value))}
+                    value={tunnelParam ?? ""}
+                    onChange={(e) => setTunnel(e.target.value ? Number(e.target.value) : null)}
                     className="h-9 w-48"
                     aria-label={t("sessions.filterTunnel")}
                 >
                     <option value="">{t("sessions.allTunnels")}</option>
-                    {places.map((x) => (
-                        <option key={x.key} value={x.key}>
-                            {x.place.type === "device" ? t("sessions.rustdeskOption", { name: x.name }) : x.name}
+                    {tunnels.map((x) => (
+                        <option key={x.id} value={x.id}>
+                            {x.name}
                         </option>
                     ))}
                 </NativeSelect>
@@ -140,7 +136,7 @@ function LiveSessionsInner() {
                     </span>
                     <p className="text-sm text-foreground">{t("sessions.empty")}</p>
                     <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("sessions.emptyHint")}</p>
-                    {(kind !== "all" || mineOnly || place) && (
+                    {(kind !== "all" || mineOnly || tunnelParam) && (
                         <Button
                             variant="ghost"
                             size="sm"
@@ -148,7 +144,7 @@ function LiveSessionsInner() {
                             onClick={() => {
                                 setKind("all");
                                 setMineOnly(false);
-                                setPlace(null);
+                                setTunnel(null);
                             }}
                         >
                             <X /> {t("sessions.clearFilters")}
@@ -158,20 +154,10 @@ function LiveSessionsInner() {
             ) : (
                 <div className="space-y-4">
                     {groups.map((g) => (
-                        <section key={g.key} className="overflow-hidden rounded-xl border border-border bg-card">
+                        <section key={g.tunnelId} className="overflow-hidden rounded-xl border border-border bg-card">
                             <h2 className="flex items-center gap-2 border-b border-border bg-surface px-4 py-2.5 text-sm text-foreground">
-                                {g.place.type === "device" ? (
-                                    <>
-                                        <MonitorSmartphone size={15} className="text-muted-foreground" aria-hidden />
-                                        <Link href="/tunnels/rustdesk" prefetch={false} className="min-w-0 truncate underline-offset-2 hover:underline">{g.name}</Link>
-                                        <Chip title={t("sessions.rustdeskHint")}>RustDesk</Chip>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Server size={15} className="text-muted-foreground" aria-hidden />
-                                        {g.name}
-                                    </>
-                                )}
+                                <Server size={15} className="text-muted-foreground" aria-hidden />
+                                {g.name}
                                 <span className="text-xs text-muted-foreground tabular-nums">{g.sessions.length}</span>
                             </h2>
                             <ul className="divide-y divide-border">
@@ -197,8 +183,8 @@ function LiveSessionsInner() {
                 message={
                     pending
                         ? pending.mine
-                            ? t("sessions.endMine", { kind: t(PRESENCE_KINDS[pending.kind]?.label ?? "sessions.allKinds"), tunnel: placeName(pending) })
-                            : t("sessions.endOther", { user: pending.user.username, kind: t(PRESENCE_KINDS[pending.kind]?.label ?? "sessions.allKinds"), tunnel: placeName(pending) })
+                            ? t("sessions.endMine", { kind: t(PRESENCE_KINDS[pending.kind]?.label ?? "sessions.allKinds"), tunnel: pending.tunnel.name ?? "" })
+                            : t("sessions.endOther", { user: pending.user.username, kind: t(PRESENCE_KINDS[pending.kind]?.label ?? "sessions.allKinds"), tunnel: pending.tunnel.name ?? "" })
                         : ""
                 }
                 confirmText={t("sessions.end")}

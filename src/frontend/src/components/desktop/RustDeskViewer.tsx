@@ -351,9 +351,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                 const url = rustdeskWsUrl(getWsOrigin(), start);
                 call("option", { name: "custom-rendezvous-server", value: url });
                 call("option", { name: "relay-server", value: url });
-                // 經 Telepy 的 RustDesk 伺服器時有伺服器公鑰：核心驗裝置金鑰後做端對端加密；經隧道（Direct IP）沒有。
-                // With Telepy's RustDesk server the core verifies the device key and encrypts end to end; Direct IP has none.
-                call("option", { name: "key", value: start.key ?? "" });
+                call("option", { name: "key", value: "" });
                 // 剪貼簿關掉 = 這台的 disable-clipboard：核心不再送本機的剪貼簿，登入時也請裝置別送它的。
                 // Clipboard off = the peer's disable-clipboard: the core stops sending ours and asks the device not to send its own.
                 call("option:peer", { id: peerIdFor(start), name: "disable-clipboard", value: clipboard === "off" ? "Y" : "N" });

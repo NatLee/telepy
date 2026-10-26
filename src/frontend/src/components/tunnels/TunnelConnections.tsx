@@ -8,7 +8,6 @@ import React from "react";
 import { Activity } from "lucide-react";
 import { Section, Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
-import { formatSpan } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import type { TunnelConnections as Data } from "@/hooks/useTunnelConnections";
 
@@ -17,6 +16,13 @@ function barTone(v: number | null): string {
     if (v >= 0.999) return "bg-success";
     if (v <= 0.001) return "bg-destructive/70";
     return "bg-warning";
+}
+
+/** 秒 → 「3 分鐘」「2.5 小時」「4 天」（Intl 依語系翻單位）。/ Seconds → a localized duration in its largest unit. */
+function duration(seconds: number, locale: string): string {
+    const [value, unit] =
+        seconds >= 86_400 ? [seconds / 86_400, "day"] : seconds >= 3_600 ? [seconds / 3_600, "hour"] : seconds >= 60 ? [seconds / 60, "minute"] : [seconds, "second"];
+    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long", maximumFractionDigits: 1 }).format(value);
 }
 
 export function TunnelConnectionsSection({ data, failed }: { data: Data | null; failed: boolean }) {
@@ -78,7 +84,7 @@ export function TunnelConnectionsSection({ data, failed }: { data: Data | null; 
                                 <li key={s.connected_at} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
                                     <span className="tabular-nums text-foreground">{time(s.connected_at)}</span>
                                     {s.disconnected_at ? (
-                                        <span className="text-muted-foreground">{s.seconds !== null ? formatSpan(s.seconds, locale) : "—"}</span>
+                                        <span className="text-muted-foreground">{s.seconds !== null ? duration(s.seconds, locale) : "—"}</span>
                                     ) : (
                                         <Chip tone="success">{t("tunnelDetails.connectedNow")}</Chip>
                                     )}

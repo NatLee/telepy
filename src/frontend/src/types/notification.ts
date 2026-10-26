@@ -47,9 +47,6 @@ export const NOTIFICATION_ACTIONS = {
     // Command rules: a command waits for approval {request, approver_ids} (owner / ADMINs + the requester); decided {request}.
     COMMAND_APPROVAL_REQUESTED: "COMMAND-APPROVAL-REQUESTED",
     COMMAND_APPROVAL_DECIDED: "COMMAND-APPROVAL-DECIDED",
-    // Telepy 當 RustDesk 伺服器：裝置登記、上下線、改名、移除 {device_id, enroll_id?, online?, removed?}（送給擁有者）。
-    // Telepy as RustDesk's server: a device enrolled, went on / offline, was renamed or removed (to its owner).
-    RUSTDESK_DEVICES_UPDATED: "RUSTDESK-DEVICES-UPDATED",
     // webhook 連續失敗被暫停：{webhook_id, name, scope}（個人的送給擁有者，全站的送給每個管理員）。
     // A webhook was paused after failing again and again (its owner; every admin for a site-wide one).
     WEBHOOK_PAUSED: "WEBHOOK-PAUSED",

@@ -33,7 +33,6 @@ pub struct SiteSettings {
     pub desktop_session_idle_timeout: i64,
     pub desktop_clipboard: String,
     pub desktop_max_resolution: i64,
-    pub desktop_rustdesk_server: bool,
     pub mfa_require_totp: bool,
     pub mfa_require_passkey: bool,
     pub recording_retention_days: i64,
@@ -67,7 +66,6 @@ pub const FIELDS: &[&str] = &[
     "desktop_session_idle_timeout",
     "desktop_clipboard",
     "desktop_max_resolution",
-    "desktop_rustdesk_server",
     "mfa_require_totp",
     "mfa_require_passkey",
     "recording_retention_days",
@@ -80,7 +78,7 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     remote_browser_max_sessions, remote_browser_geometry, remote_browser_ssh_timeout, remote_browser_ssh_attempts, \
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
     ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
-    desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_rustdesk_server, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime";
+    desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

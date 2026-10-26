@@ -559,39 +559,6 @@ const TABLES: &[(&str, &str)] = &[
             "last_used_at" datetime NULL
         )"#,
     ),
-    // 登記在 Telepy（當 RustDesk 的 ID 伺服器）的 RustDesk 裝置；不經 SSH。/ RustDesk devices enrolled with Telepy's ID server.
-    (
-        "telepy_rustdesk_device",
-        r#"CREATE TABLE "telepy_rustdesk_device" (
-            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-            "user_id" integer NOT NULL,
-            "rustdesk_id" varchar(32) NOT NULL,
-            "uuid" varchar(128) NOT NULL,
-            "pk" varchar(128) NOT NULL,
-            "name" varchar(64) NOT NULL,
-            "hostname" varchar(255) NOT NULL,
-            "os" varchar(255) NOT NULL,
-            "version" varchar(32) NOT NULL,
-            "created_at" datetime NOT NULL,
-            "last_seen_at" datetime NULL
-        )"#,
-    ),
-    // 經 Telepy RustDesk 伺服器的連線紀錄（帶 IP，90 天；隨裝置刪除）。/ Sessions to RustDesk-server devices (IPs, 90 days).
-    (
-        "telepy_rustdesk_session",
-        r#"CREATE TABLE "telepy_rustdesk_session" (
-            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-            "device_id" integer NOT NULL,
-            "user_id" integer NOT NULL,
-            "username" varchar(150) NOT NULL,
-            "ip" varchar(64) NULL,
-            "started_at" datetime NOT NULL,
-            "ended_at" datetime NULL,
-            "to_browser" integer NOT NULL DEFAULT 0,
-            "to_device" integer NOT NULL DEFAULT 0,
-            "reason" varchar(32) NOT NULL DEFAULT ''
-        )"#,
-    ),
     // Rust 自有：webhook（個人的 = 某個使用者自己的；site = 管理員們共管的全站 webhook）。
     // Webhooks: personal ones belong to one user; site-wide ones are shared by the admins.
     (
@@ -676,9 +643,6 @@ const INDEXES: &[&str] = &[
     // 同一把 host key 被哪些隧道信任（= 同一台機器）。/ Which tunnels trust one host key (= the same machine).
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_host_key_public_key" ON "telepy_device_host_key" ("public_key")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
-    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_rustdesk_device_rustdesk_id" ON "telepy_rustdesk_device" ("rustdesk_id")"#,
-    r#"CREATE INDEX IF NOT EXISTS "telepy_rustdesk_device_user" ON "telepy_rustdesk_device" ("user_id")"#,
-    r#"CREATE INDEX IF NOT EXISTS "telepy_rustdesk_session_device" ON "telepy_rustdesk_session" ("device_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
@@ -773,10 +737,6 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Web sign-in lifetimes (seconds): how long a sign-in lasts without a visit (sliding, 30 days) and how often the access token is renewed (1 hour).
     ("site_settings_sitesettings", "signin_lifetime", "integer NOT NULL DEFAULT 2592000"),
     ("site_settings_sitesettings", "signin_access_lifetime", "integer NOT NULL DEFAULT 3600"),
-    // Telepy 當 RustDesk 的 ID / 中繼伺服器（登記過的裝置不經 SSH 也能連）。/ Telepy as RustDesk's ID and relay server.
-    ("site_settings_sitesettings", "desktop_rustdesk_server", "bool NOT NULL DEFAULT 1"),
-    // 憑證庫：綁在 RustDesk 伺服器裝置上的登入（這時 tunnel_id = 0）。/ Saved logins bound to a RustDesk-server device (tunnel_id = 0).
-    ("telepy_credential", "rustdesk_device_id", "integer NULL"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.
@@ -852,6 +812,13 @@ pub const DROP_SHAREE_USERNAMES: &str = "2026-10-22-drop-usernames-created-by-no
 /// changes, same delay); the setting is cleared afterwards.
 pub const SITE_WEBHOOK_FROM_SETTINGS: &str = "2026-10-26-site-webhook-from-settings";
 
+/// 「Telepy 當 RustDesk 伺服器」移除後（只經隧道連 RustDesk）：綁那些裝置的已存密碼（`tunnel_id` = 0，只有那個功能會建）
+/// 刪掉，兩張表（裝置、帶 IP 的連線紀錄 —— 它們的 90 天清理跟著功能一起沒了）也刪掉。欄位照規則不動。
+/// After Telepy-as-RustDesk-server was removed (RustDesk only through tunnels): delete the saved logins bound to
+/// those devices (`tunnel_id` = 0, which only that feature created) and drop its two tables (devices, and the session
+/// history with IPs whose 90-day purge went with the feature). Columns stay, as always.
+pub const DROP_RUSTDESK_SERVER: &str = "2026-10-26-drop-rustdesk-server-devices";
+
 async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(name).fetch_one(pool).await?;
     Ok(n > 0)
@@ -860,7 +827,24 @@ async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
 /// 依序套用還沒跑過的一次性 data migration（同一個 transaction 裡寫入完成紀錄）。
 pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     drop_sharee_usernames(pool).await?;
-    site_webhook_from_settings(pool).await
+    site_webhook_from_settings(pool).await?;
+    drop_rustdesk_server(pool).await
+}
+
+async fn drop_rustdesk_server(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, DROP_RUSTDESK_SERVER).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let logins = sqlx::query("DELETE FROM telepy_credential WHERE tunnel_id = 0").execute(&mut *tx).await?.rows_affected();
+    sqlx::query("DROP TABLE IF EXISTS telepy_rustdesk_session").execute(&mut *tx).await?;
+    sqlx::query("DROP TABLE IF EXISTS telepy_rustdesk_device").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(DROP_RUSTDESK_SERVER).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    if logins > 0 {
+        tracing::info!(logins, "data migration: removed saved logins of RustDesk-server devices");
+    }
+    Ok(())
 }
 
 async fn site_webhook_from_settings(pool: &SqlitePool) -> anyhow::Result<()> {
@@ -948,6 +932,29 @@ mod tests {
         assert!(rows[0].3.contains("tunnel.ip_changed"));
         let url: String = sqlx::query_scalar("SELECT notify_webhook_url FROM site_settings_sitesettings WHERE id = 1").fetch_one(&db.read).await.unwrap();
         assert_eq!(url, "");
+    }
+
+    #[tokio::test]
+    async fn rustdesk_server_leftovers_go_once() {
+        let db = Db::open_memory().await.unwrap();
+        ensure_schema(&db.write).await.unwrap();
+        // 一個跑過那個功能的 DB：兩張表、一筆綁裝置的密碼（tunnel_id 0）、一筆一般的。/ A DB that ran the removed feature.
+        sqlx::query("DELETE FROM telepy_data_migration WHERE name = ?").bind(DROP_RUSTDESK_SERVER).execute(&db.write).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "telepy_rustdesk_device" ("id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "rustdesk_id" varchar(32) NOT NULL)"#).execute(&db.write).await.unwrap();
+        sqlx::query(r#"CREATE TABLE "telepy_rustdesk_session" ("id" integer NOT NULL PRIMARY KEY AUTOINCREMENT, "ip" varchar(64) NULL)"#).execute(&db.write).await.unwrap();
+        for tunnel in [0, 5] {
+            sqlx::query("INSERT INTO telepy_credential (user_id, label, protocol, tunnel_id, login, domain, secret, created_at, updated_at) VALUES (1, 'x', 'rustdesk', ?, '', '', 's', '2026-10-26 00:00:00', '2026-10-26 00:00:00')")
+                .bind(tunnel)
+                .execute(&db.write)
+                .await
+                .unwrap();
+        }
+        ensure_schema(&db.write).await.unwrap();
+        ensure_schema(&db.write).await.unwrap();
+        let left: Vec<i64> = sqlx::query_scalar("SELECT tunnel_id FROM telepy_credential").fetch_all(&db.read).await.unwrap();
+        assert_eq!(left, vec![5], "only the device-bound login goes");
+        let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'telepy_rustdesk_%'").fetch_one(&db.read).await.unwrap();
+        assert_eq!(tables, 0);
     }
 
     #[tokio::test]

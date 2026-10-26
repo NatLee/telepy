@@ -1,13 +1,12 @@
 # RustDesk 不經 SSH：Telepy 當 RustDesk 的 ID／中繼伺服器（研究與方案，2026-10-26）
 
 > 問題：Telepy 的網頁能不能遠端一台**沒有裝 Telepy 隧道**的 RustDesk？能不能讓裝置「遠端申請號碼」？
-> 這份是研究紀錄＋方案比較，不是功能文件；程式碼沒有進產品。上一份研究是 [`rustdesk-spike.md`](rustdesk-spike.md)，
+> **狀態（2026-10-26）：方案 B 做過（#201、#203、#206、#208）後又移除了。** Telepy 只經隧道連 RustDesk（見
+> [`remote-desktop.md`](remote-desktop.md)），這樣終端機、檔案、分享、即時 session 等功能都同一條路。實作時在真的 Mac
+> 上學到的事（`sudo` 下 `--option` 與 `--deploy` 讀不同的設定檔、沒裝系統服務時設定會被 root 寫壞）記在 git 歷史裡。
+>
+> 這份是研究紀錄＋方案比較，不是功能文件。上一份研究是 [`rustdesk-spike.md`](rustdesk-spike.md)，
 > 已上線的 SSH 路線見 [`remote-desktop.md`](remote-desktop.md)（#195、#196）。
-
-> **2026-10-26 更新：方案 B＋B1（權杖登記）已實作**，使用方式與設計見 [`remote-desktop.md`](remote-desktop.md) 的
-> 「不經隧道：Telepy 當 RustDesk 伺服器」。實作時補到的事實：`rustdesk --deploy` 要回 `{"result": "OK"}`（`INVALID_INPUT` /
-> `ID_TAKEN` / `NOT_ENABLED` 也認得，其他內容原樣印出並以 1 結束），OK 之後裝置立刻重新註冊；`--deploy` 還收 `--id <號碼>`，
-> 成功就把裝置的 ID 換成它 —— 方案 B2（Telepy 發號碼）可以直接用這個做。
 
 ## 結論
 
@@ -132,7 +131,7 @@ API 的相容性，而且 app 端的帳號 UI 不受 Telepy 控制。現在用�
    可選的對應隧道）；`POST /api/devices/deploy`（權杖＝一次性票證，像 join）、`/api/heartbeat`、`/api/sysinfo`、
    `/api/audit/conn`（回 2xx 空 body，寫進 Logs）；B2 的號碼配發與 `old_id` 審核。這幾個路徑落在 Telepy 的 `/api/*`
    底下，名稱目前沒有衝突；也可以把 `api-server` 設成 `https://<Telepy>/rustdesk` 讓它們落在子路徑（未實測）。
-3. **權限**：MVP 先「擁有者＋管理員」（已做：憑證庫密碼、即時 session / presence、每台的連線紀錄）；分享沿用隧道的 VIEW／EDIT／ADMIN 模型之後再接，VIEW 可以用 `control_permissions`
+3. **權限**：MVP 先「擁有者＋管理員」；分享沿用隧道的 VIEW／EDIT／ADMIN 模型之後再接，VIEW 可以用 `control_permissions`
    做成只能看。
 4. **前端**（約 1 週）：RustDesk 裝置清單（在線、名稱、ID、OS）、「新增裝置」對話框（Linux／macOS／Windows 指令，含
    權杖倒數與登記成功的即時狀態，像 JoinPanel）、連線沿用 `RustDeskViewer`（換一個 start 端點、`key` 帶伺服器公鑰）、

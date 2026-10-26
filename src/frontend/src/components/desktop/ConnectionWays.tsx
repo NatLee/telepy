@@ -1,15 +1,14 @@
 "use client";
 
 /**
- * 「比較連線方式」對話框：RDP / VNC 經隧道（guacd）、RustDesk 經隧道、Telepy 當 RustDesk 伺服器（沒有隧道），
- * 三條路徑上下對齊（你的瀏覽器 ─ Telepy ─ 裝置 ─ 桌面），每條下面一把「這段誰加密」的尺，接著是比較表與怎麼選。
- * 寬容器橫向、窄容器（手機）直向；只有直線。目前頁面上選的那一種會標出來。
- * The "ways to connect" dialog: the three paths aligned column by column with an encryption ruler under each,
+ * 「比較連線方式」對話框：RDP / VNC 經隧道（guacd）與 RustDesk 經隧道，兩條路徑上下對齊（你的瀏覽器 ─ Telepy ─
+ * 裝置 ─ 桌面），每條下面一把「這段誰加密」的尺，接著是比較表與怎麼選。寬容器橫向、窄容器（手機）直向；只有直線。
+ * 目前頁面上選的那一種會標出來。
+ * The "ways to connect" dialog: the two paths aligned column by column with an encryption ruler under each,
  * then the comparison table and how to choose. Horizontal when wide, vertical on phones; straight lines only.
  */
 import React from "react";
-import Link from "next/link";
-import { ArrowLeft, Check, Laptop, Lock, LockOpen, Monitor, MonitorSmartphone, Paintbrush, Route, Server, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Check, Laptop, Lock, LockOpen, Monitor, Paintbrush, Route, Server, TriangleAlert, type LucideIcon } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
@@ -24,11 +23,9 @@ const ICON: Record<Exclude<NodeIcon, "telepy">, LucideIcon> = { browser: Laptop,
 const SHORT: Record<WayId, TranslationKey> = {
     guacd: "desktop.ways.short.guacd",
     rustdeskTunnel: "desktop.ways.short.rustdeskTunnel",
-    rustdeskServer: "desktop.ways.short.rustdeskServer",
 };
 
 const LAYER_STYLE: Record<LayerTone, string> = {
-    e2e: "border-success/40 bg-success/10 text-success",
     transport: "border-info/35 bg-info/8 text-info",
     plain: "border-dashed border-border bg-transparent text-muted-foreground",
 };
@@ -62,7 +59,6 @@ function LinkLine({ kind, vertical }: { kind: LinkKind; vertical?: boolean }) {
         const v = kind === "tunnel" ? "w-1.5 border-x-2 border-foreground/45" : kind === "local" ? "w-0 border-l-2 border-dashed border-foreground/30" : "w-0 border-l-2 border-foreground/45";
         return (
             <span className="flex min-h-12 w-9 shrink-0 flex-col items-center self-stretch py-1" aria-hidden>
-                {kind === "dialOut" && <ArrowLeft size={14} className="-mb-1 shrink-0 rotate-90 text-foreground/60" />}
                 <span className={cn("flex-1", v)} />
             </span>
         );
@@ -70,7 +66,6 @@ function LinkLine({ kind, vertical }: { kind: LinkKind; vertical?: boolean }) {
     const h = kind === "tunnel" ? "h-1.5 border-y-2 border-foreground/45" : kind === "local" ? "h-0 border-t-2 border-dashed border-foreground/30" : "h-0 border-t-2 border-foreground/45";
     return (
         <span className="relative flex w-full items-center" aria-hidden>
-            {kind === "dialOut" && <ArrowLeft size={14} className="-mr-1 shrink-0 text-foreground/60" />}
             <span className={cn("w-full", h)} />
         </span>
     );
@@ -227,7 +222,6 @@ export function ConnectionWaysDialog({ isOpen, onClose, current }: { isOpen: boo
                 <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground" aria-label={t("desktop.ways.legend")}>
                     <span className="inline-flex items-center gap-1.5"><span className="inline-block w-6 border-t-2 border-foreground/45" aria-hidden /> {t("desktop.ways.legend.wss")}</span>
                     <span className="inline-flex items-center gap-1.5"><span className="inline-block h-1.5 w-6 border-y-2 border-foreground/45" aria-hidden /> {t("desktop.ways.legend.tunnel")}</span>
-                    <span className="inline-flex items-center gap-1.5"><ArrowLeft size={12} aria-hidden /><span className="-ml-1 inline-block w-5 border-t-2 border-foreground/45" aria-hidden /> {t("desktop.ways.legend.dialOut")}</span>
                     <span className="inline-flex items-center gap-1.5"><span className="inline-block w-6 border-t-2 border-dashed border-foreground/30" aria-hidden /> {t("desktop.ways.legend.local")}</span>
                 </div>
                 <CompareTable current={current} />
@@ -236,13 +230,6 @@ export function ConnectionWaysDialog({ isOpen, onClose, current }: { isOpen: boo
                     <ul className="space-y-2 text-sm leading-relaxed">
                         <li className="flex gap-2.5"><Monitor size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden /><span>{t("desktop.ways.pick.guacd")}</span></li>
                         <li className="flex gap-2.5"><Server size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden /><span>{t("desktop.ways.pick.rustdeskTunnel")}</span></li>
-                        <li className="flex gap-2.5">
-                            <MonitorSmartphone size={16} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
-                            <span>
-                                {t("desktop.ways.pick.rustdeskServer")}{" "}
-                                <Link href="/tunnels/rustdesk" prefetch={false} onClick={onClose} className="text-primary underline-offset-2 hover:underline">{t("desktop.ways.addRustDesk")}</Link>
-                            </span>
-                        </li>
                     </ul>
                 </section>
             </div>

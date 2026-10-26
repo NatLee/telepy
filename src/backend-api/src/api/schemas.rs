@@ -977,9 +977,6 @@ pub struct SavedCredential {
     /// null = the device itself
     pub lan_host_id: Option<i64>,
     pub lan_host: Option<String>,
-    /// A RustDesk-server device (no tunnel; `tunnel_id` is 0)
-    pub rustdesk_device_id: Option<i64>,
-    pub rustdesk_device: Option<String>,
     pub port: Option<i64>,
     pub login: String,
     pub domain: String,
@@ -994,11 +991,8 @@ pub struct SavedCredentialCreate {
     pub label: String,
     /// `rdp`, `vnc` or `rustdesk`
     pub protocol: String,
-    /// 0 with `rustdesk_device_id`
     pub tunnel_id: i64,
     pub lan_host_id: Option<i64>,
-    /// A RustDesk-server device you may use (protocol `rustdesk` only)
-    pub rustdesk_device_id: Option<i64>,
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
@@ -2159,11 +2153,9 @@ pub struct LiveSessionTunnel {
 #[derive(ToSchema)]
 pub struct LiveSession {
     pub id: u64,
-    /// A RustDesk device on Telepy's RustDesk server (then `tunnel.id` is 0 and `tunnel.name` null)
-    pub device: Option<LiveSessionDevice>,
     pub tunnel: LiveSessionTunnel,
     pub user: UserRef,
-    /// terminal / files / browser / desktop / rustdesk / ssh / ai
+    /// terminal / files / browser / desktop / ssh / ai
     #[schema(example = "terminal")]
     pub kind: String,
     pub ip: Option<String>,
@@ -2172,12 +2164,6 @@ pub struct LiveSession {
     /// MCP app name
     pub client: Option<String>,
     pub mine: bool,
-}
-
-#[derive(ToSchema)]
-pub struct LiveSessionDevice {
-    pub id: i64,
-    pub name: String,
 }
 
 /// 自己的、自己擁有或 ADMIN 的隧道上的（管理員看全部）。/ Yours plus everyone's on tunnels you own or ADMIN (all for admins).
@@ -2347,202 +2333,6 @@ pub struct CommandRequestList {
 pub struct CommandDecision {
     pub reason: Option<String>,
 }
-
-// ---- RustDesk server（Telepy 當 RustDesk 的 ID / 中繼伺服器）/ Telepy as RustDesk's ID and relay server ----
-
-#[derive(ToSchema)]
-#[schema(description = "The RustDesk options a device needs to use Telepy as its server, and the key the browser core verifies devices with")]
-pub struct RustDeskServerSettings {
-    /// Telepy's RustDesk server switch (site setting `desktop_rustdesk_server`)
-    pub enabled: bool,
-    /// `custom-rendezvous-server`: the hostname (RustDesk then dials `ws(s)://<host>/ws/id` on port 443 / 80) or `IP:<port-2>`
-    pub rendezvous: String,
-    /// `api-server`; RustDesk uses wss only when this starts with https
-    pub api_server: String,
-    /// The relay URL pushed to devices
-    pub relay_url: String,
-    /// Why RustDesk cannot reach this address: hostname_port | ip_https | localhost | bad_port | bad_url
-    pub problem: Option<String>,
-    /// Base64 ed25519 public key that signs device keys (end-to-end encryption in the browser)
-    pub key: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskDeviceOwner {
-    pub id: i64,
-    pub username: Option<String>,
-}
-
-#[derive(ToSchema)]
-#[schema(description = "A RustDesk device enrolled with Telepy's RustDesk server (no tunnel)")]
-pub struct RustDeskDevice {
-    pub id: i64,
-    pub name: String,
-    /// The device's own RustDesk ID
-    pub rustdesk_id: String,
-    pub hostname: String,
-    pub os: String,
-    /// RustDesk version the device reported
-    pub version: String,
-    /// Connected to Telepy right now
-    pub online: bool,
-    pub online_since: Option<String>,
-    pub last_seen_at: Option<String>,
-    pub created_at: String,
-    pub owner: RustDeskDeviceOwner,
-    pub mine: bool,
-    /// Browser sessions open to it
-    pub in_use: i64,
-    /// The latest browser session (null = never used)
-    pub last_used: Option<RustDeskLastUsed>,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskLastUsed {
-    pub username: String,
-    pub at: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskIdStart {
-    /// A saved login bound to this device; its password comes back in `password`
-    pub credential_id: Option<i64>,
-    /// Clipboard direction: both | to_remote | off; omitted = the user's setting; capped by the site
-    pub clipboard: Option<String>,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskSessionUser {
-    pub id: i64,
-    pub username: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskDeviceSession {
-    pub id: i64,
-    pub user: RustDeskSessionUser,
-    pub mine: bool,
-    pub ip: Option<String>,
-    #[schema(value_type = Object)]
-    pub geo: serde_json::Value,
-    pub started_at: String,
-    /// null while it is open
-    pub ended_at: Option<String>,
-    pub seconds: Option<i64>,
-    /// Bytes device → browser
-    pub to_browser: i64,
-    /// Bytes browser → device
-    pub to_device: i64,
-    /// Why it ended: `user` (browser left), `device`, `ended` (Live sessions), `stopped`, `removed`, `revoked`, `restart`
-    pub reason: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskDeviceSessions {
-    pub sessions: Vec<RustDeskDeviceSession>,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskDeviceList {
-    pub server: RustDeskServerSettings,
-    pub devices: Vec<RustDeskDevice>,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskDeviceRename {
-    pub name: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskIdDevice {
-    pub id: i64,
-    pub name: String,
-    pub rustdesk_id: String,
-}
-
-/// A browser session to an ID-server device: the core uses `ws_path` (with `?ticket=`) as its ID server and relay,
-/// asks for `peer_id`, and verifies the device's key with `key`, so the stream is end-to-end encrypted.
-#[derive(ToSchema)]
-pub struct RustDeskIdSession {
-    pub session_id: String,
-    #[schema(example = "/ws/rustdesk/<session_id>/")]
-    pub ws_path: String,
-    pub ticket: String,
-    pub expires_in: u64,
-    /// The device's RustDesk ID
-    pub peer_id: String,
-    /// Base64 ed25519 public key of Telepy's RustDesk server
-    pub key: String,
-    pub device: RustDeskIdDevice,
-    /// The saved password, only when started with `credential_id`
-    pub password: Option<String>,
-    /// Clipboard direction the browser's core applies (the stream is end-to-end encrypted): both | to_remote | off
-    pub clipboard: String,
-    /// The site's ceiling (`desktop_clipboard`)
-    pub clipboard_limit: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskEnrollRequest {
-    /// Name shown in Telepy; omitted = the device's hostname once it reports it
-    pub name: Option<String>,
-}
-
-#[derive(ToSchema)]
-#[schema(description = "A one-time enrolment command as its owner sees it")]
-pub struct RustDeskEnrolment {
-    pub id: String,
-    pub name: Option<String>,
-    /// waiting | enrolled | online
-    pub phase: String,
-    pub device_id: Option<i64>,
-    pub rustdesk_id: Option<String>,
-    pub created_at: String,
-    pub expires_at: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskCommands {
-    /// One line for Linux and macOS (run as root): finds RustDesk (the PATH, else /Applications/RustDesk.app), sets
-    /// the options, checks RustDesk took them and waits for the config `--deploy` reads before enrolling
-    pub unix: String,
-    /// PowerShell for Windows (run as Administrator)
-    pub windows: String,
-}
-
-#[derive(ToSchema)]
-pub struct RustDeskEnrolmentCreated {
-    #[schema(inline)]
-    pub enrolment: RustDeskEnrolment,
-    /// Single-use secret for `rustdesk --deploy --token` (`tpr_…`)
-    pub token: String,
-    pub commands: RustDeskCommands,
-    pub server: RustDeskServerSettings,
-}
-
-#[derive(ToSchema)]
-#[schema(description = "Sent by `rustdesk --deploy --token <token>` (with `Authorization: Bearer <token>`)")]
-pub struct RustDeskDeploy {
-    /// The device's RustDesk ID
-    pub id: String,
-    /// Base64 ed25519 public key of the device
-    pub pk: String,
-    /// Base64 machine uuid
-    pub uuid: String,
-}
-
-#[derive(ToSchema)]
-#[schema(description = "Sent by RustDesk to its api-server")]
-pub struct RustDeskSysinfo {
-    pub id: String,
-    pub uuid: String,
-    pub hostname: Option<String>,
-    pub os: Option<String>,
-    pub version: Option<String>,
-    pub cpu: Option<String>,
-    pub memory: Option<String>,
-}
-
 /// 一個 webhook。/ A webhook.
 #[derive(ToSchema)]
 pub struct Webhook {

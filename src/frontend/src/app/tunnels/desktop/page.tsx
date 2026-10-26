@@ -10,12 +10,10 @@
  * Remote desktop page: a form while idle, the screen plus a toolbar once connected (latency / stream button,
  * screen menu with detected screens / even splits / a drag-selected area, keyboard menu); RustDesk connects in the
  * browser by default (RustDeskViewer), with the native-app path (port probe + ssh -L) behind a disclosure.
- * `?rustdesk=<id>`：用 Telepy 當 RustDesk 伺服器的裝置（沒有隧道），表單只剩密碼與畫質。/ A RustDesk-server device (no tunnel):
- * the form is just the password and the quality.
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorSmartphone, MonitorX, Plus, RefreshCw, Route, ScreenShare, ShieldCheck, TextCursorInput, Waypoints, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, Waypoints, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -56,7 +54,6 @@ import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, desktopPorts, form
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
-import { deviceDetails, formatRustDeskId } from "@/lib/rustdeskDevices";
 import type { TranslationKey } from "@/locales/en";
 
 const CARD = "rounded-xl border border-border bg-card shadow-card";
@@ -116,7 +113,7 @@ function DesktopPageInner() {
     const { t } = useI18n();
     const { showSuccess } = useToast();
     const { state, actions } = useDesktopPage();
-    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState, rdSession, rdInfo, rdPassword, quality, rdDevice, rdDevices, rdDevicesLoaded } = state;
+    const { tunnels, loading, tunnel, host, form, phase, failure, session, connectedAt, endedNormally, address, stats, unstable, framebuffer, scale, screens, viewportId, customArea, selecting, ctrlAsCmd, pixelRatio, isRustDesk, probeState, rdSession, rdInfo, rdPassword, quality } = state;
     const viewerRef = useRef<DesktopViewerHandle | null>(null);
     const rdViewerRef = useRef<RustDeskViewerHandle | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -179,7 +176,7 @@ function DesktopPageInner() {
     const clipboardLimited = !clipboardAllowed(state.clipboard.choice, session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit);
     // RustDesk 用 app 的路（探測過、瀏覽器裡沒在連）：階段跟著探測；其餘都是瀏覽器 session 的階段。
     // The native-app path (probed, nothing connecting in the browser) follows the probe; everything else the session.
-    const rdNative = !rdDevice && isRustDesk && phase === "idle" && !rdSession && probeState.state !== "idle";
+    const rdNative = isRustDesk && phase === "idle" && !rdSession && probeState.state !== "idle";
     const flowPhase: DesktopPhase = rdNative
         ? (probeState.state === "checking" ? "starting" : probeState.state === "ok" ? "connected" : "failed")
         : phase;
@@ -197,10 +194,9 @@ function DesktopPageInner() {
         clipboardLimited,
         savedLogin: !!state.savedLogin,
         stats,
-        idServer: rdDevice ? { deviceName: rdDevice.name, rustdeskId: formatRustDeskId(rdDevice.rustdesk_id) } : null,
-    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, rdDevice]);
+    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats]);
 
-    const targetLabel = rdDevice ? `${rdDevice.name} · ${formatRustDeskId(rdDevice.rustdesk_id)}` : host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
+    const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
         const el = wrapRef.current;
         if (!el) return;
@@ -244,7 +240,7 @@ function DesktopPageInner() {
             </Button>
         </>
     );
-    const currentWay = wayFor({ protocol: form.protocol, idServer: !!rdDevice });
+    const currentWay = wayFor(form.protocol);
     const connected = phase === "connected";
     const isDeviceDesktop = !!session && session.target.lan_host_id === null;
     // RustDesk：畫質預設換了就告訴核心（連上時套一次）。/ RustDesk: push the quality profile to the core (once on connect too).
@@ -513,7 +509,7 @@ function DesktopPageInner() {
             )}
 
             {!session && !rdSession && endedNormally && phase === "idle" && <Callout tone="info">{t("desktop.ended")}</Callout>}
-            {!loading && rdDevicesLoaded && tunnels.length === 0 && rdDevices.length === 0 && (
+            {!loading && tunnels.length === 0 && (
                 <Callout tone="tip">
                     {t("desktop.noTunnels")}{" "}
                     <Link className="text-primary underline-offset-2 hover:underline" href="/tunnels/create"><Plus size={14} className="inline align-[-2px]" /> {t("desktop.addDevice")}</Link>
@@ -562,45 +558,6 @@ function DesktopPageInner() {
 type PageState = ReturnType<typeof useDesktopPage>["state"];
 type PageActions = ReturnType<typeof useDesktopPage>["actions"];
 
-/**
- * 「裝置」選單：有 Telepy 隧道的裝置，以及用 Telepy 當 RustDesk 伺服器的裝置（`rd:<id>`）。
- * The device picker: tunnelled devices plus RustDesk-server devices (`rd:<id>`).
- */
-function DevicePicker({ state, actions }: { state: PageState; actions: PageActions }) {
-    const { t } = useI18n();
-    const { tunnels, tunnel, online, rdDevice, rdDevices } = state;
-    const value = rdDevice ? `rd:${rdDevice.id}` : tunnel ? String(tunnel.id) : "";
-    const onChange = (v: string) => (v.startsWith("rd:") ? actions.setRustDeskDevice(Number(v.slice(3))) : actions.setTunnel(Number(v)));
-    const tunnelOptions = tunnels.map((tn) => (
-        <option key={tn.id} value={tn.id}>
-            {tn.name}{tn.online === false ? ` · ${t("desktop.offlineShort")}` : ""}
-        </option>
-    ));
-    const rdOptions = rdDevices.map((d) => (
-        <option key={`rd:${d.id}`} value={`rd:${d.id}`}>
-            {d.name} · {formatRustDeskId(d.rustdesk_id)}{d.online ? "" : ` · ${t("desktop.offlineShort")}`}
-        </option>
-    ));
-    const hint = rdDevice ? (rdDevice.online ? undefined : t("desktop.rdServer.offline", { name: rdDevice.name })) : tunnel && !online ? t("desktop.offline") : undefined;
-    return (
-        <Field label={t("desktop.field.device")} hint={hint}>
-            <NativeSelect value={value} onChange={(e) => onChange(e.target.value)}>
-                {tunnels.length > 0 && rdDevices.length > 0 ? (
-                    <>
-                        <optgroup label={t("desktop.field.groupTunnels")}>{tunnelOptions}</optgroup>
-                        <optgroup label={t("desktop.field.groupRustDesk")}>{rdOptions}</optgroup>
-                    </>
-                ) : (
-                    <>
-                        {tunnelOptions}
-                        {rdOptions}
-                    </>
-                )}
-            </NativeSelect>
-        </Field>
-    );
-}
-
 const CLIPBOARD_HINT: Record<"guacd" | "rustdesk", Record<ClipboardPolicy, TranslationKey>> = {
     guacd: { both: "desktop.clipboard.hint.both", to_remote: "desktop.clipboard.hint.toRemote", off: "desktop.clipboard.hint.off" },
     rustdesk: { both: "desktop.clipboard.hint.rdBoth", to_remote: "desktop.clipboard.hint.rdToRemote", off: "desktop.clipboard.hint.off" },
@@ -628,139 +585,16 @@ function ClipboardField({ state, actions, rustdesk }: { state: PageState; action
     );
 }
 
-/**
- * 用 Telepy 當 RustDesk 伺服器的裝置：只要密碼與畫質；連線端對端加密。
- * A device that uses Telepy as its RustDesk server: just the password and the quality; end-to-end encrypted.
- */
-/** 這個桌面存過的登入（有才顯示）。/ The logins saved for this desktop, when there are any. */
-function SavedLoginSelect({ state, actions, rustdesk }: { state: PageState; actions: PageActions; rustdesk: boolean }) {
-    const { t } = useI18n();
-    const { savedLogins, form } = state;
-    if (savedLogins.length === 0) return null;
-    return (
-        <Field label={t("desktop.field.saved")} hint={t(rustdesk ? "desktop.field.savedHintRd" : "desktop.field.savedHint")}>
-            <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
-                <option value="">{t("desktop.field.savedNone")}</option>
-                {savedLogins.map((c) => (
-                    <option key={c.id} value={c.id}>{c.label}{c.login ? ` (${c.login})` : ""}</option>
-                ))}
-            </NativeSelect>
-        </Field>
-    );
-}
-
-/** RustDesk 的固定密碼：用存的那筆（卡片），或手打＋「存起來」。隧道與 RustDesk 伺服器兩種表單共用。
- *  RustDesk's permanent password: the saved one (a card), or typed plus "save it"; shared by both forms. */
-function RustDeskSecret({ state, actions, hint, labelPlaceholder }: { state: PageState; actions: PageActions; hint: string; labelPlaceholder: string }) {
-    const { t, tn } = useI18n();
-    const { form, savedLogin } = state;
-    if (savedLogin) {
-        return (
-            <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
-                <span className="flex flex-wrap items-center gap-2 text-foreground">
-                    <KeyRound size={15} className="text-muted-foreground" aria-hidden />
-                    <span>{tn("desktop.savedUsesRd", { label: <strong>{savedLogin.label}</strong> })}</span>
-                </span>
-                <span className="text-xs text-muted-foreground">{t("desktop.savedNoteRd")}</span>
-                <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
-                    {t("desktop.savedForget")}
-                </button>
-            </div>
-        );
-    }
-    return (
-        <>
-            <Field label={t("desktop.field.rdPassword")} hint={hint}>
-                <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
-            </Field>
-            <label className="flex items-start gap-2 self-center text-sm text-foreground">
-                <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
-                <span>
-                    {t("desktop.saveLogin")}
-                    <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHintRd")}</span>
-                </span>
-            </label>
-            {form.save && (
-                <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
-                    <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={labelPlaceholder} maxLength={100} />
-                </Field>
-            )}
-        </>
-    );
-}
-
-function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
-    const { t } = useI18n();
-    const { rdDevice, phase, failure, canConnect, quality } = state;
-    const busy = phase === "starting";
-    if (!rdDevice) return null;
-    const qualityOptions: { value: DesktopQuality; label: string }[] = [
-        { value: "auto", label: t("desktop.quality.auto") },
-        { value: "speed", label: t("desktop.quality.speed") },
-        { value: "sharp", label: t("desktop.quality.sharp") },
-    ];
-    const details = deviceDetails(rdDevice);
-    return (
-        <form
-            className={cn(CARD, "space-y-5 p-4 sm:p-6")}
-            onSubmit={(e) => {
-                e.preventDefault();
-                if (canConnect) void actions.connect();
-            }}
-        >
-            {failure && phase === "failed" && (
-                <Callout tone="danger">
-                    <p>{t(failure.key, failure.vars)}</p>
-                    <button type="button" onClick={onInfo} className="mt-1 text-sm text-destructive underline underline-offset-2">
-                        {t("desktop.showWhere")}
-                    </button>
-                </Callout>
-            )}
-            <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">
-                <DevicePicker state={state} actions={actions} />
-                <div className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
-                    <MonitorSmartphone size={18} className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden />
-                    <div className="min-w-0">
-                        <p className="text-foreground">
-                            <span className="text-muted-foreground">{t("desktop.rdServer.id")} </span>
-                            <span className="tabular-nums">{formatRustDeskId(rdDevice.rustdesk_id)}</span>
-                        </p>
-                        {details && <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{details}</p>}
-                        <Link href="/tunnels/rustdesk" prefetch={false} className="text-xs text-primary underline-offset-2 hover:underline">{t("desktop.rdServer.manage")}</Link>
-                    </div>
-                </div>
-                <SavedLoginSelect state={state} actions={actions} rustdesk />
-                <RustDeskSecret state={state} actions={actions} hint={t("desktop.rdServer.passwordHint")} labelPlaceholder={`RustDesk@${rdDevice.name}`} />
-                <Field label={t("desktop.field.quality")} hint={t("desktop.rustdesk.qualityHint")}>
-                    <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
-                </Field>
-                <ClipboardField state={state} actions={actions} rustdesk />
-            </div>
-            <Callout tone="info" icon={<ShieldCheck size={17} className="mt-0.5 shrink-0" aria-hidden />}>{t("desktop.rdServer.intro")}</Callout>
-            <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <button type="button" onClick={onInfo} className="flex min-w-0 items-start gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground">
-                    <Info size={14} className="mt-px shrink-0" aria-hidden />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">{t("desktop.rdServer.pathSummary", { name: rdDevice.name })}</span>
-                </button>
-                <Button type="submit" disabled={!canConnect || busy} className="sm:min-w-40">
-                    <ScreenShare size={16} /> {busy ? t("desktop.connecting") : t("desktop.rustdesk.connectBrowser")}
-                </Button>
-            </div>
-        </form>
-    );
-}
-
 function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState; actions: PageActions; onInfo: () => void; onCompare: () => void }) {
     const { t, tn } = useI18n();
-    const { tunnels, loading, tunnel, host, form, phase, failure, canConnect, address, savedLogin, quality, isRustDesk, rdDevice, rdDevices } = state;
+    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk } = state;
     const portOk = isValidPort(form.port);
     const busy = phase === "starting";
     // 預熱畫面元件的 chunk（與填表並行）；RustDesk 是 vendored 的核心。/ Warm up the viewer chunk (the RustDesk core in that mode).
-    useEffect(() => { void (isRustDesk || rdDevice ? loadRustDeskCore() : loadGuacamole()).catch(() => undefined); }, [isRustDesk, rdDevice]);
+    useEffect(() => { void (isRustDesk ? loadRustDeskCore() : loadGuacamole()).catch(() => undefined); }, [isRustDesk]);
 
     if (loading) return <div className={cn(CARD, "p-8 text-center text-sm text-muted-foreground")}>{t("common.loading")}</div>;
-    if (rdDevice) return <RustDeskServerForm state={state} actions={actions} onInfo={onInfo} />;
-    if (tunnels.length === 0 && rdDevices.length === 0) return null;
+    if (tunnels.length === 0) return null;
 
     const protocolOptions: { value: DesktopMode; label: string }[] = [
         { value: "rdp", label: t("desktop.protocol.rdp") },
@@ -793,7 +627,15 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
 
             {/* 欄寬一定要 minmax(0,…)：RustDesk 的 ssh 指令很長，不然會把整張表單撐出手機畫面。/ minmax(0,…) keeps the long ssh command from widening the form past a phone screen. */}
             <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">
-                <DevicePicker state={state} actions={actions} />
+                <Field label={t("desktop.field.device")} hint={tunnel && !online ? t("desktop.offline") : undefined}>
+                    <NativeSelect value={tunnel ? String(tunnel.id) : ""} onChange={(e) => actions.setTunnel(Number(e.target.value))}>
+                        {tunnels.map((tn) => (
+                            <option key={tn.id} value={tn.id}>
+                                {tn.name}{tn.online === false ? ` · ${t("desktop.offlineShort")}` : ""}
+                            </option>
+                        ))}
+                    </NativeSelect>
+                </Field>
 
                 <Field
                     label={t("desktop.field.target")}
@@ -851,11 +693,49 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
 
                 <ClipboardField state={state} actions={actions} rustdesk={isRustDesk} />
 
-                <SavedLoginSelect state={state} actions={actions} rustdesk={isRustDesk} />
+                {savedLogins.length > 0 && (
+                    <Field label={t("desktop.field.saved")} hint={t(isRustDesk ? "desktop.field.savedHintRd" : "desktop.field.savedHint")}>
+                        <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
+                            <option value="">{t("desktop.field.savedNone")}</option>
+                            {savedLogins.map((c) => (
+                                <option key={c.id} value={c.id}>{c.label}{c.login ? ` (${c.login})` : ""}</option>
+                            ))}
+                        </NativeSelect>
+                    </Field>
+                )}
 
                 {isRustDesk ? (
                     <>
-                        <RustDeskSecret state={state} actions={actions} hint={t("desktop.field.rdPasswordHint")} labelPlaceholder={`RustDesk@${host ? host.address : tunnel?.name ?? ""}`} />
+                        {savedLogin ? (
+                            <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
+                                <span className="flex flex-wrap items-center gap-2 text-foreground">
+                                    <KeyRound size={15} className="text-muted-foreground" aria-hidden />
+                                    <span>{tn("desktop.savedUsesRd", { label: <strong>{savedLogin.label}</strong> })}</span>
+                                </span>
+                                <span className="text-xs text-muted-foreground">{t("desktop.savedNoteRd")}</span>
+                                <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
+                                    {t("desktop.savedForget")}
+                                </button>
+                            </div>
+                        ) : (
+                            <Field label={t("desktop.field.rdPassword")} hint={t("desktop.field.rdPasswordHint")}>
+                                <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
+                            </Field>
+                        )}
+                        {!savedLogin && (
+                            <label className="flex items-start gap-2 self-center text-sm text-foreground">
+                                <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
+                                <span>
+                                    {t("desktop.saveLogin")}
+                                    <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHintRd")}</span>
+                                </span>
+                            </label>
+                        )}
+                        {!savedLogin && form.save && (
+                            <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
+                                <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={`RustDesk@${host ? host.address : tunnel?.name ?? ""}`} maxLength={100} />
+                            </Field>
+                        )}
                         <div className="sm:col-span-2">
                             <RustDeskPanel state={state} actions={actions} />
                         </div>
