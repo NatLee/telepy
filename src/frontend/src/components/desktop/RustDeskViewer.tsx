@@ -7,6 +7,7 @@
  *   同一條；後端看第一則訊息分角色）→ `session_add_sync {id: 目標位址, password}` → `session_start`。
  *   密碼由核心在瀏覽器裡做雜湊挑戰，不會送到 Telepy。不加密的直連會跳 msgbox，這裡自動確認（隧道本身加密）。
  * - 影像：`onVideoFrame(display, VideoFrame)` 畫到 canvas，`onRgba` 備援；canvas 等比縮進框裡，滑鼠座標除以比例。
+ * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；canvas 放在裁切框裡、往左上挪平移量。
  * - 鍵盤：焦點放在隱藏的 textarea（輸入法才能組字），按鍵走 `input_key`（legacy 鍵名），組好的字走 `input_string`。
  * - 游標：`cursor_data`（RGBA）→ data URL → CSS cursor，`cursor_id` 切換。
  * In-browser RustDesk: the vendored core decodes in this page, Telepy relays. See `lib/rustdesk.ts`.
@@ -17,6 +18,8 @@ import { getWsOrigin } from "@/lib/wsCommon";
 import { useI18n } from "@/lib/i18n";
 import type { DesktopFailure } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
+import { useDesktopZoom } from "@/hooks/useDesktopZoom";
+import { ZoomControl } from "@/components/desktop/ZoomControl";
 import {
     classifyMsgbox,
     inputKeyJson,
@@ -69,7 +72,9 @@ type Globals = Partial<RustDeskCore> & {
 export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
+    const hostRef = useRef<HTMLDivElement | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const rescaleRef = useRef<(() => void) | null>(null);
     const sinkRef = useRef<HTMLTextAreaElement | null>(null);
     const coreRef = useRef<RustDeskCore | null>(null);
     const scaleRef = useRef(1);
@@ -82,6 +87,11 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         callbacks.current = { onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard };
     });
     const [focused, setFocused] = useState(false);
+    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => true);
+    const zoomRef = useRef({ layout: zoom.layout, restart: zoom.restart });
+    useLayoutEffect(() => {
+        zoomRef.current = { layout: zoom.layout, restart: zoom.restart };
+    });
 
     const call = (name: string, arg?: unknown) => {
         const core = coreRef.current;
@@ -100,9 +110,10 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
 
     useEffect(() => {
         const frame = frameRef.current;
+        const host = hostRef.current;
         const canvas = canvasRef.current;
         const sink = sinkRef.current;
-        if (!frame || !canvas || !sink) return;
+        if (!frame || !host || !canvas || !sink) return;
         let disposed = false;
         endedRef.current = false;
         const ctx = canvas.getContext("2d");
@@ -113,16 +124,23 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
             callbacks.current.onEnded(failure);
         };
 
-        // 等比縮進框裡（不放大過 1:1）。/ Fit the canvas into the frame, never above 1:1.
+        // 等比縮進框裡（不放大過 1:1），再乘上縮放倍率；host 是裁切框，canvas 往左上挪平移量。
+        // Fit the canvas into the frame (never above 1:1), times the zoom; the host clips, the canvas shifts by the pan.
         const rescale = () => {
             const { width, height } = sizeRef.current;
             if (!width || !height) return;
             const box = frame.getBoundingClientRect();
-            const scale = Math.min(box.width / width, box.height / height, 1);
-            scaleRef.current = scale;
-            canvas.style.width = `${width * scale}px`;
-            canvas.style.height = `${height * scale}px`;
+            const fit = Math.min(box.width / width, box.height / height, 1);
+            const l = zoomRef.current.layout(box, { width, height }, fit, fit < 0.99);
+            scaleRef.current = l.scale;
+            host.style.width = `${l.hostWidth}px`;
+            host.style.height = `${l.hostHeight}px`;
+            canvas.style.width = `${width * l.scale}px`;
+            canvas.style.height = `${height * l.scale}px`;
+            canvas.style.marginLeft = `${-l.ox}px`;
+            canvas.style.marginTop = `${-l.oy}px`;
         };
+        rescaleRef.current = rescale;
         const observer = new ResizeObserver(rescale);
         observer.observe(frame);
 
@@ -132,6 +150,8 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                 canvas.width = width;
                 canvas.height = height;
                 sizeRef.current = { width, height };
+                // 換了螢幕或解析度：倍率回到預設。/ Another display or resolution: back to the default zoom.
+                zoomRef.current.restart();
                 rescale();
             }
             paint();
@@ -335,6 +355,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
 
         return () => {
             disposed = true;
+            rescaleRef.current = null;
             observer.disconnect();
             canvas.removeEventListener("mousemove", onMouseMove);
             canvas.removeEventListener("mousedown", onMouseDown);
@@ -365,11 +386,14 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
     return (
         <div
             ref={frameRef}
-            className="relative flex h-full w-full items-center justify-center overflow-hidden bg-black"
+            className="relative flex h-full w-full touch-none items-center justify-center overflow-hidden bg-black"
             aria-label={t("desktop.viewerLabel")}
             onMouseDown={() => sinkRef.current?.focus()}
         >
-            <canvas ref={canvasRef} className="block max-h-full max-w-full" width={0} height={0} />
+            <div ref={hostRef} className="relative shrink-0 overflow-hidden">
+                <canvas ref={canvasRef} className="block max-w-none" width={0} height={0} />
+            </div>
+            {zoom.touch && <ZoomControl zoom={zoom} />}
             <textarea
                 ref={sinkRef}
                 aria-hidden="true"

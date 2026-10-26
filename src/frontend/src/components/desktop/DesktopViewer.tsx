@@ -10,6 +10,7 @@
  * - 只看一個螢幕：`viewport` 把畫面裁成那個矩形（多螢幕的 VNC 桌面）；座標仍是整張畫面的，滑鼠位置照舊正確。
  * - 容器大小改變 → 等比縮放畫面（HiDPI 時向 guacd 要 devicePixelRatio 倍的解析度、縮回 CSS 大小，字才銳利）；
  *   RDP 另外送 `size`，遠端桌面會跟著改解析度（resize-method display-update）。
+ * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；放大後框是裁切框、畫面元素往左上挪。
  * - 串流統計：中繼每秒送 `telepy-ping`（這裡立刻回 `telepy-pong`）與 `telepy-stats`（交給 onStats）；
  *   兩者在交給 Guacamole.Client 前攔下。tunnel 的 UNSTABLE 狀態也往上報。
  * - 錯誤：guacd 的 `error` 指令（client.onerror）或後端的關閉碼（後端把代碼放在 close reason，tunnel.onerror
@@ -24,7 +25,10 @@ import { useI18n } from "@/lib/i18n";
 import { sessionFailure, type DesktopFailure, type DesktopStart } from "@/lib/desktop";
 import { parseStats, PING_OPCODE, PONG_OPCODE, STATS_OPCODE, type StreamStats } from "@/lib/desktopStats";
 import { fitScale, rectFromPoints, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
+import { FIT, zoomLayout } from "@/lib/desktopZoom";
+import { useDesktopZoom } from "@/hooks/useDesktopZoom";
 import { Button } from "@/components/ui/button";
+import { ZoomControl } from "@/components/desktop/ZoomControl";
 
 type GuacNS = typeof Guac;
 
@@ -121,11 +125,25 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
         options.current = { viewport, pixelRatio, ctrlAsCmd, selecting };
     });
     const [focused, setFocused] = useState(false);
+    // 框選時不縮放（兩指手勢交給框選層）。/ No zooming while selecting an area.
+    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => !options.current.selecting);
+    const zoomLayoutRef = useRef(zoom.layout);
+    useLayoutEffect(() => {
+        zoomLayoutRef.current = zoom.layout;
+    });
 
     // 換螢幕、進出框選模式 → 重新裁切縮放。/ A new viewport or selection mode re-crops the display.
     useEffect(() => {
         rescaleRef.current?.();
     }, [viewport, pixelRatio, selecting]);
+    // 換到別的螢幕 / 區域：倍率回到預設。比對位置而不是物件（選單打開時會重算出新物件）。
+    // Another screen or area resets the zoom; compare the rectangle, not the object (the menu recomputes them).
+    const viewportKey = viewport ? `${viewport.x},${viewport.y},${viewport.width},${viewport.height}` : "";
+    const restartZoom = zoom.restart;
+    useEffect(() => {
+        restartZoom();
+        rescaleRef.current?.();
+    }, [viewportKey, restartZoom]);
 
     /** 視窗座標 → 整張畫面的座標（框選用）。/ Client coordinates → framebuffer coordinates. */
     const toFramebuffer = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -217,23 +235,27 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             host.appendChild(el);
             displayElRef.current = el;
 
-            // 裁切 + 等比縮放：host 是裁切框（viewport 的大小 × 比例），畫面元素往左上挪 viewport 的位移。
-            // 不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是原生解析度）。框選時一律整張。
-            // Crop and fit: the host is the clip box, the display element shifted by the viewport's origin.
+            // 裁切 + 等比縮放：host 是裁切框（viewport 的大小 × 比例，放大後最多到框的大小），畫面元素往左上挪
+            // viewport 的位移再加平移量。「塞進框裡」不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是
+            // 原生解析度），再乘上縮放倍率。框選時一律整張、不縮放。
+            // Crop, fit and zoom: the host is the clip box, the display element shifted by the viewport's origin plus the pan.
             const rescale = () => {
                 const w = display.getWidth();
                 const h = display.getHeight();
                 if (!w || !h) return;
-                const vpRaw = options.current.selecting ? null : options.current.viewport;
+                const selecting = options.current.selecting;
+                const vpRaw = selecting ? null : options.current.viewport;
                 const vp: Viewport = vpRaw && vpRaw.x < w && vpRaw.y < h ? { x: vpRaw.x, y: vpRaw.y, width: Math.min(vpRaw.width, w - vpRaw.x), height: Math.min(vpRaw.height, h - vpRaw.y) } : { x: 0, y: 0, width: w, height: h };
                 const box = frame.getBoundingClientRect();
-                const scale = fitScale(box, vp, 1 / Math.max(1, options.current.pixelRatio));
-                display.scale(scale);
-                host.style.width = `${vp.width * scale}px`;
-                host.style.height = `${vp.height * scale}px`;
-                el.style.marginLeft = `${-vp.x * scale}px`;
-                el.style.marginTop = `${-vp.y * scale}px`;
-                callbacks.current.onScale(scale);
+                const pr = Math.max(1, options.current.pixelRatio);
+                const fit = fitScale(box, vp, 1 / pr);
+                const l = selecting ? zoomLayout(box, vp, fit, FIT) : zoomLayoutRef.current(box, vp, fit, fit * pr < 0.99);
+                display.scale(l.scale);
+                host.style.width = `${l.hostWidth}px`;
+                host.style.height = `${l.hostHeight}px`;
+                el.style.marginLeft = `${-(vp.x * l.scale + l.ox)}px`;
+                el.style.marginTop = `${-(vp.y * l.scale + l.oy)}px`;
+                callbacks.current.onScale(l.scale);
             };
             rescaleRef.current = rescale;
             display.onresize = (w, h) => {
@@ -386,10 +408,11 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             tabIndex={0}
             onMouseDown={() => sinkRef.current?.focus()}
             onFocus={(e) => { if (e.target === frameRef.current) sinkRef.current?.focus(); }}
-            className="relative flex h-full w-full items-center justify-center overflow-hidden bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="relative flex h-full w-full touch-none items-center justify-center overflow-hidden bg-black outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             aria-label={t("desktop.viewerLabel")}
         >
-            <div ref={hostRef} className="relative overflow-hidden" />
+            <div ref={hostRef} className="relative shrink-0 overflow-hidden" />
+            {zoom.touch && !selecting && <ZoomControl zoom={zoom} />}
             {selecting && <AreaSelector toFramebuffer={toFramebuffer} framebuffer={framebufferSize} onDone={(area) => callbacks.current.onAreaSelected(area)} />}
             {!focused && !selecting && (
                 <div className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-md bg-background/90 px-2.5 py-1 text-xs text-foreground shadow-pop">
