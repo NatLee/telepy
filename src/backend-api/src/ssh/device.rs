@@ -21,6 +21,7 @@ use russh::keys::{load_secret_key, PrivateKey, PrivateKeyWithHashAlg, PublicKeyO
 use russh_sftp::client::SftpSession;
 
 use crate::ssh::host_keys;
+use crate::ssh::sftp_watch::{Watch, Watched};
 use crate::state::AppState;
 
 /// 握手時要比對的隧道（沒有對應的隧道列時不檢查，例如測試自帶的 sshd）。/ The tunnel to check the host key against.
@@ -176,7 +177,33 @@ const SUBSYSTEM_REPLY: Duration = Duration::from_secs(10);
 /// 在 session channel 上要 `sftp` 子系統並**等裝置回覆**：沒有這個子系統的裝置回 failure，立刻報錯，
 /// 不必等 SFTP 初始化逾時（檔案管理因此能馬上退回 exec）。
 /// Request the sftp subsystem and wait for the reply, so a device without it fails fast.
-pub async fn start_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<SftpSession> {
+pub async fn start_sftp(channel: Channel<client::Msg>) -> anyhow::Result<SftpSession> {
+    let channel = open_sftp(channel).await?;
+    SftpSession::new(channel.into_stream()).await.context("start SFTP")
+}
+
+/// [`start_sftp`]，外加看著 channel 的健康狀態（連線池共用的那條）。
+/// [`start_sftp`] plus a health watch on the channel (the pool's shared one).
+pub async fn start_sftp_watched(channel: Channel<client::Msg>) -> anyhow::Result<(SftpSession, Arc<Watch>)> {
+    let channel = open_sftp(channel).await?;
+    let (stream, watch) = Watched::new(channel.into_stream());
+    Ok((SftpSession::new(stream).await.context("start SFTP")?, watch))
+}
+
+/// 要子系統；失敗就把 channel 關掉 —— 光是 drop 一條 `Channel` 不會送 close，裝置會一直算著這個 session（MaxSessions）。
+/// Ask for the subsystem; on failure close the channel, since dropping a bare `Channel` sends no close and the
+/// device would keep counting the session against MaxSessions.
+async fn open_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<Channel<client::Msg>> {
+    match ask_for_sftp(&mut channel).await {
+        Ok(()) => Ok(channel),
+        Err(e) => {
+            let _ = channel.close().await;
+            Err(e)
+        }
+    }
+}
+
+async fn ask_for_sftp(channel: &mut Channel<client::Msg>) -> anyhow::Result<()> {
     channel.request_subsystem(true, "sftp").await.context("request the sftp subsystem")?;
     let reply = tokio::time::timeout(SUBSYSTEM_REPLY, async {
         loop {
@@ -190,8 +217,7 @@ pub async fn start_sftp(mut channel: Channel<client::Msg>) -> anyhow::Result<Sft
     })
     .await;
     match reply {
-        Ok(r) => r?,
+        Ok(r) => r,
         Err(_) => bail!("the device did not answer the sftp request"),
     }
-    SftpSession::new(channel.into_stream()).await.context("start SFTP")
 }

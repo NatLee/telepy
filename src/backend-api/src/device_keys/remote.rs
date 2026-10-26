@@ -46,8 +46,7 @@ impl AuthorizedKeysFile {
     /// 以服務金鑰登入 `username`，找出 `~/.ssh`（`for_write` 時不存在就建立，0700），記下 `authorized_keys` 的實際路徑與權限。
     /// 稽核只讀，不建目錄。/ Read-only callers (the audit) never create `~/.ssh`.
     pub async fn open(state: &AppState, username: &str, reverse_port: i64, for_write: bool) -> anyhow::Result<Self> {
-        let lease = state.pool.acquire(state, reverse_port, username).await?;
-        let channel = lease.device().channel_open_session().await?;
+        let (lease, channel) = state.pool.session_channel(state, reverse_port, username).await?;
         channel.request_subsystem(true, "sftp").await?;
         let sftp = RawSftpSession::new(channel.into_stream());
         sftp.set_timeout(20);

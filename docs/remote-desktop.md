@@ -20,7 +20,7 @@ guacd 容器（telepy-desktop internal 網路，只有 backend 與 guacd）
   │  connect 時連回 backend 上這個 session 專屬的 rendezvous 埠（只收 guacd 的來源 IP，收到一條就關）
   ▼
 backend desktop/bridge.rs
-  │  copy_bidirectional ⇄ russh direct-tcpip 通道（ssh::pool 那條裝置連線上的一個 lease）
+  │  copy_bidirectional ⇄ russh direct-tcpip 通道（ssh::pool 那條裝置連線上的一個傳輸 lease，不占 session 額度）
   ▼
 裝置 sshd ──► 127.0.0.1:<port>（裝置自己的桌面）或 <LAN 位址>:<port>（區網主機，和 ssh -J / 區網掃描同一個機制）
 ```

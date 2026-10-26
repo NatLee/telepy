@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 
 use super::pool::Lease;
 use super::resolve::Resolver;
+use crate::state::AppState;
 
 /// 一個開著的代理。drop 即停止接新連線；lease 跟著 proxy 活（已在傳的連線各自持有一份）。
 pub struct SocksProxy {
@@ -29,8 +30,9 @@ impl Drop for SocksProxy {
 }
 
 impl SocksProxy {
-    /// 在 `bind`（例如 `0.0.0.0:0`）開始聽。/ Start listening on `bind`.
-    pub async fn start(lease: Lease, bind: &str) -> anyhow::Result<Self> {
+    /// 在 `bind`（例如 `0.0.0.0:0`）開始聽。`lease` 是傳輸 lease（direct-tcpip 不占 session 額度）。
+    /// Start listening on `bind`; `lease` is a transport lease (direct-tcpip takes no session slot).
+    pub async fn start(state: AppState, lease: Lease, bind: &str) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(bind).await.with_context(|| format!("bind {bind}"))?;
         let port = listener.local_addr()?.port();
         let lease = Arc::new(lease);
@@ -39,9 +41,9 @@ impl SocksProxy {
         let accept = tokio::spawn(async move {
             loop {
                 let Ok((client, peer)) = listener.accept().await else { break };
-                let (lease, resolver) = (for_task.clone(), resolver.clone());
+                let (state, lease, resolver) = (state.clone(), for_task.clone(), resolver.clone());
                 tokio::spawn(async move {
-                    if let Err(e) = serve(lease, resolver, client, peer).await {
+                    if let Err(e) = serve(&state, lease, resolver, client, peer).await {
                         tracing::debug!(error = %e, "socks: connection ended with error");
                     }
                 });
@@ -57,7 +59,7 @@ impl SocksProxy {
 }
 
 /// SOCKS5 握手 → CONNECT → direct-tcpip → 雙向複製。/ Handshake, CONNECT, then relay.
-async fn serve(lease: Arc<Lease>, resolver: Arc<Resolver>, mut client: TcpStream, peer: SocketAddr) -> anyhow::Result<()> {
+async fn serve(state: &AppState, lease: Arc<Lease>, resolver: Arc<Resolver>, mut client: TcpStream, peer: SocketAddr) -> anyhow::Result<()> {
     let _ = client.set_nodelay(true);
     // 方法協商：只接受 0x00（無認證）。/ Method selection: only "no authentication".
     let mut head = [0u8; 2];
@@ -108,7 +110,7 @@ async fn serve(lease: Arc<Lease>, resolver: Arc<Resolver>, mut client: TcpStream
     }
 
     // 由裝置的 sshd 連出去（名稱視裝置 OS 先解析）。/ The device's sshd connects out (names resolved per OS first).
-    let target = match resolver.target(lease.device(), &host).await {
+    let target = match resolver.target(state, &lease, &host).await {
         Ok(t) => t,
         Err(e) => {
             reply(&mut client, 4).await?; // host unreachable

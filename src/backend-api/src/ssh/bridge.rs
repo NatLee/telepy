@@ -12,12 +12,13 @@ use tokio::net::TcpListener;
 
 use super::pool::Lease;
 use super::resolve::Resolver;
+use crate::state::AppState;
 
 /// 沒人來連的話多久關掉。/ How long to wait for the client.
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 開好入口，回 loopback 埠；連線結束（或逾時）時 lease 一起歸還。/ Returns the loopback port to dial.
-pub async fn one_shot(lease: Lease, host: String, port: u16) -> anyhow::Result<u16> {
+/// 開好入口，回 loopback 埠；連線結束（或逾時）時 lease（傳輸 lease）一起歸還。/ Returns the loopback port to dial.
+pub async fn one_shot(state: AppState, lease: Lease, host: String, port: u16) -> anyhow::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.context("bind a loopback entry point")?;
     let local = listener.local_addr()?.port();
     tokio::spawn(async move {
@@ -28,7 +29,7 @@ pub async fn one_shot(lease: Lease, host: String, port: u16) -> anyhow::Result<u
         drop(listener);
         let _ = tcp.set_nodelay(true);
         // 名稱（例如 nas.local）先經 resolve：macOS 裝置上不能把名稱交給 sshd-session。
-        let target = match Resolver::default().target(lease.device(), &host).await {
+        let target = match Resolver::default().target(&state, &lease, &host).await {
             Ok(t) => t,
             Err(e) => {
                 tracing::info!(%host, error = format!("{e:#}"), "bridge: cannot resolve the LAN host on the device");

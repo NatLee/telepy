@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -115,6 +116,8 @@ pub struct Machine {
     resizes: Arc<Mutex<Vec<(u32, u32)>>>,
     resolves: Arc<Mutex<Vec<String>>>,
     commands: Arc<Mutex<Vec<String>>>,
+    sftp_starts: Arc<AtomicUsize>,
+    open_sessions: Arc<AtomicUsize>,
 }
 
 impl Machine {
@@ -160,6 +163,14 @@ impl Machine {
     /// pretend_darwin：後端請裝置解析過的名稱。/ Names resolved on the (fake) macOS device.
     pub fn resolves(&self) -> Vec<String> {
         self.resolves.lock().unwrap().clone()
+    }
+    /// 啟動過幾次 sftp 子系統（= 開過幾條 sftp channel）。/ How many sftp subsystems were started.
+    pub fn sftp_starts(&self) -> usize {
+        self.sftp_starts.load(Ordering::SeqCst)
+    }
+    /// 所有連線上現在開著幾條 session channel（裝置那端看到的）。/ Session channels open right now, all connections.
+    pub fn open_sessions(&self) -> usize {
+        self.open_sessions.load(Ordering::SeqCst)
     }
 }
 
@@ -210,6 +221,8 @@ struct MachineState {
     resolves: Arc<Mutex<Vec<String>>>,
     /// echo_shell 真的「執行」了的指令。/ Lines the echo shell actually ran.
     commands: Arc<Mutex<Vec<String>>>,
+    sftp_starts: Arc<AtomicUsize>,
+    open_sessions: Arc<AtomicUsize>,
 }
 
 /// 一個 session channel 的 PTY 狀態（term + 視窗大小），`tty` 指令與 shell 的 `tty` 行會印出來。
@@ -228,6 +241,13 @@ struct SshdHandler {
     sessions: HashSet<ChannelId>,
     /// 每個 channel 要到的 PTY；shell 啟動後共用同一份（window_change 會改它）。
     ptys: HashMap<ChannelId, Arc<Mutex<PtyState>>>,
+}
+
+/// 連線斷了：它的 session channel 也跟著沒了。/ A dropped connection takes its session channels with it.
+impl Drop for SshdHandler {
+    fn drop(&mut self) {
+        self.m.open_sessions.fetch_sub(self.sessions.len(), Ordering::SeqCst);
+    }
 }
 
 impl SshdHandler {
@@ -263,12 +283,15 @@ impl server::Handler for SshdHandler {
         let id = channel.id();
         reply.accept().await;
         self.sessions.insert(id);
+        self.m.open_sessions.fetch_add(1, Ordering::SeqCst);
         self.channels.insert(id, channel);
         Ok(())
     }
 
     async fn channel_close(&mut self, channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
-        self.sessions.remove(&channel);
+        if self.sessions.remove(&channel) {
+            self.m.open_sessions.fetch_sub(1, Ordering::SeqCst);
+        }
         self.channels.remove(&channel);
         self.ptys.remove(&channel);
         Ok(())
@@ -473,6 +496,7 @@ impl server::Handler for SshdHandler {
             return Ok(());
         };
         session.channel_success(channel)?;
+        self.m.sftp_starts.fetch_add(1, Ordering::SeqCst);
         // 帳號有自己的家目錄就從那裡開始（authorized_keys 測試用）。/ Per-account home when it exists.
         let own = self.m.home.join(self.user.clone().unwrap_or_default());
         let home = if self.user.is_some() && own.is_dir() { own } else { self.m.home.clone() };
@@ -547,6 +571,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
     let resizes = Arc::new(Mutex::new(Vec::new()));
     let resolves = Arc::new(Mutex::new(Vec::new()));
     let commands = Arc::new(Mutex::new(Vec::new()));
+    let (sftp_starts, open_sessions) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let state = Arc::new(MachineState {
         name: name.to_string(),
         accounts: accounts.iter().map(|(u, keys)| (u.to_string(), keys.iter().map(|k| (*k).clone()).collect())).collect(),
@@ -557,6 +582,8 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
         resizes: resizes.clone(),
         resolves: resolves.clone(),
         commands: commands.clone(),
+        sftp_starts: sftp_starts.clone(),
+        open_sessions: open_sessions.clone(),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -571,7 +598,7 @@ pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey]
             });
         }
     });
-    Machine { name: name.to_string(), port, home, host_key: host_key.bare(), logins, ptys, resizes, resolves, commands }
+    Machine { name: name.to_string(), port, home, host_key: host_key.bare(), logins, ptys, resizes, resolves, commands, sftp_starts, open_sessions }
 }
 
 // ------------------------------------------------------------------ lab

@@ -260,7 +260,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             let lan_port = u16::try_from(host.ssh_port).unwrap_or(22);
             let entry = async {
                 let lease = state.pool.acquire(&state, reverse_port, &username).await?;
-                crate::ssh::bridge::one_shot(lease, host.address.clone(), lan_port).await
+                crate::ssh::bridge::one_shot(state.clone(), lease, host.address.clone(), lan_port).await
             };
             let local_port = match entry.await {
                 Ok(p) => p,
