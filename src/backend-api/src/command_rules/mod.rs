@@ -1,10 +1,12 @@
 //! 指令規則：網頁終端機與 MCP agent 要跑的指令先比對規則——全站規則（管理員）加上隧道自己的規則（owner / ADMIN）。
-//! 「擋下」直接取消；「要核准」先停住，通知 owner 與 ADMIN sharee，有人核准才送出（逾時 = 拒絕）。
+//! 「擋下」直接取消；「要核准」先停住，通知 owner 與 ADMIN sharee（或規則自己指定的核准人），有人核准才送出（逾時 = 拒絕）；
+//! 「允許」是例外，只豁免同一個範圍的規則（見 `matcher`）。
 //! 這是防手滑的護欄，不是安全邊界：只看得到網頁終端機畫面上那一行與 agent 送來的指令字串；腳本、alias、
 //! 編輯器、筆電直接 ssh 都不經過這裡。
 //! Command rules: commands from the web terminal and MCP agents are matched against the site-wide rules (admins)
 //! plus the tunnel's own (owner / ADMIN). "Block" cancels the command; "approve" holds it, notifies the owner and
-//! ADMIN sharees and runs it once someone approves (a timeout counts as a denial). A guard against mistakes, not
+//! ADMIN sharees (or the approvers the rule names) and runs it once someone approves (a timeout counts as a
+//! denial); "allow" is an exception that exempts the same scope's rules only (see `matcher`). A guard against mistakes, not
 //! a security boundary: only the line on the web terminal's screen and the agent's command string are seen;
 //! scripts, aliases, editors and ssh from a laptop never pass through here.
 
@@ -26,7 +28,7 @@ use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_time, db_to_iso_utc_z, now_db};
 use crate::webhooks::{Event, Kind as WebhookKind};
-pub use matcher::{Action, Kind, Matcher, Rule, Source, Via, Who};
+pub use matcher::{Action, Kind, Matcher, Rule, Scope, Source, Verdict, Via, Who};
 
 /// agent 的一次 tool call 最多等核准這麼久，之後回「還在等」。/ How long one agent tool call waits for a decision.
 pub const AGENT_WAIT: Duration = Duration::from_secs(45);
@@ -99,8 +101,22 @@ pub fn compile(row: &RuleRow) -> Option<Rule> {
         pattern: row.pattern.clone(),
         kind,
         note: row.note.clone(),
+        approver_ids: parse_approver_ids(row.approver_ids.as_deref()),
         matcher: Matcher::new(kind, &row.pattern).ok()?,
     })
+}
+
+/// 存在資料庫的核准人 JSON 陣列 → id（壞掉 / 空 = 預設核准人）。/ The stored JSON array → ids (broken / empty = default).
+pub fn parse_approver_ids(json: Option<&str>) -> Vec<i64> {
+    let mut ids: Vec<i64> = json.and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// id → 存進資料庫的 JSON 陣列（空 = NULL）。/ ids → the stored JSON array (empty = NULL).
+pub fn approver_ids_json(ids: &[i64]) -> Option<String> {
+    (!ids.is_empty()).then(|| serde_json::to_string(ids).unwrap_or_default())
 }
 
 /// 一條隧道適用的規則（全站在前）。讀不到資料庫就當沒有規則（護欄，不是安全邊界）。
@@ -142,8 +158,8 @@ pub struct Requester {
     pub session_ref: Option<String>,
 }
 
-/// 能核准這條隧道指令的人：owner 與 ADMIN sharee。/ Who decides on this tunnel: the owner and ADMIN sharees.
-pub async fn approvers(state: &AppState, t: &Tunnel) -> Vec<i64> {
+/// 預設的核准人：owner 與 ADMIN sharee。/ The default approvers: the owner and ADMIN sharees.
+pub async fn default_approvers(state: &AppState, t: &Tunnel) -> Vec<i64> {
     let mut ids = vec![t.user_id];
     ids.extend(db::sharing::admin_sharee_ids(&state.db, t.id).await.unwrap_or_default());
     ids.sort_unstable();
@@ -151,14 +167,30 @@ pub async fn approvers(state: &AppState, t: &Tunnel) -> Vec<i64> {
     ids
 }
 
+/// 這條規則在這條隧道上的核准人：規則自己指定的那些，否則 owner + ADMIN。
+/// Who decides on this rule for this tunnel: the rule's own list, else the owner + ADMIN sharees.
+pub async fn approvers_for(state: &AppState, t: &Tunnel, rule_approvers: &[i64]) -> Vec<i64> {
+    if rule_approvers.is_empty() {
+        default_approvers(state, t).await
+    } else {
+        rule_approvers.to_vec()
+    }
+}
+
+/// 一筆申請的核准人：建立時的快照，沒有就是現在的 owner + ADMIN。/ A request's approvers: its snapshot, else today's owner + ADMIN.
+pub async fn request_approvers(state: &AppState, row: &EventRow, t: &Tunnel) -> Vec<i64> {
+    approvers_for(state, t, &parse_approver_ids(row.approver_ids.as_deref())).await
+}
+
+/// owner / ADMIN：「只管 sharee」的規則不管他們，也是預設的核准人。/ Owner / ADMIN: skipped by sharees-only rules, default approvers.
 async fn is_approver(state: &AppState, user_id: i64, t: &Tunnel) -> bool {
     permissions::effective_for(&state.db, user_id, t).await.ok().flatten().is_some_and(|e| e.satisfies(Permission::Admin))
 }
 
-/// 這個人能核准這條隧道的指令嗎。/ Whether this person approves commands on this tunnel.
-pub async fn approves(state: &AppState, user_id: i64, tunnel_id: i64) -> bool {
-    match db::tunnels::by_id(&state.db, tunnel_id).await {
-        Ok(Some(t)) => is_approver(state, user_id, &t).await,
+/// 這個人能決定這筆申請嗎（規則指定的核准人，否則 owner / ADMIN）。/ Whether this person decides on this request.
+pub async fn decides(state: &AppState, user_id: i64, row: &EventRow) -> bool {
+    match db::tunnels::by_id(&state.db, row.tunnel_id).await {
+        Ok(Some(t)) => request_approvers(state, row, &t).await.contains(&user_id),
         _ => false,
     }
 }
@@ -174,7 +206,7 @@ pub async fn check(state: &AppState, r: &Requester, lines: &[String]) -> Option<
     }
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten()?;
     let approver = is_approver(state, r.user_id, &tunnel).await;
-    matcher::evaluate(&rules, lines, approver, r.source).cloned()
+    matcher::evaluate(&rules, lines, approver, r.source).decision().cloned()
 }
 
 fn clip(command: &str) -> String {
@@ -185,14 +217,10 @@ fn clip(command: &str) -> String {
 }
 
 fn scope_of(rule: &Rule) -> &'static str {
-    if rule.tunnel_id.is_some() {
-        "tunnel"
-    } else {
-        "site"
-    }
+    rule.scope().as_str()
 }
 
-fn new_event<'a>(r: &'a Requester, command: &'a str, rule: &'a Rule, status: &'a str, expires_at: Option<&'a str>) -> NewEvent<'a> {
+fn new_event<'a>(r: &'a Requester, command: &'a str, rule: &'a Rule, approver_ids: Option<&'a str>, status: &'a str, expires_at: Option<&'a str>) -> NewEvent<'a> {
     NewEvent {
         tunnel_id: r.tunnel_id,
         user_id: r.user_id,
@@ -209,6 +237,7 @@ fn new_event<'a>(r: &'a Requester, command: &'a str, rule: &'a Rule, status: &'a
         rule_kind: rule.kind.as_str(),
         rule_scope: scope_of(rule),
         rule_note: &rule.note,
+        approver_ids,
         status,
         expires_at,
     }
@@ -233,13 +262,13 @@ fn reverse_port(t: Option<&Tunnel>) -> Option<u16> {
 /// 記下一個被擋下的指令（紀錄 + 隧道 Logs）。/ Record a blocked command (event row + the tunnel's Logs).
 pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: &Rule) -> Option<EventRow> {
     let command = clip(command);
-    let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, "blocked", None)).await;
+    let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, None, "blocked", None)).await;
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten();
     if let Some(t) = &tunnel {
         state.webhooks.emit(
             Event::new(WebhookKind::CommandBlocked)
                 .tunnel(t)
-                .to(approvers(state, t).await, Some(r.user_id))
+                .to(default_approvers(state, t).await, Some(r.user_id))
                 .data(json!({ "by": r.username, "account": r.account, "lan_host": r.lan_host, "command": command, "via": r.source.as_str(), "client": r.client, "rule": rule.pattern }))
                 .link(format!("/tunnels/commands?tunnel={}&tab=history", t.id)),
         );
@@ -263,17 +292,19 @@ pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: 
     }
 }
 
-/// 送出核准申請：寫紀錄、通知 owner 與 ADMIN（與申請人），回傳申請與等結果的管道。
-/// File an approval request: record it, notify the owner and ADMINs (and the requester), return it with its channel.
+/// 送出核准申請：寫紀錄（含核准人快照）、通知核准人（規則指定的，否則 owner 與 ADMIN）與申請人，回傳申請與等結果的管道。
+/// File an approval request: record it (approvers snapshotted), notify the approvers (the rule's own, else the owner
+/// and ADMINs) and the requester, return it with its channel.
 pub async fn request(state: &AppState, r: &Requester, command: &str, rule: &Rule) -> anyhow::Result<(EventRow, watch::Receiver<Outcome>)> {
     let command = clip(command);
     let timeout = db::settings::get_solo(&state.db).await.map(|s| s.command_approval_timeout).unwrap_or(300).clamp(30, 86_400);
     let expires = db_time(Utc::now() + chrono::Duration::seconds(timeout));
-    let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, "pending", Some(&expires))).await?;
+    let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await?.ok_or_else(|| anyhow::anyhow!("tunnel is gone"))?;
+    let deciders = approvers_for(state, &tunnel, &rule.approver_ids).await;
+    let snapshot = approver_ids_json(&deciders);
+    let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, snapshot.as_deref(), "pending", Some(&expires))).await?;
     let (tx, rx) = watch::channel(Outcome::Pending);
     state.commands.waiters.insert(row.id, tx);
-    let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await?.ok_or_else(|| anyhow::anyhow!("tunnel is gone"))?;
-    let deciders = approvers(state, &tunnel).await;
     let mut audience = deciders.clone();
     audience.push(r.user_id);
     audience.sort_unstable();
@@ -358,7 +389,7 @@ async fn finish(state: &AppState, row: &EventRow, outcome: Outcome, by: Option<(
     let updated = db::command_rules::event(&state.db, row.id).await?.ok_or(DecideError::NotFound)?;
     let tunnel = db::tunnels::by_id(&state.db, row.tunnel_id).await?;
     let mut audience = match &tunnel {
-        Some(t) => approvers(state, t).await,
+        Some(t) => request_approvers(state, row, t).await,
         None => Vec::new(),
     };
     audience.push(row.user_id);
@@ -397,12 +428,13 @@ async fn finish(state: &AppState, row: &EventRow, outcome: Outcome, by: Option<(
     Ok(updated)
 }
 
-/// owner / ADMIN 核准或拒絕（自己的申請也可以：agent 用你的身分跑時，還是要你按一下）。
-/// The owner or an ADMIN approves or denies (their own requests too: an agent acting as you still needs your click).
+/// 這筆申請的核准人核准或拒絕（規則指定的人，否則 owner / ADMIN；自己的申請也可以：agent 用你的身分跑時，還是要你按一下）。
+/// One of the request's approvers (the rule's own, else the owner / ADMINs) approves or denies — their own requests
+/// too: an agent acting as you still needs your click.
 pub async fn decide(state: &AppState, id: i64, approve: bool, by: &User, reason: &str) -> Result<EventRow, DecideError> {
     let row = db::command_rules::event(&state.db, id).await?.ok_or(DecideError::NotFound)?;
     let tunnel = db::tunnels::by_id(&state.db, row.tunnel_id).await?.ok_or(DecideError::NotFound)?;
-    if !is_approver(state, by.id, &tunnel).await {
+    if !request_approvers(state, &row, &tunnel).await.contains(&by.id) {
         // 看不到這條隧道的人當作不存在。/ People who can't see the tunnel get a 404.
         return Err(if row.user_id == by.id || permissions::check_access(&state.db, by.id, &tunnel, Permission::View).await? { DecideError::NotApprover } else { DecideError::NotFound });
     }
@@ -545,6 +577,7 @@ pub fn rule_json(r: &RuleRow) -> Value {
         "via": r.via,
         "note": r.note,
         "enabled": r.enabled,
+        "approver_ids": parse_approver_ids(r.approver_ids.as_deref()),
         "created_at": db_to_iso_utc_z(&r.created_at),
         "updated_at": db_to_iso_utc_z(&r.updated_at),
     })
@@ -561,6 +594,7 @@ pub fn matched_json(r: &Rule) -> Value {
         "note": r.note,
         "who": r.who.as_str(),
         "via": r.via.as_str(),
+        "approver_ids": r.approver_ids,
     })
 }
 
@@ -576,7 +610,7 @@ pub fn event_json(e: &EventRow, tunnel_name: Option<&str>) -> Value {
         "account": e.account,
         "lan_host": e.lan_host,
         "command": e.command,
-        "rule": { "id": e.rule_id, "pattern": e.rule_pattern, "kind": e.rule_kind, "scope": e.rule_scope, "note": e.rule_note },
+        "rule": { "id": e.rule_id, "pattern": e.rule_pattern, "kind": e.rule_kind, "scope": e.rule_scope, "note": e.rule_note, "approver_ids": parse_approver_ids(e.approver_ids.as_deref()) },
         "status": e.status,
         "created_at": db_to_iso_utc_z(&e.created_at),
         "expires_at": e.expires_at.as_deref().map(db_to_iso_utc_z),

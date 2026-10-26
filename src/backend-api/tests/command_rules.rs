@@ -7,6 +7,7 @@ mod common;
 use axum::http::StatusCode;
 use common::lab::{Device, Lab, LabUser, Machine, MachineOpts};
 use serde_json::{json, Value};
+use telepy_server::db;
 
 async fn echo_device(lab: &Lab, owner: &LabUser) -> (Machine, Device) {
     let m = lab.machine_with("box", &[("ubuntu", &[&lab.service])], MachineOpts { echo_shell: true, ..Default::default() }).await;
@@ -22,6 +23,22 @@ async fn add_rule(lab: &Lab, token: &str, tunnel: Option<i64>, body: Value) -> V
     let r = lab.app.post(&path, Some(token), body).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
     r.json
+}
+
+/// 等某個通知（其他的——例如 presence——略過）；5 秒內沒有 = None。/ Wait for one notification kind (skipping others, e.g. presence).
+async fn next_action(rx: &mut tokio::sync::broadcast::Receiver<telepy_server::hub::Msg>, action: &str) -> Option<Value> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let m = rx.recv().await.ok()?;
+            let m: Value = serde_json::from_str(&m).ok()?;
+            if m["message"]["action"] == action {
+                return Some(m["message"].clone());
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn events(lab: &Lab, token: &str, tunnel_id: i64) -> Vec<String> {
@@ -277,4 +294,207 @@ async fn requests_expire_and_end_with_the_terminal() {
     }
     assert_eq!(status, "cancelled");
     assert!(!m.commands().iter().any(|c| c.contains("stop")), "{:?}", m.commands());
+}
+
+/// 允許規則（只豁免同範圍）與規則自己指定的核准人：隧道規則指定 ADMIN sharee 之後 owner 不能決定；全站規則指定一位
+/// 沒有任何隧道的管理員，他就能在別人的隧道上核准。
+/// Allow rules (same scope only) and per-rule approvers: once a tunnel rule names an ADMIN sharee the owner can't
+/// decide; a site rule naming a superuser who owns no tunnel lets that admin approve on anyone's tunnel.
+#[tokio::test]
+async fn allow_rules_and_named_approvers() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let admin = db::users::by_username(&lab.app.state.db, "admin").await.unwrap().expect("lab admin");
+    assert!(admin.is_superuser);
+    let (m, dev) = echo_device(&lab, &alice).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    lab.share(&alice, &dev, &carol, "admin", &[]).await;
+    let tunnel = format!("/api/reverse/server/{}/command-rules", dev.tunnel_id);
+    let check = |cmd: &str| json!({"tunnel_id": dev.tunnel_id, "command": cmd});
+
+    // ---- 允許規則 / allow rules
+    let site_block = add_rule(&lab, &lab.admin_token, None, json!({"action": "block", "pattern": "rm -rf"})).await;
+    assert_eq!(site_block["approver_ids"], json!([]));
+    // 隧道的允許蓋不過全站的擋下。/ A tunnel allow never beats a site-wide block.
+    let tunnel_allow = add_rule(&lab, &alice.token, Some(dev.tunnel_id), json!({"action": "allow", "pattern": "rm -rf /tmp/build/*"})).await;
+    assert_eq!(tunnel_allow["action"], "allow");
+    let r = lab.app.post("/api/command-rules/check", Some(&alice.token), check("rm -rf /tmp/build/x")).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["for_approvers"]["action"], "block", "{}", r.text);
+    assert_eq!(r.json["for_approvers"]["tunnel"]["allowed_by"]["pattern"], "rm -rf /tmp/build/*");
+    assert_eq!(r.json["for_approvers"]["tunnel"]["exempted"], false);
+    assert!(r.json["for_approvers"]["allowed_by"].is_null());
+    // 全站的允許才豁免全站的擋下，而且說得出是哪一條。/ A site allow exempts the site block, and is named.
+    let site_allow = add_rule(&lab, &lab.admin_token, None, json!({"action": "allow", "pattern": "rm -rf /tmp/build/*", "note": "build scratch"})).await;
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("rm -rf /tmp/build/x")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "allow", "{}", r.text);
+    assert_eq!(r.json["for_sharees"]["allowed_by"]["id"], site_allow["id"]);
+    assert_eq!(r.json["for_sharees"]["site"]["exempted"], true);
+    assert_eq!(r.json["for_sharees"]["site"]["hit"]["id"], site_block["id"], "the exempted rule is still reported");
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("rm -rf /srv")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "block", "outside the exception the block holds");
+    // 隧道的允許也豁免隧道自己的「要核准」（同範圍）。/ The tunnel allow exempts the tunnel's own approve rule too (same scope).
+    add_rule(&lab, &alice.token, Some(dev.tunnel_id), json!({"action": "approve", "pattern": "rm", "who": "sharees"})).await;
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("rm -rf /tmp/build/x")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "allow", "{}", r.text);
+    assert_eq!(r.json["for_sharees"]["tunnel"]["exempted"], true);
+    // 隧道的允許關掉：全站的允許蓋不過隧道自己的「要核准」。/ Tunnel allow off: a site allow never beats the tunnel's approve rule.
+    let r = lab.app.patch(&format!("/api/command-rules/{}", tunnel_allow["id"]), Some(&alice.token), json!({"enabled": false})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("rm -rf /tmp/build/x")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "approve", "{}", r.text);
+    assert_eq!(r.json["for_sharees"]["rule"]["scope"], "tunnel");
+    assert_eq!(r.json["for_sharees"]["site"]["exempted"], true);
+    assert_eq!(r.json["for_sharees"]["approvers"]["default"], true);
+    let names: Vec<&str> = r.json["for_sharees"]["approvers"]["users"].as_array().unwrap().iter().map(|u| u["username"].as_str().unwrap()).collect();
+    assert_eq!(names, ["alice", "carol"], "default approvers = owner + ADMIN sharees");
+    assert_eq!(r.json["for_approvers"]["action"], "allow", "the sharees-only approve rule skips the owner");
+    // 終端機：被豁免的指令真的跑了，沒有紀錄。/ In the terminal the exempted command really runs, unrecorded.
+    let mut own = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    own.expect("$ ").await;
+    own.input("rm -rf /tmp/build/x\r").await;
+    own.expect("ran:rm -rf /tmp/build/x").await;
+    own.input("rm -rf /srv\r").await;
+    own.expect_notice("blocked").await;
+    assert!(!m.commands().iter().any(|c| c == "rm -rf /srv"), "{:?}", m.commands());
+    own.close().await;
+    let r = lab.app.get("/api/command-requests", Some(&alice.token)).await;
+    assert!(r.json["requests"].as_array().unwrap().iter().all(|q| q["command"] != "rm -rf /tmp/build/x"), "allowed commands are not recorded");
+
+    // ---- 核准人 / named approvers
+    // 隧道規則只能指定 owner / ADMIN sharee / 管理員。/ A tunnel rule may only name the owner, ADMIN sharees or admins.
+    let r = lab.app.post(&tunnel, Some(&alice.token), json!({"action": "approve", "pattern": "sudo", "approver_ids": [bob.id]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["approver_ids"].is_array(), "{}", r.text);
+    let r = lab.app.post(&tunnel, Some(&alice.token), json!({"action": "approve", "pattern": "sudo", "approver_ids": "carol"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = lab.app.get(&tunnel, Some(&alice.token)).await;
+    let candidates: Vec<i64> = r.json["approver_candidates"].as_array().unwrap().iter().map(|u| u["id"].as_i64().unwrap()).collect();
+    assert_eq!(candidates, [alice.id, carol.id].into_iter().collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+    assert_eq!(lab.app.get(&tunnel, Some(&bob.token)).await.json["approver_candidates"], json!([]), "only editors get the candidates");
+    // 擋下 / 允許規則不留核准人。/ Block / allow rules keep no approvers.
+    let r = lab.app.post(&tunnel, Some(&alice.token), json!({"action": "block", "pattern": "mkfs*", "approver_ids": [carol.id]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.json["approver_ids"], json!([]));
+
+    // carol（ADMIN sharee）是唯一的核准人：owner 不能決定。/ carol is the only approver: the owner can't decide.
+    let sudo = add_rule(&lab, &alice.token, Some(dev.tunnel_id), json!({"action": "approve", "pattern": "sudo", "approver_ids": [carol.id]})).await;
+    assert_eq!(sudo["approver_ids"], json!([carol.id]));
+    assert_eq!(sudo["approvers"][0]["username"], "carol");
+    let r = lab.app.post("/api/command-rules/check", Some(&alice.token), check("sudo ls")).await;
+    assert_eq!(r.json["for_approvers"]["approvers"]["default"], false);
+    assert_eq!(r.json["for_approvers"]["approvers"]["users"][0]["username"], "carol");
+    let mut alice_rx = lab.app.state.hub.subscribe_user(alice.id);
+    let mut carol_rx = lab.app.state.hub.subscribe_user(carol.id);
+    let mut t = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal");
+    t.expect("$ ").await;
+    t.input("sudo ls\r").await;
+    let n = t.expect_notice("pending").await;
+    assert_eq!(n["can_decide"], false);
+    assert_eq!(n["rule"]["approver_ids"], json!([carol.id]));
+    assert_eq!(n["request"]["rule"]["approver_ids"], json!([carol.id]), "the snapshot keeps who could decide");
+    let id = n["request"]["id"].as_i64().unwrap();
+    let requested = next_action(&mut carol_rx, "COMMAND-APPROVAL-REQUESTED").await.expect("carol is asked");
+    assert_eq!(requested["approver_ids"], json!([carol.id]));
+    // owner 只收到 presence 之類的，沒有這筆申請。/ The owner gets presence and the like, not this request.
+    while let Ok(m) = alice_rx.try_recv() {
+        let m: Value = serde_json::from_str(&m).unwrap();
+        assert_ne!(m["message"]["action"], "COMMAND-APPROVAL-REQUESTED", "the owner is not asked");
+    }
+    let r = lab.app.get("/api/command-requests?status=pending", Some(&alice.token)).await;
+    let req = r.json["requests"].as_array().unwrap().iter().find(|q| q["id"] == id).cloned().expect("the owner still sees it");
+    assert_eq!(req["can_decide"], false);
+    assert_eq!(r.json["pending"], 0);
+    let r = lab.app.get("/api/command-requests?status=pending", Some(&carol.token)).await;
+    assert_eq!(r.json["requests"][0]["can_decide"], true);
+    let r = lab.app.post(&format!("/api/command-requests/{id}/approve"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    assert_eq!(r.json["code"], "not_approver");
+    let r = lab.app.post(&format!("/api/command-requests/{id}/approve"), Some(&carol.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let n = t.expect_notice("approved").await;
+    assert_eq!(n["by"], "carol");
+    t.expect("ran:sudo ls").await;
+
+    // carol 自己打的 sudo：她在名單裡，橫幅可以自己按。/ carol's own sudo: she is on the list, so she can run it herself.
+    let mut ct = lab.terminal(&carol, &dev, "ubuntu").await.expect("terminal");
+    ct.expect("$ ").await;
+    ct.input("sudo whoami\r").await;
+    let n = ct.expect_notice("pending").await;
+    assert_eq!(n["can_decide"], true);
+    ct.input("\x03").await;
+    ct.expect_notice("cancelled").await;
+    ct.close().await;
+
+    // 改回預設：owner 又能決定了。/ Back to the default: the owner decides again.
+    let rid = sudo["id"].as_i64().unwrap();
+    let r = lab.app.patch(&format!("/api/command-rules/{rid}"), Some(&alice.token), json!({"approver_ids": null})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["approver_ids"], json!([]));
+    t.input("sudo id\r").await;
+    let n = t.expect_notice("pending").await;
+    let id = n["request"]["id"].as_i64().unwrap();
+    let r = lab.app.post(&format!("/api/command-requests/{id}/approve"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(t.expect_notice("approved").await["by"], "alice");
+    t.expect("ran:sudo id").await;
+
+    // 全站規則指定一位沒有隧道的管理員：他能在 alice 的隧道上核准，owner 不能。
+    // A site rule naming a superuser who owns no tunnel: the admin approves on alice's tunnel, the owner can't.
+    let r = lab.app.post("/api/command-rules", Some(&lab.admin_token), json!({"action": "approve", "pattern": "reboot", "approver_ids": [admin.id, 999_999]})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "unknown users are refused: {}", r.text);
+    // dave 跟這條隧道毫無關係，但全站規則點名他。/ dave has nothing to do with the tunnel, but the site rule names him.
+    let dave = lab.user("dave").await;
+    let reboot = add_rule(&lab, &lab.admin_token, None, json!({"action": "approve", "pattern": "reboot", "approver_ids": [admin.id, dave.id]})).await;
+    assert_eq!(reboot["approvers"][0]["username"], "admin");
+    assert_eq!(reboot["approvers"][1]["username"], "dave");
+    let r = lab.app.get("/api/command-rules", Some(&lab.admin_token)).await;
+    assert!(r.json["approver_candidates"].as_array().unwrap().len() >= 4, "{}", r.text);
+    assert_eq!(lab.app.get("/api/command-rules", Some(&bob.token)).await.json["approver_candidates"], json!([]));
+    let mut admin_rx = lab.app.state.hub.subscribe_user(admin.id);
+    t.input("reboot\r").await;
+    let n = t.expect_notice("pending").await;
+    assert_eq!(n["rule"]["scope"], "site");
+    assert_eq!(n["request"]["rule"]["approver_ids"], json!([admin.id, dave.id]));
+    let id = n["request"]["id"].as_i64().unwrap();
+    let requested = next_action(&mut admin_rx, "COMMAND-APPROVAL-REQUESTED").await.expect("the admin is asked");
+    assert_eq!(requested["approver_ids"], json!([admin.id, dave.id]));
+    // dave 看不到隧道，但看得到（也能決定）這筆申請。/ dave can't see the tunnel, yet sees and decides this request.
+    let r = lab.app.get("/api/command-requests?status=pending", Some(&dave.token)).await;
+    assert_eq!(r.json["requests"].as_array().unwrap().len(), 1, "{}", r.text);
+    assert_eq!(r.json["requests"][0]["id"], id);
+    assert_eq!(r.json["requests"][0]["can_decide"], true);
+    assert_eq!(r.json["requests"][0]["tunnel_name"], "box");
+    assert_eq!(r.json["pending"], 1);
+    assert_eq!(lab.app.get(&format!("/api/reverse/server/{}/command-rules", dev.tunnel_id), Some(&dave.token)).await.status, StatusCode::NOT_FOUND);
+    let r = lab.app.post(&format!("/api/command-requests/{id}/approve"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    let r = lab.app.post(&format!("/api/command-requests/{id}/approve"), Some(&carol.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.text);
+    let r = lab.app.get("/api/command-requests?status=pending", Some(&lab.admin_token)).await;
+    assert_eq!(r.json["requests"][0]["can_decide"], true, "{}", r.text);
+    assert_eq!(r.json["pending"], 1);
+    let r = lab.app.post(&format!("/api/command-requests/{id}/deny"), Some(&lab.admin_token), json!({"reason": "not during the demo"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let n = t.expect_notice("denied").await;
+    assert_eq!(n["by"], "admin");
+    assert_eq!(n["reason"], "not during the demo");
+    t.input("reboot now\r").await;
+    let n = t.expect_notice("pending").await;
+    let id2 = n["request"]["id"].as_i64().unwrap();
+    let r = lab.app.post(&format!("/api/command-requests/{id2}/approve"), Some(&dave.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let n = t.expect_notice("approved").await;
+    assert_eq!(n["by"], "dave");
+    t.expect("ran:reboot now").await;
+    // 歷史裡的規則快照帶著核准人。/ The history's rule snapshot carries the approvers.
+    let r = lab.app.get(&format!("/api/command-requests?tunnel_id={}", dev.tunnel_id), Some(&alice.token)).await;
+    let row = r.json["requests"].as_array().unwrap().iter().find(|q| q["id"] == id).cloned().unwrap();
+    assert_eq!(row["rule"]["approver_ids"], json!([admin.id, dave.id]));
+    assert_eq!(row["status"], "denied");
+    let kinds = events(&lab, &alice.token, dev.tunnel_id).await;
+    assert!(kinds.iter().any(|k| k == "command_denied"), "{kinds:?}");
 }

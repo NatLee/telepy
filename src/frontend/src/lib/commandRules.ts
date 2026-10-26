@@ -4,15 +4,16 @@
  * status labels and the history filter.
  */
 import type { TranslationKey } from "../locales/en.ts";
-import type { CommandRequest, CommandRule, MatchedRule, RequestStatus, RuleAction, RuleInput, RuleVia, RuleWho, TerminalCommandNotice } from "../types/commandRules.ts";
+import type { CheckResult, CheckVerdict, CommandRequest, CommandRule, MatchedRule, RequestStatus, RuleAction, RuleInput, RuleScope, RuleVia, RuleWho, ScopeVerdict, TerminalCommandNotice } from "../types/commandRules.ts";
 
-export const DEFAULT_RULE: RuleInput = { action: "block", kind: "command", pattern: "", who: "everyone", via: "all", note: "", enabled: true };
+export const DEFAULT_RULE: RuleInput = { action: "block", kind: "command", pattern: "", who: "everyone", via: "all", note: "", enabled: true, approver_ids: [] };
 
 export function ruleToInput(r: CommandRule): RuleInput {
-    return { action: r.action, kind: r.kind, pattern: r.pattern, who: r.who, via: r.via, note: r.note, enabled: r.enabled };
+    return { action: r.action, kind: r.kind, pattern: r.pattern, who: r.who, via: r.via, note: r.note, enabled: r.enabled, approver_ids: r.approver_ids ?? [] };
 }
 
-export const ACTION_KEY: Record<RuleAction, TranslationKey> = { block: "commands.action.block", approve: "commands.action.approve" };
+export const ACTION_KEY: Record<RuleAction, TranslationKey> = { block: "commands.action.block", approve: "commands.action.approve", allow: "commands.action.allow" };
+export const ACTION_TONE: Record<RuleAction, Tone> = { block: "danger", approve: "warning", allow: "success" };
 export const WHO_KEY: Record<RuleWho, TranslationKey> = { everyone: "commands.who.everyone", sharees: "commands.who.sharees" };
 export const VIA_KEY: Record<RuleVia, TranslationKey> = { all: "commands.via.all", terminal: "commands.via.terminal", agents: "commands.via.agents" };
 
@@ -176,4 +177,85 @@ export function bannerLifetime(state: HoldBanner["state"]): number | null {
         default:
             return 15000;
     }
+}
+
+// ---------------------------------------------------------------- the decision diagram
+
+/** 一個範圍在圖上的狀態。/ What a scope shows on the diagram. */
+export type ScopeStep =
+    /** 沒有規則符合。/ No rule matched. */
+    | "none"
+    /** 擋下規則符合（而且算數）。/ A block rule matched and counts. */
+    | "block"
+    /** 要核准規則符合（而且算數）。/ An approve rule matched and counts. */
+    | "approve"
+    /** 擋下 / 要核准符合，但被同範圍的允許規則豁免。/ Caught, but exempted by an allow of this scope. */
+    | "exempted"
+    /** 只有允許規則符合（沒東西可豁免）。/ Only an allow matched (nothing to exempt). */
+    | "allowOnly";
+
+export type Outcome = "allow" | "block" | "approve";
+
+/** 指令在圖上走過的路。/ The path a command took through the diagram. */
+export interface DecisionPath {
+    outcome: Outcome;
+    site: ScopeStep;
+    tunnel: ScopeStep;
+    /** 決定的那條規則在哪個範圍（放行 = null）。/ Which scope's rule decided (null when allowed). */
+    decidedBy: RuleScope | null;
+    /** 決定的規則 / 豁免的允許規則。/ The deciding rule / the allow that exempted. */
+    rule: MatchedRule | null;
+    allowedBy: MatchedRule | null;
+    /** 要核准時：誰決定（null = 不是要核准）。/ For approve: who decides (null otherwise). */
+    approvers: { byDefault: boolean; names: string[] } | null;
+    /** 每個範圍符合的擋下 / 要核准規則與豁免它的允許規則（畫在那個範圍的格子裡）。/ Per scope: the caught rule and the allow. */
+    scopes: Record<RuleScope, { hit: MatchedRule | null; allowedBy: MatchedRule | null }>;
+}
+
+function scopeStep(v: ScopeVerdict | undefined, counts: boolean): ScopeStep {
+    if (!v) return "none";
+    if (v.hit && v.allowed_by) return "exempted";
+    if (v.hit) return counts ? (v.hit.action === "block" ? "block" : "approve") : v.hit.action === "block" ? "block" : "approve";
+    return v.allowed_by ? "allowOnly" : "none";
+}
+
+/**
+ * 從 `/api/command-rules/check` 的一個結果算出圖上要亮的路：每個範圍怎麼了、哪個範圍的規則決定了結果、誰核准。
+ * 舊格式（沒有 site / tunnel）就只亮決定的那個範圍。
+ * The highlighted path from one check verdict: what each scope did, which scope's rule decided, who approves. An
+ * older verdict (without site / tunnel) lights only the deciding scope.
+ */
+export function decisionPath(v: CheckVerdict): DecisionPath {
+    const outcome: Outcome = v.action === "block" || v.action === "approve" ? v.action : "allow";
+    const decidedBy = outcome === "allow" ? null : (v.rule?.scope ?? null);
+    let site: ScopeStep;
+    let tunnel: ScopeStep;
+    if (v.site || v.tunnel) {
+        site = scopeStep(v.site, decidedBy === "site");
+        tunnel = scopeStep(v.tunnel, decidedBy === "tunnel");
+    } else {
+        const caught: ScopeStep = outcome === "allow" ? "none" : outcome;
+        site = decidedBy === "site" ? caught : "none";
+        tunnel = decidedBy === "tunnel" ? caught : "none";
+    }
+    const approvers = outcome === "approve" ? { byDefault: v.approvers?.default ?? true, names: (v.approvers?.users ?? []).map((u) => u.username) } : null;
+    const scopeRefs = (scope: RuleScope, sv: ScopeVerdict | undefined) => ({
+        hit: sv ? sv.hit : decidedBy === scope ? (v.rule ?? null) : null,
+        allowedBy: sv ? sv.allowed_by : null,
+    });
+    return {
+        outcome,
+        site,
+        tunnel,
+        decidedBy,
+        rule: v.rule ?? null,
+        allowedBy: v.allowed_by ?? null,
+        approvers,
+        scopes: { site: scopeRefs("site", v.site), tunnel: scopeRefs("tunnel", v.tunnel) },
+    };
+}
+
+/** 試跑結果裡要畫的那一個：你是核准的人就看你的，否則看被分享的人的。/ The verdict to draw: yours when you approve, else the sharees'. */
+export function verdictToDraw(r: CheckResult): CheckVerdict {
+    return r.you_approve ? r.for_approvers : r.for_sharees;
 }

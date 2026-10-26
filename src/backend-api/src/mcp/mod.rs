@@ -478,6 +478,8 @@ impl TelepyMcp {
             let why = if rule.note.is_empty() { String::new() } else { format!(" The rule says: {}", rule.note) };
             let refused = |msg: String| Audit { session: Some(&s), detail: Some(args.command.clone()), error: Some(msg), ..Default::default() };
             match rule.action {
+                // `check` 只回擋下 / 要核准（允許 = None）。/ `check` only returns block / approve (allow = None).
+                Action::Allow => {}
                 Action::Block => {
                     command_rules::record_block(&self.state, &requester, &args.command, &rule).await;
                     self.audit(&p, "ssh_exec", started, refused(format!("blocked by the rule `{}`", rule.pattern))).await;
