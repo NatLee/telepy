@@ -128,8 +128,12 @@ pub async fn forget(state: &AppState, tunnel_id: i64) {
 }
 
 /// 共用金鑰可以從這台機器的 `account` 移掉了嗎：這條隧道與同一台機器上的每條隧道，只要列了這個帳號，都要用自己的
-/// 金鑰登入過它。/ May the shared key leave this account: every tunnel on the machine that lists it has verified its own key there.
+/// 金鑰登入過它。`KEEP_SHARED_SERVICE_KEY` 時永遠不行。/ May the shared key leave this account: every tunnel on the machine
+/// that lists it has verified its own key there. Never with `KEEP_SHARED_SERVICE_KEY`.
 pub async fn shared_removable(state: &AppState, tunnel_id: i64, account: &str) -> anyhow::Result<bool> {
+    if state.config.keep_shared_service_key {
+        return Ok(false);
+    }
     let mut mates = vec![tunnel_id];
     mates.extend(db::host_keys::same_machine(&state.db, tunnel_id).await?.into_iter().map(|c| c.tunnel_id));
     for mate in mates {

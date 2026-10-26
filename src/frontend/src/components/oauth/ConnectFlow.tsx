@@ -9,7 +9,7 @@
  * and the consent page, so both read as one flow that looks nothing like the normal sign-in.
  */
 import React from "react";
-import { Bot, CornerDownLeft, Eye, FolderTree, Radar, Server, ShieldAlert, ShieldCheck, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Bot, CornerDownLeft, Eye, FolderTree, Globe, Radar, Server, ShieldAlert, ShieldCheck, SquareTerminal, type LucideIcon } from "lucide-react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { DiagramLink, DiagramNode, FlowSteps } from "@/components/auth/AuthPanels";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ export const SCOPE_META: Record<string, { Icon: LucideIcon; label: TranslationKe
     "ssh:exec": { Icon: SquareTerminal, label: "oauth.scope.sshExec", description: "oauth.scope.sshExecDescription", changes: true },
     "ssh:files": { Icon: FolderTree, label: "oauth.scope.sshFiles", description: "oauth.scope.sshFilesDescription", changes: true },
     "network:scan": { Icon: Radar, label: "oauth.scope.networkScan", description: "oauth.scope.networkScanDescription", changes: false },
+    "browser:use": { Icon: Globe, label: "oauth.scope.browserUse", description: "oauth.scope.browserUseDescription", changes: true },
 };
 
 export function ScopeImpact({ scope }: { scope: string }) {

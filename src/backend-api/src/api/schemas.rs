@@ -1524,6 +1524,8 @@ pub struct AiSession {
     pub expires_at: String,
     pub idle_timeout_s: i64,
     pub commands: i64,
+    /// Interactive shells open on this session
+    pub shells: i64,
     /// A command or file transfer is running
     pub busy: bool,
 }
@@ -1930,6 +1932,8 @@ pub struct DeviceKeys {
 #[derive(ToSchema)]
 pub struct DeviceKeyView {
     pub accounts: Vec<DeviceKeyViewAccount>,
+    /// `KEEP_SHARED_SERVICE_KEY` is set: the legacy shared key stays on devices (another server still uses it)
+    pub keep_shared: bool,
 }
 
 #[derive(ToSchema)]
@@ -2330,6 +2334,8 @@ pub struct LiveSession {
     pub since: String,
     /// MCP app name
     pub client: Option<String>,
+    /// kind = ai: interactive shells open on the agent's session
+    pub shells: Option<i64>,
     pub mine: bool,
 }
 
@@ -2350,6 +2356,10 @@ pub struct RecordingItem {
     pub os_user: String,
     /// 區網主機 `login@address`。/ A LAN host as `login@address`.
     pub lan_host: Option<String>,
+    /// `terminal` = 網頁終端機；`agent` = MCP agent 的互動 shell（`user` 是授權那個 app 的人）。
+    /// `terminal` = the web terminal; `agent` = an MCP agent's interactive shell (`user` is who authorized the app).
+    #[schema(example = "terminal")]
+    pub kind: String,
     pub started_at: String,
     pub ended_at: Option<String>,
     /// 還在錄。/ Still recording.

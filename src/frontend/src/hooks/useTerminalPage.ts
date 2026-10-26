@@ -68,6 +68,8 @@ export interface ShellTab {
     title: string;
     username: string;
     status: ShellTabStatus;
+    /** 關閉時的 WebSocket 關閉碼（給 info 路徑圖判斷卡在哪一段）。/ The close code once closed (drives the info diagram). */
+    closeCode?: number;
 }
 
 type Session = {
@@ -257,7 +259,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
                 ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
             }));
-            updateTab(s.id, { status: "connected" });
+            updateTab(s.id, { status: "connected", closeCode: undefined });
             // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋，首個 PTY 輸出會覆蓋此行。
             s.term.write(`\x1b[90m${t("terminal.connectingToServer")}\x1b[0m\r\n`);
             if (activeIdRef.current === s.id) fitAndResize(s);
@@ -299,9 +301,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 setCommandBanner(s.commandBanner);
                 if (wsRef.current === ws) wsRef.current = null;
             }
-            updateTab(s.id, { status: "closed" });
-
             const code = event.code;
+            updateTab(s.id, { status: "closed", closeCode: code });
+
             if (lanHostId && code === 4004) {
                 setPermissionDenied(t("terminal.lanHostMissingCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.lanHostMissingXterm")}\x1b[0m\r\n`);
@@ -532,6 +534,23 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 setNoUsers(true);
             });
     }, [serverId, accessToken]);
+
+    // 裝置名稱（標頭與 info 路徑圖用）。/ The device's name, for the header and the info diagram.
+    const [tunnelName, setTunnelName] = useState<string | null>(null);
+    useEffect(() => {
+        if (!serverId || !accessToken) return;
+        let cancelled = false;
+        apiFetch(`/api/reverse/server/keys/${serverId}`)
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (cancelled) return;
+                setTunnelName(typeof data?.host_friendly_name === "string" ? data.host_friendly_name : null);
+                setRecorded(data?.record_sessions === true);
+            })
+            .catch(() => { /* 只影響顯示 / display only */ });
+        return () => { cancelled = true; };
+    }, [serverId, accessToken]);
+    const [recorded, setRecorded] = useState(false);
 
     // 區網主機資訊（標頭顯示用；連線本身只靠 id）。/ LAN host details for the header.
     const [lanHostState, setLanHost] = useState<TerminalLanHost | null>(null);
@@ -768,6 +787,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             username, setUsername,
             availableUsernames, setAvailableUsernames,
             lanHost,
+            tunnelName,
+            recorded,
             appearance,
             commandBanner,
         },

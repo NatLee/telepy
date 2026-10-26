@@ -1,7 +1,8 @@
 # AI 工具存取（MCP）
 
 > 讓 Claude Code、Claude Desktop / claude.ai、Cursor 等支援 MCP 的 AI 工具，用使用者自己的權限操作 Telepy：
-> 看隧道狀態、開一個**會自己關掉**的 SSH session、跑指令、讀寫檔案。追蹤 issue：#93。
+> 看隧道狀態、開一個**會自己關掉**的 SSH session、跑指令、用互動 shell 操作 TUI、讀寫檔案、經裝置開遠端瀏覽器。
+> 追蹤 issue：#93、#107。
 > 後端程式：`oauth/`、`api/oauth.rs`、`db/oauth.rs`、`auth/mcp.rs`（OAuth 2.1）；`mcp/`（MCP server）；
 > `ai/`（SSH session 與 reaper）；`api/ai.rs`、`db/ai_audit.rs`（session 列表與稽核）。
 
@@ -43,9 +44,10 @@ MCP client ── POST /mcp ─────────────────�
   | scope | 允許 |
   | --- | --- |
   | `tunnels:read` | `list_tunnels`、`tunnel_status` |
-  | `ssh:exec` | `ssh_session_open`、`ssh_exec` |
+  | `ssh:exec` | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
   | `ssh:files` | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
   | `network:scan` | `lan_scan`（掃描裝置背後的區網；只限擁有者或 ADMIN 的隧道） |
+  | `browser:use` | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close`（經裝置上網的真瀏覽器；同意頁標「會改東西」） |
 
   使用者可以取消勾選任何一項，也可以把 app 限制在部分隧道。
 - access token 是 `token_type: "mcp_access"` 的 JWT，REST API 不接受；網頁的 token 也不能打 `/mcp`。
@@ -67,6 +69,17 @@ MCP client ── POST /mcp ─────────────────�
 | `sftp_write(session_id, path, content, encoding?, append?)` | 寫檔或附加（`encoding`: `utf-8` / `base64`） |
 | `lan_hosts(tunnel_id)` | 裝置背後的區網主機（掃描找到的與手動加的）：位址、名稱、開著的 port、SSH banner、標籤、登入帳號 |
 | `lan_scan(tunnel_id, username?, subnets?, ports?)` | 經裝置的 sshd 掃描區網（私有網段、最多 1024 個位址、約一分鐘）並存進主機清單；需要 `network:scan` 與擁有者 / ADMIN 權限 |
+| `shell_open(session_id, cols?, rows?)` | 在 session 上開互動 shell（PTY，`xterm-256color`，預設 120×40），回 `shell_id`；每個 session 最多 2 個 |
+| `shell_send(shell_id, input, press_enter?)` | 打字：原樣送出（可含控制字元，`\u0003` = Ctrl+C、`\u001b` = Esc）；`press_enter` 加一個 Enter。每次 64 KiB 以內 |
+| `shell_read(shell_id, timeout_ms?, max_bytes?, screen?)` | 讀：`output` = 上次之後的原始輸出、`screen` = 現在的畫面（vt100 模型，一列一行的純文字）、`cursor`、`size`、`more`、`exited`；沒有新輸出時最多等 `timeout_ms`（預設 1.5 秒、上限 10 秒）。沒讀走的輸出最多留 256 KiB（超過丟最舊的，回 `dropped_bytes`） |
+| `shell_resize(shell_id, cols, rows)` / `shell_close(shell_id)` | 改大小 / 關掉 |
+| `browser_open(tunnel_id, username?, url?, idle_timeout_s?, max_lifetime_s?)` | 經裝置開一個遠端瀏覽器（Chromium，流量從裝置出去：看得到它的區網、localhost、公網 IP），回 `browser_id`；可順便開 `url` |
+| `browser_navigate(browser_id, url)` | 前往網址（只收 http / https，沒寫就補 `https://`），等頁面載入，回最後的網址與標題 |
+| `browser_read(browser_id, selector?)` | 頁面文字：標題、網址、看得到的文字（最多 10 萬字）、連結；`selector` 只讀一部分 |
+| `browser_screenshot(browser_id)` | PNG 截圖（縮到最寬 1280 px），以 MCP image content block 回傳 |
+| `browser_click(browser_id, selector? \| text?)` | 用 CSS selector 或看得到的文字（連結、按鈕、label）點一下（真的滑鼠事件） |
+| `browser_type(browser_id, selector, text, press_enter?, sensitive?)` | 在欄位打字，可按 Enter 送出；`sensitive` 預設 true = 稽核只記長度 |
+| `browser_close(browser_id)` | 關瀏覽器 |
 
 權限完全照網頁規則：要有該隧道的 VIEW 權限，而且目標 username 必須在允許清單內（被分享的隧道只能用分享時允許的
 username，與 web terminal 相同）。
@@ -81,6 +94,31 @@ username，與 web terminal 相同）。
   核准後**用一模一樣的指令**再呼叫一次；核准在 10 分鐘內可用一次（同一個 app、隧道、帳號與指令）。
 - agent 用隧道擁有者的身分跑時，一樣要擁有者按核准（human in the loop）；規則可以只管 MCP agent（`via: agents`）。
 - 被擋下 / 等待 / 拒絕都會在 AI 稽核裡記成失敗的 `ssh_exec`，申請與結果也列在指令規則頁的「紀錄」。
+- **互動 shell 也一樣**：`shell_send` 裡每個在 shell 提示字元按下的 Enter，用跟網頁終端機同一套讀畫面的方式（`TerminalGuard`）
+  讀出那一行再比對。擋下 → 改送 Ctrl+C、tool 回錯誤；要核准 → 跟 `ssh_exec` 一樣最多等 45 秒，核准就送 Enter；還在等時那一行
+  留在提示字元上，核准後 agent 送 `input: ""`、`press_enter: true` 就會跑（同樣 10 分鐘內用一次）。Enter 之後沒送出的輸入會被丟掉
+  （tool 會說幾個 bytes）。全螢幕程式（vim、less）裡的 Enter 不檢查。
+
+## 互動 shell
+
+- 一個 shell = AI session 那條連線上的一條 PTY channel，跟 `ssh_exec` 共用每個 session 的 4 條 channel 配額，最多 2 個。
+- 背景一直讀輸出（餵畫面模型、錄影），agent 沒在讀也不會卡住裝置。
+- 關閉：`shell_close`、session 關掉（每一種原因）、或超過 session 的 `idle_timeout` 沒有 send / read（reaper 每 30 秒）。
+  用 shell 也算 session 有在用，不會讓 session 閒置逾時。
+- **錄影**：隧道開了「錄下網頁終端機」時，agent 的 shell 一樣錄成 asciicast（`kind: agent`，在錄影頁標「MCP agent」）。
+- 即時 session 頁的 agent session 那一列顯示開著幾個 shell（`/api/sessions` 的 `shells`、`/api/ai/sessions` 的 `shells`）。
+
+## 遠端瀏覽器（`browser:use`）
+
+- 就是一般的 remote-browser session（`remote_browser/`：經裝置的 SOCKS、kasm-browser 裡的 Chromium，算進
+  `remote_browser_max_sessions`），只是由 agent 經 session-manager 的 CDP 端點操作（見 `docs/remote-browser.md`「MCP agent 操作」）。
+  backend 從不直接連 Chromium 的 DevTools。
+- 跟 SSH session 共用每人上限 `ai_max_sessions_per_user`、同一組 idle / 壽命限制與 reaper（裝置離線、grant 撤銷、權限或 username
+  被拿掉、remote-browser session 不見了都會關）；step-up 隧道拒絕。
+- 出現在「誰在用」與即時 session 頁（kind `browser`、client = app 名稱），可以從那裡結束：之後的 tool 回「ended by <誰>」。
+- 開 / 關寫 `browser_open` / `browser_close` gateway 事件（隧道的 Logs），通知沿用 `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
+  （多 `kind: "browser"`，webhook `mcp.session_*` 的 data 也有 `kind`）。
+- 稽核：網址、selector；`browser_type` 的文字預設只記長度（`sensitive: false` 才記內容）；截圖本身不存。
 
 ## Session 生命週期
 
@@ -99,7 +137,7 @@ username，與 web terminal 相同）。
 
 - reaper 每 30 秒檢查一次；撤銷 grant 時立即關閉。
 - agent 可以要求更短的 `idle_timeout_s` / `max_lifetime_s`，但不能超過站台設定（最短 10 秒）。
-- 每位使用者同時最多 `ai_max_sessions_per_user` 個（預設 3，所有 app 合計；0 = 不允許 AI 開 session）。
+- 每位使用者同時最多 `ai_max_sessions_per_user` 個（預設 3，所有 app 合計，SSH session 與 agent 的瀏覽器一起算；0 = 不允許 AI 開 session）。
 - 指令逾時預設 60 秒、最多 600 秒，逾時送 `KILL` 並關 channel；每個輸出串流預設保留 64 KiB、最多 1 MiB，
   超過時保留開頭 1/4 與結尾 3/4。
 - MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是 OAuth grant（哪個 app），不是 MCP 連線；
@@ -127,4 +165,8 @@ curl -s https://telepy.example.com/.well-known/oauth-authorization-server
 ```
 
 自動化測試：`tests/oauth_api.rs`（OAuth 流程）、`tests/mcp_api.rs`（以假的裝置 sshd 端到端測 exec / SFTP /
-逾時 / 截斷 / scope / 上限 / 撤銷 / reaper / 分享通知）。
+逾時 / 截斷 / scope / 上限 / 撤銷 / reaper / 分享通知、互動 shell（PTY echo shell：畫面、控制字元、錄影、指令規則），
+以及以假的 session-manager 測 agent 瀏覽器）；`docker/kasm-browser/tests/test_cdp.py`（CDP 動作、WebSocket frame、/cdp 路由）。
+
+網頁 **AI → MCP** 頁右上的「app 碰得到哪裡？」打開一張圖：MCP app ─ Telepy ─ 裝置 ─ 區網 / 網際網路，依選到的已連接 app
+的權限亮起對應的分支（`lib/aiAccess.ts` `reachFor`）。

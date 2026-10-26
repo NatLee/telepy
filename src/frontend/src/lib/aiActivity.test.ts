@@ -33,6 +33,11 @@ test("tool categories and code details", () => {
     assert.equal(isCodeDetail("ssh_exec"), true);
     assert.equal(isCodeDetail("sftp_list"), true);
     assert.equal(isCodeDetail("ssh_session_close"), false);
+    assert.equal(toolCategory("shell_send"), "exec");
+    assert.equal(toolCategory("browser_screenshot"), "browser");
+    assert.equal(isCodeDetail("shell_send"), true);
+    assert.equal(isCodeDetail("browser_navigate"), true);
+    assert.equal(isCodeDetail("browser_close"), false);
 });
 
 test("filter by tool, result and query", () => {
@@ -51,9 +56,9 @@ test("filter by tool, result and query", () => {
 });
 
 test("counts follow the search, failures follow the category", () => {
-    assert.deepEqual(countCalls(calls, "", "all"), { tools: { all: 6, exec: 2, files: 1, session: 1, read: 1 }, failed: 2 });
+    assert.deepEqual(countCalls(calls, "", "all"), { tools: { all: 6, exec: 2, files: 1, browser: 0, session: 1, read: 1 }, failed: 2 });
     assert.deepEqual(countCalls(calls, "", "exec").failed, 1);
-    assert.deepEqual(countCalls(calls, "office-nas", "all"), { tools: { all: 3, exec: 1, files: 1, session: 1, read: 0 }, failed: 0 });
+    assert.deepEqual(countCalls(calls, "office-nas", "all"), { tools: { all: 3, exec: 1, files: 1, browser: 0, session: 1, read: 0 }, failed: 0 });
 });
 
 test("durations and sizes", () => {

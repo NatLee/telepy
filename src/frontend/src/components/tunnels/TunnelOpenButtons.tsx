@@ -1,8 +1,9 @@
 /**
- * 「開啟」三顆按鈕：終端機 / 檔案 / 瀏覽器，一律帶文字標籤（卡片是圖示在上的方塊，表格是精簡橫排）。
- * 線上時終端機是實色主色、其餘外框；離線一律淡色。沒有光暈、位移或放大。
- * The three "open" actions — Terminal / Files / Browser — always labelled (tiles on cards, a compact row in the
- * table). Online: Terminal is solid primary, the others outlined; offline: all muted. No glow, lift or scale.
+ * 「開啟」四顆按鈕：終端機 / 檔案 / 瀏覽器 / 遠端桌面，一律帶文字標籤（卡片是圖示在上的方塊，標籤可換行不截斷；
+ * 表格是精簡橫排）。線上時終端機是實色主色、其餘外框；離線一律淡色。沒有光暈、位移或放大。
+ * The four "open" actions — Terminal / Files / Browser / Desktop — always labelled (tiles on cards, where labels
+ * wrap instead of truncating; a compact row in the table). Online: Terminal is solid primary, the others outlined;
+ * offline: all muted. No glow, lift or scale.
  *
  * prefetch={false}：terminal 是「點了才進」的重頁（xterm/VNC），每條隧道三條連結，N 條隧道 = 3N 次 route
  * prefetch，載入時一次湧出把伺服器/連線塞爆，害真正在等的 dashboard/profile 排隊變慢。點擊時才載入。
@@ -12,7 +13,7 @@
 import React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FolderOpen, MonitorPlay, TerminalSquare, type LucideIcon } from "lucide-react";
+import { FolderOpen, MonitorPlay, ScreenShare, TerminalSquare, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
@@ -20,11 +21,19 @@ import { getTerminalPageUrl, type TerminalMainView } from "@/lib/tunnelUrls";
 import { Tunnel } from "@/types/tunnel";
 import { requestStepUp, stepUpToken } from "@/lib/stepUp";
 
-const OPEN_ACTIONS: { view: TerminalMainView; icon: LucideIcon; label: TranslationKey; hint: TranslationKey }[] = [
+type OpenAction = { view: TerminalMainView | "desktop"; icon: LucideIcon; label: TranslationKey; hint: TranslationKey };
+const OPEN_ACTIONS: OpenAction[] = [
     { view: "terminal", icon: TerminalSquare, label: "common.terminal", hint: "tunnelActions.terminalHint" },
     { view: "files", icon: FolderOpen, label: "common.files", hint: "tunnelActions.filesHint" },
     { view: "browser", icon: MonitorPlay, label: "common.browser", hint: "tunnelActions.browserHint" },
+    // 遠端桌面頁（RDP / VNC / RustDesk）：裝置預選好。/ The remote desktop page with this device preselected.
+    { view: "desktop", icon: ScreenShare, label: "common.desktop", hint: "tunnelActions.desktopHint" },
 ];
+
+/** 每顆按鈕去哪：三個主畫面進終端機頁，桌面進遠端桌面頁。/ Where each action goes. */
+function actionHref(tunnel: Tunnel, view: OpenAction["view"]): string {
+    return view === "desktop" ? `/tunnels/desktop?tunnel=${tunnel.id}` : getTerminalPageUrl(tunnel, { mainView: view });
+}
 
 interface TunnelOpenButtonsProps {
     tunnel: Tunnel;
@@ -55,8 +64,8 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                 {OPEN_ACTIONS.map(({ view, icon: Icon, label, hint }) => (
                     <Link
                         key={view}
-                        href={getTerminalPageUrl(tunnel, { mainView: view })}
-                        onClick={gate(getTerminalPageUrl(tunnel, { mainView: view }))}
+                        href={actionHref(tunnel, view)}
+                        onClick={gate(actionHref(tunnel, view))}
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(
@@ -75,18 +84,22 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
     }
 
     return (
-        <div className="grid grid-cols-3 gap-2">
+        // 四顆一排要 19rem 才放得下（日文的「ターミナル」/「デスクトップ」），更窄（或放大顯示）就排成 2×2，
+        // 標籤不會被拆成一字一行。/ Four across needs 19rem (Japanese labels); narrower cards (or a larger display
+        // size) fall back to 2×2 so a label never breaks into one character per line.
+        <div className="@container">
+        <div className="grid grid-cols-2 gap-2 @[19rem]:grid-cols-4">
             {OPEN_ACTIONS.map(({ view, icon: Icon, label, hint }) => {
                 const primary = view === "terminal";
                 return (
                     <Link
                         key={view}
-                        href={getTerminalPageUrl(tunnel, { mainView: view })}
-                        onClick={gate(getTerminalPageUrl(tunnel, { mainView: view }))}
+                        href={actionHref(tunnel, view)}
+                        onClick={gate(actionHref(tunnel, view))}
                         prefetch={false}
                         title={`${t(hint)}${offlineHint}`}
                         className={cn(
-                            "flex flex-col items-center justify-center gap-1 rounded-md border px-2 py-2.5 text-xs transition-colors duration-150",
+                            "flex flex-col items-center justify-center gap-1 rounded-md border px-1 py-2.5 text-xs transition-colors duration-150",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             !online && "border-border bg-surface text-muted-foreground/80 hover:bg-muted hover:text-muted-foreground",
                             online && primary && "border-transparent bg-primary text-primary-foreground hover:bg-primary/90",
@@ -94,10 +107,12 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
                         )}
                     >
                         <Icon size={18} />
-                        <span className="truncate max-w-full">{t(label)}</span>
+                        {/* 四顆並排時標籤可以換行（日文的「ターミナル」），不截成「…」。/ Labels wrap in four columns instead of truncating. */}
+                        <span className="max-w-full text-center leading-tight [overflow-wrap:anywhere]">{t(label)}</span>
                     </Link>
                 );
             })}
+        </div>
         </div>
     );
 }

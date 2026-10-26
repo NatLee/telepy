@@ -68,6 +68,12 @@ pub struct Recorder {
 impl Recorder {
     /// 開始錄（檔案 + 索引）。失敗只記 log，不影響終端機。/ Start recording; a failure is logged and never blocks the terminal.
     pub async fn start(state: &AppState, tunnel_id: i64, user_id: i64, username: &str, os_user: &str, lan_host: Option<&str>, title: &str) -> Option<Self> {
+        Self::start_kind(state, tunnel_id, user_id, username, os_user, lan_host, "terminal", title, 80, 24).await
+    }
+
+    /// [`start`] 加上來源（`terminal` / `agent`）與初始大小。/ [`start`] with the source kind and the initial size.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_kind(state: &AppState, tunnel_id: i64, user_id: i64, username: &str, os_user: &str, lan_host: Option<&str>, kind: &str, title: &str, cols: u32, rows: u32) -> Option<Self> {
         let rel = format!("{tunnel_id}/{}.cast", random_alnum(20));
         let path = resolve(&root(state), &rel)?;
         let result = async {
@@ -75,11 +81,11 @@ impl Recorder {
                 tokio::fs::create_dir_all(dir).await?;
             }
             let mut out = BufWriter::new(File::create(&path).await?);
-            let head = header(80, 24, chrono::Utc::now().timestamp(), title);
+            let head = header(cols, rows, chrono::Utc::now().timestamp(), title);
             out.write_all(head.as_bytes()).await?;
             out.write_all(b"\n").await?;
             out.flush().await?;
-            let id = db::recordings::create(&state.db, tunnel_id, user_id, username, os_user, lan_host, &rel).await?;
+            let id = db::recordings::create(&state.db, tunnel_id, user_id, username, os_user, lan_host, kind, &rel).await?;
             anyhow::Ok(Self { id, out, started: Instant::now(), last_flush: Instant::now(), bytes: head.len() as u64 + 1, truncated: false })
         };
         match result.await {

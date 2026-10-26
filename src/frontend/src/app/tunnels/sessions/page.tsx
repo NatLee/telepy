@@ -41,6 +41,7 @@ function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
                     <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-foreground">
                         <span>{label}</span>
                         {s.client && <span className="text-muted-foreground">· {s.client}</span>}
+                        {!!s.shells && <Chip>{t("sessions.shells", { count: s.shells })}</Chip>}
                         {s.mine && <Chip>{t("sessions.you")}</Chip>}
                     </p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">

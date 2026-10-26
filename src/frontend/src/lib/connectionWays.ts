@@ -155,33 +155,38 @@ export function wayFor(protocol: "rdp" | "vnc" | "rustdesk"): WayId {
     return protocol === "rustdesk" ? "rustdeskTunnel" : "guacd";
 }
 
-export type PathCell = ({ kind: "node"; node: WayNode } | { kind: "link"; link: WayLink; span: number } | { kind: "gap" }) & {
-    /** 在 7 格裡從第幾格開始（1 起算）。/ The 1-based slot it starts at, out of seven. */
-    start: number;
-};
+/**
+ * 寬版格線：每個點佔兩個半欄（兩半中間 = 點的中心），每條線一欄，共 11 欄。加密尺的每一段從起點的中心畫到終點的中心，
+ * 相鄰兩段剛好接上，也有足夠的寬度放下標籤。
+ * Wide grid: a node takes two half columns (the line between them is its centre), a link one column — eleven in all.
+ * A ruler span runs from centre to centre, so neighbours meet and the label has the whole hop's width.
+ */
+export const PATH_GRID_TEMPLATE = "repeat(3, minmax(0, 0.5fr) minmax(0, 0.5fr) minmax(4.5rem, 0.8fr)) minmax(0, 0.5fr) minmax(0, 0.5fr)";
+/** 第 col 個點的第一欄（1 起算）。/ The first grid column of node `col`, 1-based. */
+const nodeStart = (col: number) => col * 3 + 1;
+/** 點的 grid-column。/ A node's grid-column. */
+export function nodeColumns(col: number): string {
+    return `${nodeStart(col)} / span 2`;
+}
+/** 線填滿兩個點之間（可跨過沒有點的欄）。/ A link fills the space between its two nodes. */
+export function linkColumns(from: number, to: number): string {
+    return `${nodeStart(from) + 2} / ${nodeStart(to)}`;
+}
+/** 加密尺的一段：起點中心到終點中心。/ A ruler span, centre to centre. */
+export function layerColumns(from: number, to: number): string {
+    return `${nodeStart(from) + 1} / ${nodeStart(to) + 1}`;
+}
 
-/** 路徑圖第 n 欄放什麼：點、往右的線，或空的；附起始格。/ What sits in each path slot: a node, a link or nothing, with its start. */
+export type PathCell = { kind: "node"; node: WayNode } | { kind: "link"; link: WayLink };
+
+/** 路徑上依序的點與線（沒有點的欄略過，線會跨過去）。/ The path's nodes and links in order. */
 export function pathCells(way: Way): PathCell[] {
     const out: PathCell[] = [];
-    let col = 0;
-    let slot = 1;
-    while (col <= 3) {
+    for (let col = 0; col <= 3; col += 1) {
         const node = way.nodes.find((n) => n.col === col);
-        out.push(node ? { kind: "node", node, start: slot } : { kind: "gap", start: slot });
-        slot += 1;
-        if (col === 3) break;
+        if (node) out.push({ kind: "node", node });
         const link = way.links.find((l) => l.from === col);
-        if (link) {
-            // 跨過沒有點的欄（例如 Telepy 直接到那台電腦）：線佔掉中間那幾格。/ A link may span empty columns.
-            const span = (link.to - link.from) * 2 - 1;
-            out.push({ kind: "link", link, span, start: slot });
-            slot += span;
-            col = link.to;
-        } else {
-            out.push({ kind: "gap", start: slot });
-            slot += 1;
-            col += 1;
-        }
+        if (link) out.push({ kind: "link", link });
     }
     return out;
 }

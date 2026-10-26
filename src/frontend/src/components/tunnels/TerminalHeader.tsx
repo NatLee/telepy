@@ -6,7 +6,8 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network, Palette } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network, Palette, Info, Route } from "lucide-react";
+import Link from "next/link";
 import { TerminalLanHost, TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { TerminalLatencyBadge } from "@/components/tunnels/TerminalLatencyBadge";
@@ -37,6 +38,12 @@ interface TerminalHeaderProps {
     appearanceCustomized: boolean;
     /** 殼開在裝置區網裡的機器上（帳號選單是裝置那一跳）。/ Shell on a LAN host; the user picker is the device hop. */
     lan?: { host: TerminalLanHost | null; login: string | null } | null;
+    /** 裝置名稱（載入前是 null）。/ The device's name (null until loaded). */
+    tunnelName?: string | null;
+    /** 打開「怎麼運作」的即時路徑圖。/ Opens the live path diagram. */
+    onOpenInfo: () => void;
+    /** 回到選擇器換一台裝置 / 主機。/ Back to the picker to choose another device or host. */
+    switchHref: string;
 }
 
 /** 區網主機徽章。/ LAN host badge. */
@@ -74,6 +81,9 @@ export function TerminalHeader({
     onOpenAppearance,
     appearanceCustomized,
     lan = null,
+    tunnelName = null,
+    onOpenInfo,
+    switchHref,
 }: TerminalHeaderProps) {
     const router = useRouter();
     const { t } = useI18n();
@@ -87,8 +97,9 @@ export function TerminalHeader({
                             <div className="p-2 bg-primary/10 rounded-md">
                                 <TerminalIcon className="text-primary" size={18} />
                             </div>
-                            <h1 className="text-sm md:text-base font-bold text-foreground flex items-center">
-                                {t("common.terminal")} <Badge variant="secondary" className="ml-2 font-mono text-[0.6875rem] md:text-xs">{(serverId || "").slice(0, 8)}</Badge>
+                            <h1 className="flex min-w-0 items-center text-sm text-foreground md:text-base">
+                                <span className="shrink-0">{t("common.terminal")}</span>
+                                <Badge variant="secondary" className="ml-2 max-w-[10rem] truncate font-mono text-[0.6875rem] md:max-w-[16rem] md:text-xs" title={tunnelName ?? undefined}>{tunnelName ?? (serverId || "").slice(0, 8)}</Badge>
                             </h1>
 
                             {/* Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見 */}
@@ -212,6 +223,21 @@ export function TerminalHeader({
                         <Button
                             variant="outline"
                             size="sm"
+                            onClick={onOpenInfo}
+                            title={t("terminal.howItWorks")}
+                            aria-label={t("terminal.howItWorks")}
+                            className="h-8 w-8 p-0"
+                        >
+                            <Info size={14} />
+                        </Button>
+                        <Button variant="outline" size="sm" asChild className="h-8 text-xs gap-1.5" title={t("terminal.switchTargetHint")}>
+                            <Link href={switchHref} prefetch={false}>
+                                <Route size={14} /> {t("terminal.switchTarget")}
+                            </Link>
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
                             onClick={onOpenAppearance}
                             title={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
                             aria-label={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
@@ -322,6 +348,16 @@ export function TerminalHeader({
                                 className="h-10 text-xs gap-1.5"
                             >
                                 <X size={14} /> {t("common.close")}
+                            </Button>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            <Button variant="outline" size="sm" onClick={onOpenInfo} className="h-10 text-xs gap-1.5">
+                                <Info size={14} /> {t("terminal.howItWorks")}
+                            </Button>
+                            <Button variant="outline" size="sm" asChild className="h-10 text-xs gap-1.5">
+                                <Link href={switchHref} prefetch={false}>
+                                    <Route size={14} /> {t("terminal.switchTarget")}
+                                </Link>
                             </Button>
                         </div>
                     </div>

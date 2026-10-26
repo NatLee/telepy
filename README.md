@@ -118,7 +118,11 @@ connects. Details: [docs/mcp.md](./docs/mcp.md).
 
 For Claude Code: `claude mcp add --transport http telepy https://<your-host>/mcp`. Tools: `list_tunnels`,
 `tunnel_status`, `ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`, `sftp_list` /
-`sftp_read` / `sftp_write`. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
+`sftp_read` / `sftp_write`, interactive shells for TUIs and prompts (`shell_open` / `shell_send` / `shell_read` — the
+agent reads the screen as text; command rules gate every Enter; recorded on recorded tunnels) and, with the
+`browser:use` permission, a remote browser that goes online through the device (`browser_open` / `browser_navigate` /
+`browser_read` / `browser_click` / `browser_type` / `browser_screenshot`). The MCP page's "What can an app reach?"
+diagram shows what each connected app's permissions open up. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
 someone it is shared with opens an AI session on it. Details: [docs/mcp.md](docs/mcp.md).
 
 ### API docs

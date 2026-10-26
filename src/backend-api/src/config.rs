@@ -80,6 +80,10 @@ pub struct Config {
     /// 每次裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（`DEVICE_PROBE=false` 關閉）。
     /// Ask each device for its hostname / LAN / public IP once per connection (DEVICE_PROBE=false turns it off).
     pub device_probe: bool,
+    /// 共用服務金鑰永遠留在裝置上（`KEEP_SHARED_SERVICE_KEY=true`）：另一台還在用它登入的 Telepy（例如並行運作的舊站）
+    /// 才不會在這裡的隧道換上自己的金鑰後被切斷。/ Never remove the shared service key from devices, so another Telepy
+    /// server that still logs in with it (an old one running in parallel) keeps working after tunnels move to their own keys.
+    pub keep_shared_service_key: bool,
     // --- client IP (sign-in history, presence) ---
     /// 後端前面有幾層可信的反向代理（含 Traefik）：從 X-Forwarded-For 右邊跳過這麼多段。compose 只有
     /// Traefik = 1；前面再有 TLS 代理 / LB = 2。設太大會讓客戶端能偽造 IP。
@@ -189,6 +193,7 @@ impl Config {
             gateway_probe_interval: Duration::from_secs(env("GATEWAY_PROBE_INTERVAL_SECS").and_then(|v| v.parse().ok()).unwrap_or(15)),
             gateway_proxy_protocol_from: env("GATEWAY_PROXY_PROTOCOL_FROM").unwrap_or_default(),
             device_probe: env_bool("DEVICE_PROBE", true),
+            keep_shared_service_key: env_bool("KEEP_SHARED_SERVICE_KEY", false),
             trusted_proxy_hops: env("TRUSTED_PROXY_HOPS").and_then(|v| v.parse().ok()).unwrap_or(1),
             client_ip_header: env("CLIENT_IP_HEADER"),
             geoip_dir,

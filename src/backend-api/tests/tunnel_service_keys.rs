@@ -155,3 +155,44 @@ async fn the_shared_key_waits_for_every_tunnel_on_the_machine() {
         assert_eq!(lab.backend_exec(d, "ubuntu", "whoami").await.unwrap(), "ubuntu");
     }
 }
+
+#[tokio::test]
+async fn keep_shared_service_key_leaves_the_shared_key_on_the_device() {
+    let Some(lab) = Lab::start_with(|c| c.keep_shared_service_key = true).await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    // 和上一個測試同一台舊裝置，但伺服器設定成保留共用金鑰（另一台 Telepy 還用它登入）。
+    // The same legacy device as above, on a server told to keep the shared key (another Telepy still logs in with it).
+    let old = lab.machine("kept", &[("ubuntu", &[&lab.service])], false).await;
+    let dir = old.account_home("ubuntu").join(".ssh");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("authorized_keys"), format!("{}\n", lab.service.public)).unwrap();
+    let dev = lab.device(&alice, "kept", &old).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let own = lab.tunnel_service_key(&dev).await;
+    let path = |t: &str| format!("/api/reverse/server/{}/{t}", dev.tunnel_id);
+
+    // 遷移照常：隧道金鑰裝進去，下一條連線用它登入。/ The move still happens: key installed, next login uses it.
+    assert_eq!(lab.backend_exec(&dev, "ubuntu", "whoami").await.unwrap(), "ubuntu");
+    let r = app.post(&path("device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["view"]["keep_shared"], true, "{}", r.text);
+    assert_eq!(lab.backend_exec(&dev, "ubuntu", "whoami").await.unwrap(), "ubuntu");
+    assert!(old.logged_in_bare("ubuntu", &bare(&own)));
+    assert!(tunnel_keys::account(&app.state.db, dev.tunnel_id, "ubuntu").await.unwrap().unwrap().verified_at.is_some());
+
+    // 再同步：驗證過了，共用金鑰還是留著。/ Sync again: verified, and the shared key still stays.
+    let r = app.post(&path("device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let ak = old.authorized_keys("ubuntu");
+    assert!(ak.contains(&bare(&own)) && ak.contains(&lab.service.bare()), "{ak}");
+    assert_eq!(service_rows(&r.json, "ubuntu"), vec![(true, true), (false, true)], "{}", r.text);
+    assert!(!events(&lab, &alice.token, dev.tunnel_id).await.contains(&"service_key_migrated".to_string()));
+
+    // 手動也移不掉。/ Not by hand either.
+    let acct = r.json["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == "ubuntu").unwrap();
+    let fp = acct["rows"].as_array().unwrap().iter().find(|r| r["state"] == "service" && r["legacy"] == true).unwrap()["fingerprint"].as_str().unwrap().to_string();
+    let r = app.post(&path("authorized-keys/remove"), Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("service_key")), "{}", r.text);
+    assert!(old.authorized_keys("ubuntu").contains(&lab.service.bare()));
+}

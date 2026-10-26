@@ -69,9 +69,9 @@ function NetworkInner() {
         requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     };
     const onOpenTerminal = (req: OpenTerminalRequest) =>
-        terms.open({ tunnelId: req.tunnel.id, tunnelName: req.tunnel.name, hostId: req.host.id, hostName: hostName(req.host), login: req.login, deviceUser: req.deviceUser });
-    // 開著終端機時，右側面板的高度要扣掉 dock。/ The sticky panel leaves room for the dock.
-    const dockOffset = terms.sessions.length ? `calc(${DOCK_BAR} + ${DOCK_HEIGHT[terms.size]})` : "0px";
+        terms.open({ tunnelId: req.tunnel.id, tunnelName: req.tunnel.name, reversePort: req.tunnel.reverse_port, hostId: req.host.id, hostName: hostName(req.host), login: req.login, deviceUser: req.deviceUser });
+    // 開著終端機時，右側面板的高度要扣掉 dock（放大時 dock 是整個視窗的覆蓋層，不用扣）。/ The sticky panel leaves room for the dock (not when maximised: that is an overlay).
+    const dockOffset = terms.sessions.length && terms.size !== "max" ? `calc(${DOCK_BAR} + ${DOCK_HEIGHT[terms.size]})` : "0px";
     const onScan = (tn: TopologyTunnel) => setScanFor(tn.id);
     const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
 
@@ -106,7 +106,8 @@ function NetworkInner() {
                 </div>
             ) : (
                 // 欄寬一定要 minmax(0,…)，不然長指令會把欄撐寬（手機上整個面板超出畫面）。/ minmax(0,…) keeps long commands from widening the column.
-                <div className={cn("grid grid-cols-[minmax(0,1fr)] items-start gap-5", host && hostTunnel && "xl:grid-cols-[minmax(0,1fr)_34rem]")}>
+                // flex-1：內容短時 dock 也貼在視窗底（而不是接在樹下面）。/ flex-1 keeps the dock at the viewport bottom even when the tree is short.
+                <div className={cn("grid flex-1 grid-cols-[minmax(0,1fr)] content-start items-start gap-5", host && hostTunnel && "xl:grid-cols-[minmax(0,1fr)_34rem]")}>
                 {host && hostTunnel && (
                     <aside ref={panelRef} className="min-w-0 scroll-mt-20 xl:order-last xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem-var(--dock-h))] xl:overflow-y-auto">
                         <HostPanel
@@ -154,6 +155,7 @@ function NetworkInner() {
                 activeKey={terms.activeKey}
                 size={terms.size}
                 onSelect={terms.select}
+                onDuplicate={terms.duplicate}
                 onClose={terms.close}
                 onCloseAll={terms.closeAll}
                 onReconnect={terms.reconnect}

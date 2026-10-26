@@ -16,5 +16,7 @@ export interface LiveSession {
     since: string;
     /** MCP app name */
     client: string | null;
+    /** kind = ai：這個 agent session 開著幾個互動 shell。/ kind = ai: interactive shells open on the agent's session. */
+    shells?: number | null;
     mine: boolean;
 }
