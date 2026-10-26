@@ -1020,6 +1020,135 @@ pub struct UploadResult {
     pub success: String,
 }
 
+/// `{error, code}`；code = path_required | invalid_name | exists | not_found | permission_denied | dir_not_writable |
+/// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed
+#[derive(ToSchema)]
+pub struct SftpError {
+    pub error: String,
+    #[schema(example = "exists")]
+    pub code: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathRequest {
+    /// Full path of the new folder / file (`~/x`, `/abs/x`, `C:\x`)
+    pub path: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathResult {
+    pub path: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathsRequest {
+    /// 1–500 paths
+    pub paths: Vec<String>,
+}
+
+/// A rename (`from` + `to`) or a move of several entries into `destination` (`paths` + `destination`). Never overwrites.
+#[derive(ToSchema)]
+pub struct SftpRenameRequest {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub paths: Option<Vec<String>>,
+    pub destination: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpMoveRequest {
+    pub paths: Vec<String>,
+    /// Folder the entries go into (they keep their names)
+    pub destination: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpChmodRequest {
+    pub paths: Vec<String>,
+    /// Octal, e.g. `644` / `0755`
+    #[schema(example = "0644")]
+    pub mode: String,
+    /// Folders: everything inside too (links skipped)
+    pub recursive: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpFailure {
+    pub path: String,
+    pub code: String,
+    pub error: String,
+}
+
+/// Counters present depend on the call: moved / copied (+ method `device` | `stream`) / changed (+ mode).
+#[derive(ToSchema)]
+pub struct SftpBatchResult {
+    pub path: Option<String>,
+    pub moved: Option<u64>,
+    pub copied: Option<u64>,
+    pub changed: Option<u64>,
+    pub method: Option<String>,
+    pub mode: Option<String>,
+    pub destination: Option<String>,
+    pub failed: Vec<SftpFailure>,
+}
+
+/// Dry run (`?count=1`): files / dirs / links / bytes / entries / truncated; otherwise removed + failed.
+#[derive(ToSchema)]
+pub struct SftpDeleteResult {
+    pub files: Option<u64>,
+    pub dirs: Option<u64>,
+    pub links: Option<u64>,
+    pub bytes: Option<u64>,
+    pub entries: Option<u64>,
+    pub truncated: Option<bool>,
+    pub removed: Option<u64>,
+    pub failed: Option<Vec<SftpFailure>>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpStat {
+    pub path: String,
+    pub name: String,
+    /// file | directory | symlink
+    pub r#type: String,
+    pub size: u64,
+    #[schema(example = "0644")]
+    pub mode: String,
+    #[schema(example = "-rw-r--r--")]
+    pub permissions: String,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub mtime: Option<String>,
+    pub mtime_epoch: Option<u32>,
+    pub atime: Option<String>,
+    pub link_target: Option<String>,
+    /// file | directory | missing (links only)
+    pub target_type: Option<String>,
+}
+
+/// A text file: GET returns `content`; PUT returns the saved file's size / mtime_epoch / mode.
+#[derive(ToSchema)]
+pub struct SftpText {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub mtime_epoch: Option<u32>,
+    pub mode: String,
+    pub content: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpSaveRequest {
+    pub path: String,
+    /// UTF-8 text, ≤ 1 MiB
+    pub content: String,
+    /// mtime_epoch / size from when the file was opened; a mismatch answers 409 `modified`
+    pub mtime: Option<u64>,
+    pub size: Option<u64>,
+    /// Overwrite even when the file changed meanwhile
+    pub force: Option<bool>,
+}
+
 #[derive(ToSchema)]
 pub struct RemoteBrowserStartRequest {
     /// Target username; omitted = the tunnel's default (or first allowed) username

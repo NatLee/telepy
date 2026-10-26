@@ -54,6 +54,8 @@ export type ReconnectingSocketOptions = {
     onMessage?: (data: string) => void;
     onStatus?: (connected: boolean) => void;
     onPhase?: (phase: SocketPhase) => void;
+    /** 伺服器關掉連線時的關閉碼（例如 4005 裝置離線、4008 要 step-up）。/ The close code when the socket closes. */
+    onClose?: (code: number) => void;
 };
 
 export class ReconnectingSocket {
@@ -146,6 +148,7 @@ export class ReconnectingSocket {
                 if (this.stableTimer) { clearTimeout(this.stableTimer); this.stableTimer = null; }
                 this.opts.onStatus?.(false);
                 if (this.closedByUser) return;
+                this.opts.onClose?.(event.code);
                 // 4001：token 無效/過期。refresh 一次再重連；refresh 失敗才放棄。
                 // 4001: invalid/expired token — refresh once and retry; give up only if refresh fails.
                 if (event.code === 4001) { void this.handleAuthClose(); return; }
