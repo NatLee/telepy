@@ -3,6 +3,9 @@
 > 問題：能不能把 RustDesk 的畫面放進 Telepy 的網頁介面、自己客製；這樣是不是就不需要 SSH 隧道了？
 > 這份是研究紀錄，不是功能文件。程式碼沒有進產品；重現用的腳本在當時的 scratchpad（已清），做法寫在附錄。
 
+> **2026-10-26 更新：** 下面「『不用 SSH』是反的」那一點已被推翻。RustDesk 1.5.0 能經 WebSocket 主動連 ID 伺服器，
+> Telepy 自己當 ID＋中繼伺服器就不需要 SSH、也不用開新埠，還多了端對端加密；見 [`rustdesk-id-server.md`](rustdesk-id-server.md)。
+
 ## 結論
 
 - **可以，而且不需要 RustDesk 的 server（hbbs／hbbr）。** 裝置上 RustDesk 的 Direct IP 埠（21118）是純 TCP，
