@@ -4,6 +4,11 @@
 > 這份是研究紀錄＋方案比較，不是功能文件；程式碼沒有進產品。上一份研究是 [`rustdesk-spike.md`](rustdesk-spike.md)，
 > 已上線的 SSH 路線見 [`remote-desktop.md`](remote-desktop.md)（#195、#196）。
 
+> **2026-10-26 更新：方案 B＋B1（權杖登記）已實作**，使用方式與設計見 [`remote-desktop.md`](remote-desktop.md) 的
+> 「不經隧道：Telepy 當 RustDesk 伺服器」。實作時補到的事實：`rustdesk --deploy` 要回 `{"result": "OK"}`（`INVALID_INPUT` /
+> `ID_TAKEN` / `NOT_ENABLED` 也認得，其他內容原樣印出並以 1 結束），OK 之後裝置立刻重新註冊；`--deploy` 還收 `--id <號碼>`，
+> 成功就把裝置的 ID 換成它 —— 方案 B2（Telepy 發號碼）可以直接用這個做。
+
 ## 結論
 
 - **可以，而且不用開新埠。** RustDesk 1.5.0 的「使用 WebSocket」（`allow-websocket`）讓裝置**主動往外**連 ID 伺服器的

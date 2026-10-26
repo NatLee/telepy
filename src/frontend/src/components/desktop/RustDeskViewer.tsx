@@ -347,7 +347,9 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                 const url = rustdeskWsUrl(getWsOrigin(), start);
                 call("option", { name: "custom-rendezvous-server", value: url });
                 call("option", { name: "relay-server", value: url });
-                call("option", { name: "key", value: "" });
+                // 經 Telepy 的 RustDesk 伺服器時有伺服器公鑰：核心驗裝置金鑰後做端對端加密；經隧道（Direct IP）沒有。
+                // With Telepy's RustDesk server the core verifies the device key and encrypts end to end; Direct IP has none.
+                call("option", { name: "key", value: start.key ?? "" });
                 call("session_add_sync", { id: peerIdFor(start), password: passwordRef.current, isFileTransfer: false, isTerminal: false });
                 call("session_start", { id: peerIdFor(start) });
             })

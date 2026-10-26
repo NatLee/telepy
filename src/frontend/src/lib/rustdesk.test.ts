@@ -8,6 +8,7 @@ test("the core gets one url with the ticket and an ip-looking peer id", () => {
     assert.equal(rustdeskWsUrl("wss://telepy.example", start), "wss://telepy.example/ws/rustdesk/s/?ticket=t%20k");
     assert.equal(peerIdFor(start), "127.0.0.1:21118");
     assert.equal(peerIdFor({ ...start, target: { ...start.target, host: "192.168.1.50", port: 21119 } }), "192.168.1.50:21119");
+    assert.equal(peerIdFor({ ...start, target: undefined, peer_id: "113668456", key: "k" }), "113668456", "Telepy's RustDesk server: the device's own ID");
 });
 
 const ev = (key: string, code: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean; isComposing: boolean; keyCode: number }> = {}) => ({ key, code, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });

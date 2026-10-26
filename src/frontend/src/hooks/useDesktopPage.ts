@@ -15,6 +15,9 @@
  * 指令（別名來自 `/tunnels/server/config/{id}`，和命令表同一套）。/ RustDesk: in the browser by default (a ticket from
  * `…/rustdesk/start`; the vendored core connects through Telepy's relay and the password stays in the browser), or the
  * native app with a port probe plus the ssh -L command.
+ * 經 Telepy 的 RustDesk 伺服器（`?rustdesk=<裝置 id>`，沒有隧道）：`POST /api/rustdesk/devices/{id}/start`，核心用裝置的
+ * RustDesk ID 連、用伺服器公鑰驗裝置（端對端加密）。/ Through Telepy's RustDesk server (`?rustdesk=<device id>`, no tunnel):
+ * the core asks for the device's RustDesk ID and verifies it with the server key (end-to-end encrypted).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -48,6 +51,7 @@ import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 import { useSavedLogins } from "@/hooks/useSavedLogins";
+import { useRustDeskDevices } from "@/hooks/useRustDeskDevices";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 
 export interface DesktopForm {
@@ -102,6 +106,7 @@ export function useDesktopPage() {
     const searchParams = useSearchParams();
     const tunnelParam = searchParams.get("tunnel");
     const hostParam = searchParams.get("lanHost");
+    const rustdeskParam = searchParams.get("rustdesk");
     const { t } = useI18n();
     const { showError } = useToast();
 
@@ -182,6 +187,9 @@ export function useDesktopPage() {
     });
 
     const tunnel = useMemo(() => tunnels.find((tn) => String(tn.id) === tunnelParam) ?? null, [tunnels, tunnelParam]);
+    // Telepy 當 RustDesk 伺服器的裝置（不經隧道）。/ Devices that use Telepy as their RustDesk server (no tunnel).
+    const rdDevices = useRustDeskDevices();
+    const rdDevice = useMemo(() => (rustdeskParam ? rdDevices.devices.find((d) => String(d.id) === rustdeskParam) ?? null : null), [rdDevices.devices, rustdeskParam]);
     tunnelRef.current = tunnel;
     const host: LanHost | null = useMemo(() => (tunnel && hostParam ? tunnel.hosts.find((h) => String(h.id) === hostParam) ?? null : null), [tunnel, hostParam]);
     const online = tunnel ? (ports[String(tunnel.reverse_port)] ?? tunnel.online ?? false) : false;
@@ -195,12 +203,18 @@ export function useDesktopPage() {
         router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     }, [pathname, router, searchParams]);
 
-    // 沒帶 / 帶錯 ?tunnel=：選第一台線上、有帳號的裝置。/ Default to the first online device with an account.
+    // 沒帶 / 帶錯 ?tunnel=（也沒選 RustDesk 裝置）：選第一台線上、有帳號的裝置；沒有隧道就選第一台 RustDesk 裝置。
+    // Default to the first online device with an account, else the first RustDesk device.
     useEffect(() => {
-        if (loading || tunnels.length === 0 || tunnel) return;
-        const pick = tunnels.find((tn) => tn.online && tn.usernames.length > 0) ?? tunnels.find((tn) => tn.usernames.length > 0) ?? tunnels[0];
-        replaceQuery({ tunnel: String(pick.id), lanHost: null });
-    }, [loading, tunnels, tunnel, replaceQuery]);
+        if (loading || tunnel || rdDevice) return;
+        if (rustdeskParam && !rdDevices.loaded) return;
+        if (tunnels.length > 0) {
+            const pick = tunnels.find((tn) => tn.online && tn.usernames.length > 0) ?? tunnels.find((tn) => tn.usernames.length > 0) ?? tunnels[0];
+            replaceQuery({ tunnel: String(pick.id), lanHost: null, rustdesk: null });
+        } else if (rdDevices.loaded && rdDevices.devices.length > 0) {
+            replaceQuery({ rustdesk: String(rdDevices.devices[0].id), tunnel: null, lanHost: null });
+        }
+    }, [loading, tunnels, tunnel, rdDevice, rustdeskParam, rdDevices.loaded, rdDevices.devices, replaceQuery]);
 
     // 換裝置 → 預設帳號；換主機 → 依掃描到的桌面服務預填協定與埠。
     // New device → its default account; new host → protocol and port from the desktop services it was seen with.
@@ -213,7 +227,8 @@ export function useDesktopPage() {
         if (seen.length > 0) setForm((f) => ({ ...f, protocol: seen[0].protocol, port: String(seen[0].port) }));
     }, [host]);
 
-    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null }), [replaceQuery]);
+    const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null, rustdesk: null }), [replaceQuery]);
+    const setRustDeskDevice = useCallback((id: number) => replaceQuery({ rustdesk: String(id), tunnel: null, lanHost: null }), [replaceQuery]);
     const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id) }), [replaceQuery]);
     const update = useCallback((patch: Partial<DesktopForm>) => setForm((f) => ({ ...f, ...patch })), []);
     const setProtocol = useCallback((protocol: DesktopMode) => {
@@ -232,7 +247,8 @@ export function useDesktopPage() {
     // 這個桌面（隧道 + 主機 + 協定）存過的登入；RustDesk 存的是固定密碼。/ Logins saved for this desktop (tunnel + host + protocol).
     const saved = useSavedLogins(tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel);
     const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
-    const canConnect = !!tunnel && online && !!form.account && isValidPort(form.port) && (phase === "idle" || phase === "failed");
+    const idle = phase === "idle" || phase === "failed";
+    const canConnect = rdDevice ? rdDevice.online && idle : !!tunnel && online && !!form.account && isValidPort(form.port) && idle;
     const canProbe = !!tunnel && online && !!form.account && isValidPort(form.port) && probeState.state !== "checking";
 
     /** 連線當下先讀一次隧道延遲（之後靠通知）。/ Read the tunnel RTT once at connect time (notifications keep it fresh). */
@@ -250,6 +266,39 @@ export function useDesktopPage() {
     const onRdStats = useCallback((s: StreamStats) => setStats({ ...s, tunnelMs: tunnelMsRef.current }), []);
 
     const connect = useCallback(async () => {
+        if (rdDevice) {
+            // 經 Telepy 的 RustDesk 伺服器：密碼留在瀏覽器給核心。/ Through Telepy's RustDesk server; the password stays here.
+            setFailure(null);
+            setEndedNormally(false);
+            setPhase("starting");
+            try {
+                const res = await apiFetch(`/api/rustdesk/devices/${rdDevice.id}/start`, { method: "POST", body: "{}" });
+                const data = await readJson<RustDeskStart & { code?: string }>(res);
+                if (!res.ok || !data?.ticket) {
+                    const code = data?.code;
+                    setFailure(code === "device_offline" ? { key: "desktop.err.rdServerOffline", vars: { name: rdDevice.name }, at: "device" }
+                        : code === "rustdesk_server_disabled" ? { key: "rustdesk.serverOff", at: "telepy" }
+                            : startFailure(code, res.status, { account: "", address: rdDevice.rustdesk_id }));
+                    setPhase("failed");
+                    return;
+                }
+                setRdPassword(form.password);
+                setTunnelMs(null);
+                setStats(null);
+                setUnstable(false);
+                setFramebuffer(null);
+                setScale(null);
+                setScreens(NO_SCREENS);
+                setSelecting(false);
+                setRdInfo(null);
+                setRdSession(data);
+                setPhase("connecting");
+            } catch {
+                setFailure({ key: "desktop.err.network", at: "web" });
+                setPhase("failed");
+            }
+            return;
+        }
         if (!tunnel) return;
         setFailure(null);
         setEndedNormally(false);
@@ -380,7 +429,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs]);
+    }, [rdDevice, tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs]);
 
     const onConnected = useCallback(() => {
         setPhase("connected");
@@ -595,9 +644,10 @@ export function useDesktopPage() {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
             customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
+            rdDevice, rdDevices: rdDevices.devices, rdDevicesLoaded: rdDevices.loaded,
         },
         actions: {
-            setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
+            setTunnel, setRustDeskDevice, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
             setQuality, setCtrlMode, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,

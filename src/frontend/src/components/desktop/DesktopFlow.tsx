@@ -36,6 +36,8 @@ export interface FlowContext {
     stats?: StreamStats | null;
     /** RustDesk 在瀏覽器裡連（核心在這個分頁，Telepy 中繼）而不是用 app。/ RustDesk in this tab through Telepy's relay, not the app. */
     inBrowser?: boolean;
+    /** 經 Telepy 的 RustDesk 伺服器（沒有隧道）。/ Through Telepy's RustDesk server (no tunnel). */
+    idServer?: { deviceName: string; rustdeskId: string } | null;
 }
 
 const STATE_TEXT: Record<SpotState, TranslationKey> = {
@@ -140,7 +142,85 @@ function currentRustDeskStep(phase: DesktopPhase, failure: DesktopFailure | null
     return 0;
 }
 
+/**
+ * 經 Telepy 的 RustDesk 伺服器：瀏覽器 ─ Telepy ─ 裝置自己連進來的那條（HTTPS）─ 裝置。沒有隧道、沒有 sshd。
+ * Through Telepy's RustDesk server: browser ─ Telepy ─ the device's own connection (HTTPS) ─ device. No tunnel.
+ */
+function IdServerFlow({ ctx, idServer }: { ctx: FlowContext; idServer: { deviceName: string; rustdeskId: string } }) {
+    const { t } = useI18n();
+    const motion = !useReducedMotion();
+    const s: Record<FlowSpot, SpotState> = spotStates(ctx.phase, ctx.failure);
+    const step = currentRustDeskStep(ctx.phase, ctx.failure);
+    const device = idServer.deviceName;
+    const steps: { key: TranslationKey; vars?: Record<string, string | number> }[] = [
+        { key: "desktop.flow.rds.step1", vars: { device } },
+        { key: "desktop.flow.rds.step2", vars: { device } },
+        { key: "desktop.flow.rds.step3" },
+    ];
+    const nowKey: TranslationKey = ctx.phase === "starting" ? "desktop.flow.rds.now.starting"
+        : ctx.phase === "connecting" ? "desktop.flow.rds.now.connecting"
+            : ctx.phase === "connected" ? "desktop.flow.now.connected"
+                : ctx.phase === "failed" ? "desktop.flow.now.failed"
+                    : "desktop.flow.rds.now.idle";
+    const stats = ctx.phase === "connected" ? ctx.stats ?? null : null;
+    // 沒有隧道：裝置那一段的狀態看「通道」與「目標」。/ No tunnel: the device link takes the tunnel / target states.
+    const deviceLink: SpotState = s.tunnel === "failed" || s.device === "failed" || s.reach === "failed" ? "failed" : s.tunnel;
+    const deviceNode: SpotState = s.target === "failed" || s.device === "failed" ? "failed" : s.target;
+    return (
+        <div className="space-y-5">
+            <p className={cn("rounded-md border px-3 py-2 text-sm", ctx.phase === "failed" ? "border-destructive/40 bg-destructive/5 text-destructive" : "border-border bg-surface text-foreground")} role="status">
+                {t(nowKey)}
+                {ctx.phase === "failed" && ctx.failure && <span className="mt-0.5 block text-xs text-muted-foreground">{t(ctx.failure.key, ctx.failure.vars)}</span>}
+                {stats && <span className="mt-0.5 block text-xs text-muted-foreground">{t("desktop.flow.rds.statsLine", { ms: formatMs(stats.netMs), fps: stats.fps })}</span>}
+            </p>
+            <div className="@container">
+                <ol className="flex flex-col items-stretch @3xl:flex-row @3xl:items-center">
+                    <Node icon={Laptop} title={t("desktop.flow.you")} sub={t("desktop.flow.rdb.youSub")} state={s.browser} />
+                    <Link label={t("desktop.flow.linkWeb")} state={s.web} motion={motion} note={stats ? formatMs(stats.netMs) : undefined} />
+                    <Node brand title="Telepy" sub={t("desktop.flow.rds.telepySub")} state={s.telepy} />
+                    <Link label={t("desktop.flow.rds.linkDevice")} state={deviceLink} motion={motion} />
+                    <Node icon={Monitor} title={device} sub={t("desktop.flow.rds.deviceSub", { id: idServer.rustdeskId })} state={deviceNode} />
+                </ol>
+            </div>
+            <ol className="space-y-2">
+                {steps.map((st, i) => {
+                    const n = i + 1;
+                    const current = n === step;
+                    const done = step > n || ctx.phase === "connected";
+                    const failedHere = current && ctx.phase === "failed";
+                    return (
+                        <li
+                            key={st.key}
+                            className={cn("flex gap-3 rounded-md border px-3 py-2 text-sm leading-relaxed", failedHere ? "border-destructive/50 bg-destructive/5" : current ? "border-primary/50 bg-primary/5" : "border-transparent")}
+                            aria-current={current ? "step" : undefined}
+                        >
+                            <span
+                                className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full text-xs tabular-nums", failedHere ? "bg-destructive text-destructive-foreground" : done ? "bg-success text-success-foreground" : current ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}
+                                aria-hidden
+                            >
+                                {n}
+                            </span>
+                            <span className={current || done ? "text-foreground" : "text-muted-foreground"}>{t(st.key, st.vars)}</span>
+                        </li>
+                    );
+                })}
+            </ol>
+            <ul className="space-y-1.5 border-t border-border pt-4 text-sm text-muted-foreground">
+                <li>{t("desktop.flow.rds.noteE2e")}</li>
+                <li>{t("desktop.flow.rds.notePassword")}</li>
+                <li>{t("desktop.flow.rds.noteNoTunnel")}</li>
+                <li>{t("desktop.flow.rds.noteLogged")}</li>
+            </ul>
+        </div>
+    );
+}
+
 export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
+    if (ctx.idServer) return <IdServerFlow ctx={ctx} idServer={ctx.idServer} />;
+    return <TunnelFlow ctx={ctx} />;
+}
+
+function TunnelFlow({ ctx }: { ctx: FlowContext }) {
     const { t } = useI18n();
     const motion = !useReducedMotion();
     const s: Record<FlowSpot, SpotState> = spotStates(ctx.phase, ctx.failure);

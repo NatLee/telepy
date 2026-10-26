@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, MonitorSmartphone, Activity, Clapperboard, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { useI18n } from "@/lib/i18n";
@@ -33,6 +33,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
             { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
             { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} /> },
             { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} /> },
+            { key: "nav.rustdesk", href: "/tunnels/rustdesk", icon: <MonitorSmartphone size={18} /> },
             { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
             { key: "nav.recordings", href: "/tunnels/recordings", icon: <Clapperboard size={18} /> },
             { key: "nav.commands", href: "/tunnels/commands", icon: <ShieldCheck size={18} /> },
