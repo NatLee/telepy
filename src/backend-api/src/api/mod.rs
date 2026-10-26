@@ -20,7 +20,6 @@ pub mod recordings;
 pub mod remote_browser;
 pub mod reverse_keys;
 pub mod rustdesk;
-pub mod rustdesk_devices;
 pub mod schemas;
 pub mod scripts;
 pub mod serialize;

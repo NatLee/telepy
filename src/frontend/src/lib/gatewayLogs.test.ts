@@ -16,8 +16,6 @@ test("categories", () => {
     assert.equal(categoryOf("host_key_mismatch"), "problem");
     assert.equal(categoryOf("forward"), "connection");
     assert.equal(categoryOf("desktop_close"), "session");
-    assert.equal(categoryOf("rustdesk_enrolled"), "change");
-    assert.equal(categoryOf("rustdesk_removed"), "change");
     assert.equal(categoryOf("command_blocked"), "problem");
     assert.equal(categoryOf("command_held"), "session");
     assert.equal(categoryOf("command_rule"), "change");

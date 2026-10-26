@@ -2,9 +2,7 @@
 
 /**
  * 憑證庫（遠端桌面的登入）：列出自己存的（可依桌面篩選）、新增、刪除。密碼只送出、從不取回 —— 例外是 RustDesk：
- * `…/rustdesk/start` 帶 `credential_id` 時後端解開後交給瀏覽器裡的核心（挑戰回應在瀏覽器做）。經 Telepy RustDesk
- * 伺服器的裝置沒有隧道，存的密碼綁 `rustdesk_device_id`（`tunnel_id` = 0）。
- * RustDesk-server devices have no tunnel: their saved passwords are bound to `rustdesk_device_id` instead.
+ * `…/rustdesk/start` 帶 `credential_id` 時後端解開後交給瀏覽器裡的核心（挑戰回應在瀏覽器做）。
  * The credential vault: list your saved desktop logins (optionally for one desktop), add, delete.
  * Passwords are only ever sent, never read back.
  */
@@ -21,9 +19,6 @@ export interface SavedLogin {
     tunnel_name: string | null;
     lan_host_id: number | null;
     lan_host: string | null;
-    /** Telepy RustDesk 伺服器上的裝置（沒有隧道）。/ A RustDesk-server device (no tunnel). */
-    rustdesk_device_id: number | null;
-    rustdesk_device: string | null;
     port: number | null;
     login: string;
     domain: string;
@@ -32,8 +27,11 @@ export interface SavedLogin {
     last_used_at: string | null;
 }
 
-/** 隧道上的桌面（隧道 + 主機 + 協定），或 RustDesk 伺服器上的一台裝置。/ A desktop behind a tunnel, or a RustDesk-server device. */
-export type SavedLoginFilter = { tunnelId: number; hostId: number | null; protocol: DesktopMode } | { deviceId: number };
+export interface SavedLoginFilter {
+    tunnelId: number;
+    hostId: number | null;
+    protocol: DesktopMode;
+}
 
 export interface NewSavedLogin {
     label: string;
@@ -44,7 +42,6 @@ export interface NewSavedLogin {
     login: string;
     domain: string;
     password: string;
-    rustdesk_device_id?: number;
 }
 
 /** 任一處新增／刪除後通知其他 hook 重新載入（偏好設定刪了，桌面頁的選單也要跟著更新）。
@@ -57,7 +54,6 @@ function notifyChanged() {
 
 function query(f: SavedLoginFilter | null): string {
     if (!f) return "";
-    if ("deviceId" in f) return `?rustdesk_device_id=${f.deviceId}`;
     const p = new URLSearchParams({ tunnel_id: String(f.tunnelId), protocol: f.protocol });
     if (f.hostId) p.set("lan_host_id", String(f.hostId));
     return `?${p.toString()}`;

@@ -1,16 +1,15 @@
 /**
- * 遠端桌面的三種連法（純資料＋純函式，無 React），給「比較連線方式」對話框用：
- * - guacd：RDP / VNC 經 Telepy 隧道，Telepy（guacd）把畫面轉成圖片
- * - rustdeskTunnel：RustDesk 經 Telepy 隧道（Direct IP），瀏覽器裡的 RustDesk 引擎解碼影像
- * - rustdeskServer：Telepy 當 RustDesk 伺服器，沒有隧道，端對端加密
- * 路徑圖的欄位對齊（你的瀏覽器 ─ Telepy ─ 裝置 ─ 桌面），三列上下對照；每列下面是「誰加密哪一段」的標尺。
- * The three ways to reach a desktop, as data for the comparison dialog: aligned path rows (browser ─ Telepy ─
- * device ─ desktop) with an encryption ruler under each, plus the fact rows of the comparison table.
+ * 遠端桌面的兩種連法（純資料＋純函式，無 React），給「比較連線方式」對話框用，兩種都經 Telepy 隧道：
+ * - guacd：RDP / VNC，Telepy（guacd）把畫面轉成圖片
+ * - rustdeskTunnel：RustDesk（Direct IP），瀏覽器裡的 RustDesk 引擎解碼影像
+ * 路徑圖的欄位對齊（你的瀏覽器 ─ Telepy ─ 裝置 ─ 桌面），上下對照；每列下面是「誰加密哪一段」的標尺。
+ * The two ways to reach a desktop, both through a Telepy tunnel, as data for the comparison dialog: aligned path
+ * rows (browser ─ Telepy ─ device ─ desktop) with an encryption ruler under each, plus the comparison table rows.
  */
 import type { TranslationKey } from "@/locales/en";
 
-export type WayId = "guacd" | "rustdeskTunnel" | "rustdeskServer";
-export const WAY_IDS: readonly WayId[] = ["guacd", "rustdeskTunnel", "rustdeskServer"];
+export type WayId = "guacd" | "rustdeskTunnel";
+export const WAY_IDS: readonly WayId[] = ["guacd", "rustdeskTunnel"];
 
 export type NodeIcon = "browser" | "telepy" | "device" | "desktop";
 /** 路徑上的一個點。`col` = 0..3（瀏覽器、Telepy、裝置、桌面），三列對齊用。/ A node; `col` aligns the rows. */
@@ -22,7 +21,7 @@ export interface WayNode {
     /** 畫面在這裡被畫出來。/ The picture is drawn here. */
     draws?: boolean;
 }
-export type LinkKind = "wss" | "tunnel" | "dialOut" | "local";
+export type LinkKind = "wss" | "tunnel" | "local";
 /** 兩點之間的線：`from` 欄到下一個點。/ The link from a column to the next node. */
 export interface WayLink {
     from: 0 | 1 | 2;
@@ -30,7 +29,7 @@ export interface WayLink {
     kind: LinkKind;
     label: TranslationKey;
 }
-export type LayerTone = "e2e" | "transport" | "plain";
+export type LayerTone = "transport" | "plain";
 /** 加密標尺的一段：`from`..`to` 欄（含）。/ One span of the encryption ruler, columns inclusive. */
 export interface WayLayer {
     from: 0 | 1 | 2;
@@ -90,21 +89,6 @@ export const WAYS: readonly Way[] = [
             { from: 2, to: 3, tone: "plain", label: "desktop.ways.layer.directIp" },
         ],
     },
-    {
-        id: "rustdeskServer",
-        title: "desktop.ways.rustdeskServer.title",
-        when: "desktop.ways.rustdeskServer.when",
-        nodes: [
-            { col: 0, icon: "browser", label: "desktop.ways.node.browser", sub: "desktop.ways.node.browserEngine", draws: true },
-            { col: 1, icon: "telepy", label: "desktop.ways.node.telepy", sub: "desktop.ways.node.telepyServer" },
-            { col: 3, icon: "desktop", label: "desktop.ways.node.computer", sub: "desktop.ways.node.computerRustDesk" },
-        ],
-        links: [
-            { from: 0, to: 1, kind: "wss", label: "desktop.ways.link.wss" },
-            { from: 1, to: 3, kind: "dialOut", label: "desktop.ways.link.dialOut" },
-        ],
-        layers: [{ from: 0, to: 3, tone: "e2e", label: "desktop.ways.layer.e2e" }],
-    },
 ];
 
 export type CellTone = "good" | "bad" | "neutral";
@@ -116,19 +100,10 @@ export interface WayRow {
 /** 比較表（順序 = 顯示順序）。/ The comparison table, in display order. */
 export const ROWS: readonly WayRow[] = [
     {
-        label: "desktop.ways.row.tunnel",
-        cells: {
-            guacd: { text: "desktop.ways.cell.tunnelYes", tone: "neutral" },
-            rustdeskTunnel: { text: "desktop.ways.cell.tunnelYes", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.tunnelNo", tone: "good" },
-        },
-    },
-    {
         label: "desktop.ways.row.target",
         cells: {
             guacd: { text: "desktop.ways.cell.targetRdpVnc", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.targetDirectIp", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.targetEnrolled", tone: "neutral" },
         },
     },
     {
@@ -136,7 +111,6 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.pictureImages", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.pictureVideo", tone: "good" },
-            rustdeskServer: { text: "desktop.ways.cell.pictureVideo", tone: "good" },
         },
     },
     {
@@ -144,7 +118,6 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.motionSlow", tone: "bad" },
             rustdeskTunnel: { text: "desktop.ways.cell.motionSmooth", tone: "good" },
-            rustdeskServer: { text: "desktop.ways.cell.motionSmooth", tone: "good" },
         },
     },
     {
@@ -152,7 +125,6 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.encTransport", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.encTransport", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.encE2e", tone: "good" },
         },
     },
     {
@@ -160,23 +132,6 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.seesDraws", tone: "bad" },
             rustdeskTunnel: { text: "desktop.ways.cell.seesCould", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.seesNo", tone: "good" },
-        },
-    },
-    {
-        label: "desktop.ways.row.lan",
-        cells: {
-            guacd: { text: "desktop.ways.cell.lanYes", tone: "good" },
-            rustdeskTunnel: { text: "desktop.ways.cell.lanYes", tone: "good" },
-            rustdeskServer: { text: "desktop.ways.cell.lanNo", tone: "neutral" },
-        },
-    },
-    {
-        label: "desktop.ways.row.public",
-        cells: {
-            guacd: { text: "desktop.ways.cell.publicNa", tone: "neutral" },
-            rustdeskTunnel: { text: "desktop.ways.cell.publicKept", tone: "good" },
-            rustdeskServer: { text: "desktop.ways.cell.publicLeft", tone: "neutral" },
         },
     },
     {
@@ -184,7 +139,6 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.screensCrop", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.screensSwitch", tone: "good" },
-            rustdeskServer: { text: "desktop.ways.cell.screensSwitch", tone: "good" },
         },
     },
     {
@@ -192,15 +146,13 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.loginDesktop", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.loginRustDeskSaved", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.loginRustDeskSaved", tone: "neutral" },
         },
     },
 ];
 
 /** 目前頁面上選的是哪一種。/ Which way the remote desktop page is on. */
-export function wayFor(ctx: { protocol: "rdp" | "vnc" | "rustdesk"; idServer: boolean }): WayId {
-    if (ctx.idServer) return "rustdeskServer";
-    return ctx.protocol === "rustdesk" ? "rustdeskTunnel" : "guacd";
+export function wayFor(protocol: "rdp" | "vnc" | "rustdesk"): WayId {
+    return protocol === "rustdesk" ? "rustdeskTunnel" : "guacd";
 }
 
 export type PathCell = ({ kind: "node"; node: WayNode } | { kind: "link"; link: WayLink; span: number } | { kind: "gap" }) & {

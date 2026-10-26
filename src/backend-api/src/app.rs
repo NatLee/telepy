@@ -40,7 +40,6 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::remote_browser::router())
         .merge(api::desktop::router())
         .merge(api::rustdesk::router())
-        .merge(api::rustdesk_devices::router())
         .merge(api::credentials::router())
         .merge(api::host_keys::router())
         .merge(api::oauth::router())

@@ -1,7 +1,6 @@
 //! 憑證庫（遠端桌面的登入）：
-//! - `GET    /api/credentials[?tunnel_id=&lan_host_id=&protocol=&rustdesk_device_id=]`：自己存的（永遠不回密碼）
-//! - `POST   /api/credentials`：存一筆（要看得到那條隧道；區網主機要屬於它）；或 `rustdesk_device_id` = 綁在 Telepy
-//!   RustDesk 伺服器的裝置上（要能用那台；這時 `tunnel_id` 存 0、協定一定是 rustdesk）
+//! - `GET    /api/credentials[?tunnel_id=&lan_host_id=&protocol=]`：自己存的（永遠不回密碼）
+//! - `POST   /api/credentials`：存一筆（要看得到那條隧道；區網主機要屬於它）
 //! - `PATCH  /api/credentials/{id}`、`DELETE /api/credentials/{id}`：只能動自己的
 //!
 //! 用法：`POST …/desktop/start` 帶 `credential_id`，後端在握手時解開；`POST …/rustdesk/start` 帶 `credential_id` 則解開後
@@ -40,10 +39,8 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list, create)).routes(routes!(update, remove))
 }
 
-pub fn credential_json(c: &Credential, tunnel_name: Option<&str>, host_label: Option<&str>, device_name: Option<&str>) -> Value {
+pub fn credential_json(c: &Credential, tunnel_name: Option<&str>, host_label: Option<&str>) -> Value {
     json!({
-        "rustdesk_device_id": c.rustdesk_device_id,
-        "rustdesk_device": device_name,
         "id": c.id,
         "label": c.label,
         "protocol": c.protocol,
@@ -89,30 +86,11 @@ fn port(body: &Value) -> Result<Option<Option<i64>>, ApiError> {
     }
 }
 
-struct Names {
-    tunnels: HashMap<i64, String>,
-    hosts: HashMap<i64, String>,
-    devices: HashMap<i64, String>,
-}
-
-impl Names {
-    fn json(&self, c: &Credential) -> Value {
-        credential_json(c, self.tunnels.get(&c.tunnel_id).map(String::as_str), c.lan_host_id.and_then(|h| self.hosts.get(&h)).map(String::as_str), c.rustdesk_device_id.and_then(|d| self.devices.get(&d)).map(String::as_str))
-    }
-}
-
 /// 列表用的名稱（一次查完）。/ Names for the list, looked up once.
-async fn names(state: &AppState, rows: &[Credential]) -> ApiResult<Names> {
+async fn names(state: &AppState, rows: &[Credential]) -> ApiResult<(HashMap<i64, String>, HashMap<i64, String>)> {
     let mut tunnels = HashMap::new();
     let mut hosts = HashMap::new();
-    let mut devices = HashMap::new();
     for c in rows {
-        if let Some(d) = c.rustdesk_device_id.filter(|d| !devices.contains_key(d)) {
-            if let Some(row) = db::rustdesk_devices::by_id(&state.db, d).await? {
-                devices.insert(d, row.name);
-            }
-            continue;
-        }
         if !tunnels.contains_key(&c.tunnel_id) {
             if let Some(t) = db::tunnels::by_id(&state.db, c.tunnel_id).await? {
                 tunnels.insert(t.id, t.host_friendly_name);
@@ -124,24 +102,21 @@ async fn names(state: &AppState, rows: &[Credential]) -> ApiResult<Names> {
             }
         }
     }
-    Ok(Names { tunnels, hosts, devices })
+    Ok((tunnels, hosts))
 }
 
-#[utoipa::path(get, path = "/api/credentials", tag = "Credential vault", security(("bearer" = [])), params(("tunnel_id" = Option<i64>, Query), ("lan_host_id" = Option<i64>, Query, description = "0 or absent with tunnel_id = the device itself"), ("protocol" = Option<String>, Query), ("rustdesk_device_id" = Option<i64>, Query, description = "Logins saved for a RustDesk-server device")), responses((status = 200, description = "Your saved logins (passwords are never returned)", body = [super::schemas::SavedCredential])))]
+#[utoipa::path(get, path = "/api/credentials", tag = "Credential vault", security(("bearer" = [])), params(("tunnel_id" = Option<i64>, Query), ("lan_host_id" = Option<i64>, Query, description = "0 or absent with tunnel_id = the device itself"), ("protocol" = Option<String>, Query)), responses((status = 200, description = "Your saved logins (passwords are never returned)", body = [super::schemas::SavedCredential])))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
     let mut rows = db::credentials::for_user(&state.db, user.id).await?;
-    if let Some(d) = q.get("rustdesk_device_id").and_then(|v| v.parse::<i64>().ok()) {
-        rows.retain(|c| c.rustdesk_device_id == Some(d));
-    }
     if let Some(t) = q.get("tunnel_id").and_then(|v| v.parse::<i64>().ok()) {
         let host = q.get("lan_host_id").and_then(|v| v.parse::<i64>().ok()).filter(|h| *h > 0);
-        rows.retain(|c| c.tunnel_id == t && c.lan_host_id == host && c.rustdesk_device_id.is_none());
+        rows.retain(|c| c.tunnel_id == t && c.lan_host_id == host);
     }
     if let Some(p) = q.get("protocol").filter(|p| !p.is_empty()) {
         rows.retain(|c| &c.protocol == p);
     }
-    let names = names(&state, &rows).await?;
-    Ok(Json(json!(rows.iter().map(|c| names.json(c)).collect::<Vec<_>>())))
+    let (tunnels, hosts) = names(&state, &rows).await?;
+    Ok(Json(json!(rows.iter().map(|c| credential_json(c, tunnels.get(&c.tunnel_id).map(String::as_str), c.lan_host_id.and_then(|h| hosts.get(&h)).map(String::as_str))).collect::<Vec<_>>())))
 }
 
 #[utoipa::path(post, path = "/api/credentials", tag = "Credential vault", security(("bearer" = [])), request_body = super::schemas::SavedCredentialCreate, responses((status = 201, body = super::schemas::SavedCredential), (status = 400, description = "{field: [message]}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
@@ -150,26 +125,6 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
         Some(p) => parse_protocol(&p).ok_or_else(|| ApiError::field("protocol", "Must be rdp, vnc or rustdesk."))?,
         None => return Err(ApiError::field("protocol", "This field is required.")),
     };
-    let label = text(&body, "label", 100, true)?.unwrap_or_default();
-    // Telepy RustDesk 伺服器的裝置：只有密碼，沒有隧道。/ A RustDesk-server device: a password only, no tunnel.
-    if let Some(device_id) = json_i64(&body, "rustdesk_device_id").filter(|d| *d > 0) {
-        if protocol != "rustdesk" {
-            return Err(ApiError::field("protocol", "A RustDesk device only takes a RustDesk password."));
-        }
-        if !crate::rustdesk::device_allowed(&state.db, user.id, device_id).await {
-            return Err(ApiError::not_found("Device not found"));
-        }
-        let device = db::rustdesk_devices::by_id(&state.db, device_id).await?.ok_or_else(|| ApiError::not_found("Device not found"))?;
-        let password = text(&body, "password", 1024, true)?.unwrap_or_default();
-        let vault = &state.vault;
-        let row = db::credentials::create(
-            &state.db,
-            db::credentials::NewCredential { user_id: user.id, label: &label, protocol, tunnel_id: 0, lan_host_id: None, port: None, login: "", domain: "", rustdesk_device_id: Some(device.id) },
-            |id| vault.seal(&vault::aad(user.id, id), password.as_bytes()),
-        )
-        .await?;
-        return Ok((StatusCode::CREATED, Json(credential_json(&row, None, None, Some(&device.name)))));
-    }
     let tunnel_id = json_i64(&body, "tunnel_id").ok_or_else(|| ApiError::field("tunnel_id", "This field is required."))?;
     let tunnel = db::tunnels::by_id(&state.db, tunnel_id).await?.ok_or_else(|| ApiError::not_found("Tunnel not found"))?;
     if !permissions::check_access(&state.db, user.id, &tunnel, Permission::View).await? {
@@ -179,6 +134,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     if let Some(h) = lan_host_id {
         db::lan::host_by_id(&state.db, h).await?.filter(|row| row.tunnel_id == tunnel.id).ok_or_else(|| ApiError::not_found("LAN host not found"))?;
     }
+    let label = text(&body, "label", 100, true)?.unwrap_or_default();
     let login = text(&body, "login", 256, false)?.unwrap_or_default();
     let domain = text(&body, "domain", 256, false)?.unwrap_or_default();
     let password = text(&body, "password", 1024, true)?.unwrap_or_default();
@@ -186,7 +142,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     let vault = &state.vault;
     let row = db::credentials::create(
         &state.db,
-        db::credentials::NewCredential { user_id: user.id, label: &label, protocol, tunnel_id: tunnel.id, lan_host_id, port, login: &login, domain: &domain, rustdesk_device_id: None },
+        db::credentials::NewCredential { user_id: user.id, label: &label, protocol, tunnel_id: tunnel.id, lan_host_id, port, login: &login, domain: &domain },
         |id| vault.seal(&vault::aad(user.id, id), password.as_bytes()),
     )
     .await?;
@@ -194,7 +150,7 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
         Some(h) => db::lan::host_by_id(&state.db, h).await?.map(|r| r.label.or(r.hostname).filter(|s| !s.is_empty()).unwrap_or(r.address)),
         None => None,
     };
-    Ok((StatusCode::CREATED, Json(credential_json(&row, Some(&tunnel.host_friendly_name), host.as_deref(), None))))
+    Ok((StatusCode::CREATED, Json(credential_json(&row, Some(&tunnel.host_friendly_name), host.as_deref()))))
 }
 
 #[utoipa::path(patch, path = "/api/credentials/{id}", tag = "Credential vault", security(("bearer" = [])), params(("id" = i64, Path)), request_body = super::schemas::SavedCredentialUpdate, responses((status = 200, body = super::schemas::SavedCredential), (status = 400, body = Object), (status = 404, body = super::schemas::ErrorBody)))]
@@ -210,7 +166,8 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let secret = password.map(|p| state.vault.seal(&vault::aad(user.id, current.id), p.as_bytes()));
     db::credentials::update(&state.db, current.id, db::credentials::CredentialPatch { label: label.as_deref(), port: port(&body)?, login: login.as_deref(), domain: domain.as_deref(), secret }).await?;
     let row = db::credentials::by_id(&state.db, user.id, id).await?.ok_or_else(|| ApiError::not_found("Saved login not found"))?;
-    Ok(Json(names(&state, std::slice::from_ref(&row)).await?.json(&row)))
+    let (tunnels, hosts) = names(&state, std::slice::from_ref(&row)).await?;
+    Ok(Json(credential_json(&row, tunnels.get(&row.tunnel_id).map(String::as_str), row.lan_host_id.and_then(|h| hosts.get(&h)).map(String::as_str))))
 }
 
 #[utoipa::path(delete, path = "/api/credentials/{id}", tag = "Credential vault", security(("bearer" = [])), params(("id" = i64, Path)), responses((status = 204), (status = 404, body = super::schemas::ErrorBody)))]
@@ -226,30 +183,14 @@ async fn remove(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
 /// For the desktop and RustDesk starts: own row, same target (tunnel, host, protocol), unsealed.
 pub async fn unseal_for(state: &AppState, user_id: i64, id: i64, tunnel_id: i64, lan_host_id: Option<i64>, protocol: &str) -> ApiResult<(Credential, String)> {
     let c = db::credentials::by_id(&state.db, user_id, id).await?.ok_or_else(|| ApiError::field("credential_id", "Saved login not found."))?;
-    if c.tunnel_id != tunnel_id || c.lan_host_id != lan_host_id || c.protocol != protocol || c.rustdesk_device_id.is_some() {
+    if c.tunnel_id != tunnel_id || c.lan_host_id != lan_host_id || c.protocol != protocol {
         return Err(ApiError::field("credential_id", "This saved login belongs to a different desktop."));
     }
-    let (c, plain) = open(state, user_id, c)?;
-    let _ = db::credentials::touch_used(&state.db, c.id).await;
-    Ok((c, plain))
-}
-
-/// Telepy RustDesk 伺服器的裝置用：自己的、綁在這台上的那筆。/ For a RustDesk-server device: own row bound to it.
-pub async fn unseal_for_device(state: &AppState, user_id: i64, id: i64, device_id: i64) -> ApiResult<(Credential, String)> {
-    let c = db::credentials::by_id(&state.db, user_id, id).await?.ok_or_else(|| ApiError::field("credential_id", "Saved login not found."))?;
-    if c.rustdesk_device_id != Some(device_id) {
-        return Err(ApiError::field("credential_id", "This saved login belongs to a different desktop."));
-    }
-    let (c, plain) = open(state, user_id, c)?;
-    let _ = db::credentials::touch_used(&state.db, c.id).await;
-    Ok((c, plain))
-}
-
-fn open(state: &AppState, user_id: i64, c: Credential) -> ApiResult<(Credential, String)> {
     let plain = state
         .vault
         .open(&vault::aad(user_id, c.id), &c.secret)
         .and_then(|b| String::from_utf8(b).ok())
         .ok_or_else(|| ApiError::field("credential_id", "This saved login cannot be decrypted any more (the server's SECRET_KEY changed). Save it again."))?;
+    let _ = db::credentials::touch_used(&state.db, c.id).await;
     Ok((c, plain))
 }

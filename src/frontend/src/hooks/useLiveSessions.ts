@@ -1,5 +1,5 @@
 /**
- * 即時 session：讀 `/api/sessions`、結束一個。有人進出（UPDATE-TUNNEL-PRESENCE / RUSTDESK-DEVICES-UPDATED）、AI session 開關或被結束時重抓，
+ * 即時 session：讀 `/api/sessions`、結束一個。有人進出（UPDATE-TUNNEL-PRESENCE）、AI session 開關或被結束時重抓，
  * 另外每 15 秒抓一次（看得到但收不到通知的隧道，例如管理員看別人的）。
  * Live sessions: read `/api/sessions` and end one. Refetches on presence / AI session / session-ended notifications
  * and every 15 seconds (admins see tunnels they get no notifications for).
@@ -51,8 +51,6 @@ export function useLiveSessions() {
         [NOTIFICATION_ACTIONS.AI_SESSION_OPENED]: refetch,
         [NOTIFICATION_ACTIONS.AI_SESSION_CLOSED]: refetch,
         [NOTIFICATION_ACTIONS.SESSION_ENDED]: refetch,
-        // RustDesk 伺服器裝置沒有隧道：開關 session 時擁有者收到這個。/ RustDesk-server devices have no tunnel presence.
-        [NOTIFICATION_ACTIONS.RUSTDESK_DEVICES_UPDATED]: refetch,
     });
 
     /** 結束一個 session；成功回 true。/ End a session; true on success. */

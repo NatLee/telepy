@@ -16,15 +16,13 @@
 //! and re-frames messages into a direct-tcpip channel to the device's Direct IP port. See `docs/rustdesk-spike.md`.
 
 pub mod codec;
-pub mod idserver;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::WebSocket;
 use dashmap::DashMap;
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::Notify;
 
 use crate::db::Db;
 use crate::desktop::{Prepared, Target};
@@ -49,39 +47,21 @@ pub enum Role {
     Relay,
 }
 
-/// 這個 session 怎麼到裝置。/ How a session reaches the device.
-pub enum Via {
-    /// 經裝置的 Telepy 隧道：連線池的 direct-tcpip 通道接到 Direct IP 埠（start 時就開好）。
-    /// Through the device's tunnel: a pooled direct-tcpip channel to the Direct IP port, opened at start.
-    Tunnel {
-        tunnel_id: i64,
-        tunnel_name: String,
-        reverse_port: i64,
-        hop_username: String,
-        target: Target,
-        handoff: Mutex<Option<Box<Prepared>>>,
-    },
-    /// Telepy 是這台 RustDesk 的 ID / 中繼伺服器：瀏覽器的 punch 推給裝置，裝置的中繼連線以 uuid 交過來。
-    /// Telepy is the device's ID / relay server: the punch is pushed to the device, its relay socket is handed over by uuid.
-    IdServer {
-        device_id: i64,
-        rustdesk_id: String,
-        device_name: String,
-        owner_id: i64,
-        relay_rx: Mutex<Option<oneshot::Receiver<WebSocket>>>,
-    },
-}
-
 pub struct Session {
     pub id: String,
     pub user_id: i64,
     pub user_name: String,
-    pub via: Via,
+    pub tunnel_id: i64,
+    pub tunnel_name: String,
+    pub reverse_port: i64,
+    pub hop_username: String,
+    pub target: Target,
     /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
     pub saved_label: Option<String>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     id_claimed: AtomicBool,
+    handoff: Mutex<Option<Prepared>>,
     pub connected: AtomicBool,
     pub stop: Notify,
     stop_reason: Mutex<Option<&'static str>>,
@@ -89,32 +69,7 @@ pub struct Session {
 
 impl Session {
     pub fn take_handoff(&self) -> Option<Prepared> {
-        match &self.via {
-            Via::Tunnel { handoff, .. } => handoff.lock().unwrap().take().map(|b| *b),
-            Via::IdServer { .. } => None,
-        }
-    }
-
-    /// ID 伺服器路線：這次 punch 的中繼（裝置的 socket 會從這裡來）。/ The relay receiver set by the latest punch.
-    pub fn set_relay_rx(&self, rx: oneshot::Receiver<WebSocket>) {
-        if let Via::IdServer { relay_rx, .. } = &self.via {
-            *relay_rx.lock().unwrap() = Some(rx);
-        }
-    }
-
-    pub fn take_relay_rx(&self) -> Option<oneshot::Receiver<WebSocket>> {
-        match &self.via {
-            Via::IdServer { relay_rx, .. } => relay_rx.lock().unwrap().take(),
-            Via::Tunnel { .. } => None,
-        }
-    }
-
-    /// 經隧道時的隧道 id（Logs 與 presence 用）。/ The tunnel, when going through one.
-    pub fn tunnel_id(&self) -> Option<i64> {
-        match &self.via {
-            Via::Tunnel { tunnel_id, .. } => Some(*tunnel_id),
-            Via::IdServer { .. } => None,
-        }
+        self.handoff.lock().unwrap().take()
     }
 
     pub fn ticket_expired(&self) -> bool {
@@ -135,18 +90,12 @@ impl Session {
 
     /// 日誌用的一句話。/ One line for the logs.
     pub fn describe(&self) -> String {
+        let to = if self.target.lan_host_id.is_some() { format!("{}:{}", self.target.host, self.target.port) } else { format!("device:{}", self.target.port) };
         let saved = self.saved_label.as_deref().map(|l| format!(" with saved login '{l}'")).unwrap_or_default();
-        match &self.via {
-            Via::Tunnel { tunnel_name, hop_username, target, .. } => {
-                let to = if target.lan_host_id.is_some() { format!("{}:{}", target.host, target.port) } else { format!("device:{}", target.port) };
-                format!("RustDesk in the browser by {} to {} through {}@{}{saved}", self.user_name, to, hop_username, tunnel_name)
-            }
-            Via::IdServer { rustdesk_id, device_name, .. } => format!("RustDesk in the browser by {} to {} ({}) through Telepy's RustDesk server{saved}", self.user_name, device_name, rustdesk_id),
-        }
+        format!("RustDesk in the browser by {} to {} through {}@{}{saved}", self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
-/// 經隧道的新 session。/ A new session through a tunnel.
 pub struct NewSession {
     pub user_id: i64,
     pub user_name: String,
@@ -156,18 +105,6 @@ pub struct NewSession {
     pub hop_username: String,
     pub target: Target,
     pub prepared: Prepared,
-    pub saved_label: Option<String>,
-}
-
-/// 經 ID 伺服器的新 session。/ A new session through Telepy's RustDesk server.
-pub struct NewIdSession {
-    pub user_id: i64,
-    pub user_name: String,
-    pub device_id: i64,
-    pub rustdesk_id: String,
-    pub device_name: String,
-    /// 擁有者（presence / 即時 session 頁用）。/ The device owner, for presence.
-    pub owner_id: i64,
     pub saved_label: Option<String>,
 }
 
@@ -189,55 +126,29 @@ impl RustDesk {
         self.sessions.len()
     }
 
-    fn insert(&self, user_id: i64, user_name: String, via: Via, saved_label: Option<String>) -> (Arc<Session>, String) {
+    pub fn create(&self, new: NewSession) -> (Arc<Session>, String) {
         let ticket = random_alnum(48);
         let now = Instant::now();
         let session = Arc::new(Session {
             id: uuid::Uuid::new_v4().to_string(),
-            user_id,
-            user_name,
-            via,
-            saved_label,
+            user_id: new.user_id,
+            user_name: new.user_name,
+            tunnel_id: new.tunnel_id,
+            tunnel_name: new.tunnel_name,
+            reverse_port: new.reverse_port,
+            hop_username: new.hop_username,
+            target: new.target,
+            saved_label: new.saved_label,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             id_claimed: AtomicBool::new(false),
+            handoff: Mutex::new(Some(new.prepared)),
             connected: AtomicBool::new(false),
             stop: Notify::new(),
             stop_reason: Mutex::new(None),
         });
         self.sessions.insert(session.id.clone(), session.clone());
         (session, ticket)
-    }
-
-    pub fn create(&self, new: NewSession) -> (Arc<Session>, String) {
-        let via = Via::Tunnel {
-            tunnel_id: new.tunnel_id,
-            tunnel_name: new.tunnel_name,
-            reverse_port: new.reverse_port,
-            hop_username: new.hop_username,
-            target: new.target,
-            handoff: Mutex::new(Some(Box::new(new.prepared))),
-        };
-        self.insert(new.user_id, new.user_name, via, new.saved_label)
-    }
-
-    pub fn create_id_session(&self, new: NewIdSession) -> (Arc<Session>, String) {
-        let via = Via::IdServer { device_id: new.device_id, rustdesk_id: new.rustdesk_id, device_name: new.device_name, owner_id: new.owner_id, relay_rx: Mutex::new(None) };
-        self.insert(new.user_id, new.user_name, via, new.saved_label)
-    }
-
-    /// 某台 ID 伺服器裝置正在用的 session 數。/ Sessions open to one ID-server device.
-    pub fn count_for_device(&self, device_id: i64) -> usize {
-        self.sessions.iter().filter(|e| matches!(&e.via, Via::IdServer { device_id: d, .. } if *d == device_id)).count()
-    }
-
-    /// 裝置被刪掉時結束它的 session。/ End the sessions of a removed device.
-    pub fn stop_device(&self, device_id: i64) {
-        for e in self.sessions.iter() {
-            if matches!(&e.via, Via::IdServer { device_id: d, .. } if *d == device_id) {
-                e.request_stop("removed");
-            }
-        }
     }
 
     /// 驗票證（常數時間比對、未過期）並認領一個角色；同一個角色第二次 → None。
@@ -253,10 +164,7 @@ impl RustDesk {
         }
         let claimed = match role {
             Role::Id => session.id_claimed.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok(),
-            Role::Relay => match &session.via {
-                Via::Tunnel { handoff, .. } => handoff.lock().unwrap().is_some(),
-                Via::IdServer { relay_rx, .. } => relay_rx.lock().unwrap().is_some(),
-            },
+            Role::Relay => session.handoff.lock().unwrap().is_some(),
         };
         claimed.then_some(session)
     }
@@ -299,11 +207,7 @@ impl RustDesk {
         let mut n = 0;
         let sessions: Vec<Arc<Session>> = self.sessions.iter().filter(|e| e.connected.load(Ordering::SeqCst)).map(|e| e.value().clone()).collect();
         for s in sessions {
-            let allowed = match &s.via {
-                Via::Tunnel { tunnel_id, hop_username, .. } => crate::desktop::allowed_for(db, s.user_id, *tunnel_id, hop_username).await,
-                Via::IdServer { device_id, .. } => device_allowed(db, s.user_id, *device_id).await,
-            };
-            if !allowed {
+            if !crate::desktop::allowed_for(db, s.user_id, s.tunnel_id, &s.hop_username).await {
                 tracing::info!(session = %s.id, user = %s.user_name, "rustdesk: access revoked; closing");
                 s.request_stop("revoked");
                 n += 1;
@@ -319,15 +223,6 @@ impl RustDesk {
             self.revoke_lost(&db).await;
         }
     }
-}
-
-/// ID 伺服器裝置：擁有者或管理員才能用（裝置被刪掉就不行）。/ An ID-server device is usable by its owner or an admin.
-pub async fn device_allowed(db: &Db, user_id: i64, device_id: i64) -> bool {
-    let Ok(Some(device)) = crate::db::rustdesk_devices::by_id(db, device_id).await else { return false };
-    if device.user_id == user_id {
-        return true;
-    }
-    matches!(crate::db::users::by_id(db, user_id).await, Ok(Some(u)) if u.is_superuser && u.is_active)
 }
 
 fn constant_eq(a: &str, b: &str) -> bool {
