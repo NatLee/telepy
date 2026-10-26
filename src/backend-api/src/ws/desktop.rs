@@ -71,6 +71,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         close_with_code(&mut socket, CLOSE_NO_SESSION).await;
         return;
     };
+    // 開它的網頁登入已經被撤銷了（拿到票證之後才登出）。/ The sign-in that opened it was revoked meanwhile.
+    let Some(mut signout) = super::auth::SessionWatch::for_session(&state, session.web_session) else {
+        close_with_code(&mut socket, super::auth::CLOSE_SIGNED_OUT).await;
+        state.desktop.remove(&session.id);
+        return;
+    };
     if !desktop::still_allowed(&state.db, &session).await {
         tracing::warn!(session = %session_id, user = %session.user_name, "desktop: access no longer allowed");
         state.desktop.remove(&session_id);
@@ -153,6 +159,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     let mut presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::Desktop, meta.ip));
     let mut ended_by: Option<String> = None;
+    let mut signed_out: Option<String> = None;
     let opened = session.describe();
     tracing::info!(session = %session_id, connection = %connection_id, "desktop: {opened}");
     state.gateway.event("desktop_open", None, None, Some(session.tunnel_id), format!("{opened} (session {})", short(&session_id))).await;
@@ -283,6 +290,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                 ended_by = Some(by);
                 break "ended";
             }
+            // 開它的那個網頁登入被撤銷了。/ The sign-in that opened it was revoked.
+            why = signout.ended() => {
+                signed_out = Some(why);
+                break "signed out";
+            }
             _ = session.stop.notified() => {
                 // 不先送 `disconnect` 指令：瀏覽器會把它當成正常結束，看不到 4014 的原因。
                 // No `disconnect` instruction first: the browser would treat it as a normal end and miss the 4014.
@@ -300,6 +312,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     state.gateway.event("desktop_close", None, None, Some(session.tunnel_id), message).await;
     match (ended_by, close_code) {
         (Some(by), _) => super::close_with(&mut socket, super::CLOSE_ENDED, &by).await,
+        (None, _) if signed_out.is_some() => super::close_with(&mut socket, super::auth::CLOSE_SIGNED_OUT, signed_out.as_deref().unwrap_or_default()).await,
         (None, Some(code)) => close_with_code(&mut socket, code).await,
         (None, None) => {
             let _ = socket.send(Message::Close(None)).await;

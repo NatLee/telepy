@@ -18,6 +18,9 @@ pub type Msg = Arc<str>;
 pub struct Hub {
     users: DashMap<i64, broadcast::Sender<Msg>>,
     tunnels: DashMap<i64, broadcast::Sender<Msg>>,
+    /// 登入 session（sid）→ 那個瀏覽器開著的 WebSocket；撤銷時送原因，收到就以 4010 關閉。
+    /// Sign-in session → that browser's open sockets; a revocation sends the reason and they close with 4010.
+    sessions: DashMap<i64, broadcast::Sender<Msg>>,
 }
 
 impl Hub {
@@ -35,6 +38,18 @@ impl Hub {
 
     pub fn subscribe_tunnel(&self, tunnel_id: i64) -> broadcast::Receiver<Msg> {
         Self::sender(&self.tunnels, tunnel_id).subscribe()
+    }
+
+    /// 訂閱一個登入 session 的撤銷。/ Subscribe to the revocation of one sign-in session.
+    pub fn subscribe_session(&self, sid: i64) -> broadcast::Receiver<Msg> {
+        Self::sender(&self.sessions, sid).subscribe()
+    }
+
+    /// 這個登入 session 被撤銷了：通知它的 WebSocket（訊息 = 原因）。/ The session was revoked: tell its sockets why.
+    pub fn session_ended(&self, sid: i64, reason: &str) {
+        if let Some((_, tx)) = self.sessions.remove(&sid) {
+            let _ = tx.send(Arc::from(reason));
+        }
     }
 
     /// `send_notification_to_user`：NotificationConsumer 收到後包成 `{"message": ...}` 送前端。
@@ -66,5 +81,6 @@ impl Hub {
     pub fn gc(&self) {
         self.users.retain(|_, tx| tx.receiver_count() > 0);
         self.tunnels.retain(|_, tx| tx.receiver_count() > 0);
+        self.sessions.retain(|_, tx| tx.receiver_count() > 0);
     }
 }

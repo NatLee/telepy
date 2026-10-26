@@ -38,8 +38,9 @@ async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
 
 /// 登入完成 → 開一個 session、發 `{refresh_token, access_token}`（`auth::sessions`）。
 /// Login done → start a session and issue the pair (`auth::sessions`).
-pub(crate) async fn token_pair(state: &AppState, user_id: i64, meta: &ClientMeta) -> ApiResult<Value> {
-    crate::auth::sessions::issue(state, user_id, meta).await
+/// `method` / `second_factor` 記在 session 上（「你的裝置」）。/ The sign-in method is stored on the session.
+pub(crate) async fn token_pair(state: &AppState, user_id: i64, meta: &ClientMeta, method: &str, second_factor: Option<&str>) -> ApiResult<Value> {
+    crate::auth::sessions::issue(state, user_id, meta, method, second_factor).await
 }
 
 fn required_fields_error(body: &Value, fields: &[&str]) -> Option<ApiError> {

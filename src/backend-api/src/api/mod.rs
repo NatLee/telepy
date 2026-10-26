@@ -28,6 +28,7 @@ pub mod sessions;
 pub mod sftp;
 pub mod sharing;
 pub mod sign_ins;
+pub mod web_sessions;
 pub mod site_settings;
 pub mod step_up;
 pub mod terminal_profile;

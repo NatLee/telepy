@@ -24,16 +24,27 @@ pub struct WebSession {
     pub revoked_reason: Option<String>,
     pub ip: Option<String>,
     pub user_agent: Option<String>,
+    /// 第一關（password / google / passkey）；升級前的列沒有。/ First factor; NULL on rows from before the upgrade.
+    pub method: Option<String>,
+    /// 第二關（totp / recovery_code / passkey）。/ Second factor, when there was one.
+    pub second_factor: Option<String>,
 }
 
-const COLS: &str = "id, user_id, jti, prev_jti, rotated_at, created_at, last_used_at, expires_at, revoked_at, revoked_reason, ip, user_agent";
+const COLS: &str = "id, user_id, jti, prev_jti, rotated_at, created_at, last_used_at, expires_at, revoked_at, revoked_reason, ip, user_agent, method, second_factor";
+
+/// 登入方式（寫進 session 列）。/ How the session signed in (stored on the row).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SignInMethod<'a> {
+    pub method: Option<&'a str>,
+    pub second_factor: Option<&'a str>,
+}
 
 /// 開一個 session（登入）。/ Start a session (login).
-pub async fn create(db: &Db, user_id: i64, jti: &str, expires_at: &str, ip: Option<&str>, user_agent: Option<&str>) -> sqlx::Result<i64> {
+pub async fn create(db: &Db, user_id: i64, jti: &str, expires_at: &str, ip: Option<&str>, user_agent: Option<&str>, how: SignInMethod<'_>) -> sqlx::Result<i64> {
     let now = now_db();
     let id = sqlx::query(
-        "INSERT INTO telepy_web_session (user_id, jti, prev_jti, rotated_at, created_at, last_used_at, expires_at, revoked_at, revoked_reason, ip, user_agent) \
-         VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+        "INSERT INTO telepy_web_session (user_id, jti, prev_jti, rotated_at, created_at, last_used_at, expires_at, revoked_at, revoked_reason, ip, user_agent, method, second_factor) \
+         VALUES (?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)",
     )
     .bind(user_id)
     .bind(jti)
@@ -43,6 +54,8 @@ pub async fn create(db: &Db, user_id: i64, jti: &str, expires_at: &str, ip: Opti
     .bind(expires_at)
     .bind(ip)
     .bind(user_agent.map(|u| u.chars().take(256).collect::<String>()))
+    .bind(how.method)
+    .bind(how.second_factor)
     .execute(&db.write)
     .await?
     .last_insert_rowid();
@@ -86,6 +99,44 @@ pub async fn revoke(db: &Db, id: i64, reason: &str) -> sqlx::Result<bool> {
         .await?
         .rows_affected();
     Ok(n > 0)
+}
+
+/// 使用者還有效的 session（沒撤銷、沒到期），最近用過的在前。/ A user's live sessions, most recently used first.
+pub async fn active_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<WebSession>> {
+    sqlx::query_as(&format!(
+        "SELECT {COLS} FROM telepy_web_session WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY last_used_at DESC, id DESC LIMIT 200"
+    ))
+    .bind(user_id)
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await
+}
+
+/// 撤銷使用者所有還有效的 session（`except` 那個除外），回傳撤銷了哪些。
+/// Revoke every live session of a user except `except`; returns the revoked ids.
+pub async fn revoke_for_user(db: &Db, user_id: i64, except: Option<i64>, reason: &str) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(
+        "UPDATE telepy_web_session SET revoked_at = ?, revoked_reason = ? \
+         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND id != ? RETURNING id",
+    )
+    .bind(now_db())
+    .bind(reason)
+    .bind(user_id)
+    .bind(now_db())
+    .bind(except.unwrap_or(0))
+    .fetch_all(&db.write)
+    .await
+}
+
+/// 記下「最後使用」（REST 請求，呼叫端節流）。/ Note the last use (REST requests; the caller throttles).
+pub async fn touch(db: &Db, id: i64, ip: Option<&str>) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_web_session SET last_used_at = ?, ip = COALESCE(?, ip) WHERE id = ? AND revoked_at IS NULL")
+        .bind(now_db())
+        .bind(ip)
+        .bind(id)
+        .execute(&db.write)
+        .await?;
+    Ok(())
 }
 
 /// 清掉到期或撤銷都超過 `cutoff` 的列。/ Delete rows expired or revoked before `cutoff`.

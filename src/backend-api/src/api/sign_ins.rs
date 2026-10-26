@@ -41,8 +41,25 @@ impl<'a> Attempt<'a> {
     }
 }
 
-/// 記一筆；寫不進去只記 log，不影響登入本身。/ Best effort: a failed write never blocks the login.
+/// 這次成功登入的國家 / 瀏覽器在 90 天內沒出現過嗎（`auth::devices::is_new_device`）。查不到紀錄就當不是。
+/// Is this successful sign-in's country or browser new within 90 days? A failed lookup counts as no.
+async fn new_device(state: &AppState, user_id: i64, meta: &ClientMeta) -> bool {
+    use crate::auth::devices::{is_new_device, ua_family, Seen, SEEN_WINDOW_DAYS};
+    let since = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(SEEN_WINDOW_DAYS));
+    let Ok(rows) = db::sign_ins::recent_ok(&state.db, user_id, &since).await else { return false };
+    let seen = |ip: Option<&str>, ua: Option<&str>| Seen { country: country_of(&state.geoip, ip), family: ua_family(ua) };
+    let history: Vec<Seen> = rows.iter().map(|(ip, ua)| seen(ip.as_deref(), ua.as_deref())).collect();
+    is_new_device(&history, &seen(meta.ip.as_deref(), meta.user_agent.as_deref()))
+}
+
+fn country_of(geo: &GeoIp, ip: Option<&str>) -> Option<String> {
+    geo.json(ip).get("country").and_then(Value::as_str).map(str::to_string)
+}
+
+/// 記一筆；寫不進去只記 log，不影響登入本身。成功而且是新裝置 → `SIGN-IN-NEW-DEVICE` 通知 + webhook。
+/// Best effort: a failed write never blocks the login. A successful sign-in from a new device also notifies.
 pub async fn record(state: &AppState, user_id: i64, meta: &ClientMeta, a: Attempt<'_>) {
+    let fresh = a.ok && new_device(state, user_id, meta).await;
     let row = NewSignIn {
         user_id,
         ok: a.ok,
@@ -70,6 +87,38 @@ pub async fn record(state: &AppState, user_id: i64, meta: &ClientMeta, a: Attemp
                 "user_agent": meta.user_agent,
             })),
     );
+    if fresh {
+        let device = crate::auth::devices::ua_family(meta.user_agent.as_deref());
+        let country = geo.get("country").cloned().unwrap_or(Value::Null);
+        tracing::info!(user = %username, ip = ?meta.ip, device = ?device, "sign-in from a new device");
+        state.hub.notify_user(
+            user_id,
+            &json!({
+                "action": "SIGN-IN-NEW-DEVICE",
+                "ip": meta.ip,
+                "geo": geo,
+                "device": device,
+                "user_agent": meta.user_agent,
+                "method": a.method,
+                "second_factor": a.second_factor,
+                "at": crate::util::db_to_iso_utc_z(&crate::util::now_db()),
+            }),
+        );
+        state.webhooks.emit(
+            crate::webhooks::Event::new(crate::webhooks::Kind::AccountSignInNewDevice)
+                .to([user_id], None)
+                .data(json!({
+                    "user": username,
+                    "method": a.method,
+                    "second_factor": a.second_factor,
+                    "ip": meta.ip,
+                    "country": country,
+                    "device": device,
+                    "user_agent": meta.user_agent,
+                }))
+                .link("/tunnels"),
+        );
+    }
 }
 
 fn sign_in_json(e: &SignIn, geo: &GeoIp) -> Value {

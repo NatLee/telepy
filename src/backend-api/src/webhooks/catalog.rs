@@ -28,6 +28,8 @@ pub enum Kind {
     McpSessionOpened,
     McpSessionClosed,
     AccountSignIn,
+    /// 從 90 天內沒見過的國家或瀏覽器登入。/ A sign-in from a country or browser not seen in 90 days.
+    AccountSignInNewDevice,
     AccountSignInFailed,
     KeyExpiring,
     KeyExpired,
@@ -56,6 +58,7 @@ pub const ALL: &[Kind] = &[
     Kind::McpSessionOpened,
     Kind::McpSessionClosed,
     Kind::AccountSignIn,
+    Kind::AccountSignInNewDevice,
     Kind::AccountSignInFailed,
     Kind::KeyExpiring,
     Kind::KeyExpired,
@@ -154,6 +157,7 @@ impl Kind {
             Kind::McpSessionOpened => "mcp.session_opened",
             Kind::McpSessionClosed => "mcp.session_closed",
             Kind::AccountSignIn => "account.sign_in",
+            Kind::AccountSignInNewDevice => "account.sign_in_new_device",
             Kind::AccountSignInFailed => "account.sign_in_failed",
             Kind::KeyExpiring => "key.expiring",
             Kind::KeyExpired => "key.expired",
@@ -174,7 +178,7 @@ impl Kind {
             Kind::ShareReceived | Kind::ShareEnded | Kind::AccessRequested | Kind::AccessDecided => Group::Sharing,
             Kind::CommandApprovalRequested | Kind::CommandApprovalDecided | Kind::CommandBlocked => Group::Commands,
             Kind::SessionStarted | Kind::McpSessionOpened | Kind::McpSessionClosed => Group::Sessions,
-            Kind::AccountSignIn | Kind::AccountSignInFailed => Group::Account,
+            Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed => Group::Account,
             Kind::KeyExpiring | Kind::KeyExpired => Group::Keys,
             Kind::UserCreated | Kind::Test => Group::Admin,
         }
@@ -186,7 +190,7 @@ impl Kind {
             Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::CommandApprovalRequested => Audience::Managers,
             Kind::AccessRequested | Kind::CommandBlocked | Kind::SessionStarted => Audience::ManagersOthers,
             Kind::ShareEnded => Audience::ShareParties,
-            Kind::ShareReceived | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
+            Kind::ShareReceived | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
             Kind::McpSessionOpened | Kind::McpSessionClosed => Audience::AgentAndOwner,
             Kind::UserCreated | Kind::Test => Audience::SiteOnly,
         }
@@ -230,6 +234,7 @@ impl Kind {
             | Kind::DeviceClaimAttempt
             | Kind::CommandBlocked
             | Kind::AccountSignInFailed
+            | Kind::AccountSignInNewDevice
             | Kind::KeyExpiring
             | Kind::KeyExpired => Severity::Warning,
             Kind::TunnelOnline | Kind::TunnelRecovered => Severity::Ok,
@@ -258,6 +263,7 @@ impl Kind {
             Kind::McpSessionOpened => "MCP agent session opened",
             Kind::McpSessionClosed => "MCP agent session closed",
             Kind::AccountSignIn => "New sign-in",
+            Kind::AccountSignInNewDevice => "Sign-in from a new device",
             Kind::AccountSignInFailed => "Failed sign-in",
             Kind::KeyExpiring => "SSH key expiring soon",
             Kind::KeyExpired => "SSH key expired",

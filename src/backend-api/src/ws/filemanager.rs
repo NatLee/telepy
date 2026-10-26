@@ -153,7 +153,7 @@ impl Backend {
                     }
                     Err(e) => return Err(format!("Failed to list files: {e}")),
                 };
-                Ok((path, entries.iter().map(sftp::ws_entry_json).collect()))
+                Ok((path.clone(), sftp::ws_listing(sftp, &path, &entries).await))
             }
             Backend::Exec(s) => {
                 let is_ps = s.is_powershell().await;
@@ -199,7 +199,7 @@ async fn open_backend(state: &AppState, username: &str, reverse_port: i64) -> Op
 }
 
 pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
-    let (user, msg) = match auth::first_message(&state, &mut socket).await {
+    let (user, msg, mut signout) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
         Err(code) => {
@@ -272,6 +272,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
                 close_with(&mut socket, CLOSE_ENDED, &by).await;
+                break;
+            }
+            // 這個瀏覽器的登入被撤銷了。/ This browser's sign-in was revoked.
+            reason = signout.ended() => {
+                close_with(&mut socket, auth::CLOSE_SIGNED_OUT, &reason).await;
                 break;
             }
         };

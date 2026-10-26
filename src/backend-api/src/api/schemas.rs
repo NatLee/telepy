@@ -363,6 +363,42 @@ pub struct SignInEvent {
     pub reason: Option<String>,
 }
 
+/// 一個還有效的網頁登入（一個瀏覽器）。/ One live web sign-in (one browser).
+#[derive(ToSchema)]
+pub struct WebSession {
+    pub id: i64,
+    /// 最後一次續期 / 使用時的 IP。/ The IP of the last renewal or use.
+    #[schema(example = "198.51.100.7")]
+    pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
+    pub user_agent: Option<String>,
+    /// 「瀏覽器 · 作業系統」，認不出來為 null。/ "browser · OS", null when unrecognised.
+    #[schema(example = "Chrome · macOS")]
+    pub device: Option<String>,
+    #[schema(example = "2026-10-23T01:02:03.123456Z")]
+    pub created_at: String,
+    /// 最後一次續期，或最多每 5 分鐘記一次的 REST 使用。/ Last renewal, or REST use recorded at most every 5 minutes.
+    pub last_seen_at: String,
+    /// 沒有再用的話何時登出（每次續期往後推）。/ When it ends without further use (slides on every renewal).
+    pub expires_at: String,
+    /// 就是發出這個請求的瀏覽器。/ The browser making this request.
+    pub current: bool,
+    /// password / google / passkey；升級前的登入為 null。/ First factor; null for sign-ins from before the upgrade.
+    pub sign_in_method: Option<String>,
+    /// totp / recovery_code / passkey
+    pub mfa_method: Option<String>,
+}
+
+/// `GET /api/auth/sessions` 與管理員版本。/ The sessions list and the admin version.
+#[derive(ToSchema)]
+pub struct WebSessionList {
+    pub sessions: Vec<WebSession>,
+    /// 網站設定 `signin_lifetime`（秒）：多久沒用就要重新登入。/ Seconds of no use before a sign-in ends.
+    pub signin_lifetime: i64,
+    /// 網站設定 `signin_access_lifetime`（秒）：access token 多久換一次。/ Seconds between access-token renewals.
+    pub access_lifetime: i64,
+}
+
 #[derive(ToSchema)]
 pub struct TunnelWrite {
     pub host_friendly_name: String,
@@ -991,6 +1027,135 @@ pub struct UploadForm {
 #[derive(ToSchema)]
 pub struct UploadResult {
     pub success: String,
+}
+
+/// `{error, code}`；code = path_required | invalid_name | exists | not_found | permission_denied | dir_not_writable |
+/// protected | into_itself | invalid_mode | is_directory | too_large | binary | not_utf8 | modified | timeout | device | failed
+#[derive(ToSchema)]
+pub struct SftpError {
+    pub error: String,
+    #[schema(example = "exists")]
+    pub code: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathRequest {
+    /// Full path of the new folder / file (`~/x`, `/abs/x`, `C:\x`)
+    pub path: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathResult {
+    pub path: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpPathsRequest {
+    /// 1–500 paths
+    pub paths: Vec<String>,
+}
+
+/// A rename (`from` + `to`) or a move of several entries into `destination` (`paths` + `destination`). Never overwrites.
+#[derive(ToSchema)]
+pub struct SftpRenameRequest {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub paths: Option<Vec<String>>,
+    pub destination: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpMoveRequest {
+    pub paths: Vec<String>,
+    /// Folder the entries go into (they keep their names)
+    pub destination: String,
+}
+
+#[derive(ToSchema)]
+pub struct SftpChmodRequest {
+    pub paths: Vec<String>,
+    /// Octal, e.g. `644` / `0755`
+    #[schema(example = "0644")]
+    pub mode: String,
+    /// Folders: everything inside too (links skipped)
+    pub recursive: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpFailure {
+    pub path: String,
+    pub code: String,
+    pub error: String,
+}
+
+/// Counters present depend on the call: moved / copied (+ method `device` | `stream`) / changed (+ mode).
+#[derive(ToSchema)]
+pub struct SftpBatchResult {
+    pub path: Option<String>,
+    pub moved: Option<u64>,
+    pub copied: Option<u64>,
+    pub changed: Option<u64>,
+    pub method: Option<String>,
+    pub mode: Option<String>,
+    pub destination: Option<String>,
+    pub failed: Vec<SftpFailure>,
+}
+
+/// Dry run (`?count=1`): files / dirs / links / bytes / entries / truncated; otherwise removed + failed.
+#[derive(ToSchema)]
+pub struct SftpDeleteResult {
+    pub files: Option<u64>,
+    pub dirs: Option<u64>,
+    pub links: Option<u64>,
+    pub bytes: Option<u64>,
+    pub entries: Option<u64>,
+    pub truncated: Option<bool>,
+    pub removed: Option<u64>,
+    pub failed: Option<Vec<SftpFailure>>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpStat {
+    pub path: String,
+    pub name: String,
+    /// file | directory | symlink
+    pub r#type: String,
+    pub size: u64,
+    #[schema(example = "0644")]
+    pub mode: String,
+    #[schema(example = "-rw-r--r--")]
+    pub permissions: String,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub mtime: Option<String>,
+    pub mtime_epoch: Option<u32>,
+    pub atime: Option<String>,
+    pub link_target: Option<String>,
+    /// file | directory | missing (links only)
+    pub target_type: Option<String>,
+}
+
+/// A text file: GET returns `content`; PUT returns the saved file's size / mtime_epoch / mode.
+#[derive(ToSchema)]
+pub struct SftpText {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    pub mtime_epoch: Option<u32>,
+    pub mode: String,
+    pub content: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct SftpSaveRequest {
+    pub path: String,
+    /// UTF-8 text, ≤ 1 MiB
+    pub content: String,
+    /// mtime_epoch / size from when the file was opened; a mismatch answers 409 `modified`
+    pub mtime: Option<u64>,
+    pub size: Option<u64>,
+    /// Overwrite even when the file changed meanwhile
+    pub force: Option<bool>,
 }
 
 #[derive(ToSchema)]

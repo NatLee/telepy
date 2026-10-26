@@ -63,6 +63,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         close_with_code(&mut socket, CLOSE_NO_SESSION).await;
         return;
     };
+    // 開它的網頁登入已經被撤銷了（拿到票證之後才登出）。/ The sign-in that opened it was revoked meanwhile.
+    let Some(mut signout) = super::auth::SessionWatch::for_session(&state, session.web_session) else {
+        close_with_code(&mut socket, super::auth::CLOSE_SIGNED_OUT).await;
+        state.rustdesk.remove(&session.id);
+        return;
+    };
     let first = match tokio::time::timeout(FIRST_MESSAGE_TIMEOUT, next_binary(&mut socket)).await {
         Ok(Some(m)) => m,
         _ => {
@@ -136,6 +142,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut to_device: u64 = 0;
     let mut close_code: Option<u16> = None;
     let mut ended_by: Option<String> = None;
+    let mut signed_out: Option<String> = None;
     let reason: &str = loop {
         tokio::select! {
             incoming = socket.recv() => match incoming {
@@ -199,6 +206,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                 ended_by = Some(by);
                 break "ended";
             }
+            // 開它的那個網頁登入被撤銷了。/ The sign-in that opened it was revoked.
+            why = signout.ended() => {
+                signed_out = Some(why);
+                break "signed out";
+            }
             _ = session.stop.notified() => {
                 close_code = Some(CLOSE_STOPPED);
                 break session.stop_reason().unwrap_or("stopped");
@@ -210,6 +222,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     state.gateway.event("rustdesk_close", None, None, Some(session.tunnel_id), message).await;
     match (ended_by, close_code) {
         (Some(by), _) => super::close_with(&mut socket, super::CLOSE_ENDED, &by).await,
+        (None, _) if signed_out.is_some() => super::close_with(&mut socket, super::auth::CLOSE_SIGNED_OUT, signed_out.as_deref().unwrap_or_default()).await,
         (None, Some(code)) => close_with_code(&mut socket, code).await,
         (None, None) => {
             let _ = socket.send(Message::Close(None)).await;

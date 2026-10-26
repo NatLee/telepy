@@ -78,6 +78,33 @@ export function responseError(
  */
 export type RefreshOutcome = "ok" | "rejected" | "error";
 
+/**
+ * 伺服器說這個登入被登出了的原因（`signed_out`：user = 從別的裝置、admin = 管理員）。lib/auth.tsx 在登出時讀一次並提示。
+ * Why the server ended this sign-in (`signed_out`: user = from another device, admin = an administrator).
+ * lib/auth.tsx reads it once when it logs out and shows a notice.
+ */
+let signedOutReason: string | null = null;
+
+export function noteSignedOut(reason: string | null | undefined): void {
+    if (reason) signedOutReason = reason;
+}
+
+export function takeSignedOutReason(): string | null {
+    const r = signedOutReason;
+    signedOutReason = null;
+    return r;
+}
+
+/**
+ * 這個瀏覽器被登出了（WebSocket 4010，或 401 帶 `signed_out`）：記下原因、走登出的路。
+ * This browser was signed out (WebSocket 4010, or a 401 with `signed_out`): note why and take the logout path.
+ */
+export function signedOut(reason: string | null | undefined): void {
+    if (typeof window === "undefined") return;
+    noteSignedOut(reason || "user");
+    window.dispatchEvent(new CustomEvent("api:unauthorized"));
+}
+
 let inflight: { force: boolean; promise: Promise<RefreshOutcome> } | null = null;
 
 /**
@@ -129,6 +156,10 @@ async function runRefresh(force: boolean): Promise<RefreshOutcome> {
             // 我們送的那顆在等回應時被別的分頁換掉了：它的新 token 已經在 localStorage。
             // The token we sent was replaced by another tab while we waited: its new token is already stored.
             if (localStorage.getItem("refreshToken") !== refresh) return "ok";
+            if (res.status === 401) {
+                const body = await readJson<{ signed_out?: string }>(res);
+                noteSignedOut(body?.signed_out);
+            }
             return res.status === 401 || res.status === 400 ? "rejected" : "error";
         }
         const data = await readJson<{ access?: string; access_token?: string; refresh?: string; refresh_token?: string }>(res);

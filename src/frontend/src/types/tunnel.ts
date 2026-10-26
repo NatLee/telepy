@@ -124,6 +124,13 @@ export interface FileItem {
     size: string | number;
     date?: string;
     name: string;
+    /** 檔案管理 socket（原生 SFTP）才有：位元組、`0644`、`-rw-r--r--`、epoch 秒、是不是 symlink。
+     *  From the file-manager socket (native SFTP) only: bytes, octal mode, ls-style string, epoch mtime, symlink. */
+    bytes?: number;
+    mode?: string;
+    perm?: string;
+    mtime?: number | null;
+    link?: boolean;
 }
 
 export interface TunnelModalProps {

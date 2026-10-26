@@ -9,6 +9,7 @@ import { useNotificationWebSocket, type SocketPhase } from "@/lib/websocket";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { SessionEndedNotice } from "@/components/layout/SessionEndedNotice";
+import { NewSignInNotice } from "@/components/layout/NewSignInNotice";
 import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
@@ -85,6 +86,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <StepUpProvider />
                 {/* 有人結束了你的 session 時提醒。/ A heads-up when someone ends one of your sessions. */}
                 <SessionEndedNotice />
+                {/* 新裝置登入你的帳號時提醒。/ A heads-up when your account signs in from a new device. */}
+                <NewSignInNotice />
                 <WebhookPausedNotice />
                 {/* 等你核准的指令（任何頁面右下角）。/ Commands waiting for your approval, bottom right on any page. */}
                 <CommandApprovalCenter />

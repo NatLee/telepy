@@ -21,10 +21,18 @@ const SYSTEMS: [RegExp, string][] = [
     [/\bLinux\b/, "Linux"],
 ];
 
+/** 瀏覽器與作業系統（各自認不出來為 null）。後端 `auth::devices::ua_family` 用同一張表。
+ *  Browser and OS, each null when unrecognised; the backend's `auth::devices::ua_family` uses the same table. */
+export function parseUserAgent(ua: string | null | undefined): { browser: string | null; os: string | null } {
+    if (!ua) return { browser: null, os: null };
+    return {
+        browser: BROWSERS.find(([re]) => re.test(ua))?.[1] ?? null,
+        os: SYSTEMS.find(([re]) => re.test(ua))?.[1] ?? null,
+    };
+}
+
 export function describeUserAgent(ua: string | null | undefined): string | null {
-    if (!ua) return null;
-    const browser = BROWSERS.find(([re]) => re.test(ua))?.[1];
-    const os = SYSTEMS.find(([re]) => re.test(ua))?.[1];
+    const { browser, os } = parseUserAgent(ua);
     const parts = [browser, os].filter(Boolean);
     return parts.length ? parts.join(" · ") : null;
 }

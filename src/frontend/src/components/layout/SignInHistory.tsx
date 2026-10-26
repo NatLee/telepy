@@ -29,12 +29,12 @@ export interface SignInEvent {
     reason: string | null;
 }
 
-const METHOD_KEYS: Record<string, TranslationKey> = {
+export const METHOD_KEYS: Record<string, TranslationKey> = {
     password: "security.signInMethod.password",
     google: "security.signInMethod.google",
     passkey: "security.signInMethod.passkey",
 };
-const FACTOR_KEYS: Record<string, TranslationKey> = {
+export const FACTOR_KEYS: Record<string, TranslationKey> = {
     totp: "security.signInFactor.totp",
     recovery_code: "security.signInFactor.recovery_code",
     passkey: "security.signInFactor.passkey",

@@ -285,6 +285,8 @@ pub struct Session {
     pub clipboard: Clipboard,
     pub quality: Quality,
     pub saved_label: Option<String>,
+    /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
+    pub web_session: Option<i64>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     handoff: Mutex<Option<Handoff>>,
@@ -349,6 +351,8 @@ pub struct NewSession {
     pub prepared: Prepared,
     /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
     pub saved_label: Option<String>,
+    /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
+    pub web_session: Option<i64>,
 }
 
 pub struct Desktop {
@@ -389,6 +393,7 @@ impl Desktop {
             clipboard: new.clipboard,
             quality: new.quality,
             saved_label: new.saved_label,
+            web_session: new.web_session,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             handoff: Mutex::new(Some(Handoff { credentials: new.credentials, prepared: new.prepared })),

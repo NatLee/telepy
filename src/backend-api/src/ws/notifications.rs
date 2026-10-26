@@ -8,7 +8,7 @@ use super::{auth, close, is_ping, send_json, send_text};
 use crate::state::AppState;
 
 pub async fn handle(state: AppState, mut socket: WebSocket) {
-    let (user, _) = match auth::first_message_any(&state, &mut socket).await {
+    let (user, _, mut signout) = match auth::first_message_any(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
         Err(code) => {
@@ -29,6 +29,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket) {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 Some(Ok(_)) => {}
             },
+            // 這個瀏覽器的登入被撤銷了（別的裝置、管理員）。/ This browser's sign-in was revoked.
+            reason = signout.ended() => {
+                super::close_with(&mut socket, auth::CLOSE_SIGNED_OUT, &reason).await;
+                break;
+            }
             event = rx.recv() => match event {
                 Ok(text) => {
                     if !send_text(&mut socket, text.to_string()).await {

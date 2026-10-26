@@ -13,6 +13,8 @@ use russh_sftp::protocol::FileType;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 
+pub mod ops;
+
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub name: String,
@@ -155,12 +157,33 @@ pub fn rest_entry_json(e: &Entry, tz_offset_minutes: i32) -> Value {
 }
 
 /// WS `list_files` 的每個項目。
+/// `size` 是給人看的字串（舊欄位）；`bytes` / `mode`（`0644`）/ `perm`（`-rw-r--r--`）/ `mtime`（epoch 秒）/ `link` 給檔案操作用。
+/// `size` stays the formatted string; `bytes` / `mode` / `mtime` / `link` feed the file operations.
 pub fn ws_entry_json(e: &Entry) -> Value {
     json!({
         "name": e.name,
         "type": if e.is_dir { "directory" } else { "file" },
         "size": crate::ws::filemanager::format_size(e.size as f64),
+        "bytes": e.size,
+        "mode": ops::mode_octal(e.mode),
+        "perm": mode_string(e.mode, e.is_dir, e.is_symlink),
+        "mtime": e.mtime,
+        "link": e.is_symlink,
     })
+}
+
+/// 列目錄給檔案管理：指到資料夾的 symlink 標成資料夾（點得進去；刪除仍只刪連結本身）。
+/// Listing for the file manager: a symlink to a folder is shown as a folder (deleting still removes only the link).
+pub async fn ws_listing(sftp: &SftpSession, path: &str, entries: &[Entry]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let mut v = ws_entry_json(e);
+        if e.is_symlink && matches!(sftp.metadata(ops::join(path, &e.name)).await, Ok(m) if m.is_dir()) {
+            v["type"] = json!("directory");
+        }
+        out.push(v);
+    }
+    out
 }
 
 /// 路徑的最後一段（`path.split("/")[-1]`）。
@@ -172,14 +195,29 @@ pub fn basename(path: &str) -> String {
 
 /// 遞迴把目錄打進 zip（暫存檔）。回 (暫存檔, zip 內根目錄名)。
 pub async fn zip_directory(sftp: &SftpSession, path: &str) -> anyhow::Result<tempfile::NamedTempFile> {
-    let root_name = basename(path);
+    zip_paths(sftp, &[path.to_string()]).await
+}
+
+/// 好幾個檔案 / 資料夾打成一個 zip（多選下載）：每個都放在 zip 的最上層，資料夾整棵。
+/// Zip several files and folders (multi-select download): each sits at the top of the archive, folders whole.
+pub async fn zip_paths(sftp: &SftpSession, paths: &[String]) -> anyhow::Result<tempfile::NamedTempFile> {
     let tmp = tempfile::NamedTempFile::new()?;
     let file = tmp.reopen()?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let mut stack: Vec<(String, String)> = vec![(path.trim_end_matches('/').to_string(), root_name.clone())];
-    zip.add_directory(format!("{root_name}/"), opts)?;
     let mut buf = vec![0u8; 64 * 1024];
+    let mut stack: Vec<(String, String)> = Vec::new();
+    for path in paths {
+        let root = path.trim_end_matches('/').to_string();
+        let name = basename(&root);
+        if sftp.metadata(root.as_str()).await?.is_dir() {
+            zip.add_directory(format!("{name}/"), opts)?;
+            stack.push((root, name));
+        } else {
+            zip.start_file(name, opts)?;
+            copy_into(sftp, &root, &mut zip, &mut buf).await?;
+        }
+    }
     while let Some((dir, rel)) = stack.pop() {
         for e in list_dir(sftp, &dir).await? {
             let child = format!("{dir}/{}", e.name);
@@ -189,19 +227,23 @@ pub async fn zip_directory(sftp: &SftpSession, path: &str) -> anyhow::Result<tem
                 stack.push((child, child_rel));
             } else {
                 zip.start_file(child_rel, opts)?;
-                let mut f = sftp.open(&child).await?;
-                loop {
-                    let n = f.read(&mut buf).await?;
-                    if n == 0 {
-                        break;
-                    }
-                    zip.write_all(&buf[..n])?;
-                }
+                copy_into(sftp, &child, &mut zip, &mut buf).await?;
             }
         }
     }
     zip.finish()?;
     Ok(tmp)
+}
+
+async fn copy_into(sftp: &SftpSession, path: &str, zip: &mut zip::ZipWriter<std::fs::File>, buf: &mut [u8]) -> anyhow::Result<()> {
+    let mut f = sftp.open(path).await?;
+    loop {
+        let n = f.read(buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        zip.write_all(&buf[..n])?;
+    }
 }
 
 /// 上傳：目的地是目錄 → 放進去；否則視為完整檔名。
