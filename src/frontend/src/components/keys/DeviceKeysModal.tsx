@@ -9,6 +9,10 @@
  * bar with the single "sync now" (apply the list + re-read every account), your keys to tick, and one card per
  * account where every key shows both its list state and what is on the device, with its action on the row.
  * Long files (hundreds of keys) get search / account / buckets in the toolbar, paged cards and bulk removal.
+ * - 帳號卡標題寫明金鑰檔（Windows 管理員 = 共用的 administrators_authorized_keys）；資訊按鈕開「金鑰去哪」的圖
+ *   （KeyPlacementFlow，用這台裝置的真實狀態）；批次移除後頁尾留一列「已移除 N 把 — 還原」，狀態列有「最近的移除」。
+ * Account cards name the key file (Windows admins = the shared admin file); an info button opens the "where a key
+ * goes" flow for this device; a bulk removal leaves an inline undo in the footer and "Recent removals" lists them.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -18,17 +22,24 @@ import {
     Clock3,
     FileWarning,
     HardDrive,
+    History,
+    Info,
     Loader2,
     Lock,
     Plus,
     RefreshCw,
+    ShieldCheck,
     Trash2,
+    Undo2,
     UserPen,
     WifiOff,
+    X,
 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -37,10 +48,12 @@ import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { shortFingerprint } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
-import { oldestCheck, useDeviceKeys } from "@/hooks/useDeviceKeys";
-import type { DeviceKeys, RowState, ViewAccount, ViewRow } from "@/types/keys";
+import { oldestCheck, useDeviceKeys, type LastRemoval } from "@/hooks/useDeviceKeys";
+import type { DeviceKeys, KeyRemoval, RowState, ViewAccount, ViewRow } from "@/types/keys";
 import { isRemovable } from "@/lib/keyRows";
+import { accountsFromDevice, placeKey } from "@/lib/keyPlacement";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
+import { KeyPlacementFlow } from "./KeyPlacementFlow";
 import { MyKeysOnDevice } from "./MyKeysOnDevice";
 import { RowFilterBar, RowsMore, SelectAllRemovable, useRowFilter, useRowLimit, useRowSelection, type RowFilterState, type RowSelection } from "./KeyRowFilter";
 
@@ -99,8 +112,97 @@ function StateBadge({ row, online }: { row: ViewRow; online: boolean }) {
     );
 }
 
-/** 頂端狀態列：一句話說明現況 + 唯一的同步按鈕。/ The fixed status bar with the one sync action. */
-function StatusBar({ d, syncing, onSync, now }: { d: DeviceKeys; syncing: boolean; onSync: () => void; now: number }) {
+/** 「最近的移除」浮層：7 天內的移除，每筆可還原。/ "Recent removals": the last 7 days, each restorable. */
+function RecentRemovals({
+    removals,
+    busy,
+    online,
+    onOpen,
+    onRestore,
+    now,
+}: {
+    removals: { days: number; items: KeyRemoval[] } | null;
+    busy: string | null;
+    online: boolean;
+    onOpen: () => void;
+    onRestore: (id: number) => void;
+    now: number;
+}) {
+    const { t, locale } = useI18n();
+    return (
+        <Popover onOpenChange={(open) => open && onOpen()}>
+            <PopoverTrigger asChild>
+                <Button size="sm" variant="ghost" title={t("keys.undo.recentHint", { days: removals?.days ?? 7 })}>
+                    <History /> {t("keys.undo.recent")}
+                </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-80 p-3">
+                <p className="text-sm text-foreground">{t("keys.undo.recent")}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{t("keys.undo.recentHint", { days: removals?.days ?? 7 })}</p>
+                {!removals ? (
+                    <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><Loader2 size={14} className="animate-spin" aria-hidden /> {t("keys.loading")}</p>
+                ) : removals.items.length === 0 ? (
+                    <p className="mt-3 text-xs text-muted-foreground">{t("keys.undo.none", { days: removals.days })}</p>
+                ) : (
+                    <ul className="mt-2 flex max-h-72 flex-col gap-1 overflow-y-auto">
+                        {removals.items.map((r) => (
+                            <li key={r.id} className="flex items-center justify-between gap-2 rounded-md bg-surface px-2 py-1.5 ring-1 ring-inset ring-border">
+                                <span className="min-w-0">
+                                    <span className="block truncate text-sm text-foreground">{t("keys.undo.item", { keys: r.keys, account: r.username })}</span>
+                                    <span className="block text-[0.75rem] text-muted-foreground">
+                                        {ago(r.removed_at, now, locale)} · {t("keys.undo.by", { user: r.removed_by })}
+                                    </span>
+                                </span>
+                                {r.restored_at ? (
+                                    <Chip tone="success"><CircleCheck aria-hidden /> {t("keys.undo.restoredAt")}</Chip>
+                                ) : (
+                                    <Button size="xs" variant="outline" disabled={busy === "restore" || !online} onClick={() => onRestore(r.id)}>
+                                        <Undo2 /> {t("keys.undo.restore")}
+                                    </Button>
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </PopoverContent>
+        </Popover>
+    );
+}
+
+/** 「金鑰去哪」：選一把在清單上的金鑰，看它在這台裝置會進哪些帳號、哪個檔案。/ The placement flow for this device. */
+function PlacementDialog({ d, isOpen, onClose }: { d: DeviceKeys; isOpen: boolean; onClose: () => void }) {
+    const { t } = useI18n();
+    const listed = d.my_keys.filter((k) => k.in_list);
+    const [keyId, setKeyId] = useState<number | null>(null);
+    const key = listed.find((k) => k.id === keyId) ?? listed[0] ?? null;
+    const accounts = useMemo(() => accountsFromDevice(d.view.accounts, d.account_ids), [d.view.accounts, d.account_ids]);
+    const allowedIds = d.account_ids.map((a) => a.id);
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={t("keys.place.title")} description={t("keys.place.subtitle")} icon={<Info />} size="2xl" footer={<Button variant="outline" onClick={onClose}>{t("common.close")}</Button>}>
+            {key ? (
+                <div className="space-y-3">
+                    {listed.length > 1 && (
+                        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                            {t("keys.place.pickKey")}
+                            <NativeSelect value={String(key.id)} onChange={(e) => setKeyId(Number(e.target.value))} className="h-8 max-w-xs">
+                                {listed.map((k) => (
+                                    <option key={k.id} value={k.id}>{k.name}</option>
+                                ))}
+                            </NativeSelect>
+                        </label>
+                    )}
+                    <KeyPlacementFlow keyLabel={key.name} listLabel={d.tunnel.host_friendly_name} placements={placeKey(accounts, allowedIds, key.accounts)} />
+                    {d.platform?.windows && <Callout tone="info">{t("keys.place.adminFileTip")}</Callout>}
+                </div>
+            ) : (
+                <Callout tone="info">{t("keys.place.noKeys")}</Callout>
+            )}
+        </Modal>
+    );
+}
+
+/** 頂端狀態列：一句話說明現況 + 唯一的同步按鈕（+ 資訊、最近的移除）。/ The fixed status bar with the one sync action. */
+function StatusBar({ d, syncing, onSync, now, onInfo, removals }: { d: DeviceKeys; syncing: boolean; onSync: () => void; now: number; onInfo: () => void; removals?: React.ReactNode }) {
     const { t, locale } = useI18n();
     const rows = d.view.accounts.flatMap((a) => a.rows);
     const pending = rows.filter((r) => r.state === "pending" || r.state === "removing").length;
@@ -147,10 +249,33 @@ function StatusBar({ d, syncing, onSync, now }: { d: DeviceKeys; syncing: boolea
                 {icon}
                 <span className="min-w-0">{text}</span>
             </p>
-            <Button size="sm" variant="outline" onClick={onSync} disabled={syncing || !d.tunnel.online} title={t("keys.device.syncHint")}>
-                <RefreshCw className={cn(syncing && "animate-spin")} /> {t("keys.matrix.syncNow")}
-            </Button>
+            <span className="flex flex-wrap items-center gap-1">
+                <Button size="sm" variant="ghost" onClick={onInfo} title={t("keys.place.open")} aria-label={t("keys.place.open")}>
+                    <Info /> <span className="hidden sm:inline">{t("keys.place.open")}</span>
+                </Button>
+                {removals}
+                <Button size="sm" variant="outline" onClick={onSync} disabled={syncing || !d.tunnel.online} title={t("keys.device.syncHint")}>
+                    <RefreshCw className={cn(syncing && "animate-spin")} /> {t("keys.matrix.syncNow")}
+                </Button>
+            </span>
         </div>
+    );
+}
+
+/** 頁尾的「已移除 N 把 — 還原」：留著直到還原、關閉或下一次移除。/ The footer's inline undo. */
+function UndoBar({ last, busy, online, onUndo, onDismiss }: { last: LastRemoval; busy: string | null; online: boolean; onUndo: () => void; onDismiss: () => void }) {
+    const { t } = useI18n();
+    return (
+        <span role="status" className="mr-auto flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-surface px-2.5 py-1.5 ring-1 ring-inset ring-border">
+            <Trash2 size={14} className="shrink-0 text-muted-foreground" aria-hidden />
+            <span className="text-sm text-foreground">{t("keys.undo.removed", { count: last.keys, account: last.accounts.join(", ") })}</span>
+            <Button size="xs" variant="outline" disabled={busy === "restore" || !online} onClick={onUndo}>
+                {busy === "restore" ? <Loader2 className="animate-spin" /> : <Undo2 />} {t("keys.undo.button")}
+            </Button>
+            <Button size="xs" variant="ghost" onClick={onDismiss} aria-label={t("keys.undo.dismiss")} title={t("keys.undo.dismiss")}>
+                <X />
+            </Button>
+        </span>
     );
 }
 
@@ -281,8 +406,20 @@ function AccountCard({
     return (
         <section className="overflow-hidden rounded-xl ring-1 ring-inset ring-border">
             <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-border/70 bg-surface px-3.5 py-2">
-                <span className="font-mono text-sm text-foreground">
-                    {account.username} <span className="text-xs text-muted-foreground">~/.ssh/authorized_keys</span>
+                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-sm text-foreground">
+                    {account.username} <span className="text-xs text-muted-foreground">{account.file}</span>
+                    {account.windows_admin && (
+                        <TooltipProvider delayDuration={150}>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <span tabIndex={0} className="inline-flex rounded-sm font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
+                                        <Chip tone="neutral"><ShieldCheck aria-hidden /> {t("keys.place.adminFile")}</Chip>
+                                    </span>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-xs text-xs">{t("keys.place.adminFileTip")}</TooltipContent>
+                            </Tooltip>
+                        </TooltipProvider>
+                    )}
                 </span>
                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     {selection && <SelectAllRemovable username={account.username} rows={rows} selection={selection} />}
@@ -323,6 +460,7 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
     const now = useNow(15_000);
     const d = dk.data;
     const [bulkConfirm, setBulkConfirm] = useState(false);
+    const [placement, setPlacement] = useState(false);
     const accounts = d?.view.accounts ?? NO_ACCOUNTS;
     const filter = useRowFilter(accounts, !!d?.tunnel.online);
     const selection = useRowSelection(accounts);
@@ -354,13 +492,23 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             toolbar={
                 d ? (
                     <div className="space-y-2.5">
-                        <StatusBar d={d} syncing={dk.syncing} onSync={() => dk.sync()} now={now} />
+                        <StatusBar
+                            d={d}
+                            syncing={dk.syncing}
+                            onSync={() => dk.sync()}
+                            now={now}
+                            onInfo={() => setPlacement(true)}
+                            removals={d.can_manage ? <RecentRemovals removals={dk.removals} busy={dk.busy} online={d.tunnel.online} onOpen={dk.loadRemovals} onRestore={(id) => dk.restore([id])} now={now} /> : undefined}
+                        />
                         <RowFilterBar filter={filter} />
                     </div>
                 ) : undefined
             }
             footer={
                 <>
+                    {d && dk.lastRemoval && selection.count === 0 && (
+                        <UndoBar last={dk.lastRemoval} busy={dk.busy} online={d.tunnel.online} onUndo={() => dk.lastRemoval && dk.restore(dk.lastRemoval.ids)} onDismiss={dk.dismissRemoval} />
+                    )}
                     {d?.can_manage && selection.count > 0 && (
                         <span className="mr-auto flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span className="text-sm text-foreground">{t("keys.rows.selected", { count: selection.count })}</span>
@@ -381,8 +529,9 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
             {dk.notFound && <Callout tone="danger">{t("keys.device.notFound")}</Callout>}
             {d && (
                 <div className="space-y-6">
+                    {d.platform?.error && d.can_manage && !filter.filtering && <Callout tone="warning">{t("keys.device.platformError", { error: d.platform.error })}</Callout>}
                     {/* 你的金鑰（篩選帳號裡的列時收起來，讓結果在最上面）/ Your keys (hidden while filtering rows so matches come first) */}
-                    {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onNavigate={onClose} />}
+                    {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onSetAccounts={dk.setAccounts} onNavigate={onClose} />}
 
                     {/* 每個帳號：清單 × 裝置上實際內容 / Each account: the list × what is on the device */}
                     <section className="space-y-3">
@@ -472,6 +621,7 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                 confirmText={t("keys.row.removeFromDevice")}
                 isDestructive
             />
+            {d && <PlacementDialog d={d} isOpen={placement} onClose={() => setPlacement(false)} />}
             <ConfirmDialog
                 isOpen={bulkConfirm}
                 onClose={() => setBulkConfirm(false)}

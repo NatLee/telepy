@@ -1757,7 +1757,9 @@ pub struct DeviceKeyEntry {
     pub mine: bool,
     pub added_by: String,
     pub created_at: String,
-    /// One per OS account the key's owner may use on this device
+    /// Login account ids this key is limited to (null = every account its owner may use)
+    pub accounts: Option<Vec<i64>>,
+    /// One per OS account the key goes into (the owner's allowed accounts ∩ `accounts`)
     pub targets: Vec<DeviceKeyTarget>,
 }
 
@@ -1795,6 +1797,24 @@ pub struct MyKeyChoice {
     pub fingerprint: Option<String>,
     pub key_type: Option<String>,
     pub in_list: bool,
+    /// When on the list: login account ids it is limited to (null = all)
+    pub accounts: Option<Vec<i64>>,
+}
+
+/// A login account with its id (for the per-key account choice).
+#[derive(ToSchema)]
+pub struct DeviceAccount {
+    pub id: i64,
+    pub username: String,
+}
+
+/// What Telepy knows about the device's OS (null until the device was dialed).
+#[derive(ToSchema)]
+pub struct DevicePlatform {
+    /// Windows: administrators' keys go to `%ProgramData%\ssh\administrators_authorized_keys`
+    pub windows: bool,
+    /// Why the probe failed (the device is then treated as not Windows)
+    pub error: Option<String>,
 }
 
 /// A device's key list. Owners and ADMIN sharees see every entry and pending removals; other sharees see their own.
@@ -1803,10 +1823,13 @@ pub struct DeviceKeys {
     pub tunnel: DeviceKeyTunnel,
     /// Per-account merged view: the list × what Telepy installed × the file as last read
     pub view: DeviceKeyView,
+    pub platform: Option<DevicePlatform>,
     /// Owner or ADMIN sharee
     pub can_manage: bool,
-    /// OS accounts the caller may use here (their keys go into exactly these)
+    /// OS accounts the caller may use here (their keys go into these, or a chosen subset)
     pub accounts: Vec<String>,
+    /// The same accounts with their ids (what `accounts` on an entry refers to)
+    pub account_ids: Vec<DeviceAccount>,
     pub entries: Vec<DeviceKeyEntry>,
     /// Keys Telepy installed that must go (access revoked, key deleted …), removed once the device is online
     pub removals: Vec<DeviceKeyRemoval>,
@@ -1822,6 +1845,10 @@ pub struct DeviceKeyView {
 #[derive(ToSchema)]
 pub struct DeviceKeyViewAccount {
     pub username: String,
+    /// `~/.ssh/authorized_keys`, or `%ProgramData%\ssh\administrators_authorized_keys` for a Windows administrator
+    pub file: String,
+    /// A member of the local Administrators group on a Windows device (sshd ignores its own authorized_keys)
+    pub windows_admin: bool,
     /// When Telepy last read this account's authorized_keys (null = never; "sync" re-reads)
     pub checked_at: Option<String>,
     /// Whether the file exists (null until read)
@@ -1859,12 +1886,23 @@ pub struct DeviceKeyViewRow {
     pub error: Option<String>,
     /// First 120 characters of an unreadable line
     pub raw: Option<String>,
+    /// For keys on the list: the login account ids the key is limited to (null = all)
+    pub accounts: Option<Vec<i64>>,
 }
 
 #[derive(ToSchema)]
 pub struct DeviceKeysAdd {
     /// Ids of your own keys to add to the device's list
     pub user_key_ids: Vec<i64>,
+    /// Limit the keys to these login account ids (null / absent = every account you may use)
+    pub accounts: Option<Vec<i64>>,
+}
+
+/// `PATCH …/device-keys/{key_id}`: which login accounts the key goes into.
+#[derive(ToSchema)]
+pub struct DeviceKeyAccounts {
+    /// Login account ids (non-empty), or null for every account the owner may use
+    pub accounts: Option<Vec<i64>>,
 }
 
 #[derive(ToSchema)]
@@ -1918,6 +1956,40 @@ pub struct AuthorizedKeyRemoved {
     /// Keys removed
     pub keys: i64,
     pub skipped: Vec<AuthorizedKeySkipped>,
+    /// Undo handle for `POST …/authorized-keys/restore/{removal_id}` (null when nothing was removed); kept 7 days
+    pub removal_id: Option<i64>,
+}
+
+/// One manual removal from an account's authorized_keys (restorable for 7 days).
+#[derive(ToSchema)]
+pub struct AuthorizedKeyRemoval {
+    pub id: i64,
+    pub username: String,
+    /// Keys removed
+    pub keys: i64,
+    /// Lines removed
+    pub lines: i64,
+    pub removed_by: String,
+    pub removed_at: String,
+    /// Set once restored
+    pub restored_at: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeyRemovals {
+    pub tunnel_id: i64,
+    pub retention_days: i64,
+    /// Newest first
+    pub removals: Vec<AuthorizedKeyRemoval>,
+}
+
+#[derive(ToSchema)]
+pub struct AuthorizedKeyRestored {
+    /// Lines appended back
+    pub restored: i64,
+    /// Lines skipped because that key is in the file again
+    pub skipped: i64,
+    pub username: String,
 }
 
 /// A key the batch left alone.
@@ -1931,10 +2003,12 @@ pub struct AuthorizedKeySkipped {
 #[derive(ToSchema)]
 pub struct KeyDeviceKey {
     pub user_key_id: i64,
+    /// Login account ids the key is limited to (null = all)
+    pub accounts: Option<Vec<i64>>,
     pub targets: Vec<DeviceKeyTarget>,
 }
 
-/// One device you can use, with the state of your keys on it (keys-page matrix).
+/// One device you can use, with the state of your keys on it (keys-page matrix; sorted by device name).
 #[derive(ToSchema)]
 pub struct KeyDevice {
     pub tunnel_id: i64,
@@ -1942,6 +2016,8 @@ pub struct KeyDevice {
     pub online: bool,
     pub role: String,
     pub accounts: Vec<String>,
+    /// The same accounts with ids
+    pub account_list: Vec<DeviceAccount>,
     /// Your keys that are in this device's list
     pub keys: Vec<KeyDeviceKey>,
 }

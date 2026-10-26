@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use serde::Serialize;
 
 use super::authorized_keys::{parse_authorized_keys, ParsedKey};
+use super::platform::{Platform, USER_FILE_LABEL};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,11 +53,18 @@ pub struct Row {
     pub line_count: usize,
     pub error: Option<String>,
     pub raw: Option<String>,
+    /// 清單上的金鑰只裝到這些帳號（username id）；None = 擁有者能用的每個帳號。/ The entry's chosen accounts; None = all.
+    pub accounts: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AccountView {
     pub username: String,
+    /// 這個帳號的金鑰檔：`~/.ssh/authorized_keys`，Windows 管理員是共用的 `%ProgramData%\ssh\administrators_authorized_keys`。
+    /// Which file holds this account's keys.
+    pub file: &'static str,
+    /// Windows 本機管理員：sshd 不看它自己的 `~/.ssh/authorized_keys`。/ A Windows administrator (own file ignored by sshd).
+    pub windows_admin: bool,
     /// 最近一次讀到檔案的時間；None = 還沒讀過。/ When the file was last read; None = never.
     pub checked_at: Option<String>,
     /// 檔案存在嗎（讀過才知道）。/ Whether the file exists (known once read).
@@ -99,6 +107,10 @@ pub struct Inputs<'a> {
     pub viewer: i64,
     /// 擁有者 / ADMIN 看到每一列；其他人只看到自己的金鑰。/ Owners / ADMIN see every row; others only their own keys.
     pub manager: bool,
+    /// 裝置的平台（探測過才有）。/ The device's platform, once probed.
+    pub platform: Option<&'a Platform>,
+    /// 清單上有選定帳號的金鑰：user_key_id → 選定的 username id。/ Entries with chosen accounts: user_key_id → ids.
+    pub restrictions: &'a HashMap<i64, Vec<i64>>,
 }
 
 fn base(state: RowState) -> Row {
@@ -120,6 +132,7 @@ fn base(state: RowState) -> Row {
         line_count: 0,
         error: None,
         raw: None,
+        accounts: None,
     }
 }
 
@@ -130,11 +143,12 @@ fn with_key(mut r: Row, k: &ParsedKey) -> Row {
     r
 }
 
-fn with_known(mut r: Row, k: &KnownKey, viewer: i64) -> Row {
+fn with_known(mut r: Row, k: &KnownKey, i: &Inputs) -> Row {
     r.user_key_id = Some(k.user_key_id);
     r.name = Some(k.name.clone());
     r.owner = Some(k.owner.clone());
-    r.mine = k.owner_id == viewer;
+    r.mine = k.owner_id == i.viewer;
+    r.accounts = i.restrictions.get(&k.user_key_id).cloned();
     with_key(r, &k.parsed)
 }
 
@@ -185,7 +199,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
             r.line_count = count(bare);
         }
         if let Some(k) = i.known.get(bare) {
-            r = with_known(r, k, i.viewer);
+            r = with_known(r, k, i);
         }
         rows.push(r);
         seen.insert(bare);
@@ -205,7 +219,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         r.fingerprint = Some(fp.clone());
         r.error = error.clone();
         if let Some(k) = i.known.get(bare) {
-            r = with_known(r, k, i.viewer);
+            r = with_known(r, k, i);
         } else {
             r.owner = owner.and_then(|id| i.users.get(&id).cloned());
             r.mine = *owner == Some(i.viewer);
@@ -255,7 +269,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
             r.comment = Some(k.comment.clone());
         }
         if let Some(known) = i.known.get(&k.bare) {
-            r = with_known(r, known, i.viewer);
+            r = with_known(r, known, i);
         }
         rows.push(r);
     }
@@ -263,8 +277,11 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         rows.retain(|r| r.mine);
     }
     rows.sort_by(|a, b| a.state.cmp(&b.state).then_with(|| a.name.cmp(&b.name)).then_with(|| a.line_no.cmp(&b.line_no)));
+    let (_, file, windows_admin) = i.platform.map(|p| p.file_for(acct)).unwrap_or((None, USER_FILE_LABEL, false));
     AccountView {
         username: acct.to_string(),
+        file,
+        windows_admin,
         checked_at: snapshot.map(|(_, at)| at.clone()),
         exists: snapshot.map(|(c, _)| c.is_some()),
         error,
@@ -300,6 +317,8 @@ mod tests {
         service: BTreeSet<String>,
         known: HashMap<String, KnownKey>,
         users: HashMap<i64, String>,
+        platform: Option<Platform>,
+        restrictions: HashMap<i64, Vec<i64>>,
     }
 
     impl Fixture {
@@ -313,6 +332,8 @@ mod tests {
                 service: BTreeSet::from([bare(SVC)]),
                 known: HashMap::from([known(ALICE, 1, "MacBook", 10, "alice"), known(BOB, 2, "bob-pc", 20, "bob")]),
                 users: HashMap::from([(10, "alice".into()), (20, "bob".into())]),
+                platform: None,
+                restrictions: HashMap::new(),
             }
         }
         fn build(&self, viewer: i64, manager: bool) -> AccountView {
@@ -328,6 +349,8 @@ mod tests {
                 users: &self.users,
                 viewer,
                 manager,
+                platform: self.platform.as_ref(),
+                restrictions: &self.restrictions,
             };
             build(&i).remove(0)
         }
@@ -402,6 +425,36 @@ mod tests {
         let v = f.build(10, true);
         assert_eq!(states(&v), vec![RowState::Service, RowState::Unknown]);
         assert_eq!((v.rows[0].line_count, v.rows[1].line_count, v.rows[1].line_no), (1, 3, Some(1)));
+    }
+
+    #[test]
+    fn windows_admin_file_and_chosen_accounts() {
+        let mut f = Fixture::new();
+        f.accounts = vec!["nat".into(), "guest".into()];
+        f.platform = Some(Platform { windows: true, program_data: Some("/C:/ProgramData".into()), admins: BTreeSet::from(["nat".to_string()]), error: None });
+        f.desired.insert("nat".into(), BTreeSet::from([bare(ALICE)]));
+        f.restrictions.insert(1, vec![7]);
+        let i = Inputs {
+            accounts: &f.accounts,
+            desired: &f.desired,
+            installed: &f.installed,
+            sync_errors: &f.errors,
+            snapshots: &f.snapshots,
+            service: &f.service,
+            shared: &f.service,
+            known: &f.known,
+            users: &f.users,
+            viewer: 10,
+            manager: true,
+            platform: f.platform.as_ref(),
+            restrictions: &f.restrictions,
+        };
+        let v = build(&i);
+        assert_eq!((v[0].file, v[0].windows_admin), (super::super::platform::ADMIN_FILE_LABEL, true));
+        assert_eq!((v[1].file, v[1].windows_admin), (USER_FILE_LABEL, false));
+        assert_eq!(v[0].rows[0].accounts, Some(vec![7]));
+        // 沒探測過：預設是帳號自己的檔案。/ Not probed: the account's own file.
+        assert_eq!(Fixture::new().build(10, true).file, USER_FILE_LABEL);
     }
 
     #[test]

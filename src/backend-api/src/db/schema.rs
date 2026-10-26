@@ -434,6 +434,22 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("tunnel_id", "username")
         )"#,
     ),
+    // Rust 自有：從裝置帳號的 authorized_keys 批次移除的行（7 天內可還原）。/ Lines removed from a device account's
+    // authorized_keys by hand, kept 7 days so the removal can be undone.
+    (
+        "telepy_device_key_removal",
+        r#"CREATE TABLE "telepy_device_key_removal" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(128) NOT NULL,
+            "lines" text NOT NULL,
+            "keys" integer NOT NULL,
+            "removed_by_id" integer NOT NULL,
+            "removed_by" varchar(150) NOT NULL,
+            "removed_at" datetime NOT NULL,
+            "restored_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：登入紀錄（成功與失敗；帶 IP，保留 90 天）。/ Sign-in history (carries IPs; 90 days).
     (
         "telepy_sign_in_event",
@@ -653,6 +669,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_removal_tunnel" ON "telepy_device_key_removal" ("tunnel_id", "removed_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     // 同一把 host key 被哪些隧道信任（= 同一台機器）。/ Which tunnels trust one host key (= the same machine).
@@ -710,6 +727,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 核准的存取申請：暫時的帳號（到期就移除）與暫時提升的權限（到期回到 base_permission）。
     // Approved access requests: temporary accounts (removed at expiry) and a temporary permission (back to base_permission).
     ("tunnels_tunnelsharingallowedusername", "expires_at", "datetime NULL"),
+    // 裝置金鑰清單：這把金鑰只裝到這些帳號（username id 的 JSON 陣列；NULL = 擁有者能用的每個帳號）。
+    // Device key list: install this key only into these accounts (JSON array of username ids; NULL = every allowed account).
+    ("telepy_device_key", "accounts", "text NULL"),
     ("tunnels_tunnelsharing", "base_permission", "varchar(10) NULL"),
     ("tunnels_tunnelsharing", "permission_until", "datetime NULL"),
     // 敏感隧道：開 session 前要再確認一次是你（step-up）。/ Sensitive tunnel: step-up before opening a session.

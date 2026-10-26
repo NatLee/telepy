@@ -3,14 +3,18 @@
 //! 模型 / Model:
 //! - 每台裝置（隧道）有一份清單：哪些使用者金鑰要裝上去。擁有者與被分享者都只能放「自己的」金鑰。
 //! - 一把金鑰裝進哪些 OS 帳號 = 金鑰擁有者在這台裝置上「允許使用的帳號」（`permissions::allowed_usernames`，
-//!   與網頁終端機同一道關卡）。所以撤銷分享、縮小允許清單、刪帳號或刪金鑰，裝置上的金鑰就跟著被移除。
+//!   與網頁終端機同一道關卡）∩ 清單上這把金鑰「選定的帳號」（`telepy_device_key.accounts`；NULL = 全部）。
+//!   所以撤銷分享、縮小允許清單、取消勾選帳號、刪帳號或刪金鑰，裝置上的金鑰就跟著被移除。
+//! - Windows 裝置：本機 Administrators 的金鑰寫到共用的 `%ProgramData%\ssh\administrators_authorized_keys`（`platform`）。
 //! - 「應該在」與「Telepy 裝過」（`telepy_device_key_installed`）相減就是待辦；裝置上線時同步。
 //!   Telepy 只移除自己裝過的金鑰，也絕不移除服務金鑰。
 //!
-//! Each device has a key list; a key is installed into exactly the accounts its owner may use there,
-//! so revoking access removes it. Desired − installed is reconciled whenever the device is online.
+//! Each device has a key list; a key is installed into exactly the accounts its owner may use there (narrowed
+//! further by the entry's chosen accounts), so revoking access removes it. Desired − installed is reconciled
+//! whenever the device is online.
 
 pub mod authorized_keys;
+pub mod platform;
 pub mod remote;
 pub mod view;
 
@@ -46,6 +50,9 @@ pub struct DeviceKeys {
     /// 每台裝置（reverse port）每個帳號最近一次讀到 / 寫入的 authorized_keys，面板不必每次都連裝置。
     /// The authorized_keys last read or written per (reverse port, account), so the panel needn't dial the device.
     snapshots: Mutex<HashMap<(i64, String), FileSnapshot>>,
+    /// 每台裝置的平台（Windows？哪些帳號是管理員？），探測一次快取 `platform::TTL`。/ Per-device platform, cached.
+    platforms: Mutex<HashMap<i64, platform::Cached>>,
+    platform_locks: DashMap<i64, Arc<tokio::sync::Mutex<()>>>,
 }
 
 /// 最近一次看到的檔案內容。/ The file as Telepy last saw it.
@@ -90,6 +97,37 @@ impl DeviceKeys {
     pub fn snapshot(&self, reverse_port: i64, account: &str) -> Option<FileSnapshot> {
         self.snapshots.lock().unwrap().get(&(reverse_port, account.to_string())).cloned()
     }
+
+    /// 這台裝置的平台：快取還新就直接回，否則登入 `username` 探測一次（同一台同時只探測一次）。
+    /// The device's platform: from the cache while fresh, else probed once (concurrent callers share the probe).
+    pub async fn platform(&self, state: &AppState, reverse_port: i64, username: &str) -> platform::Platform {
+        if let Some(p) = self.cached_platform(reverse_port) {
+            return p;
+        }
+        let lock = self.platform_locks.entry(reverse_port).or_default().clone();
+        let _guard = lock.lock().await;
+        if let Some(p) = self.cached_platform(reverse_port) {
+            return p;
+        }
+        let p = platform::probe(state, reverse_port, username).await;
+        if let Some(e) = &p.error {
+            tracing::info!(reverse_port, error = %e, "device keys: platform probe failed; assuming ~/.ssh/authorized_keys");
+        } else if p.windows {
+            tracing::info!(reverse_port, admins = ?p.admins, "device keys: Windows device; administrators use the shared admin key file");
+        }
+        self.platforms.lock().unwrap().insert(reverse_port, platform::Cached { platform: p.clone(), at: Instant::now() });
+        p
+    }
+
+    /// 不連裝置：快取裡（還新的）平台。/ The cached platform, if still fresh; never dials the device.
+    pub fn cached_platform(&self, reverse_port: i64) -> Option<platform::Platform> {
+        self.platforms.lock().unwrap().get(&reverse_port).filter(|c| c.fresh(Instant::now())).map(|c| c.platform.clone())
+    }
+
+    /// 「立即同步」：下次重新探測。/ Forget the platform so the next open re-probes.
+    pub fn forget_platform(&self, reverse_port: i64) {
+        self.platforms.lock().unwrap().remove(&reverse_port);
+    }
 }
 
 /// 應該裝在某帳號上的一把金鑰。
@@ -105,10 +143,14 @@ pub struct DesiredKey {
 /// OS 帳號 → (bare → 金鑰)。
 pub type Desired = BTreeMap<String, BTreeMap<String, DesiredKey>>;
 
-/// 由清單 + 每位擁有者允許的帳號算出「應該在」的狀態。
+/// 由清單 + 每位擁有者允許的帳號（∩ 這把金鑰選定的帳號）算出「應該在」的狀態。
+/// 選定的帳號只是縮小範圍：`allowed_usernames` 仍是上限，選到不被允許的帳號就當沒選（之後權限放寬才生效）。
+/// Desired state from the list × each owner's allowed accounts ∩ the entry's chosen accounts. The choice only
+/// narrows: `allowed_usernames` stays the ceiling, and a chosen account outside it is simply not used (until
+/// access widens).
 pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
     let entries = db::device_keys::entries_for_tunnel(db, tunnel.id).await?;
-    let mut allowed: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut allowed: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
     let mut out = Desired::new();
     for e in entries {
         // 到期的金鑰不該在裝置上：從期望狀態拿掉，同步就會把它移除。/ Expired keys drop out, so sync removes them.
@@ -116,11 +158,15 @@ pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
             continue;
         }
         let Some(parsed) = parse_public_key(&e.key) else { continue };
-        if !allowed.contains_key(&e.user_id) {
-            let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| u.username).collect();
-            allowed.insert(e.user_id, names);
+        if let std::collections::hash_map::Entry::Vacant(slot) = allowed.entry(e.user_id) {
+            let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| (u.id, u.username)).collect();
+            slot.insert(names);
         }
-        for os_user in &allowed[&e.user_id] {
+        let chosen = e.account_ids();
+        for (id, os_user) in &allowed[&e.user_id] {
+            if chosen.as_ref().is_some_and(|c| !c.contains(id)) {
+                continue;
+            }
             out.entry(os_user.clone()).or_default().insert(
                 parsed.bare.clone(),
                 DesiredKey {
@@ -215,6 +261,10 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
         db::device_keys::delete_tunnel(&state.db, tunnel_id).await?;
         return Ok(SyncOutcome::Done { changed: false, errors: 0 });
     };
+    if force {
+        // 重新探測平台（管理員群組可能變了）。/ Re-probe the platform (the admin group may have changed).
+        state.device_keys.forget_platform(tunnel.reverse_port);
+    }
     let desired = desired(&state.db, &tunnel).await?;
     let installed = db::device_keys::installed_for_tunnel(&state.db, tunnel.id).await?;
     let mut diffs = diff(&desired, &installed);

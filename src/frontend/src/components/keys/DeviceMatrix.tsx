@@ -89,9 +89,15 @@ function Cell({ device, keyItem, busy, onToggle }: { device: KeyDevice; keyItem:
                 <span className="sr-only">{t("keys.matrix.toggleAria", { key: keyItem.host_friendly_name, device: device.host_friendly_name })}</span>
                 <span aria-hidden>{placed ? t("keys.matrix.inList") : t("keys.matrix.notInList")}</span>
             </label>
-            {placed && <TargetChips targets={placed.targets} online={device.online} />}
+            {placed && <TargetChips targets={placed.targets} online={device.online} unchosen={unchosenAccounts(placed.accounts, device.account_list)} />}
         </div>
     );
+}
+
+/** 金鑰只選了部分帳號：沒選的帳號名（矩陣上以灰籤標示）。/ Accounts the key was not chosen for (shown muted). */
+export function unchosenAccounts(chosen: number[] | null, accounts: { id: number; username: string }[]): string[] {
+    if (chosen === null) return [];
+    return accounts.filter((a) => !chosen.includes(a.id)).map((a) => a.username);
 }
 
 export function DeviceMatrix({
