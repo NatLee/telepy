@@ -1918,6 +1918,8 @@ pub struct DeviceKeys {
 #[derive(ToSchema)]
 pub struct DeviceKeyView {
     pub accounts: Vec<DeviceKeyViewAccount>,
+    /// `KEEP_SHARED_SERVICE_KEY` is set: the legacy shared key stays on devices (another server still uses it)
+    pub keep_shared: bool,
 }
 
 #[derive(ToSchema)]

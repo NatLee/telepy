@@ -2054,6 +2054,7 @@ export const ja: Record<TranslationKey, string> = {
     "keys.row.sharedName": "共有の Telepy キー（旧）",
     "keys.row.legacyShared": "共有 · 旧",
     "keys.row.legacySharedTip": "以前すべてのトンネルが共用していたキーです。このマシン上のすべてのトンネルが固有のキーでログインできたら、Telepy がこのアカウントから取り除きます。",
+    "keys.row.keptSharedTip": "以前すべてのトンネルが共用していたキーです。このサーバーは保持する設定です（別の Telepy サーバーがまだこのキーでログインします）。Telepy は取り除きません。",
     "keys.row.installed": "デバイス上にあり",
     "keys.row.installedTip": "キーリストにあり、最後の確認時にこのファイルで見つかりました。",
     "keys.row.installedUnverified": "インストール済み",

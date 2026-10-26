@@ -2054,6 +2054,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "keys.row.sharedName": "共用的 Telepy 金鑰（舊）",
     "keys.row.legacyShared": "共用 · 舊",
     "keys.row.legacySharedTip": "以前每條通道共用的金鑰。等這台機器上的每條通道都用自己的金鑰登入過，Telepy 就會把它從這個帳號移掉。",
+    "keys.row.keptSharedTip": "以前每條通道共用的金鑰。這台伺服器設定成保留它（另一台 Telepy 還用它登入），所以 Telepy 不會移掉它。",
     "keys.row.installed": "已在裝置上",
     "keys.row.installedTip": "在金鑰清單上，最近一次檢查時在這個檔案裡看到。",
     "keys.row.installedUnverified": "已安裝",

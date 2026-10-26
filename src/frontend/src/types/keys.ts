@@ -101,7 +101,7 @@ export interface DeviceKeys {
     /** `accounts`：在清單上時，只裝到這些帳號 id；null = 全部。/ When listed: chosen account ids; null = all. */
     my_keys: { id: number; name: string; fingerprint: string | null; key_type: string | null; in_list: boolean; expired?: boolean; accounts: number[] | null }[];
     /** 每個帳號一張卡：清單與裝置上實際內容合在一起。/ Per-account merged view. */
-    view: { accounts: ViewAccount[] };
+    view: { accounts: ViewAccount[]; keep_shared?: boolean };
 }
 
 /** 合併檢視一列的狀態。/ State of one row in the merged view. */

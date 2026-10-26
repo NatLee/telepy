@@ -163,6 +163,9 @@ pub async fn run(config: &Config) -> Vec<Check> {
             }
         }
     });
+    if config.keep_shared_service_key {
+        out.push(check("shared key", Status::Info, "KEEP_SHARED_SERVICE_KEY: kept on devices after tunnels move to their own keys"));
+    }
 
     // gateway host keys。/ Gateway host keys.
     out.push(match (&config.gateway_host_keys_dir, config.gateway_enabled) {

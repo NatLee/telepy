@@ -332,7 +332,7 @@ function KeyRowView({
                     <StateBadge row={row} online={d.tunnel.online} />
                     <span className="min-w-0 truncate text-sm text-foreground">{row.state === "invalid" ? t("keys.row.invalidLine", { line: row.line_no ?? "?" }) : title}</span>
                     {row.owner && row.state !== "service" && <Chip tone={row.mine ? "primary" : "neutral"}>{row.mine ? t("keys.device.you") : row.owner}</Chip>}
-                    {row.state === "service" && row.legacy && <Chip tone="warning" title={t("keys.row.legacySharedTip")}>{t("keys.row.legacyShared")}</Chip>}
+                    {row.state === "service" && row.legacy && <Chip tone="warning" title={t(d.view.keep_shared ? "keys.row.keptSharedTip" : "keys.row.legacySharedTip")}>{t("keys.row.legacyShared")}</Chip>}
                     {row.line_count > 1 && (
                         <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
                             {t("keys.rows.lines", { count: row.line_count })}
