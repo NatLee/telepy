@@ -360,6 +360,42 @@ pub struct SignInEvent {
     pub reason: Option<String>,
 }
 
+/// 一個還有效的網頁登入（一個瀏覽器）。/ One live web sign-in (one browser).
+#[derive(ToSchema)]
+pub struct WebSession {
+    pub id: i64,
+    /// 最後一次續期 / 使用時的 IP。/ The IP of the last renewal or use.
+    #[schema(example = "198.51.100.7")]
+    pub ip: Option<String>,
+    pub geo: Option<IpGeo>,
+    pub user_agent: Option<String>,
+    /// 「瀏覽器 · 作業系統」，認不出來為 null。/ "browser · OS", null when unrecognised.
+    #[schema(example = "Chrome · macOS")]
+    pub device: Option<String>,
+    #[schema(example = "2026-10-23T01:02:03.123456Z")]
+    pub created_at: String,
+    /// 最後一次續期，或最多每 5 分鐘記一次的 REST 使用。/ Last renewal, or REST use recorded at most every 5 minutes.
+    pub last_seen_at: String,
+    /// 沒有再用的話何時登出（每次續期往後推）。/ When it ends without further use (slides on every renewal).
+    pub expires_at: String,
+    /// 就是發出這個請求的瀏覽器。/ The browser making this request.
+    pub current: bool,
+    /// password / google / passkey；升級前的登入為 null。/ First factor; null for sign-ins from before the upgrade.
+    pub sign_in_method: Option<String>,
+    /// totp / recovery_code / passkey
+    pub mfa_method: Option<String>,
+}
+
+/// `GET /api/auth/sessions` 與管理員版本。/ The sessions list and the admin version.
+#[derive(ToSchema)]
+pub struct WebSessionList {
+    pub sessions: Vec<WebSession>,
+    /// 網站設定 `signin_lifetime`（秒）：多久沒用就要重新登入。/ Seconds of no use before a sign-in ends.
+    pub signin_lifetime: i64,
+    /// 網站設定 `signin_access_lifetime`（秒）：access token 多久換一次。/ Seconds between access-token renewals.
+    pub access_lifetime: i64,
+}
+
 #[derive(ToSchema)]
 pub struct TunnelWrite {
     pub host_friendly_name: String,

@@ -167,6 +167,11 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                     });
                     return;
                 }
+                if (ev.code === 4010) {
+                    write(`\r\n\x1b[33m${translate("security.signedOutXterm")}\x1b[0m\r\n`);
+                    onStatus(key, "closed");
+                    return;
+                }
                 if (ev.code === 4009) {
                     write(`\r\n\x1b[33m${translate("sessions.endedXterm", { by: ev.reason || "?" })}\x1b[0m\r\n`);
                     onStatus(key, "closed");

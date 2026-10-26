@@ -36,6 +36,9 @@ export const NOTIFICATION_ACTIONS = {
     JOIN_UPDATED: "JOIN-UPDATED",
     // 有人從即時 session 頁結束了你的 session：{tunnel_id, kind, by}。/ Someone ended your session: {tunnel_id, kind, by}.
     SESSION_ENDED: "SESSION-ENDED",
+    // 從 90 天內沒見過的國家 / 瀏覽器登入你的帳號：{ip, geo, device, user_agent, method, second_factor, at}。
+    // A sign-in from a country or browser not seen in 90 days.
+    SIGN_IN_NEW_DEVICE: "SIGN-IN-NEW-DEVICE",
     // 筆電經 gateway 連敏感隧道被擋：{tunnel_id, tunnel_name}（送給那個人）。/ Laptop SSH to a step-up tunnel was refused.
     STEP_UP_REQUIRED: "STEP-UP-REQUIRED",
     // 存取申請：新申請送給 owner / ADMIN；決定送給申請人；其他變動讓 owner / ADMIN 端刷新。

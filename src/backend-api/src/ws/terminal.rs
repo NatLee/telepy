@@ -185,7 +185,7 @@ pub async fn resolve_access(state: &AppState, user_id: i64, server_id: &str, use
 }
 
 pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
-    let (user, msg) = match auth::first_message(&state, &mut socket).await {
+    let (user, msg, mut signout) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
         Err(code) => {
@@ -448,6 +448,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             by = presence.ended() => {
                 close_with(&mut socket, CLOSE_ENDED, &by).await;
                 close_code = Some(CLOSE_ENDED);
+                break;
+            }
+            // 這個瀏覽器的登入被撤銷了。/ This browser's sign-in was revoked.
+            reason = signout.ended() => {
+                close_with(&mut socket, auth::CLOSE_SIGNED_OUT, &reason).await;
+                close_code = Some(auth::CLOSE_SIGNED_OUT);
                 break;
             }
             read = read_pty(&mut pty, &mut buf) => match read {

@@ -102,6 +102,7 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::McpSessionOpened => ("MCP agent 開了 session", "MCP エージェントのセッション開始"),
         Kind::McpSessionClosed => ("MCP agent 的 session 關閉", "MCP エージェントのセッション終了"),
         Kind::AccountSignIn => ("新的登入", "新しいサインイン"),
+        Kind::AccountSignInNewDevice => ("新裝置登入", "新しいデバイスからのサインイン"),
         Kind::AccountSignInFailed => ("登入失敗", "サインイン失敗"),
         Kind::KeyExpiring => ("SSH 金鑰快到期", "SSH 鍵の期限が近い"),
         Kind::KeyExpired => ("SSH 金鑰已到期", "SSH 鍵の期限切れ"),
@@ -272,6 +273,24 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
                 tri(lang, format!("Failed sign-in to {user} ({method}, {reason}) from {place}"), format!("有人從 {place} 登入 {user} 失敗（{method}，{reason}）"), format!("{place} から {user} へのサインインに失敗しました（{method}、{reason}）"))
             }
         }
+        Kind::AccountSignInNewDevice => {
+            let user = s(d, "user");
+            let place = match (s(d, "ip"), s(d, "country")) {
+                ("", _) => String::new(),
+                (ip, "") => ip.to_string(),
+                (ip, c) => format!("{ip}, {c}"),
+            };
+            let device = match s(d, "device") {
+                "" => tri(lang, "an unknown browser".into(), "不明的瀏覽器".into(), "不明なブラウザー".into()),
+                d => d.to_string(),
+            };
+            tri(
+                lang,
+                format!("{user} signed in from a new device: {device} at {place}. If this wasn't you, sign it out under Preferences → Security."),
+                format!("{user} 從新的裝置登入：{device}，位置 {place}。如果不是你，請到「偏好設定 → 安全性」把它登出。"),
+                format!("{user} が新しいデバイスからサインインしました：{device}（{place}）。心当たりがなければ「設定 → セキュリティ」でサインアウトしてください。"),
+            )
+        }
         Kind::KeyExpiring => {
             let (name, when) = (s(d, "name"), s(d, "expires_label"));
             match d.get("days_left").and_then(Value::as_i64).unwrap_or(1) {
@@ -336,6 +355,14 @@ mod tests {
         let d = json!({"user": "alice", "method": "password", "reason": "bad_password", "ip": "203.0.113.9", "country": "TW"});
         assert_eq!(sentence(Kind::AccountSignInFailed, Lang::En, None, &d), "Failed sign-in to alice (password, wrong password) from 203.0.113.9, TW");
         assert_eq!(sentence(Kind::AccountSignInFailed, Lang::ZhTw, None, &d), "有人從 203.0.113.9, TW 登入 alice 失敗（密碼，密碼錯誤）");
+    }
+
+    #[test]
+    fn new_device_sign_in() {
+        let d = json!({"user": "alice", "ip": "203.0.113.9", "country": "JP", "device": "Firefox · Windows"});
+        assert!(sentence(Kind::AccountSignInNewDevice, Lang::En, None, &d).starts_with("alice signed in from a new device: Firefox · Windows at 203.0.113.9, JP."));
+        assert!(sentence(Kind::AccountSignInNewDevice, Lang::ZhTw, None, &d).starts_with("alice 從新的裝置登入：Firefox · Windows"));
+        assert!(sentence(Kind::AccountSignInNewDevice, Lang::Ja, None, &json!({"user": "alice"})).contains("不明なブラウザー"));
     }
 
     #[test]

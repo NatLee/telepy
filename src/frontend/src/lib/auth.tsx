@@ -17,6 +17,8 @@
  *   session 全部砍掉重連；要送出的地方一律從 localStorage 取最新值（apiFetch、socket 的 auth 訊息都是）。
  *   The context's accessToken is **not** updated on background renewals: the terminal / file manager / remote
  *   browser effects depend on it and would tear their sessions down; senders read the live token from localStorage.
+ * - 被登出（別的裝置 / 管理員；WebSocket 4010 或 401 帶 `signed_out`）時，登出後跳一個說明原因的提示。
+ *   Signed out elsewhere (another device / an admin; WebSocket 4010 or a 401 with `signed_out`): a notice says why.
  * - Profile 取得時機：initAuth 驗證 token 後、refresh 成功後、login 時。
  *   Profile fetch: after token verify in initAuth, after refresh success, and on login.
  */
@@ -24,7 +26,9 @@ import React, { createContext, useContext, useEffect, useRef, useState } from "r
 import { useRouter } from "next/navigation";
 
 import { UserProfile, AuthContextType } from "../types/auth";
-import { ACCESS_TOKEN_EVENT, refreshSession, revokeSession } from "./api";
+import { ACCESS_TOKEN_EVENT, refreshSession, revokeSession, takeSignedOutReason } from "./api";
+import { useI18n } from "./i18n";
+import { useToast } from "@/components/ui/Toast";
 import { isAuthorizePath, loginPathFor } from "./oauthFlow";
 import { accessTokenExpiring, refreshDelayMs, RETRY_DELAY_MS } from "./session";
 import { resetTerminalSchemes } from "@/hooks/useTerminalSchemes";
@@ -47,11 +51,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     userRef.current = user;
     const accessTokenRef = useRef<string | null>(null);
     accessTokenRef.current = accessToken;
+    const { t } = useI18n();
+    const { showToast } = useToast();
+    // 登出的原因（lib/api 記下的）→ 提示；自己登出 / 到期不提示。/ Say why we were signed out; not for an own logout or expiry.
+    const announceSignedOutRef = useRef<() => void>(() => { });
+    announceSignedOutRef.current = () => {
+        const reason = takeSignedOutReason();
+        if (reason === "admin") showToast(t("security.signedOutByAdmin"), "warning");
+        else if (reason === "user") showToast(t("security.signedOutElsewhere"), "warning");
+    };
 
     useEffect(() => {
         // 在 MCP 應用程式的同意頁上登入過期：登出後回到同一個授權請求，不要把使用者丟到一般登入頁。
         // Session expired on the consent page: come back to the same authorization request after signing in.
         const handleUnauthorized = () => {
+            announceSignedOutRef.current();
             const here = window.location.pathname + window.location.search;
             logout(isAuthorizePath(here) ? here : undefined);
         };
@@ -236,6 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 背景續期被拒時走跟 401 一樣的路（同意頁回到同一個請求）。/ A refused renewal takes the 401 path (consent page included).
     const handleUnauthorizedRef = useRef<() => void>(() => { });
     handleUnauthorizedRef.current = () => {
+        announceSignedOutRef.current();
         const here = window.location.pathname + window.location.search;
         logout(isAuthorizePath(here) ? here : undefined);
     };

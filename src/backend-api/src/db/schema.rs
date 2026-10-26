@@ -738,6 +738,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_ai_audit_event", "prev_hash", "varchar(64) NULL"),
     ("telepy_ai_audit_event", "hash", "varchar(64) NULL"),
     ("authorized_keys_reverseserverauthorizedkeys", "default_username_id", "INTEGER NULL"),
+    // 登入 session 用什麼方式登入（「你的裝置」清單）。/ How a web session signed in (the "Your devices" list).
+    ("telepy_web_session", "method", "varchar(16) NULL"),
+    ("telepy_web_session", "second_factor", "varchar(16) NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_at", "datetime NULL"),
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
     // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).

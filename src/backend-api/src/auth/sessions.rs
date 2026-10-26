@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::auth::TokenType;
 use crate::client_ip::ClientMeta;
-use crate::db::{self, web_sessions::{self, WebSession}};
+use crate::db::{self, web_sessions::{self, SignInMethod, WebSession}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::util::{db_time, parse_db_datetime, uuid_hex};
@@ -48,24 +48,121 @@ pub fn token_not_valid() -> ApiError {
     ApiError::new(StatusCode::UNAUTHORIZED, json!({ "detail": "Token is invalid or expired", "code": "token_not_valid" }))
 }
 
+/// 被登出的 session 的 401：形狀同 simplejwt，多帶 `signed_out` = 撤銷原因（user = 你從別的裝置登出它、
+/// admin = 管理員、logout、reuse），讓網頁說清楚為什麼回到登入頁。
+/// The 401 of a revoked session: simplejwt's shape plus `signed_out` = the reason, so the web can say why.
+pub fn signed_out(reason: &str) -> ApiError {
+    ApiError::new(StatusCode::UNAUTHORIZED, json!({ "detail": "Token is invalid or expired", "code": "token_not_valid", "signed_out": reason }))
+}
+
+/// 撤銷狀態快取多久（其他 process 沒有；同一個 process 的撤銷會直接寫進快取，立刻生效）。
+/// How long a session's revocation state is cached (a revocation in this process updates the cache at once).
+pub const REVOKED_CACHE_TTL: Duration = Duration::from_secs(5);
+/// REST 請求最多多久記一次「最後使用」。/ How often a REST request may record the session's last use.
+pub const TOUCH_EVERY: Duration = Duration::from_secs(300);
+
+/// 登入 session 的記憶體狀態：撤銷快取（access token 每個請求都要查）、「最後使用」的寫入節流。
+/// In-memory session state: the revocation cache (checked on every access token) and the last-use write throttle.
+pub struct SessionGuard {
+    /// sid → `Some(reason)` 已撤銷 / `None` 還有效。/ sid → `Some(reason)` revoked, `None` live.
+    revoked: moka::sync::Cache<i64, Option<String>>,
+    touched: moka::sync::Cache<i64, ()>,
+}
+
+impl Default for SessionGuard {
+    fn default() -> Self {
+        Self {
+            revoked: moka::sync::Cache::builder().time_to_live(REVOKED_CACHE_TTL).max_capacity(100_000).build(),
+            touched: moka::sync::Cache::builder().time_to_live(TOUCH_EVERY).max_capacity(100_000).build(),
+        }
+    }
+}
+
+impl SessionGuard {
+    /// 快取裡已知撤銷了（WebSocket 訂閱後的二次確認用，不讀 DB）。/ Known revoked from the cache (no DB read).
+    pub fn known_revoked(&self, sid: i64) -> Option<String> {
+        self.revoked.get(&sid).flatten()
+    }
+}
+
+/// access token 的 `sid` 還有效嗎？撤銷了回 `Some(原因)`。到期的 session 也算結束（`expired`）。快取 ≤ 5 秒。
+/// Is the access token's session still live? `Some(reason)` when revoked (or `expired`). Cached ≤ 5 s.
+pub async fn ended(state: &AppState, sid: i64) -> ApiResult<Option<String>> {
+    if let Some(v) = state.sessions.revoked.get(&sid) {
+        return Ok(v);
+    }
+    let v = match web_sessions::by_id(&state.db, sid).await? {
+        None => Some("revoked".to_string()),
+        Some(s) => s.revoked_at.as_ref().map(|_| s.revoked_reason.clone().unwrap_or_else(|| "revoked".into())).or_else(|| {
+            let expired = parse_utc(&s.expires_at).map(|t| t <= Utc::now()).unwrap_or(false);
+            expired.then(|| "expired".to_string())
+        }),
+    };
+    state.sessions.revoked.insert(sid, v.clone());
+    Ok(v)
+}
+
+/// REST 請求用到了這個 session：最多每 `TOUCH_EVERY` 寫一次 `last_used_at`（背景，不擋請求）。
+/// A REST request used this session: write `last_used_at` at most every `TOUCH_EVERY` (in the background).
+pub fn note_use(state: &AppState, sid: i64, ip: Option<String>) {
+    if state.sessions.touched.contains_key(&sid) {
+        return;
+    }
+    state.sessions.touched.insert(sid, ());
+    let db = state.db.clone();
+    tokio::spawn(async move {
+        if let Err(e) = web_sessions::touch(&db, sid, ip.as_deref()).await {
+            tracing::debug!(sid, error = %e, "cannot record session use");
+        }
+    });
+}
+
+/// 撤銷之後的共同收尾：快取立刻記上（這個 process 的 access token 馬上失效）、通知開著的 WebSocket（4010）。
+/// After a revocation: mark the cache (access tokens stop at once in this process) and close open sockets (4010).
+pub fn revoked(state: &AppState, sid: i64, reason: &str) {
+    state.sessions.revoked.insert(sid, Some(reason.to_string()));
+    state.sessions.touched.invalidate(&sid);
+    state.hub.session_ended(sid, reason);
+}
+
+/// 撤銷一個 session（DB + 快取 + 開著的頁面）。回傳是否真的撤銷了（已撤銷的回 false）。
+/// Revoke one session (DB, cache, open pages). False when it was already revoked.
+pub async fn revoke_sid(state: &AppState, sid: i64, reason: &str) -> ApiResult<bool> {
+    let done = web_sessions::revoke(&state.db, sid, reason).await?;
+    if done {
+        revoked(state, sid, reason);
+    }
+    Ok(done)
+}
+
+/// 撤銷使用者其他所有 session（`except` 除外），回傳撤銷了幾個。/ Revoke a user's other sessions; returns how many.
+pub async fn revoke_all(state: &AppState, user_id: i64, except: Option<i64>, reason: &str) -> ApiResult<usize> {
+    let ids = web_sessions::revoke_for_user(&state.db, user_id, except, reason).await?;
+    for sid in &ids {
+        revoked(state, *sid, reason);
+    }
+    Ok(ids.len())
+}
+
 fn pair(state: &AppState, user_id: i64, sid: i64, jti: &str, iat: i64, exp: i64, access: Duration) -> Value {
     json!({
         "refresh_token": state.jwt.refresh(user_id, sid, jti, iat, exp),
-        "access_token": state.jwt.access(user_id, access),
+        "access_token": state.jwt.access_in(user_id, Some(sid), access),
     })
 }
 
-async fn start(state: &AppState, user_id: i64, meta: &ClientMeta, lt: Lifetimes, now: DateTime<Utc>) -> ApiResult<Value> {
+async fn start(state: &AppState, user_id: i64, meta: &ClientMeta, how: SignInMethod<'_>, lt: Lifetimes, now: DateTime<Utc>) -> ApiResult<Value> {
     let jti = uuid_hex();
     let expires = now + chrono::Duration::seconds(lt.signin.as_secs() as i64);
-    let sid = web_sessions::create(&state.db, user_id, &jti, &db_time(expires), meta.ip.as_deref(), meta.user_agent.as_deref()).await?;
+    let sid = web_sessions::create(&state.db, user_id, &jti, &db_time(expires), meta.ip.as_deref(), meta.user_agent.as_deref(), how).await?;
     Ok(pair(state, user_id, sid, &jti, now.timestamp(), expires.timestamp(), lt.access))
 }
 
-/// 登入完成：開一個 session、回 `{refresh_token, access_token}`。/ Login done: start a session, return the pair.
-pub async fn issue(state: &AppState, user_id: i64, meta: &ClientMeta) -> ApiResult<Value> {
+/// 登入完成：開一個 session、回 `{refresh_token, access_token}`。`method` / `second_factor` 記在 session 上
+/// （「你的裝置」清單顯示）。/ Login done: start a session and return the pair; the sign-in method is stored on it.
+pub async fn issue(state: &AppState, user_id: i64, meta: &ClientMeta, method: &str, second_factor: Option<&str>) -> ApiResult<Value> {
     let lt = lifetimes(state).await?;
-    start(state, user_id, meta, lt, Utc::now()).await
+    start(state, user_id, meta, SignInMethod { method: Some(method), second_factor }, lt, Utc::now()).await
 }
 
 fn parse_utc(s: &str) -> Option<DateTime<Utc>> {
@@ -97,10 +194,17 @@ pub async fn refresh(state: &AppState, token: &str, meta: &ClientMeta) -> ApiRes
     let lt = lifetimes(state).await?;
     let now = Utc::now();
     let Some(sid) = claims.sid else {
-        return start(state, user.id, meta, lt, now).await;
+        return start(state, user.id, meta, SignInMethod::default(), lt, now).await;
     };
     let live = |s: &WebSession| s.user_id == user.id && s.revoked_at.is_none() && parse_utc(&s.expires_at).map(|t| t > now).unwrap_or(false);
-    let session = web_sessions::by_id(&state.db, sid).await?.filter(live).ok_or_else(token_not_valid)?;
+    let session = match web_sessions::by_id(&state.db, sid).await? {
+        Some(s) if live(&s) => s,
+        // 被使用者 / 管理員登出的：說是誰，網頁好解釋。/ Signed out by the user or an admin: say so, for the web.
+        Some(s) if s.user_id == user.id && matches!(s.revoked_reason.as_deref(), Some("user" | "admin")) => {
+            return Err(signed_out(s.revoked_reason.as_deref().unwrap_or("user")));
+        }
+        _ => return Err(token_not_valid()),
+    };
     if claims.jti == session.jti {
         let jti = uuid_hex();
         let expires = now + chrono::Duration::seconds(lt.signin.as_secs() as i64);
@@ -116,7 +220,7 @@ pub async fn refresh(state: &AppState, token: &str, meta: &ClientMeta) -> ApiRes
     }
     // 換掉超過寬限的 token 又被拿來用：不是遺失的回應，是另一個持有者 → 整個登入撤銷，兩邊都得重新登入。
     // A long-replaced token presented again: not a lost response but another holder; revoke the sign-in for both.
-    web_sessions::revoke(&state.db, sid, "reuse").await?;
+    revoke_sid(state, sid, "reuse").await?;
     tracing::warn!(user = %user.username, session = sid, ip = ?meta.ip, "refresh token reused after rotation; sign-in revoked");
     Err(token_not_valid())
 }
@@ -127,7 +231,7 @@ pub async fn revoke(state: &AppState, token: &str) -> ApiResult<bool> {
     let Ok(claims) = state.jwt.verify(token, TokenType::Refresh) else { return Ok(false) };
     let Some(sid) = claims.sid else { return Ok(false) };
     match web_sessions::by_id(&state.db, sid).await? {
-        Some(s) if s.user_id == claims.user_id => Ok(web_sessions::revoke(&state.db, sid, "logout").await?),
+        Some(s) if s.user_id == claims.user_id => revoke_sid(state, sid, "logout").await,
         _ => Ok(false),
     }
 }

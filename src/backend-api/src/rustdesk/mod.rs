@@ -58,6 +58,8 @@ pub struct Session {
     pub target: Target,
     /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
     pub saved_label: Option<String>,
+    /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
+    pub web_session: Option<i64>,
     pub created: Instant,
     ticket: Mutex<Option<(String, Instant)>>,
     id_claimed: AtomicBool,
@@ -106,6 +108,8 @@ pub struct NewSession {
     pub target: Target,
     pub prepared: Prepared,
     pub saved_label: Option<String>,
+    /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
+    pub web_session: Option<i64>,
 }
 
 #[derive(Default)]
@@ -139,6 +143,7 @@ impl RustDesk {
             hop_username: new.hop_username,
             target: new.target,
             saved_label: new.saved_label,
+            web_session: new.web_session,
             created: now,
             ticket: Mutex::new(Some((ticket.clone(), now + TICKET_TTL))),
             id_claimed: AtomicBool::new(false),

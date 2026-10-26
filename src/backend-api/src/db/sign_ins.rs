@@ -75,3 +75,13 @@ pub async fn for_user(db: &Db, user_id: i64, limit: i64) -> sqlx::Result<Vec<Sig
         .fetch_all(&db.read)
         .await
 }
+
+/// `since` 之後成功登入的 (ip, user_agent)，新裝置判斷用（最多 1000 筆，最新的在前）。
+/// (ip, user_agent) of successful sign-ins after `since`, for the new-device check (at most 1000, newest first).
+pub async fn recent_ok(db: &Db, user_id: i64, since: &str) -> sqlx::Result<Vec<(Option<String>, Option<String>)>> {
+    sqlx::query_as("SELECT ip, user_agent FROM telepy_sign_in_event WHERE user_id = ? AND ok = 1 AND at >= ? ORDER BY id DESC LIMIT 1000")
+        .bind(user_id)
+        .bind(since)
+        .fetch_all(&db.read)
+        .await
+}
