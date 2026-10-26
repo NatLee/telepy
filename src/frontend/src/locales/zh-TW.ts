@@ -1203,7 +1203,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "desktop.description": "直接在瀏覽器裡看、操作桌面：Windows（RDP）、VNC 或 RustDesk，在裝置上或它區網裡的電腦。",
     "desktop.howItWorks": "怎麼運作",
     "desktop.ways.button": "連線方式比較",
-    "desktop.ways.hint": "選哪個？比較三種連線方式",
+    "desktop.ways.hint": "選哪個？比較兩種連線方式",
     "desktop.ways.title": "兩種連線方式",
     "desktop.ways.description": "兩條路並排比較：各自需要什麼、畫面由誰畫、哪幾段有加密。",
     "desktop.ways.current": "目前選的",

@@ -1203,7 +1203,7 @@ export const ja: Record<TranslationKey, string> = {
     "desktop.description": "ブラウザーでデスクトップを表示・操作：Windows（RDP）、VNC、RustDesk。デバイスと、そのネットワーク上のコンピューターに対応。",
     "desktop.howItWorks": "しくみ",
     "desktop.ways.button": "接続方法の比較",
-    "desktop.ways.hint": "どれを使う？接続方法を比較",
+    "desktop.ways.hint": "どれを使う？2 つの接続方法を比較",
     "desktop.ways.title": "2 つの接続方法",
     "desktop.ways.description": "2 つの経路を並べて比較：それぞれに必要なもの、画面を描く場所、暗号化される区間。",
     "desktop.ways.current": "現在の選択",

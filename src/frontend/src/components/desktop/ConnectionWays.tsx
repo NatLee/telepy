@@ -15,7 +15,7 @@ import { Chip } from "@/components/ui/section";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { pathCells, ROWS, WAYS, type CellTone, type LayerTone, type LinkKind, type NodeIcon, type Way, type WayId, type WayLink, type WayNode } from "@/lib/connectionWays";
+import { layerColumns, linkColumns, nodeColumns, PATH_GRID_TEMPLATE, pathCells, ROWS, WAYS, type CellTone, type LayerTone, type LinkKind, type NodeIcon, type Way, type WayId, type WayLink, type WayNode } from "@/lib/connectionWays";
 import type { TranslationKey } from "@/locales/en";
 
 const ICON: Record<Exclude<NodeIcon, "telepy">, LucideIcon> = { browser: Laptop, device: Server, desktop: Monitor };
@@ -44,8 +44,8 @@ function NodeTile({ node, compact }: { node: WayNode; compact?: boolean }) {
                 <span className="block text-sm leading-tight text-foreground">{t(node.label)}</span>
                 <span className="block text-xs leading-snug text-muted-foreground">{t(node.sub)}</span>
                 {node.draws && (
-                    <span className="mt-1 inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 text-xs leading-5 whitespace-nowrap text-foreground">
-                        <Paintbrush size={12} aria-hidden /> {t("desktop.ways.draws")}
+                    <span className="mt-1 inline-flex max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 text-xs leading-5 text-foreground">
+                        <Paintbrush size={12} className="shrink-0" aria-hidden /> <span className="min-w-0">{t("desktop.ways.draws")}</span>
                     </span>
                 )}
             </span>
@@ -75,37 +75,35 @@ function layerFor(way: Way, link: WayLink) {
     return way.layers.find((l) => l.from <= link.from && l.to >= link.to) ?? null;
 }
 
-function LayerChip({ tone, label, nowrap }: { tone: LayerTone; label: TranslationKey; nowrap?: boolean }) {
+/** 加密尺的一段；`fill` = 撐滿它那一段（寬版的尺），文字放不下時換行而不是超出框。/ One ruler span; `fill` stretches it over its hop and wraps the text instead of overflowing. */
+function LayerChip({ tone, label, fill }: { tone: LayerTone; label: TranslationKey; fill?: boolean }) {
     const { t } = useI18n();
     const Icon = tone === "plain" ? LockOpen : Lock;
     return (
-        <span className={cn("inline-flex min-w-0 items-center justify-center gap-1 rounded-sm border px-1.5 text-xs leading-5", nowrap && "whitespace-nowrap", LAYER_STYLE[tone])}>
+        <span className={cn("min-w-0 items-center justify-center gap-1 rounded-sm border px-1.5 text-xs leading-5", fill ? "flex w-full py-0.5" : "inline-flex", LAYER_STYLE[tone])}>
             <Icon size={12} className="shrink-0" aria-hidden />
-            <span className="min-w-0">{t(label)}</span>
+            <span className="min-w-0 text-center">{t(label)}</span>
         </span>
     );
 }
 
-/** 寬版：7 欄（點、線、點…），三列共用欄寬所以上下對齊；尺只畫在線底下。/ Wide: seven aligned slots; the ruler sits under the links. */
+/** 寬版：點佔兩個半欄、線一欄，兩列共用欄寬所以上下對齊；尺的每段從點的中心到下一個點的中心。/ Wide: aligned columns; the ruler runs node centre to node centre. */
 function PathGrid({ way }: { way: Way }) {
     const { t } = useI18n();
-    const cells = pathCells(way);
     return (
-        <div className="grid grid-cols-[minmax(0,1fr)_minmax(4.5rem,0.8fr)_minmax(0,1fr)_minmax(4.5rem,0.8fr)_minmax(0,1fr)_minmax(4.5rem,0.8fr)_minmax(0,1fr)] items-start gap-y-3">
-            {cells.map((c, i) => {
-                const start = c.start;
-                if (c.kind === "node") return <div key={i} style={{ gridColumn: `${start}`, gridRow: 1 }}><NodeTile node={c.node} /></div>;
-                if (c.kind === "gap") return <div key={i} style={{ gridColumn: `${start}`, gridRow: 1 }} />;
+        <div className="grid items-start gap-y-3" style={{ gridTemplateColumns: PATH_GRID_TEMPLATE }}>
+            {pathCells(way).map((c, i) => {
+                if (c.kind === "node") return <div key={i} style={{ gridColumn: nodeColumns(c.node.col), gridRow: 1 }}><NodeTile node={c.node} /></div>;
                 return (
-                    <div key={i} className="flex flex-col items-center gap-1.5 px-1.5 pt-[16px]" style={{ gridColumn: `${start} / span ${c.span}`, gridRow: 1 }}>
+                    <div key={i} className="flex flex-col items-center gap-1.5 px-1.5 pt-[16px]" style={{ gridColumn: linkColumns(c.link.from, c.link.to), gridRow: 1 }}>
                         <LinkLine kind={c.link.kind} />
                         <span className="text-center text-xs leading-tight text-muted-foreground">{t(c.link.label)}</span>
                     </div>
                 );
             })}
             {way.layers.map((l) => (
-                <div key={`${l.from}-${l.to}`} className="flex justify-center px-1" style={{ gridColumn: `${l.from * 2 + 2} / ${l.to * 2 + 1}`, gridRow: 2 }}>
-                    <LayerChip tone={l.tone} label={l.label} nowrap />
+                <div key={`${l.from}-${l.to}`} className="flex px-0.5" style={{ gridColumn: layerColumns(l.from, l.to), gridRow: 2 }}>
+                    <LayerChip tone={l.tone} label={l.label} fill />
                 </div>
             ))}
         </div>
@@ -118,7 +116,6 @@ function PathList({ way }: { way: Way }) {
     return (
         <ol className="space-y-0">
             {pathCells(way).map((c, i) => {
-                if (c.kind === "gap") return null;
                 if (c.kind === "node") return <li key={i}><NodeTile node={c.node} compact /></li>;
                 const layer = layerFor(way, c.link);
                 return (
