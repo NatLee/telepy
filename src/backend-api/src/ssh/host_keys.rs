@@ -229,11 +229,17 @@ pub async fn report_claim_attempt(state: &AppState, owner: &Claimant, by: &str, 
     let mut audience = vec![t.user_id];
     audience.extend(db::sharing::admin_sharee_ids(&state.db, t.id).await.unwrap_or_default());
     state.hub.notify_users(
-        audience,
+        audience.clone(),
         &serde_json::json!({
             "action": "DEVICE-CLAIM-ATTEMPT", "tunnel_id": t.id, "tunnel_name": t.host_friendly_name, "by": by, "by_tunnel": by_tunnel,
             "details": format!("Another account ({by}) pointed a tunnel at '{}' and was refused", t.host_friendly_name),
         }),
+    );
+    state.webhooks.emit(
+        crate::webhooks::Event::new(crate::webhooks::Kind::DeviceClaimAttempt)
+            .tunnel(&t)
+            .to(audience, None)
+            .data(serde_json::json!({ "by": by, "by_tunnel": by_tunnel, "fingerprint": key.fingerprint, "key_type": key.key_type })),
     );
 }
 
@@ -248,6 +254,13 @@ async fn reject(state: &AppState, tunnel_id: i64, reverse_port: u16, key: &KeyIn
             .await;
         if let Ok(Some(t)) = db::tunnels::by_id(&state.db, tunnel_id).await {
             let _ = crate::api::notify::tunnel_users(state, &t, "HOST-KEY-CHANGED", &format!("The device '{name}' presented a different SSH host key ({}). Connections are blocked until the owner reviews it.", key.fingerprint)).await;
+            let audience = crate::api::notify::tunnel_audience(state, &t).await.unwrap_or_default();
+            state.webhooks.emit(
+                crate::webhooks::Event::new(crate::webhooks::Kind::TunnelHostKeyChanged)
+                    .tunnel(&t)
+                    .to(audience, None)
+                    .data(serde_json::json!({ "fingerprint": key.fingerprint, "key_type": key.key_type })),
+            );
         }
     }
     tracing::warn!(tunnel_id, fingerprint = %key.fingerprint, attempts, "device host key mismatch; connection refused");

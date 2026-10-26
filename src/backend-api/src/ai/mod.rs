@@ -456,6 +456,15 @@ fn notify(state: &AppState, s: &AiSession, action: &str, reason: Option<CloseRea
         msg["reason"] = json!(r.as_str());
     }
     state.hub.notify_users([s.user_id, s.tunnel_owner_id], &msg);
+    let kind = if reason.is_some() { crate::webhooks::Kind::McpSessionClosed } else { crate::webhooks::Kind::McpSessionOpened };
+    let tunnel = crate::webhooks::TunnelRef { id: s.tunnel_id, name: s.tunnel_name.clone(), reverse_port: s.reverse_port };
+    state.webhooks.emit(
+        crate::webhooks::Event::new(kind)
+            .tunnel_ref(tunnel)
+            .to([s.user_id, s.tunnel_owner_id], None)
+            .data(json!({ "session_id": s.id, "by": s.user_name, "client": s.client_name, "account": s.target_username, "reason": reason.map(|r| r.as_str()) }))
+            .link("/tunnels/activity"),
+    );
 }
 
 /// 寫稽核；失敗只記 log（不影響 tool 結果）。/ Write an audit row; failures are only logged.
@@ -589,8 +598,9 @@ mod tests {
             ai_max_sessions_per_user: 3,
             lan_scan_enabled: true,
             device_ip_lookup_url: String::new(),
-            notify_webhook_url: String::new(),
-            notify_down_delay: 60,
+            notify_user_webhooks: true,
+            notify_private_targets: false,
+            notify_max_webhooks: 10,
             user_key_max_days: 0,
             desktop_enabled: true,
             desktop_max_sessions: 4,

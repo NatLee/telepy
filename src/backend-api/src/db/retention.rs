@@ -43,6 +43,12 @@ pub async fn purge(db: &Db) -> sqlx::Result<u64> {
         .execute(&db.write)
         .await?
         .rows_affected();
+    // webhook 送出紀錄（內容可能有 IP 與指令）：留 30 天。/ Webhook deliveries (bodies may hold IPs and commands): 30 days.
+    deleted += sqlx::query("DELETE FROM telepy_webhook_delivery WHERE at < ?")
+        .bind(db_time(chrono::Utc::now() - chrono::Duration::days(30)))
+        .execute(&db.write)
+        .await?
+        .rows_affected();
     // 網頁登入 session（帶 IP）：到期或登出超過一天就沒用了。/ Web sign-in sessions (with IPs): gone a day after expiry or logout.
     deleted += super::web_sessions::purge(db, &db_time(chrono::Utc::now() - chrono::Duration::days(1))).await?;
     sqlx::query("DELETE FROM telepy_audit_anchor WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM telepy_audit_anchor WHERE kind = 'prune' GROUP BY table_name)")

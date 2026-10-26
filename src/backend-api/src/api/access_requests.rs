@@ -18,6 +18,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Effective, Permission};
 use crate::state::AppState;
 use crate::util::{db_time, db_to_iso_utc_z, parse_db_datetime};
+use crate::webhooks::{Event, Kind};
 
 /// 最短 15 分鐘、最長 7 天。/ Between 15 minutes and 7 days.
 pub const MIN_SECS: i64 = 15 * 60;
@@ -209,9 +210,24 @@ async fn create(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
     let r = db::access_requests::create(&state.db, t.id, me.id, &ids, permission.map(Permission::as_str), duration, &reason).await?;
     let asked = what(&ids.iter().filter_map(|i| names.get(i).cloned()).collect::<Vec<_>>(), r.permission.as_deref());
     let details = format!("{} asks for {asked} on \"{}\" for {}", me.username, t.host_friendly_name, human_duration(duration));
+    let deciders = deciders(&state, &t).await?;
     state.hub.notify_users(
-        deciders(&state, &t).await?,
+        deciders.clone(),
         &json!({ "action": "ACCESS-REQUEST-CREATED", "details": details, "tunnel_id": t.id, "request_id": r.id, "by": me.username }),
+    );
+    state.webhooks.emit(
+        Event::new(Kind::AccessRequested)
+            .tunnel(&t)
+            .to(deciders, Some(me.id))
+            .data(json!({
+                "request_id": r.id,
+                "by": me.username,
+                "accounts": ids.iter().filter_map(|i| names.get(i).cloned()).collect::<Vec<_>>(),
+                "permission": r.permission,
+                "duration_secs": duration,
+                "reason": reason,
+            }))
+            .link("/tunnels"),
     );
     state.gateway.event("access_request", None, u16::try_from(t.reverse_port).ok(), Some(t.id), format!("access request #{}: {details}", r.id)).await;
     Ok((StatusCode::CREATED, Json(request_json(&state, &r, &names).await?)))
@@ -270,6 +286,13 @@ async fn approve(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid
         &json!({ "action": "ACCESS-REQUEST-DECIDED", "status": "approved", "tunnel_id": t.id, "request_id": r.id, "ends_at": db_to_iso_utc_z(&until),
                  "details": format!("{} approved your request on \"{}\": {asked} until {ends}", me.username, t.host_friendly_name) }),
     );
+    state.webhooks.emit(
+        Event::new(Kind::AccessDecided)
+            .tunnel(&t)
+            .to([r.requester_id], Some(me.id))
+            .data(json!({ "request_id": r.id, "status": "approved", "by": me.username, "ends_at": db_to_iso_utc_z(&until) }))
+            .link("/tunnels"),
+    );
     // 決定的人自己也要刷新（卡片上的待審數）。/ Deciders, the one who decided included (the badge on their cards).
     state.hub.notify_users(deciders(&state, &t).await?, &json!({ "action": "ACCESS-REQUEST-UPDATED", "tunnel_id": t.id, "request_id": r.id }));
     state
@@ -294,6 +317,13 @@ async fn deny(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): 
         r.requester_id,
         &json!({ "action": "ACCESS-REQUEST-DECIDED", "status": "denied", "tunnel_id": t.id, "request_id": r.id,
                  "details": format!("{} declined your request on \"{}\" ({asked})", me.username, t.host_friendly_name) }),
+    );
+    state.webhooks.emit(
+        Event::new(Kind::AccessDecided)
+            .tunnel(&t)
+            .to([r.requester_id], Some(me.id))
+            .data(json!({ "request_id": r.id, "status": "denied", "by": me.username }))
+            .link("/tunnels"),
     );
     // 決定的人自己也要刷新（卡片上的待審數）。/ Deciders, the one who decided included (the badge on their cards).
     state.hub.notify_users(deciders(&state, &t).await?, &json!({ "action": "ACCESS-REQUEST-UPDATED", "tunnel_id": t.id, "request_id": r.id }));

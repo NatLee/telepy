@@ -96,6 +96,8 @@ pub struct Gateway {
     status: Arc<StatusState>,
     presence: Arc<Presence>,
     hub: Arc<Hub>,
+    /// webhook（AppState 共用同一份；gateway 發 IP 變更）。/ Webhooks, shared with AppState (the gateway sends IP changes).
+    webhooks: Arc<crate::webhooks::Webhooks>,
     /// 敏感隧道的 step-up（網頁與 gateway 共用）。/ Step-up confirmations, shared with the web side.
     step_ups: Arc<crate::step_up::StepUps>,
     /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
@@ -186,6 +188,7 @@ impl Gateway {
                 proxy_protocol::Trusted::default()
             }
         };
+        let webhooks = Arc::new(crate::webhooks::Webhooks::new(&config, db.clone(), hub.clone()));
         Self {
             server_config: server_config(keys),
             config,
@@ -193,6 +196,7 @@ impl Gateway {
             status,
             presence,
             hub,
+            webhooks,
             step_ups: Arc::new(crate::step_up::StepUps::default()),
             proxy_from,
             forwards: DashMap::new(),
@@ -265,6 +269,11 @@ impl Gateway {
     /// gateway 用的通知 hub（AppState 共用同一個）。/ The notification hub, shared with AppState.
     pub fn hub(&self) -> Arc<Hub> {
         self.hub.clone()
+    }
+
+    /// webhook（AppState 共用同一份）。/ Webhooks, shared with AppState.
+    pub fn webhooks(&self) -> Arc<crate::webhooks::Webhooks> {
+        self.webhooks.clone()
     }
 
     /// step-up 紀錄（AppState 共用同一份）。/ Step-up confirmations, shared with AppState.
@@ -364,15 +373,15 @@ impl Gateway {
     }
 
     /// 裝置的公網 IP 換了：記 `ip_changed`、通知擁有者與 ADMIN sharee（可能是金鑰外流，也可能只是浮動 IP），
-    /// 站台設了 webhook 也送過去。gateway 與 `device_info` 共用。
-    /// The device's public IP changed: log `ip_changed`, tell the owner and ADMIN sharees, and post to the webhook.
+    /// 也發給訂了的 webhook（他們自己的與全站的）。gateway 與 `device_info` 共用。
+    /// The device's public IP changed: log `ip_changed`, tell the owner and ADMIN sharees, and emit the webhook event.
     pub async fn announce_ip_change(&self, port: u16, ch: &db::tunnel_endpoints::IpChange, ip: &str, peer: Option<SocketAddr>) {
         let message = format!("Tunnel {} now connects from {} (was {})", ch.tunnel_name, ip, ch.previous);
         self.event("ip_changed", peer, Some(port), Some(ch.tunnel_id), message.clone()).await;
         let mut users = vec![ch.owner_id];
         users.extend(db::sharing::admin_sharee_ids(&self.db, ch.tunnel_id).await.unwrap_or_default());
         self.hub.notify_users(
-            users,
+            users.clone(),
             &serde_json::json!({
                 "action": "TUNNEL-IP-CHANGED",
                 "tunnel_id": ch.tunnel_id,
@@ -382,7 +391,13 @@ impl Gateway {
                 "details": message,
             }),
         );
-        crate::monitor::alerts::send_ip_change(&self.db, self.config.public_url.as_deref(), ch.tunnel_id, &ch.tunnel_name, i64::from(port), &ch.previous, ip).await;
+        let tunnel = crate::webhooks::TunnelRef { id: ch.tunnel_id, name: ch.tunnel_name.clone(), reverse_port: i64::from(port) };
+        self.webhooks.emit(
+            crate::webhooks::Event::new(crate::webhooks::Kind::TunnelIpChanged)
+                .tunnel_ref(tunnel)
+                .to(users, None)
+                .data(serde_json::json!({ "ip": ip, "previous_ip": ch.previous })),
+        );
     }
 
     /// 筆電經 gateway 連到裝置（使用者金鑰的 direct-tcpip）：算進「誰在用這條隧道」。

@@ -15,6 +15,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **Sharing & permissions** — share tunnels with other users under hierarchical VIEW / EDIT / ADMIN permissions.
 - **Command sheet** — pick a tunnel and get copy-ready `ssh -L` / `-R` / `-D` / `-J` / `scp` commands for forwarding ports or copying files from your own computer, each with a live diagram of where the traffic flows; works with your `~/.ssh/config` or as standalone one-liners.
 - **Network topology (jump hosts)** — see the machines behind each device at a glance: scan a device's LAN without installing anything (the device's own sshd makes the connections), label hosts and set their login, then open a web terminal on one through the device, or copy an `ssh -J` one-liner or a `ProxyJump` ssh config stanza.
+- **Webhooks** — everyone can send the notifications they get (a tunnel going offline or changing IP, a share, an access request, a command waiting for approval, a sign-in…) to Slack, Discord, Google Chat, Microsoft Teams, Telegram, ntfy or their own service, per tunnel and in their own language; admins add site-wide webhooks for outages and security events. Requests are signed (Standard Webhooks) and personal URLs may only reach public addresses.
 - **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels).
 - **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser. Optional two-factor sign-in with passkeys (also passwordless) or an authenticator app (TOTP), plus one-time recovery codes; administrators can reset a user's second factors.
 - **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
@@ -150,6 +151,7 @@ Sub-commands:
 
 - [Remote browser architecture](./docs/remote-browser.md)
 - [Remote desktop (RDP / VNC) architecture](./docs/remote-desktop.md)
+- [Webhooks: events, formats and signatures](./docs/webhooks.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
 - [Rust backend migration plan](./docs/rust-migration-plan.md)
 - [Backend benchmark: Django vs Rust](./docs/benchmarks.md)

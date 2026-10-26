@@ -114,6 +114,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
     let mut presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
     let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username)).await;
+    crate::session_audit::webhook_started(&state, session.server_id, user.id, &user.username, "browser", Some(&session.username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
     // VNC WS 連著 = session 在用：每 20s 續命（伺服器端計時，不受瀏覽器背景分頁節流影響）。

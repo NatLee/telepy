@@ -592,6 +592,60 @@ const TABLES: &[(&str, &str)] = &[
             "reason" varchar(32) NOT NULL DEFAULT ''
         )"#,
     ),
+    // Rust 自有：webhook（個人的 = 某個使用者自己的；site = 管理員們共管的全站 webhook）。
+    // Webhooks: personal ones belong to one user; site-wide ones are shared by the admins.
+    (
+        "telepy_webhook",
+        r#"CREATE TABLE "telepy_webhook" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NULL,
+            "scope" varchar(8) NOT NULL,
+            "name" varchar(80) NOT NULL,
+            "url" varchar(1024) NOT NULL,
+            "format" varchar(16) NOT NULL,
+            "language" varchar(8) NOT NULL DEFAULT 'en',
+            "events" text NOT NULL,
+            "all_tunnels" bool NOT NULL DEFAULT 1,
+            "delay" integer NOT NULL DEFAULT 60,
+            "secret" text NOT NULL DEFAULT '',
+            "enabled" bool NOT NULL DEFAULT 1,
+            "paused_reason" varchar(32) NOT NULL DEFAULT '',
+            "failures" integer NOT NULL DEFAULT 0,
+            "last_status" varchar(8) NOT NULL DEFAULT '',
+            "last_at" datetime NULL,
+            "last_code" integer NULL,
+            "last_error" text NOT NULL DEFAULT '',
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // Rust 自有：webhook 只收這幾條隧道（all_tunnels = 0 時）。/ The tunnels a webhook is limited to.
+    (
+        "telepy_webhook_tunnel",
+        r#"CREATE TABLE "telepy_webhook_tunnel" (
+            "webhook_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            PRIMARY KEY ("webhook_id", "tunnel_id")
+        )"#,
+    ),
+    // Rust 自有：webhook 最近的送出紀錄（每個 webhook 留最新 50 筆）。/ Recent deliveries, the latest 50 per webhook.
+    (
+        "telepy_webhook_delivery",
+        r#"CREATE TABLE "telepy_webhook_delivery" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "webhook_id" integer NOT NULL,
+            "event" varchar(48) NOT NULL,
+            "message_id" varchar(40) NOT NULL,
+            "at" datetime NOT NULL,
+            "status" varchar(8) NOT NULL,
+            "http_status" integer NULL,
+            "error" text NOT NULL DEFAULT '',
+            "attempts" integer NOT NULL DEFAULT 1,
+            "duration_ms" integer NOT NULL DEFAULT 0,
+            "test" bool NOT NULL DEFAULT 0,
+            "body" text NOT NULL DEFAULT ''
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -630,6 +684,9 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_user" ON "telepy_webhook" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_tunnel_tunnel" ON "telepy_webhook_tunnel" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_delivery_hook" ON "telepy_webhook_delivery" ("webhook_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_tunnel" ON "telepy_command_event" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_user" ON "telepy_command_event" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_tunnel_id" ON "telepy_gateway_event" ("tunnel_id")"#,
@@ -696,6 +753,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 隧道狀態告警的 webhook（空 = 關閉）與「斷線多久才通知」（秒）。/ Status alert webhook (empty = off) and its delay.
     ("site_settings_sitesettings", "notify_webhook_url", "varchar(512) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "notify_down_delay", "integer NOT NULL DEFAULT 60"),
+    ("site_settings_sitesettings", "notify_user_webhooks", "bool NOT NULL DEFAULT 1"),
+    ("site_settings_sitesettings", "notify_private_targets", "bool NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "notify_max_webhooks", "integer NOT NULL DEFAULT 10"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
     ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),
@@ -789,10 +849,50 @@ pub async fn ensure_schema(pool: &SqlitePool) -> anyhow::Result<()> {
 /// 只有擁有者 / ADMIN 能管理 OS 帳號之後，非 ADMIN 被分享者以前自己建的 username 一律失效（連同允許清單與預設值）。
 pub const DROP_SHAREE_USERNAMES: &str = "2026-10-22-drop-usernames-created-by-non-admin-sharees";
 
+/// 管理員在網站設定填的那一個告警網址，搬成一個全站 webhook（同樣的狀態事件 + IP 變更、同樣的延遲），再清掉設定。
+/// The admins' single alert URL from the site settings becomes a site-wide webhook (same status events + IP
+/// changes, same delay); the setting is cleared afterwards.
+pub const SITE_WEBHOOK_FROM_SETTINGS: &str = "2026-10-26-site-webhook-from-settings";
+
+async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(name).fetch_one(pool).await?;
+    Ok(n > 0)
+}
+
 /// 依序套用還沒跑過的一次性 data migration（同一個 transaction 裡寫入完成紀錄）。
 pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
-    let applied: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(DROP_SHAREE_USERNAMES).fetch_one(pool).await?;
-    if applied > 0 {
+    drop_sharee_usernames(pool).await?;
+    site_webhook_from_settings(pool).await
+}
+
+async fn site_webhook_from_settings(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, SITE_WEBHOOK_FROM_SETTINGS).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    let row: Option<(String, i64)> = sqlx::query_as("SELECT notify_webhook_url, notify_down_delay FROM site_settings_sitesettings WHERE id = 1").fetch_optional(&mut *tx).await?;
+    if let Some((url, delay)) = row.filter(|(u, _)| !u.trim().is_empty()) {
+        let now = crate::util::now_db();
+        sqlx::query(
+            "INSERT INTO telepy_webhook (user_id, scope, name, url, format, language, events, all_tunnels, delay, enabled, created_at, updated_at) \
+             VALUES (NULL, 'site', 'Status alerts', ?, 'auto', 'en', 'tunnel.offline,tunnel.online,tunnel.degraded,tunnel.recovered,tunnel.ip_changed', 1, ?, 1, ?, ?)",
+        )
+        .bind(url.trim())
+        .bind(delay.max(0))
+        .bind(&now)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE site_settings_sitesettings SET notify_webhook_url = '' WHERE id = 1").execute(&mut *tx).await?;
+        tracing::info!("data migration: the site's alert webhook URL is now a site-wide webhook");
+    }
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(SITE_WEBHOOK_FROM_SETTINGS).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn drop_sharee_usernames(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, DROP_SHAREE_USERNAMES).await? {
         return Ok(());
     }
     let mut tx = pool.begin().await?;
@@ -834,6 +934,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn the_old_alert_url_becomes_a_site_webhook_once() {
+        let db = Db::open_memory().await.unwrap();
+        ensure_schema(&db.write).await.unwrap();
+        sqlx::query("DELETE FROM telepy_data_migration WHERE name = ?").bind(SITE_WEBHOOK_FROM_SETTINGS).execute(&db.write).await.unwrap();
+        sqlx::query("UPDATE site_settings_sitesettings SET notify_webhook_url = ' https://hooks.slack.com/services/x ', notify_down_delay = 90 WHERE id = 1").execute(&db.write).await.unwrap();
+        ensure_schema(&db.write).await.unwrap();
+        ensure_schema(&db.write).await.unwrap();
+        let rows: Vec<(String, String, i64, String)> = sqlx::query_as("SELECT scope, url, delay, events FROM telepy_webhook").fetch_all(&db.read).await.unwrap();
+        assert_eq!(rows.len(), 1, "migrated once");
+        assert_eq!((rows[0].0.as_str(), rows[0].1.as_str(), rows[0].2), ("site", "https://hooks.slack.com/services/x", 90));
+        assert!(rows[0].3.contains("tunnel.ip_changed"));
+        let url: String = sqlx::query_scalar("SELECT notify_webhook_url FROM site_settings_sitesettings WHERE id = 1").fetch_one(&db.read).await.unwrap();
+        assert_eq!(url, "");
     }
 
     #[tokio::test]

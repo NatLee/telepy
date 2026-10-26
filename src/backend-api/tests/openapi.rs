@@ -24,6 +24,11 @@ async fn spec_is_served_and_covers_the_rest_api() {
     let paths = spec["paths"].as_object().unwrap();
     for (path, verbs) in [
         ("/api/auth/token", vec!["post"]),
+        ("/api/webhooks", vec!["get", "post"]),
+        ("/api/webhooks/{id}", vec!["get", "patch", "delete"]),
+        ("/api/webhooks/{id}/test", vec!["post"]),
+        ("/api/webhooks/{id}/deliveries", vec!["get"]),
+        ("/api/webhooks/{id}/secret", vec!["get", "post"]),
         ("/api/auth/user/profile", vec!["get"]),
         ("/api/reverse/server/dashboard", vec!["get"]),
         ("/api/reverse/join", vec!["post"]),

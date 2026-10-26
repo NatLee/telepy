@@ -2543,3 +2543,128 @@ pub struct RustDeskSysinfo {
     pub cpu: Option<String>,
     pub memory: Option<String>,
 }
+
+/// 一個 webhook。/ A webhook.
+#[derive(ToSchema)]
+pub struct Webhook {
+    pub id: i64,
+    /// user（個人的）/ site（管理員共管）。/ user (personal) or site (shared by the admins).
+    pub scope: String,
+    pub name: String,
+    pub url: String,
+    pub host: String,
+    /// auto / json / slack / discord / google_chat / teams / telegram / ntfy
+    pub format: String,
+    /// `auto` 依網址判斷出來的格式。/ The format `auto` resolves to for this URL.
+    pub format_resolved: Option<String>,
+    /// 訊息語言：en / zh-TW / ja。/ Message language.
+    pub language: String,
+    /// 訂的事件（`GET /api/webhooks` 的 catalog）。/ Subscribed events (see the catalog).
+    pub events: Vec<String>,
+    /// true = 所有（看得到的）隧道，包含之後的。/ All (visible) tunnels, later ones included.
+    pub all_tunnels: bool,
+    /// all_tunnels = false 時限定的隧道 `{id, name}`。/ The tunnels it is limited to.
+    #[schema(value_type = Vec<Object>)]
+    pub tunnels: Vec<serde_json::Value>,
+    /// 離線 / 降級要持續幾秒才送。/ Seconds a status condition must last before it is sent.
+    pub delay: i64,
+    pub enabled: bool,
+    /// `failing` = 連續失敗太多次被暫停。/ `failing` = paused after too many failures in a row.
+    pub paused_reason: Option<String>,
+    /// 連續失敗次數。/ Consecutive failed deliveries.
+    pub failures: i64,
+    /// 最近一次送出 `{status, at, http_status, error}`。/ The latest delivery.
+    #[schema(value_type = Option<Object>)]
+    pub last: Option<serde_json::Value>,
+    /// 建立的人（全站 webhook 給管理員看）。/ Who created it.
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 新增或修改 webhook（PATCH 只帶要改的欄位）。/ Create or change a webhook (send only what changes on PATCH).
+#[derive(ToSchema)]
+pub struct WebhookInput {
+    /// user（預設）/ site（管理員）；只在新增時有用。/ user (default) or site (admins); create only.
+    pub scope: Option<String>,
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub format: Option<String>,
+    pub language: Option<String>,
+    pub events: Option<Vec<String>>,
+    pub all_tunnels: Option<bool>,
+    pub tunnel_ids: Option<Vec<i64>>,
+    pub delay: Option<i64>,
+    pub enabled: Option<bool>,
+}
+
+#[derive(ToSchema)]
+pub struct WebhookCreated {
+    pub webhook: Webhook,
+    /// 簽章密鑰（之後也能在 `/secret` 取得）。/ The signing secret (also available from `/secret`).
+    pub secret: String,
+}
+
+/// 目錄裡的一個事件。/ One catalogue event.
+#[derive(ToSchema)]
+pub struct WebhookCatalogEvent {
+    pub event: String,
+    /// status / device / sharing / commands / sessions / account / admin
+    pub group: String,
+    /// 個人 webhook 上誰收得到（全站目錄是 `site`）。/ Who receives it on a personal webhook (`site` in the site catalogue).
+    pub audience: String,
+    /// 狀態事件（套用延遲）。/ A status event (the delay applies).
+    pub status: bool,
+    /// 跟某條隧道有關（套用隧道篩選）。/ About a tunnel (the tunnel filter applies).
+    pub tunnel: bool,
+    /// info / ok / warning
+    pub severity: String,
+}
+
+#[derive(ToSchema)]
+pub struct WebhookList {
+    pub mine: Vec<Webhook>,
+    /// 全站 webhook（只有管理員）。/ Site-wide webhooks (admins only).
+    pub site: Option<Vec<Webhook>>,
+    /// `{personal: [...], site: [...] | null}`
+    #[schema(value_type = Object)]
+    pub catalog: serde_json::Value,
+    /// `{personal_enabled, private_targets, max, used, pause_after, per_minute}`
+    #[schema(value_type = Object)]
+    pub policy: serde_json::Value,
+    pub can_manage_site: bool,
+    /// 訊息裡連結用的網址（PUBLIC_URL）。/ The base URL used for links in messages.
+    pub public_url: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct WebhookDelivery {
+    pub id: i64,
+    pub event: String,
+    /// `webhook-id` header。/ The `webhook-id` header.
+    pub message_id: String,
+    pub at: String,
+    /// ok / failed / skipped
+    pub status: String,
+    pub http_status: Option<i64>,
+    pub error: String,
+    pub attempts: i64,
+    pub duration_ms: i64,
+    pub test: bool,
+    /// 送出的內容（最多 16 KB）。/ What was sent (up to 16 KB).
+    pub body: String,
+}
+
+#[derive(ToSchema)]
+pub struct WebhookTestResult {
+    pub ok: bool,
+    pub http_status: Option<i64>,
+    pub error: Option<String>,
+    pub duration_ms: i64,
+}
+
+#[derive(ToSchema)]
+pub struct WebhookSecret {
+    /// `whsec_…`（Standard Webhooks）。/ `whsec_…` (Standard Webhooks).
+    pub secret: String,
+}

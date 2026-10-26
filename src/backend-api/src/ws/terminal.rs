@@ -289,6 +289,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         Some(what) => ConsoleSession::open(&state, ConsoleKind::LanTerminal, tunnel_id, what).await,
         None => ConsoleSession::open_for(&state, ConsoleKind::Terminal, tunnel_id, &user.username, Some(&username)).await,
     };
+    let session_kind = if lan_label.is_some() { "lan_terminal" } else { "terminal" };
+    crate::session_audit::webhook_started(&state, tunnel_id, user.id, &user.username, session_kind, Some(lan_label.as_deref().unwrap_or(&username))).await;
     let mut heartbeat = Heartbeat::new(&state.config);
 
     // 這條隧道要錄影：先告訴使用者，再開始錄（只錄輸出與視窗大小，不錄鍵盤）。

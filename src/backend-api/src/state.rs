@@ -71,6 +71,8 @@ pub struct Inner {
     pub step_up: Arc<crate::step_up::StepUps>,
     /// 指令規則快取與等待中的核准。/ Command rule cache and pending approvals.
     pub commands: crate::command_rules::CommandRules,
+    /// webhook 發送（跟 gateway 共用）。/ Webhook delivery (shared with the gateway).
+    pub webhooks: Arc<crate::webhooks::Webhooks>,
 }
 
 #[derive(Clone)]
@@ -106,6 +108,7 @@ impl AppState {
         // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
         let hub = gateway.hub();
         let step_up = gateway.step_ups();
+        let webhooks = gateway.webhooks();
         db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         Self(Arc::new(Inner {
             remote_browser,
@@ -133,6 +136,7 @@ impl AppState {
             join: JoinTickets::default(),
             step_up,
             commands: Default::default(),
+            webhooks,
             config,
             db,
         }))

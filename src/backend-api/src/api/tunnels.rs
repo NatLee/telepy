@@ -408,6 +408,9 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // 錄影檔先刪（列跟著隧道刪）。/ Recording files first (their rows go with the tunnel).
     crate::recording::forget_tunnel(&state, id).await;
     db::tunnels::delete(&state.db, id).await?;
+    // webhook 的限定清單裡也拿掉。/ Out of every webhook's tunnel list too.
+    db::webhooks::forget_tunnel(&state.db, id).await?;
+    state.webhooks.invalidate();
     crate::ssh::tunnel_keys::forget(&state, id).await;
     // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.

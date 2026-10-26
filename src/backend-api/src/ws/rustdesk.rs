@@ -200,6 +200,9 @@ async fn relay_via_tunnel(state: &AppState, mut socket: WebSocket, session: Arc<
     let opened = session.describe();
     tracing::info!(session = %session.id, "rustdesk: {opened}");
     state.gateway.event("rustdesk_open", None, None, tunnel_id, format!("{opened} (session {})", short(&session.id))).await;
+    if let Some(t) = tunnel_id {
+        crate::session_audit::webhook_started(state, t, session.user_id, &session.user_name, "rustdesk", None).await;
+    }
 
     let mut buf = vec![0u8; 64 * 1024];
     let mut pending: Vec<u8> = Vec::with_capacity(256 * 1024);
