@@ -98,6 +98,7 @@ function RecordingsInner() {
                                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-foreground">
                                     <span>{r.tunnel.name}</span>
                                     <span className="font-mono text-xs text-muted-foreground">{r.lan_host ?? r.os_user}</span>
+                                    {r.kind === "agent" && <Chip title={t("recordings.agentHint")}>{t("recordings.agent")}</Chip>}
                                     {r.live && <Chip tone="danger">{t("recordings.live")}</Chip>}
                                     {r.truncated && <Chip tone="warning">{t("recordings.truncated")}</Chip>}
                                 </p>

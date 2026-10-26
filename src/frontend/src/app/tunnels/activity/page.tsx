@@ -8,7 +8,7 @@
  * be expanded or copied without ever widening the layout.
  */
 import React, { useRef, useState } from "react";
-import { Bot, RefreshCw, Search, X, Activity, Loader2, ChevronDown, ListTree } from "lucide-react";
+import { Bot, RefreshCw, Search, X, Activity, Loader2, ChevronDown, ListTree, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -32,6 +32,7 @@ const TOOL_FILTER_LABELS: Record<ToolFilter, TranslationKey> = {
     all: "activity.cat.all",
     exec: "activity.cat.exec",
     files: "activity.cat.files",
+    browser: "activity.cat.browser",
     session: "activity.cat.session",
     read: "activity.cat.read",
 };
@@ -112,7 +113,13 @@ function CallRow({
                     {r.bytes_out ? <span>· {formatBytes(r.bytes_out)}</span> : null}
                 </span>
             </div>
-            {detail &&
+            {r.tool === "browser_screenshot" ? (
+                // 截圖本身不存，只說拍了一張。/ The image itself is never stored; just say one was taken.
+                <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <ImageIcon size={14} aria-hidden />
+                    {t("activity.screenshotNote")}
+                </p>
+            ) : detail &&
                 (isCodeDetail(r.tool) ? (
                     <ClampedText className="mt-1.5" text={detail} query={query} copy />
                 ) : (

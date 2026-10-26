@@ -9,8 +9,14 @@
 //! - MCP 2026-07-28 起沒有 transport session，所以 session 綁的是 OAuth grant（= 哪個 app），不是 MCP 連線。
 //!
 //! 每次開 / 關都寫稽核紀錄並通知 session 的使用者與隧道擁有者（`AI-SESSION-OPENED` / `AI-SESSION-CLOSED`）。
+//! 同一條連線上還能開互動 shell（`shell`，PTY；最多 [`shell::MAX_SHELLS_PER_SESSION`] 個，算進 channel 配額）；
+//! agent 開的遠端瀏覽器（`browser`）走同樣的生命週期與 reaper。
 //! SSH sessions opened by AI agents over MCP: one russh connection per session, reused by every command, with
-//! idle / lifetime / revocation / permission based expiry.
+//! idle / lifetime / revocation / permission based expiry. Interactive shells (`shell`) share the connection;
+//! agent-opened remote browsers (`browser`) share the lifecycle and the reaper.
+
+pub mod browser;
+pub mod shell;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -28,6 +34,8 @@ use tokio::sync::Semaphore;
 
 use crate::auth::mcp::McpPrincipal;
 use crate::db::{self, settings::SiteSettings};
+pub use browser::{AiBrowser, AiBrowsers};
+pub use shell::AiShell;
 use crate::permissions::{self, Permission};
 use crate::presence::{Entry, Kind, PresenceGuard};
 use crate::sftp;
@@ -134,7 +142,9 @@ pub struct AiSession {
     commands: AtomicU64,
     conn: DeviceConn,
     sftp: tokio::sync::Mutex<Option<Arc<SftpSession>>>,
-    slots: Semaphore,
+    slots: Arc<Semaphore>,
+    /// 開著的互動 shell。/ Open interactive shells.
+    shells: Mutex<HashMap<String, Arc<AiShell>>>,
     /// 開 session 的 MCP 請求來源 IP。/ Client IP of the MCP request that opened it.
     pub ip: Option<String>,
     /// 存在期間算「在用這條隧道」。/ Counts as using the tunnel while the session exists.
@@ -157,8 +167,19 @@ impl AiSession {
         self._presence.id()
     }
 
-    fn touch(&self) {
+    pub(crate) fn touch(&self) {
         *self.activity.lock().unwrap() = (Instant::now(), now_db());
+    }
+    pub fn shell(&self, id: &str) -> Option<Arc<AiShell>> {
+        self.shells.lock().unwrap().get(id).cloned()
+    }
+    pub fn shells(&self) -> Vec<Arc<AiShell>> {
+        let mut v: Vec<Arc<AiShell>> = self.shells.lock().unwrap().values().cloned().collect();
+        v.sort_by_key(|s| s.created);
+        v
+    }
+    pub fn shell_count(&self) -> usize {
+        self.shells.lock().unwrap().len()
     }
     fn begin(&self) -> Busy<'_> {
         self.in_flight.fetch_add(1, Ordering::SeqCst);
@@ -217,9 +238,11 @@ pub struct AiSessions {
     map: DashMap<String, Arc<AiSession>>,
     /// 正在連線中（尚未放進 map）的數量，避免並行的 open 超過上限。/ Opens in progress, counted against the cap.
     opening: Mutex<HashMap<i64, usize>>,
+    /// agent 開的遠端瀏覽器（跟 SSH session 一起算每人上限）。/ Agent browsers (counted with SSH sessions).
+    pub browsers: AiBrowsers,
 }
 
-struct Reservation<'a> {
+pub(crate) struct Reservation<'a> {
     reg: &'a AiSessions,
     user_id: i64,
 }
@@ -246,10 +269,11 @@ impl AiSessions {
         v.sort_by_key(|s| s.created);
         v
     }
+    /// 這個人開著的 SSH session + 瀏覽器。/ Open SSH sessions plus browsers of one user.
     pub fn count_for_user(&self, user_id: i64) -> usize {
-        self.map.iter().filter(|e| e.value().user_id == user_id).count()
+        self.map.iter().filter(|e| e.value().user_id == user_id).count() + self.browsers.count_for_user(user_id)
     }
-    fn reserve(&self, user_id: i64, max: usize) -> Option<Reservation<'_>> {
+    pub(crate) fn reserve(&self, user_id: i64, max: usize) -> Option<Reservation<'_>> {
         let mut g = self.opening.lock().unwrap();
         let pending = g.get(&user_id).copied().unwrap_or(0);
         if self.count_for_user(user_id) + pending >= max {
@@ -330,7 +354,8 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
         commands: AtomicU64::new(0),
         conn,
         sftp: tokio::sync::Mutex::new(None),
-        slots: Semaphore::new(MAX_CONCURRENT_COMMANDS),
+        slots: Arc::new(Semaphore::new(MAX_CONCURRENT_COMMANDS)),
+        shells: Mutex::new(HashMap::new()),
         ip: p.ip.clone(),
         _presence: state.presence.join(Entry { client: Some(p.client_name.clone()), ..Entry::new(tunnel.id, p.user.id, &p.user.username, Kind::Ai, p.ip.clone()) }),
     });
@@ -344,6 +369,10 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
 /// Close and forget a session; audited and notified once.
 pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Arc<AiSession>> {
     let (_, s) = state.ai.map.remove(id)?;
+    // 先收 shell（錄影要收尾、稽核要寫），再斷線。/ Shells first (recordings finished, audited), then the connection.
+    for sh in s.shells() {
+        close_shell(state, &s, &sh, "session_closed").await;
+    }
     let _ = s.conn.device.disconnect(Disconnect::ByApplication, reason.as_str(), "en").await;
     tracing::info!(session = %s.id, tunnel = %s.tunnel_name, reason = reason.as_str(), "AI session closed");
     audit(
@@ -368,14 +397,14 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Ar
     Some(s)
 }
 
-/// grant 撤銷時立即關掉它的所有 session。/ Close every session of a grant (on revocation).
+/// grant 撤銷時立即關掉它的所有 session 與瀏覽器。/ Close every session and browser of a grant (on revocation).
 pub async fn close_for_grant(state: &AppState, grant_id: i64, reason: CloseReason) -> usize {
-    close_where(state, |s| s.grant_id == grant_id, reason).await
+    close_where(state, |s| s.grant_id == grant_id, reason).await + browser::close_where(state, |b| b.grant_id == grant_id, reason).await
 }
 
-/// 隧道刪除時立即關掉上面的 session（不等 reaper）。/ Close every session on a tunnel (on delete).
+/// 隧道刪除時立即關掉上面的 session 與瀏覽器（不等 reaper）。/ Close every session and browser on a tunnel (on delete).
 pub async fn close_for_tunnel(state: &AppState, tunnel_id: i64, reason: CloseReason) -> usize {
-    close_where(state, |s| s.tunnel_id == tunnel_id, reason).await
+    close_where(state, |s| s.tunnel_id == tunnel_id, reason).await + browser::close_where(state, |b| b.tunnel_id == tunnel_id, reason).await
 }
 
 async fn close_where(state: &AppState, pick: impl Fn(&AiSession) -> bool, reason: CloseReason) -> usize {
@@ -411,10 +440,15 @@ async fn authorization_lost(state: &AppState, s: &AiSession) -> Option<CloseReas
     None
 }
 
-/// 檢查一輪。/ One reaper pass.
+/// 檢查一輪：session、它們的 shell（閒置的關掉）、agent 的瀏覽器。/ One reaper pass: sessions, idle shells, browsers.
 pub async fn reap_once(state: &AppState) {
     let listen = state.status.listen_ports();
     for s in state.ai.list() {
+        for sh in s.shells() {
+            if sh.idle_for() >= s.idle_timeout {
+                close_shell(state, &s, &sh, "idle").await;
+            }
+        }
         let reason = if let Some(r) = s.time_expiry() {
             Some(r)
         } else if s.conn.device.is_closed() {
@@ -428,6 +462,7 @@ pub async fn reap_once(state: &AppState) {
             close(state, &s.id, r).await;
         }
     }
+    browser::reap_once(state).await;
 }
 
 pub async fn run_reaper(state: AppState, interval: Duration) {
@@ -446,6 +481,7 @@ fn notify(state: &AppState, s: &AiSession, action: &str, reason: Option<CloseRea
     };
     let mut msg = json!({
         "action": action,
+        "kind": "ssh",
         "details": details,
         "tunnel_id": s.tunnel_id,
         "session_id": s.id,
@@ -462,7 +498,7 @@ fn notify(state: &AppState, s: &AiSession, action: &str, reason: Option<CloseRea
         crate::webhooks::Event::new(kind)
             .tunnel_ref(tunnel)
             .to([s.user_id, s.tunnel_owner_id], None)
-            .data(json!({ "session_id": s.id, "by": s.user_name, "client": s.client_name, "account": s.target_username, "reason": reason.map(|r| r.as_str()) }))
+            .data(json!({ "session_id": s.id, "kind": "ssh", "by": s.user_name, "client": s.client_name, "account": s.target_username, "reason": reason.map(|r| r.as_str()) }))
             .link("/tunnels/activity"),
     );
 }
@@ -485,6 +521,63 @@ pub async fn exec(s: &AiSession, command: &str, timeout: Duration, max_output: u
     let _busy = s.begin();
     s.commands.fetch_add(1, Ordering::SeqCst);
     crate::ssh::exec::run(&s.conn.device, command, timeout, max_output).await
+}
+
+// ---------------------------------------------------------------- interactive shells
+
+/// 在 session 上開一個互動 shell（PTY）。錯誤字串直接給 agent 看。/ Open an interactive shell on the session.
+pub async fn open_shell(state: &AppState, s: &Arc<AiSession>, cols: u32, rows: u32) -> Result<Arc<AiShell>, String> {
+    if s.shell_count() >= shell::MAX_SHELLS_PER_SESSION {
+        let open: Vec<String> = s.shells().iter().map(|sh| sh.id.clone()).collect();
+        return Err(format!("This session already has {} shell(s) open (the limit is {}). Close one with shell_close first: {}", open.len(), shell::MAX_SHELLS_PER_SESSION, open.join(", ")));
+    }
+    let Ok(slot) = s.slots.clone().try_acquire_owned() else {
+        return Err(format!("This session already has {MAX_CONCURRENT_COMMANDS} commands or shells in flight; wait for one to finish."));
+    };
+    let _busy = s.begin();
+    // 這條隧道要錄影：shell 也錄（asciicast，kind = agent）。/ A recorded tunnel records agent shells too.
+    let recorder = match db::tunnels::by_id(&state.db, s.tunnel_id).await.ok().flatten().filter(|t| t.record_sessions) {
+        Some(t) => {
+            let title = format!("{} ({}) on {} as {}", s.client_name, s.user_name, t.host_friendly_name, s.target_username);
+            crate::recording::Recorder::start_kind(state, t.id, s.user_id, &s.user_name, &s.target_username, None, "agent", &title, cols, rows).await
+        }
+        None => None,
+    };
+    let sh = AiShell::open(&s.conn.device, &s.id, s.tunnel_id, cols, rows, slot, recorder).await.map_err(|e| format!("Cannot open a shell: {e:#}"))?;
+    s.shells.lock().unwrap().insert(sh.id.clone(), sh.clone());
+    tracing::info!(session = %s.id, shell = %sh.id, cols, rows, "AI shell opened");
+    Ok(sh)
+}
+
+/// 關一個 shell：移出 session、關 channel、收錄影、寫稽核（`shell_close`，detail = 原因與流量）。重複關閉不再寫。
+/// Close a shell: forget it, close the channel, finish the recording, audit once.
+pub async fn close_shell(state: &AppState, s: &AiSession, sh: &AiShell, reason: &str) -> bool {
+    if s.shells.lock().unwrap().remove(&sh.id).is_none() {
+        return false;
+    }
+    sh.close(state).await;
+    s.touch();
+    tracing::info!(session = %s.id, shell = %sh.id, reason, "AI shell closed");
+    audit(
+        state,
+        db::ai_audit::NewEvent {
+            user_id: s.user_id,
+            grant_id: Some(s.grant_id),
+            client_name: &s.client_name,
+            tool: "shell_close",
+            tunnel_id: Some(s.tunnel_id),
+            session_id: Some(&s.id),
+            target_username: Some(&s.target_username),
+            detail: Some(&format!("shell {}: reason: {reason}; sent: {} bytes; read: {} bytes", sh.id, sh.bytes_in(), sh.bytes_out())),
+            ok: true,
+            duration_ms: Some(sh.created.elapsed().as_millis() as i64),
+            bytes_out: Some(sh.bytes_out() as i64),
+            ip: s.ip.as_deref(),
+            ..Default::default()
+        },
+    )
+    .await;
+    true
 }
 
 // ---------------------------------------------------------------- sftp
