@@ -968,6 +968,9 @@ pub struct SavedCredential {
     /// null = the device itself
     pub lan_host_id: Option<i64>,
     pub lan_host: Option<String>,
+    /// A RustDesk-server device (no tunnel; `tunnel_id` is 0)
+    pub rustdesk_device_id: Option<i64>,
+    pub rustdesk_device: Option<String>,
     pub port: Option<i64>,
     pub login: String,
     pub domain: String,
@@ -982,8 +985,11 @@ pub struct SavedCredentialCreate {
     pub label: String,
     /// `rdp`, `vnc` or `rustdesk`
     pub protocol: String,
+    /// 0 with `rustdesk_device_id`
     pub tunnel_id: i64,
     pub lan_host_id: Option<i64>,
+    /// A RustDesk-server device you may use (protocol `rustdesk` only)
+    pub rustdesk_device_id: Option<i64>,
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
@@ -2132,9 +2138,11 @@ pub struct LiveSessionTunnel {
 #[derive(ToSchema)]
 pub struct LiveSession {
     pub id: u64,
+    /// A RustDesk device on Telepy's RustDesk server (then `tunnel.id` is 0 and `tunnel.name` null)
+    pub device: Option<LiveSessionDevice>,
     pub tunnel: LiveSessionTunnel,
     pub user: UserRef,
-    /// terminal / files / browser / desktop / ssh / ai
+    /// terminal / files / browser / desktop / rustdesk / ssh / ai
     #[schema(example = "terminal")]
     pub kind: String,
     pub ip: Option<String>,
@@ -2143,6 +2151,12 @@ pub struct LiveSession {
     /// MCP app name
     pub client: Option<String>,
     pub mine: bool,
+}
+
+#[derive(ToSchema)]
+pub struct LiveSessionDevice {
+    pub id: i64,
+    pub name: String,
 }
 
 /// 自己的、自己擁有或 ADMIN 的隧道上的（管理員看全部）。/ Yours plus everyone's on tunnels you own or ADMIN (all for admins).
@@ -2358,6 +2372,51 @@ pub struct RustDeskDevice {
     pub mine: bool,
     /// Browser sessions open to it
     pub in_use: i64,
+    /// The latest browser session (null = never used)
+    pub last_used: Option<RustDeskLastUsed>,
+}
+
+#[derive(ToSchema)]
+pub struct RustDeskLastUsed {
+    pub username: String,
+    pub at: String,
+}
+
+#[derive(ToSchema)]
+pub struct RustDeskIdStart {
+    /// A saved login bound to this device; its password comes back in `password`
+    pub credential_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct RustDeskSessionUser {
+    pub id: i64,
+    pub username: String,
+}
+
+#[derive(ToSchema)]
+pub struct RustDeskDeviceSession {
+    pub id: i64,
+    pub user: RustDeskSessionUser,
+    pub mine: bool,
+    pub ip: Option<String>,
+    #[schema(value_type = Object)]
+    pub geo: serde_json::Value,
+    pub started_at: String,
+    /// null while it is open
+    pub ended_at: Option<String>,
+    pub seconds: Option<i64>,
+    /// Bytes device → browser
+    pub to_browser: i64,
+    /// Bytes browser → device
+    pub to_device: i64,
+    /// Why it ended: `user` (browser left), `device`, `ended` (Live sessions), `stopped`, `removed`, `revoked`, `restart`
+    pub reason: String,
+}
+
+#[derive(ToSchema)]
+pub struct RustDeskDeviceSessions {
+    pub sessions: Vec<RustDeskDeviceSession>,
 }
 
 #[derive(ToSchema)]
@@ -2392,6 +2451,8 @@ pub struct RustDeskIdSession {
     /// Base64 ed25519 public key of Telepy's RustDesk server
     pub key: String,
     pub device: RustDeskIdDevice,
+    /// The saved password, only when started with `credential_id`
+    pub password: Option<String>,
 }
 
 #[derive(ToSchema)]

@@ -172,14 +172,26 @@ WebSocket，就會**主動往外**連 Telepy 的 443；Telepy 自己實作 hbbs 
   附 Telepy 簽的 `IdPk{id, 裝置公鑰}`；裝置開 `/ws/relay` 送 `request_relay {uuid}`，兩條 WS 以 uuid 配對、逐則轉送。
   伺服器金鑰是由 `SECRET_KEY` 衍生的 ed25519（不另存；裝置在 WS 模式不驗它，只有瀏覽器核心用）。核心驗過金鑰就和裝置做
   RustDesk 的金鑰交換 → **端對端加密**，不會出現「不安全連線」。
-- **管理**：`GET /api/rustdesk/devices`（自己的；管理員看全部）、`PATCH` 改名、`DELETE` 移除（踢掉註冊連線、結束 session，
-  之後回 `NOT_DEPLOYED`）。通知 `RUSTDESK-DEVICES-UPDATED`（登記、上下線、改名、移除；帶 `enroll_id` 時給新增對話框）。
-  事件 `rustdesk_enrolled` / `rustdesk_removed` / `rustdesk_open` / `rustdesk_close`（沒有隧道 → 只有管理員在 Logs 看得到）。
+- **管理**：`GET /api/rustdesk/devices`（自己的；管理員看全部；每台帶 `last_used {username, at}`）、`PATCH` 改名、`DELETE` 移除
+  （踢掉註冊連線、結束 session、刪掉綁它的已存密碼與連線紀錄，之後回 `NOT_DEPLOYED`）。通知 `RUSTDESK-DEVICES-UPDATED`
+  （登記、上下線、改名、移除、session 開關；帶 `enroll_id` 時給新增對話框）。事件 `rustdesk_enrolled` / `rustdesk_removed` /
+  `rustdesk_open` / `rustdesk_close` 沒有隧道 → 只有管理員在 Logs 看得到，所以擁有者看下面的連線紀錄。
+- **已存的密碼**：憑證庫的列可以綁一台裝置（`telepy_credential.rustdesk_device_id`，`tunnel_id` = 0，協定只能 `rustdesk`；
+  建立時要能用那台 = 擁有者或管理員）。`GET /api/credentials?rustdesk_device_id=` 列出；start 帶 `{credential_id}` 時只有綁
+  **這台**的解得開（否則欄位錯誤 `credential_id`），解開的密碼只放進這次回應的 `password`，交給瀏覽器裡的核心回挑戰 ——
+  和隧道版 RustDesk 一樣是「憑證庫不回傳密碼」的唯一例外。手打的密碼仍然只留在分頁裡。
+- **即時 session 與連線紀錄**：連上時加入 presence（種類 `rustdesk`，隧道 0 ＋ `device {id, name, owner_id}`），
+  `GET /api/sessions` 給本人、裝置擁有者與管理員看（`device {id, name}`），擁有者可以結束別人的（關閉碼 4009、原因 = 誰；
+  通知 `SESSION-ENDED` 帶 `device_id`、事件 `session_ended`）。每次連線一列 `telepy_rustdesk_session`（誰、IP、開始 / 結束、
+  兩個方向的位元組、結束原因 user / device / ended / stopped / removed / revoked / restart），每台最多 200 列、含 IP 所以保留
+  90 天（`db::retention`），重啟時沒收尾的記成 `restart`；`GET /api/rustdesk/devices/{id}/sessions`（擁有者或管理員）回最近 20 筆。
 - **前端**：`/tunnels/rustdesk`（`hooks/useRustDeskDevices.ts`、`components/rustdesk/EnrolDialog.tsx` + `hooks/useRustDeskEnrol.ts`，
-  純函式 `lib/rustdeskDevices.ts`）；遠端桌面頁的「裝置」選單多一組 RustDesk 裝置（`?rustdesk=<id>`，表單只有密碼與畫質），
-  `RustDeskViewer` 帶 `key` 與 `peer_id`；info 路徑圖是三節點版（瀏覽器 ─ Telepy ─ 裝置自己的 HTTPS 連線 ─ 裝置）。
-- **還沒有的**：分享給別人（只有擁有者與管理員）、憑證庫（密碼每次輸入）、即時 session 頁 / presence、擁有者在 Logs 看到事件、
-  Telepy 配發的號碼（RustDesk 的 `--deploy --id <號碼>` 可以做到）。實測只在 Linux（Debian 容器、RustDesk 1.5.0）；macOS /
+  純函式 `lib/rustdeskDevices.ts`）；卡片顯示「最後使用」、使用中連到即時 session 頁（`?device=<id>`），選單「最近的連線」開
+  `components/rustdesk/DeviceSessionsDialog.tsx`。遠端桌面頁的「裝置」選單多一組 RustDesk 裝置（`?rustdesk=<id>`，表單是
+  已存的密碼 / 密碼＋「存起來」與畫質，和隧道版共用 `SavedLoginSelect` / `RustDeskSecret`），`RustDeskViewer` 帶 `key` 與
+  `peer_id`；info 路徑圖是三節點版（瀏覽器 ─ Telepy ─ 裝置自己的 HTTPS 連線 ─ 裝置）。即時 session 頁依「地點」分組
+  （隧道或 RustDesk 裝置，`lib/liveSessions.ts` 的 `Place`），篩選 `?tunnel=` / `?device=`。
+- **還沒有的**：分享給別人（只有擁有者與管理員）、Telepy 配發的號碼（RustDesk 的 `--deploy --id <號碼>` 可以做到）。實測只在 Linux（Debian 容器、RustDesk 1.5.0）；macOS /
   Windows 指令用同樣的選項，還沒實機跑過。
 
 ### 用 RustDesk app（埠轉發）

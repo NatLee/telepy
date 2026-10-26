@@ -192,7 +192,7 @@ export const ROWS: readonly WayRow[] = [
         cells: {
             guacd: { text: "desktop.ways.cell.loginDesktop", tone: "neutral" },
             rustdeskTunnel: { text: "desktop.ways.cell.loginRustDeskSaved", tone: "neutral" },
-            rustdeskServer: { text: "desktop.ways.cell.loginRustDesk", tone: "neutral" },
+            rustdeskServer: { text: "desktop.ways.cell.loginRustDeskSaved", tone: "neutral" },
         },
     },
 ];

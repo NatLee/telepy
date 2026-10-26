@@ -304,6 +304,15 @@ async fn relay_via_id_server(state: &AppState, mut socket: WebSocket, session: A
     let from = meta.ip.as_deref().map(|ip| format!(" from {ip}")).unwrap_or_default();
     tracing::info!(session = %session.id, "rustdesk: {opened}");
     state.gateway.event("rustdesk_open", None, None, None, format!("{opened}{from} (session {})", short(&session.id))).await;
+    // 沒有隧道：presence 用隧道 0 加上裝置；擁有者在即時 session 頁看得到、能結束。連線紀錄給裝置頁。
+    // No tunnel: presence on tunnel 0 with the device, so its owner sees and can end it; history for the device page.
+    let Via::IdServer { device_id, device_name, owner_id, .. } = &session.via else { return };
+    let device_ref = crate::presence::DeviceRef { id: *device_id, name: device_name.clone(), owner_id: *owner_id };
+    let mut presence = Some(state.presence.join(Entry { device: Some(device_ref), ..Entry::new(0, session.user_id, &session.user_name, Kind::RustDesk, meta.ip.clone()) }));
+    let history = crate::db::rustdesk_devices::open_session(&state.db, *device_id, session.user_id, &session.user_name, meta.ip.as_deref()).await.ok();
+    let (device_id, owner_id) = (*device_id, *owner_id);
+    devices_updated(state, owner_id, device_id);
+    let mut ended_by: Option<String> = None;
 
     let mut to_browser: u64 = 0;
     let mut to_device: u64 = 0;
@@ -334,15 +343,29 @@ async fn relay_via_id_server(state: &AppState, mut socket: WebSocket, session: A
                 }
                 Some(Ok(_)) => {}
             },
+            by = presence_ended(&mut presence) => {
+                ended_by = Some(by);
+                break "ended";
+            }
             _ = session.stop.notified() => {
                 close_code = Some(CLOSE_STOPPED);
                 break session.stop_reason().unwrap_or("stopped");
             }
         }
     };
-    finish(state, &mut socket, &session, &opened, connected_at, reason, to_browser, to_device, None, close_code).await;
+    if let Some(id) = history {
+        let _ = crate::db::rustdesk_devices::close_session(&state.db, id, to_browser, to_device, reason).await;
+    }
+    finish(state, &mut socket, &session, &opened, connected_at, reason, to_browser, to_device, ended_by, close_code).await;
+    drop(presence);
     let _ = tokio::time::timeout(Duration::from_secs(2), device.send(Message::Close(None))).await;
     state.rustdesk.remove(&session.id);
+    devices_updated(state, owner_id, device_id);
+}
+
+/// 擁有者的裝置頁（使用中、最後使用）與即時 session 頁跟著更新。/ Refresh the owner's device page and live sessions.
+fn devices_updated(state: &AppState, owner_id: i64, device_id: i64) {
+    state.hub.notify_user(owner_id, &serde_json::json!({ "action": "RUSTDESK-DEVICES-UPDATED", "device_id": device_id, "details": "RustDesk device in use changed" }));
 }
 
 /// 收尾：寫 close 事件、用對的關閉碼關掉瀏覽器那條。/ Write the close event and close the browser's socket.

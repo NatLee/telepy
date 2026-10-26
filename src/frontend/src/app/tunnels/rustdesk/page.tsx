@@ -8,7 +8,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { Info, MonitorSmartphone, MoreHorizontal, Pencil, Plus, Route, ScreenShare, Trash2 } from "lucide-react";
+import { History, Info, MonitorSmartphone, MoreHorizontal, Pencil, Plus, Route, ScreenShare, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -21,17 +21,19 @@ import { useToast } from "@/components/ui/Toast";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { StatusDot, TunnelLastSeen } from "@/components/tunnels/TunnelStatus";
 import { EnrolDialog } from "@/components/rustdesk/EnrolDialog";
+import { DeviceSessionsDialog } from "@/components/rustdesk/DeviceSessionsDialog";
 import { ConnectionWaysDialog } from "@/components/desktop/ConnectionWays";
 import { Disclosure } from "@/components/tunnels/CreateWizardSteps/parts";
 import { useRustDeskDevices } from "@/hooks/useRustDeskDevices";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
+import { formatRelativeTime } from "@/lib/relativeTime";
 import { deviceDetails, formatRustDeskId, serverProblemKey, type RustDeskDevice } from "@/lib/rustdeskDevices";
 
 const CARD = "rounded-xl border border-border bg-card shadow-card";
 
-function DeviceCard({ device, onRename, onRemove }: { device: RustDeskDevice; onRename: () => void; onRemove: () => void }) {
-    const { t } = useI18n();
+function DeviceCard({ device, onRename, onRemove, onHistory }: { device: RustDeskDevice; onRename: () => void; onRemove: () => void; onHistory: () => void }) {
+    const { t, locale } = useI18n();
     const details = deviceDetails(device);
     return (
         <li className={`${CARD} flex flex-col gap-3 p-4`}>
@@ -50,18 +52,28 @@ function DeviceCard({ device, onRename, onRemove }: { device: RustDeskDevice; on
                         </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                        <DropdownMenuItem onSelect={onHistory}><History size={14} /> {t("rustdesk.card.history")}</DropdownMenuItem>
                         <DropdownMenuItem onSelect={onRename}><Pencil size={14} /> {t("rustdesk.card.rename")}</DropdownMenuItem>
                         <DropdownMenuItem onSelect={onRemove} className="text-destructive focus:text-destructive"><Trash2 size={14} /> {t("rustdesk.card.remove")}</DropdownMenuItem>
                     </DropdownMenuContent>
                 </DropdownMenu>
             </div>
             {details && <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{details}</p>}
+            {device.last_used && (
+                <button type="button" onClick={onHistory} className="self-start text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline" title={new Date(device.last_used.at).toLocaleString(locale)}>
+                    {t("rustdesk.card.lastUsed", { name: device.last_used.username, time: formatRelativeTime(device.last_used.at, locale) })}
+                </button>
+            )}
             <div className="mt-auto flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 text-xs text-foreground">
                     <StatusDot online={device.online} /> {device.online ? t("rustdesk.card.online") : t("rustdesk.card.offline")}
                 </span>
                 {!device.online && (device.last_seen_at ? <TunnelLastSeen at={device.last_seen_at} /> : <span className="text-xs text-muted-foreground">{t("rustdesk.card.neverSeen")}</span>)}
-                {device.in_use > 0 && <Chip>{t("rustdesk.card.inUse", { n: device.in_use })}</Chip>}
+                {device.in_use > 0 && (
+                    <Link href={`/tunnels/sessions?device=${device.id}`} prefetch={false} title={t("rustdesk.card.inUseHint")}>
+                        <Chip className="hover:bg-muted/70">{t("rustdesk.card.inUse", { n: device.in_use })}</Chip>
+                    </Link>
+                )}
                 {!device.mine && device.owner.username && <Chip>{t("rustdesk.card.owner", { name: device.owner.username })}</Chip>}
                 <span className="flex-1" />
                 {device.online ? (
@@ -87,6 +99,10 @@ export default function RustDeskDevicesPage() {
     const [renameError, setRenameError] = useState<string | null>(null);
     const [removing, setRemoving] = useState<RustDeskDevice | null>(null);
     const [waysOpen, setWaysOpen] = useState(false);
+    // 關掉時只把 open 設成 false，裝置留著給關閉動畫；開著時跟著清單更新（使用中、名稱）。
+    // Closing only clears `open` so the closing animation keeps its content; follows the list (in use, name).
+    const [history, setHistory] = useState<{ id: number; open: boolean } | null>(null);
+    const historyDevice = devices.find((d) => d.id === history?.id) ?? null;
 
     const off = !!server && !server.enabled;
     const problem = server ? serverProblemKey(server.problem) : null;
@@ -161,12 +177,14 @@ export default function RustDeskDevicesPage() {
                             device={d}
                             onRename={() => { setRenaming(d); setNewName(d.name); setRenameError(null); }}
                             onRemove={() => setRemoving(d)}
+                            onHistory={() => setHistory({ id: d.id, open: true })}
                         />
                     ))}
                 </ul>
             )}
 
             {adding && <EnrolDialog onClose={() => setAdding(false)} />}
+            <DeviceSessionsDialog device={historyDevice} open={!!history?.open} onClose={() => setHistory((h) => (h ? { ...h, open: false } : h))} />
             <ConnectionWaysDialog isOpen={waysOpen} onClose={() => setWaysOpen(false)} current="rustdeskServer" />
             <Modal
                 isOpen={!!renaming}

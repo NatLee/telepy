@@ -57,11 +57,21 @@ pub struct Entry {
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
     pub client: Option<String>,
+    /// 經 Telepy RustDesk 伺服器的 session 連的是哪台（這時 `tunnel_id` = 0）。/ The RustDesk-server device (then `tunnel_id` = 0).
+    pub device: Option<DeviceRef>,
+}
+
+/// RustDesk 伺服器裝置：id、名稱、擁有者（擁有者看得到、能結束上面的 session）。/ A RustDesk-server device and its owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRef {
+    pub id: i64,
+    pub name: String,
+    pub owner_id: i64,
 }
 
 impl Entry {
     pub fn new(tunnel_id: i64, user_id: i64, username: &str, kind: Kind, ip: Option<String>) -> Self {
-        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None }
+        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, device: None }
     }
 }
 

@@ -295,3 +295,122 @@ async fn a_rustdesk_id_belongs_to_one_account() {
     assert_eq!(r.json["devices"].as_array().unwrap().len(), 1);
     assert_eq!(r.json["devices"][0]["id"], id);
 }
+
+/// 關閉幀（代碼、原因）。/ The close frame: code and reason.
+async fn close_frame(ws: &mut Ws) -> (u16, String) {
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("nothing arrived") {
+            Some(Ok(Message::Close(Some(f)))) => return (u16::from(f.code), f.reason.to_string()),
+            Some(Ok(Message::Close(None))) | None | Some(Err(_)) => return (0, String::new()),
+            Some(Ok(_)) => continue,
+        }
+    }
+}
+
+/// 開一個瀏覽器 session 並把兩端中繼接起來。/ Start a browser session and pair both relay sides.
+async fn connect(app: &common::TestApp, host: &str, token: &str, device_id: i64, body: Value, dev: &FakeDevice, reg: &mut Ws) -> (Value, Ws, Ws) {
+    let r = app.post(&format!("/api/rustdesk/devices/{device_id}/start"), Some(token), body).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let url = format!("ws://{host}{}?ticket={}", r.json["ws_path"].as_str().unwrap(), r.json["ticket"].as_str().unwrap());
+    let mut browser_id = ws(&url).await;
+    send(&mut browser_id, rendezvous_with_id(PUNCH_HOLE_REQUEST, &dev.id)).await;
+    let pushed = recv(reg).await.unwrap();
+    let (_, fs) = rendezvous(&pushed).unwrap();
+    let uuid = String::from_utf8(bytes_of(&fs, 2)).unwrap();
+    let relay_url = String::from_utf8(bytes_of(&fs, 4)).unwrap();
+    recv(&mut browser_id).await.unwrap();
+    let mut device_relay = ws(&relay_url).await;
+    send(&mut device_relay, codec::request_relay(&uuid, &[], "", false)).await;
+    let mut browser_relay = ws(&url).await;
+    send(&mut browser_relay, rendezvous_with_id(REQUEST_RELAY, &dev.id)).await;
+    send(&mut browser_relay, b"ping".to_vec()).await;
+    assert_eq!(recv(&mut device_relay).await.unwrap(), b"ping");
+    (r.json, browser_relay, device_relay)
+}
+
+#[tokio::test]
+async fn rustdesk_devices_saved_passwords_live_sessions_and_history() {
+    let app = common::spawn().await;
+    let (admin, bob) = app.admin_and_user("alice", "bob").await;
+    let carol = app.login("carol", "pw").await;
+    let host = listen(&app).await;
+    let dev = FakeDevice::new("246810121");
+    let r = app.post("/api/rustdesk/enroll", Some(&bob), json!({"name": "Studio Mac"})).await;
+    assert_eq!(deploy(&app, r.json["token"].as_str().unwrap(), dev.deploy_body()).await, "OK");
+    let mut reg = ws(&format!("ws://{host}/ws/id")).await;
+    assert_eq!(dev.register(&mut reg).await, codec::register_result::OK);
+    let r = app.get("/api/rustdesk/devices", Some(&bob)).await;
+    let device_id = r.json["devices"][0]["id"].as_i64().unwrap();
+    assert_eq!(r.json["devices"][0]["last_used"], Value::Null, "never used yet");
+    // 另一台（登記了、沒連上），給「綁別台」的檢查用。/ A second device for the wrong-device check.
+    let r = app.post("/api/rustdesk/enroll", Some(&bob), json!({})).await;
+    assert_eq!(deploy(&app, r.json["token"].as_str().unwrap(), FakeDevice::new("135791113").deploy_body()).await, "OK");
+    let other_id = app.get("/api/rustdesk/devices", Some(&bob)).await.json["devices"].as_array().unwrap().iter().find(|d| d["rustdesk_id"] == "135791113").unwrap()["id"].as_i64().unwrap();
+
+    // 憑證庫：綁這台的 RustDesk 密碼。/ The vault: a RustDesk password bound to this device.
+    let saved = |device: i64, protocol: &str| json!({"label": "Studio", "protocol": protocol, "tunnel_id": 0, "rustdesk_device_id": device, "password": "s3cret-pass"});
+    let r = app.post("/api/credentials", Some(&bob), saved(device_id, "rustdesk")).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!((r.json["rustdesk_device_id"].as_i64(), r.json["rustdesk_device"].as_str(), r.json["has_password"].as_bool()), (Some(device_id), Some("Studio Mac"), Some(true)));
+    assert!(r.json.get("password").is_none(), "never returned by the vault API");
+    let cred = r.json["id"].as_i64().unwrap();
+    let r = app.post("/api/credentials", Some(&bob), saved(device_id, "vnc")).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "RustDesk only: {}", r.text);
+    assert_eq!(app.post("/api/credentials", Some(&carol), saved(device_id, "rustdesk")).await.status, StatusCode::NOT_FOUND, "not carol's device");
+    let wrong = app.post("/api/credentials", Some(&bob), saved(other_id, "rustdesk")).await.json["id"].as_i64().unwrap();
+    let r = app.get(&format!("/api/credentials?rustdesk_device_id={device_id}"), Some(&bob)).await;
+    assert_eq!(r.json.as_array().unwrap().iter().map(|c| c["id"].as_i64().unwrap()).collect::<Vec<_>>(), vec![cred]);
+    let r = app.post(&format!("/api/rustdesk/devices/{device_id}/start"), Some(&bob), json!({"credential_id": wrong})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "saved for the other device: {}", r.text);
+    assert!(r.json["credential_id"].is_array());
+
+    // 用存的密碼連：只有這次回應帶密碼。/ Start with the saved password: it comes back in this response only.
+    let (start, mut bob_relay, mut bob_device) = connect(&app, &host, &bob, device_id, json!({"credential_id": cred}), &dev, &mut reg).await;
+    assert_eq!(start["password"], "s3cret-pass");
+    let r = app.get(&format!("/api/credentials?rustdesk_device_id={device_id}"), Some(&bob)).await;
+    assert!(r.json[0]["last_used_at"].is_string(), "touched");
+
+    // 即時 session：擁有者看得到，別人看不到。/ Live sessions: the owner sees it, someone else does not.
+    let r = app.get("/api/sessions", Some(&bob)).await;
+    let live = r.json["sessions"].as_array().unwrap().clone();
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert_eq!((live[0]["kind"].as_str(), live[0]["device"]["id"].as_i64(), live[0]["device"]["name"].as_str()), (Some("rustdesk"), Some(device_id), Some("Studio Mac")));
+    assert_eq!(app.get("/api/sessions", Some(&carol)).await.json["sessions"], json!([]));
+    bob_relay.close(None).await.unwrap();
+    assert!(recv(&mut bob_device).await.is_err());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(app.get("/api/sessions", Some(&bob)).await.json["sessions"], json!([]), "left presence when it closed");
+
+    // 管理員連 bob 的裝置；bob（擁有者）從即時 session 頁結束它 → 4009，原因 = bob。
+    // An admin connects to bob's device; bob, the owner, ends it from Live sessions → 4009 with "bob".
+    let (_, mut alice_relay, mut alice_device) = connect(&app, &host, &admin, device_id, json!({}), &dev, &mut reg).await;
+    let live = app.get("/api/sessions", Some(&bob)).await.json["sessions"].clone();
+    assert_eq!((live[0]["user"]["username"].as_str(), live[0]["mine"].as_bool()), (Some("alice"), Some(false)));
+    let sid = live[0]["id"].as_u64().unwrap();
+    assert_eq!(app.delete(&format!("/api/sessions/{sid}"), Some(&carol)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.delete(&format!("/api/sessions/{sid}"), Some(&bob)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(close_frame(&mut alice_relay).await, (4009, "bob".to_string()));
+    assert!(recv(&mut alice_device).await.is_err(), "the device side closes too");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 連線紀錄：新的在前，誰、怎麼結束、流量。/ History: newest first, who, how it ended, bytes.
+    let r = app.get(&format!("/api/rustdesk/devices/{device_id}/sessions"), Some(&bob)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rows = r.json["sessions"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!((rows[0]["user"]["username"].as_str(), rows[0]["reason"].as_str()), (Some("alice"), Some("ended")));
+    assert_eq!((rows[1]["user"]["username"].as_str(), rows[1]["reason"].as_str(), rows[1]["mine"].as_bool()), (Some("bob"), Some("user"), Some(true)));
+    assert!(rows.iter().all(|s| s["ended_at"].is_string() && s["seconds"].is_i64()));
+    assert!(rows[1]["to_device"].as_i64().unwrap() >= 4, "the browser's bytes were counted");
+    assert_eq!(app.get(&format!("/api/rustdesk/devices/{device_id}/sessions"), Some(&carol)).await.status, StatusCode::NOT_FOUND);
+    let r = app.get("/api/rustdesk/devices", Some(&bob)).await;
+    let d = r.json["devices"].as_array().unwrap().iter().find(|d| d["id"] == device_id).unwrap().clone();
+    assert_eq!(d["last_used"]["username"], "alice");
+
+    // 移除裝置：存的密碼與紀錄一起刪。/ Removing the device removes its saved logins and history.
+    assert_eq!(app.delete(&format!("/api/rustdesk/devices/{device_id}"), Some(&bob)).await.status, StatusCode::NO_CONTENT);
+    let ids: Vec<i64> = app.get("/api/credentials", Some(&bob)).await.json.as_array().unwrap().iter().map(|c| c["id"].as_i64().unwrap()).collect();
+    assert_eq!(ids, vec![wrong], "only the other device's login is left");
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_rustdesk_session WHERE device_id = ?").bind(device_id).fetch_one(&app.state.db.read).await.unwrap();
+    assert_eq!(left, 0);
+}

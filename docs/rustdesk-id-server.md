@@ -132,7 +132,7 @@ API 的相容性，而且 app 端的帳號 UI 不受 Telepy 控制。現在用�
    可選的對應隧道）；`POST /api/devices/deploy`（權杖＝一次性票證，像 join）、`/api/heartbeat`、`/api/sysinfo`、
    `/api/audit/conn`（回 2xx 空 body，寫進 Logs）；B2 的號碼配發與 `old_id` 審核。這幾個路徑落在 Telepy 的 `/api/*`
    底下，名稱目前沒有衝突；也可以把 `api-server` 設成 `https://<Telepy>/rustdesk` 讓它們落在子路徑（未實測）。
-3. **權限**：MVP 先「擁有者＋管理員」；分享沿用隧道的 VIEW／EDIT／ADMIN 模型之後再接，VIEW 可以用 `control_permissions`
+3. **權限**：MVP 先「擁有者＋管理員」（已做：憑證庫密碼、即時 session / presence、每台的連線紀錄）；分享沿用隧道的 VIEW／EDIT／ADMIN 模型之後再接，VIEW 可以用 `control_permissions`
    做成只能看。
 4. **前端**（約 1 週）：RustDesk 裝置清單（在線、名稱、ID、OS）、「新增裝置」對話框（Linux／macOS／Windows 指令，含
    權杖倒數與登記成功的即時狀態，像 JoinPanel）、連線沿用 `RustDeskViewer`（換一個 start 端點、`key` 帶伺服器公鑰）、

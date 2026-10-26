@@ -8,7 +8,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson } from "@/lib/api";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
-import { sortDevices, type RustDeskDevice, type RustDeskServerSettings } from "@/lib/rustdeskDevices";
+import type { NotificationPayload } from "@/types/notification";
+import { sortDevices, type RustDeskDevice, type RustDeskDeviceSession, type RustDeskServerSettings } from "@/lib/rustdeskDevices";
 
 interface ListResponse {
     server?: RustDeskServerSettings;
@@ -70,3 +71,36 @@ export function useRustDeskDevices() {
 }
 
 export type RustDeskDevices = ReturnType<typeof useRustDeskDevices>;
+
+/** 一台裝置最近的瀏覽器連線：`enabled` 時（對話框開著）抓、連線開關時（通知）重抓；關掉時留著上次的結果，
+ *  關閉動畫期間不會閃回載入中。/ A device's recent browser sessions, fetched while `enabled` and refetched when
+ *  sessions open or close; the last result is kept while closed so the closing animation does not flash. */
+export function useRustDeskDeviceSessions(deviceId: number | null, enabled: boolean) {
+    const [result, setResult] = useState<{ id: number; sessions: RustDeskDeviceSession[] | null } | null>(null);
+
+    const load = useCallback(async (id: number) => {
+        try {
+            const res = await apiFetch(`/api/rustdesk/devices/${id}/sessions`);
+            const data = res.ok ? await readJson<{ sessions?: RustDeskDeviceSession[] }>(res) : null;
+            setResult({ id, sessions: Array.isArray(data?.sessions) ? data.sessions : null });
+        } catch {
+            setResult({ id, sessions: null });
+        }
+    }, []);
+
+    useEffect(() => {
+        if (deviceId === null || !enabled) return;
+        const first = setTimeout(() => void load(deviceId), 0);
+        return () => clearTimeout(first);
+    }, [deviceId, enabled, load]);
+
+    const handlers = useMemo(() => ({
+        [NOTIFICATION_ACTIONS.RUSTDESK_DEVICES_UPDATED]: (msg: NotificationPayload) => {
+            if (enabled && deviceId !== null && msg.device_id === deviceId) void load(deviceId);
+        },
+    }), [deviceId, enabled, load]);
+    useNotificationHandlers(handlers);
+
+    const current = result && result.id === deviceId ? result : null;
+    return { sessions: current?.sessions ?? [], loaded: !!current, failed: !!current && current.sessions === null };
+}

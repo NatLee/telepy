@@ -7,6 +7,8 @@ export type SessionKind = "terminal" | "files" | "browser" | "desktop" | "rustde
 
 export interface LiveSession {
     id: number;
+    /** 經 Telepy RustDesk 伺服器連的裝置（這時沒有隧道：`tunnel.id` = 0）。/ A RustDesk-server device (no tunnel then). */
+    device?: { id: number; name: string } | null;
     tunnel: { id: number; name: string | null };
     user: { id: number; username: string };
     kind: SessionKind | string;
