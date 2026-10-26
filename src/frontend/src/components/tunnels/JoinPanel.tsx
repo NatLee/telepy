@@ -18,6 +18,7 @@ import type { DeviceJoin, JoinPhase } from "@/hooks/useDeviceJoin";
 import type { TranslationKey } from "@/locales/en";
 import { CopyLine, Disclosure, FieldError, Segmented, StepFooter, StepHeading } from "./CreateWizardSteps/parts";
 import { DialInRadar, type RadarState } from "@/components/tunnels/DialIn";
+import { TransportVisibility } from "@/components/tunnels/TransportVisibility";
 
 const ORDER: JoinPhase[] = ["waiting", "registered", "connected", "verified"];
 
@@ -100,6 +101,7 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                         ]}
                     />
                     <p className="text-xs leading-relaxed text-muted-foreground">{form.transport === "websocket" ? t("join.transportWebHint") : t("join.transportSshHint")}</p>
+                    <TransportVisibility selected={form.transport} />
                 </fieldset>
                 {form.error && <Callout tone="danger">{form.error}</Callout>}
                 <StepFooter>
