@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 誰建立 / 管理 | 每個人自己的（別人看不到） | 管理員；每位管理員都看得到、都能改 |
 | 收什麼 | 他在網頁上本來就會收到的通知 | 精選的重要事件（狀態、裝置身分與安全、帳號） |
-| 範圍 | 自己擁有或被分享的通道（可再限定幾條） | 每條通道、每個帳號 |
+| 範圍 | 自己擁有或被分享的通道（可再限定幾條） | 每條通道、每個帳號（可限定在任何通道） |
 | 內網位址 | 預設不准（見「位址檢查」） | 可以 |
 
 網站設定 → 通知分頁（`notify_*`）：
@@ -48,8 +48,15 @@
 | `mcp.session_opened` / `mcp.session_closed` | 連線 | agent 的使用者與通道 owner | |
 | `account.sign_in` | 登入 | 帳號本人 | |
 | `account.sign_in_failed` | 登入 | 帳號本人 | ✓（任何帳號） |
+| `key.expiring` | SSH 金鑰 | 金鑰的擁有者（個人 SSH 金鑰 7 天內到期） | |
+| `key.expired` | SSH 金鑰 | 金鑰的擁有者（剛到期：gateway 拒絕、從裝置移除） | |
 | `user.created` | 管理 | — | ✓ |
 | `webhook.test` | — | 「送測試」按鈕，不能訂 | |
+
+`key.*` 指的是金鑰頁上的**個人 SSH 金鑰**（筆電經 gateway 連裝置用的那把；管理員用 `user_key_max_days` 讓它們有效期限）。
+通道（裝置）金鑰刻意不會到期，所以沒有對應事件。每 10 分鐘看一次（`webhooks/keys.rs`）：7 天內到期送 `key.expiring`
+（`days_left` 無條件進位），到期了送 `key.expired`（只送 48 小時內到期的，舊的到期不補發）；每把金鑰每個階段每個到期時間只送一次
+（`telepy_key_expiry_notice`），續期改了到期時間就重新算。
 
 狀態事件（offline / online / degraded / recovered）不是一發生就送：每個 webhook 有自己的延遲（立刻 – 1 天，預設 1 分鐘），
 狀況要持續超過延遲才送；只有送過 offline / degraded 的，結束時才送 online / recovered。只追蹤 webhook 建立之後的變化。
@@ -90,6 +97,14 @@ Telepy JSON：
 `tunnel` 只有跟通道有關的事件才有；`data` 依事件不同（`by`、`command`、`reason`…，見 `webhooks/text.rs` 用到的欄位）。
 連結用 `PUBLIC_URL`（沒設就 `https://SERVER_DOMAIN`；都沒有就不附連結）。
 
+## 自訂 header
+
+每個 webhook 最多 10 個，例如自己服務的 `Authorization`、ntfy 的 access token。名稱必須是 HTTP token、不能重複，
+Telepy 自己設的（`content-type`、`user-agent`、`webhook-*`、`x-telepy-event`、`host`、`content-length`…）不能改；
+值是 1–2048 個可見 ASCII（不能換行）。以 `SECRET_KEY` 衍生的金鑰加密存放（AAD `telepy-webhook-headers:<id>`），
+API 只回給能管這個 webhook 的人；`PATCH` 帶 `headers` 就整組取代，沒帶就不變。換掉 `SECRET_KEY` 之後讀不出來：送出會失敗並說明，
+編輯畫面提示重新輸入（`headers_unreadable`）。
+
 ## 簽章（Standard Webhooks）
 
 每個請求都有：
@@ -107,7 +122,10 @@ Telepy JSON：
 - 失敗（連線錯誤、逾時、408、429、5xx）在 10 秒與 1 分鐘後各重試一次；其他 4xx 不重試；3xx 不跟（請填最終網址）。
 - 每個 webhook 一分鐘最多 30 則，超過的跳過，第一次跳過記一筆 `skipped`。
 - 連續失敗 20 次就暫停（`paused_reason = failing`），通知擁有者（全站的通知每位管理員，`WEBHOOK-PAUSED`）；重新打開就清掉。
-- 每個 webhook 留最新 50 筆送出紀錄（含內容，最多 16 KB），保留 30 天。
+- 每個 webhook 留最新 50 筆送出紀錄（含內容，最多 16 KB），保留 30 天。送之前就先記成 `sending`，送完補結果；
+  重試還在等時後端重啟的，啟動時改成失敗（「Telepy restarted before this was delivered.」）。
+- **重送**：送出紀錄裡失敗 / 跳過的（送達的展開後也有）可以按「重送」：同一個 `webhook-id`、依 webhook 現在的格式 / 語言 / header 重組，
+  不重試、不算進連續失敗、關著的 webhook 也能送，記成新的一筆（`redelivered_from`）。事件本身存在 `event_json`；測試送出不能重送。
 - 全站 webhook 的新增 / 修改 / 刪除 / 換密鑰記成 `webhook` gateway 事件（Logs，管理員看得到）。
 
 ## 位址檢查（SSRF）
@@ -126,7 +144,9 @@ Telepy JSON：
 | `GET / PATCH / DELETE /api/webhooks/{id}` | 只有自己的（全站的：管理員）；別人的一律 404 |
 | `POST /api/webhooks/{id}/test` | 送 `webhook.test` 並等結果（不重試、不算進連續失敗） |
 | `GET /api/webhooks/{id}/deliveries` | 最新 50 筆 |
+| `POST /api/webhooks/{id}/deliveries/{delivery_id}/redeliver` | 重送一筆（409 `not_redeliverable`：測試送出） |
 | `GET / POST /api/webhooks/{id}/secret` | 讀 / 換簽章密鑰 |
 
 錯誤是 `{field: [message], code}` 或 `{error, code}`；`code`：`private_target`、`invalid_url`、`unresolvable`、`no_events`、
-`no_tunnels`、`limit`、`personal_disabled`、`admins_only`、`secret_unreadable`。
+`no_tunnels`、`limit`、`personal_disabled`、`admins_only`、`secret_unreadable`、`bad_header`、`not_redeliverable`。
+`GET /api/webhooks` 對管理員另外回 `site_tunnels`（整台伺服器的通道，給全站 webhook 選）。

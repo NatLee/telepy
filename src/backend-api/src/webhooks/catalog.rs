@@ -29,6 +29,8 @@ pub enum Kind {
     McpSessionClosed,
     AccountSignIn,
     AccountSignInFailed,
+    KeyExpiring,
+    KeyExpired,
     UserCreated,
     /// 「送測試」按鈕。不在目錄裡，不能訂。/ The "Send test" button; not in the catalogue, cannot be subscribed to.
     Test,
@@ -55,6 +57,8 @@ pub const ALL: &[Kind] = &[
     Kind::McpSessionClosed,
     Kind::AccountSignIn,
     Kind::AccountSignInFailed,
+    Kind::KeyExpiring,
+    Kind::KeyExpired,
     Kind::UserCreated,
 ];
 
@@ -69,6 +73,7 @@ pub enum Group {
     Commands,
     Sessions,
     Account,
+    Keys,
     Admin,
 }
 
@@ -81,6 +86,7 @@ impl Group {
             Group::Commands => "commands",
             Group::Sessions => "sessions",
             Group::Account => "account",
+            Group::Keys => "keys",
             Group::Admin => "admin",
         }
     }
@@ -149,6 +155,8 @@ impl Kind {
             Kind::McpSessionClosed => "mcp.session_closed",
             Kind::AccountSignIn => "account.sign_in",
             Kind::AccountSignInFailed => "account.sign_in_failed",
+            Kind::KeyExpiring => "key.expiring",
+            Kind::KeyExpired => "key.expired",
             Kind::UserCreated => "user.created",
             Kind::Test => "webhook.test",
         }
@@ -167,6 +175,7 @@ impl Kind {
             Kind::CommandApprovalRequested | Kind::CommandApprovalDecided | Kind::CommandBlocked => Group::Commands,
             Kind::SessionStarted | Kind::McpSessionOpened | Kind::McpSessionClosed => Group::Sessions,
             Kind::AccountSignIn | Kind::AccountSignInFailed => Group::Account,
+            Kind::KeyExpiring | Kind::KeyExpired => Group::Keys,
             Kind::UserCreated | Kind::Test => Group::Admin,
         }
     }
@@ -177,7 +186,7 @@ impl Kind {
             Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::CommandApprovalRequested => Audience::Managers,
             Kind::AccessRequested | Kind::CommandBlocked | Kind::SessionStarted => Audience::ManagersOthers,
             Kind::ShareEnded => Audience::ShareParties,
-            Kind::ShareReceived | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInFailed => Audience::You,
+            Kind::ShareReceived | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
             Kind::McpSessionOpened | Kind::McpSessionClosed => Audience::AgentAndOwner,
             Kind::UserCreated | Kind::Test => Audience::SiteOnly,
         }
@@ -210,7 +219,7 @@ impl Kind {
 
     /// 跟某條隧道有關的事件才看隧道篩選。/ Only tunnel events go through the tunnel filter.
     pub fn about_tunnel(self) -> bool {
-        !matches!(self.group(), Group::Account | Group::Admin)
+        !matches!(self.group(), Group::Account | Group::Keys | Group::Admin)
     }
 
     pub fn severity(self) -> Severity {
@@ -220,7 +229,9 @@ impl Kind {
             | Kind::TunnelHostKeyChanged
             | Kind::DeviceClaimAttempt
             | Kind::CommandBlocked
-            | Kind::AccountSignInFailed => Severity::Warning,
+            | Kind::AccountSignInFailed
+            | Kind::KeyExpiring
+            | Kind::KeyExpired => Severity::Warning,
             Kind::TunnelOnline | Kind::TunnelRecovered => Severity::Ok,
             _ => Severity::Info,
         }
@@ -248,6 +259,8 @@ impl Kind {
             Kind::McpSessionClosed => "MCP agent session closed",
             Kind::AccountSignIn => "New sign-in",
             Kind::AccountSignInFailed => "Failed sign-in",
+            Kind::KeyExpiring => "SSH key expiring soon",
+            Kind::KeyExpired => "SSH key expired",
             Kind::UserCreated => "New account",
             Kind::Test => "Test",
         }

@@ -4,7 +4,7 @@
  * the backend), event presets, form defaults, the card state and error-code mapping.
  */
 import type { TranslationKey } from "../locales/en.ts";
-import type { CatalogEvent, EventAudience, EventGroup, Webhook, WebhookFormat, WebhookInput, WebhookLanguage, WebhookScope } from "../types/webhooks.ts";
+import type { CatalogEvent, EventAudience, EventGroup, Webhook, WebhookFormat, WebhookHeader, WebhookInput, WebhookLanguage, WebhookScope } from "../types/webhooks.ts";
 
 /** 每個事件的名稱與一句說明。/ Each event's name and one-line explanation. */
 export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: TranslationKey }> = {
@@ -27,11 +27,13 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "mcp.session_closed": { label: "webhooks.ev.mcpSessionClosed", hint: "webhooks.ev.mcpSessionClosedHint" },
     "account.sign_in": { label: "webhooks.ev.accountSignIn", hint: "webhooks.ev.accountSignInHint" },
     "account.sign_in_failed": { label: "webhooks.ev.accountSignInFailed", hint: "webhooks.ev.accountSignInFailedHint" },
+    "key.expiring": { label: "webhooks.ev.keyExpiring", hint: "webhooks.ev.keyExpiringHint" },
+    "key.expired": { label: "webhooks.ev.keyExpired", hint: "webhooks.ev.keyExpiredHint" },
     "user.created": { label: "webhooks.ev.userCreated", hint: "webhooks.ev.userCreatedHint" },
     "webhook.test": { label: "webhooks.ev.test", hint: "webhooks.ev.testHint" },
 };
 
-export const GROUP_ORDER: EventGroup[] = ["status", "device", "sharing", "commands", "sessions", "account", "admin"];
+export const GROUP_ORDER: EventGroup[] = ["status", "device", "sharing", "commands", "sessions", "account", "keys", "admin"];
 export const GROUP_KEY: Record<EventGroup, TranslationKey> = {
     status: "webhooks.group.status",
     device: "webhooks.group.device",
@@ -39,6 +41,7 @@ export const GROUP_KEY: Record<EventGroup, TranslationKey> = {
     commands: "webhooks.group.commands",
     sessions: "webhooks.group.sessions",
     account: "webhooks.group.account",
+    keys: "webhooks.group.keys",
     admin: "webhooks.group.admin",
 };
 export const AUDIENCE_KEY: Record<EventAudience, TranslationKey> = {
@@ -126,7 +129,7 @@ export const PRESET_KEY: Record<PresetId, TranslationKey> = {
 };
 const PRESET_EVENTS: Record<Exclude<PresetId, "all">, string[]> = {
     status: ["tunnel.offline", "tunnel.online", "tunnel.degraded", "tunnel.recovered"],
-    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_failed", "user.created"],
+    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
     approvals: ["access.requested", "command.approval_requested"],
 };
 
@@ -158,7 +161,7 @@ export function hasTunnelEvent(events: string[], catalog: CatalogEvent[]): boole
 }
 
 export function defaultInput(scope: WebhookScope, language: WebhookLanguage): WebhookInput {
-    return { scope, name: "", url: "", format: "auto", language, events: PRESET_EVENTS.status, all_tunnels: true, tunnel_ids: [], delay: 60, enabled: true };
+    return { scope, name: "", url: "", format: "auto", language, events: PRESET_EVENTS.status, all_tunnels: true, tunnel_ids: [], delay: 60, enabled: true, headers: [] };
 }
 
 export function toInput(h: Webhook): WebhookInput {
@@ -172,7 +175,49 @@ export function toInput(h: Webhook): WebhookInput {
         tunnel_ids: h.tunnels.map((t) => t.id),
         delay: h.delay,
         enabled: h.enabled,
+        headers: h.headers.map((x) => ({ ...x })),
     };
+}
+
+/** 最多幾個自訂 header（跟後端一樣）。/ Custom headers per webhook (same as the backend). */
+export const MAX_HEADERS = 10;
+/** Telepy 自己設的、或會壞掉 HTTP 的 header（跟後端同一份）。/ Headers Telepy sets or that would break HTTP (same list as the backend). */
+const RESERVED_HEADERS = [
+    "host",
+    "content-type",
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "upgrade",
+    "te",
+    "trailer",
+    "expect",
+    "proxy-authorization",
+    "proxy-connection",
+    "user-agent",
+    "webhook-id",
+    "webhook-timestamp",
+    "webhook-signature",
+    "x-telepy-event",
+];
+
+/** 一個自訂 header 的問題（後端同樣規則）；沒問題回 null。全空的列不算（存的時候略過）。
+ *  What is wrong with one custom header (same rules as the backend); null when fine. A blank row is ignored. */
+export function headerProblem(h: WebhookHeader, all: WebhookHeader[]): TranslationKey | null {
+    const name = h.name.trim();
+    if (!name && !h.value) return null;
+    if (!name || name.length > 64 || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return "webhooks.headers.badName";
+    if (RESERVED_HEADERS.includes(name.toLowerCase())) return "webhooks.headers.reserved";
+    if (all.filter((x) => x.name.trim().toLowerCase() === name.toLowerCase()).length > 1) return "webhooks.headers.duplicate";
+    if (!h.value || h.value.length > 2048 || !/^[\t\x20-\x7e]+$/.test(h.value)) return "webhooks.headers.badValue";
+    return null;
+}
+
+/** 要存的 header：去掉全空的列、名稱去空白。/ The headers to save: blank rows dropped, names trimmed. */
+export function headersToSave(list: WebhookHeader[]): WebhookHeader[] {
+    return list.filter((h) => h.name.trim() || h.value).map((h) => ({ name: h.name.trim(), value: h.value }));
 }
 
 /** 介面語言 → webhook 語言。/ UI locale → webhook language. */
@@ -200,6 +245,7 @@ const ERROR_KEY: Record<string, TranslationKey> = {
     personal_disabled: "webhooks.err.personalDisabled",
     admins_only: "webhooks.err.adminsOnly",
     secret_unreadable: "webhooks.err.secretUnreadable",
+    not_redeliverable: "webhooks.err.notRedeliverable",
 };
 
 export function errorKey(code: unknown): TranslationKey | null {

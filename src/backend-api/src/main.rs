@@ -115,6 +115,11 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         Ok(n) => tracing::info!(rows = n, "closed connection history rows left open by the previous run"),
         Err(e) => tracing::warn!(error = %e, "cannot close orphaned connection history rows"),
     }
+    match telepy_server::db::webhooks::fail_unfinished(&state.db).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(rows = n, "webhook deliveries the previous run didn't finish are now marked failed"),
+        Err(e) => tracing::warn!(error = %e, "cannot close unfinished webhook deliveries"),
+    }
     if config.gateway_enabled {
         match tokio::net::TcpListener::bind(&config.gateway_bind).await {
             Ok(listener) => match telepy_server::gateway::start(state.gateway.clone(), listener) {
@@ -136,6 +141,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tokio::spawn(telepy_server::recording::run(state.clone()));
     // 指令規則：逾時的核准申請。/ Command rules: expire approval requests nobody answered.
     tokio::spawn(telepy_server::command_rules::run(state.clone()));
+    // 個人 SSH 金鑰快到期 / 已到期的 webhook 事件。/ Webhook events for personal SSH keys about to expire or expired.
+    tokio::spawn(telepy_server::webhooks::keys::run(state.clone()));
     tokio::spawn(telepy_server::db::audit_chain::run(state.db.clone()));
     tokio::spawn(telepy_server::ai::run_reaper(state.clone(), telepy_server::ai::REAP_INTERVAL));
     tokio::spawn(state.pool.clone().run_reaper());

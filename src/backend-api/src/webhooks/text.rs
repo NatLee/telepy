@@ -103,6 +103,8 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::McpSessionClosed => ("MCP agent 的 session 關閉", "MCP エージェントのセッション終了"),
         Kind::AccountSignIn => ("新的登入", "新しいサインイン"),
         Kind::AccountSignInFailed => ("登入失敗", "サインイン失敗"),
+        Kind::KeyExpiring => ("SSH 金鑰快到期", "SSH 鍵の期限が近い"),
+        Kind::KeyExpired => ("SSH 金鑰已到期", "SSH 鍵の期限切れ"),
         Kind::UserCreated => ("新帳號", "新しいアカウント"),
         Kind::Test => ("測試", "テスト"),
     };
@@ -251,6 +253,22 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
                 let reason = sign_in_word(lang, s(d, "reason"));
                 tri(lang, format!("Failed sign-in to {user} ({method}, {reason}) from {place}"), format!("有人從 {place} 登入 {user} 失敗（{method}，{reason}）"), format!("{place} から {user} へのサインインに失敗しました（{method}、{reason}）"))
             }
+        }
+        Kind::KeyExpiring => {
+            let (name, when) = (s(d, "name"), s(d, "expires_label"));
+            match d.get("days_left").and_then(Value::as_i64).unwrap_or(1) {
+                n if n <= 1 => tri(lang, format!("Your SSH key {name} expires within a day ({when})"), format!("你的 SSH 金鑰 {name} 一天內就會到期（{when}）"), format!("SSH 鍵 {name} は 1 日以内に期限切れになります（{when}）")),
+                n => tri(lang, format!("Your SSH key {name} expires in {n} days ({when})"), format!("你的 SSH 金鑰 {name} 會在 {n} 天內到期（{when}）"), format!("SSH 鍵 {name} は {n} 日以内に期限切れになります（{when}）")),
+            }
+        }
+        Kind::KeyExpired => {
+            let name = s(d, "name");
+            tri(
+                lang,
+                format!("Your SSH key {name} has expired: Telepy no longer accepts it and removes it from devices. Renew it on the Keys page."),
+                format!("你的 SSH 金鑰 {name} 已到期：Telepy 不再接受它，也會把它從裝置上移除。請到金鑰頁續期。"),
+                format!("SSH 鍵 {name} の期限が切れました。Telepy はこの鍵を受け付けず、デバイスからも削除します。鍵ページで更新してください。"),
+            )
         }
         Kind::UserCreated => {
             let (user, via) = (s(d, "user"), s(d, "via"));
