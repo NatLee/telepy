@@ -758,6 +758,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_webhook", "headers", "text NOT NULL DEFAULT ''"),
     ("telepy_webhook_delivery", "event_json", "text NOT NULL DEFAULT ''"),
     ("telepy_webhook_delivery", "redelivered_from", "integer NULL"),
+    // 指令規則：這條「要核准」規則指定的核准人（JSON 陣列；NULL / 空 = owner + ADMIN）。紀錄上留一份快照。
+    // Command rules: the approvers an "approve" rule names (JSON array; NULL / empty = owner + ADMIN). Events keep a snapshot.
+    ("telepy_command_rule", "approver_ids", "text NULL"),
+    ("telepy_command_event", "approver_ids", "text NULL"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
     ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),

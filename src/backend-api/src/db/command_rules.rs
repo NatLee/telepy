@@ -16,7 +16,7 @@ pub const MAX_EVENTS: i64 = 20_000;
 pub struct RuleRow {
     pub id: i64,
     pub tunnel_id: Option<i64>,
-    /// block / approve
+    /// block / approve / allow
     pub action: String,
     /// command / regex
     pub kind: String,
@@ -27,12 +27,15 @@ pub struct RuleRow {
     pub via: String,
     pub note: String,
     pub enabled: bool,
+    /// 「要核准」規則指定的核准人（JSON 陣列）；NULL / 空 = owner + ADMIN sharee。
+    /// The approvers an "approve" rule names (JSON array); NULL / empty = the owner + ADMIN sharees.
+    pub approver_ids: Option<String>,
     pub created_by_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-const R_COLS: &str = "id, tunnel_id, action, kind, pattern, who, via, note, enabled, created_by_id, created_at, updated_at";
+const R_COLS: &str = "id, tunnel_id, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at";
 
 pub struct NewRule<'a> {
     pub tunnel_id: Option<i64>,
@@ -43,12 +46,14 @@ pub struct NewRule<'a> {
     pub via: &'a str,
     pub note: &'a str,
     pub enabled: bool,
+    /// JSON 陣列；None = 預設核准人。/ A JSON array; None = the default approvers.
+    pub approver_ids: Option<&'a str>,
 }
 
 pub async fn create_rule(db: &Db, r: &NewRule<'_>, by: i64) -> sqlx::Result<RuleRow> {
     let now = now_db();
     let id = sqlx::query(&format!(
-        "INSERT INTO {R} (tunnel_id, action, kind, pattern, who, via, note, enabled, created_by_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO {R} (tunnel_id, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ))
     .bind(r.tunnel_id)
     .bind(r.action)
@@ -58,6 +63,7 @@ pub async fn create_rule(db: &Db, r: &NewRule<'_>, by: i64) -> sqlx::Result<Rule
     .bind(r.via)
     .bind(r.note)
     .bind(r.enabled)
+    .bind(r.approver_ids)
     .bind(by)
     .bind(&now)
     .bind(&now)
@@ -69,7 +75,7 @@ pub async fn create_rule(db: &Db, r: &NewRule<'_>, by: i64) -> sqlx::Result<Rule
 
 /// 整列換掉（tunnel_id 不變）。/ Replace a rule's fields (its tunnel stays).
 pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>) -> sqlx::Result<Option<RuleRow>> {
-    sqlx::query(&format!("UPDATE {R} SET action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, updated_at = ? WHERE id = ?"))
+    sqlx::query(&format!("UPDATE {R} SET action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, approver_ids = ?, updated_at = ? WHERE id = ?"))
         .bind(r.action)
         .bind(r.kind)
         .bind(r.pattern)
@@ -77,6 +83,7 @@ pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>) -> sqlx::Result<Opti
         .bind(r.via)
         .bind(r.note)
         .bind(r.enabled)
+        .bind(r.approver_ids)
         .bind(now_db())
         .bind(id)
         .execute(&db.write)
@@ -129,6 +136,8 @@ pub struct EventRow {
     /// site / tunnel
     pub rule_scope: String,
     pub rule_note: String,
+    /// 這筆申請的核准人快照（JSON 陣列）；NULL = 當時的 owner + ADMIN。/ Who could decide (JSON array); NULL = owner + ADMIN at the time.
+    pub approver_ids: Option<String>,
     /// blocked / pending / approved / denied / cancelled / expired
     pub status: String,
     pub created_at: String,
@@ -140,7 +149,7 @@ pub struct EventRow {
     pub used_at: Option<String>,
 }
 
-const E_COLS: &str = "id, tunnel_id, user_id, username, source, client, grant_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, status, created_at, expires_at, decided_by_id, decided_by, decided_at, reason, used_at";
+const E_COLS: &str = "id, tunnel_id, user_id, username, source, client, grant_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, approver_ids, status, created_at, expires_at, decided_by_id, decided_by, decided_at, reason, used_at";
 
 pub struct NewEvent<'a> {
     pub tunnel_id: i64,
@@ -158,14 +167,15 @@ pub struct NewEvent<'a> {
     pub rule_kind: &'a str,
     pub rule_scope: &'a str,
     pub rule_note: &'a str,
+    pub approver_ids: Option<&'a str>,
     pub status: &'a str,
     pub expires_at: Option<&'a str>,
 }
 
 pub async fn create_event(db: &Db, e: &NewEvent<'_>) -> sqlx::Result<EventRow> {
     let id = sqlx::query(&format!(
-        "INSERT INTO {E} (tunnel_id, user_id, username, source, client, grant_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, status, created_at, expires_at, reason) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')"
+        "INSERT INTO {E} (tunnel_id, user_id, username, source, client, grant_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, approver_ids, status, created_at, expires_at, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')"
     ))
     .bind(e.tunnel_id)
     .bind(e.user_id)
@@ -182,6 +192,7 @@ pub async fn create_event(db: &Db, e: &NewEvent<'_>) -> sqlx::Result<EventRow> {
     .bind(e.rule_kind)
     .bind(e.rule_scope)
     .bind(e.rule_note)
+    .bind(e.approver_ids)
     .bind(e.status)
     .bind(now_db())
     .bind(e.expires_at)
@@ -266,11 +277,15 @@ pub async fn cancel_orphans(db: &Db) -> sqlx::Result<u64> {
         .rows_affected())
 }
 
-/// 清單：可以看的隧道（`tunnel_ids`）裡全部的，或我自己的（`own_user`），新的在前。
-/// The list: everything on tunnels in `tunnel_ids` plus the caller's own rows, newest first.
+/// 清單：可以看的隧道（`tunnel_ids`）裡全部的、我自己的（`own_user`），加上規則點名我核准的（`approver_ids` 快照裡有我），新的在前。
+/// The list: everything on tunnels in `tunnel_ids`, the caller's own rows, plus requests whose approver snapshot names
+/// the caller, newest first.
 pub async fn list(db: &Db, tunnel_ids: &[i64], own_user: i64, only_tunnel: Option<i64>, pending_only: bool, limit: i64) -> sqlx::Result<Vec<EventRow>> {
     let ids = if tunnel_ids.is_empty() { "NULL".to_string() } else { tunnel_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",") };
-    let mut sql = format!("SELECT {E_COLS} FROM {E} WHERE (tunnel_id IN ({ids}) OR user_id = ?)");
+    let mut sql = format!(
+        "SELECT {E_COLS} FROM {E} WHERE (tunnel_id IN ({ids}) OR user_id = ? \
+         OR (approver_ids IS NOT NULL AND EXISTS (SELECT 1 FROM json_each({E}.approver_ids) WHERE value = ?)))"
+    );
     if only_tunnel.is_some() {
         sql.push_str(" AND tunnel_id = ?");
     }
@@ -278,7 +293,7 @@ pub async fn list(db: &Db, tunnel_ids: &[i64], own_user: i64, only_tunnel: Optio
         sql.push_str(" AND status = 'pending'");
     }
     sql.push_str(" ORDER BY id DESC LIMIT ?");
-    let mut q = sqlx::query_as(&sql).bind(own_user);
+    let mut q = sqlx::query_as(&sql).bind(own_user).bind(own_user);
     if let Some(t) = only_tunnel {
         q = q.bind(t);
     }

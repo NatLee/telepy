@@ -232,6 +232,21 @@ pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sql
     Ok(settings_for(db, user_id).await?.expect("settings row exists"))
 }
 
+/// 這些 id 的帳號名稱（不存在的略過）。/ The usernames of these ids (missing ones are skipped).
+pub async fn usernames_for(db: &Db, ids: &[i64]) -> sqlx::Result<std::collections::HashMap<i64, String>> {
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let rows: Vec<(i64, String)> = sqlx::query_as(&format!("SELECT id, username FROM auth_user WHERE id IN ({list})")).fetch_all(&db.read).await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// 啟用中的帳號（id, username），給核准人清單用。/ Active accounts (id, username), for approver pickers.
+pub async fn active_brief(db: &Db) -> sqlx::Result<Vec<(i64, String)>> {
+    sqlx::query_as("SELECT id, username FROM auth_user WHERE is_active = 1 ORDER BY username").fetch_all(&db.read).await
+}
+
 /// 一次載入所有使用者的 language（admin 使用者列表用，避免 N+1）。
 pub async fn settings_language_map(db: &Db) -> sqlx::Result<std::collections::HashMap<i64, Option<String>>> {
     let rows: Vec<(i64, Option<String>)> =

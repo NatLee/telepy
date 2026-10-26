@@ -410,7 +410,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
                         }
                         Some(rule) => match command_rules::request(&state, &requester, &shown, &rule).await {
                             Ok((row, rx)) => {
-                                let can_decide = command_rules::approves(&state, user.id, tunnel_id).await;
+                                let can_decide = command_rules::decides(&state, user.id, &row).await;
                                 notice(&mut socket, json!({
                                     "type": "command",
                                     "state": "pending",

@@ -1,7 +1,10 @@
 //! 指令規則 API：全站規則（管理員改、大家看得到）、隧道規則（owner / ADMIN 改、看得到隧道的人都看得到）、
-//! 試跑一個指令，以及核准申請的清單與核准 / 拒絕 / 撤回。
+//! 試跑一個指令，以及核准申請的清單與核准 / 拒絕 / 撤回。「要核准」規則可以指定核准人（`approver_ids`）：隧道規則只能
+//! 指定 owner / ADMIN sharee / 管理員，全站規則任何啟用中的帳號都行。
 //! Command rules API: site-wide rules (admins edit, everyone reads), tunnel rules (owner / ADMIN edit, anyone who
-//! sees the tunnel reads), trying a command, and the approval requests with approve / deny / withdraw.
+//! sees the tunnel reads), trying a command, and the approval requests with approve / deny / withdraw. An "approve"
+//! rule may name its approvers (`approver_ids`): a tunnel rule only the owner / ADMIN sharees / admins, a site-wide
+//! rule any active account.
 
 use std::collections::HashMap;
 
@@ -14,7 +17,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::command_rules::{self as rules, matcher, DecideError, Kind, Matcher, Source};
+use crate::command_rules::{self as rules, matcher, Action, DecideError, Kind, Matcher, Source};
 use crate::db::{self, command_rules::{NewRule, RuleRow}, tunnels::Tunnel, users::User};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
@@ -23,6 +26,8 @@ use crate::state::AppState;
 /// 每個範圍（全站 / 一條隧道）最多幾條規則。/ Rules per scope at most.
 pub const MAX_RULES: usize = 100;
 const NOTE_MAX: usize = 300;
+/// 一條規則最多指定幾位核准人。/ Approvers a rule may name at most.
+pub const MAX_APPROVERS: usize = 20;
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -60,6 +65,57 @@ struct Parsed {
     via: String,
     note: String,
     enabled: bool,
+    /// 已排序去重；空 = 預設核准人。/ Sorted, de-duplicated; empty = the default approvers.
+    approver_ids: Vec<i64>,
+}
+
+/// `approver_ids`：沒帶 = 保留現在的（新增時 = 空）；null / [] = 預設核准人。只有「要核准」規則留著。
+/// `approver_ids`: omitted = keep the current list (empty on create); null / [] = default. Kept for approve rules only.
+fn parse_approvers(body: &Value, current: Option<&RuleRow>, action: &str) -> ApiResult<Vec<i64>> {
+    let ids = match body.get("approver_ids") {
+        None => rules::parse_approver_ids(current.and_then(|c| c.approver_ids.as_deref())),
+        Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut ids = Vec::with_capacity(items.len());
+            for v in items {
+                let Some(id) = v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())) else {
+                    return Err(ApiError::field("approver_ids", "approver_ids must be a list of user ids."));
+                };
+                ids.push(id);
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+        Some(_) => return Err(ApiError::field("approver_ids", "approver_ids must be a list of user ids.")),
+    };
+    if ids.len() > MAX_APPROVERS {
+        return Err(ApiError::field("approver_ids", format!("Name at most {MAX_APPROVERS} approvers.")));
+    }
+    // 擋下 / 允許用不到核准人；默默清掉，免得之後改成「要核准」時冒出舊名單。/ Block / allow rules have no approvers.
+    Ok(if action == "approve" { ids } else { Vec::new() })
+}
+
+/// 核准人要是這條隧道的 owner / ADMIN sharee / 管理員（全站規則：任何啟用中的帳號）。
+/// Approvers must be the tunnel's owner / ADMIN sharees / admins (site rules: any active account).
+async fn check_approvers(state: &AppState, tunnel: Option<&Tunnel>, ids: &[i64]) -> ApiResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let allowed: Option<Vec<i64>> = match tunnel {
+        Some(t) => Some(rules::default_approvers(state, t).await),
+        None => None,
+    };
+    for id in ids {
+        let user = db::users::by_id(&state.db, *id).await?.filter(|u| u.is_active);
+        let Some(user) = user else { return Err(ApiError::field("approver_ids", format!("User #{id} is not an active account."))) };
+        if let Some(allowed) = &allowed {
+            if !allowed.contains(id) && !user.is_superuser {
+                return Err(ApiError::field("approver_ids", format!("{} can't approve here: approvers must be the tunnel owner, an Admin sharee or a site admin.", user.username)));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_rule(body: &Value, current: Option<&RuleRow>) -> ApiResult<Parsed> {
@@ -71,7 +127,7 @@ fn parse_rule(body: &Value, current: Option<&RuleRow>) -> ApiResult<Parsed> {
     };
     let action = text("action", current.map(|c| c.action.as_str()), "");
     if rules::Action::parse(&action).is_none() {
-        return Err(ApiError::field("action", "Choose block or approve."));
+        return Err(ApiError::field("action", "Choose block, approve or allow."));
     }
     let kind = text("kind", current.map(|c| c.kind.as_str()), "command");
     let Some(k) = Kind::parse(&kind) else { return Err(ApiError::field("kind", "Choose command or regex.")) };
@@ -94,12 +150,13 @@ fn parse_rule(body: &Value, current: Option<&RuleRow>) -> ApiResult<Parsed> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(ApiError::field("enabled", "enabled must be true or false")),
     };
-    Ok(Parsed { action, kind, pattern, who, via, note, enabled })
+    let approver_ids = parse_approvers(body, current, &action)?;
+    Ok(Parsed { action, kind, pattern, who, via, note, enabled, approver_ids })
 }
 
 impl Parsed {
-    fn new_rule(&self, tunnel_id: Option<i64>) -> NewRule<'_> {
-        NewRule { tunnel_id, action: &self.action, kind: &self.kind, pattern: &self.pattern, who: &self.who, via: &self.via, note: &self.note, enabled: self.enabled }
+    fn new_rule<'a>(&'a self, tunnel_id: Option<i64>, approvers_json: Option<&'a str>) -> NewRule<'a> {
+        NewRule { tunnel_id, action: &self.action, kind: &self.kind, pattern: &self.pattern, who: &self.who, via: &self.via, note: &self.note, enabled: self.enabled, approver_ids: approvers_json }
     }
 }
 
@@ -112,7 +169,47 @@ fn rule_words(r: &RuleRow) -> String {
     };
     let who = if r.who == "sharees" { "shared users" } else { "everyone" };
     let off = if r.enabled { "" } else { ", off" };
-    format!("{} `{}` ({who}, {via}{off})", if r.action == "block" { "block" } else { "needs approval" }, r.pattern)
+    let what = match r.action.as_str() {
+        "block" => "block",
+        "allow" => "allow (exception)",
+        _ => "needs approval",
+    };
+    let approvers = match rules::parse_approver_ids(r.approver_ids.as_deref()).len() {
+        0 => String::new(),
+        n => format!(", {n} named approver{}", if n == 1 { "" } else { "s" }),
+    };
+    format!("{what} `{}` ({who}, {via}{approvers}{off})", r.pattern)
+}
+
+/// 規則 JSON 加上核准人的名字（一次查完）。/ Rules as JSON with the approvers' names (one lookup).
+async fn rules_json(state: &AppState, rows: &[RuleRow]) -> ApiResult<Vec<Value>> {
+    let ids: Vec<i64> = rows.iter().flat_map(|r| rules::parse_approver_ids(r.approver_ids.as_deref())).collect();
+    let names = db::users::usernames_for(&state.db, &ids).await?;
+    Ok(rows.iter().map(|r| rule_json_named(r, &names)).collect())
+}
+
+fn rule_json_named(r: &RuleRow, names: &HashMap<i64, String>) -> Value {
+    let mut v = rules::rule_json(r);
+    v["approvers"] = rules::parse_approver_ids(r.approver_ids.as_deref())
+        .into_iter()
+        .map(|id| json!({ "id": id, "username": names.get(&id).cloned().unwrap_or_else(|| format!("#{id}")) }))
+        .collect();
+    v
+}
+
+async fn one_rule_json(state: &AppState, r: &RuleRow) -> ApiResult<Value> {
+    Ok(rules_json(state, std::slice::from_ref(r)).await?.pop().unwrap_or(Value::Null))
+}
+
+/// 隧道規則可以指定的核准人：owner 與 ADMIN sharee（管理員也可以把自己加進去）。
+/// Who a tunnel rule may name: the owner and ADMIN sharees (an admin may add themselves too).
+async fn tunnel_candidates(state: &AppState, me: &User, t: &Tunnel) -> ApiResult<Vec<Value>> {
+    let mut ids = rules::default_approvers(state, t).await;
+    if me.is_superuser && !ids.contains(&me.id) {
+        ids.push(me.id);
+    }
+    let names = db::users::usernames_for(&state.db, &ids).await?;
+    Ok(ids.into_iter().filter_map(|id| names.get(&id).map(|n| json!({ "id": id, "username": n }))).collect())
 }
 
 async fn log_rule(state: &AppState, me: &User, verb: &str, r: &RuleRow, tunnel: Option<&Tunnel>) {
@@ -130,7 +227,13 @@ async fn log_rule(state: &AppState, me: &User, verb: &str, r: &RuleRow, tunnel: 
 #[utoipa::path(get, path = "/api/command-rules", tag = "Command Rules", security(("bearer" = [])), responses((status = 200, body = super::schemas::CommandRuleList)))]
 async fn site_list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
     let rows = db::command_rules::rules_for(&state.db, None).await?;
-    Ok(Json(json!({ "rules": rows.iter().map(rules::rule_json).collect::<Vec<_>>(), "can_edit": me.is_superuser })))
+    // 核准人候選：管理員才拿得到全站名單（跟 /api/user/users 一樣）。/ Candidates: admins only, like /api/user/users.
+    let candidates: Vec<Value> = if me.is_superuser {
+        db::users::active_brief(&state.db).await?.into_iter().map(|(id, username)| json!({ "id": id, "username": username })).collect()
+    } else {
+        Vec::new()
+    };
+    Ok(Json(json!({ "rules": rules_json(&state, &rows).await?, "can_edit": me.is_superuser, "approver_candidates": candidates })))
 }
 
 /// 新增全站規則（管理員）。/ Add a site-wide rule (admins).
@@ -152,10 +255,12 @@ async fn create_rule(state: &AppState, me: &User, tunnel: Option<&Tunnel>, body:
     if existing.iter().any(|r| r.action == p.action && r.kind == p.kind && r.pattern == p.pattern && r.who == p.who && r.via == p.via) {
         return Err(ApiError::field("pattern", "This rule already exists here."));
     }
-    let row = db::command_rules::create_rule(&state.db, &p.new_rule(tunnel_id), me.id).await?;
+    check_approvers(state, tunnel, &p.approver_ids).await?;
+    let approvers = rules::approver_ids_json(&p.approver_ids);
+    let row = db::command_rules::create_rule(&state.db, &p.new_rule(tunnel_id, approvers.as_deref()), me.id).await?;
     state.commands.invalidate();
     log_rule(state, me, "added", &row, tunnel).await;
-    Ok((StatusCode::CREATED, Json(rules::rule_json(&row))))
+    Ok((StatusCode::CREATED, Json(one_rule_json(state, &row).await?)))
 }
 
 /// 這條規則能不能改：全站 = 管理員；隧道 = owner / ADMIN。看不到的回 404。
@@ -181,10 +286,12 @@ async fn editable(state: &AppState, me: &User, rid: i64) -> ApiResult<(RuleRow, 
 async fn update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let (row, tunnel) = editable(&state, &me, rid).await?;
     let p = parse_rule(&body, Some(&row))?;
-    let row = db::command_rules::update_rule(&state.db, rid, &p.new_rule(row.tunnel_id)).await?.ok_or_else(|| ApiError::not_found("Rule not found"))?;
+    check_approvers(&state, tunnel.as_ref(), &p.approver_ids).await?;
+    let approvers = rules::approver_ids_json(&p.approver_ids);
+    let row = db::command_rules::update_rule(&state.db, rid, &p.new_rule(row.tunnel_id, approvers.as_deref())).await?.ok_or_else(|| ApiError::not_found("Rule not found"))?;
     state.commands.invalidate();
     log_rule(&state, &me, "changed", &row, tunnel.as_ref()).await;
-    Ok(Json(rules::rule_json(&row)))
+    Ok(Json(one_rule_json(&state, &row).await?))
 }
 
 /// 刪除規則。/ Delete a rule.
@@ -203,12 +310,14 @@ async fn tunnel_list(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     let (t, can_edit) = tunnel_access(&state, &me, id).await?;
     let own = db::command_rules::rules_for(&state.db, Some(t.id)).await?;
     let site = db::command_rules::rules_for(&state.db, None).await?;
+    let candidates = if can_edit { tunnel_candidates(&state, &me, &t).await? } else { Vec::new() };
     Ok(Json(json!({
         "tunnel": { "id": t.id, "name": t.host_friendly_name },
-        "rules": own.iter().map(rules::rule_json).collect::<Vec<_>>(),
-        "site_rules": site.iter().map(rules::rule_json).collect::<Vec<_>>(),
+        "rules": rules_json(&state, &own).await?,
+        "site_rules": rules_json(&state, &site).await?,
         "can_edit": can_edit,
         "can_edit_site": me.is_superuser,
+        "approver_candidates": candidates,
     })))
 }
 
@@ -222,8 +331,16 @@ async fn tunnel_create(State(state): State<AppState>, AuthUser(me): AuthUser, Pa
     create_rule(&state, &me, Some(&t), &body).await
 }
 
-/// 試一個指令：對你、對被分享的人各是什麼結果；帶 `rule` 時也看這條（還沒存的）規則符不符合。
-/// Try a command: the verdict for you and for shared users; with `rule`, whether that (unsaved) rule matches too.
+/// 一個範圍的結果 JSON：`hit` = 符合的擋下 / 要核准規則（被豁免也列）、`allowed_by` = 豁免它的允許規則。
+/// One scope's verdict as JSON: `hit` = the block / approve rule that matched (even when exempted), `allowed_by` = the allow.
+fn scope_json(v: &matcher::ScopeVerdict<'_>) -> Value {
+    json!({ "hit": v.hit.map(rules::matched_json), "allowed_by": v.allowed_by.map(rules::matched_json), "exempted": v.hit.is_some() && v.allowed_by.is_some() })
+}
+
+/// 試一個指令：對你、對被分享的人各是什麼結果（含兩個範圍各自的結果、豁免它的允許規則、誰核准）；帶 `rule` 時也看這條
+/// （還沒存的）規則符不符合。
+/// Try a command: the verdict for approvers and for shared users (each scope's outcome, the allow rule that exempted
+/// it, who approves); with `rule`, whether that (unsaved) rule matches too.
 #[utoipa::path(post, path = "/api/command-rules/check", tag = "Command Rules", security(("bearer" = [])), request_body = super::schemas::CommandCheckInput, responses((status = 200, body = super::schemas::CommandCheckResult), (status = 400, body = Object), (status = 404, body = super::schemas::ErrorBody)))]
 async fn check(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let command = body.get("command").and_then(Value::as_str).unwrap_or("").to_string();
@@ -234,25 +351,53 @@ async fn check(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(bo
         Some("agent") => Source::Agent,
         _ => Source::Terminal,
     };
-    let (rule_set, me_approver) = match body.get("tunnel_id").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))) {
+    let (rule_set, me_approver, tunnel) = match body.get("tunnel_id").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))) {
         Some(id) => {
             let (t, approver) = tunnel_access(&state, &me, id).await?;
-            (rules::rules_for(&state, t.id).await, approver)
+            (rules::rules_for(&state, t.id).await, approver, Some(t))
         }
         None => {
             let rows = db::command_rules::rules_for(&state.db, None).await?;
-            (std::sync::Arc::new(rows.iter().filter_map(rules::compile).collect::<Vec<_>>()), false)
+            (std::sync::Arc::new(rows.iter().filter_map(rules::compile).collect::<Vec<_>>()), false, None)
         }
     };
     let lines = vec![command.clone()];
-    let verdict = |approver: bool| match matcher::evaluate(&rule_set, &lines, approver, source) {
-        Some(r) => json!({ "action": r.action.as_str(), "rule": rules::matched_json(r) }),
-        None => json!({ "action": "allow", "rule": null }),
-    };
+    let mut verdicts = Vec::with_capacity(2);
+    for approver in [true, false] {
+        let v = matcher::evaluate(&rule_set, &lines, approver, source);
+        let decision = v.decision();
+        // 誰核准：規則指定的人，否則這條隧道的 owner + ADMIN（沒選隧道 = 不知道是誰，`default: true`）。
+        // Who approves: the rule's own list, else this tunnel's owner + ADMIN (no tunnel = unknown, `default: true`).
+        let approvers = match decision {
+            Some(r) if r.action == Action::Approve => {
+                let ids = match (&tunnel, r.approver_ids.is_empty()) {
+                    (_, false) => r.approver_ids.clone(),
+                    (Some(t), true) => rules::default_approvers(&state, t).await,
+                    (None, true) => Vec::new(),
+                };
+                let names = db::users::usernames_for(&state.db, &ids).await?;
+                json!({
+                    "default": r.approver_ids.is_empty(),
+                    "users": ids.iter().map(|id| json!({ "id": id, "username": names.get(id).cloned().unwrap_or_else(|| format!("#{id}")) })).collect::<Vec<_>>(),
+                })
+            }
+            _ => Value::Null,
+        };
+        verdicts.push(json!({
+            "action": decision.map(|r| r.action.as_str()).unwrap_or("allow"),
+            "rule": decision.map(rules::matched_json),
+            "allowed_by": v.allowed_by().map(rules::matched_json),
+            "site": scope_json(&v.site),
+            "tunnel": scope_json(&v.tunnel),
+            "approvers": approvers,
+        }));
+    }
+    let for_sharees = verdicts.pop().unwrap_or(Value::Null);
+    let for_approvers = verdicts.pop().unwrap_or(Value::Null);
     let mut out = json!({
         "commands": matcher::commands(&command).into_iter().map(|c| json!({ "program": c.program, "args": c.args })).collect::<Vec<_>>(),
-        "for_approvers": verdict(true),
-        "for_sharees": verdict(false),
+        "for_approvers": for_approvers,
+        "for_sharees": for_sharees,
         "you_approve": me_approver,
     });
     if let Some(draft) = body.get("rule").filter(|v| v.is_object()) {
@@ -295,12 +440,25 @@ async fn requests(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q
     let pending_only = q.status.as_deref() == Some("pending");
     let limit = q.limit.unwrap_or(100).clamp(1, 500);
     let rows = db::command_rules::list(&state.db, &scope, me.id, q.tunnel_id, pending_only, limit).await?;
+    // 規則點名我核准、但我看不到那條隧道：名字還是要給（核准卡片上要顯示在哪裡跑）。
+    // Named as an approver on a tunnel I can't otherwise see: still show its name (the approval card says where).
+    let mut names = names;
+    for e in &rows {
+        if !names.contains_key(&e.tunnel_id) {
+            if let Some(t) = db::tunnels::by_id(&state.db, e.tunnel_id).await? {
+                names.insert(t.id, t.host_friendly_name);
+            }
+        }
+    }
     let items: Vec<Value> = rows
         .iter()
         .map(|e| {
             let mut v = rules::event_json(e, names.get(&e.tunnel_id).map(String::as_str));
             let pending = e.status == "pending";
-            v["can_decide"] = json!(pending && approves.contains_key(&e.tunnel_id));
+            // 規則指定了核准人就只有他們；否則 owner / ADMIN。/ The rule's own approvers when it named some, else owner / ADMIN.
+            let named = rules::parse_approver_ids(e.approver_ids.as_deref());
+            let decides = if named.is_empty() { approves.contains_key(&e.tunnel_id) } else { named.contains(&me.id) };
+            v["can_decide"] = json!(pending && decides);
             v["can_cancel"] = json!(pending && e.user_id == me.id);
             v
         })
@@ -312,7 +470,7 @@ async fn requests(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q
 fn decide_error(e: DecideError) -> ApiError {
     match e {
         DecideError::NotFound => ApiError::not_found("Request not found"),
-        DecideError::NotApprover => coded(StatusCode::FORBIDDEN, "not_approver", "Only the tunnel owner or an ADMIN sharee can approve commands."),
+        DecideError::NotApprover => coded(StatusCode::FORBIDDEN, "not_approver", "Only this request's approvers (the tunnel owner and ADMIN sharees, or the people the rule names) can decide on it."),
         DecideError::NotRequester => coded(StatusCode::FORBIDDEN, "not_requester", "Only the person who asked can withdraw this request."),
         DecideError::AlreadyDecided(s) => coded(StatusCode::CONFLICT, "already_decided", format!("This request was already {s}.")),
         DecideError::Db(e) => e.into(),

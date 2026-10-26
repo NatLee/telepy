@@ -8,11 +8,12 @@
  * `?tunnel=<id>` picks a tunnel, `?tab=history` opens the history.
  */
 import React, { Suspense, useState } from "react";
-import { Plus, RefreshCw, ShieldCheck } from "lucide-react";
+import { Info, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ApprovalCard, useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { CommandHistory } from "@/components/commands/CommandHistory";
 import { CommandTester } from "@/components/commands/CommandTester";
+import { DecisionFlowDialog } from "@/components/commands/DecisionFlowDialog";
 import { RuleDialog } from "@/components/commands/RuleDialog";
 import { RuleList } from "@/components/commands/RuleList";
 import { Button } from "@/components/ui/button";
@@ -22,8 +23,9 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { useCommandRulesPage } from "@/hooks/useCommandRulesPage";
+import { verdictToDraw } from "@/lib/commandRules";
 import { useI18n } from "@/lib/i18n";
-import type { CommandRule } from "@/types/commandRules";
+import type { CheckResult, CommandRule } from "@/types/commandRules";
 
 function CommandsInner() {
     const { t } = useI18n();
@@ -31,6 +33,9 @@ function CommandsInner() {
     const { pending, decide } = useCommandApprovals();
     const [editing, setEditing] = useState<CommandRule | "new" | null>(null);
     const [deleting, setDeleting] = useState<CommandRule | null>(null);
+    // 「指令是怎麼決定的」：上一個試跑結果點亮路徑圖。/ "How a command is decided": the last test lights the path.
+    const [flowOpen, setFlowOpen] = useState(false);
+    const [tested, setTested] = useState<{ command: string; result: CheckResult | null }>({ command: "", result: null });
     const scopeLabel = page.scopeName ? t("commands.scopeTunnel", { name: page.scopeName }) : t("commands.scopeSite");
     // 這一頁看的範圍內、等我決定的。/ Requests waiting for me within the scope on screen.
     const waiting = pending.filter((r) => !page.tunnelId || r.tunnel_id === page.tunnelId);
@@ -43,10 +48,16 @@ function CommandsInner() {
                 title={t("commands.title")}
                 description={t("commands.subtitle")}
                 actions={
-                    <Button onClick={() => void page.reload()} variant="outline">
-                        <RefreshCw size={16} />
-                        {t("common.refresh")}
-                    </Button>
+                    <>
+                        <Button onClick={() => setFlowOpen(true)} variant="outline">
+                            <Info size={16} />
+                            {t("commands.flow.button")}
+                        </Button>
+                        <Button onClick={() => void page.reload()} variant="outline">
+                            <RefreshCw size={16} />
+                            {t("common.refresh")}
+                        </Button>
+                    </>
                 }
             />
 
@@ -127,7 +138,10 @@ function CommandsInner() {
                         )}
                     </div>
                     <aside className="min-w-0 space-y-4">
-                        <CommandTester check={page.check} scopeIsTunnel={page.tunnelId !== null} />
+                        <CommandTester check={page.check} scopeIsTunnel={page.tunnelId !== null} onResult={(command, result) => setTested({ command, result })} />
+                        <button type="button" onClick={() => setFlowOpen(true)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                            <Info size={14} aria-hidden /> {t("commands.flow.button")}
+                        </button>
                         <Callout tone="info" title={t("commands.howTitle")}>
                             <ul className="list-disc space-y-1 pl-4">
                                 <li>{t("commands.how1")}</li>
@@ -144,7 +158,24 @@ function CommandsInner() {
                 <CommandHistory list={page.history} onWithdraw={page.withdraw} />
             )}
 
-            <RuleDialog isOpen={editing !== null} onClose={() => setEditing(null)} rule={editing === "new" ? null : editing} scopeLabel={scopeLabel} onSave={page.saveRule} check={page.check} />
+            <RuleDialog
+                isOpen={editing !== null}
+                onClose={() => setEditing(null)}
+                rule={editing === "new" ? null : editing}
+                scopeLabel={scopeLabel}
+                scopeIsTunnel={page.tunnelId !== null}
+                approverCandidates={page.approverCandidates}
+                onSave={page.saveRule}
+                check={page.check}
+            />
+            <DecisionFlowDialog
+                isOpen={flowOpen}
+                onClose={() => setFlowOpen(false)}
+                command={tested.command}
+                verdict={tested.result ? verdictToDraw(tested.result) : null}
+                who={tested.result?.you_approve ? "approvers" : "sharees"}
+                scopeIsTunnel={page.tunnelId !== null}
+            />
             <ConfirmDialog
                 isOpen={deleting !== null}
                 onClose={() => setDeleting(null)}

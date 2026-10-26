@@ -1,9 +1,12 @@
 //! 指令規則的比對（純函式）：把一行 shell 拆成一個個簡單指令（看穿 `sudo`、`env`、`sh -c`、`$(…)` 這類包裝），
 //! 再拿規則比對。「指令」規則比程式名稱與必要參數（短旗標一個字母一個字母比，`-rf` = `-r` + `-f`，參數可用 `*` / `?`），
-//! 「正規表示式」規則比整行。這是防手滑的護欄，不是安全邊界：腳本、alias、編輯器裡照樣什麼都能跑。
+//! 「正規表示式」規則比整行。「允許」規則是例外：只豁免同一個範圍（全站 / 這條隧道）的擋下與要核准規則——隧道的允許
+//! 蓋不過全站的擋下，全站的允許也蓋不過隧道自己更嚴的規則。這是防手滑的護欄，不是安全邊界：腳本、alias、編輯器裡照樣什麼都能跑。
 //! Rule matching (pure): split a shell line into simple commands (seeing through `sudo`, `env`, `sh -c`, `$(…)` and
 //! similar wrappers), then match rules. "Command" rules compare the program and required arguments (short flags
-//! letter by letter, `-rf` = `-r` + `-f`; arguments may use `*` / `?`); "regex" rules match the whole line. A
+//! letter by letter, `-rf` = `-r` + `-f`; arguments may use `*` / `?`); "regex" rules match the whole line. An
+//! "allow" rule is an exception that exempts a command from the block / approve rules **of its own scope only**: a
+//! tunnel allow never overrides a site-wide block, and a site allow never overrides a tunnel's stricter rules. A
 //! guard against mistakes, not a security boundary: scripts, aliases and editors can still run anything.
 
 use regex::{Regex, RegexBuilder};
@@ -17,8 +20,10 @@ const MAX_DEPTH: usize = 6;
 pub enum Action {
     /// 直接擋下。/ Refused outright.
     Block,
-    /// 等 owner / ADMIN 核准。/ Held until the owner or an ADMIN approves.
+    /// 等 owner / ADMIN（或規則指定的人）核准。/ Held until the owner, an ADMIN or the rule's own approvers approve.
     Approve,
+    /// 例外：豁免同範圍的擋下 / 要核准規則。/ An exception: exempt from the same scope's block / approve rules.
+    Allow,
 }
 
 impl Action {
@@ -26,6 +31,7 @@ impl Action {
         match s {
             "block" => Some(Self::Block),
             "approve" => Some(Self::Approve),
+            "allow" => Some(Self::Allow),
             _ => None,
         }
     }
@@ -33,6 +39,7 @@ impl Action {
         match self {
             Self::Block => "block",
             Self::Approve => "approve",
+            Self::Allow => "allow",
         }
     }
 }
@@ -203,10 +210,21 @@ pub struct Rule {
     pub pattern: String,
     pub kind: Kind,
     pub note: String,
+    /// 「要核准」規則指定的核准人；空 = owner + ADMIN sharee。/ The approvers an "approve" rule names; empty = owner + ADMIN.
+    pub approver_ids: Vec<i64>,
     pub matcher: Matcher,
 }
 
 impl Rule {
+    /// 全站（tunnel_id None）或隧道。/ Site-wide (no tunnel) or a tunnel's.
+    pub fn scope(&self) -> Scope {
+        if self.tunnel_id.is_some() {
+            Scope::Tunnel
+        } else {
+            Scope::Site
+        }
+    }
+
     fn applies(&self, approver: bool, source: Source) -> bool {
         let who = match self.who {
             Who::Everyone => true,
@@ -217,9 +235,73 @@ impl Rule {
     }
 }
 
-/// 一行（或好幾個候選行）的結果：擋下優先於要核准；都不符合 = None。
-/// The verdict for a line (or several candidate readings of it): block wins over approve; None = allowed.
-pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], approver: bool, source: Source) -> Option<&'a Rule> {
+/// 規則的範圍。/ A rule's scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Site,
+    Tunnel,
+}
+
+impl Scope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Site => "site",
+            Self::Tunnel => "tunnel",
+        }
+    }
+}
+
+/// 一個範圍（全站或隧道）的結果：符合的擋下 / 要核准規則，與豁免它的允許規則（有允許就不算）。
+/// One scope's outcome: the block / approve rule that matched, and the allow rule that exempted it (if any).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScopeVerdict<'a> {
+    /// 符合的擋下 / 要核准規則（擋下優先）；被豁免時也留著，給畫面說「本來會…」。
+    /// The block / approve rule that matched (block first); kept when exempted so the UI can say "would have …".
+    pub hit: Option<&'a Rule>,
+    /// 豁免這個範圍的允許規則。/ The allow rule that exempts this scope.
+    pub allowed_by: Option<&'a Rule>,
+}
+
+impl<'a> ScopeVerdict<'a> {
+    /// 這個範圍真正算數的規則（被豁免 = None）。/ The rule that counts for this scope (None when exempted).
+    pub fn effective(&self) -> Option<&'a Rule> {
+        if self.allowed_by.is_some() {
+            None
+        } else {
+            self.hit
+        }
+    }
+}
+
+/// 一行的完整結果：兩個範圍各自的結果，合起來擋下（任一範圍）> 要核准（任一範圍）> 放行。
+/// The whole verdict: each scope's outcome; combined, block (either scope) > approve (either scope) > allowed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Verdict<'a> {
+    pub site: ScopeVerdict<'a>,
+    pub tunnel: ScopeVerdict<'a>,
+}
+
+impl<'a> Verdict<'a> {
+    /// 要執行的決定：擋下或要核准的那條規則；None = 放行。/ The decision: the block or approve rule; None = allowed.
+    pub fn decision(&self) -> Option<&'a Rule> {
+        let effective = [self.site.effective(), self.tunnel.effective()];
+        effective.iter().flatten().find(|r| r.action == Action::Block).or_else(|| effective.iter().flatten().next()).copied()
+    }
+
+    /// 放行而且是因為允許規則的（本來會被擋下 / 要核准）。/ Allowed because of an allow rule (it would otherwise be caught).
+    pub fn allowed_by(&self) -> Option<&'a Rule> {
+        if self.decision().is_some() {
+            return None;
+        }
+        [self.site, self.tunnel].iter().find(|s| s.hit.is_some()).and_then(|s| s.allowed_by)
+    }
+}
+
+/// 一行（或好幾個候選行）的結果。每個範圍：先找符合的允許規則；有，就豁免該範圍的擋下 / 要核准；再把兩個範圍合起來
+/// （擋下 > 要核准 > 放行）。都不符合 = 全空。
+/// The verdict for a line (or several candidate readings of it). Per scope: an allow rule that matches exempts that
+/// scope's block / approve rules; the scopes then combine as block > approve > allowed.
+pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], approver: bool, source: Source) -> Verdict<'a> {
     let parsed: Vec<(&str, Vec<SimpleCommand>)> = lines
         .iter()
         .map(|l| truncate(l))
@@ -227,15 +309,16 @@ pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], approver: bool, source:
         .map(|l| (l, commands(l)))
         .collect();
     if parsed.is_empty() {
-        return None;
+        return Verdict::default();
     }
-    let hit = |action: Action| {
+    let hit = |scope: Scope, action: Action| {
         rules
             .iter()
-            .filter(|r| r.action == action && r.applies(approver, source))
+            .filter(|r| r.scope() == scope && r.action == action && r.applies(approver, source))
             .find(|r| parsed.iter().any(|(line, cmds)| r.matcher.matches(line, cmds)))
     };
-    hit(Action::Block).or_else(|| hit(Action::Approve))
+    let scope = |scope: Scope| ScopeVerdict { hit: hit(scope, Action::Block).or_else(|| hit(scope, Action::Approve)), allowed_by: hit(scope, Action::Allow) };
+    Verdict { site: scope(Scope::Site), tunnel: scope(Scope::Tunnel) }
 }
 
 fn truncate(s: &str) -> &str {
@@ -665,13 +748,26 @@ mod tests {
             pattern: pattern.into(),
             kind,
             note: String::new(),
+            approver_ids: Vec::new(),
             matcher: Matcher::new(kind, pattern).unwrap(),
         }
     }
 
+    fn tunnel_rule(id: i64, action: Action, pattern: &str) -> Rule {
+        Rule { id, tunnel_id: Some(7), ..rule(action, Kind::Command, pattern) }
+    }
+
+    fn site_rule(id: i64, action: Action, pattern: &str) -> Rule {
+        Rule { id, ..rule(action, Kind::Command, pattern) }
+    }
+
     fn hits(pattern: &str, line: &str) -> bool {
         let r = [rule(Action::Block, Kind::Command, pattern)];
-        evaluate(&r, &[line.to_string()], false, Source::Terminal).is_some()
+        evaluate(&r, &[line.to_string()], false, Source::Terminal).decision().is_some()
+    }
+
+    fn decided(rules: &[Rule], line: &str, approver: bool, source: Source) -> Option<i64> {
+        evaluate(rules, &[line.to_string()], approver, source).decision().map(|r| r.id)
     }
 
     fn programs(line: &str) -> Vec<String> {
@@ -741,8 +837,8 @@ mod tests {
     #[test]
     fn regex_rules_match_the_whole_line() {
         let r = [rule(Action::Block, Kind::Regex, r"curl .*\|\s*(ba)?sh")];
-        assert!(evaluate(&r, &["curl -fsSL https://x.sh | sh".into()], false, Source::Terminal).is_some());
-        assert!(evaluate(&r, &["curl -fsSL https://x.sh -o x".into()], false, Source::Terminal).is_none());
+        assert!(decided(&r, "curl -fsSL https://x.sh | sh", false, Source::Terminal).is_some());
+        assert!(decided(&r, "curl -fsSL https://x.sh -o x", false, Source::Terminal).is_none());
     }
 
     #[test]
@@ -752,28 +848,89 @@ mod tests {
         let mut block = rule(Action::Block, Kind::Command, "reboot");
         block.id = 2;
         let rules = [approve.clone(), block.clone()];
-        let line = |s: &str| vec![s.to_string()];
-        assert_eq!(evaluate(&rules, &line("sudo reboot"), false, Source::Terminal).map(|r| r.id), Some(2));
-        assert_eq!(evaluate(&rules, &line("sudo ls"), false, Source::Terminal).map(|r| r.id), Some(1));
-        assert!(evaluate(&rules, &line("ls"), false, Source::Terminal).is_none());
-        assert!(evaluate(&rules, &line("   "), false, Source::Terminal).is_none());
+        assert_eq!(decided(&rules, "sudo reboot", false, Source::Terminal), Some(2));
+        assert_eq!(decided(&rules, "sudo ls", false, Source::Terminal), Some(1));
+        assert!(decided(&rules, "ls", false, Source::Terminal).is_none());
+        assert!(decided(&rules, "   ", false, Source::Terminal).is_none());
 
         let mut sharees = approve.clone();
         sharees.who = Who::Sharees;
-        assert!(evaluate(std::slice::from_ref(&sharees), &line("sudo ls"), true, Source::Terminal).is_none());
-        assert!(evaluate(std::slice::from_ref(&sharees), &line("sudo ls"), false, Source::Terminal).is_some());
+        assert!(decided(std::slice::from_ref(&sharees), "sudo ls", true, Source::Terminal).is_none());
+        assert!(decided(std::slice::from_ref(&sharees), "sudo ls", false, Source::Terminal).is_some());
 
         let mut agents = approve;
         agents.via = Via::Agents;
-        assert!(evaluate(std::slice::from_ref(&agents), &line("sudo ls"), false, Source::Terminal).is_none());
-        assert!(evaluate(std::slice::from_ref(&agents), &line("sudo ls"), true, Source::Agent).is_some());
+        assert!(decided(std::slice::from_ref(&agents), "sudo ls", false, Source::Terminal).is_none());
+        assert!(decided(std::slice::from_ref(&agents), "sudo ls", true, Source::Agent).is_some());
     }
 
     #[test]
     fn any_candidate_line_can_match() {
         let r = [rule(Action::Block, Kind::Command, "reboot")];
         let lines = vec!["nat@box:~$ reboot".to_string(), "reboot".to_string()];
-        assert!(evaluate(&r, &lines, false, Source::Terminal).is_some());
+        assert!(evaluate(&r, &lines, false, Source::Terminal).decision().is_some());
+    }
+
+    // ---------------------------------------------------------------- allow (exception) rules
+
+    #[test]
+    fn allow_exempts_only_its_own_scope() {
+        // 全站擋 `rm -rf`，隧道允許 `rm -rf /tmp/build/*`：還是擋（管理員的規則優先）。
+        // A tunnel allow never overrides a site-wide block.
+        let rules = [site_rule(1, Action::Block, "rm -rf"), tunnel_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
+        let v = evaluate(&rules, &["rm -rf /tmp/build/x".to_string()], false, Source::Terminal);
+        assert_eq!(v.decision().map(|r| r.id), Some(1));
+        assert_eq!(v.tunnel.allowed_by.map(|r| r.id), Some(2), "the tunnel allow matched, it just has nothing to exempt there");
+        assert!(v.allowed_by().is_none());
+
+        // 隧道要核准 `sudo`，全站允許 `sudo systemctl restart myapp`：還是要核准（owner 自己的規則更嚴）。
+        // A site allow never overrides a tunnel's stricter rule.
+        let rules = [tunnel_rule(1, Action::Approve, "sudo"), site_rule(2, Action::Allow, "sudo systemctl restart myapp")];
+        assert_eq!(decided(&rules, "sudo systemctl restart myapp", false, Source::Terminal), Some(1));
+
+        // 同範圍：允許豁免擋下，而且說得出是哪一條。/ Same scope: the allow exempts the block, and names itself.
+        let rules = [site_rule(1, Action::Block, "rm -rf"), site_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
+        let v = evaluate(&rules, &["rm -rf /tmp/build/x".to_string()], false, Source::Terminal);
+        assert!(v.decision().is_none());
+        assert_eq!(v.allowed_by().map(|r| r.id), Some(2));
+        assert_eq!(v.site.hit.map(|r| r.id), Some(1), "the exempted rule is still reported");
+        assert_eq!(decided(&rules, "rm -rf /srv", false, Source::Terminal), Some(1), "outside the exception the block holds");
+        // 同範圍：允許也豁免要核准。/ The same for approve rules of that scope.
+        let rules = [tunnel_rule(1, Action::Approve, "sudo"), tunnel_rule(2, Action::Allow, "sudo systemctl restart myapp")];
+        assert!(decided(&rules, "sudo systemctl restart myapp", false, Source::Terminal).is_none());
+        assert_eq!(decided(&rules, "sudo reboot", false, Source::Terminal), Some(1));
+
+        // 兩個範圍各自豁免後再合併：全站被豁免、隧道還要核准 → 要核准。/ After per-scope exemptions the scopes still combine.
+        let rules = [site_rule(1, Action::Block, "rm -rf"), site_rule(2, Action::Allow, "rm -rf /tmp/*"), tunnel_rule(3, Action::Approve, "rm")];
+        let v = evaluate(&rules, &["rm -rf /tmp/x".to_string()], false, Source::Terminal);
+        assert_eq!(v.decision().map(|r| r.id), Some(3));
+        assert!(v.allowed_by().is_none(), "not allowed overall, so no allow is credited");
+        assert_eq!(v.site.allowed_by.map(|r| r.id), Some(2));
+    }
+
+    #[test]
+    fn allow_rules_honour_who_and_via() {
+        // 只豁免 agent 的允許：終端機還是被擋。/ An agents-only allow exempts agent calls only.
+        let mut agents_only = site_rule(2, Action::Allow, "rm -rf /tmp/build/*");
+        agents_only.via = Via::Agents;
+        let rules = [site_rule(1, Action::Block, "rm -rf"), agents_only];
+        assert_eq!(decided(&rules, "rm -rf /tmp/build/x", false, Source::Terminal), Some(1));
+        assert!(decided(&rules, "rm -rf /tmp/build/x", false, Source::Agent).is_none());
+
+        // 只給 sharee 的允許：owner / ADMIN 不在豁免內（對他們而言規則照舊）。/ A sharees-only allow leaves approvers out.
+        let mut sharees_only = site_rule(2, Action::Allow, "sudo systemctl restart myapp");
+        sharees_only.who = Who::Sharees;
+        let rules = [site_rule(1, Action::Approve, "sudo"), sharees_only];
+        assert!(decided(&rules, "sudo systemctl restart myapp", false, Source::Terminal).is_none());
+        assert_eq!(decided(&rules, "sudo systemctl restart myapp", true, Source::Terminal), Some(1));
+    }
+
+    #[test]
+    fn allow_rules_alone_do_nothing() {
+        let rules = [site_rule(1, Action::Allow, "ls")];
+        let v = evaluate(&rules, &["ls -la".to_string()], false, Source::Terminal);
+        assert!(v.decision().is_none());
+        assert!(v.allowed_by().is_none(), "nothing to exempt from: the allow is not credited");
     }
 
     #[test]

@@ -3,7 +3,8 @@
  * Types for command rules, approval requests and the terminal's binary notices.
  */
 
-export type RuleAction = "block" | "approve";
+/** 擋下 / 要核准 / 允許（例外：只豁免同範圍的規則）。/ block, approve, or allow (an exception within its own scope). */
+export type RuleAction = "block" | "approve" | "allow";
 export type RuleKind = "command" | "regex";
 export type RuleWho = "everyone" | "sharees";
 export type RuleVia = "all" | "terminal" | "agents";
@@ -20,8 +21,16 @@ export interface CommandRule {
     via: RuleVia;
     note: string;
     enabled: boolean;
+    /** 「要核准」規則指定的核准人；空 = 擁有者 + Admin。/ The approvers an approve rule names; empty = owner + Admins. */
+    approver_ids: number[];
+    approvers: UserBrief[];
     created_at: string;
     updated_at: string;
+}
+
+export interface UserBrief {
+    id: number;
+    username: string;
 }
 
 export interface RuleInput {
@@ -32,6 +41,14 @@ export interface RuleInput {
     via: RuleVia;
     note: string;
     enabled: boolean;
+    approver_ids: number[];
+}
+
+export interface SiteRules {
+    rules: CommandRule[];
+    can_edit: boolean;
+    /** 管理員才有（任何啟用中的帳號）。/ Admins only (any active account). */
+    approver_candidates: UserBrief[];
 }
 
 export interface TunnelRules {
@@ -40,6 +57,8 @@ export interface TunnelRules {
     site_rules: CommandRule[];
     can_edit: boolean;
     can_edit_site: boolean;
+    /** 擁有者與 Admin sharee（能改規則的人才有）。/ The owner and Admin sharees (editors only). */
+    approver_candidates: UserBrief[];
 }
 
 /** 比對到的規則（終端機通知、試跑結果）。/ A matched rule (terminal notices, the tester). */
@@ -52,6 +71,8 @@ export interface MatchedRule {
     note: string;
     who?: RuleWho;
     via?: RuleVia;
+    /** 規則指定的核准人（紀錄裡 = 當時能決定的人）。/ The rule's approvers (in a record: who could decide). */
+    approver_ids?: number[];
 }
 
 export type RequestStatus = "blocked" | "pending" | "approved" | "denied" | "cancelled" | "expired";
@@ -78,9 +99,24 @@ export interface CommandRequest {
     can_cancel?: boolean;
 }
 
+/** 一個範圍（全站 / 隧道）的結果。/ One scope's outcome. */
+export interface ScopeVerdict {
+    /** 符合的擋下 / 要核准規則（被豁免時也列出）。/ The block / approve rule that matched (listed even when exempted). */
+    hit: MatchedRule | null;
+    /** 豁免這個範圍的允許規則。/ The allow rule that exempts this scope. */
+    allowed_by: MatchedRule | null;
+    exempted: boolean;
+}
+
 export interface CheckVerdict {
     action: "allow" | RuleAction;
     rule: MatchedRule | null;
+    /** 放行是因為這條允許規則。/ Allowed thanks to this allow rule. */
+    allowed_by?: MatchedRule | null;
+    site?: ScopeVerdict;
+    tunnel?: ScopeVerdict;
+    /** 要核准時誰決定（`default` = 擁有者 + Admin）。/ Who decides (`default` = owner + Admins). */
+    approvers?: { default: boolean; users: UserBrief[] } | null;
 }
 
 export interface CheckResult {

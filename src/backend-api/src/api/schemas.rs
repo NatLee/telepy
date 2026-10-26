@@ -2293,7 +2293,7 @@ pub struct CommandRule {
     pub tunnel_id: Option<i64>,
     /// site / tunnel
     pub scope: String,
-    /// block / approve
+    /// block / approve / allow（例外：只豁免同範圍的規則）。/ block, approve or allow (an exception within its own scope).
     pub action: String,
     /// command（程式 + 必要參數）/ regex（整行）。/ command (program + required arguments) or regex (whole line).
     pub kind: String,
@@ -2304,6 +2304,10 @@ pub struct CommandRule {
     pub via: String,
     pub note: String,
     pub enabled: bool,
+    /// 「要核准」規則指定的核准人；空 = owner + ADMIN sharee。/ The approvers an approve rule names; empty = owner + ADMIN.
+    pub approver_ids: Vec<i64>,
+    /// 同上，附名字。/ The same with usernames.
+    pub approvers: Vec<UserRef>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -2311,6 +2315,7 @@ pub struct CommandRule {
 /// 新增或修改規則（修改時只帶要改的欄位）。/ Create or change a rule (send only what changes on PATCH).
 #[derive(ToSchema)]
 pub struct CommandRuleInput {
+    /// block / approve / allow
     pub action: Option<String>,
     pub kind: Option<String>,
     pub pattern: Option<String>,
@@ -2318,12 +2323,17 @@ pub struct CommandRuleInput {
     pub via: Option<String>,
     pub note: Option<String>,
     pub enabled: Option<bool>,
+    /// 核准人（只對 approve 有意義；null / [] = owner + ADMIN）。隧道規則：owner / ADMIN sharee / 管理員；全站規則：任何啟用中的帳號。
+    /// Approvers (approve rules only; null / [] = owner + ADMIN). Tunnel rules: owner / ADMIN sharees / admins; site rules: any active user.
+    pub approver_ids: Option<Vec<i64>>,
 }
 
 #[derive(ToSchema)]
 pub struct CommandRuleList {
     pub rules: Vec<CommandRule>,
     pub can_edit: bool,
+    /// 可以指定的核准人（管理員才有；其他人為空）。/ Who a site rule may name (admins only; empty otherwise).
+    pub approver_candidates: Vec<UserRef>,
 }
 
 #[derive(ToSchema)]
@@ -2334,6 +2344,8 @@ pub struct TunnelCommandRules {
     pub site_rules: Vec<CommandRule>,
     pub can_edit: bool,
     pub can_edit_site: bool,
+    /// 可以指定的核准人：owner 與 ADMIN sharee（能改規則的人才有）。/ Who a tunnel rule may name: owner + ADMIN sharees (editors only).
+    pub approver_candidates: Vec<UserRef>,
 }
 
 #[derive(ToSchema)]
@@ -2348,12 +2360,35 @@ pub struct CommandCheckInput {
     pub rule: Option<serde_json::Value>,
 }
 
+/// 一個範圍（全站 / 隧道）的結果。/ One scope's outcome.
+#[derive(ToSchema)]
+pub struct CommandScopeVerdict {
+    /// 符合的擋下 / 要核准規則（被豁免時也列出）。/ The block / approve rule that matched (listed even when exempted).
+    #[schema(value_type = Option<Object>)]
+    pub hit: Option<serde_json::Value>,
+    /// 豁免這個範圍的允許規則。/ The allow rule that exempts this scope.
+    #[schema(value_type = Option<Object>)]
+    pub allowed_by: Option<serde_json::Value>,
+    /// `hit` 被 `allowed_by` 豁免了。/ `hit` was exempted by `allowed_by`.
+    pub exempted: bool,
+}
+
 #[derive(ToSchema)]
 pub struct CommandVerdict {
     /// allow / block / approve
     pub action: String,
+    /// 決定的那條規則（擋下 / 要核准）。/ The deciding rule (block / approve).
     #[schema(value_type = Option<Object>)]
     pub rule: Option<serde_json::Value>,
+    /// 放行是因為這條允許規則（本來會被擋下 / 要核准）。/ Allowed thanks to this allow rule (it would otherwise be caught).
+    #[schema(value_type = Option<Object>)]
+    pub allowed_by: Option<serde_json::Value>,
+    pub site: CommandScopeVerdict,
+    pub tunnel: CommandScopeVerdict,
+    /// 要核准時：`{default, users: [{id, username}]}`（`default` = owner + ADMIN，沒選隧道時 users 為空）。
+    /// For approve: `{default, users}` (`default` = owner + ADMIN; `users` empty when no tunnel was given).
+    #[schema(value_type = Option<Object>)]
+    pub approvers: Option<serde_json::Value>,
 }
 
 #[derive(ToSchema)]
@@ -2384,7 +2419,8 @@ pub struct CommandRequest {
     pub account: String,
     pub lan_host: Option<String>,
     pub command: String,
-    /// {id, pattern, kind, scope, note}
+    /// {id, pattern, kind, scope, note, approver_ids}（approver_ids = 當時能決定的人；空 = owner + ADMIN）
+    /// {id, pattern, kind, scope, note, approver_ids} (approver_ids = who could decide; empty = owner + ADMIN)
     #[schema(value_type = Object)]
     pub rule: serde_json::Value,
     /// blocked / pending / approved / denied / cancelled / expired
