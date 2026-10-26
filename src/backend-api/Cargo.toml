@@ -54,6 +54,8 @@ schemars = "1"
 # two-factor login: passkeys (WebAuthn) and TOTP (secret encrypted at rest, QR code as SVG)
 webauthn-rs = { version = "0.5.5", features = ["conditional-ui"] }
 aes-gcm = "0.10"
+# RustDesk ID 伺服器簽裝置公鑰（已在 russh / ssh-key 的相依樹裡）。/ Signs device keys for the RustDesk ID server.
+ed25519-dalek = "3"
 sha1 = "0.10"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 # misc

@@ -8,14 +8,23 @@
 import type { DesktopFailure } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
 
-/** `POST /api/reverse/server/{id}/rustdesk/start` 的回應。/ The start response. */
+/**
+ * start 的回應：經隧道（`POST /api/reverse/server/{id}/rustdesk/start`，有 `target` / `username`）或經 Telepy 的
+ * RustDesk 伺服器（`POST /api/rustdesk/devices/{id}/start`，有 `peer_id` / `key` / `device`）。
+ * The start response, through a tunnel (`target`, `username`) or through Telepy's RustDesk server (`peer_id`, `key`).
+ */
 export interface RustDeskStart {
     session_id: string;
     ws_path: string;
     ticket: string;
     expires_in: number;
-    target: { host: string; port: number; label: string; lan_host_id: number | null };
-    username: string;
+    target?: { host: string; port: number; label: string; lan_host_id: number | null };
+    username?: string;
+    /** 裝置的 RustDesk ID（經 RustDesk 伺服器時）。/ The device's RustDesk ID. */
+    peer_id?: string;
+    /** 伺服器公鑰：核心用它驗裝置的金鑰，連線就是端對端加密。/ The server key the core verifies the device with. */
+    key?: string;
+    device?: { id: number; name: string; rustdesk_id: string };
 }
 
 export const RUSTDESK_CORE_URL = "/vendor/rustdesk-web-core/rustdesk-web-core.js";
@@ -66,7 +75,8 @@ export function rustdeskWsUrl(wsOrigin: string, start: RustDeskStart): string {
  * The peer id for the login: a device accepts its own ID or an IP-looking id, so use the target address.
  */
 export function peerIdFor(start: RustDeskStart): string {
-    return `${start.target.host}:${start.target.port}`;
+    if (start.peer_id) return start.peer_id;
+    return start.target ? `${start.target.host}:${start.target.port}` : "";
 }
 
 // ---- keyboard ---------------------------------------------------------------

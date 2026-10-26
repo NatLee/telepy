@@ -558,6 +558,23 @@ const TABLES: &[(&str, &str)] = &[
             "last_used_at" datetime NULL
         )"#,
     ),
+    // 登記在 Telepy（當 RustDesk 的 ID 伺服器）的 RustDesk 裝置；不經 SSH。/ RustDesk devices enrolled with Telepy's ID server.
+    (
+        "telepy_rustdesk_device",
+        r#"CREATE TABLE "telepy_rustdesk_device" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "rustdesk_id" varchar(32) NOT NULL,
+            "uuid" varchar(128) NOT NULL,
+            "pk" varchar(128) NOT NULL,
+            "name" varchar(64) NOT NULL,
+            "hostname" varchar(255) NOT NULL,
+            "os" varchar(255) NOT NULL,
+            "version" varchar(32) NOT NULL,
+            "created_at" datetime NOT NULL,
+            "last_seen_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -588,6 +605,8 @@ const INDEXES: &[&str] = &[
     // 同一把 host key 被哪些隧道信任（= 同一台機器）。/ Which tunnels trust one host key (= the same machine).
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_host_key_public_key" ON "telepy_device_host_key" ("public_key")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_rustdesk_device_rustdesk_id" ON "telepy_rustdesk_device" ("rustdesk_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_rustdesk_device_user" ON "telepy_rustdesk_device" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
@@ -676,6 +695,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Web sign-in lifetimes (seconds): how long a sign-in lasts without a visit (sliding, 30 days) and how often the access token is renewed (1 hour).
     ("site_settings_sitesettings", "signin_lifetime", "integer NOT NULL DEFAULT 2592000"),
     ("site_settings_sitesettings", "signin_access_lifetime", "integer NOT NULL DEFAULT 3600"),
+    // Telepy 當 RustDesk 的 ID / 中繼伺服器（登記過的裝置不經 SSH 也能連）。/ Telepy as RustDesk's ID and relay server.
+    ("site_settings_sitesettings", "desktop_rustdesk_server", "bool NOT NULL DEFAULT 1"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

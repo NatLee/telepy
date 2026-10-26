@@ -143,6 +143,45 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   分毫不差（`xev`），打字到達 xterm，即時 session 頁列出 `rustdesk`，Logs 有兩個事件。腳本：scratchpad 的
   `pw/rd-browser-e2e.js`（見記憶 `rustdesk-browser`）。
 
+### 不經隧道：Telepy 當 RustDesk 伺服器（`rustdesk/idserver.rs`、`api/rustdesk_devices.rs`、`ws/rustdesk.rs`、`db/rustdesk_devices.rs`；前端 `/tunnels/rustdesk`）
+
+研究與 PoC 見 `docs/rustdesk-id-server.md`。沒有 Telepy 隧道的電腦，把 RustDesk 的 ID / API 伺服器指到 Telepy，打開
+WebSocket，就會**主動往外**連 Telepy 的 443；Telepy 自己實作 hbbs / hbbr 需要的那一小部分（不跑官方伺服器、不開新埠）。
+
+- **登記（RustDesk 內建的 deploy）**：「RustDesk 裝置」頁 → 新增裝置 → `POST /api/rustdesk/enroll {name?}` 發一次性權杖
+  （`tpr_…`，記憶體、30 分鐘、每人 10 張）與指令（Linux / macOS 一行 `sudo sh -c '…'`，Windows PowerShell）：
+  `rustdesk --option custom-rendezvous-server <位址>`、`--option api-server <Telepy>`、`--option allow-websocket Y`、
+  `rustdesk --deploy --token <權杖>`。裝置 `POST /api/devices/deploy`（`Authorization: Bearer`，`{id, pk, uuid}`），
+  Telepy 存一列 `telepy_rustdesk_device`（RustDesk ID 全站唯一；同一個擁有者再登記 = 換 uuid / 公鑰）並回
+  `{"result": "OK"}` —— RustDesk 1.5 只認 `result`（`OK` / `INVALID_INPUT` / `ID_TAKEN` / `NOT_ENABLED`），其他內容原樣印出、
+  結束碼 1，所以權杖問題回一行純文字。OK 之後裝置通知自己的服務，1 秒內就註冊。
+- **位址規則（RustDesk 1.5）**：伺服器是網域 → 連 `ws(s)://網域/ws/id`，**埠固定 443 / 80**（`api-server` 是 https 才用 wss）；
+  是 IP → `ws://IP:<設定的埠+2>/`（根路徑、不加密）。所以 `device_settings()` 依 Telepy 對外網址（`PUBLIC_URL`，否則轉送標頭）
+  給 `網域` 或 `IP:埠−2`，並標出 RustDesk 連不到的情況（網域配非標準埠、IP 配 https、localhost）——頁面上有警告。
+  後端在 `/ws/id` 與根路徑 `/`（只接 WebSocket 升級，其他還是 404）都收裝置；Traefik 多一條 `backend-rustdesk-root`
+  （``Path(`/`) && HeaderRegexp(`Upgrade`, `(?i)^websocket$`)``）。
+- **註冊**：第一則 `register_pk {id, uuid, pk}`。登記過、uuid 與公鑰都對得上、站台開關開著 → 先登記為在線再回
+  `RegisterPkResponse OK, keep_alive 30`；其他一律 `NOT_DEPLOYED`（裝置停著、每 30 秒重試；連線最多留 5 分鐘、同時最多 256 條）。
+  換公鑰（重裝）也是 `NOT_DEPLOYED`，要重新登記。`--set-id`（帶 `old_id`）回 `NOT_SUPPORT`。伺服器每 10 秒送空訊息當心跳。
+  裝置的 `/api/sysinfo`（uuid 要對）存主機名稱、系統、版本，登記沒取名就用主機名稱；`/api/heartbeat`、`/api/audit/{kind}`
+  只回空 / `{}`（審計要空 body，否則裝置會重送）；`/api/devices/cli`（`--assign`）不支援。
+- **連線**：`POST /api/rustdesk/devices/{id}/start`（擁有者或管理員；`desktop_enabled`、站台開關、在線、`desktop_max_sessions`
+  與 guacd / 隧道 RustDesk 合計）→ `{session_id, ws_path, ticket, peer_id = RustDesk ID, key = 伺服器公鑰}`。瀏覽器核心照舊連
+  `/ws/rustdesk/<session>/`：punch → Telepy 在裝置的註冊連線推 `request_relay {uuid, socket_addr, relay_server, secure}`
+  （中繼網址取自**裝置自己連進來**的位址；`socket_addr` 每次不同，否則裝置當成重複丟掉），回瀏覽器 `relay_response`
+  附 Telepy 簽的 `IdPk{id, 裝置公鑰}`；裝置開 `/ws/relay` 送 `request_relay {uuid}`，兩條 WS 以 uuid 配對、逐則轉送。
+  伺服器金鑰是由 `SECRET_KEY` 衍生的 ed25519（不另存；裝置在 WS 模式不驗它，只有瀏覽器核心用）。核心驗過金鑰就和裝置做
+  RustDesk 的金鑰交換 → **端對端加密**，不會出現「不安全連線」。
+- **管理**：`GET /api/rustdesk/devices`（自己的；管理員看全部）、`PATCH` 改名、`DELETE` 移除（踢掉註冊連線、結束 session，
+  之後回 `NOT_DEPLOYED`）。通知 `RUSTDESK-DEVICES-UPDATED`（登記、上下線、改名、移除；帶 `enroll_id` 時給新增對話框）。
+  事件 `rustdesk_enrolled` / `rustdesk_removed` / `rustdesk_open` / `rustdesk_close`（沒有隧道 → 只有管理員在 Logs 看得到）。
+- **前端**：`/tunnels/rustdesk`（`hooks/useRustDeskDevices.ts`、`components/rustdesk/EnrolDialog.tsx` + `hooks/useRustDeskEnrol.ts`，
+  純函式 `lib/rustdeskDevices.ts`）；遠端桌面頁的「裝置」選單多一組 RustDesk 裝置（`?rustdesk=<id>`，表單只有密碼與畫質），
+  `RustDeskViewer` 帶 `key` 與 `peer_id`；info 路徑圖是三節點版（瀏覽器 ─ Telepy ─ 裝置自己的 HTTPS 連線 ─ 裝置）。
+- **還沒有的**：分享給別人（只有擁有者與管理員）、憑證庫（密碼每次輸入）、即時 session 頁 / presence、擁有者在 Logs 看到事件、
+  Telepy 配發的號碼（RustDesk 的 `--deploy --id <號碼>` 可以做到）。實測只在 Linux（Debian 容器、RustDesk 1.5.0）；macOS /
+  Windows 指令用同樣的選項，還沒實機跑過。
+
 ### 用 RustDesk app（埠轉發）
 
 桌面頁的「想用 RustDesk app？」展開：把 **Direct IP Access**（TCP 21118）經裝置轉到使用者電腦，用 app 連 `127.0.0.1`。

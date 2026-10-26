@@ -74,6 +74,13 @@ http:
       <<: *backendRouterSettings
       rule: "PathPrefix(`/ws`)"
 
+    # RustDesk 用 IP 位址當 ID 伺服器時連 ws://IP:埠/（根路徑）。只把 WebSocket 升級交給後端，網頁照舊給前端。
+    # RustDesk dials the root path when its ID server is an IP address; only WebSocket upgrades go to the backend.
+    backend-rustdesk-root:
+      <<: *backendRouterSettings
+      rule: "Path(`/`) && HeaderRegexp(`Upgrade`, `(?i)^websocket$`)"
+      priority: 200
+
   services:
     frontend-service:
       <<: *frontendServiceSettings

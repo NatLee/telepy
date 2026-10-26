@@ -596,6 +596,7 @@ mod tests {
             desktop_session_idle_timeout: 900,
             desktop_clipboard: "both".into(),
             desktop_max_resolution: 2560,
+            desktop_rustdesk_server: true,
             mfa_require_totp: false,
             mfa_require_passkey: false,
             recording_retention_days: 30,
