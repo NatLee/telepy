@@ -55,6 +55,8 @@ async fn setup_status_register_login_profile_refresh() {
     assert_eq!(r.json["ui_scale"], 100);
     assert_eq!(r.json["terminal_font"], "hack");
     assert_eq!(r.json["terminal_scheme"], "telepy");
+    assert_eq!(r.json["terminal_bold"], "face");
+    assert_eq!(r.json["terminal_ligatures"], false);
     assert!(r.json["date_joined"].as_str().unwrap().ends_with('Z'));
     assert!(r.json["last_login"].is_string(), "a password login records last_login: {}", r.text);
 

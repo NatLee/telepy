@@ -14,8 +14,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { clock, countUntil, parseSize, type Cast } from "@/lib/asciicast";
 import { useI18n } from "@/lib/i18n";
-import { terminalFontFamily } from "@/lib/terminalAppearance";
-import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
 
 const SPEEDS = ["1", "2", "4", "8"] as const;
 
@@ -68,7 +67,7 @@ export function CastPlayer({ cast, tunnelId }: { cast: Cast; tunnelId: number })
         let disposed = false;
         let cleanup = () => {};
         (async () => {
-            const [{ Terminal }] = await Promise.all([loadXtermDeps(), waitForFont(resolved.font)]);
+            const [{ Terminal }] = await Promise.all([loadXtermDeps(), waitForFont(resolved.font, resolved.bold !== "bright")]);
             if (disposed || !hostRef.current) return;
             const term = new Terminal({
                 cols: cast.width,
@@ -76,12 +75,10 @@ export function CastPlayer({ cast, tunnelId }: { cast: Cast; tunnelId: number })
                 disableStdin: true,
                 cursorBlink: false,
                 scrollback: 5000,
-                theme: resolved.scheme.theme,
-                fontFamily: terminalFontFamily(resolved.font, resolveCssVar),
-                fontSize: resolved.fontSize,
-                lineHeight: 1.2,
+                ...xtermLookOptions(resolved),
             });
             term.open(hostRef.current);
+            applyLigatures(term, resolved.ligatures);
             termRef.current = term;
             appliedRef.current = 0;
             setReady(true);

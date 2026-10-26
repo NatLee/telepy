@@ -491,6 +491,25 @@ const TABLES: &[(&str, &str)] = &[
             "font" varchar(32) NULL,
             "font_size" smallint NULL,
             "scheme" varchar(32) NULL,
+            "bold" varchar(8) NULL,
+            "ligatures" bool NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // Rust 自有：使用者自訂的終端機配色（colors = JSON：前景 / 背景 / 游標 / 選取 + 16 色 ANSI，都是 #rrggbb）。
+    // scheme_id 是 API 上的 id（`custom-<8 hex>`），存在 terminal_scheme / 每條隧道的覆寫裡；刪掉後前端回到預設配色。
+    // User-defined terminal colour schemes (colors = JSON: foreground / background / cursor / selection + the 16 ANSI
+    // colours, all #rrggbb). scheme_id is the API id (`custom-<8 hex>`) referenced by terminal_scheme and per-tunnel
+    // overrides; once deleted the frontend falls back to the default scheme.
+    (
+        "telepy_terminal_scheme",
+        r#"CREATE TABLE "telepy_terminal_scheme" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "scheme_id" varchar(32) NOT NULL UNIQUE,
+            "name" varchar(40) NOT NULL,
+            "colors" text NOT NULL,
+            "created_at" datetime NOT NULL,
             "updated_at" datetime NOT NULL
         )"#,
     ),
@@ -657,6 +676,7 @@ const TABLES: &[(&str, &str)] = &[
 const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
@@ -788,6 +808,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
     ("user_management_usersettings", "terminal_font", "varchar(32) NOT NULL DEFAULT 'hack'"),
     ("user_management_usersettings", "terminal_scheme", "varchar(32) NOT NULL DEFAULT 'telepy'"),
+    // 終端機粗體的畫法（face = 真正的粗體字 / bright = 只換亮色 / both）與連字。/ Terminal bold style and ligatures.
+    ("user_management_usersettings", "terminal_bold", "varchar(8) NOT NULL DEFAULT 'face'"),
+    ("user_management_usersettings", "terminal_ligatures", "bool NOT NULL DEFAULT 0"),
+    // 每條隧道的覆寫也多這兩項（NULL = 跟隨預設）。/ The per-tunnel override gets the same two (NULL = inherit).
+    ("telepy_terminal_profile", "bold", "varchar(8) NULL"),
+    ("telepy_terminal_profile", "ligatures", "bool NULL"),
     // 遠端桌面剪貼簿方向（個人選擇；站台的 desktop_clipboard 是上限）。/ Desktop clipboard direction (the site setting caps it).
     ("user_management_usersettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
 ];
