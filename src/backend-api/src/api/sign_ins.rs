@@ -55,6 +55,21 @@ pub async fn record(state: &AppState, user_id: i64, meta: &ClientMeta, a: Attemp
     if let Err(e) = db::sign_ins::insert(&state.db, &row).await {
         tracing::warn!(user_id, error = %e, "cannot record sign-in");
     }
+    let username = db::users::by_id(&state.db, user_id).await.ok().flatten().map(|u| u.username).unwrap_or_default();
+    let geo = state.geoip.json(meta.ip.as_deref());
+    state.webhooks.emit(
+        crate::webhooks::Event::new(if a.ok { crate::webhooks::Kind::AccountSignIn } else { crate::webhooks::Kind::AccountSignInFailed })
+            .to([user_id], None)
+            .data(json!({
+                "user": username,
+                "method": a.method,
+                "second_factor": a.second_factor,
+                "reason": a.reason,
+                "ip": meta.ip,
+                "country": geo.get("country").cloned().unwrap_or(Value::Null),
+                "user_agent": meta.user_agent,
+            })),
+    );
 }
 
 fn sign_in_json(e: &SignIn, geo: &GeoIp) -> Value {

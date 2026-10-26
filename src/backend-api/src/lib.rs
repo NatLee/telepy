@@ -40,4 +40,5 @@ pub mod tokens;
 pub mod tunnel_service;
 pub mod util;
 pub mod vault;
+pub mod webhooks;
 pub mod ws;

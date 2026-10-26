@@ -25,6 +25,7 @@ use crate::db::{self, command_rules::{EventRow, NewEvent, RuleRow}, tunnels::Tun
 use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_time, db_to_iso_utc_z, now_db};
+use crate::webhooks::{Event, Kind as WebhookKind};
 pub use matcher::{Action, Kind, Matcher, Rule, Source, Via, Who};
 
 /// agent 的一次 tool call 最多等核准這麼久，之後回「還在等」。/ How long one agent tool call waits for a decision.
@@ -234,6 +235,15 @@ pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: 
     let command = clip(command);
     let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, "blocked", None)).await;
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten();
+    if let Some(t) = &tunnel {
+        state.webhooks.emit(
+            Event::new(WebhookKind::CommandBlocked)
+                .tunnel(t)
+                .to(approvers(state, t).await, Some(r.user_id))
+                .data(json!({ "by": r.username, "account": r.account, "lan_host": r.lan_host, "command": command, "via": r.source.as_str(), "client": r.client, "rule": rule.pattern }))
+                .link(format!("/tunnels/commands?tunnel={}&tab=history", t.id)),
+        );
+    }
     state
         .gateway
         .event(
@@ -269,6 +279,24 @@ pub async fn request(state: &AppState, r: &Requester, command: &str, rule: &Rule
     audience.sort_unstable();
     audience.dedup();
     let details = format!("{} wants to run `{}` on \"{}\"", r.username, short(&command, 80), tunnel.host_friendly_name);
+    // 自己在終端機打的指令有橫幅可以按，不另外送 webhook；自己的 agent 的指令還是要送（人可能不在電腦前）。
+    // Your own terminal command has the banner; your own agent's commands still go out (you may be away).
+    state.webhooks.emit(
+        Event::new(WebhookKind::CommandApprovalRequested)
+            .tunnel(&tunnel)
+            .to(deciders.clone(), (r.source == Source::Terminal).then_some(r.user_id))
+            .data(json!({
+                "request_id": row.id,
+                "by": r.username,
+                "account": r.account,
+                "lan_host": r.lan_host,
+                "command": command,
+                "via": r.source.as_str(),
+                "client": r.client,
+                "expires_at": db_to_iso_utc_z(&expires),
+            }))
+            .link(format!("/tunnels/commands?tunnel={}", tunnel.id)),
+    );
     state.hub.notify_users(
         audience,
         &json!({
@@ -338,6 +366,16 @@ async fn finish(state: &AppState, row: &EventRow, outcome: Outcome, by: Option<(
     audience.dedup();
     let name = tunnel.as_ref().map(|t| t.host_friendly_name.as_str());
     state.hub.notify_users(audience, &json!({ "action": "COMMAND-APPROVAL-DECIDED", "tunnel_id": row.tunnel_id, "request": event_json(&updated, name) }));
+    // 申請人自己決定的、或取消的，不用再通知他。/ Not when the requester decided or cancelled it themselves.
+    if let Some(t) = tunnel.as_ref().filter(|_| updated.decided_by_id != Some(row.user_id) && !matches!(outcome, Outcome::Cancelled { .. })) {
+        state.webhooks.emit(
+            Event::new(WebhookKind::CommandApprovalDecided)
+                .tunnel(t)
+                .to([row.user_id], None)
+                .data(json!({ "request_id": row.id, "status": outcome.status(), "by": updated.decided_by, "reason": reason, "command": row.command, "account": row.account }))
+                .link(format!("/tunnels/commands?tunnel={}&tab=history", t.id)),
+        );
+    }
     let words = match &outcome {
         Outcome::Approved { by } => format!("approved by {by}"),
         Outcome::Denied { by, reason } if reason.is_empty() => format!("denied by {by}"),

@@ -66,6 +66,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     command_expired: { key: "logs.event.command_expired", tone: "secondary", category: "session" },
     command_cancelled: { key: "logs.event.command_cancelled", tone: "secondary", category: "session" },
     command_rule: { key: "logs.event.command_rule", tone: "outline", category: "change" },
+    webhook: { key: "logs.event.webhook", tone: "outline", category: "change" },
     host_key_pinned: { key: "logs.event.host_key_pinned", tone: "outline", category: "change" },
     service_key_migrated: { key: "logs.event.service_key_migrated", tone: "success", category: "change" },
     host_key_accepted: { key: "logs.event.host_key_accepted", tone: "warning", category: "change" },
