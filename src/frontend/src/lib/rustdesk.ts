@@ -284,6 +284,7 @@ export function rustdeskCloseFailure(code: number): DesktopFailure | null {
         case 4400:
             return { key: "desktop.err.protocol", at: "web" };
         case 4009:
+        case 4010:
             return { key: "desktop.err.stopped", at: "telepy" };
     }
     return { key: "desktop.err.generic", vars: { message: String(code) }, at: "telepy" };

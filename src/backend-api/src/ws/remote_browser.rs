@@ -73,7 +73,7 @@ async fn connect_upstream(state: &AppState, ws_port: u16) -> anyhow::Result<(Ups
 }
 
 pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, meta: ClientMeta) {
-    let (user, _) = match auth::first_message(&state, &mut socket).await {
+    let (user, _, mut signout) = match auth::first_message(&state, &mut socket).await {
         Ok(v) => v,
         Err(0) => return,
         Err(code) => {
@@ -132,6 +132,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut begun = false;
     let mut close_code: Option<u16> = None;
     let mut ended_by: Option<String> = None;
+    let mut signed_out: Option<String> = None;
     loop {
         tokio::select! {
             incoming = heartbeat.recv(&mut socket) => match incoming {
@@ -152,6 +153,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
                 ended_by = Some(by);
+                break;
+            }
+            // 這個瀏覽器的登入被撤銷了。/ This browser's sign-in was revoked.
+            reason = signout.ended() => {
+                signed_out = Some(reason);
                 break;
             }
             up = upstream.next(), if begun => match up {
@@ -175,6 +181,8 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     audit.close(&state).await;
     if let Some(by) = &ended_by {
         close_with(&mut socket, CLOSE_ENDED, by).await;
+    } else if let Some(reason) = &signed_out {
+        close_with(&mut socket, auth::CLOSE_SIGNED_OUT, reason).await;
     } else if let Some(code) = close_code {
         close(&mut socket, code).await;
     }

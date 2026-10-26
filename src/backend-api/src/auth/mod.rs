@@ -3,6 +3,7 @@ pub mod google;
 pub mod jwt;
 pub mod mcp;
 pub mod password;
+pub mod devices;
 pub mod sessions;
 
 pub use extractor::AuthUser;

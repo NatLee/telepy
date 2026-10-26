@@ -52,6 +52,7 @@ import { SavedLogins } from "@/components/layout/SavedLogins";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
+import { SignInDevices } from "./SignInDevices";
 
 type PrefsTab = "general" | "security" | "logins" | "apps";
 
@@ -251,6 +252,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
             {tab === "security" && (
                 <div className="space-y-6">
                     <SecuritySettings />
+                    <SignInDevices />
                     <SignInHistory endpoint="/api/auth/sign-ins" description={t("security.signInsDescription")} />
                 </div>
             )}

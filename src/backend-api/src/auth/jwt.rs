@@ -17,8 +17,10 @@ pub struct Claims {
     pub iat: i64,
     pub jti: String,
     pub user_id: i64,
-    /// refresh token 的登入 session（`telepy_web_session.id`）；access token 與升級前的 token 沒有。
-    /// The refresh token's sign-in session (`telepy_web_session.id`); absent on access tokens and pre-upgrade tokens.
+    /// 這顆 token 屬於哪個登入 session（`telepy_web_session.id`）。refresh 與 access token 都帶（access token 用來
+    /// 讓撤銷立刻生效、標出「這個瀏覽器」）；升級前的 token 與測試直接簽的 access token 沒有。
+    /// The sign-in session (`telepy_web_session.id`) this token belongs to. Both refresh and access tokens carry it
+    /// (on access tokens it makes a revocation bite at once and marks "this browser"); absent on pre-upgrade tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sid: Option<i64>,
 }
@@ -76,8 +78,15 @@ impl Jwt {
         encode(&Header::new(Algorithm::HS256), claims, &self.enc).expect("HS256 encoding cannot fail")
     }
 
-    /// 從現在起 `lifetime` 有效的 access token。/ An access token valid for `lifetime` from now.
+    /// 從現在起 `lifetime` 有效、不屬於任何登入 session 的 access token（測試 / 工具用）。
+    /// An access token valid for `lifetime` from now, bound to no sign-in session (tests and tools).
     pub fn access(&self, user_id: i64, lifetime: Duration) -> String {
+        self.access_in(user_id, None, lifetime)
+    }
+
+    /// 綁在登入 session `sid` 上的 access token：session 一撤銷，它在到期前也不能用了。
+    /// An access token bound to sign-in session `sid`: once the session is revoked it stops working before it expires.
+    pub fn access_in(&self, user_id: i64, sid: Option<i64>, lifetime: Duration) -> String {
         let now = chrono::Utc::now().timestamp();
         self.encode_claims(&Claims {
             token_type: TokenType::Access.as_str().to_string(),
@@ -85,7 +94,7 @@ impl Jwt {
             iat: now,
             jti: crate::util::uuid_hex(),
             user_id,
-            sid: None,
+            sid,
         })
     }
 
@@ -169,6 +178,8 @@ mod tests {
         assert_eq!((c.token_type.as_str(), c.sid, c.jti.as_str(), c.exp), ("refresh", Some(42), "abc", now + 120));
         assert_eq!(j.refresh(7, 42, "abc", now, now + 120), r, "the same session state mints the same token");
         assert!(Jwt::new("other").verify(&a, TokenType::Access).is_err());
+        let bound = j.access_in(7, Some(42), Duration::from_secs(60));
+        assert_eq!(j.verify(&bound, TokenType::Access).unwrap().sid, Some(42), "an access token names its session");
         // 升級前的 refresh token 沒有 sid，照樣驗得過。/ A pre-upgrade refresh token (no sid) still verifies.
         let legacy = j.encode_claims(&Claims { token_type: "refresh".into(), exp: now + 60, iat: now, jti: "x".into(), user_id: 7, sid: None });
         assert_eq!(j.verify(&legacy, TokenType::Refresh).unwrap().sid, None);

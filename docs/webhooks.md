@@ -47,6 +47,7 @@
 | `session.started` | 連線 | owner 與 ADMIN，不含本人（終端機、區網終端機、檔案、瀏覽器、桌面、RustDesk） | |
 | `mcp.session_opened` / `mcp.session_closed` | 連線 | agent 的使用者與通道 owner | |
 | `account.sign_in` | 登入 | 帳號本人 | |
+| `account.sign_in_new_device` | 新裝置登入（90 天內沒見過的國家或瀏覽器） | 帳號本人 | |
 | `account.sign_in_failed` | 登入 | 帳號本人 | ✓（任何帳號） |
 | `key.expiring` | SSH 金鑰 | 金鑰的擁有者（個人 SSH 金鑰 7 天內到期） | |
 | `key.expired` | SSH 金鑰 | 金鑰的擁有者（剛到期：gateway 拒絕、從裝置移除） | |

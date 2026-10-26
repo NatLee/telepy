@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 
 use super::AppJson;
 use crate::auth::AuthUser;
+use crate::auth::extractor::CurrentSession;
 use crate::db;
 use crate::desktop::{self, screens, Clipboard, Credentials, NewSession, Protocol, Quality, Target, TICKET_TTL};
 use crate::error::{ApiError, ApiResult};
@@ -88,7 +89,7 @@ fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/desktop/start", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::DesktopStartRequest, responses((status = 200, description = "Session created; open the WebSocket at ws_path with ?ticket= within expires_in seconds", body = super::schemas::DesktopSession), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | desktop_busy", body = super::schemas::DesktopError)))]
-async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentSession(web_session): CurrentSession, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
     if !settings.desktop_enabled {
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_disabled", "Remote desktop is disabled on this server."));
@@ -136,6 +137,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         credentials,
         prepared,
         saved_label,
+        web_session,
     });
     tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), "desktop: session created");
     Ok(Json(json!({

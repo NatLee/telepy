@@ -16,9 +16,9 @@
  * ws-ticket pre-flight. On 4001 (expired token) we refresh once and reconnect. Also: exponential
  * backoff + jitter reconnect, stable-open reset, no-retry on auth/permission codes, ping/pong heartbeat.
  */
-import { refreshAccessToken } from "@/lib/api";
+import { refreshAccessToken, signedOut } from "@/lib/api";
 import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
-import { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CODES } from "@/lib/wsCommon";
+import { getWsOrigin, backoffDelay, STABLE_CONNECTION_MS, NON_RETRYABLE_CLOSE_CODES, SIGNED_OUT_CLOSE_CODE } from "@/lib/wsCommon";
 
 const HEARTBEAT_INTERVAL_MS = 25000;
 const HEARTBEAT_TIMEOUT_MS = 10000;
@@ -149,6 +149,8 @@ export class ReconnectingSocket {
                 // 4001：token 無效/過期。refresh 一次再重連；refresh 失敗才放棄。
                 // 4001: invalid/expired token — refresh once and retry; give up only if refresh fails.
                 if (event.code === 4001) { void this.handleAuthClose(); return; }
+                // 4010：這個瀏覽器被登出了（別的裝置 / 管理員）→ 整個網頁登出並說原因。/ Signed out elsewhere: log out and say why.
+                if (event.code === SIGNED_OUT_CLOSE_CODE) { this.opts.onPhase?.({ state: "stopped" }); signedOut(event.reason); return; }
                 // 4008：敏感隧道要先確認是你；確認了就重連，不確認就停。/ 4008: step-up needed; reconnect once confirmed.
                 if (event.code === STEP_UP_CLOSE_CODE) {
                     this.opts.onPhase?.({ state: "connecting" });

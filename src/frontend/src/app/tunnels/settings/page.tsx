@@ -38,6 +38,7 @@ import type { Translate } from "@/lib/i18n";
 import { en } from "@/locales/en";
 import type { TranslationKey } from "@/locales/en";
 import { SignInHistory } from "@/components/layout/SignInHistory";
+import { SignInDevices } from "@/components/layout/SignInDevices";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -600,6 +601,8 @@ function UserEditModal({
                     )}
                 </div>
 
+                {/* 登入中的瀏覽器（可登出）/ Signed-in browsers (sign out) */}
+                <SignInDevices userId={user.id} userName={user.username} />
                 {/* 最近的登入 / Recent sign-ins */}
                 <SignInHistory endpoint={`/api/user/users/${user.id}/sign-ins`} description={t("security.signInsAdminDescription")} />
             </div>

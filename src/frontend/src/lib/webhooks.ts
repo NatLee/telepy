@@ -26,6 +26,7 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "mcp.session_opened": { label: "webhooks.ev.mcpSessionOpened", hint: "webhooks.ev.mcpSessionOpenedHint" },
     "mcp.session_closed": { label: "webhooks.ev.mcpSessionClosed", hint: "webhooks.ev.mcpSessionClosedHint" },
     "account.sign_in": { label: "webhooks.ev.accountSignIn", hint: "webhooks.ev.accountSignInHint" },
+    "account.sign_in_new_device": { label: "webhooks.ev.accountSignInNewDevice", hint: "webhooks.ev.accountSignInNewDeviceHint" },
     "account.sign_in_failed": { label: "webhooks.ev.accountSignInFailed", hint: "webhooks.ev.accountSignInFailedHint" },
     "key.expiring": { label: "webhooks.ev.keyExpiring", hint: "webhooks.ev.keyExpiringHint" },
     "key.expired": { label: "webhooks.ev.keyExpired", hint: "webhooks.ev.keyExpiredHint" },
@@ -129,7 +130,7 @@ export const PRESET_KEY: Record<PresetId, TranslationKey> = {
 };
 const PRESET_EVENTS: Record<Exclude<PresetId, "all">, string[]> = {
     status: ["tunnel.offline", "tunnel.online", "tunnel.degraded", "tunnel.recovered"],
-    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
+    security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_new_device", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
     approvals: ["access.requested", "command.approval_requested"],
 };
 

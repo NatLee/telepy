@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use super::AppJson;
 use crate::auth::AuthUser;
+use crate::auth::extractor::CurrentSession;
 use crate::db;
 use crate::desktop;
 use crate::error::{ApiError, ApiResult};
@@ -42,7 +43,7 @@ fn parse_port(body: &Value) -> Result<u16, ApiError> {
 }
 
 #[utoipa::path(post, path = "/api/reverse/server/{id}/rustdesk/start", tag = "Remote Desktop", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::RustDeskStartRequest, responses((status = 200, description = "Session created; the browser core connects to ws_path with ?ticket= (twice: hbbs role, then relay role) within expires_in seconds", body = super::schemas::RustDeskSession), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline | device_auth | host_key_changed | forwarding_disabled | target_unreachable | device_unreachable", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | desktop_busy", body = super::schemas::DesktopError)))]
-async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentSession(web_session): CurrentSession, headers: axum::http::HeaderMap, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
     if !settings.desktop_enabled {
         return Err(super::desktop::coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_disabled", "Remote desktop is disabled on this server."));
@@ -83,6 +84,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         target,
         prepared,
         saved_label,
+        web_session,
     });
     tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, saved = session.saved_label.is_some(), "rustdesk: session created");
     let mut out = json!({
