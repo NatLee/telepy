@@ -1,7 +1,7 @@
 # 後端怎麼連到裝置：共用連線與 port
 
 > 本文涵蓋現在的連線路徑、port 用在哪裡、依「隧道 + OS 帳號」共用連線的設計，以及還沒做的部分。
-> 程式：`gateway/mod.rs`、`ssh/device.rs`、`ssh/pool.rs`、`ssh/terminal.rs`、`ssh/socks.rs`、`ssh/bridge.rs`；
+> 程式：`gateway/mod.rs`、`ssh/device.rs`、`ssh/pool.rs`、`ssh/sftp_watch.rs`、`ssh/terminal.rs`、`ssh/socks.rs`、`ssh/bridge.rs`；
 > 測試：`tests/terminal_e2e.rs`、`tests/socks_e2e.rs`、`tests/device_pool.rs`、`tests/ssh_topology.rs`
 > （都建在 `tests/common/lab.rs` 上）。
 
@@ -19,7 +19,7 @@
        ▲                                    │                                                            │
        │ 每條「通道」= 隧道裡的一條            │ 連線池（ssh::pool）：同一台、同一個 OS 帳號一條 SSH 連線      │
        │ forwarded-tcpip channel；裝置的       │   ├ 網頁終端機：一個分頁一條 PTY channel                     │
-       │ ssh 客戶端把它接到 localhost:22        │   ├ 檔案管理 / SFTP：一個操作一條 sftp（或 exec）channel       │
+       │ ssh 客戶端把它接到 localhost:22        │   ├ 檔案管理 / SFTP：共用一條 sftp channel（exec 備援一指令一條）│
        └──────────────────────────────────── │   ├ 遠端瀏覽器：行程內 SOCKS5，每個 CONNECT 一條 direct-tcpip    │
                                             │   └ 區網主機那一跳：一條 direct-tcpip（最後一跳仍是 OpenSSH）   │
                                             │ AI session、區網掃描：各自一條連線（同樣在行程內開通道）         │
@@ -57,12 +57,24 @@
   的 channel。權限照舊在取用前由 `permissions::allowed_usernames` 檢查。
 - **建立**：第一次用到才連。傳輸在行程內：`Gateway::open_stream(port)` 在裝置隧道上開一條 forwarded-tcpip
   channel，russh 直接在上面跟裝置 sshd 握手。同一個 key 同時有多個請求時只握手一次，其他人等它。
-- **lease**：每個使用者借一個 lease。
-  - 開 session channel（終端機分頁、SFTP、exec）一律走 `DevicePool::session_channel`。
-  - 一條連線最多 8 個 lease；OpenSSH sshd 預設 MaxSessions 是 10，留 2 個餘裕。
-  - 裝置把 MaxSessions 設得更小、拒絕開 channel 時，池子把那條連線的額度降到它實際撐得住的數量，再為同一個 key
-    開一條連線。
-  - MaxSessions 只限 session channel、不限 direct-tcpip，所以 SOCKS 代理與區網那一跳各占一個 lease 就夠。
+- **額度只算 session channel**：OpenSSH 的 MaxSessions 只限 session channel（shell、exec、sftp），不限
+  direct-tcpip，所以池子也只數這種。
+  - 開 session channel（終端機分頁、exec、裝置金鑰清單、macOS 的名稱解析）一律走 `DevicePool::session_channel`。
+  - 一條連線同時最多 8 條 session channel；sshd 預設 MaxSessions 是 10，留 2 個，因為裝置要處理完我們的
+    close（shell 還得先結束）才放掉名額，剛還回來的名額馬上再用可能被拒。
+  - 裝置把 MaxSessions 設得更小、拒絕開 channel 時，池子記下那條連線當下撐得住的數量，再為同一個 key 開一條
+    連線。學到的上限 2 分鐘後失效：被拒可能只是一時的，不該讓那條連線一直縮著。
+  - 只開 direct-tcpip 的用途（遠端瀏覽器的 SOCKS、遠端桌面 / RustDesk、區網那一跳）用 `DevicePool::acquire`
+    借「傳輸」lease：不占額度，只讓連線不被收掉。以前它們各占一格，開著遠端瀏覽器加遠端桌面時，終端機分頁
+    就少兩格。
+- **SFTP 共用一條 channel**：SFTP 請求有編號，多人同時用同一條沒問題，所以每條連線只開一條 sftp channel，
+  SFTP REST 與所有檔案管理都走它（`DevicePool::sftp`）。
+  - 好處：SFTP REST 不必每個請求都重開 channel、要子系統、做 INIT（隧道上好幾個來回）；檔案管理開再多也只占
+    一格。
+  - 代價：裝置的 sftp-server 一次只處理一個請求，一個卡住的請求（例如卡在掛掉的網路磁碟）會讓大家一起等。
+    所以 `ssh::sftp_watch` 包住 channel 的 stream，數送出的請求與收到的回覆：channel 關了，或有請求在等卻
+    15 秒什麼都沒收到，就算壞掉，下一個借的人拿到新的一條；檔案管理列目錄失敗時自己換一條再試一次。
+  - 沒人用超過 5 分鐘就關掉，還回那一格（連線本身還有人用時也一樣）。
 - **回收**：沒有 lease、閒置超過 5 分鐘的連線由 reaper 關掉（每 30 秒檢查一次）。裝置斷線時連線自己失效，
   開著的終端機分頁會被關掉，下次取用重連。
 - **終端機**：分頁 = channel，關分頁只關那條 channel。以前 killpg 殺到 ControlMaster、把所有分頁一起踢掉的
@@ -75,18 +87,19 @@
   - 每條連線問一次 OS（`uname -s`）。
   - Darwin：用 `/usr/bin/dscacheutil` 在**裝置上**把名稱解析成 IP（IPv4 優先，內網與 `.local` 名稱照常），
     再對 IP 開 channel。
-    - 同一個名稱同時查只跑一次；同時最多 2 個查詢（每個都占一條 session channel）。
+    - 同一個名稱同時查只跑一次；同時最多 2 個查詢（每個都向池子借一條 session channel，算在額度裡）。
     - 快取：查得到 60 秒、查不到 10 秒。
     - 查不到就讓那個 CONNECT 失敗，**絕不**把名稱交給 Apple 的 sshd。
   - 其他 OS：照舊把名稱交給裝置解析（與 `ssh -D` 相同）。
 - **效果**：同一台、同一帳號，從第二個操作起就不再握手。測試量到的數字：
-  - 連續 5 次列目錄：1 次登入
-  - 同時 12 個請求：最多 2 次登入
+  - 連續 5 次列目錄：1 次登入、1 條 sftp channel
+  - 同時 12 個請求：1 次登入、1 條 sftp channel
   - 3 個終端機分頁加檔案管理：1 次登入
+  - 10 個傳輸 lease 加 8 個 session：1 次登入
 
 ## 四、還沒做的
 
-- **AI session 仍是自己的一條連線。** 一個 AI session 會同時跑最多 4 個指令再加 SFTP，若只算一個 lease，會讓
+- **AI session 仍是自己的一條連線。** 一個 AI session 會同時跑最多 4 個指令再加 SFTP，若只算一個 session，會讓
   池子低估裝置的 MaxSessions 用量。它已經在行程內開通道（不占 port），共用連線只省一次握手，所以先不搬。
 - **隧道已經由金鑰辨識**（第十節）：裝置在 `-R` 要求哪個號碼都無所謂，筆電可以用 `ssh -W <隧道名>:22`。
   `reverse_port` 仍是每條隧道的內部號碼（u16），超過 6 萬條隧道時要把它放寬成更大的整數——純粹是型別與分配器
@@ -105,8 +118,12 @@
   - stop 後代理埠關閉；離線時回 `device_offline`
   - 假 macOS 裝置（lab 的 `pretend_darwin` 對名稱的 direct-tcpip 會斷線，模擬 Apple 的 crash）：用名稱
     CONNECT 也能通，同一條連線上的終端機分頁仍然活著
-- `tests/device_pool.rs`：連線共用（數裝置 sshd 的登入紀錄）、MaxSessions 比 8 小時改開第二條、裝置重連、
-  閒置回收、使用中的連線不會被收。
+- `tests/device_pool.rs`：
+  - 連線與 sftp channel 共用（數裝置 sshd 的登入紀錄與 sftp 啟動次數）
+  - MaxSessions 比 8 小時改開第二條；傳輸 lease 不占額度
+  - 壞掉的共用 sftp 被換掉、沒人用的被關掉；檔案管理自己換一條
+  - sftp 子系統被拒時 channel 會關掉（不留在裝置上占 MaxSessions）
+  - 裝置重連、閒置回收、使用中的連線不會被收
 - `tests/ssh_topology.rs`：同一台多使用者、多 OS 帳號，以及多跳路徑。
 - 新的 SSH 路徑一律建在 `tests/common/lab.rs` 上（說明見 `.claude/CLAUDE.md` 的 Code Conventions）。
 

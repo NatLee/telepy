@@ -138,12 +138,21 @@ impl Backend {
     }
 
     /// 回 (path, files) 或錯誤訊息。
-    async fn list(&self, requested: Option<String>) -> Result<(String, Vec<Value>), String> {
+    async fn list(&mut self, state: &AppState, requested: Option<String>) -> Result<(String, Vec<Value>), String> {
         match self {
             Backend::Sftp { sftp, home, shell, .. } => {
                 let raw = requested.unwrap_or_else(|| if *shell == "powershell" { "C:\\".into() } else { "~/".into() });
                 let path = sftp::resolve_path(&raw, home);
-                let entries = sftp::list_dir(sftp, &path).await.map_err(|e| format!("Failed to list files: {e}"))?;
+                let entries = match sftp::list_dir(sftp, &path).await {
+                    Ok(entries) => entries,
+                    // 共用的 sftp channel 關了或卡住：換連線池現在那條再試一次。/ The shared channel broke: renew, retry once.
+                    Err(e) if !sftp.healthy() => {
+                        tracing::info!(error = %e, "FileManager: shared SFTP channel broke; renewing");
+                        sftp.renew(state).await.map_err(|e| format!("Failed to list files: {e:#}"))?;
+                        sftp::list_dir(sftp, &path).await.map_err(|e| format!("Failed to list files: {e}"))?
+                    }
+                    Err(e) => return Err(format!("Failed to list files: {e}")),
+                };
                 Ok((path, entries.iter().map(sftp::ws_entry_json).collect()))
             }
             Backend::Exec(s) => {
@@ -244,7 +253,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4005).await;
         return;
     }
-    let Some(backend) = open_backend(&state, &username, tunnel.reverse_port).await else {
+    let Some(mut backend) = open_backend(&state, &username, tunnel.reverse_port).await else {
         tracing::error!("Failed to initialize SSH session");
         close(&mut socket, 4005).await;
         return;
@@ -291,7 +300,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         let ok = match action.as_str() {
             "list_files" => {
                 let requested = payload.get("path").and_then(|p| p.as_str()).map(str::to_string);
-                match backend.list(requested).await {
+                match backend.list(&state, requested).await {
                     Ok((path, files)) => send_response(&mut socket, "list_files", json!({ "status": "success", "path": path, "files": files })).await,
                     Err(e) => send_error(&mut socket, e).await,
                 }

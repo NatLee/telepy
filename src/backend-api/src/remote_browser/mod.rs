@@ -85,7 +85,7 @@ impl RemoteBrowser {
             tracing::info!(server_id, attempt, attempts, "Starting SSH proxy for target");
             let opened = tokio::time::timeout(ssh_timeout, async {
                 let lease = state.pool.acquire(state, reverse_port, username).await?;
-                SocksProxy::start(lease, "0.0.0.0:0").await
+                SocksProxy::start(state.clone(), lease, "0.0.0.0:0").await
             })
             .await;
             match opened {

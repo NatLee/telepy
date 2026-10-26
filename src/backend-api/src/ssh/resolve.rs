@@ -18,10 +18,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use russh::client::Handle;
 use tokio::sync::{OnceCell, Semaphore};
 
-use super::device::ClientHandler;
+use super::pool::Lease;
+use crate::state::AppState;
 use super::exec;
 
 /// 解析結果的快取時間（找不到的名稱短一點）。/ Cache lifetime of an answer (shorter for "no such name").
@@ -30,8 +30,8 @@ const NEGATIVE_TTL: Duration = Duration::from_secs(10);
 const EXEC_TIMEOUT: Duration = Duration::from_secs(6);
 const OUTPUT_LIMIT: usize = 16 * 1024;
 const MAX_ENTRIES: usize = 1024;
-/// 同時進行的解析 exec 上限：每個都是一條 session channel，占裝置的 MaxSessions（macOS 預設 10）。
-/// Concurrent lookups; each one is a session channel and counts against the device's MaxSessions.
+/// 同時進行的解析 exec 上限：每個都是一條 session channel（向連線池借，算在 MaxSessions 額度裡）。
+/// Concurrent lookups; each one is a session channel borrowed from the pool and counted against MaxSessions.
 const PARALLEL_LOOKUPS: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,8 +92,8 @@ impl Entry {
     }
 }
 
-/// 一條裝置連線一個：系統偵測一次、Darwin 的答案快取、同名併發只 exec 一次。
-/// One per device connection: detects the OS once, caches Darwin answers, shares a lookup between callers.
+/// 一個 SOCKS 代理（或一次區網跳板）一個：系統偵測一次、Darwin 的答案快取、同名併發只 exec 一次。
+/// One per SOCKS proxy (or LAN hop): detects the OS once, caches Darwin answers, shares a lookup between callers.
 pub struct Resolver {
     os: OnceCell<DeviceOs>,
     entries: Mutex<HashMap<String, Entry>>,
@@ -113,10 +113,14 @@ impl Resolver {
 
     /// direct-tcpip 該連的目標：IP 字面值原樣回（不 exec）、非 Darwin 回原主機名、Darwin 回裝置解析出的位址
     /// （IPv4 優先）。Darwin 上解析不了、或還不知道是什麼系統時回錯誤 —— 絕不把主機名交給 Apple 的 sshd。
+    /// 指令跑在向連線池借的 session channel 上（同一台、同一個帳號，`lease` 只用來認 key），所以算在額度裡。
     /// The address to open a direct-tcpip channel to. Errors rather than ever sending a hostname to Apple's sshd.
-    pub async fn target(&self, conn: &Handle<ClientHandler>, host: &str) -> anyhow::Result<String> {
+    /// Commands run on session channels borrowed from the pool for the lease's key, so they count against the limit.
+    pub async fn target(&self, state: &AppState, lease: &Lease, host: &str) -> anyhow::Result<String> {
+        let (reverse_port, username) = (lease.reverse_port(), lease.username());
         self.target_with(host, |cmd| async move {
-            let r = exec::run(conn, &cmd, EXEC_TIMEOUT, OUTPUT_LIMIT).await?;
+            let (_session, channel) = state.pool.session_channel(state, reverse_port, username).await?;
+            let r = exec::run_on(channel, &cmd, EXEC_TIMEOUT, OUTPUT_LIMIT).await?;
             Ok((r.exit_code, r.stdout.text))
         })
         .await
