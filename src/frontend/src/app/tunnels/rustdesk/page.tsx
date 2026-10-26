@@ -8,7 +8,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { Info, MonitorSmartphone, MoreHorizontal, Pencil, Plus, ScreenShare, Trash2 } from "lucide-react";
+import { Info, MonitorSmartphone, MoreHorizontal, Pencil, Plus, Route, ScreenShare, Trash2 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/Toast";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { StatusDot, TunnelLastSeen } from "@/components/tunnels/TunnelStatus";
 import { EnrolDialog } from "@/components/rustdesk/EnrolDialog";
+import { ConnectionWaysDialog } from "@/components/desktop/ConnectionWays";
 import { Disclosure } from "@/components/tunnels/CreateWizardSteps/parts";
 import { useRustDeskDevices } from "@/hooks/useRustDeskDevices";
 import { useAuth } from "@/lib/auth";
@@ -85,6 +86,7 @@ export default function RustDeskDevicesPage() {
     const [newName, setNewName] = useState("");
     const [renameError, setRenameError] = useState<string | null>(null);
     const [removing, setRemoving] = useState<RustDeskDevice | null>(null);
+    const [waysOpen, setWaysOpen] = useState(false);
 
     const off = !!server && !server.enabled;
     const problem = server ? serverProblemKey(server.problem) : null;
@@ -107,9 +109,14 @@ export default function RustDeskDevicesPage() {
                 title={t("rustdesk.title")}
                 description={t("rustdesk.description")}
                 actions={
-                    <Button onClick={() => setAdding(true)} disabled={off || !server}>
-                        <Plus size={16} /> {t("rustdesk.add")}
-                    </Button>
+                    <>
+                        <Button variant="outline" onClick={() => setWaysOpen(true)}>
+                            <Route size={16} /> {t("desktop.ways.button")}
+                        </Button>
+                        <Button onClick={() => setAdding(true)} disabled={off || !server}>
+                            <Plus size={16} /> {t("rustdesk.add")}
+                        </Button>
+                    </>
                 }
             />
 
@@ -160,6 +167,7 @@ export default function RustDeskDevicesPage() {
             )}
 
             {adding && <EnrolDialog onClose={() => setAdding(false)} />}
+            <ConnectionWaysDialog isOpen={waysOpen} onClose={() => setWaysOpen(false)} current="rustdeskServer" />
             <Modal
                 isOpen={!!renaming}
                 onClose={() => setRenaming(null)}
