@@ -55,6 +55,26 @@ import { hostName } from "@/lib/lanConnect";
 import type { TranslationKey } from "@/locales/en";
 
 const CARD = "rounded-xl border border-border bg-card shadow-card";
+/**
+ * 工具列：手機上第一行是目標（名稱最多兩行）+「中斷連線」，第二行是只剩圖示的按鈕；寬螢幕照原本一路排下去。
+ * The toolbar: on phones the first row holds the target (name up to two lines) and Disconnect, the second the
+ * icon-only buttons; wider screens flow as before. 協定 chip 手機上不顯示（說明和延遲面板都有）。/ The protocol chip is
+ * hidden on phones (the info dialog and the stats panel name it).
+ */
+const TOOLBAR = "flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-border bg-card px-3 py-2 sm:gap-2";
+const TOOLBAR_TARGET = "flex min-w-0 basis-full items-center gap-2 sm:basis-auto";
+const TARGET_LABEL = "line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere] sm:truncate";
+const TOOL = "max-sm:has-[>svg]:px-1.5";
+/**
+ * 畫面框：RDP 的解析度跟著框走，所以照舊佔滿高度；VNC / RustDesk 的解析度固定，手機上框改成畫面的比例
+ * （不再是高高的黑框中間一張小圖），最高不超過原本的高度。
+ * The screen frame: RDP sizes the remote desktop to the frame, so it keeps the full height; VNC / RustDesk have a
+ * fixed resolution, so on phones the frame takes the picture's shape instead of a tall black box around a small picture.
+ */
+const SCREEN_TALL = "h-[calc(100dvh-15rem)] min-h-80";
+const SCREEN_FITTED = `${SCREEN_TALL} max-sm:aspect-(--screen-ratio) max-sm:h-auto max-sm:max-h-[calc(100dvh-15rem)] max-sm:min-h-0`;
+const screenRatio = (size: { width: number; height: number } | null) =>
+    ({ "--screen-ratio": size && size.width > 0 && size.height > 0 ? `${size.width} / ${size.height}` : "16 / 10" }) as React.CSSProperties;
 
 const PRESET_KEY: Record<NonNullable<ScreenChoice["preset"]>, TranslationKey> = {
     left: "desktop.screen.preset.left",
@@ -197,6 +217,11 @@ function DesktopPageInner() {
         setTimeout(() => (viewerRef.current ?? rdViewerRef.current)?.focus(), 150);
     };
 
+    const disconnectButton = (ref: React.RefObject<{ disconnect: () => void } | null>, className: string) => (
+        <Button size="sm" variant="destructive" className={className} onClick={() => { ref.current?.disconnect(); actions.stop(); }} title={t("desktop.disconnect")} aria-label={t("desktop.disconnect")}>
+            <MonitorX size={15} /> <span className="hidden sm:inline">{t("desktop.disconnect")}</span>
+        </Button>
+    );
     const infoButton = (
         <Button variant="outline" onClick={() => setInfoOpen(true)}>
             <Info size={16} /> {t("desktop.howItWorks")}
@@ -217,20 +242,23 @@ function DesktopPageInner() {
 
             {session ? (
                 <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
-                    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
-                        <StatusDot online={connected} />
-                        <span className="min-w-0 truncate text-sm text-foreground" title={targetLabel}>{targetLabel}</span>
-                        <Chip mono>{MODE_LABEL[form.protocol]}</Chip>
-                        {connected && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                    <div className={TOOLBAR}>
+                        <div className={TOOLBAR_TARGET}>
+                            <StatusDot online={connected} />
+                            <span className={TARGET_LABEL} title={targetLabel}>{targetLabel}</span>
+                            <Chip mono className="shrink-0 max-sm:hidden">{MODE_LABEL[form.protocol]}</Chip>
+                            {connected && connectedAt && <Chip mono className="shrink-0">{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                            {disconnectButton(viewerRef, "ml-auto shrink-0 sm:hidden")}
+                        </div>
                         {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={framebuffer} viewport={viewport} scale={scale} />}
                         <span className="flex-1" />
                         {session.protocol === "vnc" && (
                             <DropdownMenu onOpenChange={(open) => { if (open) recomputeChoices(); }}>
                                 <DropdownMenuTrigger asChild>
-                                    <Button size="sm" variant="ghost" disabled={!connected || selecting} title={t("desktop.screen.menu")}>
+                                    <Button size="sm" variant="ghost" className={TOOL} disabled={!connected || selecting} title={t("desktop.screen.menu")}>
                                         <Monitor size={15} />
                                         <span className="hidden max-w-32 truncate sm:inline">{chosen ? choiceLabel(chosen) : t("desktop.screen.whole")}</span>
-                                        <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                        <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="w-64">
@@ -295,9 +323,9 @@ function DesktopPageInner() {
                         )}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="sm" variant="ghost" disabled={!connected || selecting} title={t("desktop.keyboard.menu")}>
+                                <Button size="sm" variant="ghost" className={TOOL} disabled={!connected || selecting} title={t("desktop.keyboard.menu")}>
                                     <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
-                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                    <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-72">
@@ -319,19 +347,17 @@ function DesktopPageInner() {
                             </DropdownMenuContent>
                         </DropdownMenu>
                         {clipboard !== "off" && (
-                            <Button size="sm" variant="ghost" onClick={() => setPasteOpen(true)} disabled={!connected || selecting} title={t("desktop.pasteTitle")}>
+                            <Button size="sm" variant="ghost" className={TOOL} onClick={() => setPasteOpen(true)} disabled={!connected || selecting} title={t("desktop.pasteTitle")}>
                                 <ClipboardPaste size={15} /> <span className="hidden md:inline">{t("desktop.paste")}</span>
                             </Button>
                         )}
-                        <Button size="sm" variant="ghost" onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
+                        <Button size="sm" variant="ghost" className={TOOL} onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
                             {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setInfoOpen(true)} title={t("desktop.howItWorks")} aria-label={t("desktop.howItWorks")}>
+                        <Button size="sm" variant="ghost" className={TOOL} onClick={() => setInfoOpen(true)} title={t("desktop.howItWorks")} aria-label={t("desktop.howItWorks")}>
                             <Info size={15} />
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => { viewerRef.current?.disconnect(); actions.stop(); }}>
-                            <MonitorX size={15} /> {t("desktop.disconnect")}
-                        </Button>
+                        {disconnectButton(viewerRef, "max-sm:hidden")}
                     </div>
                     {remoteClip !== null && clipboard === "both" && (
                         <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground">
@@ -340,7 +366,7 @@ function DesktopPageInner() {
                             <CopyButton value={remoteClip} />
                         </div>
                     )}
-                    <div className={cn("relative", fullscreen ? "flex-1" : "h-[calc(100dvh-15rem)] min-h-80")}>
+                    <div className={cn("relative", fullscreen ? "flex-1" : session.protocol === "vnc" ? SCREEN_FITTED : SCREEN_TALL)} style={screenRatio(viewport ?? framebuffer)}>
                         <DesktopViewer
                             ref={viewerRef}
                             start={session}
@@ -370,19 +396,22 @@ function DesktopPageInner() {
                 </div>
             ) : rdSession ? (
                 <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
-                    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
-                        <StatusDot online={connected} />
-                        <span className="min-w-0 truncate text-sm text-foreground" title={targetLabel}>{targetLabel}</span>
-                        <Chip mono>RustDesk</Chip>
-                        {connected && connectedAt && <Chip mono>{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                    <div className={TOOLBAR}>
+                        <div className={TOOLBAR_TARGET}>
+                            <StatusDot online={connected} />
+                            <span className={TARGET_LABEL} title={targetLabel}>{targetLabel}</span>
+                            <Chip mono className="shrink-0 max-sm:hidden">RustDesk</Chip>
+                            {connected && connectedAt && <Chip mono className="shrink-0">{formatElapsed((now - connectedAt) / 1000)}</Chip>}
+                            {disconnectButton(rdViewerRef, "ml-auto shrink-0 sm:hidden")}
+                        </div>
                         {connected && <DesktopStatsButton stats={stats} unstable={unstable} now={now} framebuffer={rdDisplay} viewport={null} scale={null} engine="rustdesk" />}
                         <span className="flex-1" />
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.screen.menu")}>
+                                <Button size="sm" variant="ghost" className={TOOL} disabled={!connected} title={t("desktop.screen.menu")}>
                                     <Monitor size={15} />
                                     <span className="hidden max-w-32 truncate sm:inline">{rdInfo && rdInfo.displays.length > 1 ? t("desktop.screen.display", { n: rdInfo.currentDisplay + 1 }) : t("desktop.screen.whole")}</span>
-                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                    <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-64">
@@ -410,9 +439,9 @@ function DesktopPageInner() {
                         </DropdownMenu>
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button size="sm" variant="ghost" disabled={!connected} title={t("desktop.keyboard.menu")}>
+                                <Button size="sm" variant="ghost" className={TOOL} disabled={!connected} title={t("desktop.keyboard.menu")}>
                                     <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
-                                    <ChevronDown size={13} className="text-muted-foreground" aria-hidden />
+                                    <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-72">
@@ -424,15 +453,13 @@ function DesktopPageInner() {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                        <Button size="sm" variant="ghost" onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
+                        <Button size="sm" variant="ghost" className={TOOL} onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
                             {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setInfoOpen(true)} title={t("desktop.howItWorks")} aria-label={t("desktop.howItWorks")}>
+                        <Button size="sm" variant="ghost" className={TOOL} onClick={() => setInfoOpen(true)} title={t("desktop.howItWorks")} aria-label={t("desktop.howItWorks")}>
                             <Info size={15} />
                         </Button>
-                        <Button size="sm" variant="destructive" onClick={() => { rdViewerRef.current?.disconnect(); actions.stop(); }}>
-                            <MonitorX size={15} /> {t("desktop.disconnect")}
-                        </Button>
+                        {disconnectButton(rdViewerRef, "max-sm:hidden")}
                     </div>
                     {remoteClip !== null && (
                         <div className="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5 text-xs text-muted-foreground">
@@ -441,7 +468,7 @@ function DesktopPageInner() {
                             <CopyButton value={remoteClip} />
                         </div>
                     )}
-                    <div className={cn("relative", fullscreen ? "flex-1" : "h-[calc(100dvh-15rem)] min-h-80")}>
+                    <div className={cn("relative", fullscreen ? "flex-1" : SCREEN_FITTED)} style={screenRatio(rdDisplay)}>
                         <RustDeskViewer
                             ref={rdViewerRef}
                             start={rdSession}
@@ -556,7 +583,8 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                 </Callout>
             )}
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            {/* 欄寬一定要 minmax(0,…)：RustDesk 的 ssh 指令很長，不然會把整張表單撐出手機畫面。/ minmax(0,…) keeps the long ssh command from widening the form past a phone screen. */}
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">
                 <Field label={t("desktop.field.device")} hint={tunnel && !online ? t("desktop.offline") : undefined}>
                     <NativeSelect value={tunnel ? String(tunnel.id) : ""} onChange={(e) => actions.setTunnel(Number(e.target.value))}>
                         {tunnels.map((tn) => (
@@ -706,9 +734,9 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
             {noAccounts && tunnel && <Callout tone="warning">{t(isRustDesk ? "desktop.rustdesk.noAccounts" : "desktop.noAccounts", { name: tunnel.name })}</Callout>}
 
             <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <button type="button" onClick={onInfo} className="flex min-w-0 items-center gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground">
-                    <Info size={14} className="shrink-0" aria-hidden />
-                    <span className="truncate">{t("desktop.pathSummary", { device: tunnel?.name ?? "—", target: host ? address : t("desktop.targetDeviceShort", { address }) })}</span>
+                <button type="button" onClick={onInfo} className="flex min-w-0 items-start gap-1.5 text-left text-xs text-muted-foreground hover:text-foreground">
+                    <Info size={14} className="mt-px shrink-0" aria-hidden />
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{t("desktop.pathSummary", { device: tunnel?.name ?? "—", target: host ? address : t("desktop.targetDeviceShort", { address }) })}</span>
                 </button>
                 <Button type="submit" disabled={!canConnect || busy} className="sm:min-w-40">
                     <ScreenShare size={16} /> {busy ? t("desktop.connecting") : isRustDesk ? t("desktop.rustdesk.connectBrowser") : t("desktop.connect")}

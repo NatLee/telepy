@@ -68,12 +68,12 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
     children: React.ReactNode;
 }) {
     return (
-        <li className="relative pl-7 pt-2">
+        <li className="relative pl-5 pt-2 @md:pl-7">
             <span aria-hidden className={cn("absolute left-0 top-0 w-px bg-border", first && hideFirstStubOnWide && "@3xl:hidden")} style={{ height: tickTop }} />
             {!last && <span aria-hidden className="absolute left-0 bottom-0 w-px bg-border" style={{ top: tickTop }} />}
             <span
                 aria-hidden
-                className={cn("absolute left-0 w-6 border-t", solid ? "border-success/60" : "border-dashed border-muted-foreground/40")}
+                className={cn("absolute left-0 w-4 border-t @md:w-6", solid ? "border-success/60" : "border-dashed border-muted-foreground/40")}
                 style={{ top: tickTop }}
             />
             {children}
@@ -92,8 +92,9 @@ function HostChip({ host, selected, onOpen }: { host: LanHost; selected: boolean
             type="button"
             onClick={() => onOpen(host)}
             aria-current={selected ? "true" : undefined}
+            title={name}
             className={cn(
-                "group flex w-full items-center gap-3 rounded-xl border px-3 py-2 text-left transition-[background-color,box-shadow] hover:bg-card hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @3xl:w-80",
+                "group flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition-[background-color,box-shadow] hover:bg-card hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @3xl:w-80",
                 selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
             )}
         >
@@ -101,20 +102,23 @@ function HostChip({ host, selected, onOpen }: { host: LanHost; selected: boolean
                 {KIND_ICON[kind]}
             </span>
             <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5">
-                    <span className="truncate text-sm text-foreground">{name}</span>
+                <span className="flex items-baseline gap-1.5">
+                    <span className="line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
                     {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
-                    {host.vendor && <span className="min-w-0 truncate text-[0.6875rem] text-muted-foreground" title={host.vendor}>{shortVendor(host.vendor)}</span>}
                 </span>
-                <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    {name !== host.address && <span className="truncate font-mono">{host.address}</span>}
-                    {shown.map((p) => (
-                        <span key={p} className={cn("rounded px-1 font-mono text-[0.6875rem] leading-4", p === host.ssh_port && hasSsh(host) ? "bg-success/12 text-success" : "bg-muted")}>
-                            {p}
-                        </span>
-                    ))}
-                    {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
-                    {host.open_ports.length === 0 && <span className="text-[0.6875rem]">{t("network.noOpenPorts")}</span>}
+                {/* 位址、廠牌、port 放不下就換行，不截斷；port 整組一起換到下一行。/ Address, vendor and ports wrap rather than being cut; the ports move as one group. */}
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+                    {name !== host.address && <span className="font-mono [overflow-wrap:anywhere]">{host.address}</span>}
+                    {host.vendor && <span className="text-[0.6875rem]" title={host.vendor}>{shortVendor(host.vendor)}</span>}
+                    <span className="flex min-w-0 flex-wrap items-center gap-1">
+                        {shown.map((p) => (
+                            <span key={p} className={cn("rounded px-1 font-mono text-[0.6875rem] leading-4", p === host.ssh_port && hasSsh(host) ? "bg-success/12 text-success" : "bg-muted")}>
+                                {p}
+                            </span>
+                        ))}
+                        {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
+                        {host.open_ports.length === 0 && <span className="text-[0.6875rem]">{t("network.noOpenPorts")}</span>}
+                    </span>
                 </span>
             </span>
         </button>
@@ -163,13 +167,13 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
                 focused ? "border-primary ring-2 ring-primary/30" : "border-border"
             )}
         >
-            <div className="flex items-center gap-3">
+            <div className="flex items-start gap-3">
                 <span className={cn("relative grid size-10 shrink-0 place-items-center rounded-xl ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
                     <Router size={18} />
                     <span className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <p className="truncate text-[1rem] text-foreground">{tn.name}</p>
+                    <p className="line-clamp-2 text-[1rem] text-foreground [overflow-wrap:anywhere]" title={tn.name}>{tn.name}</p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}</span>
                         <span>·</span>
@@ -181,9 +185,9 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
                 )}
             </div>
             {(tn.can_scan || tn.can_edit) && (
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                     {tn.can_scan && (
-                        <Button size="sm" variant="outline" className="h-8 flex-1 gap-1.5 text-xs" disabled={running || !online} onClick={() => onScan(tn)} title={!online ? t("network.scanNeedsOnline") : undefined}>
+                        <Button size="sm" variant="outline" className="h-8 grow gap-1.5 text-xs" disabled={running || !online} onClick={() => onScan(tn)} title={!online ? t("network.scanNeedsOnline") : undefined}>
                             <Radar size={14} /> {running ? t("network.scanning") : t("network.scan")}
                         </Button>
                     )}
