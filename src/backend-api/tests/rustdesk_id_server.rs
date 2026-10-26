@@ -170,10 +170,11 @@ async fn rustdesk_devices_enrol_register_and_relay_without_ssh() {
     assert_eq!((r.status, r.text.as_str()), (StatusCode::OK, ""), "RustDesk retries anything but an empty body");
 
     // 瀏覽器 session。/ A browser session.
-    let r = app.post(&format!("/api/rustdesk/devices/{device_id}/start"), Some(&bob), json!({})).await;
+    let r = app.post(&format!("/api/rustdesk/devices/{device_id}/start"), Some(&bob), json!({"clipboard": "to_remote"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let start = r.json.clone();
     assert_eq!(start["peer_id"], "113668456");
+    assert_eq!(start["clipboard"], "to_remote", "the browser's core applies the requested direction");
     let url = format!("ws://{host}{}?ticket={}", start["ws_path"].as_str().unwrap(), start["ticket"].as_str().unwrap());
     let key = ed25519_dalek::VerifyingKey::from_bytes(&B64.decode(start["key"].as_str().unwrap()).unwrap().try_into().unwrap()).unwrap();
 

@@ -23,15 +23,20 @@ pub fn router() -> OpenApiRouter<AppState> {
 const LANGUAGES: [&str; 4] = ["auto", "en", "zh-TW", "ja"];
 const THEMES: [&str; 3] = ["system", "light", "dark"];
 
-fn settings_json(s: &UserSettings) -> Value {
-    json!({
+/// `desktop_clipboard_limit` 是站台設定（唯讀）：桌面頁和偏好設定拿它把超過上限的選項關掉。
+/// `desktop_clipboard_limit` is the site setting (read-only), so the UI can disable choices above it.
+async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
+    let limit = db::settings::get_solo(&state.db).await?.desktop_clipboard;
+    Ok(json!({
         "language": s.language,
         "theme": s.theme,
         "terminal_font_size": s.terminal_font_size,
         "ui_scale": s.ui_scale,
         "terminal_font": s.terminal_font,
         "terminal_scheme": s.terminal_scheme,
-    })
+        "desktop_clipboard": s.desktop_clipboard,
+        "desktop_clipboard_limit": limit,
+    }))
 }
 
 pub const CHOICE_ID_RULE: &str = "Use 1-32 lowercase letters, digits or '-'.";
@@ -69,7 +74,7 @@ fn parse_language(v: &Value) -> Result<Option<String>, ApiError> {
 #[utoipa::path(get, path = "/api/user/settings", tag = "User Management", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserSettings)))]
 async fn get_settings(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let s = db::users::settings_get_or_create(&state.db, user.id).await?;
-    Ok(Json(settings_json(&s)))
+    Ok(Json(settings_json(&state, &s).await?))
 }
 
 #[utoipa::path(post, path = "/api/user/settings", tag = "User Management", security(("bearer" = [])), request_body = super::schemas::UserSettingsPatch, responses((status = 200, body = super::schemas::UserSettings), (status = 400, description = "{field: [message]}", body = Object)))]
@@ -111,9 +116,14 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         ui_scale: scale,
         terminal_font: parse_choice(&body, "terminal_font")?,
         terminal_scheme: parse_choice(&body, "terminal_scheme")?,
+        desktop_clipboard: match body.get("desktop_clipboard") {
+            None => None,
+            Some(Value::String(c)) if crate::desktop::Clipboard::parse(c).is_some() => Some(c.trim().to_string()),
+            Some(_) => return Err(ApiError::field("desktop_clipboard", format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", ")))),
+        },
     };
     let s = db::users::settings_update(&state.db, user.id, patch).await?;
-    Ok(Json(settings_json(&s)))
+    Ok(Json(settings_json(&state, &s).await?))
 }
 
 fn managed_user_json(u: &User, language: Option<&str>, mfa_enabled: bool, tz: i32) -> Value {

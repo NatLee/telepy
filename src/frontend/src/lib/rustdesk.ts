@@ -5,7 +5,7 @@
  * Pure helpers for in-browser RustDesk: loading the vendored core, turning DOM input into the core's JSON
  * commands and the core's events into page state.
  */
-import type { DesktopFailure } from "@/lib/desktop";
+import type { ClipboardPolicy, DesktopFailure } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
 
 /**
@@ -25,6 +25,9 @@ export interface RustDeskStart {
     /** 伺服器公鑰：核心用它驗裝置的金鑰，連線就是端對端加密。/ The server key the core verifies the device with. */
     key?: string;
     device?: { id: number; name: string; rustdesk_id: string };
+    /** 剪貼簿方向（選擇套上站台上限），由這一頁的核心套用。/ The clipboard direction, applied by the core in this tab. */
+    clipboard?: ClipboardPolicy;
+    clipboard_limit?: ClipboardPolicy;
 }
 
 export const RUSTDESK_CORE_URL = "/vendor/rustdesk-web-core/rustdesk-web-core.js";

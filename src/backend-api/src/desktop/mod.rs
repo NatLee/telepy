@@ -87,8 +87,10 @@ impl Protocol {
     }
 }
 
-/// 剪貼簿政策（站台設定 `desktop_clipboard`）：both = 雙向、to_remote = 只能貼進遠端、off = 關閉。
-/// Clipboard policy from the `desktop_clipboard` site setting.
+/// 剪貼簿方向：both = 雙向、to_remote = 只能貼進遠端、off = 關閉。使用者自己選（個人設定 `desktop_clipboard`，
+/// 連線時也可以帶），站台設定 `desktop_clipboard` 是上限：實際用的是兩者較窄的那個（`within`）。
+/// Clipboard direction. Each user picks one (user setting, or per start); the site setting of the same name
+/// is the ceiling, and the narrower of the two applies (`within`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Clipboard {
     Both,
@@ -98,6 +100,31 @@ pub enum Clipboard {
 
 impl Clipboard {
     pub const VALUES: &'static [&'static str] = &["both", "to_remote", "off"];
+
+    /// 放得越寬數字越大：off < to_remote < both。/ Wider = larger: off < to_remote < both.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Off => 0,
+            Self::ToRemote => 1,
+            Self::Both => 2,
+        }
+    }
+
+    /// 使用者的選擇套上站台上限。/ The user's choice capped by the site limit.
+    pub fn within(self, limit: Self) -> Self {
+        if self.rank() <= limit.rank() { self } else { limit }
+    }
+
+    /// 站台上限 + 這次要的（沒帶就用個人設定）→ 實際用的方向；壞值回欄位錯誤的訊息。
+    /// The effective direction from the site limit, the requested value and the user's saved choice.
+    pub fn effective(limit: &str, requested: Option<&str>, saved: &str) -> Result<Self, String> {
+        let limit = Self::parse(limit).unwrap_or(Self::Both);
+        let choice = match requested {
+            Some(r) => Self::parse(r).ok_or_else(|| format!("Must be one of: {}.", Self::VALUES.join(", ")))?,
+            None => Self::parse(saved).unwrap_or(Self::Both),
+        };
+        Ok(choice.within(limit))
+    }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim() {
@@ -561,6 +588,23 @@ mod tests {
         for v in Clipboard::VALUES {
             assert_eq!(Clipboard::parse(v).unwrap().as_str(), *v);
         }
+    }
+
+    #[test]
+    fn the_site_limit_caps_the_users_clipboard_choice() {
+        use Clipboard::*;
+        assert_eq!(Both.within(Both), Both);
+        assert_eq!(Both.within(ToRemote), ToRemote);
+        assert_eq!(Both.within(Off), Off);
+        assert_eq!(ToRemote.within(Both), ToRemote);
+        assert_eq!(ToRemote.within(Off), Off);
+        assert_eq!(Off.within(Both), Off);
+        // 這次有帶就用它，沒帶用個人設定；壞的個人設定 / 上限當 both。/ Requested wins over saved; bad stored values read as both.
+        assert_eq!(Clipboard::effective("both", Some("off"), "both"), Ok(Off));
+        assert_eq!(Clipboard::effective("to_remote", Some("both"), "off"), Ok(ToRemote));
+        assert_eq!(Clipboard::effective("both", None, "to_remote"), Ok(ToRemote));
+        assert_eq!(Clipboard::effective("junk", None, "junk"), Ok(Both));
+        assert!(Clipboard::effective("both", Some("yes"), "both").is_err());
     }
 
     #[test]

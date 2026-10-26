@@ -4,7 +4,7 @@
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
  * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
  * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機的預設字型 / 字級 / 配色
- *   (單一裝置的覆寫在終端機頁的「外觀」按鈕)。
+ *   (單一裝置的覆寫在終端機頁的「外觀」按鈕)、遠端桌面剪貼簿的方向(存在帳號上,站台設定是上限)。
  *   變更即時套用並寫入本機(cookie/localStorage),已登入時同步到後端 UserSettings(跨裝置)。
  * - 安全性:登入安全性(passkey / 驗證器 App / 復原碼)。
  * - 已連接的應用程式:授權過的 MCP / AI 客戶端(OAuth grants),可撤銷;另有連到 MCP 頁的設定入口。
@@ -12,14 +12,15 @@
  * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
  * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
  * - General: account, language, theme, display size (S/M/L + fine slider), the terminal's default font /
- *   size / colour scheme (a device's own override lives behind the terminal page's Appearance button).
+ *   size / colour scheme (a device's own override lives behind the terminal page's Appearance button), the remote
+ *   desktop clipboard direction (saved on the account, capped by the site setting).
  *   Changes apply instantly, persist locally, and sync to the backend UserSettings for cross-device use.
  * - Security: sign-in security (passkeys, authenticator app, recovery codes).
  * - Connected apps: authorized MCP / AI clients with revoke, plus a pointer to the MCP page.
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -41,6 +42,8 @@ import {
 import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
+import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed } from "@/lib/desktop";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
 import { TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import type { TranslationKey } from "@/locales/en";
@@ -65,6 +68,7 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const [theme, changeTheme] = useThemePreference();
     const [scale, changeScale] = useUiScale();
     const [terminalDefaults, changeTerminalDefaults] = useTerminalDefaults();
+    const clipboard = useDesktopClipboard();
     const [tab, setTab] = useState<PrefsTab>("general");
     const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
     const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
@@ -208,6 +212,21 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                                 ...(patch.scheme ? { scheme: patch.scheme } : {}),
                             })}
                         />
+                    </Section>
+
+                    {/* 遠端桌面剪貼簿（存在帳號上；超過站台上限的選項關掉）。/ Remote desktop clipboard (on the account; choices above the site's limit are disabled). */}
+                    <Section icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>
+                        <Segmented
+                            fullWidth
+                            options={CLIPBOARD_VALUES.map((v) => ({ value: v, label: t(CLIPBOARD_LABEL[v]), disabled: !clipboardAllowed(v, clipboard.limit) }))}
+                            value={clipboard.effective}
+                            onChange={(v) => void clipboard.setChoice(v)}
+                            aria-label={t("prefs.desktopClipboard")}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            {t(clipboard.effective === "off" ? "desktop.clipboard.hint.off" : clipboard.effective === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}
+                            {clipboard.limit !== "both" && <> {t("desktop.clipboard.limited", { limit: t(CLIPBOARD_LABEL[clipboard.limit]) })}</>}
+                        </p>
                     </Section>
 
                     {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}

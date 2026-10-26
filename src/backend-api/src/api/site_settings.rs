@@ -59,7 +59,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
     FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
     FieldMeta { name: "desktop_session_idle_timeout", kind: Kind::Int, label: "Remote Desktop Idle Timeout (seconds)", description: "遠端桌面多久沒有鍵盤 / 滑鼠 / 剪貼簿輸入就自動斷線(秒)。設 0 = 不自動斷線。變更後即時生效。" },
-    FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard", description: "剪貼簿方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。下次開桌面時生效。" },
+    FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard Limit", description: "剪貼簿最多能開到哪個方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。每個人在桌面頁或偏好設定裡自己選方向，實際用的是兩者較窄的那個；RDP / VNC 由伺服器（guacd）把關，RustDesk 由瀏覽器裡的核心套用。下次開桌面時生效。" },
     FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
     FieldMeta { name: "desktop_rustdesk_server", kind: Kind::Bool, label: "Act as a RustDesk server", description: "讓 Telepy 當 RustDesk 的 ID / 中繼伺服器：登記過的 RustDesk 裝置不需要 Telepy 隧道，經網頁的 443 主動連進來，就能在瀏覽器裡連線（端對端加密）。只有用一次性登記指令（rustdesk --deploy）加入的裝置會被接受。關閉後裝置連不上，已開著的連線不受影響。" },
 ];

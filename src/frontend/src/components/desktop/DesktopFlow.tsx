@@ -29,7 +29,10 @@ export interface FlowContext {
     account: string;
     /** null = 裝置自己。/ null = the device itself. */
     lanHost: { name: string; address: string } | null;
+    /** 這個 session（或下一個）的剪貼簿方向。/ The clipboard direction of this (or the next) session. */
     clipboard: ClipboardPolicy | null;
+    /** 管理員的上限把使用者的選擇收窄了。/ The site's limit narrowed the user's choice. */
+    clipboardLimited?: boolean;
     /** 用憑證庫的登入（密碼只在伺服器上解開）。/ Using a saved login (unsealed on the server only). */
     savedLogin?: boolean;
     /** 連線中的串流統計：每段線標上往返時間，最慢的那段標黃。/ Live stats: a round trip on each link. */
@@ -38,6 +41,14 @@ export interface FlowContext {
     inBrowser?: boolean;
     /** 經 Telepy 的 RustDesk 伺服器（沒有隧道）。/ Through Telepy's RustDesk server (no tunnel). */
     idServer?: { deviceName: string; rustdeskId: string } | null;
+}
+
+/** 剪貼簿那一行說明：guacd（貼上按鈕、伺服器把關）或 RustDesk 核心（分頁有焦點時自動同步）。
+ *  The clipboard note: guacd (Paste button, enforced on the server) or the RustDesk core (syncs while the tab is focused). */
+function clipboardNote(clipboard: ClipboardPolicy | null, engine: "guacd" | "rustdesk"): TranslationKey {
+    if (clipboard === "off") return "desktop.flow.noteClipboardOff";
+    if (clipboard === "to_remote") return engine === "rustdesk" ? "desktop.flow.rdb.noteClipboardToRemote" : "desktop.flow.noteClipboardToRemote";
+    return engine === "rustdesk" ? "desktop.flow.rdb.noteClipboard" : "desktop.flow.noteClipboardBoth";
 }
 
 const STATE_TEXT: Record<SpotState, TranslationKey> = {
@@ -208,6 +219,7 @@ function IdServerFlow({ ctx, idServer }: { ctx: FlowContext; idServer: { deviceN
             <ul className="space-y-1.5 border-t border-border pt-4 text-sm text-muted-foreground">
                 <li>{t("desktop.flow.rds.noteE2e")}</li>
                 <li>{t("desktop.flow.rds.notePassword")}</li>
+                <li>{t(clipboardNote(ctx.clipboard, "rustdesk"))}{ctx.clipboardLimited && <> {t("desktop.flow.noteClipboardLimited")}</>}</li>
                 <li>{t("desktop.flow.rds.noteNoTunnel")}</li>
                 <li>{t("desktop.flow.rds.noteLogged")}</li>
             </ul>
@@ -333,14 +345,14 @@ function TunnelFlow({ ctx }: { ctx: FlowContext }) {
                     <>
                         <li>{t(ctx.savedLogin ? "desktop.flow.rdb.noteVault" : "desktop.flow.rdb.notePassword")}</li>
                         <li>{t("desktop.flow.rdb.noteEngine")}</li>
-                        <li>{t("desktop.flow.rdb.noteClipboard")}</li>
+                        <li>{t(clipboardNote(ctx.clipboard, "rustdesk"))}{ctx.clipboardLimited && <> {t("desktop.flow.noteClipboardLimited")}</>}</li>
                         <li>{t("desktop.flow.rd.noteDirectIp")}</li>
                         <li>{t("desktop.flow.noteLogged")}</li>
                     </>
                 ) : (
                     <>
                         <li>{t(ctx.savedLogin ? "desktop.flow.noteVault" : "desktop.flow.noteCredentials")}</li>
-                        <li>{t(ctx.clipboard === "off" ? "desktop.flow.noteClipboardOff" : ctx.clipboard === "to_remote" ? "desktop.flow.noteClipboardToRemote" : "desktop.flow.noteClipboardBoth")}</li>
+                        <li>{t(clipboardNote(ctx.clipboard, "guacd"))}{ctx.clipboardLimited && <> {t("desktop.flow.noteClipboardLimited")}</>}</li>
                         <li>{t("desktop.flow.noteLogged")}</li>
                         <li>{t("desktop.flow.noteDevice")}</li>
                         <li>{t("desktop.flow.noteIme")}</li>

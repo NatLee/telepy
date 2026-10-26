@@ -110,6 +110,9 @@ async fn rustdesk_session_is_bridged_through_the_device() {
     let start = r.json.clone();
     assert_eq!(start["target"]["port"], rd_port);
     assert_eq!(start["username"], "ubuntu");
+    // 剪貼簿方向由瀏覽器裡的核心套用：預設 = 個人設定（both），上限 = 站台設定。
+    // The browser's core applies the clipboard direction: the user's setting (both) under the site's limit.
+    assert_eq!((start["clipboard"].as_str(), start["clipboard_limit"].as_str()), (Some("both"), Some("both")));
     assert!(start["ws_path"].as_str().unwrap().starts_with("/ws/rustdesk/"));
     let sid = start["session_id"].as_str().unwrap().to_string();
 

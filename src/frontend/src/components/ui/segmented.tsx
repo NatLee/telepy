@@ -18,6 +18,8 @@ export interface SegmentedOption<T extends string> {
     icon?: React.ReactNode;
     /** hover 文字(label 不是字串時用)。/ Hover text (when the label is not a plain string). */
     title?: string;
+    /** 不能選(例如超過管理員的上限)。/ Not selectable (e.g. above an administrator's limit). */
+    disabled?: boolean;
 }
 
 interface SegmentedProps<T extends string> {
@@ -59,6 +61,7 @@ export function Segmented<T extends string>({
                     <button
                         key={option.value}
                         type="button"
+                        disabled={option.disabled}
                         onClick={() => onChange(option.value)}
                         title={option.title ?? (typeof option.label === "string" ? option.label : undefined)}
                         {...(kind === "tabs" ? { role: "tab", "aria-selected": active } : { "aria-pressed": active })}
@@ -67,6 +70,7 @@ export function Segmented<T extends string>({
                             size === "sm" ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-sm",
                             fullWidth ? "text-center leading-snug" : "whitespace-nowrap",
                             active ? "bg-card text-foreground ring-1 ring-border dark:bg-secondary [&_svg]:text-primary" : "text-muted-foreground hover:text-foreground",
+                            "disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:text-muted-foreground",
                         )}
                     >
                         {option.icon}

@@ -10,6 +10,8 @@
  * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；canvas 放在裁切框裡、往左上挪平移量。
  * - 鍵盤：焦點放在隱藏的 textarea（輸入法才能組字），按鍵走 `input_key`（legacy 鍵名），組好的字走 `input_string`。
  * - 游標：`cursor_data`（RGBA）→ data URL → CSS cursor，`cursor_id` 切換。
+ * - 剪貼簿：start 回的方向（使用者的選擇套上站台上限）在這裡套用——off = 這台的 `disable-clipboard`，
+ *   to_remote = 本機照送、遠端複製的不收。資料流是 RustDesk 的（端對端或 Direct IP），後端管不到。
  * In-browser RustDesk: the vendored core decodes in this page, Telepy relays. See `lib/rustdesk.ts`.
  */
 import React, { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
@@ -116,6 +118,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         if (!frame || !host || !canvas || !sink) return;
         let disposed = false;
         endedRef.current = false;
+        const clipboard = start.clipboard ?? "both";
         const ctx = canvas.getContext("2d");
         const cursors = new Map<string, string>();
         const end = (failure: DesktopFailure | null) => {
@@ -236,8 +239,9 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                         break;
                     }
                     case "clipboard": {
+                        // 只有雙向時才收遠端複製的文字（to_remote = 只能貼進去）。/ Remote text only comes back when the direction is both.
                         const text = typeof e.content === "string" ? e.content : typeof e.text === "string" ? e.text : "";
-                        if (text) callbacks.current.onRemoteClipboard(text);
+                        if (text && clipboard === "both") callbacks.current.onRemoteClipboard(text);
                         break;
                     }
                     default:
@@ -350,6 +354,9 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                 // 經 Telepy 的 RustDesk 伺服器時有伺服器公鑰：核心驗裝置金鑰後做端對端加密；經隧道（Direct IP）沒有。
                 // With Telepy's RustDesk server the core verifies the device key and encrypts end to end; Direct IP has none.
                 call("option", { name: "key", value: start.key ?? "" });
+                // 剪貼簿關掉 = 這台的 disable-clipboard：核心不再送本機的剪貼簿，登入時也請裝置別送它的。
+                // Clipboard off = the peer's disable-clipboard: the core stops sending ours and asks the device not to send its own.
+                call("option:peer", { id: peerIdFor(start), name: "disable-clipboard", value: clipboard === "off" ? "Y" : "N" });
                 call("session_add_sync", { id: peerIdFor(start), password: passwordRef.current, isFileTransfer: false, isTerminal: false });
                 call("session_start", { id: peerIdFor(start) });
             })

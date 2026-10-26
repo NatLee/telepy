@@ -166,6 +166,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "rustdesk_server_disabled", "Telepy's RustDesk server is turned off."));
     }
     let d = device_for(&state, user.id, user.is_superuser, id).await?;
+    // 端對端加密：剪貼簿方向只能由瀏覽器裡的核心套用。/ End-to-end encrypted: the browser's core applies the clipboard direction.
+    let (clipboard, clipboard_limit) = super::desktop::clipboard_for(&state, user.id, &settings, &body).await?;
     if !state.rustdesk_ids.is_online(&d.rustdesk_id) {
         return Err(coded(StatusCode::BAD_GATEWAY, "device_offline", "The RustDesk device is not connected to Telepy."));
     }
@@ -200,6 +202,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
         "peer_id": d.rustdesk_id,
         "key": state.rustdesk_ids.key.public_b64(),
         "device": { "id": d.id, "name": d.name, "rustdesk_id": d.rustdesk_id },
+        "clipboard": clipboard.as_str(),
+        "clipboard_limit": clipboard_limit.as_str(),
     });
     if let Some(p) = password {
         out["password"] = json!(p);

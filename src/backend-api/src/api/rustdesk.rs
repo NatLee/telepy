@@ -53,6 +53,9 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
     }
     super::step_up::check(&state, user.id, &tunnel, &headers)?;
     let port = parse_port(&body)?;
+    // 剪貼簿：RustDesk 的資料流後端讀不到，方向由瀏覽器裡的核心照這個值套用。
+    // Clipboard: the backend cannot see RustDesk's stream, so the browser's core applies this value.
+    let (clipboard, clipboard_limit) = super::desktop::clipboard_for(&state, user.id, &settings, &body).await?;
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
@@ -91,6 +94,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         "expires_in": TICKET_TTL.as_secs(),
         "target": target_out,
         "username": username_out,
+        "clipboard": clipboard.as_str(),
+        "clipboard_limit": clipboard_limit.as_str(),
     });
     if let Some(p) = password {
         out["password"] = json!(p);
