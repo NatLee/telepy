@@ -128,7 +128,7 @@ async fn rustdesk_devices_enrol_register_and_relay_without_ssh() {
     let enroll_id = r.json["id"].as_str().unwrap().to_string();
     assert!(token.starts_with("tpr_"));
     assert_eq!(r.json["phase"], "waiting");
-    for os in ["linux", "macos", "windows"] {
+    for os in ["unix", "windows"] {
         let c = r.json["commands"][os].as_str().unwrap();
         assert!(c.contains(&format!("--deploy --token {token}")), "{os}: {c}");
         assert!(c.contains("allow-websocket Y"), "{os}: {c}");

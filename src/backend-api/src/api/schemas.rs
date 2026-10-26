@@ -2476,10 +2476,9 @@ pub struct RustDeskEnrolment {
 
 #[derive(ToSchema)]
 pub struct RustDeskCommands {
-    /// One line for Linux (run as root)
-    pub linux: String,
-    /// One line for macOS (run as root)
-    pub macos: String,
+    /// One line for Linux and macOS (run as root): finds RustDesk (the PATH, else /Applications/RustDesk.app), sets
+    /// the options, checks RustDesk took them and waits for the config `--deploy` reads before enrolling
+    pub unix: String,
     /// PowerShell for Windows (run as Administrator)
     pub windows: String,
 }

@@ -385,13 +385,19 @@ pub fn device_settings(base: &str) -> DeviceSettings {
     }
 }
 
-/// 裝置上要跑的指令（Linux / macOS 要 root，Windows 要系統管理員）。/ The commands to run on the device.
+/// 裝置上要跑的指令：Linux 與 macOS 共用一條（要 root），Windows 一條（要系統管理員）。
+/// The commands to run on the device: one for Linux and macOS (root), one for Windows (Administrator).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeviceCommands {
-    pub linux: String,
-    pub macos: String,
+    pub unix: String,
     pub windows: String,
 }
+
+/// macOS 的 RustDesk 不在 PATH 上。/ RustDesk on macOS is not on the PATH.
+const MAC_APP_BINARY: &str = "/Applications/RustDesk.app/Contents/MacOS/RustDesk";
+const NOT_FOUND: &str = "RustDesk was not found. Install RustDesk 1.5 or later (on macOS, into Applications), open it once, then run this command again.";
+const NOT_TAKEN: &str = "RustDesk did not accept the settings. Open RustDesk and let it finish its setup (on macOS: allow Accessibility and Screen Recording, and install its background service when asked), then run this command again.";
+const NOT_SYNCED: &str = "The RustDesk background service did not pick up the settings. Open RustDesk (on macOS, install its service when asked), then run this command again.";
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -410,19 +416,33 @@ fn ps_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
+/// Linux / macOS：一條 `sudo sh -c '…'`。
+/// - 找 RustDesk：PATH 上的 `rustdesk`，否則 macOS 的 app（不在 PATH 上；以前 Linux 指令在 Mac 上是 command not found）。
+/// - 設好三個選項後讀回 `api-server`：沒裝好、服務沒在跑時 RustDesk 只印一行或什麼都不做，讀回不對就停下來說原因。
+/// - `--deploy` 讀的是**執行它的行程**的設定檔（sudo 下是 `$HOME` 那份；macOS 的 RustDesk 服務以使用者身分跑，
+///   0.3 秒一次把設定同步給 root），`--option` 卻是經 IPC 寫進使用者的服務。所以等那份檔案裡出現 Telepy 的
+///   api-server 才 deploy —— 否則 deploy 會帶著權杖送到 RustDesk 自己的 API 伺服器。
+///
+/// Linux / macOS: one `sudo sh -c '…'` that finds RustDesk (the PATH, else the macOS app, which is not on the PATH),
+/// sets the options, reads `api-server` back (RustDesk prints one line or nothing when it is not installed or its
+/// service is not running), and waits until the config file `--deploy` reads (the one under `$HOME`; on macOS the
+/// service runs as the user and syncs to root every 0.3 s) holds Telepy's API server, so the token never goes to
+/// RustDesk's own API server.
 pub fn device_commands(settings: &DeviceSettings, token: &str) -> DeviceCommands {
-    let sh = |bin: &str| {
-        let b = sh_word(bin);
-        [
-            format!("{b} --option custom-rendezvous-server {}", sh_word(&settings.rendezvous)),
-            format!("{b} --option api-server {}", sh_word(&settings.api_server)),
-            format!("{b} --option allow-websocket Y"),
-            format!("{b} --deploy --token {}", sh_word(token)),
-        ]
-        .join(" && ")
-    };
-    let linux = format!("sudo sh -c {}", shell_quote(&sh("rustdesk")));
-    let macos = format!("sudo sh -c {}", shell_quote(&sh("/Applications/RustDesk.app/Contents/MacOS/RustDesk")));
+    let api = sh_word(&settings.api_server);
+    let unix = [
+        format!("RD=$(command -v rustdesk 2>/dev/null); [ -n \"$RD\" ] || RD={MAC_APP_BINARY}"),
+        format!("if [ ! -x \"$RD\" ]; then echo \"{NOT_FOUND}\"; exit 1; fi"),
+        format!("\"$RD\" --option custom-rendezvous-server {}", sh_word(&settings.rendezvous)),
+        format!("\"$RD\" --option api-server {api}"),
+        "\"$RD\" --option allow-websocket Y".to_string(),
+        format!("if [ \"$(\"$RD\" --option api-server)\" != {api} ]; then echo \"{NOT_TAKEN}\"; exit 1; fi"),
+        "if [ \"$(uname -s)\" = Darwin ]; then CFG=\"$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml\"; else CFG=\"${XDG_CONFIG_HOME:-$HOME/.config}/rustdesk/RustDesk2.toml\"; fi".to_string(),
+        format!("n=0; while ! grep -qF {api} \"$CFG\" 2>/dev/null; do n=$((n+1)); if [ \"$n\" -gt 15 ]; then echo \"{NOT_SYNCED}\"; exit 1; fi; sleep 1; done"),
+        format!("\"$RD\" --deploy --token {}", sh_word(token)),
+    ]
+    .join("; ");
+    let unix = format!("sudo sh -c {}", shell_quote(&unix));
     let windows = [
         "$rd = Join-Path $env:ProgramFiles 'RustDesk\\rustdesk.exe'".to_string(),
         format!("& $rd --option custom-rendezvous-server {} | Out-Null", ps_quote(&settings.rendezvous)),
@@ -431,7 +451,7 @@ pub fn device_commands(settings: &DeviceSettings, token: &str) -> DeviceCommands
         format!("& $rd --deploy --token {token} | Write-Output"),
     ]
     .join("\n");
-    DeviceCommands { linux, macos, windows }
+    DeviceCommands { unix, windows }
 }
 
 #[cfg(test)]
@@ -487,10 +507,14 @@ mod tests {
     fn commands_quote_and_carry_the_token() {
         let s = device_settings("https://telepy.example.com");
         let c = device_commands(&s, "tpr_abc");
-        assert_eq!(c.linux, "sudo sh -c 'rustdesk --option custom-rendezvous-server telepy.example.com && rustdesk --option api-server https://telepy.example.com && rustdesk --option allow-websocket Y && rustdesk --deploy --token tpr_abc'");
+        assert!(c.unix.starts_with("sudo sh -c 'RD=$(command -v rustdesk 2>/dev/null); [ -n \"$RD\" ] || RD=/Applications/RustDesk.app/Contents/MacOS/RustDesk; "), "{}", c.unix);
+        assert!(c.unix.contains("\"$RD\" --option custom-rendezvous-server telepy.example.com; \"$RD\" --option api-server https://telepy.example.com; \"$RD\" --option allow-websocket Y; "));
+        assert!(c.unix.contains("!= https://telepy.example.com ]"), "reads the setting back");
+        assert!(c.unix.contains("grep -qF https://telepy.example.com \"$CFG\""), "waits for the config --deploy reads");
+        assert!(c.unix.ends_with("\"$RD\" --deploy --token tpr_abc'"), "deploy comes last: {}", c.unix);
+        assert!(!c.unix[12..c.unix.len() - 1].contains('\''), "one single-quoted script");
         assert_eq!(sh_word("a b"), "'a b'", "anything unusual is still quoted");
         assert_eq!(sh_word("it's"), "'it'\\''s'");
-        assert!(c.macos.contains("/Applications/RustDesk.app/Contents/MacOS/RustDesk"));
         assert!(c.windows.contains("--option api-server 'https://telepy.example.com'"));
         assert!(c.windows.contains("--deploy --token tpr_abc"));
     }

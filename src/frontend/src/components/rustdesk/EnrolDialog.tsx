@@ -40,7 +40,7 @@ function Step({ state, title, detail }: { state: "done" | "active" | "todo"; tit
     );
 }
 
-const OS_HINT: Record<DeviceOs, TranslationKey> = { linux: "rustdesk.enrol.hintLinux", macos: "rustdesk.enrol.hintMac", windows: "rustdesk.enrol.hintWindows" };
+const OS_HINT: Record<DeviceOs, TranslationKey> = { unix: "rustdesk.enrol.hintUnix", windows: "rustdesk.enrol.hintWindows" };
 
 /** 對話框開著時才掛上（關掉就丟掉狀態，下次重來）。/ Mounted only while open, so closing starts over. */
 export function EnrolDialog({ onClose }: { onClose: () => void }) {
@@ -134,8 +134,7 @@ export function EnrolDialog({ onClose }: { onClose: () => void }) {
                     <div className="space-y-3">
                         <Segmented
                             options={[
-                                { value: "linux", label: "Linux" },
-                                { value: "macos", label: "macOS" },
+                                { value: "unix", label: "Linux / macOS" },
                                 { value: "windows", label: "Windows" },
                             ]}
                             value={os}
