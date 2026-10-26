@@ -14,12 +14,13 @@
  *   user:alice                                      現在正在用這條隧道的人（看得到細節時）
  *   label:prod | tag:prod                           標籤（tag 是別名）
  *   pinned:yes|no                                   我有沒有釘選
+ *   group:prod | group:none                         我把它放在哪個通道群組（名稱不分大小寫；none = 未分組）
  *
  * 純函式、不依賴 React，`tunnelQuery.test.ts` 有測試。/ Pure functions; tested in tunnelQuery.test.ts.
  */
 import type { Tunnel, TunnelHealth } from "../types/tunnel";
 
-export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned"] as const;
+export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned", "group"] as const;
 export type QueryKey = (typeof QUERY_KEYS)[number];
 
 export interface QueryFilter {
@@ -41,6 +42,8 @@ export interface MatchContext {
     /** 即時健康狀態（lib/tunnelHealth.liveHealth）。/ Live health. */
     health: TunnelHealth;
     now: number;
+    /** 我把它放進的通道群組名稱；null / 沒給 = 未分組。/ My tunnel group's name; null / absent = ungrouped. */
+    group?: string | null;
 }
 
 const STATUS = new Set(["online", "degraded", "offline", "never", "up", "down"]);
@@ -70,6 +73,7 @@ function validValue(key: QueryKey, v: string): boolean {
         case "ip":
         case "user":
         case "label":
+        case "group":
             return v.length > 0;
         case "pinned":
             return v === "yes" || v === "no";
@@ -157,11 +161,14 @@ function matchOne(f: QueryFilter, v: string, t: Tunnel, ctx: MatchContext): bool
             return (t.labels ?? []).includes(v);
         case "pinned":
             return (v === "yes") === !!t.pinned;
+        case "group":
+            return v === "none" ? !ctx.group : (ctx.group ?? "").toLowerCase() === v;
     }
 }
 
-function matchText(term: string, t: Tunnel): boolean {
+function matchText(term: string, t: Tunnel, ctx: MatchContext): boolean {
     const hay = [
+        ctx.group ?? "",
         t.host_friendly_name,
         t.description ?? "",
         String(t.reverse_port),
@@ -174,7 +181,7 @@ function matchText(term: string, t: Tunnel): boolean {
 
 export function matchTunnel(t: Tunnel, q: ParsedQuery, ctx: MatchContext): boolean {
     for (const term of q.text) {
-        if (!matchText(term, t)) return false;
+        if (!matchText(term, t, ctx)) return false;
     }
     for (const f of q.filters) {
         const hit = f.values.some((v) => matchOne(f, v, t, ctx));

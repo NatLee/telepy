@@ -20,7 +20,10 @@ import { KeyCard } from "@/components/keys/KeyCard";
 import { KeyDetailsModal } from "@/components/keys/KeyDetailsModal";
 import { KeyListExplainer } from "@/components/keys/KeyListExplainer";
 import { KeyListFilterBar, KeyListFilterFooter, useKeyListFilter } from "@/components/keys/KeyListFilter";
+import { KeyGroupsSection } from "@/components/keys/KeyGroupsSection";
 import { useKeysPage } from "@/hooks/useKeysPage";
+import { useKeyGroups } from "@/hooks/useKeyGroups";
+import { useTunnelGroups } from "@/hooks/useTunnelGroups";
 import { useI18n } from "@/lib/i18n";
 import type { UserKey } from "@/types/keys";
 import { expiryState } from "@/lib/keyExpiry";
@@ -43,6 +46,15 @@ function SectionHeader({ title, count, description }: { title: string; count?: n
 function UserKeysPage() {
     const { t } = useI18n();
     const page = useKeysPage();
+    // 金鑰群組（改動會裝 / 移除金鑰，所以重抓裝置矩陣）與通道群組（授予對象）。
+    // Key groups (writes move keys, so the device matrix is refetched) and tunnel groups (grant targets).
+    const keyGroups = useKeyGroups(page.fetchDevices);
+    const tunnelGroups = useTunnelGroups();
+    const groupNameOf = useMemo(() => {
+        const m = new Map<number, string>();
+        for (const g of keyGroups.groups) for (const k of g.key_ids) m.set(k, g.name);
+        return m;
+    }, [keyGroups.groups]);
     // 頁面在 Suspense 裡只在瀏覽器端算繪，直接讀 localStorage 不會造成 hydration 不一致。
     // The page renders client-side inside Suspense, so reading localStorage up front is safe.
     const [explainer, setExplainer] = useState(() => {
@@ -138,6 +150,7 @@ function UserKeysPage() {
                                     key={k.id}
                                     keyItem={k}
                                     placements={page.placements.get(k.id) ?? []}
+                                    groupName={groupNameOf.get(k.id) ?? null}
                                     onDetails={() => setDetailsId(k.id)}
                                     onDelete={() => setDeleting(k)}
                                 />
@@ -147,6 +160,8 @@ function UserKeysPage() {
                     </>
                 )}
             </section>
+
+            {page.keys.length > 0 && <KeyGroupsSection api={keyGroups} keys={page.keys} tunnelGroups={tunnelGroups.groups} devices={page.devices} />}
 
             {page.keys.length > 0 && (
                 <section aria-labelledby="keys-devices">
@@ -166,7 +181,17 @@ function UserKeysPage() {
                 </section>
             )}
 
-            <AddKeyModal isOpen={addOpen} onClose={() => setAddOpen(false)} devices={page.devices} onSubmit={page.addKey} />
+            <AddKeyModal
+                isOpen={addOpen}
+                onClose={() => setAddOpen(false)}
+                devices={page.devices}
+                keyGroups={keyGroups.groups}
+                onSubmit={async (k) => {
+                    const ok = await page.addKey(k);
+                    if (ok && k.groupId) void keyGroups.load();
+                    return ok;
+                }}
+            />
 
             <KeyDetailsModal
                 keyItem={details}
@@ -174,7 +199,12 @@ function UserKeysPage() {
                 pending={page.pending}
                 onToggle={page.toggle}
                 onClose={() => setDetailsId(null)}
-                onSave={page.updateKey}
+                keyGroups={keyGroups.groups}
+                onSave={async (k, patch) => {
+                    const errors = await page.updateKey(k, patch);
+                    if (errors === null && patch.group_id !== undefined) void keyGroups.load();
+                    return errors;
+                }}
                 onManageDevice={(d) => {
                     setDetailsId(null);
                     page.openDevice(d.tunnel_id);

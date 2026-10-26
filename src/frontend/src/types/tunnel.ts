@@ -30,6 +30,8 @@ export interface Tunnel {
     last_seen_at?: string | null;
     /** 我有沒有釘選（每個人自己的）。/ Whether I pinned it (per user). */
     pinned?: boolean;
+    /** 我把它放在哪個通道群組（每個人自己的）；null = 未分組。/ My tunnel group for it (personal); null = ungrouped. */
+    group_id?: number | null;
     /** 隧道標籤（大家共用，EDIT 以上可改）。/ Shared labels (EDIT and up may change them). */
     labels?: string[];
     /** 開 session 前要確認是你（step-up）。/ Sessions ask for a step-up first. */
@@ -162,4 +164,6 @@ export interface TunnelActionHandlers {
     onTogglePin?: (tunnelId: number, pinned: boolean) => void;
     /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */
     onLabel?: (label: string) => void;
+    /** 換到別的通道群組（每個人自己的分組）。/ Move it to another of my tunnel groups. */
+    onMoveToGroup?: (tunnelId: number) => void;
 }

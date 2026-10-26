@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Plus, Network, Info, RefreshCw, SearchX } from "lucide-react";
+import { Plus, Network, Info, RefreshCw, SearchX, FolderTree } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Tooltip,
@@ -22,6 +22,11 @@ import { TunnelTableRow } from "@/components/tunnels/TunnelTableRow";
 import { TunnelFilterTiles, type TunnelFilter } from "@/components/tunnels/TunnelFilterTiles";
 import { TunnelSearchBar } from "@/components/tunnels/TunnelSearchBar";
 import { ViewToggle } from "@/components/ui/ViewToggle";
+import { Segmented } from "@/components/ui/segmented";
+import { EmptyGroup, GroupHeader, GroupHeaderRow, type GroupHeaderProps } from "@/components/tunnels/TunnelGroupSection";
+import { TunnelGroupDialogs } from "@/components/tunnels/TunnelGroupDialogs";
+import { sectionKey, useTunnelGroupsUi } from "@/hooks/useTunnelGroupsUi";
+import { groupOf, groupSections, type Section } from "@/lib/groups";
 
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
@@ -32,6 +37,8 @@ import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
 const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
+/** 依群組分段或一個列表（有群組時才有這個選擇）。/ Sections by group or one list (offered once groups exist). */
+const GROUPINGS = ["groups", "flat"] as const;
 
 export default function TunnelsPage() {
     const { t } = useI18n();
@@ -61,6 +68,17 @@ export default function TunnelsPage() {
     const [query, setQuery] = useState("");
 
     const isOnline = (tunnel: Tunnel) => portsMap[String(tunnel.reverse_port)] === true;
+    // 我的通道群組（每個人自己的資料夾）。/ My tunnel groups (personal folders).
+    const groupsUi = useTunnelGroupsUi(tunnels, isOnline);
+    const [grouping, setGrouping] = useStoredChoice("telepy.tunnelGrouping", GROUPINGS, "groups");
+    const groupNames = useMemo(() => {
+        const names = new Map(groupsUi.groups.map((g) => [g.id, g.name]));
+        const of = groupOf(groupsUi.groups);
+        return (tn: Tunnel) => {
+            const id = of.get(tn.id);
+            return id === undefined ? null : (names.get(id) ?? null);
+        };
+    }, [groupsUi.groups]);
 
     const counts = useMemo(() => {
         const online = tunnels.filter(tn => portsMap[String(tn.reverse_port)] === true).length;
@@ -78,7 +96,7 @@ export default function TunnelsPage() {
     // 方塊篩選 AND 搜尋語法（lib/tunnelQuery），再依選的方式排序。/ Tile filter AND the query, then sorted.
     const visible = useMemo(() => {
         const now = Date.now();
-        const ctx = (tn: Tunnel): MatchContext => ({ health: liveHealth(tn, isOnline(tn)), now });
+        const ctx = (tn: Tunnel): MatchContext => ({ health: liveHealth(tn, isOnline(tn)), now, group: groupNames(tn) });
         return tunnels
             .filter((tn) => {
                 const online = isOnline(tn);
@@ -89,7 +107,26 @@ export default function TunnelsPage() {
             })
             .sort((a, b) => pinnedFirst(a, b) || compareTunnels(a, b, sort, ctx));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [tunnels, portsMap, filter, parsed, sort]);
+    }, [tunnels, portsMap, filter, parsed, sort, groupNames]);
+
+    // 有群組時依群組分段（搜尋 / 篩選中只留有符合的段）。/ Sections by group once groups exist.
+    const filtering = filter !== "all" || query.trim() !== "";
+    const grouped = grouping === "groups" && groupsUi.groups.length > 0;
+    const sections = useMemo(() => groupSections(visible, tunnels, groupsUi.groups, filtering), [visible, tunnels, groupsUi.groups, filtering]);
+    const headerProps = (s: Section<Tunnel>): GroupHeaderProps => ({
+        group: s.group,
+        shown: s.items.length,
+        total: s.total,
+        online: tunnels.filter((tn) => (s.group ? s.group.tunnel_ids.includes(tn.id) : !groupOf(groupsUi.groups).has(tn.id)) && isOnline(tn)).length,
+        filtering,
+        collapsed: groupsUi.collapsed.has(sectionKey(s.group)),
+        onToggle: () => groupsUi.toggleSection(sectionKey(s.group)),
+        isFirst: !!s.group && groupsUi.orderedIds[0] === s.group.id,
+        isLast: !!s.group && groupsUi.orderedIds[groupsUi.orderedIds.length - 1] === s.group.id,
+        onEdit: s.group ? () => groupsUi.openEdit(s.group!) : undefined,
+        onMove: s.group ? (delta) => groupsUi.moveGroup(s.group!, delta) : undefined,
+        onDelete: s.group ? () => void groupsUi.requestDelete(s.group!) : undefined,
+    });
 
     const actions: TunnelActionHandlers = {
         onDetails: (tunnelId) => setDetailsModal({ isOpen: true, tunnelId }),
@@ -110,7 +147,30 @@ export default function TunnelsPage() {
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),
         // 點標籤：把 label:x 加進搜尋（已經有就不重複）。/ Clicking a label adds label:x to the search.
         onLabel: (label) => setQuery((q) => (q.split(/\s+/).includes(`label:${label}`) ? q : `${q.trim()} label:${label}`.trim())),
+        onMoveToGroup: (tunnelId) => groupsUi.openMove(tunnelId),
     };
+
+    const card = (tunnel: Tunnel) => (
+        <TunnelCard
+            key={tunnel.id}
+            tunnel={tunnel}
+            isActive={isOnline(tunnel)}
+            latencyMs={latencyMap[String(tunnel.reverse_port)] ?? null}
+            sharedCount={tunnel.shared_with_count ?? 0}
+            {...actions}
+        />
+    );
+    const row = (tunnel: Tunnel) => (
+        <TunnelTableRow
+            key={tunnel.id}
+            tunnel={tunnel}
+            isActive={isOnline(tunnel)}
+            latencyMs={latencyMap[String(tunnel.reverse_port)] ?? null}
+            sharedCount={tunnel.shared_with_count ?? 0}
+            {...actions}
+        />
+    );
+    const CARD_GRID = "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5";
 
     const clearFilters = () => {
         setFilter("all");
@@ -188,6 +248,26 @@ export default function TunnelsPage() {
                         onSortChange={setSort}
                         shown={visible.length}
                         total={tunnels.length}
+                        groupControls={
+                            <>
+                                <Button variant="outline" size="sm" className="h-9" onClick={groupsUi.openManage} aria-label={t("groups.tunnel.manageAria")}>
+                                    <FolderTree size={15} />
+                                    {t("groups.tunnel.manage")}
+                                </Button>
+                                {groupsUi.groups.length > 0 && (
+                                    <Segmented
+                                        size="sm"
+                                        value={grouping}
+                                        onChange={setGrouping}
+                                        aria-label={t("groups.tunnel.view")}
+                                        options={[
+                                            { value: "groups", label: t("groups.tunnel.viewGrouped") },
+                                            { value: "flat", label: t("groups.tunnel.viewFlat") },
+                                        ]}
+                                    />
+                                )}
+                            </>
+                        }
                         viewToggle={
                             <div className="hidden min-[1200px]:flex items-center">
                                 <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
@@ -201,19 +281,20 @@ export default function TunnelsPage() {
                             <p className="text-sm text-muted-foreground">{t("tunnels.noMatch")}</p>
                             <Button variant="outline" size="sm" onClick={clearFilters}>{t("tunnels.clearFilters")}</Button>
                         </div>
-                    ) : viewMode === "card" ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5">
-                            {visible.map((tunnel) => (
-                                <TunnelCard
-                                    key={tunnel.id}
-                                    tunnel={tunnel}
-                                    isActive={isOnline(tunnel)}
-                                    latencyMs={latencyMap[String(tunnel.reverse_port)] ?? null}
-                                    sharedCount={tunnel.shared_with_count ?? 0}
-                                    {...actions}
-                                />
-                            ))}
+                    ) : grouped && viewMode === "card" ? (
+                        <div className="space-y-6">
+                            {sections.map((sec) => {
+                                const h = headerProps(sec);
+                                return (
+                                    <section key={sectionKey(sec.group)} className="space-y-3">
+                                        <GroupHeader {...h} />
+                                        {!h.collapsed && (sec.items.length > 0 ? <div className={CARD_GRID}>{sec.items.map(card)}</div> : <EmptyGroup />)}
+                                    </section>
+                                );
+                            })}
                         </div>
+                    ) : viewMode === "card" ? (
+                        <div className={CARD_GRID}>{visible.map(card)}</div>
                     ) : (
                         <div className="overflow-x-auto rounded-xl border border-border bg-card shadow-card">
                             <table className="min-w-full divide-y divide-border">
@@ -226,18 +307,26 @@ export default function TunnelsPage() {
                                         <th scope="col" className={`${TH} text-right`}>{t("tunnels.thActions")}</th>
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-border">
-                                    {visible.map((tunnel) => (
-                                        <TunnelTableRow
-                                            key={tunnel.id}
-                                            tunnel={tunnel}
-                                            isActive={isOnline(tunnel)}
-                                            latencyMs={latencyMap[String(tunnel.reverse_port)] ?? null}
-                                            sharedCount={tunnel.shared_with_count ?? 0}
-                                            {...actions}
-                                        />
-                                    ))}
-                                </tbody>
+                                {grouped ? (
+                                    sections.map((sec) => {
+                                        const h = headerProps(sec);
+                                        return (
+                                            <tbody key={sectionKey(sec.group)} className="divide-y divide-border border-t border-border">
+                                                <GroupHeaderRow colSpan={5} {...h} />
+                                                {!h.collapsed &&
+                                                    (sec.items.length > 0 ? (
+                                                        sec.items.map(row)
+                                                    ) : (
+                                                        <tr>
+                                                            <td colSpan={5} className="px-4 py-3 text-center text-sm text-muted-foreground">{t("groups.tunnel.emptySection")}</td>
+                                                        </tr>
+                                                    ))}
+                                            </tbody>
+                                        );
+                                    })
+                                ) : (
+                                    <tbody className="divide-y divide-border">{visible.map(row)}</tbody>
+                                )}
                             </table>
                         </div>
                     )}
@@ -259,6 +348,7 @@ export default function TunnelsPage() {
                 fetchData={fetchData}
                 handleLeaveTunnel={handleLeaveTunnel}
             />
+            <TunnelGroupDialogs ui={groupsUi} tunnels={tunnels} health={(tn) => liveHealth(tn, isOnline(tn))} />
         </div>
     );
 }

@@ -9,12 +9,14 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { Callout } from "@/components/ui/callout";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import { fingerprint, keyProblem, parsePublicKey, type KeyProblem } from "@/lib/sshKeys";
 import type { KeyDevice } from "@/types/keys";
+import type { KeyGroup } from "@/types/groups";
 import type { NewKey } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyCard";
 import { OnlineDot } from "./DeviceMatrix";
@@ -33,11 +35,14 @@ export function AddKeyModal({
     isOpen,
     onClose,
     devices,
+    keyGroups = [],
     onSubmit,
 }: {
     isOpen: boolean;
     onClose: () => void;
     devices: KeyDevice[];
+    /** 我的金鑰群組（有的話可以直接放進去）。/ My key groups (the new key can go straight into one). */
+    keyGroups?: KeyGroup[];
     onSubmit: (k: NewKey) => Promise<boolean>;
 }) {
     const { t } = useI18n();
@@ -46,6 +51,7 @@ export function AddKeyModal({
     const [nameInput, setNameInput] = useState<string | null>(null);
     const [description, setDescription] = useState("");
     const [deviceIds, setDeviceIds] = useState<number[]>([]);
+    const [groupId, setGroupId] = useState<number | null>(null);
     const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset>("never");
     const [expiryDate, setExpiryDate] = useState("");
     const [computed, setComputed] = useState<{ key: string; fp: string } | null>(null);
@@ -72,6 +78,7 @@ export function AddKeyModal({
         setNameInput(null);
         setDescription("");
         setDeviceIds([]);
+        setGroupId(null);
         setExpiryPreset("never");
         setExpiryDate("");
         onClose();
@@ -86,7 +93,7 @@ export function AddKeyModal({
         e.preventDefault();
         if (problem || !name.trim()) return;
         setSubmitting(true);
-        const ok = await onSubmit({ key, name, description, deviceIds, expiresAt: expiryValue(expiryPreset, expiryDate, "create") ?? undefined });
+        const ok = await onSubmit({ key, name, description, deviceIds, groupId, expiresAt: expiryValue(expiryPreset, expiryDate, "create") ?? undefined });
         setSubmitting(false);
         if (ok) close();
     };
@@ -157,6 +164,18 @@ export function AddKeyModal({
                         <ExpiryPicker id="add-key-expiry" preset={expiryPreset} customDate={expiryDate} onPreset={setExpiryPreset} onCustomDate={setExpiryDate} neverLabel={t("keys.expiry.siteDefault")} />
                         <p className="text-xs text-muted-foreground">{t("keys.expiry.hint")}</p>
                     </div>
+                    {keyGroups.length > 0 && (
+                        <div className="space-y-2">
+                            <Label htmlFor="add-key-group">{t("groups.key.field")}</Label>
+                            <NativeSelect id="add-key-group" value={groupId ?? ""} onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : null)}>
+                                <option value="">{t("groups.key.fieldNone")}</option>
+                                {keyGroups.map((g) => (
+                                    <option key={g.id} value={g.id}>{g.name}</option>
+                                ))}
+                            </NativeSelect>
+                            <p className="text-xs text-muted-foreground">{t("groups.key.fieldHint")}</p>
+                        </div>
+                    )}
                 </div>
                 {devices.length > 0 && (
                     <fieldset className="space-y-2">

@@ -143,13 +143,14 @@ pub struct DesiredKey {
 /// OS 帳號 → (bare → 金鑰)。
 pub type Desired = BTreeMap<String, BTreeMap<String, DesiredKey>>;
 
-/// 由清單 + 每位擁有者允許的帳號（∩ 這把金鑰選定的帳號）算出「應該在」的狀態。
+/// 由清單（含金鑰群組授予來的列）+ 每位擁有者允許的帳號（∩ 這一列選定的帳號）算出「應該在」的狀態。
 /// 選定的帳號只是縮小範圍：`allowed_usernames` 仍是上限，選到不被允許的帳號就當沒選（之後權限放寬才生效）。
-/// Desired state from the list × each owner's allowed accounts ∩ the entry's chosen accounts. The choice only
-/// narrows: `allowed_usernames` stays the ceiling, and a chosen account outside it is simply not used (until
-/// access widens).
+/// 同一把金鑰有好幾列（直接 + 群組）時取聯集。
+/// Desired state from the list (including entries from key group grants) × each owner's allowed accounts ∩ the
+/// entry's chosen accounts. The choice only narrows: `allowed_usernames` stays the ceiling, and a chosen account
+/// outside it is simply not used (until access widens). Several entries for one key add up.
 pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
-    let entries = db::device_keys::entries_for_tunnel(db, tunnel.id).await?;
+    let entries = db::device_keys::effective_entries_for_tunnel(db, tunnel.id).await?;
     let mut allowed: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
     let mut out = Desired::new();
     for e in entries {
@@ -162,9 +163,8 @@ pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
             let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| (u.id, u.username)).collect();
             slot.insert(names);
         }
-        let chosen = e.account_ids();
         for (id, os_user) in &allowed[&e.user_id] {
-            if chosen.as_ref().is_some_and(|c| !c.contains(id)) {
+            if !e.covers(*id, os_user) {
                 continue;
             }
             out.entry(os_user.clone()).or_default().insert(
@@ -415,7 +415,7 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Keys Telepy installed on the device, grouped per key (for the delete check).
 pub async fn installed_summary(db: &db::Db, tunnel_id: i64) -> sqlx::Result<Vec<serde_json::Value>> {
     let installed = db::device_keys::installed_for_tunnel(db, tunnel_id).await?;
-    let entries: HashMap<i64, db::device_keys::Entry> = db::device_keys::entries_for_tunnel(db, tunnel_id).await?.into_iter().map(|e| (e.user_key_id, e)).collect();
+    let entries: HashMap<i64, db::device_keys::Entry> = db::device_keys::effective_entries_for_tunnel(db, tunnel_id).await?.into_iter().map(|e| (e.user_key_id, e)).collect();
     let mut keys: BTreeMap<String, (Option<i64>, Option<i64>, String, Vec<String>)> = BTreeMap::new();
     for i in installed {
         let k = keys.entry(i.key_bare.clone()).or_insert_with(|| (i.user_key_id, i.user_id, i.fingerprint.clone(), Vec::new()));

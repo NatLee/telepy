@@ -5,7 +5,7 @@
  * use (time + source IP) and which devices' lists it is on.
  */
 import React from "react";
-import { CalendarClock, Clock3, HardDrive, KeyRound, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
+import { CalendarClock, Clock3, HardDrive, KeyRound, Layers, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -51,11 +51,14 @@ export function KeyExpiryText({ expiresAt, compact = false }: { expiresAt: strin
 export function KeyCard({
     keyItem,
     placements,
+    groupName,
     onDetails,
     onDelete,
 }: {
     keyItem: UserKey;
     placements: { device: KeyDevice; targets: KeyTarget[] }[];
+    /** 它的金鑰群組名稱。/ Its key group's name. */
+    groupName?: string | null;
     onDetails: () => void;
     onDelete: () => void;
 }) {
@@ -71,6 +74,11 @@ export function KeyCard({
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <h3 className="truncate text-[1rem] text-foreground" title={keyItem.host_friendly_name}>{keyItem.host_friendly_name}</h3>
                         <KeyTypeBadge type={keyItem.key_type} bits={keyItem.bits} />
+                        {groupName && (
+                            <span className="inline-flex max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[0.75rem] text-muted-foreground" title={t("groups.key.chipTitle")}>
+                                <Layers size={12} aria-hidden /> <span className="truncate">{groupName}</span>
+                            </span>
+                        )}
                     </div>
                     {keyItem.comment && <p className="mt-0.5 truncate font-mono text-[0.75rem] text-muted-foreground" title={keyItem.comment}>{keyItem.comment}</p>}
                 </div>

@@ -24,6 +24,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::usernames::router())
         .merge(api::user_keys::router())
         .merge(api::device_keys::router())
+        .merge(api::groups::router())
         .merge(api::reverse_keys::router())
         .merge(api::scripts::router())
         .merge(api::sharing::router())

@@ -6,12 +6,13 @@
  * on every device account.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { HardDrive, Hash, KeyRound, Loader2, Pencil, Save, Settings2 } from "lucide-react";
+import { HardDrive, Hash, KeyRound, Layers, Loader2, Pencil, Save, Settings2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/ui/field";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
@@ -20,6 +21,7 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { fingerprint, keyProblem, parsePublicKey, type KeyProblem } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, KeyTarget, UserKey } from "@/types/keys";
+import type { KeyGroup, KeyGroupSource } from "@/types/groups";
 import type { KeyPatch, KeyPatchErrors } from "@/hooks/useKeysPage";
 import { KeyTypeBadge } from "./KeyCard";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
@@ -43,6 +45,8 @@ interface DevicesProps {
     pending: Set<string>;
     onToggle: (device: KeyDevice, key: UserKey, on: boolean) => void;
     onManageDevice: (device: KeyDevice) => void;
+    /** 我的金鑰群組（選這把金鑰在哪一組）。/ My key groups (to pick this key's group). */
+    keyGroups?: KeyGroup[];
 }
 
 export function KeyDetailsModal({
@@ -60,8 +64,12 @@ export function KeyDetailsModal({
     return keyItem ? <KeyDetailsBody key={keyItem.id} keyItem={keyItem} onClose={onClose} onSave={onSave} {...devices} /> : <Modal isOpen={false} onClose={onClose} title="" />;
 }
 
-/** 這把金鑰在每台裝置上：在清單上的才有 targets。/ The key on every device; targets only when on the list. */
-type Placement = { device: KeyDevice; targets: KeyTarget[] | null };
+/**
+ * 這把金鑰在每台裝置上：在那裡（直接或經由金鑰群組）的才有 targets；`direct` = 直接在清單上（勾選框就是它）。
+ * The key on every device: targets when it is there (directly or through key groups); `direct` = listed
+ * directly (that is what the tick means).
+ */
+type Placement = { device: KeyDevice; targets: KeyTarget[] | null; direct: boolean; groups: KeyGroupSource[] };
 
 function rank(p: Placement): number {
     if (p.targets && needsAttention(p.targets, p.device.online)) return 0;
@@ -75,7 +83,10 @@ function KeyDevices({ keyItem, devices, pending, onToggle, onManageDevice }: { k
     const placements = useMemo<Placement[]>(
         () =>
             devices
-                .map((device) => ({ device, targets: device.keys.find((k) => k.user_key_id === keyItem.id)?.targets ?? null }))
+                .map((device) => {
+                    const k = device.keys.find((x) => x.user_key_id === keyItem.id);
+                    return { device, targets: k?.targets ?? null, direct: !!k && k.direct !== false, groups: k?.groups ?? [] };
+                })
                 .sort((a, b) => rank(a) - rank(b) || a.device.host_friendly_name.localeCompare(b.device.host_friendly_name)),
         [devices, keyItem.id]
     );
@@ -101,7 +112,7 @@ function KeyDevices({ keyItem, devices, pending, onToggle, onManageDevice }: { k
             </p>
             <DeviceFilterBar filter={filter} />
             <ul className="divide-y divide-border/70 rounded-xl ring-1 ring-inset ring-border/80">
-                {filter.visible.map(({ device, targets }) => {
+                {filter.visible.map(({ device, targets, direct, groups }) => {
                     const busy = pending.has(`${device.tunnel_id}:${keyItem.id}`);
                     const id = `key-${keyItem.id}-dev-${device.tunnel_id}`;
                     return (
@@ -110,13 +121,18 @@ function KeyDevices({ keyItem, devices, pending, onToggle, onManageDevice }: { k
                                 {busy ? (
                                     <Loader2 size={16} className="mt-0.5 animate-spin text-primary" aria-hidden />
                                 ) : (
-                                    <input id={id} type="checkbox" checked={!!targets} onChange={(e) => onToggle(device, keyItem, e.target.checked)} className="mt-0.5 size-4 accent-primary" />
+                                    <input id={id} type="checkbox" checked={direct} onChange={(e) => onToggle(device, keyItem, e.target.checked)} className="mt-0.5 size-4 accent-primary" />
                                 )}
                                 <span className="flex min-w-0 flex-col gap-1">
                                     <span className="flex flex-wrap items-center gap-2 text-sm">
                                         <span className="truncate text-foreground">{device.host_friendly_name}</span>
                                         <RoleBadge role={device.role} />
                                         <OnlineDot online={device.online} />
+                                        {groups.map((g) => (
+                                            <Chip key={g.id} title={t("groups.viaGroup", { name: g.name })}>
+                                                <Layers aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
+                                            </Chip>
+                                        ))}
                                     </span>
                                     {targets ? (
                                         <TargetChips targets={targets} online={device.online} />
@@ -141,6 +157,7 @@ function KeyDetailsBody({
     keyItem,
     onClose,
     onSave,
+    keyGroups = [],
     ...devices
 }: {
     keyItem: UserKey;
@@ -148,7 +165,9 @@ function KeyDetailsBody({
     onSave: (key: UserKey, patch: KeyPatch) => Promise<KeyPatchErrors | null>;
 } & DevicesProps) {
     const { t, locale } = useI18n();
+    const currentGroup = keyGroups.find((g) => g.key_ids.includes(keyItem.id))?.id ?? null;
     const [form, setForm] = useState({ host_friendly_name: keyItem.host_friendly_name, key: keyItem.key, description: keyItem.description ?? "" });
+    const [groupId, setGroupId] = useState<number | null>(currentGroup);
     // 效期：null = 沒動。/ Expiry: null = untouched.
     const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset | null>(null);
     const [expiryDate, setExpiryDate] = useState("");
@@ -172,12 +191,13 @@ function KeyDetailsBody({
         if (form.host_friendly_name.trim() !== keyItem.host_friendly_name) p.host_friendly_name = form.host_friendly_name.trim();
         if (form.key.trim() !== keyItem.key.trim()) p.key = form.key.trim();
         if (form.description !== (keyItem.description ?? "")) p.description = form.description;
+        if (groupId !== currentGroup) p.group_id = groupId;
         if (expiryPreset !== null) {
             const v = expiryValue(expiryPreset, expiryDate, "update");
             if (v !== undefined) p.expires_at = v;
         }
         return p;
-    }, [form, keyItem, expiryPreset, expiryDate]);
+    }, [form, keyItem, expiryPreset, expiryDate, groupId, currentGroup]);
     const dirty = Object.keys(patch).length > 0;
     const keyChanged = patch.key !== undefined;
 
@@ -274,6 +294,16 @@ function KeyDetailsBody({
                         <Field id="key-details-description" label={t("common.description")} addon={t("common.optional")} error={errors.description}>
                             <Input value={form.description} onChange={(e) => setField("description", e.target.value)} placeholder={t("keys.descriptionPlaceholder")} />
                         </Field>
+                        {keyGroups.length > 0 && (
+                            <Field id="key-details-group" label={t("groups.key.field")} hint={t("groups.key.fieldHint")}>
+                                <NativeSelect value={groupId ?? ""} onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : null)}>
+                                    <option value="">{t("groups.key.fieldNone")}</option>
+                                    {keyGroups.map((g) => (
+                                        <option key={g.id} value={g.id}>{g.name}</option>
+                                    ))}
+                                </NativeSelect>
+                            </Field>
+                        )}
                     </div>
                     <Field
                         id="key-details-key"

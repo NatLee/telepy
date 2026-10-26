@@ -55,6 +55,24 @@ pub struct Row {
     pub raw: Option<String>,
     /// 清單上的金鑰只裝到這些帳號（username id）；None = 擁有者能用的每個帳號。/ The entry's chosen accounts; None = all.
     pub accounts: Option<Vec<i64>>,
+    /// 清單上的金鑰：直接加進清單的（能直接移出）。/ Listed keys: added to the list directly (can be taken off directly).
+    pub direct: bool,
+    /// 清單上的金鑰：經由哪些金鑰群組來的。/ Listed keys: the key groups that bring it here.
+    pub groups: Vec<GroupRef>,
+}
+
+/// 一個金鑰群組（名稱給畫面用）。/ A key group, named for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GroupRef {
+    pub id: i64,
+    pub name: String,
+}
+
+/// 一把金鑰為什麼在這台裝置的清單上。/ Why a key is on this device's list.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sources {
+    pub direct: bool,
+    pub groups: Vec<GroupRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -111,6 +129,8 @@ pub struct Inputs<'a> {
     pub platform: Option<&'a Platform>,
     /// 清單上有選定帳號的金鑰：user_key_id → 選定的 username id。/ Entries with chosen accounts: user_key_id → ids.
     pub restrictions: &'a HashMap<i64, Vec<i64>>,
+    /// 清單上的金鑰從哪來（直接 / 金鑰群組）。/ Where listed keys come from (directly / key groups).
+    pub sources: &'a HashMap<i64, Sources>,
 }
 
 fn base(state: RowState) -> Row {
@@ -133,6 +153,8 @@ fn base(state: RowState) -> Row {
         error: None,
         raw: None,
         accounts: None,
+        direct: false,
+        groups: Vec::new(),
     }
 }
 
@@ -149,6 +171,12 @@ fn with_known(mut r: Row, k: &KnownKey, i: &Inputs) -> Row {
     r.owner = Some(k.owner.clone());
     r.mine = k.owner_id == i.viewer;
     r.accounts = i.restrictions.get(&k.user_key_id).cloned();
+    if r.on_list {
+        let src = i.sources.get(&k.user_key_id);
+        // 沒有來源資料就當成直接加的（舊呼叫端）。/ No source data = listed directly.
+        r.direct = src.is_none_or(|s| s.direct);
+        r.groups = src.map(|s| s.groups.clone()).unwrap_or_default();
+    }
     with_key(r, &k.parsed)
 }
 
@@ -319,6 +347,7 @@ mod tests {
         users: HashMap<i64, String>,
         platform: Option<Platform>,
         restrictions: HashMap<i64, Vec<i64>>,
+        sources: HashMap<i64, Sources>,
     }
 
     impl Fixture {
@@ -334,6 +363,7 @@ mod tests {
                 users: HashMap::from([(10, "alice".into()), (20, "bob".into())]),
                 platform: None,
                 restrictions: HashMap::new(),
+                sources: HashMap::new(),
             }
         }
         fn build(&self, viewer: i64, manager: bool) -> AccountView {
@@ -351,6 +381,7 @@ mod tests {
                 manager,
                 platform: self.platform.as_ref(),
                 restrictions: &self.restrictions,
+                sources: &self.sources,
             };
             build(&i).remove(0)
         }
@@ -448,6 +479,7 @@ mod tests {
             manager: true,
             platform: f.platform.as_ref(),
             restrictions: &f.restrictions,
+            sources: &f.sources,
         };
         let v = build(&i);
         assert_eq!((v[0].file, v[0].windows_admin), (super::super::platform::ADMIN_FILE_LABEL, true));
@@ -455,6 +487,26 @@ mod tests {
         assert_eq!(v[0].rows[0].accounts, Some(vec![7]));
         // 沒探測過：預設是帳號自己的檔案。/ Not probed: the account's own file.
         assert_eq!(Fixture::new().build(10, true).file, USER_FILE_LABEL);
+    }
+
+    #[test]
+    fn listed_rows_say_where_they_come_from() {
+        let mut f = Fixture::new();
+        f.desired.insert("ubuntu".into(), BTreeSet::from([bare(ALICE), bare(BOB)]));
+        // alice 的金鑰只經由群組「Laptops」來；bob 的直接在清單上（沒有來源資料 = 直接）。
+        // Alice's key comes only through the "Laptops" group; Bob's is listed directly (no source data = direct).
+        f.sources.insert(1, Sources { direct: false, groups: vec![GroupRef { id: 5, name: "Laptops".into() }] });
+        let v = f.build(10, true);
+        let alice = v.rows.iter().find(|r| r.user_key_id == Some(1)).unwrap();
+        let bob = v.rows.iter().find(|r| r.user_key_id == Some(2)).unwrap();
+        assert!(!alice.direct);
+        assert_eq!(alice.groups, vec![GroupRef { id: 5, name: "Laptops".into() }]);
+        assert!(bob.direct && bob.groups.is_empty());
+        // 不在清單上的列沒有來源。/ Rows not on the list carry no source.
+        f.desired.clear();
+        f.snapshots.insert("ubuntu".into(), (Some(format!("{ALICE}\n")), "t".into()));
+        let v = f.build(10, true);
+        assert!(!v.rows[0].direct && v.rows[0].groups.is_empty());
     }
 
     #[test]

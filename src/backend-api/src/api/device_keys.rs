@@ -70,6 +70,50 @@ fn require_manager(eff: Effective) -> ApiResult<()> {
     }
 }
 
+/// 一把金鑰實際用到的帳號（username id）：每一列（直接 / 各群組授予）的聯集；有一列是「全部」就是 None。
+/// 群組授予用帳號名稱，對照這台裝置上的帳號換成 id。
+/// The accounts a key really goes to: the union over its entries (direct and each group grant); None when any
+/// of them means "all". Grants name accounts, mapped to this device's account ids.
+fn union_accounts(entries: &[&db::device_keys::Entry], tunnel_accounts: &[(i64, String)]) -> Option<Vec<i64>> {
+    let mut ids = BTreeSet::new();
+    for e in entries {
+        match (e.account_ids(), e.grant_accounts()) {
+            (Some(chosen), _) => ids.extend(chosen),
+            (None, Some(names)) => ids.extend(tunnel_accounts.iter().filter(|(_, n)| names.contains(n)).map(|(id, _)| *id)),
+            (None, None) => return None,
+        }
+    }
+    Some(ids.into_iter().collect())
+}
+
+/// 一把金鑰經由哪些群組來到這台裝置（JSON）。/ The group grants bringing a key to this device (JSON).
+fn group_sources(entries: &[&db::device_keys::Entry]) -> Vec<Value> {
+    entries
+        .iter()
+        .filter(|e| !e.is_direct())
+        .map(|e| {
+            json!({
+                "id": e.via_group,
+                "name": e.group_name,
+                "tunnel_group": e.via_tunnel_group.map(|id| json!({ "id": id, "name": e.tunnel_group_name })),
+                "accounts": e.grant_accounts(),
+            })
+        })
+        .collect()
+}
+
+/// 依金鑰分好的列（保留第一次出現的順序：直接的在前）。/ Entries grouped per key, in first-seen order (direct first).
+fn by_key(entries: &[db::device_keys::Entry]) -> Vec<(i64, Vec<&db::device_keys::Entry>)> {
+    let mut out: Vec<(i64, Vec<&db::device_keys::Entry>)> = Vec::new();
+    for e in entries {
+        match out.iter_mut().find(|(k, _)| *k == e.user_key_id) {
+            Some((_, v)) => v.push(e),
+            None => out.push((e.user_key_id, vec![e])),
+        }
+    }
+    out
+}
+
 /// 一台裝置算狀態要的資料。
 struct Snapshot {
     desired: Desired,
@@ -164,7 +208,22 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
         }
     }
     let platform = state.device_keys.cached_platform(t.reverse_port);
-    let restrictions: HashMap<i64, Vec<i64>> = db::device_keys::entries_for_tunnel(&state.db, t.id).await?.into_iter().filter_map(|e| e.account_ids().map(|a| (e.user_key_id, a))).collect();
+    let entries = db::device_keys::effective_entries_for_tunnel(&state.db, t.id).await?;
+    let tunnel_accounts: Vec<(i64, String)> = db::tunnels::usernames_for_tunnel(&state.db, t.id).await?.into_iter().map(|u| (u.id, u.username)).collect();
+    let mut restrictions: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut sources: HashMap<i64, view::Sources> = HashMap::new();
+    for (key_id, list) in by_key(&entries) {
+        if let Some(ids) = union_accounts(&list, &tunnel_accounts) {
+            restrictions.insert(key_id, ids);
+        }
+        let groups = list.iter().filter_map(|e| e.via_group.map(|id| view::GroupRef { id, name: e.group_name.clone().unwrap_or_default() })).fold(Vec::new(), |mut acc: Vec<view::GroupRef>, g| {
+            if !acc.contains(&g) {
+                acc.push(g);
+            }
+            acc
+        });
+        sources.insert(key_id, view::Sources { direct: list.iter().any(|e| e.is_direct()), groups });
+    }
     Ok(view::build(&view::Inputs {
         accounts,
         desired: &desired,
@@ -179,6 +238,7 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
         manager,
         platform: platform.as_ref(),
         restrictions: &restrictions,
+        sources: &sources,
     }))
 }
 
@@ -207,12 +267,18 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
     let allowed = permissions::allowed_usernames(&state.db, user_id, t).await?;
     let accounts: Vec<String> = allowed.iter().map(|u| u.username.clone()).collect();
     let account_ids: Vec<Value> = allowed.iter().map(|u| json!({ "id": u.id, "username": u.username })).collect();
-    let entries = db::device_keys::entries_for_tunnel(&state.db, t.id).await?;
-    let in_list: BTreeSet<i64> = entries.iter().filter(|e| e.user_id == user_id).map(|e| e.user_key_id).collect();
-    let my_restrictions: HashMap<i64, Option<Vec<i64>>> = entries.iter().filter(|e| e.user_id == user_id).map(|e| (e.user_key_id, e.account_ids())).collect();
+    // 直接在清單上的 + 金鑰群組授予來的；同一把金鑰合成一筆，`direct` / `groups` 說它從哪來。
+    // Direct entries plus the ones from key group grants, one item per key; `direct` / `groups` say why it is here.
+    let entries = db::device_keys::effective_entries_for_tunnel(&state.db, t.id).await?;
+    let direct: Vec<&db::device_keys::Entry> = entries.iter().filter(|e| e.is_direct()).collect();
+    let in_list: BTreeSet<i64> = direct.iter().filter(|e| e.user_id == user_id).map(|e| e.user_key_id).collect();
+    let my_restrictions: HashMap<i64, Option<Vec<i64>>> = direct.iter().filter(|e| e.user_id == user_id).map(|e| (e.user_key_id, e.account_ids())).collect();
     let mut names: HashMap<i64, String> = HashMap::new();
     let mut entry_values = Vec::new();
-    for e in entries.iter().filter(|e| manager || e.user_id == user_id) {
+    let grouped = by_key(&entries);
+    for (_, list) in grouped.iter().filter(|(_, l)| manager || l[0].user_id == user_id) {
+        let e = list[0];
+        let direct_entry = list.iter().find(|e| e.is_direct()).copied();
         let parsed = parse_public_key(&e.key);
         if let std::collections::hash_map::Entry::Vacant(slot) = names.entry(e.added_by_id) {
             let n = db::users::by_id(&state.db, e.added_by_id).await?.map(|u| u.username).unwrap_or_default();
@@ -227,10 +293,13 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
             "mine": e.user_id == user_id,
             "added_by": names[&e.added_by_id],
             "created_at": db_to_iso(&e.created_at, tz),
-            "accounts": e.account_ids(),
+            "accounts": direct_entry.and_then(|d| d.account_ids()),
+            "direct": direct_entry.is_some(),
+            "groups": group_sources(list),
             "targets": parsed.map(|p| snap.targets(&p.bare)).unwrap_or_default(),
         }));
     }
+    let my_via: HashMap<i64, Vec<Value>> = grouped.iter().filter(|(_, l)| l[0].user_id == user_id).map(|(k, l)| (*k, group_sources(l))).collect();
     let owners: HashMap<i64, String> = entries.iter().map(|e| (e.user_id, e.owner_username.clone())).collect();
     let removals: Vec<Value> = if manager {
         let mut out = Vec::new();
@@ -261,6 +330,7 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
         .filter(|s| manager || accounts.contains(&s.username))
         .map(|s| json!({ "username": s.username, "ok": s.ok, "error": s.error, "synced_at": db_to_iso(&s.synced_at, tz) }))
         .collect();
+    let my_group_of = db::groups::key_group_of(&state.db, user_id).await?;
     let my_keys: Vec<Value> = db::keys::user_keys(&state.db, user_id)
         .await?
         .iter()
@@ -274,9 +344,12 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
                 "in_list": in_list.contains(&k.id),
                 "expired": k.expired(),
                 "accounts": my_restrictions.get(&k.id).cloned().flatten(),
+                "group_id": my_group_of.get(&k.id),
+                "via_groups": my_via.get(&k.id).cloned().unwrap_or_default(),
             })
         })
         .collect();
+    let my_key_groups = my_key_groups_here(state, user_id, t.id, &my_group_of).await?;
     let view_accounts = visible_accounts(state, t, user_id, manager, &snap.desired).await?;
     let view = build_view(state, t, &snap, &view_accounts, user_id, manager).await?;
     let platform = state.device_keys.cached_platform(t.reverse_port).map(|p| json!({ "windows": p.windows, "error": p.error }));
@@ -291,7 +364,33 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
         "removals": removals,
         "sync": sync,
         "my_keys": my_keys,
+        "my_key_groups": my_key_groups,
     }))
+}
+
+/// 面板的「你的金鑰群組」：每組有幾把金鑰、有沒有直接授予這台裝置、經由我的哪個通道群組授予了。
+/// The panel's "your key groups": key count, a direct grant to this device, and grants through my tunnel group.
+async fn my_key_groups_here(state: &AppState, user_id: i64, tunnel_id: i64, group_of: &HashMap<i64, i64>) -> ApiResult<Vec<Value>> {
+    let groups = db::groups::key_groups(&state.db, user_id).await?;
+    if groups.is_empty() {
+        return Ok(vec![]);
+    }
+    let grants = db::groups::grants_of_user(&state.db, user_id).await?;
+    let my_tunnel_group = db::groups::tunnel_group_of(&state.db, user_id).await?.get(&tunnel_id).copied();
+    Ok(groups
+        .iter()
+        .map(|g| {
+            let direct = grants.iter().find(|gr| gr.key_group_id == g.id && gr.tunnel_id == Some(tunnel_id));
+            let via = grants.iter().find(|gr| gr.key_group_id == g.id && gr.tunnel_group_id.is_some() && gr.tunnel_group_id == my_tunnel_group);
+            json!({
+                "id": g.id,
+                "name": g.name,
+                "key_count": group_of.values().filter(|v| **v == g.id).count(),
+                "grant": direct.map(|gr| json!({ "id": gr.id, "accounts": gr.account_names() })),
+                "via_tunnel_group": via.map(|gr| json!({ "id": gr.tunnel_group_id, "name": gr.tunnel_group_name, "grant_id": gr.id, "accounts": gr.account_names() })),
+            })
+        })
+        .collect())
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/{id}/device-keys", tag = "Device Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::DeviceKeys), (status = 404, body = super::schemas::ErrorBody)))]
@@ -607,7 +706,13 @@ fn batch_fingerprints(body: &Value) -> ApiResult<Vec<String>> {
 async fn my_devices(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
     // BTreeMap：金鑰依 id 排，裝置依名稱排，輸出才是固定的。/ Ordered maps so the output is deterministic.
     let mine: BTreeMap<i64, String> = db::keys::user_keys(&state.db, me.id).await?.into_iter().filter_map(|k| parse_public_key(&k.key).map(|p| (k.id, p.bare))).collect();
-    let in_list: HashMap<(i64, i64), Option<Vec<i64>>> = db::device_keys::entries_for_user(&state.db, me.id).await?.into_iter().map(|e| ((e.tunnel_id, e.user_key_id), e.account_ids())).collect();
+    // (隧道, 金鑰) → 這把金鑰在那台裝置上的每一列（直接 + 群組授予）。/ (tunnel, key) → its entries there.
+    let entries = db::device_keys::effective_entries_for_user(&state.db, me.id).await?;
+    let mut in_list: HashMap<(i64, i64), Vec<&db::device_keys::Entry>> = HashMap::new();
+    for e in &entries {
+        in_list.entry((e.tunnel_id, e.user_key_id)).or_default().push(e);
+    }
+    let my_groups = db::groups::tunnel_group_of(&state.db, me.id).await?;
     let (my_shares, _) = db::sharing::permission_context(&state.db, me.id).await?;
     let mut tunnels = db::tunnels::visible_to(&state.db, me.id).await?;
     tunnels.sort_by(|a, b| a.host_friendly_name.to_lowercase().cmp(&b.host_friendly_name.to_lowercase()).then(a.id.cmp(&b.id)));
@@ -621,12 +726,22 @@ async fn my_devices(State(state): State<AppState>, AuthUser(me): AuthUser) -> Ap
         let snap = if has_entries { Some(snapshot(&state, &t).await?) } else { None };
         let keys: Vec<Value> = mine
             .iter()
-            .filter_map(|(kid, bare)| in_list.get(&(t.id, *kid)).map(|accounts| (kid, bare, accounts)))
-            .map(|(kid, bare, accounts)| json!({ "user_key_id": kid, "accounts": accounts, "targets": snap.as_ref().map(|s| s.targets(bare)).unwrap_or_default() }))
+            .filter_map(|(kid, bare)| in_list.get(&(t.id, *kid)).map(|list| (kid, bare, list)))
+            .map(|(kid, bare, list)| {
+                let direct = list.iter().find(|e| e.is_direct());
+                json!({
+                    "user_key_id": kid,
+                    "accounts": direct.and_then(|d| d.account_ids()),
+                    "direct": direct.is_some(),
+                    "groups": group_sources(list),
+                    "targets": snap.as_ref().map(|s| s.targets(bare)).unwrap_or_default(),
+                })
+            })
             .collect();
         out.push(json!({
             "tunnel_id": t.id,
             "host_friendly_name": t.host_friendly_name,
+            "group_id": my_groups.get(&t.id),
             "online": dk::online(&state, t.reverse_port),
             "role": eff.label(),
             "accounts": accounts,

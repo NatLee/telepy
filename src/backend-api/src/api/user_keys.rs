@@ -39,8 +39,49 @@ fn unique_error(e: sqlx::Error) -> ApiError {
 #[utoipa::path(get, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::UserKey>)))]
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let rows = db::keys::user_keys(&state.db, user.id).await?;
+    let groups = db::groups::key_group_of(&state.db, user.id).await?;
     let tz = state.config.tz_offset_minutes;
-    Ok(Json(Value::Array(rows.iter().map(|k| user_key_json(k, tz)).collect())))
+    Ok(Json(Value::Array(
+        rows.iter()
+            .map(|k| {
+                let mut v = user_key_json(k, tz);
+                v["group_id"] = json!(groups.get(&k.id));
+                v
+            })
+            .collect(),
+    )))
+}
+
+/// 單筆金鑰的 JSON，加上它在哪個金鑰群組。/ One key's JSON plus its key group.
+async fn key_reply(state: &AppState, k: &UserKey) -> ApiResult<Value> {
+    let mut v = user_key_json(k, state.config.tz_offset_minutes);
+    v["group_id"] = json!(db::groups::key_group_of_key(&state.db, k.id).await?);
+    Ok(v)
+}
+
+/// `group_id`：沒給 = 不動；null = 拿出群組；否則必須是自己的金鑰群組。/ `group_id`: absent = unchanged; null = none;
+/// else one of the caller's key groups.
+async fn group_choice(state: &AppState, user_id: i64, body: &Value) -> ApiResult<Option<Option<i64>>> {
+    match body.get("group_id") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(v) => {
+            let id = v.as_i64().ok_or_else(|| ApiError::field("group_id", "Expected a key group id or null."))?;
+            if db::groups::key_group(&state.db, user_id, id).await?.is_none() {
+                return Err(ApiError::field("group_id", "Key group not found."));
+            }
+            Ok(Some(Some(id)))
+        }
+    }
+}
+
+/// 金鑰換組：舊組與新組授予的裝置都要同步。/ A key changed group: sync the devices of both groups.
+async fn move_key(state: &AppState, key_id: i64, group: Option<i64>) -> ApiResult<()> {
+    let old = db::groups::set_key_group(&state.db, key_id, group).await?;
+    for g in old.into_iter().chain(group) {
+        state.device_keys.kick_many(db::groups::key_group_reach(&state.db, g).await?);
+    }
+    Ok(())
 }
 
 async fn own_key(state: &AppState, user_id: i64, id: i64) -> ApiResult<UserKey> {
@@ -89,6 +130,7 @@ fn validate_full(body: &Value) -> Result<(String, String), ApiError> {
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (name, key) = validate_full(&body)?;
     let key = checked_key(&state, &key, None).await?;
+    let group = group_choice(&state, user.id, &body).await?;
     let description = json_str(&body, "description");
     // 沒給到期時間：站台有上限就用上限，否則不到期。/ No expiry given: the site limit when set, else never.
     let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
@@ -101,6 +143,10 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
     .map_err(|m| ApiError::field("expires_at", m))?;
     let expires = expires.map(crate::util::db_time);
     let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref(), expires.as_deref()).await.map_err(unique_error)?;
+    // 放進金鑰群組：那組授予的裝置都會裝上它。/ Into a key group: every device the group is granted to gets it.
+    if let Some(Some(g)) = group {
+        move_key(&state, k.id, Some(g)).await?;
+    }
     state.hub.notify_user(
         user.id,
         &json!({
@@ -108,18 +154,19 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
             "details": format!("A new user authorized key has been created by {}", user.username),
         }),
     );
-    Ok((StatusCode::CREATED, Json(user_key_json(&k, state.config.tz_offset_minutes))))
+    Ok((StatusCode::CREATED, Json(key_reply(&state, &k).await?)))
 }
 
 #[utoipa::path(get, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
 async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let k = own_key(&state, user.id, id).await?;
-    Ok(Json(user_key_json(&k, state.config.tz_offset_minutes)))
+    Ok(Json(key_reply(&state, &k).await?))
 }
 
 #[utoipa::path(patch, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), request_body = super::schemas::UserKeyPatch, responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     own_key(&state, user.id, id).await?;
+    let group = group_choice(&state, user.id, &body).await?;
     let name = json_str(&body, "host_friendly_name");
     let key = match json_str(&body, "key") {
         Some(k) => Some(checked_key(&state, &k, Some(id)).await?),
@@ -149,7 +196,10 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         // 公鑰換了：裝置上的舊金鑰換成新的。/ New key material: replace it on every device.
         state.device_keys.kick_many(db::device_keys::tunnels_with_key(&state.db, id).await?);
     }
-    Ok(Json(user_key_json(&k, state.config.tz_offset_minutes)))
+    if let Some(group) = group {
+        move_key(&state, id, group).await?;
+    }
+    Ok(Json(key_reply(&state, &k).await?))
 }
 
 #[utoipa::path(put, path = "/api/reverse/user/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Key id")), request_body = super::schemas::UserKeyWrite, responses((status = 200, body = super::schemas::UserKey), (status = 404, body = super::schemas::ErrorBody)))]
@@ -163,6 +213,7 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // 先記下用到它的裝置：刪掉之後由同步把它從那些裝置移除。/ Devices that must drop this key.
     let tunnels = db::device_keys::tunnels_with_key(&state.db, id).await?;
     db::device_keys::delete_entries_for_key(&state.db, id).await?;
+    db::groups::forget_key(&state.db, id).await?;
     db::keys::user_key_delete(&state.db, id).await?;
     state.device_keys.kick_many(tunnels);
     state.hub.notify_user(

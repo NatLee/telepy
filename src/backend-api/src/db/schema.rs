@@ -392,6 +392,66 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("tunnel_id", "label")
         )"#,
     ),
+    // Rust 自有：通道群組——每個人自己的資料夾（一條通道在一個人那裡最多屬於一組）；見 db/groups.rs。
+    // Tunnel groups: personal folders (a tunnel is in at most one of a person's groups); see db/groups.rs.
+    (
+        "telepy_tunnel_group",
+        r#"CREATE TABLE "telepy_tunnel_group" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "name" varchar(48) NOT NULL,
+            "position" integer NOT NULL DEFAULT 0,
+            "created_at" datetime NOT NULL,
+            UNIQUE ("user_id", "name")
+        )"#,
+    ),
+    (
+        "telepy_tunnel_group_member",
+        r#"CREATE TABLE "telepy_tunnel_group_member" (
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "group_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "tunnel_id")
+        )"#,
+    ),
+    // Rust 自有：金鑰群組——自己的金鑰分組（一把金鑰最多一組），整組授予通道或通道群組。
+    // Key groups: a person's own keys in groups (a key is in at most one), granted as a unit to tunnels or tunnel groups.
+    (
+        "telepy_key_group",
+        r#"CREATE TABLE "telepy_key_group" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "name" varchar(48) NOT NULL,
+            "created_at" datetime NOT NULL,
+            UNIQUE ("user_id", "name")
+        )"#,
+    ),
+    (
+        "telepy_key_group_member",
+        r#"CREATE TABLE "telepy_key_group_member" (
+            "user_key_id" integer NOT NULL PRIMARY KEY,
+            "group_id" integer NOT NULL,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
+    // 授予：金鑰群組 → 一條通道（`tunnel_id`）或自己的一個通道群組（`tunnel_group_id`），兩者只有一個；
+    // `accounts` = 只裝到這些帳號名稱（JSON；NULL = 每個允許的帳號）。
+    // A grant: key group → one tunnel or one of the owner's tunnel groups (exactly one is set); `accounts` = account
+    // names to limit it to (JSON; NULL = every allowed account).
+    (
+        "telepy_key_group_grant",
+        r#"CREATE TABLE "telepy_key_group_grant" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "key_group_id" integer NOT NULL,
+            "tunnel_id" integer NULL,
+            "tunnel_group_id" integer NULL,
+            "accounts" text NULL,
+            "created_at" datetime NOT NULL,
+            UNIQUE ("key_group_id", "tunnel_id"),
+            UNIQUE ("key_group_id", "tunnel_group_id")
+        )"#,
+    ),
     // Rust 自有：裝置金鑰清單——哪些使用者金鑰要裝進這台裝置（依擁有者允許的 OS 帳號）。
     // Device key lists: which user keys Telepy installs on a device (into the owner's allowed accounts).
     (
@@ -690,6 +750,11 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_removal_tunnel" ON "telepy_device_key_removal" ("tunnel_id", "removed_at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_group_member_group" ON "telepy_tunnel_group_member" ("group_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_group_member_tunnel" ON "telepy_tunnel_group_member" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_key_group_member_group" ON "telepy_key_group_member" ("group_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_key_group_grant_tunnel" ON "telepy_key_group_grant" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_key_group_grant_tunnel_group" ON "telepy_key_group_grant" ("tunnel_group_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     // 同一把 host key 被哪些隧道信任（= 同一台機器）。/ Which tunnels trust one host key (= the same machine).

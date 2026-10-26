@@ -92,3 +92,16 @@ test("labels (tag: alias) and pins", () => {
     const list = [tunnel({ id: 1 }), tunnel({ id: 2, pinned: true })];
     assert.deepEqual(list.sort(pinnedFirst).map((x) => x.id), [2, 1]);
 });
+
+test("group matches my group's name, none = ungrouped, and free text finds it", () => {
+    const t = tunnel({});
+    const inGroup = (q: string, group: string | null) => matchTunnel(t, parseQuery(q), { health: "online", now: NOW, group });
+    assert.ok(inGroup("group:prod", "Prod"), "case-insensitive");
+    assert.ok(inGroup(`group:"home lab"`, "Home lab"), "quoted names with spaces");
+    assert.ok(!inGroup("group:prod", "Production"), "the whole name, not a prefix");
+    assert.ok(inGroup("group:none", null));
+    assert.ok(!inGroup("group:none", "Prod"));
+    assert.ok(inGroup("-group:none", "Prod"));
+    assert.ok(inGroup("prod", "Production"), "free text searches the group name too");
+    assert.deepEqual(parseQuery("group:").invalid, ["group:"]);
+});
