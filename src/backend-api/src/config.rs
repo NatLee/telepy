@@ -35,8 +35,6 @@ pub struct Config {
     pub log_level: String,
     pub ssh_logs_path: PathBuf,
     pub web_service_pubkey_path: PathBuf,
-    pub access_token_lifetime: Duration,
-    pub refresh_token_lifetime: Duration,
     /// settings.VALID_REGISTER_DOMAINS fallback when the site setting is blank.
     pub default_register_domains: Vec<String>,
     /// Asia/Taipei (+08:00, no DST) — DRF serialised datetimes in TIME_ZONE.
@@ -132,12 +130,6 @@ impl Config {
             .unwrap_or_else(|| first_existing(&["/logs"], PathBuf::from("./logs")));
         let secret_key = env("SECRET_KEY");
         let secret_key_is_default = secret_key.is_none();
-        let access_minutes: u64 = env("ACCESS_TOKEN_LIFETIME_MINUTES")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(3600);
-        let refresh_days: u64 = env("REFRESH_TOKEN_LIFETIME_DAYS")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
         let home = env("HOME").unwrap_or_else(|| "/root".to_string());
         // gateway：有 host key 目錄就預設啟用（容器掛 /config/ssh_host_keys）。
         let gateway_host_keys_dir = env("GATEWAY_HOST_KEYS_DIR")
@@ -167,8 +159,6 @@ impl Config {
             web_service_pubkey_path: env("WEB_SERVICE_SSH_PUBKEY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(format!("{home}/.ssh/id_rsa.pub"))),
-            access_token_lifetime: Duration::from_secs(access_minutes * 60),
-            refresh_token_lifetime: Duration::from_secs(refresh_days * 86400),
             default_register_domains: vec!["gmail.com".to_string()],
             tz_offset_minutes: env("TIME_ZONE_OFFSET_MINUTES")
                 .and_then(|v| v.parse().ok())

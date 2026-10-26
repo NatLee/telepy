@@ -26,5 +26,6 @@ pub mod tunnel_sessions;
 pub mod tunnel_tags;
 pub mod tunnels;
 pub mod users;
+pub mod web_sessions;
 
 pub use pool::Db;

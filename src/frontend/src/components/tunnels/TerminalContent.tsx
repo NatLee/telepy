@@ -271,7 +271,6 @@ export function TerminalContent({
                                 <RemoteBrowserPanel
                                     serverId={serverId}
                                     username={username}
-                                    accessToken={accessToken}
                                     onActiveChange={setIsBrowserActive}
                                 />
                             )}

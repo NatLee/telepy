@@ -2,15 +2,15 @@
 
 /**
  * 設定頁(管理員專用),分頁並以 ?tab= 記在網址(MCP 頁可直接連到 AI 分頁):
- * - 帳號與註冊 / 遠端瀏覽器 / AI 存取(MCP):站台設定依 key 前綴分到各分頁。label 與說明優先用前端字典
+ * - 帳號與註冊 / 登入 / 遠端瀏覽器 / AI 存取(MCP)…:站台設定依 key 前綴分到各分頁。label 與說明優先用前端字典
  *   (siteSettings.<key>.label/.description,隨介面語言切換),找不到才退回後端 meta。
- *   以秒為單位的設定在輸入框下顯示換算後的時間。AI 分頁另外顯示 MCP 端點網址。
+ *   以秒為單位的設定用「數字 + 單位(秒/分/時/天)」輸入(DurationField)。AI 分頁另外顯示 MCP 端點網址。
  * - 使用者:使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
  * 個人偏好(語言/主題/終端機字型/已連接的應用程式)在 sidebar 左下角的齒輪 modal,不在這裡。
  * Settings page (admin-only), tabbed with the tab kept in ?tab= (the MCP page deep-links to
- * the AI tab): site settings split by key prefix into Account & registration / Remote browser /
- * AI access (labels from the frontend dictionaries, backend-meta fallback; second-based values
- * show a readable duration; the AI tab also shows the MCP endpoint), and Users (list + manage
+ * the AI tab): site settings split by key prefix into Account & registration / Sign-in / Remote browser /
+ * AI access … (labels from the frontend dictionaries, backend-meta fallback; second-based values
+ * are edited as a number plus a unit; the AI tab also shows the MCP endpoint), and Users (list + manage
  * modal). Personal preferences live in the sidebar gear modal instead.
  */
 import React, { Suspense, useState } from "react";
@@ -18,7 +18,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare, SquareTerminal } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare, SquareTerminal, LogIn } from "lucide-react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
@@ -71,19 +71,76 @@ const SETTING_CHOICES: Record<string, { value: string; label: TranslationKey }[]
 /** 以秒為單位的站台設定(逾時 / 存活時間)。/ Site settings measured in seconds. */
 const SECONDS_KEY = /_(timeout|lifetime|delay)$/;
 
-/** 秒數 → 「10 分鐘」「2 小時」這種好讀的長度(Intl 依語系翻單位)。/ Seconds → a readable, localized duration. */
-function formatDuration(seconds: number, locale: string): string {
-    const [value, unit] =
-        seconds >= 3600 ? [seconds / 3600, "hour"] : seconds >= 60 ? [seconds / 60, "minute"] : [seconds, "second"];
-    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long", maximumFractionDigits: 1 }).format(value);
+/** 秒數設定的單位(由小到大)。/ Units for seconds-based settings, smallest first. */
+type DurationUnit = "seconds" | "minutes" | "hours" | "days";
+const DURATION_UNITS: { id: DurationUnit; secs: number; label: TranslationKey }[] = [
+    { id: "seconds", secs: 1, label: "settings.unitSeconds" },
+    { id: "minutes", secs: 60, label: "settings.unitMinutes" },
+    { id: "hours", secs: 3600, label: "settings.unitHours" },
+    { id: "days", secs: 86400, label: "settings.unitDays" },
+];
+const unitSecs = (id: DurationUnit) => DURATION_UNITS.find((u) => u.id === id)?.secs ?? 1;
+/** 能整除的最大單位(2592000 → 天、3600 → 小時、90 → 秒)。/ The largest unit that divides the value exactly. */
+function unitFor(seconds: number): DurationUnit {
+    for (const u of [...DURATION_UNITS].reverse()) {
+        if (seconds > 0 && seconds % u.secs === 0) return u.id;
+    }
+    return "seconds";
+}
+/** 單位換算後的顯示值(最多兩位小數)。/ The amount in a unit, at most two decimals. */
+const amountIn = (seconds: number, unit: DurationUnit) => String(Math.round((seconds / unitSecs(unit)) * 100) / 100);
+
+/**
+ * 以秒儲存的設定:數字 + 單位 + 儲存。換單位時數值跟著換算(30 天 → 720 小時),存回去的永遠是秒。
+ * 存好的值變了(存檔、還原、重新載入)時由呼叫端以 key 重新掛載,所以這裡只在初始化時推導一次。
+ * A seconds-based setting: number + unit + save. Switching the unit converts the amount (30 days → 720 hours);
+ * what is saved is always seconds. The caller remounts it (key) when the saved value changes, so the local
+ * state is derived once.
+ */
+function DurationField({ seconds, label, onSave }: { seconds: number; label: string; onSave: (seconds: number) => void }) {
+    const { t } = useI18n();
+    const [unit, setUnit] = useState<DurationUnit>(() => unitFor(seconds));
+    const [amount, setAmount] = useState(() => amountIn(seconds, unitFor(seconds)));
+    const commit = () => {
+        const n = Number(amount);
+        if (!Number.isFinite(n) || n < 0) return;
+        onSave(Math.round(n * unitSecs(unit)));
+    };
+    const changeUnit = (next: DurationUnit) => {
+        const n = Number(amount);
+        if (Number.isFinite(n)) setAmount(amountIn(n * unitSecs(unit), next));
+        setUnit(next);
+    };
+    return (
+        <div className="flex items-center gap-2">
+            <Input
+                type="number"
+                className="w-24 h-8"
+                value={amount}
+                min={0}
+                step="any"
+                aria-label={label}
+                onChange={(e) => setAmount(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") commit(); }}
+            />
+            <NativeSelect className="h-8 w-28" value={unit} onChange={(e) => changeUnit(e.target.value as DurationUnit)} aria-label={t("settings.unitLabel")}>
+                {DURATION_UNITS.map((u) => <option key={u.id} value={u.id}>{t(u.label)}</option>)}
+            </NativeSelect>
+            <Button type="button" size="sm" variant="soft" onClick={commit}>
+                {t("common.save")}
+            </Button>
+        </div>
+    );
 }
 
 /** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
-type SiteTabId = "general" | "browser" | "desktop" | "ai" | "notify" | "commands";
+type SiteTabId = "general" | "signin" | "browser" | "desktop" | "ai" | "notify" | "commands";
 type TabId = SiteTabId | "users";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_"),
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_") && !k.startsWith("signin_") && !k.startsWith("mfa_"),
+    // 登入效期與必要的第二因素。/ Sign-in lifetimes and the required second factors.
+    signin: (k) => k.startsWith("signin_") || k.startsWith("mfa_"),
     browser: (k) => k.startsWith("remote_browser"),
     desktop: (k) => k.startsWith("desktop_"),
     ai: (k) => k.startsWith("ai_"),
@@ -91,7 +148,7 @@ const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
     commands: (k) => k.startsWith("command_"),
 };
 
-const TAB_IDS: TabId[] = ["general", "browser", "desktop", "ai", "notify", "commands", "users"];
+const TAB_IDS: TabId[] = ["general", "signin", "browser", "desktop", "ai", "notify", "commands", "users"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -141,6 +198,7 @@ function AdminSettings() {
 
     const tabs: { value: TabId; label: string; icon: React.ReactNode }[] = [
         { value: "general", label: t("settings.groupAccount"), icon: <UserPlus size={15} /> },
+        { value: "signin", label: t("settings.groupSignin"), icon: <LogIn size={15} /> },
         { value: "browser", label: t("settings.groupRemoteBrowser"), icon: <Globe size={15} /> },
         { value: "desktop", label: t("settings.groupDesktop"), icon: <ScreenShare size={15} /> },
         { value: "ai", label: t("settings.groupAi"), icon: <Bot size={15} /> },
@@ -171,6 +229,7 @@ function AdminSettings() {
 
 const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
     general: "settings.generalBanner",
+    signin: "settings.signinBanner",
     browser: "settings.browserBanner",
     desktop: "settings.desktopBanner",
     ai: "settings.aiBanner",
@@ -179,7 +238,7 @@ const SITE_TAB_BANNERS: Record<SiteTabId, TranslationKey> = {
 };
 
 function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnType<typeof useSettingsPage> }) {
-    const { t, locale } = useI18n();
+    const { t } = useI18n();
     const { state, actions } = settings;
     const { settingsObj, meta, loading } = state;
     const { handleToggle, handleUpdate } = actions;
@@ -243,7 +302,6 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                             const m = meta[key];
                             const description = descriptionOf(key, m);
                             const current = editValues[key] ?? String(value ?? "");
-                            const seconds = kind === "integer" && SECONDS_KEY.test(key) ? parseInt(current, 10) : NaN;
                             return (
                                 <li key={key} className="p-4 sm:px-6 sm:py-5 transition-colors hover:bg-surface">
                                     <div className="flex items-start justify-between gap-4">
@@ -267,6 +325,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                 <NativeSelect className="h-8 w-56" value={String(value ?? "")} onChange={(e) => handleUpdate(key, e.target.value)} aria-label={labelOf(key, m)}>
                                                     {SETTING_CHOICES[key].map((c) => <option key={c.value} value={c.value}>{t(c.label)}</option>)}
                                                 </NativeSelect>
+                                            ) : kind === "integer" && SECONDS_KEY.test(key) ? (
+                                                <DurationField key={String(value)} seconds={Number(value) || 0} label={labelOf(key, m)} onSave={(secs) => handleUpdate(key, secs)} />
                                             ) : (
                                                 <>
                                                     <div className="flex items-center gap-2">
@@ -283,9 +343,6 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                             {t("common.save")}
                                                         </Button>
                                                     </div>
-                                                    {seconds >= 60 && (
-                                                        <p className="mt-1 text-xs text-muted-foreground">≈ {formatDuration(seconds, locale)}</p>
-                                                    )}
                                                 </>
                                             )}
                                         </div>

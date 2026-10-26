@@ -477,6 +477,25 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：網頁登入 session（refresh token 的 sid）；見 db/web_sessions.rs。
+    // Web sign-in sessions (the refresh token's sid); see db/web_sessions.rs.
+    (
+        "telepy_web_session",
+        r#"CREATE TABLE "telepy_web_session" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "jti" varchar(32) NOT NULL,
+            "prev_jti" varchar(32) NULL,
+            "rotated_at" datetime NOT NULL,
+            "created_at" datetime NOT NULL,
+            "last_used_at" datetime NOT NULL,
+            "expires_at" datetime NOT NULL,
+            "revoked_at" datetime NULL,
+            "revoked_reason" varchar(16) NULL,
+            "ip" varchar(45) NULL,
+            "user_agent" varchar(256) NULL
+        )"#,
+    ),
     // Rust 自有：裝置 SSH host key 釘選（pinned / rejected），隧道刪除時一併刪。
     // Pinned and rejected device SSH host keys per tunnel; deleted with the tunnel.
     (
@@ -552,6 +571,7 @@ const TABLES: &[(&str, &str)] = &[
 const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_user_id" ON "telepy_ai_audit_event" ("user_id")"#,
@@ -652,6 +672,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 這條隧道的網頁終端機要錄影。/ Record this tunnel's web terminal sessions.
     ("authorized_keys_reverseserverauthorizedkeys", "record_sessions", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "command_approval_timeout", "integer NOT NULL DEFAULT 300"),
+    // 網頁登入效期（秒）：沒有任何造訪多久後要重新登入（每次續期往後推，預設 30 天）、access token 多久換一次（預設 1 小時）。
+    // Web sign-in lifetimes (seconds): how long a sign-in lasts without a visit (sliding, 30 days) and how often the access token is renewed (1 hour).
+    ("site_settings_sitesettings", "signin_lifetime", "integer NOT NULL DEFAULT 2592000"),
+    ("site_settings_sitesettings", "signin_access_lifetime", "integer NOT NULL DEFAULT 3600"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

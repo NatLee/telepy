@@ -130,7 +130,7 @@ pub async fn complete_login(state: &AppState, user: &User, first_factor: &'stati
         // 沒有第二步，這裡就是登入完成（有第二步時由 mfa_verify 記）。/ No second step: the login completes here.
         db::users::touch_last_login(&state.db, user.id).await?;
         sign_ins::record(state, user.id, meta, Attempt::ok(first_factor, None)).await;
-        return Ok(token_pair(state, user.id));
+        return token_pair(state, user.id, meta).await;
     }
     let token = crate::oauth::random_token("");
     state.mfa.challenges.insert(token.clone(), LoginChallenge::new(user.id, first_factor));
@@ -271,7 +271,7 @@ async fn mfa_verify(State(state): State<AppState>, headers: HeaderMap, meta: Cli
             db::users::touch_last_login(&state.db, user.id).await?;
             sign_ins::record(&state, user.id, &meta, Attempt::ok(ch.first_factor, Some(method))).await;
             tracing::info!(username = %user.username, method, "[AUTH][2FA] Login success");
-            Ok(Json(token_pair(&state, user.id)))
+            Ok(Json(token_pair(&state, user.id, &meta).await?))
         }
         Err(e) => {
             let attempted = body.get("method").and_then(Value::as_str);
@@ -334,7 +334,7 @@ async fn passkey_login(State(state): State<AppState>, headers: HeaderMap, meta: 
     db::users::touch_last_login(&state.db, user.id).await?;
     sign_ins::record(&state, user.id, &meta, Attempt::ok("passkey", None)).await;
     tracing::info!(username = %user.username, "[AUTH][PASSKEY] Login success");
-    Ok(Json(token_pair(&state, user.id)))
+    Ok(Json(token_pair(&state, user.id, &meta).await?))
 }
 
 // ---------------------------------------------------------------- management (logged in)

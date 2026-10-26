@@ -395,8 +395,10 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 26);
+    assert_eq!(keys.len(), 28);
     assert_eq!(r.json["values"]["command_approval_timeout"], 300, "approvals wait five minutes by default");
+    assert_eq!(r.json["values"]["signin_lifetime"], 2_592_000, "a sign-in lasts 30 days without a visit by default");
+    assert_eq!(r.json["values"]["signin_access_lifetime"], 3600, "access tokens are renewed hourly by default");
     assert_eq!(r.json["values"]["user_key_max_days"], 0, "personal keys don't expire by default");
     assert_eq!(r.json["values"]["notify_webhook_url"], "", "alerts are off by default");
     assert_eq!(r.json["values"]["notify_down_delay"], 60);
@@ -539,7 +541,7 @@ async fn device_keys_are_unique_across_users_and_never_personal_or_service_keys(
     let admin = app.login("admin", "pw").await;
     // 第二個帳號直接建在 DB（註冊預設只開給第一個人）。/ The second account goes straight into the DB.
     let bob_user = telepy_server::db::users::create(&app.state.db, telepy_server::db::users::NewUser { username: "bob", password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
-    let bob = app.state.jwt.access(bob_user.id);
+    let bob = app.state.jwt.access(bob_user.id, std::time::Duration::from_secs(3600));
     create_tunnel(&app, &admin, "box-a", KEY_A).await;
     let renamed = KEY_A.replace("device-a", "stolen");
     let issue = |token: String| { let app = &app; async move { app.get("/api/reverse/issue/token", Some(&token)).await.json["token"].as_str().unwrap().to_string() } };

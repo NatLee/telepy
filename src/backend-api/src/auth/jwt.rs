@@ -1,6 +1,9 @@
 //! simplejwt 相容的 HS256 token：claims `{token_type, exp, iat, jti, user_id}`。
-//! 用同一把 SECRET_KEY 簽，切換當下既有 token 不失效。
-//! simplejwt-compatible HS256 tokens signed with the same SECRET_KEY as the Django backend.
+//! 用同一把 SECRET_KEY 簽，切換當下既有 token 不失效。效期不住在這裡：登入 / 續期時由網站設定決定
+//! （`auth::sessions`），refresh token 另帶 `sid` = `telepy_web_session` 的列（舊 token 沒有，續期時補開）。
+//! simplejwt-compatible HS256 tokens signed with the same SECRET_KEY as the Django backend. Lifetimes are
+//! not stored here: the site settings decide them at issue time (`auth::sessions`); a refresh token also
+//! carries `sid`, its `telepy_web_session` row (tokens from before the upgrade have none and get one on renewal).
 
 use std::time::Duration;
 
@@ -14,6 +17,10 @@ pub struct Claims {
     pub iat: i64,
     pub jti: String,
     pub user_id: i64,
+    /// refresh token 的登入 session（`telepy_web_session.id`）；access token 與升級前的 token 沒有。
+    /// The refresh token's sign-in session (`telepy_web_session.id`); absent on access tokens and pre-upgrade tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<i64>,
 }
 
 /// MCP（OAuth 2.1）access token 的 claims。`token_type` 與網頁的 `access` 不同，所以兩種 token 互不通用：
@@ -38,8 +45,6 @@ pub const MCP_TOKEN_TYPE: &str = "mcp_access";
 pub struct Jwt {
     enc: EncodingKey,
     dec: DecodingKey,
-    access_lifetime: Duration,
-    refresh_lifetime: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,37 +63,38 @@ impl TokenType {
 }
 
 impl Jwt {
-    pub fn new(secret: &str, access_lifetime: Duration, refresh_lifetime: Duration) -> Self {
+    pub fn new(secret: &str) -> Self {
         Self {
             enc: EncodingKey::from_secret(secret.as_bytes()),
             dec: DecodingKey::from_secret(secret.as_bytes()),
-            access_lifetime,
-            refresh_lifetime,
         }
     }
 
-    fn issue(&self, user_id: i64, kind: TokenType) -> String {
+    /// 簽任意 claims（`auth::sessions` 與測試用；一般請走 `access` / `refresh`）。
+    /// Sign arbitrary claims (`auth::sessions` and tests; normally go through `access` / `refresh`).
+    pub fn encode_claims(&self, claims: &Claims) -> String {
+        encode(&Header::new(Algorithm::HS256), claims, &self.enc).expect("HS256 encoding cannot fail")
+    }
+
+    /// 從現在起 `lifetime` 有效的 access token。/ An access token valid for `lifetime` from now.
+    pub fn access(&self, user_id: i64, lifetime: Duration) -> String {
         let now = chrono::Utc::now().timestamp();
-        let life = match kind {
-            TokenType::Access => self.access_lifetime,
-            TokenType::Refresh => self.refresh_lifetime,
-        };
-        let claims = Claims {
-            token_type: kind.as_str().to_string(),
-            exp: now + life.as_secs() as i64,
+        self.encode_claims(&Claims {
+            token_type: TokenType::Access.as_str().to_string(),
+            exp: now + lifetime.as_secs() as i64,
             iat: now,
             jti: crate::util::uuid_hex(),
             user_id,
-        };
-        encode(&Header::new(Algorithm::HS256), &claims, &self.enc).expect("HS256 encoding cannot fail")
+            sid: None,
+        })
     }
 
-    pub fn access(&self, user_id: i64) -> String {
-        self.issue(user_id, TokenType::Access)
-    }
-
-    pub fn refresh(&self, user_id: i64) -> String {
-        self.issue(user_id, TokenType::Refresh)
+    /// 綁在 session `sid` 上的 refresh token；`jti` / `iat` / `exp` 由呼叫端給，所以同一個 session 狀態
+    /// 可以重發出一模一樣的 token（兩個分頁同時續期時）。
+    /// A refresh token bound to session `sid`; the caller supplies `jti` / `iat` / `exp`, so the same
+    /// session state re-mints a byte-identical token (two tabs renewing at once).
+    pub fn refresh(&self, user_id: i64, sid: i64, jti: &str, iat: i64, exp: i64) -> String {
+        self.encode_claims(&Claims { token_type: TokenType::Refresh.as_str().to_string(), exp, iat, jti: jti.to_string(), user_id, sid: Some(sid) })
     }
 
     /// 驗簽 + exp + token_type。/ Verify signature, expiry and token type.
@@ -152,23 +158,30 @@ mod tests {
 
     #[test]
     fn roundtrip_and_type_check() {
-        let j = Jwt::new("k", Duration::from_secs(60), Duration::from_secs(120));
-        let a = j.access(7);
-        let r = j.refresh(7);
-        assert_eq!(j.verify(&a, TokenType::Access).unwrap().user_id, 7);
+        let j = Jwt::new("k");
+        let now = chrono::Utc::now().timestamp();
+        let a = j.access(7, Duration::from_secs(60));
+        let r = j.refresh(7, 42, "abc", now, now + 120);
+        let c = j.verify(&a, TokenType::Access).unwrap();
+        assert_eq!((c.user_id, c.sid), (7, None));
         assert!(j.verify(&a, TokenType::Refresh).is_err());
-        assert_eq!(j.verify(&r, TokenType::Refresh).unwrap().token_type, "refresh");
-        assert!(Jwt::new("other", Duration::from_secs(60), Duration::from_secs(60)).verify(&a, TokenType::Access).is_err());
+        let c = j.verify(&r, TokenType::Refresh).unwrap();
+        assert_eq!((c.token_type.as_str(), c.sid, c.jti.as_str(), c.exp), ("refresh", Some(42), "abc", now + 120));
+        assert_eq!(j.refresh(7, 42, "abc", now, now + 120), r, "the same session state mints the same token");
+        assert!(Jwt::new("other").verify(&a, TokenType::Access).is_err());
+        // 升級前的 refresh token 沒有 sid，照樣驗得過。/ A pre-upgrade refresh token (no sid) still verifies.
+        let legacy = j.encode_claims(&Claims { token_type: "refresh".into(), exp: now + 60, iat: now, jti: "x".into(), user_id: 7, sid: None });
+        assert_eq!(j.verify(&legacy, TokenType::Refresh).unwrap().sid, None);
     }
 
     #[test]
     fn mcp_tokens_do_not_mix_with_web_tokens() {
-        let j = Jwt::new("k", Duration::from_secs(60), Duration::from_secs(120));
+        let j = Jwt::new("k");
         let m = j.mcp_access(7, 3, "cid", "tunnels:read", "https://t.example/mcp", Duration::from_secs(60));
         let c = j.verify_mcp(&m).unwrap();
         assert_eq!((c.user_id, c.grant_id, c.scope.as_str()), (7, 3, "tunnels:read"));
         assert!(j.verify(&m, TokenType::Access).is_err(), "an MCP token must not pass as a web access token");
-        assert!(j.verify_mcp(&j.access(7)).is_err(), "a web access token must not pass as an MCP token");
+        assert!(j.verify_mcp(&j.access(7, Duration::from_secs(60))).is_err(), "a web access token must not pass as an MCP token");
         let expired = j.mcp_access(7, 3, "cid", "", "aud", Duration::from_secs(0));
         std::thread::sleep(Duration::from_millis(1100));
         assert!(j.verify_mcp(&expired).is_err());
