@@ -12,7 +12,30 @@ export type DesktopProtocol = "rdp" | "vnc";
  * The page's mode: RDP / VNC rendered by guacd, or RustDesk, which Telepy forwards for the native client.
  */
 export type DesktopMode = DesktopProtocol | "rustdesk";
+/**
+ * 剪貼簿方向：both = 雙向、to_remote = 只能貼進遠端、off = 關閉。每個人自己選（個人設定 `desktop_clipboard`），
+ * 站台的同名設定是上限，實際用的是較窄的那個（和後端 `Clipboard::within` 一樣）。
+ * Clipboard direction. Each user picks one; the site setting of the same name is the ceiling and the narrower applies
+ * (mirrors the backend's `Clipboard::within`).
+ */
 export type ClipboardPolicy = "both" | "to_remote" | "off";
+export const CLIPBOARD_VALUES: readonly ClipboardPolicy[] = ["both", "to_remote", "off"];
+const CLIPBOARD_RANK: Record<ClipboardPolicy, number> = { off: 0, to_remote: 1, both: 2 };
+export const CLIPBOARD_LABEL: Record<ClipboardPolicy, TranslationKey> = { both: "desktop.clipboard.both", to_remote: "desktop.clipboard.toRemote", off: "desktop.clipboard.off" };
+
+export function isClipboardPolicy(value: unknown): value is ClipboardPolicy {
+    return typeof value === "string" && (CLIPBOARD_VALUES as readonly string[]).includes(value);
+}
+
+/** 這個方向在上限之內嗎（超過的選項要關掉）。/ Whether a direction fits under the limit. */
+export function clipboardAllowed(value: ClipboardPolicy, limit: ClipboardPolicy): boolean {
+    return CLIPBOARD_RANK[value] <= CLIPBOARD_RANK[limit];
+}
+
+/** 使用者的選擇套上上限。/ The user's choice capped by the site limit. */
+export function clipboardWithin(choice: ClipboardPolicy, limit: ClipboardPolicy): ClipboardPolicy {
+    return clipboardAllowed(choice, limit) ? choice : limit;
+}
 /** RustDesk 的 Direct IP Access 埠。/ RustDesk's Direct IP Access port. */
 export const RUSTDESK_PORT = 21118;
 /** 畫質預設（start 時送給後端 → guacd 參數）。/ Quality preset, turned into guacd parameters at start. */
@@ -38,7 +61,10 @@ export interface DesktopStart {
     ticket: string;
     expires_in: number;
     protocol: DesktopProtocol;
+    /** 實際用的方向（選擇套上上限）。/ The direction in effect (the choice under the limit). */
     clipboard: ClipboardPolicy;
+    /** 站台上限。/ The site's ceiling. */
+    clipboard_limit: ClipboardPolicy;
     quality: DesktopQuality;
     target: { host: string; port: number; label: string; lan_host_id: number | null };
     username: string;

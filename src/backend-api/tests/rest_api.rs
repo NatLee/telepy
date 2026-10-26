@@ -335,10 +335,10 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy"}));
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark"})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark"}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
     // 字型 / 配色 id 只檢查形狀（清單在前端）。/ Font / scheme ids are shape-checked only.
     let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_font": "Hack Nerd Font"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);

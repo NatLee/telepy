@@ -27,11 +27,12 @@ backend desktop/bridge.rs
 
 ## 流程
 
-1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username, port?, lan_host_id?, login?, password?, domain?, quality?}`：
+1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username, port?, lan_host_id?, login?, password?, domain?, quality?, clipboard?}`：
    檢查 `desktop_enabled`、隧道 VIEW、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號）、
    區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip 通道到目標，所以
    `device_offline` / `device_auth` / `target_unreachable` 在這一步就回 502，不必等 WebSocket。
-   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, quality, target, username}`；帳密只留在記憶體。
+   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, target, username}`；帳密只留在記憶體。
+   `clipboard`：沒帶就用使用者的個人設定 `desktop_clipboard`，再套上站台的同名上限（取較窄的）；回應的 `clipboard` 是實際用的方向。
    帶 `credential_id` 時改用憑證庫裡那筆的 login / password / domain（見下方「憑證庫」），請求裡的帳密欄位被忽略。
 2. 瀏覽器用票證開 WS。後端重驗權限、開 rendezvous、連 guacd 握手（`hostname` / `port` = rendezvous），
    guacd 連回來的那條接到第 1 步的通道。握手完成後先送 `0.,<uuid>;`（guacamole-common-js 收到才把 tunnel 標成開啟），
@@ -266,7 +267,7 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 | `desktop_enabled` | true | 關閉後不能開新的 session |
 | `desktop_max_sessions` | 4 | 整站同時上限（含尚未認領的票證），0 = 不限 |
 | `desktop_session_idle_timeout` | 900 | 沒有鍵盤 / 滑鼠 / 剪貼簿輸入多久就斷線（秒），0 = 不斷 |
-| `desktop_clipboard` | both | both / to_remote / off（對應 guacd 的 disable-copy / disable-paste） |
+| `desktop_clipboard` | both | **上限**：both / to_remote / off。每個人在桌面頁或偏好設定裡自己選方向（個人設定 `desktop_clipboard`），實際用兩者較窄的那個；guacd 用 disable-copy / disable-paste 把關，RustDesk 由瀏覽器裡的核心套用（off = 那台的 `disable-clipboard`） |
 | `desktop_max_resolution` | 2560 | 寬或高的上限（像素） |
 
 ## 部署

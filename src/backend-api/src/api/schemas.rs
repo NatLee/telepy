@@ -730,6 +730,12 @@ pub struct UserSettings {
     pub terminal_font: String,
     #[schema(example = "telepy")]
     pub terminal_scheme: String,
+    /// Remote desktop clipboard direction this user picked: both | to_remote | off
+    #[schema(example = "both")]
+    pub desktop_clipboard: String,
+    /// The site's ceiling for it (read-only; the narrower of the two applies)
+    #[schema(example = "both")]
+    pub desktop_clipboard_limit: String,
 }
 
 #[derive(ToSchema)]
@@ -746,6 +752,9 @@ pub struct UserSettingsPatch {
     pub terminal_font: Option<String>,
     #[schema(example = "solarized-dark")]
     pub terminal_scheme: Option<String>,
+    /// both | to_remote | off (capped by the site setting at connect time)
+    #[schema(example = "to_remote")]
+    pub desktop_clipboard: Option<String>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default
@@ -1029,6 +1038,10 @@ pub struct DesktopStartRequest {
     pub domain: Option<String>,
     /// Use a saved login from the credential vault instead of login / password / domain
     pub credential_id: Option<i64>,
+    /// Clipboard direction: both | to_remote | off; omitted = the user's `desktop_clipboard` setting. Capped by the
+    /// site setting `desktop_clipboard`
+    #[schema(example = "to_remote")]
+    pub clipboard: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1050,8 +1063,10 @@ pub struct DesktopSession {
     /// Seconds the ticket stays valid
     pub expires_in: u64,
     pub protocol: String,
-    /// Effective clipboard policy: both | to_remote | off
+    /// Clipboard direction in effect (the request or the user's setting, capped by the site): both | to_remote | off
     pub clipboard: String,
+    /// The site's ceiling (`desktop_clipboard`), so the page can say when it narrowed the choice
+    pub clipboard_limit: String,
     /// Quality preset in effect: auto | speed | sharp
     pub quality: String,
     pub target: DesktopTarget,
@@ -1081,6 +1096,8 @@ pub struct RustDeskStartRequest {
     pub port: Option<u16>,
     /// A saved login of yours (protocol `rustdesk`, same tunnel and LAN host): its password comes back in `password`
     pub credential_id: Option<i64>,
+    /// Clipboard direction: both | to_remote | off; omitted = the user's setting; capped by the site
+    pub clipboard: Option<String>,
 }
 
 /// An in-browser RustDesk session. The browser's RustDesk core connects to `ws_path` twice with `?ticket=`:
@@ -1102,6 +1119,10 @@ pub struct RustDeskSession {
     /// Only with `credential_id`: the saved RustDesk password, unsealed for this start and handed to the browser's core
     /// for the hash challenge (the backend cannot answer it itself). Never logged.
     pub password: Option<String>,
+    /// Clipboard direction the browser's core applies (Telepy cannot read the RustDesk stream): both | to_remote | off
+    pub clipboard: String,
+    /// The site's ceiling (`desktop_clipboard`)
+    pub clipboard_limit: String,
 }
 
 /// A port on the target answered a TCP connection opened from the device (the same path a desktop session
@@ -2386,6 +2407,8 @@ pub struct RustDeskLastUsed {
 pub struct RustDeskIdStart {
     /// A saved login bound to this device; its password comes back in `password`
     pub credential_id: Option<i64>,
+    /// Clipboard direction: both | to_remote | off; omitted = the user's setting; capped by the site
+    pub clipboard: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -2453,6 +2476,10 @@ pub struct RustDeskIdSession {
     pub device: RustDeskIdDevice,
     /// The saved password, only when started with `credential_id`
     pub password: Option<String>,
+    /// Clipboard direction the browser's core applies (the stream is end-to-end encrypted): both | to_remote | off
+    pub clipboard: String,
+    /// The site's ceiling (`desktop_clipboard`)
+    pub clipboard_limit: String,
 }
 
 #[derive(ToSchema)]

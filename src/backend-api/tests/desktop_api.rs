@@ -31,7 +31,7 @@ struct Seen {
     after_ready: Vec<String>,
 }
 
-const ARG_NAMES: [&str; 6] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy"];
+const ARG_NAMES: [&str; 7] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy", "disable-paste"];
 
 struct Conn {
     s: TcpStream,
@@ -333,6 +333,81 @@ async fn desktop_session_through_the_device() {
     let msg = close["message"].as_str().unwrap();
     assert!(msg.contains("closed after") && msg.contains("(stopped,") && msg.contains("to the browser") && msg.contains("frame latency avg"), "{msg}");
     wait_for("presence cleared", || app.state.presence.for_tunnel(id).iter().all(|e| e.kind.as_str() != "desktop")).await;
+}
+
+/// 剪貼簿：每個人自己選方向（個人設定，或這次連線帶的值），站台設定是上限；guacd 拿到對應的 disable-copy / disable-paste。
+/// Clipboard: each user's own direction (saved, or sent with the start) under the site's limit, enforced through guacd.
+#[tokio::test]
+async fn desktop_clipboard_is_the_users_choice_within_the_site_limit() {
+    let (guacd, seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.guacd_addr = guacd.clone();
+        c.desktop_callback_host = "127.0.0.1".into();
+    });
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let desktop = echo_service().await;
+    let id = dev.tunnel_id;
+    let start = |body: Value| {
+        let token = alice.token.clone();
+        async move { app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&token), body).await }
+    };
+    // 開 WS 讓 guacd 握手，回 guacd 拿到的兩個剪貼簿參數。/ Open the socket and return guacd's two clipboard arguments.
+    let guacd_clipboard = |start: Value| {
+        let lab = &lab;
+        let seen = seen.clone();
+        async move {
+            seen.lock().unwrap().connect.clear();
+            let mut ws = open_ws(lab, &start).await.unwrap();
+            assert!(recv(&mut ws).await.is_ok());
+            wait_for("connect at guacd", || !seen.lock().unwrap().connect.is_empty()).await;
+            let s = seen.lock().unwrap();
+            let get = |n: &str| s.connect.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone()).unwrap_or_default();
+            (get("disable-copy"), get("disable-paste"))
+        }
+    };
+
+    // 個人設定：預設 both，上限跟著回來；壞值 400。/ The user setting: both by default, the limit alongside; bad values are 400s.
+    let r = app.get("/api/user/settings", Some(&alice.token)).await;
+    assert_eq!((r.json["desktop_clipboard"].as_str(), r.json["desktop_clipboard_limit"].as_str()), (Some("both"), Some("both")), "{}", r.text);
+    for bad in [json!("sideways"), json!(1)] {
+        let r = app.post("/api/user/settings", Some(&alice.token), json!({"desktop_clipboard": bad})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad} → {}", r.text);
+        assert!(r.json["desktop_clipboard"].is_array(), "{}", r.text);
+    }
+    let r = app.post("/api/user/settings", Some(&alice.token), json!({"desktop_clipboard": "off"})).await;
+    assert_eq!((r.status, r.json["desktop_clipboard"].as_str()), (StatusCode::OK, Some("off")), "{}", r.text);
+
+    // 沒帶 clipboard = 用個人設定（off）：兩個方向都關。/ No clipboard in the start = the saved choice (off).
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["clipboard"].as_str(), r.json["clipboard_limit"].as_str()), (Some("off"), Some("both")));
+    assert_eq!(guacd_clipboard(r.json.clone()).await, ("true".into(), "true".into()));
+
+    // 這次帶的值優先於個人設定。/ The value sent with the start wins over the saved one.
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "clipboard": "both"})).await;
+    assert_eq!(r.json["clipboard"], "both", "{}", r.text);
+    assert_eq!(guacd_clipboard(r.json.clone()).await, (String::new(), String::new()));
+
+    // 站台上限 to_remote：要 both 只拿到 to_remote，複製出來的方向由 guacd 關掉。
+    // A to_remote site limit: asking for both gets to_remote, and guacd blocks copying out.
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"desktop_clipboard": "to_remote"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(app.get("/api/user/settings", Some(&alice.token)).await.json["desktop_clipboard_limit"], "to_remote");
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "clipboard": "both"})).await;
+    assert_eq!((r.json["clipboard"].as_str(), r.json["clipboard_limit"].as_str()), (Some("to_remote"), Some("to_remote")), "{}", r.text);
+    assert_eq!(guacd_clipboard(r.json.clone()).await, ("true".into(), String::new()));
+
+    // 壞的 clipboard → 欄位錯誤，不開通道。/ A bad clipboard value is a field error.
+    for bad in [json!("sideways"), json!(true)] {
+        let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "clipboard": bad})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad} → {}", r.text);
+        assert!(r.json["clipboard"].is_array(), "{}", r.text);
+    }
 }
 
 #[tokio::test]

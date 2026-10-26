@@ -52,7 +52,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { desktopPorts, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, desktopPorts, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -173,7 +173,10 @@ function DesktopPageInner() {
     const viewport = chosen?.viewport ?? null;
     const choiceLabel = (c: ScreenChoice) => (c.preset ? t(PRESET_KEY[c.preset]) : c.name);
 
-    const clipboard = session?.clipboard ?? null;
+    // 連線中 = 那個 session 實際用的方向；還沒連 = 下一次會拿到的（個人選擇套上站台上限）。
+    // While connected, the session's own direction; before that, what the next session will get.
+    const clipboard = session?.clipboard ?? rdSession?.clipboard ?? state.clipboard.effective;
+    const clipboardLimited = !clipboardAllowed(state.clipboard.choice, session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit);
     // RustDesk 用 app 的路（探測過、瀏覽器裡沒在連）：階段跟著探測；其餘都是瀏覽器 session 的階段。
     // The native-app path (probed, nothing connecting in the browser) follows the probe; everything else the session.
     const rdNative = !rdDevice && isRustDesk && phase === "idle" && !rdSession && probeState.state !== "idle";
@@ -191,10 +194,11 @@ function DesktopPageInner() {
         account: form.account,
         lanHost: host ? { name: hostName(host), address: host.address } : null,
         clipboard,
+        clipboardLimited,
         savedLogin: !!state.savedLogin,
         stats,
         idServer: rdDevice ? { deviceName: rdDevice.name, rustdeskId: formatRustDeskId(rdDevice.rustdesk_id) } : null,
-    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, t, state.savedLogin, stats, rdDevice]);
+    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, rdDevice]);
 
     const targetLabel = rdDevice ? `${rdDevice.name} · ${formatRustDeskId(rdDevice.rustdesk_id)}` : host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -597,6 +601,33 @@ function DevicePicker({ state, actions }: { state: PageState; actions: PageActio
     );
 }
 
+const CLIPBOARD_HINT: Record<"guacd" | "rustdesk", Record<ClipboardPolicy, TranslationKey>> = {
+    guacd: { both: "desktop.clipboard.hint.both", to_remote: "desktop.clipboard.hint.toRemote", off: "desktop.clipboard.hint.off" },
+    rustdesk: { both: "desktop.clipboard.hint.rdBoth", to_remote: "desktop.clipboard.hint.rdToRemote", off: "desktop.clipboard.hint.off" },
+};
+
+/**
+ * 剪貼簿方向：每個人自己選（存在帳號上，偏好設定裡是同一個值），超過站台上限的選項關掉並說明。
+ * The clipboard direction: the user's own (saved on the account, the same value as in Preferences); choices above
+ * the site's limit are disabled and the hint says why.
+ */
+function ClipboardField({ state, actions, rustdesk }: { state: PageState; actions: PageActions; rustdesk: boolean }) {
+    const { t } = useI18n();
+    const { clipboard } = state;
+    const options = CLIPBOARD_VALUES.map((v) => ({ value: v, label: t(CLIPBOARD_LABEL[v]), disabled: !clipboardAllowed(v, clipboard.limit) }));
+    const hint = (
+        <>
+            {t(CLIPBOARD_HINT[rustdesk ? "rustdesk" : "guacd"][clipboard.effective])}
+            {clipboard.limit !== "both" && <> {t("desktop.clipboard.limited", { limit: t(CLIPBOARD_LABEL[clipboard.limit]) })}</>}
+        </>
+    );
+    return (
+        <Field label={t("desktop.field.clipboard")} hint={hint}>
+            <Segmented options={options} value={clipboard.effective} onChange={(v) => void actions.setClipboard(v)} fullWidth aria-label={t("desktop.field.clipboard")} />
+        </Field>
+    );
+}
+
 /**
  * 用 Telepy 當 RustDesk 伺服器的裝置：只要密碼與畫質；連線端對端加密。
  * A device that uses Telepy as its RustDesk server: just the password and the quality; end-to-end encrypted.
@@ -703,6 +734,7 @@ function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; acti
                 <Field label={t("desktop.field.quality")} hint={t("desktop.rustdesk.qualityHint")}>
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
+                <ClipboardField state={state} actions={actions} rustdesk />
             </div>
             <Callout tone="info" icon={<ShieldCheck size={17} className="mt-0.5 shrink-0" aria-hidden />}>{t("desktop.rdServer.intro")}</Callout>
             <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
@@ -816,6 +848,8 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
                 <Field label={t("desktop.field.quality")} hint={isRustDesk ? t("desktop.rustdesk.qualityHint") : t(QUALITY_HINT[quality])}>
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
+
+                <ClipboardField state={state} actions={actions} rustdesk={isRustDesk} />
 
                 <SavedLoginSelect state={state} actions={actions} rustdesk={isRustDesk} />
 

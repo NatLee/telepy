@@ -118,6 +118,7 @@ const TABLES: &[(&str, &str)] = &[
             "ui_scale" smallint unsigned NOT NULL DEFAULT 100,
             "terminal_font" varchar(32) NOT NULL DEFAULT 'hack',
             "terminal_scheme" varchar(32) NOT NULL DEFAULT 'telepy',
+            "desktop_clipboard" varchar(16) NOT NULL DEFAULT 'both',
             "user_id" integer NOT NULL UNIQUE REFERENCES "auth_user" ("id") DEFERRABLE INITIALLY DEFERRED
         )"#,
     ),
@@ -723,6 +724,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
     ("user_management_usersettings", "terminal_font", "varchar(32) NOT NULL DEFAULT 'hack'"),
     ("user_management_usersettings", "terminal_scheme", "varchar(32) NOT NULL DEFAULT 'telepy'"),
+    // 遠端桌面剪貼簿方向（個人選擇；站台的 desktop_clipboard 是上限）。/ Desktop clipboard direction (the site setting caps it).
+    ("user_management_usersettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

@@ -57,6 +57,22 @@ fn bounded(body: &Value, key: &str, max: usize) -> Result<String, ApiError> {
     Ok(v)
 }
 
+/// 這次連線的剪貼簿方向：body 的 `clipboard`（沒帶 = 個人設定）套上站台上限。回（實際、上限）。
+/// The session's clipboard direction: the body's `clipboard` (else the user's setting) capped by the site limit.
+pub(crate) async fn clipboard_for(state: &AppState, user_id: i64, settings: &db::settings::SiteSettings, body: &Value) -> Result<(Clipboard, Clipboard), ApiError> {
+    let requested = match body.get("clipboard") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(ApiError::field("clipboard", format!("Must be one of: {}.", Clipboard::VALUES.join(", ")))),
+    };
+    let saved = match requested {
+        Some(_) => String::new(),
+        None => db::users::settings_for(&state.db, user_id).await?.map(|s| s.desktop_clipboard).unwrap_or_default(),
+    };
+    let effective = Clipboard::effective(&settings.desktop_clipboard, requested.as_deref(), &saved).map_err(|m| ApiError::field("clipboard", m))?;
+    Ok((effective, Clipboard::parse(&settings.desktop_clipboard).unwrap_or(Clipboard::Both)))
+}
+
 fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
     let n = match body.get("port") {
         None | Some(Value::Null) => return Ok(protocol.default_port()),
@@ -88,6 +104,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
     };
     let port = parse_port(&body, protocol)?;
     let quality = Quality::parse(&json_str(&body, "quality").unwrap_or_default()).ok_or_else(|| ApiError::field("quality", "Must be auto, speed or sharp."))?;
+    let (clipboard, clipboard_limit) = clipboard_for(&state, user.id, &settings, &body).await?;
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
@@ -105,7 +122,6 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
     }
     let prepared = desktop::prepare(&state, tunnel.reverse_port, &hop_username, &target).await.map_err(|e| coded(StatusCode::BAD_GATEWAY, e.code(), e.to_string()))?;
-    let clipboard = Clipboard::parse(&settings.desktop_clipboard).unwrap_or(Clipboard::Both);
     let (session, ticket) = state.desktop.create(NewSession {
         user_id: user.id,
         user_name: user.username.clone(),
@@ -121,7 +137,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         prepared,
         saved_label,
     });
-    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), "desktop: session created");
+    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), "desktop: session created");
     Ok(Json(json!({
         "session_id": session.id,
         "ws_path": format!("/ws/desktop/{}/", session.id),
@@ -129,6 +145,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         "expires_in": TICKET_TTL.as_secs(),
         "protocol": protocol.as_str(),
         "clipboard": clipboard.as_str(),
+        "clipboard_limit": clipboard_limit.as_str(),
         "quality": quality.as_str(),
         "target": target_json(&session.target),
         "username": session.hop_username,

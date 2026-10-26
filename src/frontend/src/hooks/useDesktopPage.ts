@@ -53,6 +53,7 @@ import type { LanHost, TopologyTunnel } from "@/types/lan";
 import { useSavedLogins } from "@/hooks/useSavedLogins";
 import { useRustDeskDevices } from "@/hooks/useRustDeskDevices";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
 
 export interface DesktopForm {
     account: string;
@@ -121,6 +122,10 @@ export function useDesktopPage() {
     const [endedNormally, setEndedNormally] = useState(false);
     const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
     const [ctrlMode, setCtrlMode] = useStoredChoice<CtrlAsCmdMode>("telepy.desktopCtrlAsCmd", CTRL_MODE_VALUES, "auto");
+    // 剪貼簿方向：個人設定（跟著帳號走），站台設定是上限。還沒讀到就不帶，後端用存著的值。
+    // The clipboard direction is a per-account setting capped by the site; omitted until loaded so the backend uses the saved one.
+    const clipboardPref = useDesktopClipboard();
+    const clipboardBody = useMemo(() => (clipboardPref.loaded ? { clipboard: clipboardPref.choice } : {}), [clipboardPref.loaded, clipboardPref.choice]);
     const [stats, setStats] = useState<StreamStats | null>(null);
     const [unstable, setUnstable] = useState(false);
     const [framebuffer, setFramebuffer] = useState<Framebuffer | null>(null);
@@ -295,7 +300,7 @@ export function useDesktopPage() {
                     credentialId = created.id;
                     setForm((f) => ({ ...f, savedId: created.id, save: false, saveLabel: "" }));
                 }
-                const res = await apiFetch(`/api/rustdesk/devices/${rdDevice.id}/start`, { method: "POST", body: JSON.stringify(credentialId ? { credential_id: credentialId } : {}) });
+                const res = await apiFetch(`/api/rustdesk/devices/${rdDevice.id}/start`, { method: "POST", body: JSON.stringify({ ...clipboardBody, ...(credentialId ? { credential_id: credentialId } : {}) }) });
                 const data = await readJson<RustDeskStart & { code?: string; credential_id?: string[]; password?: string }>(res);
                 if (!res.ok || !data?.ticket) {
                     if (data?.credential_id?.[0]) {
@@ -357,7 +362,7 @@ export function useDesktopPage() {
                 }
                 const res = await apiFetch(`/api/reverse/server/${tunnel.id}/rustdesk/start`, {
                     method: "POST",
-                    body: JSON.stringify({ username: form.account, port: Number(form.port), lan_host_id: host?.id ?? null, ...(credentialId ? { credential_id: credentialId } : {}) }),
+                    body: JSON.stringify({ username: form.account, port: Number(form.port), lan_host_id: host?.id ?? null, ...clipboardBody, ...(credentialId ? { credential_id: credentialId } : {}) }),
                 });
                 const data = await readJson<RustDeskStart & { code?: string; credential_id?: string[]; password?: string }>(res);
                 if (!res.ok || !data?.ticket) {
@@ -417,6 +422,7 @@ export function useDesktopPage() {
                     port: Number(form.port),
                     lan_host_id: host?.id ?? null,
                     quality,
+                    ...clipboardBody,
                     ...(credentialId
                         ? { credential_id: credentialId }
                         : { login: form.login.trim(), password: form.password, domain: form.protocol === "rdp" ? form.domain.trim() : "" }),
@@ -457,7 +463,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [rdDevice, tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs]);
+    }, [rdDevice, tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody]);
 
     const onConnected = useCallback(() => {
         setPhase("connected");
@@ -672,11 +678,11 @@ export function useDesktopPage() {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
             customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
-            rdDevice, rdDevices: rdDevices.devices, rdDevicesLoaded: rdDevices.loaded,
+            rdDevice, rdDevices: rdDevices.devices, rdDevicesLoaded: rdDevices.loaded, clipboard: clipboardPref,
         },
         actions: {
             setTunnel, setRustDeskDevice, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
-            setQuality, setCtrlMode, detectScreens, setViewportId,
+            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },
