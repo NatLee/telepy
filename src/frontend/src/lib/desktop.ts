@@ -121,7 +121,13 @@ export function isValidPort(value: string): boolean {
 }
 
 /** start API 失敗（`{error, code}` + HTTP 狀態）。/ A failed start call. */
-export function startFailure(code: string | undefined, status: number, vars: { account: string; address: string }): DesktopFailure {
+/**
+ * 開始 / 探測失敗的說明。RustDesk 的埠被拒（`target_unreachable`）幾乎都是那台 RustDesk 沒開 Direct IP Access，
+ * 所以 RustDesk 模式給它自己的說明，不是 RDP / VNC 那句。
+ * Why a start or probe failed. A refused RustDesk port almost always means Direct IP Access is off on that RustDesk,
+ * so RustDesk mode gets its own explanation instead of the RDP / VNC one.
+ */
+export function startFailure(code: string | undefined, status: number, vars: { account: string; address: string }, mode: DesktopMode = "rdp"): DesktopFailure {
     switch (code) {
         case "device_offline":
             return { key: "desktop.err.deviceOffline", at: "tunnel" };
@@ -134,7 +140,9 @@ export function startFailure(code: string | undefined, status: number, vars: { a
         case "forwarding_disabled":
             return { key: "desktop.err.forwardingDisabled", at: "device" };
         case "target_unreachable":
-            return { key: "desktop.err.targetUnreachable", vars: { address: vars.address }, at: "reach" };
+            return mode === "rustdesk"
+                ? { key: "desktop.err.rdDirectIpOff", vars: { address: vars.address }, at: "reach" }
+                : { key: "desktop.err.targetUnreachable", vars: { address: vars.address }, at: "reach" };
         case "device_unreachable":
             return { key: "desktop.err.deviceUnreachable", at: "device" };
         case "desktop_busy":
