@@ -80,9 +80,9 @@ export interface TunnelEndpoint {
     /** 最近一次換「公網 IP」之前的位址與換的時間。/ The public address before the latest change, and when. */
     previous_ip?: string | null;
     changed_at?: string | null;
-    /** 裝置真正的公網 IP（gateway 看到的公網來源，或裝置經 /api/whoami 回報的）。/ The device's real public IP. */
+    /** 裝置真正的公網 IP（gateway 看到的公網來源，或裝置經 /api/whoami / 站台設定的查詢網址回報的）。/ The device's real public IP. */
     public_ip?: string | null;
-    /** gateway / device */
+    /** gateway / device（經 /api/whoami）/ lookup（經站台設定的 device_ip_lookup_url） */
     public_source?: string | null;
     public_geo?: IpGeo | null;
     /** 裝置自己網卡上的位址（每次連上問一次）。/ The device's own interfaces (asked once per connection). */

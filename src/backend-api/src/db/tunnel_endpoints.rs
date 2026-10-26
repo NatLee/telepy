@@ -22,7 +22,7 @@ pub struct LastEndpoint {
     /// 裝置真正的公網 IP：gateway 看到的（是公網位址時）或裝置經 `/api/whoami` 回報的。
     /// The device's real public IP: the gateway's peer when public, else what the device reported via /api/whoami.
     pub public_ip: Option<String>,
-    /// gateway / device
+    /// gateway / device / lookup
     pub public_source: Option<String>,
     /// 裝置的內網網卡（JSON：`[{iface, ip, prefix}]`）。/ The device's LAN interfaces (JSON).
     pub lan: Option<String>,
@@ -62,7 +62,7 @@ pub async fn record_connected(db: &Db, port: u16, ip: &str, at: &str) -> sqlx::R
     Ok(())
 }
 
-/// 記下裝置的公網 IP（`source` = gateway / device）。跟上次不同時保留舊的（`previous_ip` / `changed_at`）並回傳，
+/// 記下裝置的公網 IP（`source` = gateway / device / lookup）。跟上次不同時保留舊的（`previous_ip` / `changed_at`）並回傳，
 /// 給 gateway 發警示；第一次不算換。SET 右邊讀到的都是更新前的值（SQLite 語意）。
 /// Store the device's public IP; when it differs from the stored one, keep the old one and return the change.
 pub async fn update_public_ip(db: &Db, tunnel_id: i64, ip: &str, source: &str, at: &str) -> sqlx::Result<Option<IpChange>> {

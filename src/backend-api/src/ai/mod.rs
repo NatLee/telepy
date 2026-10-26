@@ -597,6 +597,7 @@ mod tests {
             ai_session_max_lifetime: 7200,
             ai_max_sessions_per_user: 3,
             lan_scan_enabled: true,
+            device_ip_lookup_url: String::new(),
             notify_user_webhooks: true,
             notify_private_targets: false,
             notify_max_webhooks: 10,
