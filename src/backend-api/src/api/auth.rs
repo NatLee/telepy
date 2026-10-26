@@ -191,6 +191,9 @@ async fn register(State(state): State<AppState>, AppJson(body): AppJson<Value>) 
             ApiError::from(e)
         }
     })?;
+    state.webhooks.emit(
+        crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": user.username, "via": "registration" })).link("/tunnels/settings?tab=users"),
+    );
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -291,6 +294,9 @@ pub async fn google_sign_in(state: &AppState, claims: GoogleClaims, meta: &Clien
             .await?;
             db::users::social_create(&state.db, u.id, "google", &claims.sub).await?;
             tracing::info!(username = account, email, "[AUTH][GOOGLE] Created user");
+            state.webhooks.emit(
+                crate::webhooks::Event::new(crate::webhooks::Kind::UserCreated).data(json!({ "user": u.username, "via": "google" })).link("/tunnels/settings?tab=users"),
+            );
             u
         }
     };

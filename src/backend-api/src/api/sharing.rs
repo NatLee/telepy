@@ -14,6 +14,7 @@ use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::util::{db_to_iso_utc_offset, json_i64, json_str};
+use crate::webhooks::{Event, Kind};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
@@ -72,6 +73,18 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
     if let Some(actor) = actor {
         state.hub.notify_user(actor, &json!({ "action": "TUNNEL-UNSHARED", "tunnel_id": t.id }));
     }
+    let (reason_name, by) = match &reason {
+        EndReason::Revoked { by } => ("revoked", Some(by.to_string())),
+        EndReason::Left => ("left", Some(target_name.clone())),
+        EndReason::Expired => ("expired", None),
+    };
+    state.webhooks.emit(
+        Event::new(Kind::ShareEnded)
+            .tunnel(t)
+            .to([uid, t.user_id], actor)
+            .data(json!({ "user": target_name, "reason": reason_name, "by": by }))
+            .link("/tunnels"),
+    );
     Ok(())
 }
 
@@ -168,6 +181,13 @@ async fn share(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): 
         );
     }
     state.hub.notify_user(me.id, &json!({ "action": "TUNNEL-SHARED", "tunnel_id": t.id }));
+    state.webhooks.emit(
+        Event::new(Kind::ShareReceived)
+            .tunnel(&t)
+            .to([target.id], None)
+            .data(json!({ "by": me.username, "permission": perm.as_str(), "expires_at": expires.as_deref().map(crate::util::db_to_iso_utc_z) }))
+            .link("/tunnels"),
+    );
 
     if let Some(Value::Array(ids)) = body.get("allowed_target_username_ids") {
         let ids: Vec<i64> = ids.iter().filter_map(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).collect();

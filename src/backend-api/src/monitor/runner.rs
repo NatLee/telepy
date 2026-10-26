@@ -7,11 +7,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::alerts::{self, Alert, Alerts, Condition};
+use super::alerts::{Alert, Alerts, Condition};
 use super::ports::{transitions, Debouncer, LatencyThrottle};
 use crate::db::{self, tunnels::Tunnel};
 use crate::presence;
 use crate::state::AppState;
+use crate::webhooks::{catalog, Event, Hook};
 
 /// presence 變動的推播頻率（只是讀一個 set，很便宜）。/ How often presence changes are pushed.
 const PRESENCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -22,27 +23,31 @@ pub struct Runner {
     throttle: LatencyThrottle,
     /// 上一輪通知過的降級 port。/ Degraded ports as of the last notification.
     degraded: HashSet<u16>,
-    /// webhook 告警的計時（離線 / 降級要持續超過延遲才發）。/ Webhook alert timers.
-    alerts: Alerts,
+    /// 每個 webhook 自己的告警計時（離線 / 降級要持續超過它設的延遲才發）。/ Alert timers, one set per webhook.
+    alerts: HashMap<i64, Alerts>,
 }
 
-/// 把告警送到管理員設定的 webhook（沒設就丟掉）；每則一個背景 task，失敗只記 log。
-/// Send alerts to the admin's webhook (dropped when none is set); one background task each, failures logged.
-fn send_alerts(state: &AppState, url: &str, tunnels: &[Tunnel], due: Vec<(i64, Alert)>) {
-    if url.trim().is_empty() || due.is_empty() {
-        return;
-    }
-    let at = crate::util::db_to_iso_utc_z(&crate::util::now_db());
+/// 把到期 / 結束的狀態告警送給一個 webhook（它有訂的才送）。/ Send status alerts to one webhook (subscribed ones only).
+fn send_alerts(state: &AppState, hook: &Hook, tunnels: &[Tunnel], due: Vec<(i64, Alert)>) {
     for (tunnel_id, alert) in due {
+        if !hook.wants(alert.kind()) {
+            continue;
+        }
         let Some(t) = tunnels.iter().find(|t| t.id == tunnel_id) else { continue };
-        let body = alerts::payload(alert, t.id, &t.host_friendly_name, t.reverse_port, state.config.public_url.as_deref(), &at);
-        let (http, url, name) = (state.http.clone(), url.to_string(), t.host_friendly_name.clone());
-        tokio::spawn(async move {
-            match alerts::deliver(&http, &url, &body).await {
-                Ok(_) => tracing::info!(tunnel = %name, event = alert.event(), "status alert sent"),
-                Err(e) => tracing::warn!(tunnel = %name, event = alert.event(), error = %e, "status alert failed"),
-            }
-        });
+        state.webhooks.send_to(hook.clone(), Event::new(alert.kind()).tunnel(t));
+    }
+}
+
+/// 一條隧道的狀況開始或結束：每個收得到它的 webhook 各自計時，結束時發過的就送恢復。
+/// A condition starts or ends on a tunnel: each webhook that hears about it times it; announced ones send the end.
+fn status_change(state: &AppState, runner: &mut Runner, hooks: &[Hook], viewers: &[i64], tunnels: &[Tunnel], t: &Tunnel, (c, starting): (Condition, bool)) {
+    for h in hooks.iter().filter(|h| h.receives_status_of(t.id, viewers)) {
+        let timers = runner.alerts.entry(h.row.id).or_default();
+        if starting {
+            timers.start(t.id, c, Instant::now());
+        } else if let Some(a) = timers.end(t.id, c) {
+            send_alerts(state, h, tunnels, vec![(t.id, a)]);
+        }
     }
 }
 
@@ -103,17 +108,28 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
     let tunnels = db::tunnels::all(&state.db).await?;
     let audience = audiences(state, &tunnels).await?;
 
-    // 持續超過延遲的離線 / 降級現在送出（只在設了 webhook 時）。/ Conditions that outlasted the delay go out now.
+    // 訂了狀態事件的 webhook：各自計時，持續超過各自延遲的離線 / 降級現在送出。只追蹤 webhook 存在之後的變化，
+    // 不再收得到的隧道（取消分享、限定清單改了）連同計時一起忘掉。
+    // Webhooks with status events time conditions separately; those that outlasted each webhook's delay go out
+    // now. Only changes after a webhook exists are tracked; tunnels a webhook can no longer hear about are dropped.
     let settings = db::settings::get_solo(&state.db).await?;
-    let url = settings.notify_webhook_url.clone();
-    // 沒設 webhook 就不追蹤：告警只涵蓋設好之後發生的變化，之後補設網址不會冒出舊的離線 / 恢復。
-    // Without a webhook nothing is tracked: alerts cover changes after one is saved, never stale ones.
-    if url.trim().is_empty() {
-        runner.alerts = Alerts::default();
+    let hooks: Vec<Hook> = state
+        .webhooks
+        .hooks()
+        .await
+        .iter()
+        .filter(|h| catalog::STATUS.iter().any(|k| h.wants(*k)) && (h.row.is_site() || settings.notify_user_webhooks))
+        .cloned()
+        .collect();
+    runner.alerts.retain(|id, _| hooks.iter().any(|h| h.row.id == *id));
+    let viewers = |id: i64| audience.get(&id).map(Vec::as_slice).unwrap_or(&[]);
+    for h in &hooks {
+        let heard: HashSet<i64> = tunnels.iter().filter(|t| h.receives_status_of(t.id, viewers(t.id))).map(|t| t.id).collect();
+        let timers = runner.alerts.entry(h.row.id).or_default();
+        timers.keep_only(&heard);
+        let due = timers.due(Instant::now(), Duration::from_secs(h.row.delay.max(0) as u64));
+        send_alerts(state, h, &tunnels, due);
     }
-    runner.alerts.keep_only(&tunnels.iter().map(|t| t.id).collect());
-    let due = runner.alerts.due(Instant::now(), Duration::from_secs(settings.notify_down_delay.max(0) as u64));
-    send_alerts(state, &url, &tunnels, due);
 
     // 延遲廣播刻意放在「狀態沒變就早退」之前。/ Latency runs before the no-change early return.
     if let Some(latency) = state.status.latency() {
@@ -151,13 +167,7 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
         for port in changed {
             let health = super::health(listen.contains(&port), state.status.probe_failures(port), true);
             for t in tunnels.iter().filter(|t| t.reverse_port == i64::from(port)) {
-                if url.trim().is_empty() {
-                    // 沒設 webhook：不追蹤。/ No webhook: nothing to track.
-                } else if health == super::Health::Degraded {
-                    runner.alerts.start(t.id, Condition::Degraded, Instant::now());
-                } else if let Some(a) = runner.alerts.end(t.id, Condition::Degraded) {
-                    send_alerts(state, &url, &tunnels, vec![(t.id, a)]);
-                }
+                status_change(state, runner, &hooks, viewers(t.id), &tunnels, t, (Condition::Degraded, health == super::Health::Degraded));
                 let users = audience.get(&t.id).cloned().unwrap_or_default();
                 state.hub.notify_users(users, &json!({
                     "action": "UPDATE-TUNNEL-HEALTH",
@@ -202,14 +212,8 @@ pub async fn cycle(state: &AppState, runner: &mut Runner) -> sqlx::Result<()> {
             users.sort_unstable();
             users.dedup();
             let (verb, status) = if connected { ("connected", "connected") } else { ("disconnected", "disconnected") };
-            for t in affected.iter().filter(|_| !url.trim().is_empty()) {
-                if connected {
-                    if let Some(a) = runner.alerts.end(t.id, Condition::Down) {
-                        send_alerts(state, &url, &tunnels, vec![(t.id, a)]);
-                    }
-                } else {
-                    runner.alerts.start(t.id, Condition::Down, Instant::now());
-                }
+            for t in &affected {
+                status_change(state, runner, &hooks, viewers(t.id), &tunnels, t, (Condition::Down, !connected));
             }
             if !users.is_empty() {
                 // `tunnels`（id + 名稱）給桌面通知用。/ `tunnels` (id + name) for desktop notifications.

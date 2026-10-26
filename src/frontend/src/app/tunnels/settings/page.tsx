@@ -18,9 +18,8 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, Send, Loader2, ScreenShare, SquareTerminal, LogIn } from "lucide-react";
-import { apiFetch, readJson, responseError } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook } from "lucide-react";
+import { apiFetch, readJson } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -119,6 +118,9 @@ function DurationField({ seconds, label, onSave }: { seconds: number; label: str
 }
 
 /** 站台設定依 key 前綴分到各分頁。/ Site settings are split into tabs by key prefix. */
+/** 分頁裡排最前面的設定（開關整個功能的）。/ Settings listed first in their tab (the ones that turn a feature on). */
+const LEAD_KEYS = ["notify_user_webhooks"];
+
 type SiteTabId = "general" | "signin" | "browser" | "desktop" | "ai" | "notify" | "commands";
 type TabId = SiteTabId | "users";
 
@@ -228,10 +230,10 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     const { settingsObj, meta, loading } = state;
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
-    // 後端的鍵是字母序；網址（開關整個功能的那個）排最前面。/ Keys arrive sorted; the URL (which turns a feature on) goes first.
+    // 後端的鍵是字母序；開關整個功能的那個排最前面。/ Keys arrive sorted; the switch that turns a feature on goes first.
     const entries = Object.entries(settingsObj)
         .filter(([k]) => SITE_TAB_KEYS[tab](k))
-        .sort(([a], [b]) => Number(!a.endsWith("_url")) - Number(!b.endsWith("_url")));
+        .sort(([a], [b]) => Number(!LEAD_KEYS.includes(a)) - Number(!LEAD_KEYS.includes(b)));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
     // Prefer the frontend dictionary (localized); fall back to backend meta for unknown keys.
@@ -254,8 +256,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             handleUpdate(key, num);
         } else {
             const s = raw.trim();
-            // 網址欄位可以清空（= 關閉）。/ URL fields may be cleared (= off).
-            if (!s && kind !== "url") return;
+            if (!s) return;
             handleUpdate(key, s);
         }
     };
@@ -265,7 +266,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             <Callout tone="info">{t(SITE_TAB_BANNERS[tab])}</Callout>
 
             {tab === "ai" && <McpEndpointPanel />}
-            {tab === "notify" && <NotifyTestPanel configured={!!String(settingsObj.notify_webhook_url ?? "").trim()} />}
+            {tab === "notify" && <WebhooksPanel />}
             {tab === "commands" && <SiteCommandRulesPanel />}
 
             {loading ? (
@@ -316,9 +317,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                 <>
                                                     <div className="flex items-center gap-2">
                                                         <Input
-                                                            type={kind === "integer" ? "number" : kind === "url" ? "url" : "text"}
-                                                            className={`${kind === "integer" ? "w-24" : kind === "url" ? "w-56 sm:w-80" : "w-56"} h-8`}
-                                                            placeholder={kind === "url" ? "https://hooks.slack.com/services/…" : undefined}
+                                                            type={kind === "integer" ? "number" : "text"}
+                                                            className={`${kind === "integer" ? "w-24" : "w-56"} h-8`}
                                                             value={current}
                                                             onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
                                                             onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}
@@ -649,33 +649,22 @@ function SiteCommandRulesPanel() {
     );
 }
 
-function NotifyTestPanel({ configured }: { configured: boolean }) {
+/** 通知分頁：webhook 都搬到 Webhooks 頁了（全站的在「全站」分頁）。/ The Notifications tab: webhooks live on the Webhooks page now. */
+function WebhooksPanel() {
     const { t } = useI18n();
-    const { showSuccess, showError } = useToast();
-    const [sending, setSending] = useState(false);
-    const send = async () => {
-        setSending(true);
-        try {
-            const res = await apiFetch("/api/site/settings/notify-test", { method: "POST" });
-            const body = await readJson<{ ok?: boolean; status?: number; error?: string }>(res);
-            if (res.ok && body?.ok) showSuccess(t("settings.notifyTestOk"));
-            else showError(t("settings.notifyTestFailed", { error: body?.error ?? responseError(res, body, String(res.status)) }));
-        } catch (e) {
-            showError(t("settings.notifyTestFailed", { error: e instanceof Error ? e.message : "" }));
-        } finally {
-            setSending(false);
-        }
-    };
     return (
         <section className="overflow-hidden rounded-xl border border-border/80 bg-card text-card-foreground shadow-card p-4 sm:p-6">
-            <SectionHeading icon={<Send />} title={t("settings.notifyTestTitle")} />
-            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{t("settings.notifyTestBody")}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-                <Button type="button" variant="outline" size="sm" onClick={() => void send()} disabled={!configured || sending}>
-                    {sending ? <Loader2 className="animate-spin" /> : <Send />}
-                    {t("settings.notifyTestButton")}
+            <SectionHeading icon={<Webhook />} title={t("settings.webhooksTitle")} />
+            <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{t("settings.webhooksBody")}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button asChild variant="outline" size="sm">
+                    <Link href="/tunnels/webhooks?scope=site">
+                        {t("settings.webhooksSite")} <ArrowRight />
+                    </Link>
                 </Button>
-                {!configured && <span className="text-xs text-muted-foreground">{t("settings.notifyTestNeedsUrl")}</span>}
+                <Button asChild variant="ghost" size="sm">
+                    <Link href="/tunnels/webhooks">{t("settings.webhooksMine")}</Link>
+                </Button>
             </div>
             <p className="mt-4 text-xs text-muted-foreground leading-relaxed">{t("settings.notifyDesktopNote")}</p>
         </section>

@@ -43,6 +43,22 @@ impl ConsoleKind {
     }
 }
 
+/// 有人開了 session：發 `session.started` 給 owner 與 ADMIN 被分享者（不含他自己）。`kind` = terminal /
+/// lan_terminal / files / browser / desktop / rustdesk。
+/// Someone opened a session: emit `session.started` to the owner and ADMIN sharees (not to themselves).
+pub async fn webhook_started(state: &AppState, tunnel_id: i64, user_id: i64, username: &str, kind: &str, account: Option<&str>) {
+    let Ok(Some(t)) = db::tunnels::by_id(&state.db, tunnel_id).await else { return };
+    let mut managers = vec![t.user_id];
+    managers.extend(db::sharing::admin_sharee_ids(&state.db, t.id).await.unwrap_or_default());
+    state.webhooks.emit(
+        crate::webhooks::Event::new(crate::webhooks::Kind::SessionStarted)
+            .tunnel(&t)
+            .to(managers, Some(user_id))
+            .data(serde_json::json!({ "kind": kind, "by": username, "account": account }))
+            .link(format!("/tunnels/sessions?tunnel={}", t.id)),
+    );
+}
+
 /// 一個 session 的稽核；`close` 記結束（沒呼叫就不記，例如連線半途失敗）。/ Audit of one session.
 pub struct ConsoleSession {
     kind: ConsoleKind,

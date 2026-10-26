@@ -156,6 +156,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let opened = session.describe();
     tracing::info!(session = %session_id, connection = %connection_id, "desktop: {opened}");
     state.gateway.event("desktop_open", None, None, Some(session.tunnel_id), format!("{opened} (session {})", short(&session_id))).await;
+    crate::session_audit::webhook_started(&state, session.tunnel_id, session.user_id, &session.user_name, "desktop", Some(&session.hop_username)).await;
 
     let (stream, mut from_guacd) = guacd.into_parts();
     let (mut rx, mut tx) = stream.into_split();
