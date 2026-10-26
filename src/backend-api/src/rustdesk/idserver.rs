@@ -395,9 +395,10 @@ pub struct DeviceCommands {
 
 /// macOS 的 RustDesk 不在 PATH 上。/ RustDesk on macOS is not on the PATH.
 const MAC_APP_BINARY: &str = "/Applications/RustDesk.app/Contents/MacOS/RustDesk";
-const NOT_FOUND: &str = "RustDesk was not found. Install RustDesk 1.5 or later (on macOS, into Applications), open it once, then run this command again.";
-const NOT_TAKEN: &str = "RustDesk did not accept the settings. Open RustDesk and let it finish its setup (on macOS: allow Accessibility and Screen Recording, and install its background service when asked), then run this command again.";
-const NOT_SYNCED: &str = "The RustDesk background service did not pick up the settings. Open RustDesk (on macOS, install its service when asked), then run this command again.";
+const NOT_FOUND: &str = "RustDesk was not found. Install RustDesk 1.5 or later (on macOS, into Applications), then run this command again.";
+const NOT_RUNNING: &str = "RustDesk is not running in the background. Open RustDesk: on macOS click Install where it offers to install the system service (it asks for an administrator password) and allow Accessibility and Screen Recording; on Linux start the rustdesk service. Then run this command again.";
+const NOT_TAKEN: &str = "RustDesk did not accept the settings. Make sure RustDesk is running in the background, then run this command again.";
+const NOT_SYNCED: &str = "The RustDesk background service did not pick up the settings. Restart RustDesk, then run this command again.";
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -418,26 +419,34 @@ fn ps_quote(s: &str) -> String {
 
 /// Linux / macOS：一條 `sudo sh -c '…'`。
 /// - 找 RustDesk：PATH 上的 `rustdesk`，否則 macOS 的 app（不在 PATH 上；以前 Linux 指令在 Mac 上是 command not found）。
-/// - 設好三個選項後讀回 `api-server`：沒裝好、服務沒在跑時 RustDesk 只印一行或什麼都不做，讀回不對就停下來說原因。
-/// - `--deploy` 讀的是**執行它的行程**的設定檔（sudo 下是 `$HOME` 那份；macOS 的 RustDesk 服務以使用者身分跑，
-///   0.3 秒一次把設定同步給 root），`--option` 卻是經 IPC 寫進使用者的服務。所以等那份檔案裡出現 Telepy 的
-///   api-server 才 deploy —— 否則 deploy 會帶著權杖送到 RustDesk 自己的 API 伺服器。
+/// - **先確認 RustDesk 的背景服務（`--server` 行程）在跑**，否則什麼都不動。RustDesk 1.5 的 `set_options` 在 IPC 連不上
+///   時照樣把設定寫進本機設定檔、讀取也退回那份檔案，所以沒有服務時「讀回」一樣會過；而 macOS 的 sudo 保留 `$HOME`，
+///   root 會把**使用者的** `RustDesk2.toml` 寫成 root 擁有、0600，RustDesk 下次啟動讀不到就整份換成預設值（實際在
+///   Mac mini 上發生過）。
+/// - 結束時（成功或失敗）把 `$HOME` 那份設定目錄裡被 root 寫過的 `RustDesk*.toml` 還給 `$SUDO_USER`（只在 `$HOME`
+///   屬於那個人時；Linux 上 `/root` 是 root 自己的服務設定，不能動）。
+/// - 設好三個選項後讀回 `api-server`，再等 `--deploy` 會讀的那份設定檔裡出現 Telepy 的 api-server 才 deploy
+///   （`--deploy` 讀**自己行程**的設定；否則權杖會被送到 RustDesk 自己的 API 伺服器）。
 ///
-/// Linux / macOS: one `sudo sh -c '…'` that finds RustDesk (the PATH, else the macOS app, which is not on the PATH),
-/// sets the options, reads `api-server` back (RustDesk prints one line or nothing when it is not installed or its
-/// service is not running), and waits until the config file `--deploy` reads (the one under `$HOME`; on macOS the
-/// service runs as the user and syncs to root every 0.3 s) holds Telepy's API server, so the token never goes to
-/// RustDesk's own API server.
+/// Linux / macOS: one `sudo sh -c '…'`. It finds RustDesk (the PATH, else the macOS app), then **requires RustDesk's
+/// background service (a `--server` process) before touching anything**: RustDesk 1.5's `set_options` also writes the
+/// local config file and reads fall back to it, so without a service the read-back passes anyway, and because macOS
+/// sudo keeps `$HOME`, root leaves the user's `RustDesk2.toml` owned by root (0600) and RustDesk resets it on its next
+/// start. On exit it hands root-owned `RustDesk*.toml` under `$HOME` back to `$SUDO_USER` (only when `$HOME` is theirs).
+/// It reads `api-server` back and waits until the config file `--deploy` reads holds Telepy's API server, so the token
+/// never goes to RustDesk's own API server.
 pub fn device_commands(settings: &DeviceSettings, token: &str) -> DeviceCommands {
     let api = sh_word(&settings.api_server);
     let unix = [
         format!("RD=$(command -v rustdesk 2>/dev/null); [ -n \"$RD\" ] || RD={MAC_APP_BINARY}"),
         format!("if [ ! -x \"$RD\" ]; then echo \"{NOT_FOUND}\"; exit 1; fi"),
+        format!("if ! {{ pgrep -f \"[Rr]ust[Dd]esk --server\" || ps -A -o args= 2>/dev/null | grep -q \"[Rr]ust[Dd]esk --server\"; }} >/dev/null 2>&1; then echo \"{NOT_RUNNING}\"; exit 1; fi"),
+        "if [ \"$(uname -s)\" = Darwin ]; then D=\"$HOME/Library/Preferences/com.carriez.RustDesk\"; else D=\"${XDG_CONFIG_HOME:-$HOME/.config}/rustdesk\"; fi; CFG=\"$D/RustDesk2.toml\"; U=\"${SUDO_USER:-}\"".to_string(),
+        "fixown() { if [ -n \"$U\" ] && [ \"$U\" != root ] && [ -d \"$D\" ] && [ -n \"$(find \"$HOME\" -maxdepth 0 -user \"$U\" 2>/dev/null)\" ]; then find \"$D\" -maxdepth 1 -name \"RustDesk*.toml\" -user root -exec chown \"$U\" {} + 2>/dev/null; fi; }; trap fixown EXIT".to_string(),
         format!("\"$RD\" --option custom-rendezvous-server {}", sh_word(&settings.rendezvous)),
         format!("\"$RD\" --option api-server {api}"),
         "\"$RD\" --option allow-websocket Y".to_string(),
         format!("if [ \"$(\"$RD\" --option api-server)\" != {api} ]; then echo \"{NOT_TAKEN}\"; exit 1; fi"),
-        "if [ \"$(uname -s)\" = Darwin ]; then CFG=\"$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml\"; else CFG=\"${XDG_CONFIG_HOME:-$HOME/.config}/rustdesk/RustDesk2.toml\"; fi".to_string(),
         format!("n=0; while ! grep -qF {api} \"$CFG\" 2>/dev/null; do n=$((n+1)); if [ \"$n\" -gt 15 ]; then echo \"{NOT_SYNCED}\"; exit 1; fi; sleep 1; done"),
         format!("\"$RD\" --deploy --token {}", sh_word(token)),
     ]
@@ -511,6 +520,10 @@ mod tests {
         assert!(c.unix.contains("\"$RD\" --option custom-rendezvous-server telepy.example.com; \"$RD\" --option api-server https://telepy.example.com; \"$RD\" --option allow-websocket Y; "));
         assert!(c.unix.contains("!= https://telepy.example.com ]"), "reads the setting back");
         assert!(c.unix.contains("grep -qF https://telepy.example.com \"$CFG\""), "waits for the config --deploy reads");
+        let at = |needle: &str| c.unix.find(needle).unwrap_or_else(|| panic!("{needle} missing"));
+        assert!(at("--server") < at("--option custom-rendezvous-server"), "the service must run before anything is written");
+        assert!(at("trap fixown EXIT") < at("--option custom-rendezvous-server"), "root-written config files go back to the user on every exit");
+        assert!(c.unix.contains("-user root -exec chown \"$U\" {} +"));
         assert!(c.unix.ends_with("\"$RD\" --deploy --token tpr_abc'"), "deploy comes last: {}", c.unix);
         assert!(!c.unix[12..c.unix.len() - 1].contains('\''), "one single-quoted script");
         assert_eq!(sh_word("a b"), "'a b'", "anything unusual is still quoted");
