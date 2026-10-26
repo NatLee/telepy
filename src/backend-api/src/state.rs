@@ -49,8 +49,6 @@ pub struct Inner {
     pub desktop: Arc<Desktop>,
     /// 網頁內 RustDesk（瀏覽器裡的 RustDesk 核心，後端只中繼）的 session。/ In-browser RustDesk sessions (relay only).
     pub rustdesk: Arc<crate::rustdesk::RustDesk>,
-    /// Telepy 當 RustDesk 的 ID / 中繼伺服器：在線的裝置、中繼配對、登記指令。/ Telepy as RustDesk's ID and relay server.
-    pub rustdesk_ids: Arc<crate::rustdesk::idserver::IdServer>,
     /// 依「隧道 + OS 帳號」共用的裝置 SSH 連線（SFTP / 檔案管理）。
     pub pool: Arc<DevicePool>,
     /// 裝置 host key 釘選的快取。/ Cache of the devices' pinned host keys.
@@ -104,7 +102,6 @@ impl AppState {
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         let desktop = Arc::new(Desktop::new(&config));
         let rustdesk = Arc::new(crate::rustdesk::RustDesk::new());
-        let rustdesk_ids = Arc::new(crate::rustdesk::idserver::IdServer::new(&config.secret_key));
         // 通知 hub 跟 gateway 共用（gateway 會發 IP 變更警示）。/ The hub is shared with the gateway (IP-change alerts).
         let hub = gateway.hub();
         let step_up = gateway.step_ups();
@@ -114,7 +111,6 @@ impl AppState {
             remote_browser,
             desktop,
             rustdesk,
-            rustdesk_ids,
             google: GoogleVerifier::new(http.clone()),
             jwt,
             hub,

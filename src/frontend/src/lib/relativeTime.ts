@@ -23,10 +23,3 @@ export function formatRelativeTime(iso: string, locale: string, now: number = Da
     }
     return iso;
 }
-
-/** 秒 → 「3 分鐘」「2.5 小時」「4 天」（Intl 依語系翻單位）。/ Seconds → a localized duration in its largest unit. */
-export function formatSpan(seconds: number, locale: string): string {
-    const [value, unit] =
-        seconds >= 86_400 ? [seconds / 86_400, "day"] : seconds >= 3_600 ? [seconds / 3_600, "hour"] : seconds >= 60 ? [seconds / 60, "minute"] : [seconds, "second"];
-    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long", maximumFractionDigits: 1 }).format(value);
-}

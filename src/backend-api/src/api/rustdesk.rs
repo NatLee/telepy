@@ -73,8 +73,6 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         return Err(super::desktop::coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
     }
     let prepared = desktop::prepare(&state, tunnel.reverse_port, &hop_username, &target).await.map_err(|e| super::desktop::coded(StatusCode::BAD_GATEWAY, e.code(), e.to_string()))?;
-    let target_out = super::desktop::target_json(&target);
-    let username_out = hop_username.clone();
     let (session, ticket) = state.rustdesk.create(NewSession {
         user_id: user.id,
         user_name: user.username.clone(),
@@ -92,8 +90,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, headers:
         "ws_path": format!("/ws/rustdesk/{}/", session.id),
         "ticket": ticket,
         "expires_in": TICKET_TTL.as_secs(),
-        "target": target_out,
-        "username": username_out,
+        "target": super::desktop::target_json(&session.target),
+        "username": session.hop_username,
         "clipboard": clipboard.as_str(),
         "clipboard_limit": clipboard_limit.as_str(),
     });

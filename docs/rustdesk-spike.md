@@ -4,7 +4,8 @@
 > 這份是研究紀錄，不是功能文件。程式碼沒有進產品；重現用的腳本在當時的 scratchpad（已清），做法寫在附錄。
 
 > **2026-10-26 更新：** 下面「『不用 SSH』是反的」那一點已被推翻。RustDesk 1.5.0 能經 WebSocket 主動連 ID 伺服器，
-> Telepy 自己當 ID＋中繼伺服器就不需要 SSH、也不用開新埠，還多了端對端加密；見 [`rustdesk-id-server.md`](rustdesk-id-server.md)。
+> Telepy 自己當 ID＋中繼伺服器就不需要 SSH、也不用開新埠，還多了端對端加密；見 [`rustdesk-id-server.md`](rustdesk-id-server.md)
+> （做過後又移除：Telepy 只經隧道連 RustDesk）。
 
 ## 結論
 

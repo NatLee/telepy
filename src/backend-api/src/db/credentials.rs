@@ -24,11 +24,9 @@ pub struct Credential {
     pub created_at: String,
     pub updated_at: String,
     pub last_used_at: Option<String>,
-    /// 綁在 Telepy RustDesk 伺服器的裝置上（這時 `tunnel_id` = 0）。/ Bound to a RustDesk-server device (then `tunnel_id` = 0).
-    pub rustdesk_device_id: Option<i64>,
 }
 
-const COLS: &str = "id, user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at, last_used_at, rustdesk_device_id";
+const COLS: &str = "id, user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at, last_used_at";
 
 pub async fn for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Credential>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM telepy_credential WHERE user_id = ? ORDER BY tunnel_id, lan_host_id, label"))
@@ -50,7 +48,6 @@ pub struct NewCredential<'a> {
     pub port: Option<i64>,
     pub login: &'a str,
     pub domain: &'a str,
-    pub rustdesk_device_id: Option<i64>,
 }
 
 /// 插入一列並在同一個 transaction 裡寫入密文（AAD 要用到新列的 id）。/ Insert, then seal with the new id's AAD.
@@ -58,8 +55,8 @@ pub async fn create(db: &Db, new: NewCredential<'_>, seal: impl FnOnce(i64) -> S
     let now = now_db();
     let mut tx = db.write.begin().await?;
     let id = sqlx::query(
-        "INSERT INTO telepy_credential (user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at, rustdesk_device_id) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)",
+        "INSERT INTO telepy_credential (user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
     )
     .bind(new.user_id)
     .bind(new.label)
@@ -71,7 +68,6 @@ pub async fn create(db: &Db, new: NewCredential<'_>, seal: impl FnOnce(i64) -> S
     .bind(new.domain)
     .bind(&now)
     .bind(&now)
-    .bind(new.rustdesk_device_id)
     .execute(&mut *tx)
     .await?
     .last_insert_rowid();
