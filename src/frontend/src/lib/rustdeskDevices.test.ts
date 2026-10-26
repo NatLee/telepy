@@ -25,9 +25,9 @@ test("address problems map to explanations", () => {
 
 test("the default command tab follows the browser", () => {
     assert.equal(guessOs({ platform: "Win32" }), "windows");
-    assert.equal(guessOs({ platform: "MacIntel" }), "macos");
-    assert.equal(guessOs({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }), "linux");
-    assert.equal(guessOs(undefined), "linux");
+    assert.equal(guessOs({ platform: "MacIntel", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" }), "unix");
+    assert.equal(guessOs({ userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }), "unix");
+    assert.equal(guessOs(undefined), "unix");
 });
 
 test("enrolment steps", () => {

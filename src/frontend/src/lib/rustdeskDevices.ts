@@ -67,11 +67,12 @@ export interface RustDeskEnrolment {
 
 export interface RustDeskEnrolmentCreated extends RustDeskEnrolment {
     token: string;
-    commands: { linux: string; macos: string; windows: string };
+    /** `unix` = Linux 與 macOS 共用（自己找 RustDesk、檢查每一步）。/ `unix` serves Linux and macOS alike. */
+    commands: { unix: string; windows: string };
     server: RustDeskServerSettings;
 }
 
-export type DeviceOs = "linux" | "macos" | "windows";
+export type DeviceOs = "unix" | "windows";
 
 /** 純數字的 RustDesk ID 三位一組（和 RustDesk 畫面上一樣）；自訂 ID 原樣。/ Group a numeric ID in threes like RustDesk does. */
 export function formatRustDeskId(id: string): string {
@@ -118,9 +119,7 @@ export function shortOs(os: string): string {
 /** 瀏覽器猜使用者的系統（新增裝置時預選那個分頁）。/ Guess the user's OS for the default command tab. */
 export function guessOs(nav: { platform?: string; userAgent?: string } | undefined): DeviceOs {
     const s = `${nav?.platform ?? ""} ${nav?.userAgent ?? ""}`.toLowerCase();
-    if (s.includes("win")) return "windows";
-    if (s.includes("mac")) return "macos";
-    return "linux";
+    return s.includes("win") ? "windows" : "unix";
 }
 
 /** 登記的三步各自的狀態。/ The state of each enrolment step. */

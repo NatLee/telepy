@@ -150,12 +150,19 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 WebSocket，就會**主動往外**連 Telepy 的 443；Telepy 自己實作 hbbs / hbbr 需要的那一小部分（不跑官方伺服器、不開新埠）。
 
 - **登記（RustDesk 內建的 deploy）**：「RustDesk 裝置」頁 → 新增裝置 → `POST /api/rustdesk/enroll {name?}` 發一次性權杖
-  （`tpr_…`，記憶體、30 分鐘、每人 10 張）與指令（Linux / macOS 一行 `sudo sh -c '…'`，Windows PowerShell）：
+  （`tpr_…`，記憶體、30 分鐘、每人 10 張）與指令（`unix` = Linux / macOS 共用一行 `sudo sh -c '…'`，`windows` = PowerShell）：
   `rustdesk --option custom-rendezvous-server <位址>`、`--option api-server <Telepy>`、`--option allow-websocket Y`、
   `rustdesk --deploy --token <權杖>`。裝置 `POST /api/devices/deploy`（`Authorization: Bearer`，`{id, pk, uuid}`），
   Telepy 存一列 `telepy_rustdesk_device`（RustDesk ID 全站唯一；同一個擁有者再登記 = 換 uuid / 公鑰）並回
   `{"result": "OK"}` —— RustDesk 1.5 只認 `result`（`OK` / `INVALID_INPUT` / `ID_TAKEN` / `NOT_ENABLED`），其他內容原樣印出、
   結束碼 1，所以權杖問題回一行純文字。OK 之後裝置通知自己的服務，1 秒內就註冊。
+- **Linux / macOS 共用一條指令**（`idserver::device_commands`）：macOS 的 RustDesk 不在 PATH 上（以前「Linux」那條在 Mac 上是
+  `command not found: rustdesk`），所以先找 PATH 上的 `rustdesk`、找不到再用 `/Applications/RustDesk.app/Contents/MacOS/RustDesk`，
+  都沒有就說「沒裝」並停下。設完三個選項後讀回 `api-server`：沒裝好或服務沒在跑時 RustDesk 只印
+  `Installation and administrative privileges required!` 或什麼都不做，讀回不對就停下來說原因。最後一步是等設定出現在
+  `--deploy` 會讀的那份設定檔（RustDesk 1.5 原始碼）：root 跑的 `--option` 經 IPC 寫進**使用者的** `--server`
+  （`UserMainIpcScope`），但 `--deploy` 讀的是**自己行程**的設定（`$HOME` 那份；macOS 的服務以使用者身分跑，每 0.3 秒同步給
+  root）—— 沒等就 deploy，權杖會被送到 RustDesk 自己的 API 伺服器。最多等 15 秒，等不到就說「服務沒收到設定」。
 - **位址規則（RustDesk 1.5）**：伺服器是網域 → 連 `ws(s)://網域/ws/id`，**埠固定 443 / 80**（`api-server` 是 https 才用 wss）；
   是 IP → `ws://IP:<設定的埠+2>/`（根路徑、不加密）。所以 `device_settings()` 依 Telepy 對外網址（`PUBLIC_URL`，否則轉送標頭）
   給 `網域` 或 `IP:埠−2`，並標出 RustDesk 連不到的情況（網域配非標準埠、IP 配 https、localhost）——頁面上有警告。
@@ -192,8 +199,9 @@ WebSocket，就會**主動往外**連 Telepy 的 443；Telepy 自己實作 hbbs 
   已存的密碼 / 密碼＋「存起來」與畫質，和隧道版共用 `SavedLoginSelect` / `RustDeskSecret`），`RustDeskViewer` 帶 `key` 與
   `peer_id`；info 路徑圖是三節點版（瀏覽器 ─ Telepy ─ 裝置自己的 HTTPS 連線 ─ 裝置）。即時 session 頁依「地點」分組
   （隧道或 RustDesk 裝置，`lib/liveSessions.ts` 的 `Place`），篩選 `?tunnel=` / `?device=`。
-- **還沒有的**：分享給別人（只有擁有者與管理員）、Telepy 配發的號碼（RustDesk 的 `--deploy --id <號碼>` 可以做到）。實測只在 Linux（Debian 容器、RustDesk 1.5.0）；macOS /
-  Windows 指令用同樣的選項，還沒實機跑過。
+- **還沒有的**：分享給別人（只有擁有者與管理員）、Telepy 配發的號碼（RustDesk 的 `--deploy --id <號碼>` 可以做到）。實測：Linux（Debian 容器、RustDesk 1.5.0）
+  真機；Linux / macOS 那條指令的流程另外在 macOS 的 `/bin/sh` 用假 RustDesk 跑過（找不到、沒收下設定、同步延遲、同步不到）。
+  macOS 真機與 Windows 指令還沒實機跑過。
 
 ### 用 RustDesk app（埠轉發）
 
