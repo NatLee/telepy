@@ -185,6 +185,9 @@ pub struct Tunnel {
     pub share_expires_at: Option<String>,
     /// 只有列表帶：owner / ADMIN 看得到還在等的存取申請數；其他人 0。/ List only: pending access requests (owner / ADMIN; else 0).
     pub access_requests: Option<i64>,
+    /// 只有列表帶：分享給誰（分享的先後順序，權限是現在有效的那個）；只給 owner / ADMIN（能管分享的人），其他人 null。
+    /// List / dashboard only: who the tunnel is shared with (in sharing order, the permission in force); owner / ADMIN only, null for everyone else.
+    pub shared_with: Option<Vec<TunnelSharee>>,
     /// 開 session 前要 step-up（`POST /api/auth/step-up`，token 放 `X-Telepy-Step-Up` 或 WebSocket auth 的 `step_up`）。
     /// Sessions need a step-up first (token in `X-Telepy-Step-Up` or the WebSocket auth field `step_up`).
     pub require_step_up: bool,
@@ -237,6 +240,17 @@ pub struct PinState {
 pub struct LabelsRequest {
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Vec<String>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelSharee {
+    /// 使用者 id。/ The sharee's user id.
+    pub id: i64,
+    #[schema(example = "alice")]
+    pub username: String,
+    /// view / edit / admin（暫時提升過期了就是原本的）。/ view / edit / admin (a temporary raise that ran out counts as the original).
+    #[schema(example = "view")]
+    pub permission: String,
 }
 
 #[derive(ToSchema)]

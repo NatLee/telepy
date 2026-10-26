@@ -1,16 +1,17 @@
 /**
  * 隧道狀態與存取標籤：狀態是「小圓點 + 文字」（不是發光膠囊）——上線實心綠、降級實心琥珀、離線實心灰、從沒連過是虛線空心；
- * 擁有者 / 被分享 / 分享人數是 4px 圓角的小標籤。卡片與表格共用。
+ * 擁有者 / 被分享 / 分享人數是 4px 圓角的小標籤（分享人數 hover 會列出分享給誰）。卡片與表格共用。
  * Tunnel status + access badges: a dot + plain text (no glowing pill) — online solid green, degraded solid amber,
  * offline solid grey, never connected a dashed ring; owner / shared-with-you / share-count are small chips.
  */
 import React from "react";
-import { CircleDot, Clock, Crown, Hourglass, Share2, ShieldCheck, Users } from "lucide-react";
+import { CircleDot, Clock, Crown, Hourglass, Share2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { shareExpiryState } from "@/lib/shareExpiry";
 import { ShareExpiryText } from "@/components/tunnels/ShareExpiry";
+import { SharedWithChip } from "@/components/tunnels/SharedWithChip";
 import type { TranslationKey } from "@/locales/en";
 import { Tunnel, TunnelHealth } from "@/types/tunnel";
 
@@ -81,7 +82,18 @@ export const HEALTH_TILE: Record<TunnelHealth, string> = {
 const chip = "inline-flex items-center gap-1 rounded-sm border px-1.5 py-px text-[0.75rem] whitespace-nowrap [&>svg]:size-3";
 
 /** 這條隧道和「我」的關係：我的 / 別人分享給我的，以及我分享給幾個人。/ How the tunnel relates to me. */
-export function TunnelAccessBadges({ tunnel, sharedCount, onRequests }: { tunnel: Tunnel; sharedCount: number; onRequests?: () => void }) {
+export function TunnelAccessBadges({
+    tunnel,
+    sharedCount,
+    onRequests,
+    onShare,
+}: {
+    tunnel: Tunnel;
+    sharedCount: number;
+    onRequests?: () => void;
+    /** 打開分享視窗（「已分享給 N 人」浮層裡的「管理分享」）。/ Opens the share dialog ("Manage sharing" in the chip's panel). */
+    onShare?: () => void;
+}) {
     const { t } = useI18n();
     return (
         <span className="inline-flex flex-wrap items-center gap-1">
@@ -123,10 +135,14 @@ export function TunnelAccessBadges({ tunnel, sharedCount, onRequests }: { tunnel
                     <ShieldCheck /> {t("stepUp.chip")}
                 </span>
             )}
+            {/* hover / 聚焦 / 點一下 = 分享給誰。/ Hover, focus or tap shows who it is shared with. */}
             {tunnel.is_owner && sharedCount > 0 && (
-                <span className={cn(chip, "border-border bg-muted text-foreground/75")} title={t("tunnels.sharedWithCount", { count: sharedCount })}>
-                    <Users /> {t("tunnels.sharedWithCount", { count: sharedCount })}
-                </span>
+                <SharedWithChip
+                    count={sharedCount}
+                    sharees={tunnel.shared_with}
+                    onManage={onShare}
+                    className={cn(chip, "border-border bg-muted text-foreground/75")}
+                />
             )}
         </span>
     );

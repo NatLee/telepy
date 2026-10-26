@@ -94,6 +94,39 @@ pub async fn permission_context(db: &Db, user_id: i64) -> sqlx::Result<(HashMap<
     Ok((mine.into_iter().collect(), counts.into_iter().collect()))
 }
 
+/// 一位分享對象：列表上「已分享給 N 人」hover 時列出來。/ One sharee, listed when hovering "Shared with N" on the tunnels list.
+#[derive(Debug, Clone, FromRow)]
+pub struct Sharee {
+    pub tunnel_id: i64,
+    pub id: i64,
+    pub username: String,
+    /// 現在有效的權限（同 [`Sharing::permission`]）。/ The permission in force now (as [`Sharing::permission`]).
+    pub permission: String,
+}
+
+/// 我看得到的隧道（owned ∪ shared）各自分享給誰，一次查完；順序同分享視窗（分享的先後）。
+/// 誰能看由呼叫端決定（owner / ADMIN，同分享管理）。
+/// Sharees of every tunnel the user can see, in one query, ordered like the share dialog; the caller decides who may see them.
+pub async fn sharees_of_visible(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, Vec<Sharee>>> {
+    let rows: Vec<Sharee> = sqlx::query_as(&format!(
+        "SELECT s.tunnel_id, s.shared_with_id AS id, a.username, \
+         CASE WHEN s.base_permission IS NOT NULL AND s.permission_until <= ? THEN s.base_permission ELSE s.permission_type END AS permission \
+         FROM {S} s JOIN auth_user a ON a.id = s.shared_with_id \
+         WHERE s.tunnel_id IN (SELECT id FROM authorized_keys_reverseserverauthorizedkeys WHERE user_id = ? UNION SELECT tunnel_id FROM {S} WHERE shared_with_id = ?) \
+         ORDER BY s.tunnel_id, s.id"
+    ))
+    .bind(now_db())
+    .bind(user_id)
+    .bind(user_id)
+    .fetch_all(&db.read)
+    .await?;
+    let mut map: HashMap<i64, Vec<Sharee>> = HashMap::new();
+    for r in rows {
+        map.entry(r.tunnel_id).or_default().push(r);
+    }
+    Ok(map)
+}
+
 /// 所有分享關係 (tunnel_id, shared_with_id)，給廣播計算「誰看得到哪個 port」用。
 pub async fn all_pairs(db: &Db) -> sqlx::Result<Vec<(i64, i64)>> {
     sqlx::query_as(&format!("SELECT tunnel_id, shared_with_id FROM {S}")).fetch_all(&db.read).await

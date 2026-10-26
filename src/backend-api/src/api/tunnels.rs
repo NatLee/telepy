@@ -59,12 +59,13 @@ async fn status_latency(State(state): State<AppState>, _user: AuthUser) -> ApiRe
 
 /// 列表序列化：以預先算好的表避免每列查詢（`tunnel_permission_context`）。
 /// 列表多一個 `endpoint`（裝置的公網 IP）：只給 [`permissions::can_see_endpoint`] 允許的人，其他人是 null；
-/// 和 `presence`（誰在用：人數給大家，細節給 [`permissions::can_see_presence_details`]）。
+/// 和 `presence`（誰在用：人數給大家，細節給 [`permissions::can_see_presence_details`]）；`shared_with`（分享給誰）只給 owner / ADMIN。
 /// `health`（online / degraded / offline / never，見 [`crate::monitor::Health`]）與 `last_seen_at`（離線時最後
 /// 一次有連線的時間，連著時 null）不含 IP，所以給所有看得到隧道的人。
 async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiResult<Vec<Value>> {
     let tunnels = db::tunnels::visible_to(&state.db, user_id).await?;
     let (my_shares, counts) = db::sharing::permission_context(&state.db, user_id).await?;
+    let sharees = db::sharing::sharees_of_visible(&state.db, user_id).await?;
     let with_accounts = db::sharing::tunnels_with_allowed_usernames(&state.db, user_id).await?;
     let last = db::tunnel_endpoints::visible_to(&state.db, user_id).await?;
     let live = state.status.endpoints();
@@ -102,6 +103,14 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             // owner / ADMIN：還在等我決定的存取申請。/ Owner / ADMIN: access requests waiting for a decision.
             let decides = eff.is_some_and(|e| e.satisfies(permissions::Permission::Admin));
             v["access_requests"] = json!(if decides { requests.get(&t.id).copied().unwrap_or(0) } else { 0 });
+            // owner / ADMIN（能管分享的人）：分享給誰，給「已分享給 N 人」的 hover；其他人 null。
+            // Owner / ADMIN (who manage sharing): who it is shared with, for the "Shared with N" hover; null for everyone else.
+            v["shared_with"] = if decides {
+                let list = sharees.get(&t.id).map(Vec::as_slice).unwrap_or(&[]);
+                json!(list.iter().map(|s| json!({ "id": s.id, "username": s.username, "permission": s.permission })).collect::<Vec<_>>())
+            } else {
+                Value::Null
+            };
             v["labels"] = json!(labels.get(&t.id).cloned().unwrap_or_default());
             // 裝置出示了和釘選不同的 host key、正等擁有者確認。/ The device presented a different host key; waiting for review.
             v["host_key_changed"] = json!(key_alerts.contains(&t.id));

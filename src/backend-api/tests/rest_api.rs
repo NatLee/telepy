@@ -427,6 +427,57 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!(""));
 }
 
+/// 列表的 `shared_with`（「已分享給 N 人」hover 的名單）：owner 與 ADMIN sharee 看得到、依分享先後、權限是現在有效的那個；
+/// 其他 sharee 是 null。/ The list's `shared_with`: owner and ADMIN sharees see it, in sharing order with the permission in force; others get null.
+#[tokio::test]
+async fn shared_with_names_go_to_owner_and_admin_sharees_only() {
+    let app = common::spawn().await;
+    let (owner, bob) = app.admin_and_user("owner", "bob").await;
+    let carol = app.login("carol", "pw").await;
+    let bob_id = app.get("/api/auth/user/profile", Some(&bob)).await.json["id"].as_i64().unwrap();
+    let carol_id = app.get("/api/auth/user/profile", Some(&carol)).await.json["id"].as_i64().unwrap();
+    let t = create_tunnel(&app, &owner, "shared-box", KEY_A).await;
+    let id = t["id"].as_i64().unwrap();
+    let item = |json: &Value| json["tunnels"].as_array().unwrap().iter().find(|t| t["id"] == id).cloned().unwrap();
+
+    // not shared yet: the owner gets an empty list, not null
+    let r = app.get("/api/reverse/server/dashboard", Some(&owner)).await;
+    assert_eq!(item(&r.json)["shared_with"], json!([]));
+
+    for (uid, perm) in [(carol_id, "view"), (bob_id, "admin")] {
+        let r = app.post(&format!("/tunnels/share/{id}"), Some(&owner), json!({"shared_with_user_id": uid, "permission_type": perm})).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    }
+    let expected = json!([
+        {"id": carol_id, "username": "carol", "permission": "view"},
+        {"id": bob_id, "username": "bob", "permission": "admin"},
+    ]);
+    // the owner: names in sharing order, like the share dialog
+    let r = app.get("/api/reverse/server/dashboard", Some(&owner)).await;
+    let o = item(&r.json);
+    assert_eq!(o["shared_with_count"], 2);
+    assert_eq!(o["shared_with"], expected);
+    let r = app.get("/api/reverse/server/keys", Some(&owner)).await;
+    assert_eq!(r.json.as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()["shared_with"], expected, "the plain list carries it too");
+    // an ADMIN sharee manages sharing, so they see it as well
+    let r = app.get("/api/reverse/server/dashboard", Some(&bob)).await;
+    assert_eq!(item(&r.json)["shared_with"], expected);
+    // a VIEW sharee does not
+    let r = app.get("/api/reverse/server/dashboard", Some(&carol)).await;
+    assert!(item(&r.json)["shared_with"].is_null(), "{}", r.text);
+
+    // a temporary raise that ran out counts as the original permission (before the reaper reverts it)
+    sqlx::query("UPDATE tunnels_tunnelsharing SET base_permission = 'view', permission_until = '2000-01-01 00:00:00.000000' WHERE shared_with_id = ?")
+        .bind(bob_id)
+        .execute(&app.state.db.write)
+        .await
+        .unwrap();
+    let r = app.get("/api/reverse/server/dashboard", Some(&owner)).await;
+    assert_eq!(item(&r.json)["shared_with"][1], json!({"id": bob_id, "username": "bob", "permission": "view"}));
+    let r = app.get("/api/reverse/server/dashboard", Some(&bob)).await;
+    assert!(item(&r.json)["shared_with"].is_null(), "an expired ADMIN raise no longer shows the list");
+}
+
 /// 一次性 data migration：非 ADMIN 被分享者以前自己建的 username 全部刪掉（連同允許清單、預設值），之後不再跑。
 #[tokio::test]
 async fn legacy_sharee_usernames_are_dropped_once() {
