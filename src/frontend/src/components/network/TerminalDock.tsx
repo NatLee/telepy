@@ -2,23 +2,28 @@
 
 /**
  * 網路頁底部的終端機 dock：在這頁開區網主機的終端機，不必跳到終端機頁。每個 session 一個分頁（狀態點 + 帳號@主機），
- * 換分頁 / 換主機都不會斷；可縮小成一條、一般高度、或放大。所有 session 都掛著，只顯示作用中的那個。
- * The network page's terminal dock: LAN-host terminals open right here. One tab per session; switching
- * never disconnects. Minimise to a bar, normal height, or maximise. Every session stays mounted.
+ * 「+」在同一台機器再開一個 shell，換分頁 / 換主機都不會斷；可縮小成一條、一般高度、或放大成整個視窗的覆蓋層
+ * （Esc 還原）。「在終端機頁開啟」把作用中的那台帶到完整的終端機頁。所有 session 都掛著，只顯示作用中的那個。
+ * The network page's terminal dock: LAN-host terminals open right here. One tab per session, "+" opens another
+ * shell on the same machine, switching never disconnects. Minimise to a bar, normal height, or maximise into a
+ * full-window overlay (Esc restores). "Open in the terminal page" takes the active machine to the full page.
+ * Every session stays mounted.
  */
-import React from "react";
-import { ChevronDown, ChevronUp, Maximize2, Minimize2, RotateCw, X } from "lucide-react";
+import React, { useEffect } from "react";
+import Link from "next/link";
+import { ChevronDown, ChevronUp, Maximize2, Minimize2, Plus, RotateCw, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { LanTerminal } from "@/components/network/LanTerminal";
-import type { DockSize, LanTerminalSession, LanTerminalStatus } from "@/hooks/useLanTerminals";
+import { MAX_LAN_TERMINALS, type DockSize, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
 
-/** dock 本體高度（給主機面板扣掉，免得被蓋住）。/ Body height, also subtracted from the host panel. */
+/** dock 本體高度（給主機面板扣掉，免得被蓋住）。放大是覆蓋層，不佔版面。/ Body height, also subtracted from the host panel. */
 export const DOCK_HEIGHT: Record<DockSize, string> = {
     min: "0px",
-    normal: "min(22rem, 40vh)",
-    max: "calc(100vh - 10rem)",
+    normal: "min(24rem, 45vh)",
+    max: "0px",
 };
 /** 標題列高度。/ Header bar height. */
 export const DOCK_BAR = "2.75rem";
@@ -34,6 +39,7 @@ interface Props {
     activeKey: number | null;
     size: DockSize;
     onSelect: (key: number) => void;
+    onDuplicate: (key: number) => boolean;
     onClose: (key: number) => void;
     onCloseAll: () => void;
     onReconnect: (key: number) => void;
@@ -45,18 +51,37 @@ export function sessionLabel(s: LanTerminalSession): string {
     return s.login ? `${s.login}@${s.hostName}` : s.hostName;
 }
 
-export function TerminalDock({ sessions, activeKey, size, onSelect, onClose, onCloseAll, onReconnect, onStatus, setSize }: Props) {
+export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, setSize }: Props) {
     const { t } = useI18n();
+    const maximized = size === "max";
+
+    // 放大時 Esc 還原（沒有對話框開著時）。/ Esc restores from the overlay.
+    useEffect(() => {
+        if (!maximized) return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape" && !document.querySelector("[role=dialog]")) setSize("normal");
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [maximized, setSize]);
+
     if (sessions.length === 0) return null;
     const active = sessions.find((s) => s.key === activeKey) ?? null;
+    const canAdd = sessions.length < MAX_LAN_TERMINALS && !!active;
+    const pageHref = active ? getTerminalPageUrl({ id: active.tunnelId, reverse_port: active.reversePort }, { lanHost: active.hostId, lanUser: active.login || undefined }) : null;
 
     return (
         <section
             aria-label={t("network.dock.title")}
-            className="sticky bottom-0 z-30 mt-6 overflow-hidden rounded-t-xl border border-b-0 border-border bg-card shadow-dialog"
+            className={cn(
+                "flex flex-col overflow-hidden border-border bg-card",
+                maximized
+                    ? "fixed inset-0 z-40 border-0"
+                    : "sticky bottom-0 z-30 mt-6 rounded-t-xl border border-b-0 shadow-dialog",
+            )}
         >
-            <div className="flex items-center gap-1 border-b border-border px-1.5" style={{ height: DOCK_BAR }}>
-                <div role="tablist" aria-label={t("network.dock.title")} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <div className="flex shrink-0 items-center gap-1 border-b border-border px-1.5" style={{ height: DOCK_BAR }}>
+                <div role="tablist" aria-label={t("network.dock.title")} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {sessions.map((s) => {
                         const selected = s.key === activeKey;
                         const label = sessionLabel(s);
@@ -90,34 +115,54 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onClose, onC
                             </div>
                         );
                     })}
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 shrink-0"
+                        disabled={!canAdd}
+                        onClick={() => active && onDuplicate(active.key)}
+                        aria-label={t("network.dock.newShell")}
+                        title={canAdd ? t("network.dock.newShell") : t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}
+                    >
+                        <Plus size={16} />
+                    </Button>
                 </div>
                 <div className="flex shrink-0 items-center">
+                    {pageHref && (
+                        <Button variant="ghost" size="icon" className="size-8" asChild title={t("network.dock.openPage")} aria-label={t("network.dock.openPage")}>
+                            <Link href={pageHref} prefetch={false}>
+                                <SquareArrowOutUpRight size={15} />
+                            </Link>
+                        </Button>
+                    )}
+                    {!maximized && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8"
+                            onClick={() => setSize(size === "min" ? "normal" : "min")}
+                            aria-label={size === "min" ? t("network.dock.restore") : t("network.dock.minimize")}
+                            title={size === "min" ? t("network.dock.restore") : t("network.dock.minimize")}
+                        >
+                            {size === "min" ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                        </Button>
+                    )}
                     <Button
                         variant="ghost"
                         size="icon"
                         className="size-8"
-                        onClick={() => setSize(size === "min" ? "normal" : "min")}
-                        aria-label={size === "min" ? t("network.dock.restore") : t("network.dock.minimize")}
-                        title={size === "min" ? t("network.dock.restore") : t("network.dock.minimize")}
+                        onClick={() => setSize(maximized ? "normal" : "max")}
+                        aria-label={maximized ? t("network.dock.restore") : t("network.dock.maximize")}
+                        title={maximized ? t("network.dock.restore") : t("network.dock.maximize")}
                     >
-                        {size === "min" ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="size-8"
-                        onClick={() => setSize(size === "max" ? "normal" : "max")}
-                        aria-label={size === "max" ? t("network.dock.restore") : t("network.dock.maximize")}
-                        title={size === "max" ? t("network.dock.restore") : t("network.dock.maximize")}
-                    >
-                        {size === "max" ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                        {maximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                     </Button>
                     <Button variant="ghost" size="icon" className="size-8" onClick={onCloseAll} aria-label={t("network.dock.closeAll")} title={t("network.dock.closeAll")}>
                         <X size={16} />
                     </Button>
                 </div>
             </div>
-            <div className="relative bg-black transition-[height] duration-200" style={{ height: DOCK_HEIGHT[size] }}>
+            <div className={cn("relative bg-black", maximized ? "min-h-0 flex-1" : "transition-[height] duration-200")} style={maximized ? undefined : { height: DOCK_HEIGHT[size] }}>
                 {sessions.map((s) => (
                     <LanTerminal key={`${s.key}`} session={s} visible={size !== "min" && s.key === activeKey} onStatus={onStatus} />
                 ))}

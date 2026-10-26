@@ -13,7 +13,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, Waypoints, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -42,6 +42,7 @@ import { DesktopViewer, loadGuacamole, type DesktopViewerHandle } from "@/compon
 import { RustDeskViewer, type RustDeskQuality, type RustDeskViewerHandle } from "@/components/desktop/RustDeskViewer";
 import { loadRustDeskCore } from "@/lib/rustdesk";
 import { DesktopInfoDialog } from "@/components/desktop/DesktopInfoDialog";
+import { DesktopPathPicker } from "@/components/desktop/DesktopPathPicker";
 import { ConnectionWaysDialog } from "@/components/desktop/ConnectionWays";
 import { wayFor } from "@/lib/connectionWays";
 import { RustDeskSetup } from "@/components/desktop/RustDeskSetup";
@@ -52,7 +53,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, desktopPorts, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -589,8 +590,7 @@ function ClipboardField({ state, actions, rustdesk }: { state: PageState; action
 
 function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState; actions: PageActions; onInfo: () => void; onCompare: () => void }) {
     const { t, tn } = useI18n();
-    const { tunnels, loading, tunnel, host, online, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk } = state;
-    const portOk = isValidPort(form.port);
+    const { tunnels, loading, tunnel, host, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk } = state;
     const busy = phase === "starting";
     // 預熱畫面元件的 chunk（與填表並行）；RustDesk 是 vendored 的核心。/ Warm up the viewer chunk (the RustDesk core in that mode).
     useEffect(() => { void (isRustDesk ? loadRustDeskCore() : loadGuacamole()).catch(() => undefined); }, [isRustDesk]);
@@ -598,11 +598,6 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
     if (loading) return <div className={cn(CARD, "p-8 text-center text-sm text-muted-foreground")}>{t("common.loading")}</div>;
     if (tunnels.length === 0) return null;
 
-    const protocolOptions: { value: DesktopMode; label: string }[] = [
-        { value: "rdp", label: t("desktop.protocol.rdp") },
-        { value: "vnc", label: t("desktop.protocol.vnc") },
-        { value: "rustdesk", label: t("desktop.protocol.rustdesk") },
-    ];
     const qualityOptions: { value: DesktopQuality; label: string }[] = [
         { value: "auto", label: t("desktop.quality.auto") },
         { value: "speed", label: t("desktop.quality.speed") },
@@ -627,68 +622,11 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
                 </Callout>
             )}
 
+            {/* 路徑圖就是表單的前半：裝置、帳號、目標、協定、埠都在對應的節點裡選。/ The path diagram holds the device, account, target, protocol and port. */}
+            <DesktopPathPicker state={state} actions={actions} onCompare={onCompare} />
+
             {/* 欄寬一定要 minmax(0,…)：RustDesk 的 ssh 指令很長，不然會把整張表單撐出手機畫面。/ minmax(0,…) keeps the long ssh command from widening the form past a phone screen. */}
             <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">
-                <Field label={t("desktop.field.device")} hint={tunnel && !online ? t("desktop.offline") : undefined}>
-                    <NativeSelect value={tunnel ? String(tunnel.id) : ""} onChange={(e) => actions.setTunnel(Number(e.target.value))}>
-                        {tunnels.map((tn) => (
-                            <option key={tn.id} value={tn.id}>
-                                {tn.name}{tn.online === false ? ` · ${t("desktop.offlineShort")}` : ""}
-                            </option>
-                        ))}
-                    </NativeSelect>
-                </Field>
-
-                <Field
-                    label={t("desktop.field.target")}
-                    hint={
-                        host ? t("desktop.target.hintLan", { address: host.address }) : (
-                            <>
-                                {t("desktop.target.hintDevice")}{" "}
-                                {tunnel && tunnel.hosts.length === 0 && (
-                                    <Link className="text-primary underline-offset-2 hover:underline" href={`/tunnels/network?tunnel=${tunnel.id}`}>
-                                        <Waypoints size={12} className="inline align-[-1px]" /> {t("desktop.findLan")}
-                                    </Link>
-                                )}
-                            </>
-                        )
-                    }
-                >
-                    <NativeSelect value={host ? String(host.id) : ""} onChange={(e) => actions.setHost(e.target.value ? Number(e.target.value) : null)} disabled={!tunnel}>
-                        <option value="">{t("desktop.target.device")}</option>
-                        {tunnel?.hosts.map((h) => {
-                            const seen = desktopPorts(h.open_ports).map((d) => `${MODE_LABEL[d.protocol]} ${d.port}`).join(", ");
-                            return (
-                                <option key={h.id} value={h.id}>
-                                    {hostName(h)}{hostName(h) !== h.address ? ` (${h.address})` : ""}{seen ? ` · ${seen}` : ""}
-                                </option>
-                            );
-                        })}
-                    </NativeSelect>
-                </Field>
-
-                <Field label={t("desktop.field.account")} hint={t("desktop.field.accountHint")}>
-                    <NativeSelect value={form.account} onChange={(e) => actions.update({ account: e.target.value })} disabled={!tunnel || noAccounts}>
-                        {noAccounts && <option value="">—</option>}
-                        {tunnel?.usernames.map((u) => <option key={u} value={u}>{u}</option>)}
-                    </NativeSelect>
-                </Field>
-
-                <Field
-                    label={t("desktop.field.protocol")}
-                    hint={
-                        <button type="button" onClick={onCompare} className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
-                            <Route size={12} aria-hidden /> {t("desktop.ways.hint")}
-                        </button>
-                    }
-                >
-                    <Segmented options={protocolOptions} value={form.protocol} onChange={actions.setProtocol} fullWidth aria-label={t("desktop.field.protocol")} />
-                </Field>
-
-                <Field label={t("desktop.field.port")} hint={isRustDesk ? t("desktop.field.rustdeskPortHint") : t("desktop.field.portHint")} error={portOk ? undefined : t("desktop.field.portInvalid")}>
-                    <Input inputMode="numeric" value={form.port} onChange={(e) => actions.update({ port: e.target.value.replace(/[^\d]/g, "") })} />
-                </Field>
-
                 <Field label={t("desktop.field.quality")} hint={isRustDesk ? t("desktop.rustdesk.qualityHint") : t(QUALITY_HINT[quality])}>
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
