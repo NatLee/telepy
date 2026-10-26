@@ -294,7 +294,7 @@ export function useDesktopPage() {
                         setPhase("failed");
                         return;
                     }
-                    setFailure(startFailure(data?.code, res.status, { account: form.account, address }));
+                    setFailure(startFailure(data?.code, res.status, { account: form.account, address }, "rustdesk"));
                     setPhase("failed");
                     return;
                 }
@@ -539,7 +539,7 @@ export function useDesktopPage() {
             const data = await readJson<DesktopProbe & { code?: string }>(res);
             if (probeKeyRef.current !== key) return;
             if (!res.ok || !data?.reachable) {
-                setProbeState({ state: "failed", failure: startFailure(data?.code, res.status, { account: form.account, address }), result: null });
+                setProbeState({ state: "failed", failure: startFailure(data?.code, res.status, { account: form.account, address }, "rustdesk"), result: null });
                 return;
             }
             setProbeState({ state: "ok", failure: null, result: data });
