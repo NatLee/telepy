@@ -10,6 +10,7 @@ pub mod command_rules;
 pub mod config;
 pub mod db;
 pub mod desktop;
+pub mod device_facts;
 pub mod device_info;
 pub mod device_keys;
 pub mod doctor;

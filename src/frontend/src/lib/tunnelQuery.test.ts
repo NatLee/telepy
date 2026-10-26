@@ -92,3 +92,17 @@ test("labels (tag: alias) and pins", () => {
     const list = [tunnel({ id: 1 }), tunnel({ id: 2, pinned: true })];
     assert.deepEqual(list.sort(pinnedFirst).map((x) => x.id), [2, 1]);
 });
+
+test("warn: device warnings", () => {
+    const facts = (...kinds: string[]) => ({ ip: "1.2.3.4", live: true, connected_at: "2026-10-23T10:00:00Z", last_seen_at: null, facts: { warnings: kinds.map((kind) => ({ kind, detail: "" })) } });
+    const full = tunnel({ endpoint: facts("disk", "reboot") });
+    const fine = tunnel({ endpoint: facts() });
+    assert.ok(match("warn:disk", full));
+    assert.ok(match("warn:memory,reboot", full));
+    assert.ok(!match("warn:load", full));
+    assert.ok(match("warn:any", full));
+    assert.ok(!match("warn:any", fine));
+    assert.ok(match("-warn:any", fine));
+    assert.ok(!match("warn:any", tunnel({ endpoint: null })), "hidden endpoint = no warnings");
+    assert.deepEqual(parseQuery("warn:cpu").invalid, ["warn:cpu"]);
+});

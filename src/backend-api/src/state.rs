@@ -73,6 +73,8 @@ pub struct Inner {
     pub commands: crate::command_rules::CommandRules,
     /// webhook 發送（跟 gateway 共用）。/ Webhook delivery (shared with the gateway).
     pub webhooks: Arc<crate::webhooks::Webhooks>,
+    /// 裝置狀況：警示去重複與「立即重新整理」的頻率限制。/ Device facts: alert de-dup and the refresh rate limit.
+    pub device_info: crate::device_info::DeviceInfoState,
 }
 
 #[derive(Clone)]
@@ -136,6 +138,7 @@ impl AppState {
             step_up,
             commands: Default::default(),
             webhooks,
+            device_info: Default::default(),
             config,
             db,
         }))

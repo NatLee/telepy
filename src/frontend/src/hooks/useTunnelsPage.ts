@@ -4,7 +4,8 @@ import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
-import { Tunnel } from "@/types/tunnel";
+import { Tunnel, type DeviceWarningKind } from "@/types/tunnel";
+import { WARNING_KINDS } from "@/lib/deviceFacts";
 import { useI18n } from "@/lib/i18n";
 
 export function useTunnelsPage() {
@@ -119,6 +120,17 @@ export function useTunnelsPage() {
             }
             reloadSoon();
         },
+        [NOTIFICATION_ACTIONS.DEVICE_WARNING]: (msg) => {
+            // 裝置需要注意（磁碟快滿、記憶體不足…）：提醒一次並刷新列表上的標記。/ A device needs attention: tell, then refresh the chip.
+            const kinds = Array.isArray(msg.warnings) ? (msg.warnings as string[]).filter((k) => (WARNING_KINDS as string[]).includes(k)) : [];
+            if (kinds.length > 0) {
+                const what = kinds.map((k) => t(`deviceFacts.chip.${k as DeviceWarningKind}`)).join(", ");
+                showToast(t("tunnels.deviceWarningToast", { name: String(msg.tunnel_name ?? ""), what }), "warning");
+            }
+            reloadSoon();
+        },
+        // 裝置的位址 / 基本狀況重新讀過：靜默重抓（列表上的警示標記）。/ Facts re-read: quietly refetch (warning chips).
+        [NOTIFICATION_ACTIONS.DEVICE_FACTS_UPDATED]: () => reloadSoon(),
         [NOTIFICATION_ACTIONS.UPDATE_TUNNEL_PRESENCE]: (msg) => {
             // 人數直接換；看得到細節（誰 / IP）的隧道再靜默重抓一次列表。/ Update the count; refetch when details are visible.
             const id = msg.tunnel_id;

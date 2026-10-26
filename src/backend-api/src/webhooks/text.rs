@@ -91,6 +91,7 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::TunnelIpChanged => ("裝置換了 IP", "デバイスの IP が変更"),
         Kind::TunnelHostKeyChanged => ("裝置的 host key 變了", "ホストキーが変更"),
         Kind::DeviceClaimAttempt => ("別的帳號想接管裝置", "別アカウントによるデバイスの登録"),
+        Kind::DeviceWarning => ("裝置需要注意", "デバイスの要確認"),
         Kind::ShareReceived => ("有通道分享給你", "トンネルが共有されました"),
         Kind::ShareEnded => ("分享結束", "共有の終了"),
         Kind::AccessRequested => ("存取申請", "アクセス申請"),
@@ -167,6 +168,42 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
                 format!("{by} 的通道 {other} 指向 {t} 的 SSH 伺服器，已被拒絕"),
                 format!("{by} のトンネル {other} が {t} の SSH サーバーを指していたため拒否されました"),
             )
+        }
+        Kind::DeviceWarning => {
+            let (avail, total) = (s(d, "avail"), s(d, "total"));
+            match s(d, "warning") {
+                "disk" => tri(
+                    lang,
+                    format!("{t}: the root disk is almost full ({avail} free of {total})"),
+                    format!("{t} 的根磁碟快滿了（剩 {avail}，共 {total}）"),
+                    format!("{t} のルートディスクの空きが少なくなっています（空き {avail} / {total}）"),
+                ),
+                "memory" => tri(
+                    lang,
+                    format!("{t} is low on memory ({avail} available of {total})"),
+                    format!("{t} 的記憶體快不夠了（可用 {avail}，共 {total}）"),
+                    format!("{t} のメモリが不足しています（利用可能 {avail} / {total}）"),
+                ),
+                "load" => {
+                    let (load, cpus) = (s(d, "load1"), d.get("cpus").and_then(Value::as_u64).unwrap_or(0));
+                    tri(
+                        lang,
+                        format!("{t} is under heavy load (load average {load} on {cpus} CPUs)"),
+                        format!("{t} 的負載很高（1 分鐘平均負載 {load}，{cpus} 顆 CPU）"),
+                        format!("{t} の負荷が高くなっています（1 分間のロードアベレージ {load}、CPU {cpus} 個）"),
+                    )
+                }
+                "reboot" => tri(
+                    lang,
+                    format!("{t} needs a reboot to finish installing updates"),
+                    format!("{t} 需要重新開機才能裝完更新"),
+                    format!("{t} は更新を完了するために再起動が必要です"),
+                ),
+                _ => {
+                    let detail = s(d, "detail");
+                    tri(lang, format!("{t} needs attention: {detail}"), format!("{t} 需要注意：{detail}"), format!("{t} の確認が必要です：{detail}"))
+                }
+            }
         }
         Kind::ShareReceived => {
             let perm = s(d, "permission").to_uppercase();
@@ -342,6 +379,12 @@ mod tests {
     fn sentences_use_the_fields() {
         let s = sentence(Kind::TunnelIpChanged, Lang::En, Some(&tunnel()), &json!({"ip": "203.0.113.9", "previous_ip": "198.51.100.1"}));
         assert_eq!(s, "office-pi connected from a new IP address: 203.0.113.9 (was 198.51.100.1)");
+        let s = sentence(Kind::DeviceWarning, Lang::En, Some(&tunnel()), &json!({"warning": "disk", "avail": "1.2 GB", "total": "32 GB"}));
+        assert_eq!(s, "office-pi: the root disk is almost full (1.2 GB free of 32 GB)");
+        let s = sentence(Kind::DeviceWarning, Lang::ZhTw, Some(&tunnel()), &json!({"warning": "load", "load1": "9.10", "cpus": 4}));
+        assert_eq!(s, "office-pi 的負載很高（1 分鐘平均負載 9.10，4 顆 CPU）");
+        let s = sentence(Kind::DeviceWarning, Lang::Ja, Some(&tunnel()), &json!({"warning": "reboot"}));
+        assert_eq!(s, "office-pi は更新を完了するために再起動が必要です");
         let s = sentence(Kind::TunnelOffline, Lang::ZhTw, Some(&tunnel()), &json!({}));
         assert_eq!(s, "office-pi 離線了（port 1025）");
         let s = sentence(Kind::ShareEnded, Lang::En, Some(&tunnel()), &json!({"user": "carol", "reason": "expired"}));
