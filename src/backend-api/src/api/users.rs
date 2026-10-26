@@ -34,6 +34,8 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "ui_scale": s.ui_scale,
         "terminal_font": s.terminal_font,
         "terminal_scheme": s.terminal_scheme,
+        "terminal_bold": s.terminal_bold,
+        "terminal_ligatures": s.terminal_ligatures,
         "desktop_clipboard": s.desktop_clipboard,
         "desktop_clipboard_limit": limit,
     }))
@@ -46,6 +48,14 @@ pub const CHOICE_ID_RULE: &str = "Use 1-32 lowercase letters, digits or '-'.";
 /// back to its default for an unknown id, so the backend only rejects garbage.
 pub fn is_choice_id(s: &str) -> bool {
     (1..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+pub const BOLD_STYLES: [&str; 3] = ["face", "bright", "both"];
+pub const BOLD_RULE: &str = "Must be one of: face, bright, both.";
+
+/// 粗體的畫法：face = 真正的粗體字、bright = 只換亮色（經典終端機）、both。/ Bold style: real face, bright colour only, or both.
+pub fn is_bold_style(s: &str) -> bool {
+    BOLD_STYLES.contains(&s)
 }
 
 fn parse_choice(body: &Value, key: &str) -> Result<Option<String>, ApiError> {
@@ -116,6 +126,16 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         ui_scale: scale,
         terminal_font: parse_choice(&body, "terminal_font")?,
         terminal_scheme: parse_choice(&body, "terminal_scheme")?,
+        terminal_bold: match body.get("terminal_bold") {
+            None => None,
+            Some(Value::String(b)) if is_bold_style(b) => Some(b.clone()),
+            Some(_) => return Err(ApiError::field("terminal_bold", BOLD_RULE)),
+        },
+        terminal_ligatures: match body.get("terminal_ligatures") {
+            None => None,
+            Some(Value::Bool(l)) => Some(*l),
+            Some(_) => return Err(ApiError::field("terminal_ligatures", "Must be a valid boolean.")),
+        },
         desktop_clipboard: match body.get("desktop_clipboard") {
             None => None,
             Some(Value::String(c)) if crate::desktop::Clipboard::parse(c).is_some() => Some(c.trim().to_string()),

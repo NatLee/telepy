@@ -10,7 +10,9 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Activity, ArrowRight, KeyRound, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
+import { Activity, ArrowRight, Info, KeyRound, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { AgentReachDialog } from "@/components/mcp/AgentReachDialog";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
@@ -26,6 +28,8 @@ type ClientId = "claudeCode" | "claudeApp" | "other";
 
 const SESSION_RULES: TranslationKey[] = [
     "mcp.ruleTimers",
+    "mcp.ruleShells",
+    "mcp.ruleBrowser",
     "mcp.ruleClosed",
     "mcp.ruleLimit",
     "mcp.ruleNotify",
@@ -46,6 +50,7 @@ export default function McpPage() {
     const { user } = useAuth();
     const { serverUrl, openSessions } = useMcpPage();
     const [client, setClient] = useState<ClientId>("claudeCode");
+    const [reachOpen, setReachOpen] = useState(false);
     const url = serverUrl ?? "https://…/mcp";
 
     const clients: { id: ClientId; label: string }[] = [
@@ -59,7 +64,17 @@ export default function McpPage() {
 
     return (
         <div className="animate-fade-in-up space-y-6">
-            <PageHeader icon={<Plug />} title={t("mcp.title")} description={t("mcp.subtitle")} />
+            <PageHeader
+                icon={<Plug />}
+                title={t("mcp.title")}
+                description={t("mcp.subtitle")}
+                actions={
+                    <Button variant="outline" onClick={() => setReachOpen(true)}>
+                        <Info size={16} /> {t("mcp.reach.button")}
+                    </Button>
+                }
+            />
+            <AgentReachDialog isOpen={reachOpen} onClose={() => setReachOpen(false)} />
 
             <div className="grid gap-6 lg:grid-cols-5 items-start">
                 <div className="lg:col-span-3 space-y-6 min-w-0">

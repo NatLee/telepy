@@ -14,6 +14,8 @@ pub struct Recording {
     pub username: String,
     pub os_user: String,
     pub lan_host: Option<String>,
+    /// `terminal`（網頁終端機）或 `agent`（MCP agent 的 shell）。/ `terminal` (web terminal) or `agent` (an MCP agent's shell).
+    pub kind: String,
     /// 相對 `DATA_DIR/recordings` 的路徑。/ Path relative to `DATA_DIR/recordings`.
     pub file: String,
     pub started_at: String,
@@ -24,15 +26,16 @@ pub struct Recording {
 }
 
 const R: &str = "telepy_terminal_recording";
-const COLS: &str = "id, tunnel_id, user_id, username, os_user, lan_host, file, started_at, ended_at, duration_ms, bytes, truncated";
+const COLS: &str = "id, tunnel_id, user_id, username, os_user, lan_host, kind, file, started_at, ended_at, duration_ms, bytes, truncated";
 
-pub async fn create(db: &Db, tunnel_id: i64, user_id: i64, username: &str, os_user: &str, lan_host: Option<&str>, file: &str) -> sqlx::Result<i64> {
-    Ok(sqlx::query(&format!("INSERT INTO {R} (tunnel_id, user_id, username, os_user, lan_host, file, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)"))
+pub async fn create(db: &Db, tunnel_id: i64, user_id: i64, username: &str, os_user: &str, lan_host: Option<&str>, kind: &str, file: &str) -> sqlx::Result<i64> {
+    Ok(sqlx::query(&format!("INSERT INTO {R} (tunnel_id, user_id, username, os_user, lan_host, kind, file, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"))
         .bind(tunnel_id)
         .bind(user_id)
         .bind(username)
         .bind(os_user)
         .bind(lan_host)
+        .bind(kind)
         .bind(file)
         .bind(now_db())
         .execute(&db.write)

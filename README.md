@@ -9,7 +9,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **Tunnel dashboard** — live online/offline status and per-hop latency (you → Telepy → device), in list or card view.
 - **Guided tunnel creation** — a five-step wizard issues keys and generates ready-to-run connection scripts: plain SSH, AutoSSH, systemd service, PowerShell, Docker Run, and Docker Compose, plus a single-use `curl` URL for fetching the script on the target machine.
 - **One-command device join** — on Linux or macOS, paste one `curl … | sudo sh` command on the device: it creates the tunnel key, registers the device, authorizes Telepy, pins Telepy's host key, installs the tunnel as a systemd/launchd service and waits until Telepy has logged in through it. The command works once and expires after 30 minutes; the create page follows each step live.
-- **Web terminal** — multi-tab xterm.js terminal over WebSocket, with per-user sessions and live latency readout.
+- **Web terminal** — multi-tab xterm.js terminal over WebSocket, with per-user sessions and live latency readout; pick a Nerd Font (real bold and italic faces, optional ligatures) and a colour scheme — built-in or your own, imported from a Windows Terminal or base16 scheme — as your default or per device.
 - **File manager** — SFTP-based file browser alongside the terminal for uploading and downloading files on the device.
 - **Remote proxy browser** — launch a real Chromium desktop (KasmVNC) whose traffic is tunneled through the target device, so external requests appear to come from that machine.
 - **Sharing & permissions** — share tunnels with other users under hierarchical VIEW / EDIT / ADMIN permissions.
@@ -17,7 +17,7 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **Network topology (jump hosts)** — see the machines behind each device at a glance: scan a device's LAN without installing anything (the device's own sshd makes the connections), label hosts and set their login, then open a web terminal on one through the device, or copy an `ssh -J` one-liner or a `ProxyJump` ssh config stanza.
 - **Webhooks** — everyone can send the notifications they get (a tunnel going offline or changing IP, a share, an access request, a command waiting for approval, a sign-in…) to Slack, Discord, Google Chat, Microsoft Teams, Telegram, ntfy or their own service, per tunnel and in their own language; admins add site-wide webhooks for outages and security events. Requests are signed (Standard Webhooks) and personal URLs may only reach public addresses.
 - **Command rules** — block commands, or hold them until someone approves, site-wide or per tunnel, for the web terminal and MCP agents alike; "allow" exceptions carve out the safe cases within the same scope, an approval rule can name its own approvers (a security team for `sudo` everywhere), and an info diagram shows the path every tested command takes.
-- **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels).
+- **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels). Per-device key lists put your keys into exactly the accounts you may use — or a chosen subset — including the administrators file on Windows devices, and a key removed from a device by hand can be put back for 7 days.
 - **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser. Optional two-factor sign-in with passkeys (also passwordless) or an authenticator app (TOTP), plus one-time recovery codes; administrators can reset a user's second factors.
 - **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
 
@@ -118,7 +118,11 @@ connects. Details: [docs/mcp.md](./docs/mcp.md).
 
 For Claude Code: `claude mcp add --transport http telepy https://<your-host>/mcp`. Tools: `list_tunnels`,
 `tunnel_status`, `ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`, `sftp_list` /
-`sftp_read` / `sftp_write`. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
+`sftp_read` / `sftp_write`, interactive shells for TUIs and prompts (`shell_open` / `shell_send` / `shell_read` — the
+agent reads the screen as text; command rules gate every Enter; recorded on recorded tunnels) and, with the
+`browser:use` permission, a remote browser that goes online through the device (`browser_open` / `browser_navigate` /
+`browser_read` / `browser_click` / `browser_type` / `browser_screenshot`). The MCP page's "What can an app reach?"
+diagram shows what each connected app's permissions open up. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
 someone it is shared with opens an AI session on it. Details: [docs/mcp.md](docs/mcp.md).
 
 ### API docs

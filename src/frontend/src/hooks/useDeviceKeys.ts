@@ -12,8 +12,16 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
-import type { DeviceKeys } from "@/types/keys";
+import type { DeviceKeys, KeyRemoval } from "@/types/keys";
 import { deviceKeyError, errorCode } from "@/lib/deviceKeyErrors";
+
+/** 剛做完的一次批次移除（頁尾的「還原」）。/ The bulk removal just made (the footer's undo). */
+export interface LastRemoval {
+    /** 每個帳號一筆紀錄。/ One record per account. */
+    ids: number[];
+    keys: number;
+    accounts: string[];
+}
 
 /** 打開時，超過這麼久沒檢查就自動同步。/ Auto-sync on open when the last check is older than this. */
 const STALE_MS = 60_000;
@@ -36,6 +44,9 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
     /** 正在同步 / 重讀裝置。/ A sync (apply + re-read) is running. */
     const [syncing, setSyncing] = useState(false);
     const autoSynced = useRef<number | null>(null);
+    const [lastRemoval, setLastRemoval] = useState<LastRemoval | null>(null);
+    /** 最近的移除（「最近的移除」浮層）。/ Recent removals (the "Recent removals" popover). */
+    const [removals, setRemovals] = useState<{ days: number; items: KeyRemoval[] } | null>(null);
 
     const base = tunnelId ? `/api/reverse/server/${tunnelId}` : null;
 
@@ -88,6 +99,8 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
     useEffect(() => {
         setData(null);
         setNotFound(false);
+        setLastRemoval(null);
+        setRemovals(null);
         if (!base || tunnelId === null) return;
         let cancelled = false;
         setLoading(true);
@@ -177,6 +190,68 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
         [base, run, t]
     );
 
+    /** 這把金鑰只裝到這些帳號（null = 全部）。/ Limit a listed key to these accounts (null = all). */
+    const setAccounts = useCallback(
+        (keyId: number, accounts: number[] | null) =>
+            base && run(`accounts:${keyId}`, () => apiFetch(`${base}/device-keys/${keyId}`, { method: "PATCH", body: JSON.stringify({ accounts }) }), t("keys.accounts.saveFailed")),
+        [base, run, t]
+    );
+
+    const loadRemovals = useCallback(async () => {
+        if (!base) return;
+        try {
+            const res = await apiFetch(`${base}/authorized-keys/removals`);
+            const body = await readJson(res);
+            if (res.ok && body && typeof body === "object") {
+                const b = body as { retention_days: number; removals: KeyRemoval[] };
+                setRemovals({ days: b.retention_days, items: b.removals });
+            }
+        } catch {
+            /* keep the last list */
+        }
+    }, [base]);
+
+    /** 把一次移除接回去。/ Put one removal back. */
+    const restore = useCallback(
+        async (ids: number[]) => {
+            if (!base || ids.length === 0) return false;
+            setBusy("restore");
+            let restored = 0;
+            let skipped = 0;
+            let account = "";
+            let failed: string | null = null;
+            try {
+                for (const id of ids) {
+                    const res = await apiFetch(`${base}/authorized-keys/restore/${id}`, { method: "POST" });
+                    const body = await readJson(res);
+                    if (!res.ok) {
+                        failed = deviceKeyError(res, body, t("keys.undo.failed"));
+                        break;
+                    }
+                    const r = body as { restored?: number; skipped?: number; username?: string } | null;
+                    restored += r?.restored ?? 0;
+                    skipped += r?.skipped ?? 0;
+                    account = r?.username ?? account;
+                }
+            } catch (e) {
+                failed = e instanceof Error ? e.message : t("keys.undo.failed");
+            } finally {
+                setBusy(null);
+            }
+            await load();
+            await loadRemovals();
+            onChanged?.();
+            if (failed) {
+                showError(failed);
+                return false;
+            }
+            setLastRemoval((l) => (l && l.ids.some((id) => ids.includes(id)) ? null : l));
+            showSuccess(skipped > 0 ? t("keys.undo.restoredSkipped", { count: restored, skipped, account }) : t("keys.undo.restored", { count: restored, account }));
+            return true;
+        },
+        [base, load, loadRemovals, onChanged, showError, showSuccess, t]
+    );
+
     /** 從某個帳號移除一把不在清單上的金鑰。/ Remove a key that is not on the list from one account. */
     const removeLine = useCallback(
         (username: string, fingerprint: string) =>
@@ -200,6 +275,8 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
             let keys = 0;
             let skipped = 0;
             let failed: string | null = null;
+            const ids: number[] = [];
+            const accounts: string[] = [];
             try {
                 for (const [username, fingerprints] of groups) {
                     const res = await apiFetch(`${base}/authorized-keys/remove`, { method: "POST", body: JSON.stringify({ username, fingerprints }) });
@@ -208,9 +285,13 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
                         failed = deviceKeyError(res, body, t("keys.row.removeFailed"));
                         break;
                     }
-                    const r = body as { keys?: number; skipped?: unknown[] } | null;
+                    const r = body as { keys?: number; skipped?: unknown[]; removal_id?: number | null } | null;
                     keys += r?.keys ?? 0;
                     skipped += r?.skipped?.length ?? 0;
+                    if (typeof r?.removal_id === "number") {
+                        ids.push(r.removal_id);
+                        accounts.push(username);
+                    }
                 }
             } catch (e) {
                 failed = e instanceof Error ? e.message : t("keys.row.removeFailed");
@@ -220,11 +301,15 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
             await load();
             onChanged?.();
             if (failed) showError(failed);
-            if (keys > 0 || !failed) showSuccess(skipped > 0 ? t("keys.rows.removedSkipped", { count: keys, skipped }) : t("keys.rows.removedToast", { count: keys }));
+            // 成功的移除留在頁尾可以還原（不是會消失的 toast）。/ A successful removal stays in the footer with an undo.
+            if (ids.length > 0) setLastRemoval({ ids, keys, accounts });
+            else if (keys > 0 || !failed) showSuccess(skipped > 0 ? t("keys.rows.removedSkipped", { count: keys, skipped }) : t("keys.rows.removedToast", { count: keys }));
             return !failed;
         },
         [base, load, onChanged, showError, showSuccess, t]
     );
 
-    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, removeLine, removeLines };
+    const dismissRemoval = useCallback(() => setLastRemoval(null), []);
+
+    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, setAccounts, removeLine, removeLines, lastRemoval, dismissRemoval, removals, loadRemovals, restore };
 }

@@ -30,6 +30,7 @@ pub mod sign_ins;
 pub mod site_settings;
 pub mod step_up;
 pub mod terminal_profile;
+pub mod terminal_schemes;
 pub mod tunnels;
 pub mod user_keys;
 pub mod usernames;

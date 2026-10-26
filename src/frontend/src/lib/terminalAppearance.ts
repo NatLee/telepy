@@ -1,12 +1,14 @@
 /**
- * 網頁終端機外觀:可選的字型(Nerd Font Mono)與配色,以及「個人預設 + 這台裝置的覆寫」的合成規則。
- * 純資料與純函式,不碰 DOM / localStorage(那些在 lib/userPrefs.ts 與 hooks/useTerminalAppearance.ts)。
- * 後端只存 id(`/api/user/settings` 的 terminal_font / terminal_scheme,與
- * `/api/reverse/server/{id}/terminal-profile`),不認得的 id 一律回到預設,所以從清單拿掉一項不會壞。
- * Web-terminal appearance: the font (Nerd Font Mono) and colour-scheme catalogue plus the rule that
- * merges the personal default with a per-device override. Pure data and functions; storage lives in
- * lib/userPrefs.ts and hooks/useTerminalAppearance.ts. The backend stores ids only, and an unknown id
- * falls back to the default, so removing an entry here never breaks a saved setting.
+ * 網頁終端機外觀:可選的字型(Nerd Font Mono)與配色、粗體的畫法、連字,以及「個人預設 + 這台裝置的覆寫」
+ * 的合成規則。純資料與純函式,不碰 DOM / localStorage(那些在 lib/userPrefs.ts 與 hooks/useTerminalAppearance.ts)。
+ * 後端只存 id(`/api/user/settings` 的 terminal_*,與 `/api/reverse/server/{id}/terminal-profile`),不認得的 id
+ * 一律回到預設,所以從清單拿掉一項(或刪掉一個自訂配色)不會壞。自訂配色(lib/terminalSchemes.ts)由呼叫端傳進
+ * 查表函式,內建清單之外的 id 才會在那裡找到。
+ * Web-terminal appearance: the font (Nerd Font Mono) and colour-scheme catalogue, the bold style and
+ * ligatures, plus the rule that merges the personal default with a per-device override. Pure data and
+ * functions; storage lives in lib/userPrefs.ts and hooks/useTerminalAppearance.ts. The backend stores ids
+ * only, and an unknown id falls back to the default, so removing an entry (or deleting a custom scheme)
+ * never breaks a saved setting. Custom schemes (lib/terminalSchemes.ts) are passed into the lookups.
  */
 import type { TranslationKey } from "@/locales/en";
 
@@ -19,6 +21,29 @@ export interface TerminalFont {
     /** 字型不是 @font-face 宣告的,而是 next/font 給的 CSS 變數(0xProto)。/ Family comes from a next/font CSS variable. */
     cssVar?: string;
     note: TranslationKey;
+    /** 有的真實字體(terminal-fonts.css / layout.tsx 宣告的);沒有的由瀏覽器合成。/ Real faces shipped; the rest is synthesised. */
+    faces: TerminalFace[];
+    /** 字型本身有程式連字(calt)。/ The font has programming ligatures (calt). */
+    ligatures: boolean;
+}
+
+export type TerminalFace = "bold" | "italic" | "boldItalic";
+
+/**
+ * 粗體的畫法:face = 真正的粗體字(預設)、bright = 經典終端機只把顏色換成亮色、both = 兩者都要。
+ * How bold text is drawn: the real bold face (default), the classic brighter colour only, or both.
+ */
+export type TerminalBold = "face" | "bright" | "both";
+export const BOLD_STYLES: TerminalBold[] = ["face", "bright", "both"];
+export const DEFAULT_TERMINAL_BOLD: TerminalBold = "face";
+
+export function isBoldStyle(v: unknown): v is TerminalBold {
+    return typeof v === "string" && (BOLD_STYLES as string[]).includes(v);
+}
+
+/** xterm 的粗體相關選項。/ xterm's bold-related options for a bold style. */
+export function xtermBoldOptions(bold: TerminalBold): { fontWeight: number; fontWeightBold: number; drawBoldTextInBrightColors: boolean } {
+    return { fontWeight: 400, fontWeightBold: bold === "bright" ? 400 : 700, drawBoldTextInBrightColors: bold !== "face" };
 }
 
 /** xterm.js 的 ITheme 子集(16 色 + 前景 / 背景 / 游標 / 選取)。/ The ITheme subset xterm.js uses here. */
@@ -28,6 +53,7 @@ export interface TerminalPalette {
     cursor: string;
     cursorAccent: string;
     selectionBackground: string;
+    selectionForeground?: string;
     black: string;
     red: string;
     green: string;
@@ -51,18 +77,26 @@ export interface TerminalScheme {
     name: string;
     kind: "dark" | "light";
     theme: TerminalPalette;
+    /** 使用者自訂的(lib/terminalSchemes.ts)。/ A user-defined scheme. */
+    custom?: boolean;
 }
 
 export const DEFAULT_TERMINAL_FONT = "hack";
 export const DEFAULT_TERMINAL_SCHEME = "telepy";
 
+const ALL_FACES: TerminalFace[] = ["bold", "italic", "boldItalic"];
+
+// faces / ligatures 要跟 terminal-fonts.css(0xProto:layout.tsx)與 src/fonts/terminal/README.md 一致:
+// Fira Code 沒有斜體、0xProto 沒有粗斜體,Hack 與 Meslo 沒有連字。
+// Keep faces / ligatures in sync with terminal-fonts.css (0xProto: layout.tsx) and src/fonts/terminal/README.md:
+// Fira Code has no italic, 0xProto no bold italic; Hack and Meslo have no ligatures.
 export const TERMINAL_FONTS: TerminalFont[] = [
-    { id: "hack", name: "Hack", family: "Hack Nerd Font Mono", note: "terminal.fontNoteHack" },
-    { id: "jetbrains-mono", name: "JetBrains Mono", family: "JetBrainsMono NFM", note: "terminal.fontNoteJetbrains" },
-    { id: "fira-code", name: "Fira Code", family: "FiraCode Nerd Font Mono", note: "terminal.fontNoteFira" },
-    { id: "cascadia-code", name: "Cascadia Code", family: "CaskaydiaCove NFM", note: "terminal.fontNoteCascadia" },
-    { id: "meslo", name: "Meslo LGS", family: "MesloLGS Nerd Font Mono", note: "terminal.fontNoteMeslo" },
-    { id: "0xproto", name: "0xProto", family: "0xProto Nerd Font", cssVar: "--font-0xproto", note: "terminal.fontNoteProto" },
+    { id: "hack", name: "Hack", family: "Hack Nerd Font Mono", note: "terminal.fontNoteHack", faces: ALL_FACES, ligatures: false },
+    { id: "jetbrains-mono", name: "JetBrains Mono", family: "JetBrainsMono NFM", note: "terminal.fontNoteJetbrains", faces: ALL_FACES, ligatures: true },
+    { id: "fira-code", name: "Fira Code", family: "FiraCode Nerd Font Mono", note: "terminal.fontNoteFira", faces: ["bold"], ligatures: true },
+    { id: "cascadia-code", name: "Cascadia Code", family: "CaskaydiaCove NFM", note: "terminal.fontNoteCascadia", faces: ALL_FACES, ligatures: true },
+    { id: "meslo", name: "Meslo LGS", family: "MesloLGS Nerd Font Mono", note: "terminal.fontNoteMeslo", faces: ALL_FACES, ligatures: false },
+    { id: "0xproto", name: "0xProto", family: "0xProto Nerd Font", cssVar: "--font-0xproto", note: "terminal.fontNoteProto", faces: ["bold", "italic"], ligatures: true },
 ];
 
 // 配色值取自各專案官方的終端機移植(Solarized、Dracula、Nord、Gruvbox、Tokyo Night、Catppuccin)與
@@ -175,6 +209,8 @@ export interface TerminalDefaults {
     font: string;
     fontSize: number;
     scheme: string;
+    bold: TerminalBold;
+    ligatures: boolean;
 }
 
 /** 這台裝置的覆寫;null = 跟隨個人預設(與後端的 JSON 同形)。/ Per-device override; null inherits (same shape as the API). */
@@ -182,30 +218,42 @@ export interface TerminalProfile {
     font: string | null;
     font_size: number | null;
     scheme: string | null;
+    bold: string | null;
+    ligatures: boolean | null;
 }
 
-export const EMPTY_TERMINAL_PROFILE: TerminalProfile = { font: null, font_size: null, scheme: null };
+export const EMPTY_TERMINAL_PROFILE: TerminalProfile = { font: null, font_size: null, scheme: null, bold: null, ligatures: null };
 
 export interface ResolvedTerminalAppearance {
     font: TerminalFont;
     fontSize: number;
     scheme: TerminalScheme;
+    bold: TerminalBold;
+    /** 已經考慮字型有沒有連字:沒有的字型永遠 false。/ Already gated by the font: false for fonts without ligatures. */
+    ligatures: boolean;
+}
+
+/** id 的形狀(與後端 `is_choice_id` 相同):內建或自訂配色的 id 都長這樣。/ The id shape (the backend's rule). */
+export function isSchemeId(id: unknown): id is string {
+    return typeof id === "string" && /^[a-z0-9-]{1,32}$/.test(id);
 }
 
 export function isKnownFont(id: unknown): id is string {
     return typeof id === "string" && TERMINAL_FONTS.some((f) => f.id === id);
 }
 
-export function isKnownScheme(id: unknown): id is string {
-    return typeof id === "string" && TERMINAL_SCHEMES.some((s) => s.id === id);
+/** 內建或(給了清單時)自訂配色裡認得的 id。/ A built-in id, or a custom one when the list is given. */
+export function isKnownScheme(id: unknown, custom: readonly TerminalScheme[] = []): id is string {
+    return typeof id === "string" && (TERMINAL_SCHEMES.some((s) => s.id === id) || custom.some((s) => s.id === id));
 }
 
 export function terminalFont(id: string | null | undefined): TerminalFont {
     return TERMINAL_FONTS.find((f) => f.id === id) ?? TERMINAL_FONTS.find((f) => f.id === DEFAULT_TERMINAL_FONT)!;
 }
 
-export function terminalScheme(id: string | null | undefined): TerminalScheme {
-    return TERMINAL_SCHEMES.find((s) => s.id === id) ?? TERMINAL_SCHEMES.find((s) => s.id === DEFAULT_TERMINAL_SCHEME)!;
+/** 先找內建、再找自訂;都沒有就回預設配色(刪掉的自訂配色就是這樣回到預設)。/ Built-ins, then custom, else the default. */
+export function terminalScheme(id: string | null | undefined, custom: readonly TerminalScheme[] = []): TerminalScheme {
+    return TERMINAL_SCHEMES.find((s) => s.id === id) ?? custom.find((s) => s.id === id) ?? TERMINAL_SCHEMES.find((s) => s.id === DEFAULT_TERMINAL_SCHEME)!;
 }
 
 export function clampTerminalFontSize(value: number, fallback: number = 14): number {
@@ -213,21 +261,53 @@ export function clampTerminalFontSize(value: number, fallback: number = 14): num
     return Math.min(TERMINAL_FONT_SIZE_RANGE.max, Math.max(TERMINAL_FONT_SIZE_RANGE.min, Math.round(value)));
 }
 
-/** 覆寫中「認得」的欄位才算數;不認得的 id / 超出範圍的大小 = 跟隨預設。
- *  Only recognised override fields count; an unknown id or out-of-range size inherits. */
-export function resolveTerminalAppearance(defaults: TerminalDefaults, profile: TerminalProfile | null): ResolvedTerminalAppearance {
+/** 哪一層給了這個值。/ Which layer supplied a value. */
+export type AppearanceSource = "default" | "device";
+
+export interface EffectiveField<T> {
+    value: T;
+    from: AppearanceSource;
+}
+
+/**
+ * 每一項的值與來源:覆寫裡「認得」的欄位才算數;不認得的 id(拿掉的字型、刪掉的自訂配色)/ 超出範圍的大小 = 跟隨預設。
+ * 連字還要字型有才算開(來源仍照設定算,外觀圖才能說「字型沒有連字」)。
+ * Every field's value and where it came from: only recognised override fields count; an unknown id (a removed
+ * font, a deleted custom scheme) or an out-of-range size inherits. Ligatures also need a font that has them
+ * (the source still follows the setting so the layers diagram can say "this font has none").
+ */
+export function effectiveAppearance(defaults: TerminalDefaults, profile: TerminalProfile | null, custom: readonly TerminalScheme[] = []): {
+    font: EffectiveField<TerminalFont>;
+    fontSize: EffectiveField<number>;
+    scheme: EffectiveField<TerminalScheme>;
+    bold: EffectiveField<TerminalBold>;
+    ligatures: EffectiveField<boolean>;
+} {
     const p = profile ?? EMPTY_TERMINAL_PROFILE;
-    const fontId = isKnownFont(p.font) ? p.font : defaults.font;
-    const schemeId = isKnownScheme(p.scheme) ? p.scheme : defaults.scheme;
-    const size = typeof p.font_size === "number"
-        && p.font_size >= TERMINAL_FONT_SIZE_RANGE.min && p.font_size <= TERMINAL_FONT_SIZE_RANGE.max
-        ? p.font_size
-        : defaults.fontSize;
-    return { font: terminalFont(fontId), fontSize: clampTerminalFontSize(size), scheme: terminalScheme(schemeId) };
+    const fontFromDevice = isKnownFont(p.font);
+    const schemeFromDevice = isKnownScheme(p.scheme, custom);
+    const sizeFromDevice = typeof p.font_size === "number" && p.font_size >= TERMINAL_FONT_SIZE_RANGE.min && p.font_size <= TERMINAL_FONT_SIZE_RANGE.max;
+    const boldFromDevice = isBoldStyle(p.bold);
+    const ligaturesFromDevice = typeof p.ligatures === "boolean";
+    const font = terminalFont(fontFromDevice ? p.font : defaults.font);
+    const ligatures = ligaturesFromDevice ? p.ligatures! : defaults.ligatures;
+    return {
+        font: { value: font, from: fontFromDevice ? "device" : "default" },
+        fontSize: { value: clampTerminalFontSize(sizeFromDevice ? p.font_size! : defaults.fontSize), from: sizeFromDevice ? "device" : "default" },
+        scheme: { value: terminalScheme(schemeFromDevice ? p.scheme : defaults.scheme, custom), from: schemeFromDevice ? "device" : "default" },
+        bold: { value: boldFromDevice ? (p.bold as TerminalBold) : defaults.bold, from: boldFromDevice ? "device" : "default" },
+        ligatures: { value: font.ligatures && ligatures, from: ligaturesFromDevice ? "device" : "default" },
+    };
+}
+
+/** 終端機實際要用的外觀(effectiveAppearance 去掉來源)。/ What the terminal uses (effectiveAppearance without the sources). */
+export function resolveTerminalAppearance(defaults: TerminalDefaults, profile: TerminalProfile | null, custom: readonly TerminalScheme[] = []): ResolvedTerminalAppearance {
+    const e = effectiveAppearance(defaults, profile, custom);
+    return { font: e.font.value, fontSize: e.fontSize.value, scheme: e.scheme.value, bold: e.bold.value, ligatures: e.ligatures.value };
 }
 
 export function hasProfileOverride(profile: TerminalProfile | null): boolean {
-    return !!profile && (profile.font !== null || profile.font_size !== null || profile.scheme !== null);
+    return !!profile && (profile.font !== null || profile.font_size !== null || profile.scheme !== null || profile.bold !== null || profile.ligatures !== null);
 }
 
 /** 後端回傳 → TerminalProfile(形狀不對的欄位當成 null)。/ API JSON → TerminalProfile; malformed fields become null. */
@@ -237,6 +317,8 @@ export function parseTerminalProfile(data: unknown): TerminalProfile {
         font: typeof o.font === "string" ? o.font : null,
         font_size: typeof o.font_size === "number" ? o.font_size : null,
         scheme: typeof o.scheme === "string" ? o.scheme : null,
+        bold: typeof o.bold === "string" ? o.bold : null,
+        ligatures: typeof o.ligatures === "boolean" ? o.ligatures : null,
     };
 }
 

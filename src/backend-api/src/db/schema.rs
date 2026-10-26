@@ -434,6 +434,22 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("tunnel_id", "username")
         )"#,
     ),
+    // Rust 自有：從裝置帳號的 authorized_keys 批次移除的行（7 天內可還原）。/ Lines removed from a device account's
+    // authorized_keys by hand, kept 7 days so the removal can be undone.
+    (
+        "telepy_device_key_removal",
+        r#"CREATE TABLE "telepy_device_key_removal" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "tunnel_id" integer NOT NULL,
+            "username" varchar(128) NOT NULL,
+            "lines" text NOT NULL,
+            "keys" integer NOT NULL,
+            "removed_by_id" integer NOT NULL,
+            "removed_by" varchar(150) NOT NULL,
+            "removed_at" datetime NOT NULL,
+            "restored_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：登入紀錄（成功與失敗；帶 IP，保留 90 天）。/ Sign-in history (carries IPs; 90 days).
     (
         "telepy_sign_in_event",
@@ -475,6 +491,25 @@ const TABLES: &[(&str, &str)] = &[
             "font" varchar(32) NULL,
             "font_size" smallint NULL,
             "scheme" varchar(32) NULL,
+            "bold" varchar(8) NULL,
+            "ligatures" bool NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
+    // Rust 自有：使用者自訂的終端機配色（colors = JSON：前景 / 背景 / 游標 / 選取 + 16 色 ANSI，都是 #rrggbb）。
+    // scheme_id 是 API 上的 id（`custom-<8 hex>`），存在 terminal_scheme / 每條隧道的覆寫裡；刪掉後前端回到預設配色。
+    // User-defined terminal colour schemes (colors = JSON: foreground / background / cursor / selection + the 16 ANSI
+    // colours, all #rrggbb). scheme_id is the API id (`custom-<8 hex>`) referenced by terminal_scheme and per-tunnel
+    // overrides; once deleted the frontend falls back to the default scheme.
+    (
+        "telepy_terminal_scheme",
+        r#"CREATE TABLE "telepy_terminal_scheme" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "scheme_id" varchar(32) NOT NULL UNIQUE,
+            "name" varchar(40) NOT NULL,
+            "colors" text NOT NULL,
+            "created_at" datetime NOT NULL,
             "updated_at" datetime NOT NULL
         )"#,
     ),
@@ -641,6 +676,7 @@ const TABLES: &[(&str, &str)] = &[
 const INDEXES: &[&str] = &[
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_recovery_code_user_id" ON "telepy_recovery_code" ("user_id")"#,
@@ -653,6 +689,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_removal_tunnel" ON "telepy_device_key_removal" ("tunnel_id", "removed_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_audit_anchor_table_name_id" ON "telepy_audit_anchor" ("table_name", "id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_device_host_key_tunnel_key" ON "telepy_device_host_key" ("tunnel_id", "public_key")"#,
     // 同一把 host key 被哪些隧道信任（= 同一台機器）。/ Which tunnels trust one host key (= the same machine).
@@ -705,11 +742,16 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
     // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).
     ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
+    // 錄影的來源：terminal（網頁終端機）/ agent（MCP agent 的 shell）。/ What was recorded: the web terminal or an agent's shell.
+    ("telepy_terminal_recording", "kind", "varchar(16) NOT NULL DEFAULT 'terminal'"),
     // 限時分享：到期時間（NULL = 一直有效）。/ Timed sharing: when the share ends (NULL = never).
     ("tunnels_tunnelsharing", "expires_at", "datetime NULL"),
     // 核准的存取申請：暫時的帳號（到期就移除）與暫時提升的權限（到期回到 base_permission）。
     // Approved access requests: temporary accounts (removed at expiry) and a temporary permission (back to base_permission).
     ("tunnels_tunnelsharingallowedusername", "expires_at", "datetime NULL"),
+    // 裝置金鑰清單：這把金鑰只裝到這些帳號（username id 的 JSON 陣列；NULL = 擁有者能用的每個帳號）。
+    // Device key list: install this key only into these accounts (JSON array of username ids; NULL = every allowed account).
+    ("telepy_device_key", "accounts", "text NULL"),
     ("tunnels_tunnelsharing", "base_permission", "varchar(10) NULL"),
     ("tunnels_tunnelsharing", "permission_until", "datetime NULL"),
     // 敏感隧道：開 session 前要再確認一次是你（step-up）。/ Sensitive tunnel: step-up before opening a session.
@@ -768,6 +810,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
     ("user_management_usersettings", "terminal_font", "varchar(32) NOT NULL DEFAULT 'hack'"),
     ("user_management_usersettings", "terminal_scheme", "varchar(32) NOT NULL DEFAULT 'telepy'"),
+    // 終端機粗體的畫法（face = 真正的粗體字 / bright = 只換亮色 / both）與連字。/ Terminal bold style and ligatures.
+    ("user_management_usersettings", "terminal_bold", "varchar(8) NOT NULL DEFAULT 'face'"),
+    ("user_management_usersettings", "terminal_ligatures", "bool NOT NULL DEFAULT 0"),
+    // 每條隧道的覆寫也多這兩項（NULL = 跟隨預設）。/ The per-tunnel override gets the same two (NULL = inherit).
+    ("telepy_terminal_profile", "bold", "varchar(8) NULL"),
+    ("telepy_terminal_profile", "ligatures", "bool NULL"),
     // 遠端桌面剪貼簿方向（個人選擇；站台的 desktop_clipboard 是上限）。/ Desktop clipboard direction (the site setting caps it).
     ("user_management_usersettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
 ];

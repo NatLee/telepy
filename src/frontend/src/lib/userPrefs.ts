@@ -12,10 +12,12 @@
 import { apiFetch } from "./api";
 import {
     clampTerminalFontSize,
+    DEFAULT_TERMINAL_BOLD,
     DEFAULT_TERMINAL_FONT,
     DEFAULT_TERMINAL_SCHEME,
+    isBoldStyle,
     isKnownFont,
-    isKnownScheme,
+    isSchemeId,
     TERMINAL_FONT_SIZE_RANGE,
     type TerminalDefaults,
 } from "./terminalAppearance";
@@ -29,15 +31,19 @@ export const THEMES: Theme[] = ["system", "light", "dark"];
 export const THEME_EVENT = "telepy:theme";
 
 /**
- * 終端機外觀的個人預設(字型 / 字級 / 配色);某台裝置自己的覆寫存在後端,見 hooks/useTerminalAppearance.ts。
- * 任何一項變更都廣播 TERMINAL_APPEARANCE_EVENT,開著的終端機與偏好設定 modal 靠它即時同步。
- * Personal terminal defaults (font / size / colour scheme); per-device overrides live on the backend
- * (hooks/useTerminalAppearance.ts). Every change broadcasts TERMINAL_APPEARANCE_EVENT so open terminals
- * and the preferences modal update live.
+ * 終端機外觀的個人預設(字型 / 字級 / 配色 / 粗體畫法 / 連字);某台裝置自己的覆寫存在後端,見 hooks/useTerminalAppearance.ts。
+ * 任何一項變更都廣播 TERMINAL_APPEARANCE_EVENT,開著的終端機與偏好設定 modal 靠它即時同步。配色 id 只檢查形狀:
+ * 自訂配色(custom-…)的清單在 hooks/useTerminalSchemes.ts,查不到的 id 由 resolveTerminalAppearance 回到預設。
+ * Personal terminal defaults (font / size / scheme / bold style / ligatures); per-device overrides live on the
+ * backend (hooks/useTerminalAppearance.ts). Every change broadcasts TERMINAL_APPEARANCE_EVENT so open terminals
+ * and the preferences modal update live. Scheme ids are shape-checked only: custom ones (custom-…) live in
+ * hooks/useTerminalSchemes.ts and resolveTerminalAppearance falls back for ids it cannot find.
  */
 export const TERMINAL_FONT_SIZE_KEY = "telepy.terminalFontSize";
 export const TERMINAL_FONT_KEY = "telepy.terminalFont";
 export const TERMINAL_SCHEME_KEY = "telepy.terminalScheme";
+export const TERMINAL_BOLD_KEY = "telepy.terminalBold";
+export const TERMINAL_LIGATURES_KEY = "telepy.terminalLigatures";
 export const TERMINAL_FONT_SIZE_DEFAULT = 14;
 export const TERMINAL_FONT_SIZE_MIN = TERMINAL_FONT_SIZE_RANGE.min;
 export const TERMINAL_FONT_SIZE_MAX = TERMINAL_FONT_SIZE_RANGE.max;
@@ -97,6 +103,8 @@ export const TERMINAL_DEFAULTS_FALLBACK: TerminalDefaults = {
     font: DEFAULT_TERMINAL_FONT,
     fontSize: TERMINAL_FONT_SIZE_DEFAULT,
     scheme: DEFAULT_TERMINAL_SCHEME,
+    bold: DEFAULT_TERMINAL_BOLD,
+    ligatures: false,
 };
 
 function readItem(key: string): string | null {
@@ -112,10 +120,13 @@ export function readTerminalDefaults(): TerminalDefaults {
     const size = parseInt(readItem(TERMINAL_FONT_SIZE_KEY) ?? "", 10);
     const font = readItem(TERMINAL_FONT_KEY);
     const scheme = readItem(TERMINAL_SCHEME_KEY);
+    const bold = readItem(TERMINAL_BOLD_KEY);
     return {
         font: isKnownFont(font) ? font : DEFAULT_TERMINAL_FONT,
         fontSize: Number.isNaN(size) ? TERMINAL_FONT_SIZE_DEFAULT : clampTerminalFontSize(size, TERMINAL_FONT_SIZE_DEFAULT),
-        scheme: isKnownScheme(scheme) ? scheme : DEFAULT_TERMINAL_SCHEME,
+        scheme: isSchemeId(scheme) ? scheme : DEFAULT_TERMINAL_SCHEME,
+        bold: isBoldStyle(bold) ? bold : DEFAULT_TERMINAL_BOLD,
+        ligatures: readItem(TERMINAL_LIGATURES_KEY) === "1",
     };
 }
 
@@ -127,7 +138,9 @@ export function applyTerminalDefaults(patch: Partial<TerminalDefaults>) {
             localStorage.setItem(TERMINAL_FONT_SIZE_KEY, String(clampTerminalFontSize(patch.fontSize, TERMINAL_FONT_SIZE_DEFAULT)));
         }
         if (patch.font !== undefined && isKnownFont(patch.font)) localStorage.setItem(TERMINAL_FONT_KEY, patch.font);
-        if (patch.scheme !== undefined && isKnownScheme(patch.scheme)) localStorage.setItem(TERMINAL_SCHEME_KEY, patch.scheme);
+        if (patch.scheme !== undefined && isSchemeId(patch.scheme)) localStorage.setItem(TERMINAL_SCHEME_KEY, patch.scheme);
+        if (patch.bold !== undefined && isBoldStyle(patch.bold)) localStorage.setItem(TERMINAL_BOLD_KEY, patch.bold);
+        if (patch.ligatures !== undefined) localStorage.setItem(TERMINAL_LIGATURES_KEY, patch.ligatures ? "1" : "0");
     } catch { /* localStorage 不可用:這一頁仍會套用(事件照發)/ storage unavailable: still broadcast */ }
     window.dispatchEvent(new CustomEvent(TERMINAL_APPEARANCE_EVENT));
 }
@@ -138,6 +151,8 @@ export function terminalDefaultsToSettings(patch: Partial<TerminalDefaults>): Re
     if (patch.font !== undefined) out.terminal_font = patch.font;
     if (patch.fontSize !== undefined) out.terminal_font_size = patch.fontSize;
     if (patch.scheme !== undefined) out.terminal_scheme = patch.scheme;
+    if (patch.bold !== undefined) out.terminal_bold = patch.bold;
+    if (patch.ligatures !== undefined) out.terminal_ligatures = patch.ligatures;
     return out;
 }
 

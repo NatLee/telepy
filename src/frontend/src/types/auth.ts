@@ -18,6 +18,9 @@ export interface UserProfile {
     /** 終端機字型 / 配色 id(lib/terminalAppearance.ts)。/ Terminal font / colour-scheme ids. */
     terminal_font?: string;
     terminal_scheme?: string;
+    /** 粗體的畫法(face / bright / both)與連字。/ Bold style and ligatures. */
+    terminal_bold?: string;
+    terminal_ligatures?: boolean;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
     /** 已設定任一第二因素。/ A passkey or an authenticator app is set up. */

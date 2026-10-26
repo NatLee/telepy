@@ -30,6 +30,8 @@ export interface AiSession {
     expires_at: string;
     idle_timeout_s: number;
     commands: number;
+    /** 開著的互動 shell。/ Open interactive shells. */
+    shells?: number;
     busy: boolean;
 }
 

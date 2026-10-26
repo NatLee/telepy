@@ -2,7 +2,8 @@
 
 /**
  * 某條隧道(裝置)的終端機外觀:個人預設 + 這台裝置的覆寫(`/api/reverse/server/{id}/terminal-profile`,
- * 只影響自己),合成出終端機實際要用的字型 / 字級 / 配色。
+ * 只影響自己),合成出終端機實際要用的字型 / 字級 / 配色 / 粗體畫法 / 連字。自訂配色(useTerminalSchemes)也在
+ * 這裡併進查表,所以每個用 `resolved` 的地方都認得 custom-… 的 id。
  * - 覆寫在本機有一份快取(localStorage `telepy.terminalProfile.<id>`),以 useSyncExternalStore 讀:終端機一開
  *   就是對的字型,別的分頁改了也會跟著變,SSR 時是 null(不會 hydration 不一致)。後端回來後覆蓋快取。
  *   `ready` = 有快取或後端回來了(失敗也算),終端機頁等它才開第一個 shell,避免先用預設字型再換一次。
@@ -21,12 +22,16 @@ import {
     parseTerminalProfile,
     resolveTerminalAppearance,
     terminalFontFamily,
+    terminalFontPrimary,
+    xtermBoldOptions,
     type ResolvedTerminalAppearance,
+    type TerminalScheme,
     type TerminalDefaults,
     type TerminalProfile,
 } from "@/lib/terminalAppearance";
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
-import { loadTerminalFont, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
+import { applyLigatures, loadTerminalFont, resolveCssVar, waitForFont } from "@/lib/xterm";
 
 const KEY_PREFIX = "telepy.terminalProfile.";
 const PROFILE_EVENT = "telepy:terminal-profile";
@@ -83,6 +88,8 @@ export interface TerminalAppearanceState {
     setDefaults: (patch: Partial<TerminalDefaults>) => void;
     /** 這台裝置的覆寫(null = 還沒載入)。/ This device's override (null until loaded). */
     profile: TerminalProfile | null;
+    /** 使用者自訂的配色(查表用;選擇器也列它們)。/ The user's custom schemes (for lookups; the picker lists them too). */
+    customSchemes: TerminalScheme[];
     customized: boolean;
     setProfile: (patch: Partial<TerminalProfile>) => void;
     resetProfile: () => void;
@@ -93,6 +100,7 @@ export interface TerminalAppearanceState {
 
 export function useTerminalAppearance(tunnelId: string | null): TerminalAppearanceState {
     const [defaults, setDefaults] = useTerminalDefaults();
+    const customSchemes = useCustomSchemes();
     const getSnapshot = useCallback(() => (tunnelId ? snapshotFor(tunnelId) : null), [tunnelId]);
     const profile = useSyncExternalStore(subscribe, getSnapshot, () => null);
     const [fetchedId, setFetchedId] = useState<string | null>(null);
@@ -139,13 +147,14 @@ export function useTerminalAppearance(tunnelId: string | null): TerminalAppearan
 
     const resetProfile = useCallback(() => commit(EMPTY_TERMINAL_PROFILE), [commit]);
 
-    const resolved = useMemo(() => resolveTerminalAppearance(defaults, profile), [defaults, profile]);
+    const resolved = useMemo(() => resolveTerminalAppearance(defaults, profile, customSchemes), [defaults, profile, customSchemes]);
 
     return {
         resolved,
         defaults,
         setDefaults,
         profile,
+        customSchemes,
         customized: hasProfileOverride(profile),
         setProfile,
         resetProfile,
@@ -156,12 +165,15 @@ export function useTerminalAppearance(tunnelId: string | null): TerminalAppearan
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * 把外觀變更即時套用到開著的 xterm(終端機頁的每個分頁、網路頁的內嵌終端機):配色立即換;字級換完 refit;
- * 字型等它載好(最多 1.5 s)再換,之後才載好的強迫 xterm 重新量字寬(xterm 只在值變了才量,所以先換成
- * monospace 再換回來),否則字距會照後備字型算而對不齊。`forEachTerm` / `refit` 要是穩定的 callback。
- * Applies appearance changes to open xterms live: the scheme at once, the size followed by a refit, the font
- * once loaded (1.5 s cap). A late load forces a re-measure (xterm only measures when the value changes, hence
- * the monospace round trip); otherwise cells keep the fallback font's width. Pass stable callbacks.
+ * 把外觀變更即時套用到開著的 xterm(終端機頁的每個分頁、網路頁的內嵌終端機):配色、粗體畫法、連字立即換;
+ * 字級換完 refit;字型等它載好(最多 1.5 s;粗體用真實字體時連 Bold 一起等)再換,之後才載好的強迫 xterm 重新量字寬
+ * (xterm 只在值變了才量,所以先換成 monospace 再換回來),否則字距會照後備字型算而對不齊;斜體 / 粗斜體是用到才
+ * 下載的,所以 document.fonts 的 loadingdone 也會觸發同樣的重新量寬。`forEachTerm` / `refit` 要是穩定的 callback。
+ * Applies appearance changes to open xterms live: the scheme, bold style and ligatures at once, the size followed
+ * by a refit, the font once loaded (1.5 s cap; the Bold face too when the bold style uses it). A late load forces a
+ * re-measure (xterm only measures when the value changes, hence the monospace round trip); otherwise cells keep the
+ * fallback font's width. Italic / bold-italic faces download on first use, so document.fonts' loadingdone triggers
+ * the same re-measure. Pass stable callbacks.
  */
 export function useLiveTerminalLook(
     resolved: ResolvedTerminalAppearance,
@@ -184,6 +196,19 @@ export function useLiveTerminalLook(
     }, [resolved.fontSize, each, refit]);
 
     useEffect(() => {
+        const { fontWeightBold, drawBoldTextInBrightColors } = xtermBoldOptions(resolved.bold);
+        each((term) => {
+            term.options.fontWeightBold = fontWeightBold;
+            term.options.drawBoldTextInBrightColors = drawBoldTextInBrightColors;
+        });
+    }, [resolved.bold, each]);
+
+    useEffect(() => {
+        each((term) => applyLigatures(term, resolved.ligatures));
+    }, [resolved.ligatures, each]);
+
+    const wantBoldFace = resolved.bold !== "bright";
+    useEffect(() => {
         let cancelled = false;
         const font = resolved.font;
         const family = terminalFontFamily(font, resolveCssVar);
@@ -194,8 +219,19 @@ export function useLiveTerminalLook(
             });
             refit();
         };
-        void waitForFont(font).then(() => { if (!cancelled) apply(false); });
+        void waitForFont(font, wantBoldFace).then(() => { if (!cancelled) apply(false); });
         void loadTerminalFont(font).then((ok) => { if (!cancelled && ok) apply(true); });
-        return () => { cancelled = true; };
-    }, [resolved.font, each, refit]);
+        if (wantBoldFace) void loadTerminalFont(font, true).then((ok) => { if (!cancelled && ok) apply(true); });
+        // 之後才載好的同一家族字體(斜體等)也重新量寬。/ A later face of the same family (italic…) re-measures too.
+        const primary = terminalFontPrimary(font, resolveCssVar).replace(/^"|"$/g, "");
+        const onLoaded = (e: Event) => {
+            const faces = (e as unknown as { fontfaces?: FontFace[] }).fontfaces ?? [];
+            if (!cancelled && faces.some((f) => f.family.replace(/^"|"$/g, "") === primary)) apply(true);
+        };
+        document.fonts.addEventListener("loadingdone", onLoaded);
+        return () => {
+            cancelled = true;
+            document.fonts.removeEventListener("loadingdone", onLoaded);
+        };
+    }, [resolved.font, wantBoldFace, each, refit]);
 }

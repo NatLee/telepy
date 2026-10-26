@@ -12,8 +12,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import "xterm/css/xterm.css";
 import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
-import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
-import { terminalFontFamily } from "@/lib/terminalAppearance";
+import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { translate } from "@/lib/translate";
 import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
@@ -75,19 +74,14 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
         let disposed = false;
         let cleanup = () => {};
         (async () => {
-            const [{ Terminal, FitAddon }] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font)]);
+            const [{ Terminal, FitAddon }] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font, resolvedRef.current.bold !== "bright")]);
             if (disposed || !hostRef.current) return;
             const look = resolvedRef.current;
-            const term = new Terminal({
-                cursorBlink: true,
-                theme: look.scheme.theme,
-                fontFamily: terminalFontFamily(look.font, resolveCssVar),
-                fontSize: look.fontSize,
-                lineHeight: 1.2,
-            });
+            const term = new Terminal({ cursorBlink: true, ...xtermLookOptions(look) });
             const fit = new FitAddon();
             term.loadAddon(fit);
             term.open(hostRef.current);
+            applyLigatures(term, look.ligatures);
             termRef.current = { term, fit };
             term.onData((data: string) => {
                 const ws = wsRef.current;

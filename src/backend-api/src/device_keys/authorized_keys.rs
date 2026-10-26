@@ -184,17 +184,60 @@ pub fn plan(content: &str, wanted: &[WantedKey], managed: &BTreeSet<String>, pro
 /// 從檔案移除這些金鑰的每一行（稽核頁的「移除」；一次移除多把也只改寫一次檔案）。回傳 (新內容, 移除的行數)。
 /// Removes every line of each key in `bares` in one pass. Returns (new content, lines removed).
 pub fn remove_keys(content: &str, bares: &BTreeSet<String>) -> (String, usize) {
+    let (out, lines) = remove_key_lines(content, bares);
+    (out, lines.len())
+}
+
+/// 同 `remove_keys`，但把移掉的原始行也交回來（還原用）。/ Like `remove_keys`, also returning the raw lines removed (for undo).
+pub fn remove_key_lines(content: &str, bares: &BTreeSet<String>) -> (String, Vec<String>) {
     let mut out = String::with_capacity(content.len());
-    let mut n = 0;
+    let mut removed = Vec::new();
     for l in parse_authorized_keys(content) {
         if l.key.as_ref().is_some_and(|k| bares.contains(&k.bare)) {
-            n += 1;
+            removed.push(l.raw);
             continue;
         }
         out.push_str(&l.raw);
         out.push('\n');
     }
-    (out, n)
+    (out, removed)
+}
+
+/// 還原的結果。/ What a restore did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Restore {
+    /// None = 不需要改檔。/ None = nothing to write.
+    pub content: Option<String>,
+    /// 接回去的行數。/ Lines appended.
+    pub restored: usize,
+    /// 已經在檔案裡（同一把金鑰又出現了）而跳過的行數。/ Lines skipped because that key is back in the file.
+    pub skipped: usize,
+}
+
+/// 把移掉的行接回檔尾：金鑰已經又在檔案裡的那幾行跳過（還原兩次 = 什麼都不做）；解析不了的行照原樣接回。
+/// Appends removed lines; lines whose key is present again are skipped (restoring twice is a no-op).
+pub fn restore_lines(content: &str, lines: &[String]) -> Restore {
+    let mut present: BTreeSet<String> = parse_authorized_keys(content).into_iter().filter_map(|l| l.key.map(|k| k.bare)).collect();
+    let mut out = String::with_capacity(content.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>());
+    out.push_str(content);
+    if !content.is_empty() && !content.ends_with('\n') {
+        out.push('\n');
+    }
+    let mut r = Restore::default();
+    for raw in lines {
+        let parsed = parse_authorized_keys(raw).into_iter().next().and_then(|l| l.key);
+        if let Some(k) = parsed {
+            if !present.insert(k.bare) {
+                r.skipped += 1;
+                continue;
+            }
+        }
+        out.push_str(raw);
+        out.push('\n');
+        r.restored += 1;
+    }
+    r.content = (r.restored > 0).then_some(out);
+    r
 }
 
 /// 稽核頁要移除的金鑰（依指紋挑）。/ What an audit removal will take out, picked by fingerprint.
@@ -321,6 +364,24 @@ mod tests {
         let (c, n) = remove_keys(&content, &BTreeSet::from([bare(ED), bare(ED2)]));
         assert_eq!(n, 3);
         assert_eq!(c, format!("# mine\n{SVC}\n"));
+    }
+
+    #[test]
+    fn restore_appends_removed_lines_once() {
+        let content = format!("{SVC}\n{ED}\nno-pty {ED2}\n");
+        let (rest, removed) = remove_key_lines(&content, &BTreeSet::from([bare(ED), bare(ED2)]));
+        assert_eq!(rest, format!("{SVC}\n"));
+        assert_eq!(removed, vec![ED.to_string(), format!("no-pty {ED2}")]);
+        let r = restore_lines(&rest, &removed);
+        assert_eq!((r.restored, r.skipped), (2, 0));
+        let back = r.content.unwrap();
+        assert_eq!(back, content);
+        // 再還原一次：金鑰都在了，什麼都不做。/ Restoring again is a no-op.
+        let again = restore_lines(&back, &removed);
+        assert_eq!((again.restored, again.skipped, again.content), (0, 2, None));
+        // 檔尾沒有換行也接得對。/ A file without a trailing newline is handled.
+        let r = restore_lines(SVC, &[ED.to_string()]);
+        assert_eq!(r.content.unwrap(), format!("{SVC}\n{ED}\n"));
     }
 
     #[test]

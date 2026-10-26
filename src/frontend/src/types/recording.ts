@@ -9,6 +9,8 @@ export interface Recording {
     os_user: string;
     /** 區網主機 `login@address`。/ A LAN host as `login@address`. */
     lan_host: string | null;
+    /** `terminal` = 網頁終端機；`agent` = MCP agent 的互動 shell。/ The web terminal or an MCP agent's shell. */
+    kind?: "terminal" | "agent" | string;
     started_at: string;
     ended_at: string | null;
     live: boolean;

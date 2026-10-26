@@ -1,12 +1,14 @@
 //! MCP 端點端到端：OAuth token → `/mcp`（rmcp stateless Streamable HTTP）→ AI SSH session 打到一個假的裝置 sshd
 //! （russh server：exec 用 `sh -c`、sftp 轉接本機 `sftp-server`）。沒有 ssh-keygen 就跳過；沒有 sftp-server 時略過 SFTP 部分。
 //! The MCP endpoint end to end against a fake device sshd (russh server running `sh -c` and the local sftp-server).
+//! 互動 shell 用假 sshd 的 PTY echo shell；agent 瀏覽器用一個假的 kasm session-manager（HTTP，回答 CDP 動作），不需要 Docker。
+//! Interactive shells run against the fake sshd's PTY echo shell; agent browsers against a fake session-manager.
 mod common;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -17,7 +19,7 @@ use russh::server::{self, Auth, ChannelOpenHandle, Handler, Msg, Session};
 use russh::{Channel, ChannelId, ChannelMsg};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
@@ -43,9 +45,18 @@ fn keygen(dir: &Path, name: &str) -> PathBuf {
 
 // ---------------------------------------------------------------- fake device sshd
 
+/// 假裝置看到的事：echo shell 跑了的指令、PTY 要求、視窗大小變化。/ What the fake device saw.
+#[derive(Default)]
+struct DeviceLog {
+    commands: Vec<String>,
+    terms: Vec<(String, u32, u32)>,
+    resizes: Vec<(u32, u32)>,
+}
+
 struct Device {
     home: PathBuf,
     channels: HashMap<ChannelId, Channel<Msg>>,
+    log: Arc<Mutex<DeviceLog>>,
 }
 
 impl Handler for Device {
@@ -65,6 +76,24 @@ impl Handler for Device {
         let Some(channel) = self.channels.remove(&id) else { return session.channel_failure(id) };
         session.channel_success(id)?;
         tokio::spawn(run_exec(channel, session.handle(), String::from_utf8_lossy(data).into_owned(), self.home.clone()));
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn pty_request(&mut self, id: ChannelId, term: &str, cols: u32, rows: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+        self.log.lock().unwrap().terms.push((term.to_string(), cols, rows));
+        session.channel_success(id)
+    }
+
+    async fn window_change_request(&mut self, id: ChannelId, cols: u32, rows: u32, _pw: u32, _ph: u32, session: &mut Session) -> Result<(), Self::Error> {
+        self.log.lock().unwrap().resizes.push((cols, rows));
+        session.channel_success(id)
+    }
+
+    async fn shell_request(&mut self, id: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        let Some(channel) = self.channels.remove(&id) else { return session.channel_failure(id) };
+        session.channel_success(id)?;
+        tokio::spawn(run_echo_shell(channel, self.log.clone()));
         Ok(())
     }
 
@@ -116,6 +145,60 @@ async fn run_exec(mut channel: Channel<Msg>, handle: server::Handle, cmd: String
     let _ = channel.close().await;
 }
 
+/// 像 tty 的 shell：`$ ` 提示、回顯、退格、Ctrl+C；Enter 「執行」：`draw` 清畫面畫一個 TUI，`exit` 結束，其他印 `ran:<行>`。
+/// A tty-like shell: prompt, echo, backspace, Ctrl+C; Enter "runs" the line (`draw` paints a TUI, `exit` ends).
+async fn run_echo_shell(channel: Channel<Msg>, log: Arc<Mutex<DeviceLog>>) {
+    let mut s = channel.into_stream();
+    let _ = s.write_all(b"welcome\r\n$ ").await;
+    let mut buf = [0u8; 4096];
+    let mut line = String::new();
+    'shell: while let Ok(n) = s.read(&mut buf).await {
+        if n == 0 {
+            break;
+        }
+        let mut out = String::new();
+        for c in String::from_utf8_lossy(&buf[..n]).chars() {
+            match c {
+                '\r' | '\n' => {
+                    let cmd = std::mem::take(&mut line).trim().to_string();
+                    out.push_str("\r\n");
+                    match cmd.as_str() {
+                        "" => {}
+                        "exit" => {
+                            let _ = s.write_all(out.as_bytes()).await;
+                            break 'shell;
+                        }
+                        "draw" => out.push_str("\x1b[2J\x1b[1;1HTOP LINE\x1b[3;5Hmiddle\x1b[5;1H"),
+                        _ => {
+                            out.push_str(&format!("ran:{cmd}\r\n"));
+                            log.lock().unwrap().commands.push(cmd);
+                        }
+                    }
+                    out.push_str("$ ");
+                }
+                '\x03' => {
+                    line.clear();
+                    out.push_str("^C\r\n$ ");
+                }
+                '\x7f' | '\x08' => {
+                    if line.pop().is_some() {
+                        out.push_str("\x08 \x08");
+                    }
+                }
+                c if !c.is_control() => {
+                    line.push(c);
+                    out.push(c);
+                }
+                _ => {}
+            }
+        }
+        if s.write_all(out.as_bytes()).await.is_err() {
+            break;
+        }
+    }
+    let _ = s.shutdown().await;
+}
+
 async fn run_sftp(channel: Channel<Msg>, bin: &str, home: PathBuf) {
     let mut child = Command::new(bin).current_dir(&home).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn().unwrap();
     let (mut cin, mut cout) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
@@ -129,7 +212,7 @@ async fn run_sftp(channel: Channel<Msg>, bin: &str, home: PathBuf) {
 }
 
 /// 起一個假裝置 sshd，回 port。/ Start the fake device sshd and return its port.
-async fn start_device(host_key: &Path, home: PathBuf) -> u16 {
+async fn start_device(host_key: &Path, home: PathBuf, log: Arc<Mutex<DeviceLog>>) -> u16 {
     let key = russh::keys::load_secret_key(host_key, None).unwrap();
     let config = Arc::new(server::Config {
         keys: vec![key],
@@ -141,13 +224,58 @@ async fn start_device(host_key: &Path, home: PathBuf) -> u16 {
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((sock, _)) = listener.accept().await {
-            let (cfg, home) = (config.clone(), home.clone());
+            let (cfg, home, log) = (config.clone(), home.clone(), log.clone());
             tokio::spawn(async move {
-                if let Ok(s) = server::run_stream(cfg, sock, Device { home, channels: HashMap::new() }).await {
+                if let Ok(s) = server::run_stream(cfg, sock, Device { home, channels: HashMap::new(), log }).await {
                     let _ = s.await;
                 }
             });
         }
+    });
+    port
+}
+
+// ---------------------------------------------------------------- fake kasm session-manager
+
+/// 假的 session-manager 收到的請求（`create` / `cdp <action>` / `stop`）。/ Requests the fake session-manager got.
+type KasmLog = Arc<Mutex<Vec<Value>>>;
+
+/// 回答 `POST /sessions`、`POST /sessions/{id}/cdp`（照動作回假的頁面）、`DELETE /sessions/{id}`。
+/// Answers session create, CDP actions (with a fake page) and stop.
+async fn start_kasm(log: KasmLog) -> u16 {
+    use axum::extract::{Path as UrlPath, State};
+    use axum::routing::{delete, post};
+    use axum::Json;
+    async fn create(State(log): State<KasmLog>, Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+        log.lock().unwrap().push(json!({"op": "create", "proxy": body["proxy"]}));
+        (StatusCode::CREATED, Json(json!({"session_id": "kasm-1", "ws_port": 18443})))
+    }
+    async fn cdp(State(log): State<KasmLog>, UrlPath(sid): UrlPath<String>, Json(a): Json<Value>) -> (StatusCode, Json<Value>) {
+        log.lock().unwrap().push(json!({"op": "cdp", "session": sid, "action": a.clone()}));
+        let page = |url: &str| json!({"url": url, "title": "Fake page"});
+        match a["action"].as_str().unwrap_or("") {
+            "navigate" => (StatusCode::OK, Json(page(a["url"].as_str().unwrap_or("")))),
+            "screenshot" => (StatusCode::OK, Json(json!({"data": STANDARD.encode(b"\x89PNG fake"), "width": 1280, "height": 720, "url": "https://example.com/", "title": "Fake page"}))),
+            "read" => (StatusCode::OK, Json(json!({"title": "Fake page", "url": "https://example.com/", "text": "Hello from behind the device", "truncated": false, "links": []}))),
+            "click" if a["selector"] == "#missing" => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": "No element matches #missing"}))),
+            "click" => (StatusCode::OK, Json(json!({"clicked": "button “Save”", "url": "https://example.com/saved", "title": "Saved"}))),
+            "type" => (StatusCode::OK, Json(page("https://example.com/"))),
+            other => (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": format!("unknown action {other}")}))),
+        }
+    }
+    async fn stop(State(log): State<KasmLog>, UrlPath(sid): UrlPath<String>) -> Json<Value> {
+        log.lock().unwrap().push(json!({"op": "stop", "session": sid}));
+        Json(json!({"status": "stopped"}))
+    }
+    let app = axum::Router::new()
+        .route("/sessions", post(create))
+        .route("/sessions/{sid}/cdp", post(cdp))
+        .route("/sessions/{sid}", delete(stop))
+        .with_state(log);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
     });
     port
 }
@@ -214,6 +342,8 @@ struct Setup {
     tunnel_id: i64,
     device_port: u16,
     home: tempfile::TempDir,
+    device: Arc<Mutex<DeviceLog>>,
+    kasm: KasmLog,
     _keys: tempfile::TempDir,
 }
 
@@ -226,12 +356,16 @@ async fn setup() -> Option<Setup> {
     let identity = keygen(keys.path(), "backend_key");
     let host_key = keygen(keys.path(), "device_host_key");
     let home = tempfile::tempdir().unwrap();
-    let device_port = start_device(&host_key, home.path().to_path_buf()).await;
+    let device = Arc::new(Mutex::new(DeviceLog::default()));
+    let device_port = start_device(&host_key, home.path().to_path_buf(), device.clone()).await;
+    let kasm: KasmLog = Arc::default();
+    let kasm_port = start_kasm(kasm.clone()).await;
 
     let mut app = common::spawn().await;
     let mut config = app.state.config.clone();
     config.ssh_identity = identity;
     config.ssh_target_host = "127.0.0.1".into();
+    config.kasm_api = format!("http://127.0.0.1:{kasm_port}");
     app.state = telepy_server::state::AppState::new(config, app.state.db.clone());
     app.router = telepy_server::app::build(app.state.clone());
     let web = app.login("admin", "pw").await;
@@ -241,7 +375,7 @@ async fn setup() -> Option<Setup> {
     let tunnel_id = r.json["id"].as_i64().unwrap();
     let r = app.post("/api/reverse/server/usernames", Some(&web), json!({"reverse_server": tunnel_id, "username": "alice"})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
-    Some(Setup { app, web, admin_id, tunnel_id, device_port, home, _keys: keys })
+    Some(Setup { app, web, admin_id, tunnel_id, device_port, home, device, kasm, _keys: keys })
 }
 
 // ---------------------------------------------------------------- tests
@@ -271,7 +405,7 @@ async fn mcp_requires_an_oauth_token() {
     assert!(r.json["result"]["instructions"].as_str().unwrap().contains("ssh_session_open"));
     let r = mcp_raw(&app, Some(&token), json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})).await;
     let names: HashSet<&str> = r.json["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for t in ["list_tunnels", "tunnel_status", "ssh_session_open", "ssh_exec", "ssh_session_close", "ssh_session_list", "sftp_list", "sftp_read", "sftp_write"] {
+    for t in ["list_tunnels", "tunnel_status", "ssh_session_open", "ssh_exec", "ssh_session_close", "ssh_session_list", "sftp_list", "sftp_read", "sftp_write", "shell_open", "shell_send", "shell_read", "shell_resize", "shell_close", "browser_open", "browser_navigate", "browser_screenshot", "browser_read", "browser_click", "browser_type", "browser_close"] {
         assert!(names.contains(t), "missing tool {t}: {names:?}");
     }
     let exec = r.json["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "ssh_exec").unwrap();
@@ -586,4 +720,261 @@ async fn command_rules_block_and_hold_agent_commands() {
     let failed: Vec<&str> = r.json.as_array().unwrap().iter().filter(|e| e["tool"] == "ssh_exec" && e["ok"] == false).map(|e| e["error"].as_str().unwrap_or_default()).collect();
     assert!(failed.iter().any(|e| e.contains("blocked by the rule `rm`")), "{failed:?}");
     assert!(failed.iter().any(|e| e.contains("denied")), "{failed:?}");
+}
+
+/// 等到第一筆待核准的指令申請。/ Wait for the first pending command request.
+async fn first_pending(app: &TestApp, web: &str) -> Value {
+    loop {
+        let r = app.get("/api/command-requests?status=pending", Some(web)).await;
+        if let Some(q) = r.json["requests"].as_array().and_then(|a| a.first()) {
+            return q.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 讀到輸出裡出現 `needle` 為止（最多幾次）。/ Read until `needle` shows up in the output.
+async fn read_until(app: &TestApp, token: &str, shell: &str, needle: &str) -> Value {
+    let mut seen = String::new();
+    for _ in 0..10 {
+        let (err, v) = call(app, token, "shell_read", json!({"shell_id": shell, "timeout_ms": 2000})).await;
+        assert!(!err, "{v}");
+        seen.push_str(v["output"].as_str().unwrap_or(""));
+        if seen.contains(needle) || v["screen"].as_str().unwrap_or("").contains(needle) {
+            return v;
+        }
+    }
+    panic!("{needle:?} never showed up; got {seen:?}");
+}
+
+/// 互動 shell：PTY（xterm-256color）、輸出 + 畫面、控制字元、改大小、上限、錄影、跟 session 一起關、即時 session 頁的 shell 數。
+/// Interactive shells: PTY, output + screen, control characters, resize, the cap, recording, closing with the session.
+#[tokio::test]
+async fn interactive_shells_read_the_screen_and_are_recorded() {
+    let Some(s) = setup().await else { return };
+    let app = &s.app;
+    let (token, _) = oauth_token(app, &s.web, "", json!(null)).await;
+    let (_, v) = call(app, &token, "ssh_session_open", json!({"tunnel_id": s.tunnel_id})).await;
+    let sid = v["session_id"].as_str().unwrap().to_string();
+
+    // tunnels:read 而已 → 不能開 shell。/ tunnels:read alone cannot open a shell.
+    let (read_only, _) = oauth_token(app, &s.web, "tunnels:read", json!(null)).await;
+    let (err, v) = call(app, &read_only, "shell_open", json!({"session_id": sid})).await;
+    assert!(err && v.as_str().unwrap().contains("ssh:exec"), "{v}");
+
+    let (err, v) = call(app, &token, "shell_open", json!({"session_id": sid, "cols": 100, "rows": 30})).await;
+    assert!(!err, "{v}");
+    let shell = v["shell_id"].as_str().unwrap().to_string();
+    assert!(shell.starts_with("sh_"));
+    assert_eq!(v["recorded"], false);
+    assert_eq!(s.device.lock().unwrap().terms, vec![("xterm-256color".to_string(), 100, 30)]);
+
+    // 提示字元出現在畫面上。/ The prompt shows on the screen.
+    let v = read_until(app, &token, &shell, "$").await;
+    assert!(v["screen"].as_str().unwrap().starts_with("welcome\n$"), "{v}");
+    assert_eq!(v["size"], json!({"cols": 100, "rows": 30}));
+
+    // 打字 + Enter：跑了。/ Type and press Enter: it runs.
+    let (err, v) = call(app, &token, "shell_send", json!({"shell_id": shell, "input": "echo hi", "press_enter": true})).await;
+    assert!(!err, "{v}");
+    assert_eq!(v["bytes_sent"], 8);
+    read_until(app, &token, &shell, "ran:echo hi").await;
+    assert_eq!(s.device.lock().unwrap().commands, vec!["echo hi".to_string()]);
+
+    // TUI：清畫面、跳游標畫字 → screen 照人看到的樣子。/ A TUI drawn with cursor moves reads like the screen.
+    call(app, &token, "shell_send", json!({"shell_id": shell, "input": "draw\r"})).await;
+    let v = read_until(app, &token, &shell, "middle").await;
+    let screen = v["screen"].as_str().unwrap();
+    assert!(screen.starts_with("TOP LINE\n\n    middle"), "{screen:?}");
+    assert_eq!(v["cursor"], json!({"row": 4, "col": 2}));
+
+    // 控制字元：Ctrl+C 丟掉這一行。/ Control characters: Ctrl+C abandons the line.
+    call(app, &token, "shell_send", json!({"shell_id": shell, "input": "half\u{3}"})).await;
+    read_until(app, &token, &shell, "^C").await;
+    let (_, v) = call(app, &token, "shell_resize", json!({"shell_id": shell, "cols": 90, "rows": 25})).await;
+    assert_eq!(v["cols"], 90);
+    assert_eq!(s.device.lock().unwrap().resizes, vec![(90, 25)]);
+
+    // 即時 session 頁：這個 agent session 有 1 個 shell。/ The live sessions page shows one shell.
+    let r = app.get("/api/sessions", Some(&s.web)).await;
+    let row = r.json["sessions"].as_array().unwrap().iter().find(|x| x["kind"] == "ai").unwrap().clone();
+    assert_eq!(row["shells"], 1, "{row}");
+    assert_eq!(app.get("/api/ai/sessions", Some(&s.web)).await.json[0]["shells"], 1);
+
+    // 錄影：開了之後新開的 shell 會錄（kind = agent）。/ Recording: shells opened afterwards are recorded as `agent`.
+    let r = app.put(&format!("/api/reverse/server/{}/recording", s.tunnel_id), Some(&s.web), json!({"enabled": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let (_, v) = call(app, &token, "shell_open", json!({"session_id": sid})).await;
+    assert_eq!(v["recorded"], true, "{v}");
+    let second = v["shell_id"].as_str().unwrap().to_string();
+    read_until(app, &token, &second, "$").await;
+    call(app, &token, "shell_send", json!({"shell_id": second, "input": "uptime", "press_enter": true})).await;
+    read_until(app, &token, &second, "ran:uptime").await;
+    // 每個 session 最多 2 個。/ Two shells per session at most.
+    let (err, v) = call(app, &token, "shell_open", json!({"session_id": sid})).await;
+    assert!(err && v.as_str().unwrap().contains("limit is 2"), "{v}");
+    let (err, _) = call(app, &token, "shell_close", json!({"shell_id": second})).await;
+    assert!(!err);
+    let (err, v) = call(app, &token, "shell_read", json!({"shell_id": second})).await;
+    assert!(err && v.as_str().unwrap().contains("Unknown or closed shell_id"), "{v}");
+    let r = app.get(&format!("/api/recordings?tunnel_id={}", s.tunnel_id), Some(&s.web)).await;
+    let rec = r.json["recordings"][0].clone();
+    assert_eq!(rec["kind"], "agent", "{}", r.text);
+    assert_eq!(rec["os_user"], "alice");
+    assert_eq!(rec["live"], false);
+    let cast = app.get(&format!("/api/recordings/{}/cast", rec["id"]), Some(&s.web)).await.text;
+    assert!(cast.contains("ran:uptime") && cast.contains(r#""width":120"#), "{cast}");
+
+    // 關 session → 它的 shell 一起關；稽核每一步。/ Closing the session closes its shells; every step is audited.
+    call(app, &token, "ssh_session_close", json!({"session_id": sid})).await;
+    let (err, _) = call(app, &token, "shell_read", json!({"shell_id": shell})).await;
+    assert!(err);
+    let rows = app.get("/api/ai/activity", Some(&s.web)).await.json;
+    let rows = rows.as_array().unwrap();
+    let sent = rows.iter().find(|e| e["tool"] == "shell_send" && e["detail"].as_str().unwrap().ends_with("echo hi\\r")).unwrap();
+    assert_eq!(sent["bytes_out"], 8);
+    assert!(rows.iter().any(|e| e["tool"] == "shell_read"));
+    assert!(rows.iter().any(|e| e["tool"] == "shell_resize" && e["detail"].as_str().unwrap().ends_with("90x25")));
+    let closes: Vec<&str> = rows.iter().filter(|e| e["tool"] == "shell_close").map(|e| e["detail"].as_str().unwrap()).collect();
+    assert!(closes.iter().any(|d| d.contains("closed_by_agent")) && closes.iter().any(|d| d.contains("session_closed")), "{closes:?}");
+}
+
+/// 指令規則也管 shell：擋下的那一行改送 Ctrl+C，要核准的等 owner 按。/ Command rules gate the shell's Enter too.
+#[tokio::test]
+async fn command_rules_gate_enter_in_agent_shells() {
+    let Some(s) = setup().await else { return };
+    let app = &s.app;
+    let rules = format!("/api/reverse/server/{}/command-rules", s.tunnel_id);
+    for body in [json!({"action": "block", "pattern": "rm", "note": "No deleting"}), json!({"action": "approve", "pattern": "touch"})] {
+        assert_eq!(app.post(&rules, Some(&s.web), body).await.status, StatusCode::CREATED);
+    }
+    let (token, _) = oauth_token(app, &s.web, "", json!(null)).await;
+    let (_, v) = call(app, &token, "ssh_session_open", json!({"tunnel_id": s.tunnel_id})).await;
+    let sid = v["session_id"].as_str().unwrap().to_string();
+    let (_, v) = call(app, &token, "shell_open", json!({"session_id": sid})).await;
+    let shell = v["shell_id"].as_str().unwrap().to_string();
+    read_until(app, &token, &shell, "$").await;
+
+    // 沒有規則的指令照常跑。/ Commands without a rule run.
+    let (err, v) = call(app, &token, "shell_send", json!({"shell_id": shell, "input": "ls -la", "press_enter": true})).await;
+    assert!(!err, "{v}");
+    read_until(app, &token, &shell, "ran:ls -la").await;
+
+    // 擋下：Ctrl+C 取代 Enter，沒跑。/ Blocked: Ctrl+C instead of Enter; nothing ran.
+    let (err, v) = call(app, &token, "shell_send", json!({"shell_id": shell, "input": "rm -rf /tmp/x", "press_enter": true})).await;
+    assert!(err, "{v}");
+    let msg = v.as_str().unwrap();
+    assert!(msg.contains("`rm`") && msg.contains("No deleting") && msg.contains("Ctrl+C"), "{msg}");
+    read_until(app, &token, &shell, "^C").await;
+    assert!(!s.device.lock().unwrap().commands.iter().any(|c| c.starts_with("rm")));
+
+    // 要核准：等 owner 在網頁按下才送 Enter。/ Held until the owner approves in the web.
+    let approve = async {
+        let q = first_pending(app, &s.web).await;
+        assert_eq!((q["source"].as_str(), q["command"].as_str()), (Some("agent"), Some("touch done.txt")));
+        assert!(!s.device.lock().unwrap().commands.iter().any(|c| c.starts_with("touch")), "nothing runs before the approval");
+        let r = app.post(&format!("/api/command-requests/{}/approve", q["id"]), Some(&s.web), json!({})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    };
+    let ((err, v), ()) = tokio::join!(call(app, &token, "shell_send", json!({"shell_id": shell, "input": "touch done.txt", "press_enter": true})), approve);
+    assert!(!err, "{v}");
+    read_until(app, &token, &shell, "ran:touch done.txt").await;
+
+    // 拒絕：Ctrl+C，tool 回錯誤。/ Denied: Ctrl+C and an error.
+    let deny = async {
+        let q = first_pending(app, &s.web).await;
+        app.post(&format!("/api/command-requests/{}/deny", q["id"]), Some(&s.web), json!({"reason": "not today"})).await;
+    };
+    let ((err, v), ()) = tokio::join!(call(app, &token, "shell_send", json!({"shell_id": shell, "input": "touch no.txt", "press_enter": true})), deny);
+    assert!(err && v.as_str().unwrap().contains("not today"), "{v}");
+    assert!(!s.device.lock().unwrap().commands.iter().any(|c| c == "touch no.txt"));
+
+    let rows = app.get("/api/ai/activity", Some(&s.web)).await.json;
+    let failed: Vec<&str> = rows.as_array().unwrap().iter().filter(|e| e["tool"] == "shell_send" && e["ok"] == false).map(|e| e["error"].as_str().unwrap_or("")).collect();
+    assert!(failed.iter().any(|e| e.contains("blocked by the rule `rm`")), "{failed:?}");
+}
+
+/// agent 的遠端瀏覽器：開（經裝置的 SOCKS）、導向、讀、截圖（image content block）、點、打字（敏感的只記長度）、即時 session 頁結束它。
+/// Agent browsers: open through the device, navigate, read, screenshot as an image block, click, type (sensitive text
+/// only by length), and being ended from the live sessions page.
+#[tokio::test]
+async fn agent_browsers_are_remote_browser_sessions() {
+    let Some(s) = setup().await else { return };
+    let app = &s.app;
+
+    // 沒有 browser:use → 不能開。/ Without browser:use it can't open one.
+    let (no_browser, _) = oauth_token(app, &s.web, "tunnels:read ssh:exec", json!(null)).await;
+    let (err, v) = call(app, &no_browser, "browser_open", json!({"tunnel_id": s.tunnel_id})).await;
+    assert!(err && v.as_str().unwrap().contains("browser:use"), "{v}");
+
+    let (token, _) = oauth_token(app, &s.web, "browser:use", json!(null)).await;
+    let (err, v) = call(app, &token, "browser_open", json!({"tunnel_id": s.tunnel_id, "url": "file:///etc/passwd"})).await;
+    assert!(err && v.as_str().unwrap().contains("http and https"), "{v}");
+    let mut owner_rx = app.state.hub.subscribe_user(s.admin_id);
+    let (err, v) = call(app, &token, "browser_open", json!({"tunnel_id": s.tunnel_id, "url": "example.com"})).await;
+    assert!(!err, "{v}");
+    let bid = v["browser_id"].as_str().unwrap().to_string();
+    assert!(bid.starts_with("aib_"));
+    assert_eq!(v["page"]["title"], "Fake page");
+    assert_eq!(v["username"], "alice");
+    let msg: Value = serde_json::from_str(&owner_rx.try_recv().unwrap()).unwrap();
+    assert_eq!((msg["message"]["action"].as_str(), msg["message"]["kind"].as_str()), (Some("AI-SESSION-OPENED"), Some("browser")));
+    {
+        let log = s.kasm.lock().unwrap();
+        assert!(log[0]["proxy"].as_str().unwrap().starts_with("socks5://"), "{log:?}");
+        assert_eq!(log[1]["action"], json!({"action": "navigate", "url": "https://example.com/"}));
+    }
+
+    let (err, v) = call(app, &token, "browser_read", json!({"browser_id": bid})).await;
+    assert!(!err && v["text"] == "Hello from behind the device", "{v}");
+    let (err, v) = call(app, &token, "browser_navigate", json!({"browser_id": bid, "url": "http://192.168.1.1/"})).await;
+    assert!(!err && v["url"] == "http://192.168.1.1/", "{v}");
+    // 截圖 = image content block（PNG）。/ A screenshot comes back as an image block.
+    let r = mcp_raw(app, Some(&token), json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "browser_screenshot", "arguments": {"browser_id": bid}}})).await;
+    let content = &r.json["result"]["content"];
+    assert_eq!((content[0]["type"].as_str(), content[0]["mimeType"].as_str()), (Some("image"), Some("image/png")), "{}", r.text);
+    assert_eq!(STANDARD.decode(content[0]["data"].as_str().unwrap()).unwrap(), b"\x89PNG fake");
+    let (err, v) = call(app, &token, "browser_click", json!({"browser_id": bid, "selector": "#missing"})).await;
+    assert!(err && v.as_str().unwrap().contains("No element matches #missing"), "{v}");
+    let (err, v) = call(app, &token, "browser_click", json!({"browser_id": bid, "text": "Save"})).await;
+    assert!(!err && v["title"] == "Saved", "{v}");
+    let (err, _) = call(app, &token, "browser_type", json!({"browser_id": bid, "selector": "#pw", "text": "hunter2", "press_enter": true})).await;
+    assert!(!err);
+    call(app, &token, "browser_type", json!({"browser_id": bid, "selector": "#q", "text": "weather", "sensitive": false})).await;
+
+    // 列在 session 清單與即時 session 頁（kind browser、client = app）。/ Listed for the agent and on the live sessions page.
+    let (_, v) = call(app, &token, "ssh_session_list", json!({})).await;
+    assert_eq!(v["browsers"][0]["browser_id"], bid);
+    let r = app.get("/api/sessions", Some(&s.web)).await;
+    let row = r.json["sessions"].as_array().unwrap().iter().find(|x| x["kind"] == "browser").unwrap().clone();
+    assert_eq!(row["client"], "Test Agent");
+
+    // 從即時 session 頁結束 → tool 回「被誰結束」，kasm session 收掉。/ Ended from the web: tools say who ended it.
+    assert_eq!(app.delete(&format!("/api/sessions/{}", row["id"]), Some(&s.web)).await.status, StatusCode::NO_CONTENT);
+    let (err, v) = call(app, &token, "browser_read", json!({"browser_id": bid})).await;
+    assert!(err && v.as_str().unwrap().contains("ended by admin"), "{v}");
+    assert!(s.kasm.lock().unwrap().iter().any(|e| e["op"] == "stop" && e["session"] == "kasm-1"));
+    assert!(app.state.ai.browsers.get(&bid).is_none());
+
+    // 稽核：網址、選擇器；敏感文字只記長度。/ Audit: URLs and selectors; sensitive text by length only.
+    let rows = app.get("/api/ai/activity", Some(&s.web)).await.json;
+    let rows = rows.as_array().unwrap();
+    let detail = |tool: &str| rows.iter().filter(|e| e["tool"] == tool).map(|e| e["detail"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    assert!(detail("browser_open")[0].contains("url: https://example.com/"));
+    assert_eq!(detail("browser_navigate"), vec!["http://192.168.1.1/".to_string()]);
+    assert_eq!(detail("browser_screenshot"), vec!["screenshot".to_string()]);
+    let typed = detail("browser_type");
+    assert!(typed.iter().any(|d| d == "selector: #pw; 7 characters + Enter") && typed.iter().any(|d| d == "selector: #q; \"weather\""), "{typed:?}");
+    assert!(!typed.iter().any(|d| d.contains("hunter2")));
+    assert!(detail("browser_close")[0].contains("by: admin"));
+    let events = app.get(&format!("/api/log/ssh/events?tunnel_id={}", s.tunnel_id), Some(&s.web)).await.json;
+    let kinds: Vec<&str> = events.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap_or("")).collect();
+    assert!(kinds.contains(&"browser_open") && kinds.contains(&"browser_close"), "{kinds:?}");
+
+    // 撤銷 grant → 開著的瀏覽器立刻關。/ Revoking the grant closes its browsers at once.
+    let (token2, grant2) = oauth_token(app, &s.web, "browser:use", json!(null)).await;
+    let (_, v) = call(app, &token2, "browser_open", json!({"tunnel_id": s.tunnel_id})).await;
+    let bid2 = v["browser_id"].as_str().unwrap().to_string();
+    assert_eq!(app.delete(&format!("/api/oauth/grants/{grant2}"), Some(&s.web)).await.status, StatusCode::NO_CONTENT);
+    assert!(app.state.ai.browsers.get(&bid2).is_none());
 }

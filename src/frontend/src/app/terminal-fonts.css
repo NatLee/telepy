@@ -1,11 +1,17 @@
 /*
- * 網頁終端機可選的字型(Nerd Font Mono Regular,來源與授權見 src/fonts/terminal/README.md)。
- * 清單在 lib/terminalAppearance.ts。只有真的被終端機用到的那一個才會下載:@font-face 在有人用到該
- * family 時才抓檔,useTerminalPage 會 await document.fonts.load。local() 先試本機裝好的同一套字型,
- * 有裝就不用下載。0xProto 仍由 layout.tsx 的 next/font 載入(介面的 font-mono 也用它)。
- * Web-terminal font choices (Nerd Font Mono Regular; sources and licenses in src/fonts/terminal/README.md).
- * The list lives in lib/terminalAppearance.ts. A face downloads only when a terminal uses it; local()
- * tries an installed copy first. 0xProto stays on next/font in layout.tsx because the UI's font-mono uses it.
+ * 網頁終端機可選的字型(Nerd Font Mono 的 Regular / Bold / Italic / Bold Italic,來源與授權見
+ * src/fonts/terminal/README.md)。清單在 lib/terminalAppearance.ts(每個字型有哪些字體要跟這裡一致:
+ * Fira Code 沒有斜體)。只有真的被終端機用到的字體才會下載:@font-face 在有文字以該 family + weight + style
+ * 繪製時才抓檔,所以 Bold 要等第一個粗體字、Italic 要等第一個斜體字;useTerminalPage 開 shell 前會
+ * await document.fonts.load(Regular,粗體畫法用真實字體時加 Bold)。local() 先試本機裝好的同一套字型,
+ * 有裝就不用下載。0xProto 仍由 layout.tsx 的 next/font 載入(介面的 font-mono 也用它),那裡也宣告它的 Bold / Italic。
+ * Web-terminal font choices (Nerd Font Mono Regular / Bold / Italic / Bold Italic; sources and licenses in
+ * src/fonts/terminal/README.md). The list lives in lib/terminalAppearance.ts (its `faces` must match this
+ * file: Fira Code has no italic). A face downloads only when text is drawn with that family + weight + style,
+ * so Bold waits for the first bold cell and Italic for the first italic one; useTerminalPage awaits
+ * document.fonts.load for Regular (and Bold when the bold style uses the face) before opening a shell.
+ * local() tries an installed copy first. 0xProto stays on next/font in layout.tsx, which declares its
+ * Bold / Italic too.
  */
 @font-face {
   font-family: "Hack Nerd Font Mono";
@@ -46,4 +52,110 @@
   font-display: swap;
   src: local("MesloLGSNFM-Regular"), local("MesloLGS Nerd Font Mono Regular"),
     url("../fonts/terminal/MesloLGSNerdFontMono-Regular.woff2") format("woff2");
+}
+
+/* Bold / Italic / Bold Italic(同一個 family 名稱,瀏覽器按 weight / style 挑)。/ Bold / Italic / Bold Italic under the same family names. */
+@font-face {
+  font-family: "Hack Nerd Font Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("HackNFM-Bold"), local("Hack Nerd Font Mono Bold"),
+    url("../fonts/terminal/HackNerdFontMono-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hack Nerd Font Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("HackNFM-Italic"), local("Hack Nerd Font Mono Italic"),
+    url("../fonts/terminal/HackNerdFontMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Hack Nerd Font Mono";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("HackNFM-BoldItalic"), local("Hack Nerd Font Mono Bold Italic"),
+    url("../fonts/terminal/HackNerdFontMono-BoldItalic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrainsMono NFM";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("JetBrainsMonoNFM-Bold"), local("JetBrainsMono NFM Bold"),
+    url("../fonts/terminal/JetBrainsMonoNerdFontMono-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrainsMono NFM";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("JetBrainsMonoNFM-Italic"), local("JetBrainsMono NFM Italic"),
+    url("../fonts/terminal/JetBrainsMonoNerdFontMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrainsMono NFM";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("JetBrainsMonoNFM-BoldItalic"), local("JetBrainsMono NFM Bold Italic"),
+    url("../fonts/terminal/JetBrainsMonoNerdFontMono-BoldItalic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "FiraCode Nerd Font Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("FiraCodeNFM-Bold"), local("FiraCode Nerd Font Mono Bold"),
+    url("../fonts/terminal/FiraCodeNerdFontMono-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "CaskaydiaCove NFM";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("CaskaydiaCoveNFM-Bold"), local("CaskaydiaCove NFM Bold"),
+    url("../fonts/terminal/CaskaydiaCoveNerdFontMono-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "CaskaydiaCove NFM";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("CaskaydiaCoveNFM-Italic"), local("CaskaydiaCove NFM Italic"),
+    url("../fonts/terminal/CaskaydiaCoveNerdFontMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "CaskaydiaCove NFM";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("CaskaydiaCoveNFM-BoldItalic"), local("CaskaydiaCove NFM Bold Italic"),
+    url("../fonts/terminal/CaskaydiaCoveNerdFontMono-BoldItalic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "MesloLGS Nerd Font Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local("MesloLGSNFM-Bold"), local("MesloLGS Nerd Font Mono Bold"),
+    url("../fonts/terminal/MesloLGSNerdFontMono-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "MesloLGS Nerd Font Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: local("MesloLGSNFM-Italic"), local("MesloLGS Nerd Font Mono Italic"),
+    url("../fonts/terminal/MesloLGSNerdFontMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "MesloLGS Nerd Font Mono";
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: local("MesloLGSNFM-BoldItalic"), local("MesloLGS Nerd Font Mono Bold Italic"),
+    url("../fonts/terminal/MesloLGSNerdFontMono-BoldItalic.woff2") format("woff2");
 }

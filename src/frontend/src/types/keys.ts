@@ -34,7 +34,13 @@ export interface KeyTarget {
     error: string | null;
 }
 
-/** `GET /api/reverse/user/keys/devices`：我能用的裝置 × 我在它清單上的金鑰。 */
+/** 一個登入帳號與它的 id（金鑰「只裝到這些帳號」用 id 指）。/ A login account with its id. */
+export interface DeviceAccount {
+    id: number;
+    username: string;
+}
+
+/** `GET /api/reverse/user/keys/devices`：我能用的裝置 × 我在它清單上的金鑰（依裝置名稱排序）。 */
 export interface KeyDevice {
     tunnel_id: number;
     host_friendly_name: string;
@@ -42,7 +48,9 @@ export interface KeyDevice {
     role: TunnelRole;
     /** 我在這台能用的 OS 帳號（金鑰會裝進這些）。/ Accounts my keys go into here. */
     accounts: string[];
-    keys: { user_key_id: number; targets: KeyTarget[] }[];
+    account_list: DeviceAccount[];
+    /** `accounts`：這把金鑰只裝到這些帳號 id；null = 全部。/ `accounts`: chosen account ids; null = all. */
+    keys: { user_key_id: number; accounts: number[] | null; targets: KeyTarget[] }[];
 }
 
 export interface DeviceKeyEntry {
@@ -54,7 +62,20 @@ export interface DeviceKeyEntry {
     mine: boolean;
     added_by: string;
     created_at: string;
+    /** 只裝到這些帳號（id）；null = 擁有者能用的每個帳號。/ Chosen account ids; null = every allowed account. */
+    accounts: number[] | null;
     targets: KeyTarget[];
+}
+
+/** 手動從某帳號 authorized_keys 移除的一批（7 天內可還原）。/ One manual removal, restorable for 7 days. */
+export interface KeyRemoval {
+    id: number;
+    username: string;
+    keys: number;
+    lines: number;
+    removed_by: string;
+    removed_at: string;
+    restored_at: string | null;
 }
 
 export interface DeviceKeyRemoval {
@@ -68,12 +89,17 @@ export interface DeviceKeyRemoval {
 /** `GET /api/reverse/server/{id}/device-keys` */
 export interface DeviceKeys {
     tunnel: { id: number; host_friendly_name: string; online: boolean; role: TunnelRole };
+    /** 裝置的平台（連過裝置才知道）：Windows 的管理員金鑰在共用的 administrators_authorized_keys。/ Known once dialed. */
+    platform: { windows: boolean; error: string | null } | null;
     can_manage: boolean;
     accounts: string[];
+    /** `accounts` 加上 id（金鑰的帳號選擇用）。/ The same accounts with ids. */
+    account_ids: DeviceAccount[];
     entries: DeviceKeyEntry[];
     removals: DeviceKeyRemoval[];
     sync: { username: string; ok: boolean; error: string | null; synced_at: string }[];
-    my_keys: { id: number; name: string; fingerprint: string | null; key_type: string | null; in_list: boolean }[];
+    /** `accounts`：在清單上時，只裝到這些帳號 id；null = 全部。/ When listed: chosen account ids; null = all. */
+    my_keys: { id: number; name: string; fingerprint: string | null; key_type: string | null; in_list: boolean; expired?: boolean; accounts: number[] | null }[];
     /** 每個帳號一張卡：清單與裝置上實際內容合在一起。/ Per-account merged view. */
     view: { accounts: ViewAccount[] };
 }
@@ -103,10 +129,16 @@ export interface ViewRow {
     line_count: number;
     error: string | null;
     raw: string | null;
+    /** 清單上的金鑰：只裝到這些帳號 id；null = 全部。/ Listed keys: chosen account ids; null = all. */
+    accounts: number[] | null;
 }
 
 export interface ViewAccount {
     username: string;
+    /** 這個帳號的金鑰檔：`~/.ssh/authorized_keys`，Windows 管理員是 `%ProgramData%\ssh\administrators_authorized_keys`。 */
+    file: string;
+    /** Windows 本機管理員（sshd 不看它自己的 authorized_keys）。/ A Windows administrator. */
+    windows_admin: boolean;
     /** 最近一次讀檔；null = 還沒讀過。/ Last read of the file; null = never. */
     checked_at: string | null;
     exists: boolean | null;

@@ -51,16 +51,41 @@ export function TargetChip({ target, online = true }: { target: KeyTarget; onlin
     );
 }
 
-/** 一把金鑰在一台裝置上的所有帳號；沒有帳號時說明原因。/ All accounts of a key on a device. */
-export function TargetChips({ targets, online, className }: { targets: KeyTarget[]; online: boolean; className?: string }) {
+/** 金鑰沒選的帳號：灰籤。/ An account the key was not chosen for: a muted chip. */
+function UnchosenChip({ username }: { username: string }) {
     const { t } = useI18n();
-    if (targets.length === 0) {
+    return (
+        <TooltipProvider delayDuration={150}>
+            <Tooltip>
+                <TooltipTrigger asChild>
+                    <span
+                        tabIndex={0}
+                        className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[0.75rem] text-muted-foreground ring-1 ring-inset ring-border line-through decoration-muted-foreground/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                        <span className="truncate">{username}</span>
+                        <span className="sr-only">{t("keys.matrix.notChosen")}</span>
+                    </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs text-xs">{t("keys.matrix.notChosenTip", { account: username })}</TooltipContent>
+            </Tooltip>
+        </TooltipProvider>
+    );
+}
+
+/** 一把金鑰在一台裝置上的所有帳號；沒有帳號時說明原因。`unchosen` = 金鑰刻意沒選的帳號。
+ *  All accounts of a key on a device; `unchosen` = accounts the key was deliberately not chosen for. */
+export function TargetChips({ targets, online, className, unchosen = [] }: { targets: KeyTarget[]; online: boolean; className?: string; unchosen?: string[] }) {
+    const { t } = useI18n();
+    if (targets.length === 0 && unchosen.length === 0) {
         return <span className={cn("text-[0.75rem] text-muted-foreground", className)}>{t("keys.status.noAccounts")}</span>;
     }
     return (
         <div className={cn("flex flex-wrap gap-1", className)}>
             {targets.map((tg) => (
                 <TargetChip key={tg.username} target={tg} online={online} />
+            ))}
+            {unchosen.map((u) => (
+                <UnchosenChip key={`u:${u}`} username={u} />
             ))}
         </div>
     );

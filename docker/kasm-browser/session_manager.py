@@ -43,6 +43,8 @@ import threading
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import cdp
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [session-manager] %(message)s")
 logger = logging.getLogger("session_manager")
 
@@ -95,6 +97,10 @@ DEFAULT_WM_CMD = "openbox --config-file /app/openbox-rc.xml"
 # 注意:此瀏覽器是「真人透過 VNC 操作」且**經由目標機器出口 IP**(ssh -D),本身已是最強的反偵測
 # 條件;這裡的旗標是加分。**主宰因素是出口 IP 的信譽**:目標機若是資料中心/雲端 IP,YouTube 仍會
 # 擋(與瀏覽器指紋無關);且設定檔每 session 全新、無 cookie 信任累積(privacy 取捨)。詳見 docs。
+#   {cdp_flag}      --remote-debugging-port=<CDP_BASE + display>:MCP agent 經 session-manager 操作這顆瀏覽器
+#                   (cdp.py)。DevTools 只聽在容器內的 127.0.0.1(chromium 預設),backend 從不直接碰 CDP,
+#                   只呼叫 session-manager 的 POST /sessions/<id>/cdp(X-Internal-Token)。
+#                   The DevTools port for MCP agents; loopback inside the container only.
 #   (無 --no-first-run)
 #                   **Chromium 150(Debian bookworm 2026-07 安全更新)帶 --no-first-run 會在啟動
 #                   ~1 秒內無聲 SIGTRAP(exit 133,--v=1 也沒有 FATAL 訊息)**,任何 profile 狀態
@@ -122,7 +128,7 @@ DEFAULT_BROWSER_CMD = (
     "--disable-blink-features=AutomationControlled "
     "--lang={lang} --accept-lang={accept_lang} {profile_flag} "
     "--proxy-server={proxy} --proxy-bypass-list='<-loopback>' "
-    "--start-maximized {homepage}"
+    "{cdp_flag} --start-maximized {homepage}"
 )
 # 瀏覽器重啟策略:
 #   - 視窗被縮小/關掉但 chromium「行程」還在(background mode)→ 不打擾,由使用者點 tint2
@@ -199,6 +205,8 @@ class SessionManager:
         # KasmVNC 的 websocket 埠 auto = 8443 + display;ws_base 預設對齊,per-session 埠可預測。
         self.ws_base = int(os.getenv("WS_BASE", "8443"))
         self.ws_timeout = int(os.getenv("WS_TIMEOUT", os.getenv("RFB_TIMEOUT", "15")))
+        # DevTools 埠 = cdp_base + display(只聽 127.0.0.1)。/ DevTools port per session (loopback only).
+        self.cdp_base = int(os.getenv("CDP_BASE", "9300"))
         self.homepage = DEFAULT_HOMEPAGE
         self.lang = DEFAULT_LANG
         self.kasm_password_file = KASM_PASSWORD_FILE
@@ -267,6 +275,7 @@ class SessionManager:
         with self._lock:
             display = self._alloc_display()
         ws_port = self.ws_base + display
+        cdp_port = self.cdp_base + display
         disp = f":{display}"
         lang = lang or self.lang            # 未指定 → 退回 env 預設(REMOTE_BROWSER_LANG)
         homepage = homepage or self.homepage  # 未指定 → 退回 env 預設(REMOTE_BROWSER_HOMEPAGE)
@@ -286,7 +295,8 @@ class SessionManager:
                     f"Last log lines:\n{self._tail(vnc_log)}")
             browser_cmd = self.browser_cmd.format(
                 proxy=proxy, homepage=homepage, lang=lang,
-                accept_lang=_accept_lang(lang), profile_flag=profile_flag)
+                accept_lang=_accept_lang(lang), profile_flag=profile_flag,
+                cdp_flag=f"--remote-debugging-port={cdp_port} --remote-debugging-address=127.0.0.1")
             # 桌布(不黑)—— 一次性;失敗不致命。
             if WALLPAPER_CMD:
                 try:
@@ -321,7 +331,7 @@ class SessionManager:
             raise
         sid = uuid.uuid4().hex
         with self._lock:
-            self._sessions[sid] = {"display": display, "ws_port": ws_port,
+            self._sessions[sid] = {"display": display, "ws_port": ws_port, "cdp_port": cdp_port,
                                    "procs": procs, "proxy": proxy,
                                    "profile_dir": profile_dir,
                                    # watchdog 重開 chromium 用 / for the chromium watchdog
@@ -330,6 +340,15 @@ class SessionManager:
         logger.info("session %s up: display %s ws %s profile %s (ephemeral)",
                     sid, disp, ws_port, profile_dir or "(chromium default)")
         return {"session_id": sid, "ws_port": ws_port}
+
+    def cdp(self, session_id, action):
+        """在該 session 的 chromium 上跑一個 agent 動作(見 cdp.py);沒有這個 session → KeyError。
+        Run one agent action on the session's chromium (see cdp.py); KeyError for an unknown session."""
+        with self._lock:
+            sess = self._sessions.get(session_id)
+        if not sess or not sess.get("cdp_port"):
+            raise KeyError(session_id)
+        return cdp.perform(sess["cdp_port"], action)
 
     def stop(self, session_id):
         with self._lock:
@@ -509,6 +528,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._auth_ok():
             return self._send(403, {"error": "forbidden"})
+        parts = self.path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "sessions" and parts[2] == "cdp":
+            return self._cdp(parts[1])
         if self.path != "/sessions":
             return self._send(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length", 0) or 0)
@@ -530,6 +552,26 @@ class _Handler(BaseHTTPRequestHandler):
             logger.exception("create failed")
             return self._send(500, {"error": str(e)})
         self._send(201, out)
+
+    def _cdp(self, sid):
+        """POST /sessions/<id>/cdp:MCP agent 的瀏覽器動作(導向、截圖、讀頁面、點、打字)。/ An agent's browser action."""
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            action = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError:
+            return self._send(400, {"error": "bad json"})
+        if not isinstance(action, dict):
+            return self._send(400, {"error": "bad json"})
+        try:
+            out = self.manager.cdp(sid, action)
+        except KeyError:
+            return self._send(404, {"error": "unknown session"})
+        except cdp.CdpError as e:
+            return self._send(422, {"error": str(e)})
+        except Exception as e:  # noqa: BLE001 — 動作失敗不能拖垮 session-manager / never take the manager down
+            logger.exception("cdp action failed")
+            return self._send(500, {"error": str(e)})
+        self._send(200, out)
 
     def do_DELETE(self):
         if not self._auth_ok():

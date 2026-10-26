@@ -322,3 +322,198 @@ async fn audit_lists_many_keys_and_removes_a_batch() {
         assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{}", r.text);
     }
 }
+
+/// 清單上的金鑰可以只裝到選定的帳號：擁有者兩個帳號都能用，金鑰只選 ubuntu → 只進 ubuntu；放寬 → 也進 root；
+/// 縮回 → 離開 ubuntu；null → 全部。上限仍是允許清單。
+/// A listed key can be limited to chosen accounts; widening installs it there, narrowing removes it.
+#[tokio::test]
+async fn key_goes_only_to_chosen_accounts() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("picky", &[("ubuntu", &[&lab.service]), ("root", &[&lab.service])], false).await;
+    boxm.account_home("ubuntu");
+    boxm.account_home("root");
+    let dev = lab.device(&alice, "picky", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let root = lab.username(&alice, &dev, "root").await;
+    let alice_key = key_id(&lab, &alice).await;
+    let to_ubuntu = [(Hop::Tunnel(&dev), "ubuntu")];
+    let to_root = [(Hop::Tunnel(&dev), "root")];
+    let entry = format!("device-keys/{alice_key}");
+
+    // 壞的選擇：空清單、不是這台的帳號。/ Bad choices: empty, or an account of another device.
+    for bad in [json!([]), json!([999_999]), json!("ubuntu")] {
+        let r = lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key], "accounts": bad})).await;
+        assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_accounts")), "{}", r.text);
+    }
+
+    // 只選 ubuntu。/ Only ubuntu.
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key], "accounts": [ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["entries"][0]["accounts"], json!([ubuntu]));
+    assert_eq!(r.json["my_keys"][0]["accounts"], json!([ubuntu]));
+    assert_eq!(r.json["account_ids"].as_array().unwrap().len(), 2, "{}", r.text);
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "pending")]));
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("ubuntu", "installed")]), "{}", r.text);
+    assert!(boxm.authorized_keys("ubuntu").contains(&alice.key.bare()));
+    assert!(!boxm.authorized_keys("root").contains(&alice.key.bare()));
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("installed", "alice", true)]));
+    assert_eq!(view_rows(&r.json, "root"), rows(&[]));
+    let ubuntu_rows = r.json["view"]["accounts"].as_array().unwrap().iter().find(|a| a["username"] == "ubuntu").unwrap()["rows"].as_array().unwrap().clone();
+    let alice_row = ubuntu_rows.iter().find(|row| row["state"] == "installed").unwrap();
+    assert_eq!(alice_row["accounts"], json!([ubuntu]), "{}", r.text);
+    assert_eq!(lab.laptop_exec(&alice, &to_ubuntu, "whereami").await.stdout, "ubuntu@picky");
+    assert!(!lab.laptop_exec(&alice, &to_root, "whoami").await.ok);
+    // 金鑰頁矩陣也帶選擇與帳號 id。/ The keys-page matrix carries the choice and the account ids.
+    let r = lab.app.get("/api/reverse/user/keys/devices", Some(&alice.token)).await;
+    assert_eq!(r.json[0]["keys"][0]["accounts"], json!([ubuntu]), "{}", r.text);
+    assert_eq!(r.json[0]["account_list"].as_array().unwrap().iter().map(|a| a["username"].as_str().unwrap()).collect::<Vec<_>>(), vec!["ubuntu", "root"]);
+
+    // 放寬到兩個。/ Widen to both.
+    let r = lab.app.patch(&path(dev.tunnel_id, &entry), Some(&alice.token), json!({"accounts": [root, ubuntu]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("root", "pending"), ("ubuntu", "installed")]));
+    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert!(boxm.authorized_keys("root").contains(&alice.key.bare()));
+    assert_eq!(lab.laptop_exec(&alice, &to_root, "whereami").await.stdout, "root@picky");
+
+    // 縮回只剩 root：ubuntu 上的變成「移除中」，同步後離開。/ Narrow to root: ubuntu's copy is removed.
+    let r = lab.app.patch(&path(dev.tunnel_id, &entry), Some(&alice.token), json!({"accounts": [root]})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[("removing", "alice", true)]), "{}", r.text);
+    assert_eq!(r.json["removals"][0]["username"], "ubuntu");
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(view_rows(&r.json, "ubuntu"), rows(&[]));
+    assert!(!boxm.authorized_keys("ubuntu").contains(&alice.key.bare()));
+    assert!(boxm.authorized_keys("root").contains(&alice.key.bare()));
+    assert!(!lab.laptop_exec(&alice, &to_ubuntu, "whoami").await.ok);
+
+    // null = 全部。/ null = every allowed account.
+    let r = lab.app.patch(&path(dev.tunnel_id, &entry), Some(&alice.token), json!({"accounts": null})).await;
+    assert_eq!(r.json["entries"][0]["accounts"], Value::Null, "{}", r.text);
+    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert!(boxm.authorized_keys("ubuntu").contains(&alice.key.bare()));
+    // 不在清單上的金鑰：404。/ Not listed: 404.
+    let r = lab.app.patch(&path(dev.tunnel_id, "device-keys/424242"), Some(&alice.token), json!({"accounts": null})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
+}
+
+/// Windows 裝置：管理員的金鑰寫到共用的 `administrators_authorized_keys`（就地改寫，檔案本身不換），一般帳號照舊。
+/// On a Windows device an administrator's keys go to the shared admin file, rewritten in place.
+#[tokio::test]
+async fn windows_administrators_use_the_shared_admin_file() {
+    use std::os::unix::fs::MetadataExt;
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { pretend_windows: true, windows_admins: &["nat"], ..Default::default() };
+    let boxm = lab.machine_with("winbox", &[("nat", &[&lab.service]), ("guest", &[&lab.service])], opts).await;
+    boxm.account_home("nat");
+    boxm.account_home("guest");
+    let admin_file = boxm.admin_authorized_keys_path();
+    std::fs::write(&admin_file, "# admins only\n").unwrap();
+    let inode = std::fs::metadata(&admin_file).unwrap().ino();
+    let dev = lab.device(&alice, "winbox", &boxm).await;
+    lab.username(&alice, &dev, "nat").await;
+    lab.username(&alice, &dev, "guest").await;
+    let alice_key = key_id(&lab, &alice).await;
+    let to_nat = [(Hop::Tunnel(&dev), "nat")];
+
+    assert!(!lab.laptop_exec(&alice, &to_nat, "whoami").await.ok);
+    lab.app.post(&path(dev.tunnel_id, "device-keys"), Some(&alice.token), json!({"user_key_ids": [alice_key]})).await;
+    let r = lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(targets(&r.json["entries"][0]), pairs(&[("guest", "installed"), ("nat", "installed")]));
+    assert_eq!(r.json["platform"]["windows"], true, "{}", r.text);
+    let accounts = r.json["view"]["accounts"].as_array().unwrap().clone();
+    let nat = accounts.iter().find(|a| a["username"] == "nat").unwrap();
+    let guest = accounts.iter().find(|a| a["username"] == "guest").unwrap();
+    assert_eq!((nat["windows_admin"].as_bool(), nat["file"].as_str()), (Some(true), Some("%ProgramData%\\ssh\\administrators_authorized_keys")));
+    assert_eq!((guest["windows_admin"].as_bool(), guest["file"].as_str()), (Some(false), Some("~/.ssh/authorized_keys")));
+    // 管理員的金鑰在共用檔裡（註解保留、檔案就地改寫），不在它自己的 ~/.ssh。/ In the shared file, in place; not in ~/.ssh.
+    let admin = boxm.admin_authorized_keys();
+    assert!(admin.starts_with("# admins only\n"), "{admin}");
+    assert!(admin.contains(&format!("{} telepy:alice/alice-laptop", alice.key.bare())), "{admin}");
+    assert_eq!(std::fs::metadata(&admin_file).unwrap().ino(), inode, "the admin file must be rewritten in place");
+    assert!(!boxm.authorized_keys("nat").contains(&alice.key.bare()));
+    assert!(boxm.authorized_keys("guest").contains(&alice.key.bare()));
+    assert_eq!(lab.laptop_exec(&alice, &to_nat, "whereami").await.stdout, "nat@winbox");
+    assert_eq!(lab.laptop_exec(&alice, &[(Hop::Tunnel(&dev), "guest")], "whereami").await.stdout, "guest@winbox");
+
+    // 移出清單：從共用檔移除，註解還在。/ Off the list: removed from the shared file, the comment stays.
+    lab.app.delete(&path(dev.tunnel_id, &format!("device-keys/{alice_key}")), Some(&alice.token)).await;
+    lab.app.post(&path(dev.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+    let admin = boxm.admin_authorized_keys();
+    assert!(!admin.contains(&alice.key.bare()), "{admin}");
+    assert!(admin.starts_with("# admins only\n"), "{admin}");
+    assert!(!lab.laptop_exec(&alice, &to_nat, "whoami").await.ok);
+}
+
+/// 手動（批次）移除可以還原：移掉的行記 7 天，還原接回檔尾、已經在檔案裡的跳過；還原兩次 = 什麼都不做。
+/// A manual removal can be undone: the lines are kept, restore appends them back, restoring twice is a no-op.
+#[tokio::test]
+async fn bulk_removal_can_be_undone() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("undo", &[("ubuntu", &[&lab.service])], false).await;
+    let home = boxm.account_home("ubuntu");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    let keys: Vec<String> = (0..3).map(|i| fake_ed25519(100 + i, &format!("fleet-{i}"))).collect();
+    std::fs::write(home.join(".ssh/authorized_keys"), format!("# fleet\n{}\n{}\nno-pty {}\n{}\n", lab.service.public, keys[0], keys[1], keys[2])).unwrap();
+    let dev = lab.device(&alice, "undo", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let lines = r.json["accounts"][0]["lines"].as_array().unwrap().clone();
+    let fp = |comment: &str| lines.iter().find(|l| l["comment"] == comment).unwrap()["fingerprint"].as_str().unwrap().to_string();
+
+    let remove = path(dev.tunnel_id, "authorized-keys/remove");
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": [fp("fleet-0"), fp("fleet-1")]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["keys"], 2);
+    let removal_id = r.json["removal_id"].as_i64().expect("removal_id");
+    let after = boxm.authorized_keys("ubuntu");
+    assert_eq!(after, format!("# fleet\n{}\n{}\n", lab.service.public, keys[2]));
+
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys/removals"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["retention_days"], 7);
+    assert_eq!(r.json["removals"][0]["id"], removal_id);
+    assert_eq!((r.json["removals"][0]["keys"].as_i64(), r.json["removals"][0]["lines"].as_i64()), (Some(2), Some(2)));
+    assert_eq!(r.json["removals"][0]["removed_by"], "alice");
+    assert!(r.json["removals"][0]["restored_at"].is_null());
+
+    // 還原：兩行接回檔尾（options 也保留）。/ Restore: both lines come back at the end, options kept.
+    let restore = path(dev.tunnel_id, &format!("authorized-keys/restore/{removal_id}"));
+    let r = lab.app.post(&restore, Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["restored"].as_i64(), r.json["skipped"].as_i64()), (Some(2), Some(0)));
+    assert_eq!(boxm.authorized_keys("ubuntu"), format!("{after}{}\nno-pty {}\n", keys[0], keys[1]));
+    // 再還原一次：都在了，檔案不變。/ Again: everything is present, nothing changes.
+    let r = lab.app.post(&restore, Some(&alice.token), json!({})).await;
+    assert_eq!((r.json["restored"].as_i64(), r.json["skipped"].as_i64()), (Some(0), Some(2)), "{}", r.text);
+    assert_eq!(boxm.authorized_keys("ubuntu"), format!("{after}{}\nno-pty {}\n", keys[0], keys[1]));
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys/removals"), Some(&alice.token)).await;
+    assert!(r.json["removals"][0]["restored_at"].is_string(), "{}", r.text);
+    // 不存在的紀錄、單把移除也有 removal_id、沒權限的人 403。/ Unknown record; single removal has an id too; non-managers 403.
+    let r = lab.app.post(&path(dev.tunnel_id, "authorized-keys/restore/999999"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprint": fp("fleet-2")})).await;
+    assert!(r.json["removal_id"].is_i64(), "{}", r.text);
+    let r = lab.app.post(&remove, Some(&alice.token), json!({"username": "ubuntu", "fingerprints": ["SHA256:nope"]})).await;
+    assert!(r.json["removal_id"].is_null(), "{}", r.text);
+    let bob = lab.user("bob").await;
+    let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys/removals"), Some(&bob.token)).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
+}

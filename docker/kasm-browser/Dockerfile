@@ -100,6 +100,8 @@ print("openbox-rc.xml generated and validated")
 PY
 
 COPY session_manager.py /app/session_manager.py
+# MCP agent 的瀏覽器動作（CDP，只聽容器內 loopback）。/ Agent browser actions over CDP (container loopback only).
+COPY cdp.py /app/cdp.py
 # 桌面捷徑:關掉瀏覽器後桌面顯示桌布 + tint2 面板上的「開啟瀏覽器」捷徑(不自動重啟、不黑畫面)。
 COPY open-browser.sh /app/open-browser.sh
 # openbox 根選單(右鍵桌面):取代 Debian 預設 —— 預設的「Web browser」項目會執行裸的

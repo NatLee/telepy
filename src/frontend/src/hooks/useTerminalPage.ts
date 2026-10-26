@@ -24,9 +24,9 @@ import { getWsOrigin } from "@/lib/websocket";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
-import { loadXtermDeps, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
-import { terminalFontFamily, type ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
+import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
@@ -374,7 +374,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         pendingCreatesRef.current += 1;
         let deps: { Terminal: any; FitAddon: any };
         try {
-            [deps] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font)]);
+            [deps] = await Promise.all([loadXtermDeps(), waitForFont(resolvedRef.current.font, resolvedRef.current.bold !== "bright")]);
         } finally {
             // 卸載時計數已歸零,作廢的建立不再扣。/ Unmount already reset the count; an aborted create doesn't subtract.
             if (generation === generationRef.current) pendingCreatesRef.current -= 1;
@@ -394,16 +394,11 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         // 等待期間外觀可能變了,用最新的;之後的變更由下方的外觀 effect 即時套用到所有分頁。
         // Use the latest look (it may have changed while awaiting); later changes reach every tab via the effects below.
         const look = resolvedRef.current;
-        const term = new Terminal({
-            cursorBlink: true,
-            theme: look.scheme.theme,
-            fontFamily: terminalFontFamily(look.font, resolveCssVar),
-            fontSize: look.fontSize,
-            lineHeight: 1.2,
-        });
+        const term = new Terminal({ cursorBlink: true, ...xtermLookOptions(look) });
         const fit = new FitAddon();
         term.loadAddon(fit);
         term.open(el);
+        applyLigatures(term, look.ligatures);
 
         const s: Session = {
             id,

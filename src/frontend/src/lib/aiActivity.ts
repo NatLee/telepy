@@ -4,12 +4,24 @@
  * AI activity helpers: tool categories (commands / files / sessions / tunnels & network), filtering and counts,
  * which details are commands or paths, and duration / size formatting.
  */
-export type ToolCategory = "exec" | "files" | "session" | "read";
+export type ToolCategory = "exec" | "files" | "browser" | "session" | "read";
 export type ToolFilter = "all" | ToolCategory;
-export const TOOL_FILTERS: ToolFilter[] = ["all", "exec", "files", "session", "read"];
+export const TOOL_FILTERS: ToolFilter[] = ["all", "exec", "files", "browser", "session", "read"];
 
 const CATEGORIES: Record<string, ToolCategory> = {
     ssh_exec: "exec",
+    shell_send: "exec",
+    shell_read: "exec",
+    shell_resize: "exec",
+    shell_open: "session",
+    shell_close: "session",
+    browser_open: "browser",
+    browser_navigate: "browser",
+    browser_read: "browser",
+    browser_screenshot: "browser",
+    browser_click: "browser",
+    browser_type: "browser",
+    browser_close: "browser",
     sftp_list: "files",
     sftp_read: "files",
     sftp_write: "files",
@@ -25,15 +37,15 @@ export function toolCategory(tool: string): ToolCategory | null {
     return CATEGORIES[tool] ?? null;
 }
 
-/** 內容是指令或路徑（用等寬的程式碼區塊、可複製），其他是一般說明文字。/ Commands and paths get a code block. */
+/** 內容是指令、路徑或網址（用等寬的程式碼區塊、可複製），其他是一般說明文字。/ Commands, paths and URLs get a code block. */
 export function isCodeDetail(tool: string): boolean {
     const c = toolCategory(tool);
-    return c === "exec" || c === "files";
+    return c === "exec" || c === "files" || tool === "browser_navigate";
 }
 
-/** 會改動裝置的工具（標籤用強調色）。/ Tools that change the device (emphasised badge). */
+/** 會改動裝置（或替使用者在網頁上動手）的工具（標籤用強調色）。/ Tools that change things (emphasised badge). */
 export function isWriteTool(tool: string): boolean {
-    return tool === "ssh_exec" || tool === "sftp_write";
+    return ["ssh_exec", "sftp_write", "shell_send", "browser_click", "browser_type"].includes(tool);
 }
 
 /** 篩選需要的欄位（AiActivityRow 是它的超集）。/ The fields the filters read (AiActivityRow is a superset). */
@@ -77,7 +89,7 @@ export interface CallCounts {
 /** 分類鈕與「失敗」鈕上的數字：都已套用搜尋；失敗數再套用目前的分類。/ Numbers on the filters, after the search. */
 export function countCalls<T extends CallLike>(calls: T[], query: string, tool: ToolFilter, label?: (tool: string) => string): CallCounts {
     const q = query.trim().toLowerCase();
-    const tools: Record<ToolFilter, number> = { all: 0, exec: 0, files: 0, session: 0, read: 0 };
+    const tools: Record<ToolFilter, number> = { all: 0, exec: 0, files: 0, browser: 0, session: 0, read: 0 };
     let failed = 0;
     for (const c of calls) {
         if (!matchesQuery(c, q, label)) continue;
