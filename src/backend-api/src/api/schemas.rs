@@ -52,9 +52,17 @@ pub struct RefreshRequest {
     pub refresh: String,
 }
 
+/// `/api/auth/token/refresh`：新的 access token 和換發的 refresh token（舊的只在 60 秒寬限內還能用）。
+/// A fresh access token and the rotated refresh token (the old one works for a 60-second grace only).
 #[derive(ToSchema)]
-pub struct AccessToken {
+pub struct RefreshResponse {
     pub access_token: String,
+    pub refresh_token: String,
+}
+
+#[derive(ToSchema)]
+pub struct LogoutRequest {
+    pub refresh: String,
 }
 
 #[derive(ToSchema)]

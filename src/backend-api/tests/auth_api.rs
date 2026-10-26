@@ -70,11 +70,12 @@ async fn setup_status_register_login_profile_refresh() {
     let r = app.get("/api/auth/user/profile", Some(&refresh)).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 
-    // refresh
+    // refresh：換發新的 access + refresh（詳細規則在 tests/web_sessions.rs）。/ Rotation; the rules live in tests/web_sessions.rs.
     let r = app.post("/api/auth/token/refresh", None, json!({"refresh": refresh})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     assert!(r.json["access_token"].is_string());
-    assert!(r.json.get("refresh_token").is_none());
+    assert!(r.json["refresh_token"].is_string(), "the refresh token rotates: {}", r.text);
+    assert!(r.json.get("access").is_none() && r.json.get("refresh").is_none(), "simplejwt keys must be renamed");
     let r = app.post("/api/auth/token/refresh", None, json!({"refresh": access})).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
     assert_eq!(r.json["code"], "token_not_valid");

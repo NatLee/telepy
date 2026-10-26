@@ -96,7 +96,7 @@ impl AppState {
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("reqwest client");
-        let jwt = Jwt::new(&config.secret_key, config.access_token_lifetime, config.refresh_token_lifetime);
+        let jwt = Jwt::new(&config.secret_key);
         let remote_browser = Arc::new(RemoteBrowser::new(&config, http.clone()));
         let desktop = Arc::new(Desktop::new(&config));
         let rustdesk = Arc::new(crate::rustdesk::RustDesk::new());

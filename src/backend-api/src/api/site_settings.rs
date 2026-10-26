@@ -53,6 +53,8 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "mfa_require_passkey", kind: Kind::Bool, label: "Require a passkey", description: "要求每個帳號都至少註冊一把 passkey。還沒註冊的使用者登入後只能先完成註冊,才能使用其他功能。passkey 需要以網域名稱(不是 IP)開啟網站。開啟前你自己的帳號必須已經有 passkey。變更後立即生效。" },
     FieldMeta { name: "recording_retention_days", kind: Kind::Int, label: "Keep terminal recordings (days)", description: "開了「錄下網頁終端機」的隧道，錄影檔要留幾天；超過就連檔案一起刪掉（每小時清一次）。設 0 = 一直留。" },
     FieldMeta { name: "command_approval_timeout", kind: Kind::Int, label: "Command approval timeout (seconds)", description: "指令規則要求核准時，等 owner / ADMIN 多久(秒)；沒人回應就當作拒絕，終端機那一行被取消。核准後 agent 的同一個指令 10 分鐘內可以跑一次。" },
+    FieldMeta { name: "signin_lifetime", kind: Kind::Int, label: "Stay signed in for (seconds)", description: "網頁登入沒有任何造訪多久後要重新登入(秒)。只要有來,效期就從那時重新起算(分頁開著時瀏覽器會在背景自動續期),所以常用的人不會被登出;登出則立刻結束。300(5 分鐘)到 31536000(365 天)。" },
+    FieldMeta { name: "signin_access_lifetime", kind: Kind::Int, label: "Access token lifetime (seconds)", description: "每顆短效 access token 的有效時間(秒);到期前瀏覽器會自動用登入 session 換一顆新的,使用者不會察覺。越短,外洩的 token 能用的時間越短。60(1 分鐘)到 86400(24 小時)。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
     FieldMeta { name: "desktop_enabled", kind: Kind::Bool, label: "Allow remote desktop", description: "允許在網頁裡開裝置（或它區網裡主機）的 RDP / VNC 桌面。連線由裝置的 sshd 轉接到目標，經 guacd 轉成瀏覽器畫面；每個 session 都記錄在該隧道的 Logs。關閉後不能再開新的 session，已開著的不受影響。" },
     FieldMeta { name: "desktop_max_sessions", kind: Kind::Int, label: "Remote Desktop Max Concurrent Sessions", description: "同時可開的遠端桌面 session 數上限（整站合計）。達到上限時新的連線會被拒絕並提示稍後再試。設 0 = 不限制。" },
@@ -89,6 +91,8 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("mfa_require_passkey".into(), json!(s.mfa_require_passkey));
     m.insert("recording_retention_days".into(), json!(s.recording_retention_days));
     m.insert("command_approval_timeout".into(), json!(s.command_approval_timeout));
+    m.insert("signin_lifetime".into(), json!(s.signin_lifetime));
+    m.insert("signin_access_lifetime".into(), json!(s.signin_access_lifetime));
     Value::Object(m)
 }
 
@@ -199,6 +203,12 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
         ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
         ("command_approval_timeout", SettingValue::Int(n)) if !(30..=86_400).contains(n) => Err(ApiError::field(name, "Must be between 30 and 86400 seconds.")),
+        ("signin_lifetime", SettingValue::Int(n)) if !crate::auth::sessions::SIGNIN_LIFETIME_RANGE.contains(n) => {
+            Err(ApiError::field(name, "Must be between 300 seconds (5 minutes) and 31536000 seconds (365 days)."))
+        }
+        ("signin_access_lifetime", SettingValue::Int(n)) if !crate::auth::sessions::ACCESS_LIFETIME_RANGE.contains(n) => {
+            Err(ApiError::field(name, "Must be between 60 seconds (1 minute) and 86400 seconds (24 hours)."))
+        }
         _ => Ok(()),
     }
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { MonitorPlay, MonitorX, AlertCircle, Loader2, Languages } from "lucide-react";
-import { readJson, responseError } from "@/lib/api";
+import { apiFetch, readJson, responseError } from "@/lib/api";
 import { getWsOrigin } from "@/lib/wsCommon";
 import KasmUI from "@/vendor/kasm-novnc/app/ui.js";
 import { useI18n } from "@/lib/i18n";
@@ -10,7 +10,6 @@ import type { TranslationKey } from "@/locales/en";
 export interface RemoteBrowserPanelProps {
     serverId: string;
     username: string;
-    accessToken: string | null;
     onActiveChange?: (isActive: boolean) => void;
 }
 
@@ -73,7 +72,6 @@ const loadClient = () => {
 export function RemoteBrowserPanel({
     serverId,
     username,
-    accessToken,
     onActiveChange,
 }: RemoteBrowserPanelProps) {
     const { t } = useI18n();
@@ -91,14 +89,13 @@ export function RemoteBrowserPanel({
     const connectedRef = useRef(false);
     const userStoppedRef = useRef(false);
 
+    // token 由 apiFetch 從 localStorage 取最新的（背景續期後 context 裡的不會更新）。/ apiFetch reads the live token.
     const postStop = useCallback((sid: string) => {
-        const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
-        return fetch(`${apiBase}/api/reverse/server/remote-browser/${sid}/stop`, {
+        return apiFetch(`/api/reverse/server/remote-browser/${sid}/stop`, {
             method: "POST",
-            headers: { ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
             keepalive: true,
         }).catch(() => { });
-    }, [accessToken]);
+    }, []);
 
     // 統一收尾:冪等。RFB 的 disconnect 事件、ws close、使用者 Stop 都走這裡。
     const cleanup = useCallback((notifyBackend: boolean) => {
@@ -198,17 +195,9 @@ export function RemoteBrowserPanel({
         connectedRef.current = false;
         loadClient().catch(() => { });   // 預熱 client chunk,與 start API 並行
         try {
-            const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
-            const res = await fetch(
-                `${apiBase}/api/reverse/server/${serverId}/remote-browser/start`,
-                {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-                    },
-                    body: JSON.stringify({ username }),
-                },
+            const res = await apiFetch(
+                `/api/reverse/server/${serverId}/remote-browser/start`,
+                { method: "POST", body: JSON.stringify({ username }) },
             );
             if (!res.ok) {
                 const data = await readJson(res);
@@ -229,8 +218,8 @@ export function RemoteBrowserPanel({
             ws.onopen = () => {
                 ws.send(JSON.stringify({
                     type: "auth",
-                    token: typeof window !== "undefined"
-                        ? localStorage.getItem("accessToken") : accessToken,
+                    // 從 localStorage 取最新的 token（背景續期後 context 裡的不會更新）。/ The live token, not the context's.
+                    token: typeof window !== "undefined" ? localStorage.getItem("accessToken") : null,
                 }));
             };
             // setup 階段:等後端 {type:"ready"} 再把 socket 交給 KasmVNC client。
@@ -258,7 +247,7 @@ export function RemoteBrowserPanel({
             setError(err.message || t("browser.unknownError"));
             cleanup(true);
         }
-    }, [serverId, username, accessToken, attachKasmClient, cleanup, t]);
+    }, [serverId, username, attachKasmClient, cleanup, t]);
 
     const stopSession = useCallback(() => {
         userStoppedRef.current = true;
@@ -289,11 +278,7 @@ export function RemoteBrowserPanel({
         const id = setInterval(() => {
             const sid = sessionIdRef.current;
             if (!sid) return;
-            const apiBase = process.env.NEXT_PUBLIC_API_BASE || "";
-            fetch(`${apiBase}/api/reverse/server/remote-browser/${sid}/ping`, {
-                method: "POST",
-                headers: { ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
-            }).then((res) => {
+            apiFetch(`/api/reverse/server/remote-browser/${sid}/ping`, { method: "POST" }).then((res) => {
                 if (res.status === 404) {
                     setError((e) => e || t("browser.sessionNotFound"));
                     cleanup(false);
@@ -301,7 +286,7 @@ export function RemoteBrowserPanel({
             }).catch(() => { });   // 暫時性網路錯誤不動作 / transient errors: no action
         }, 15000);
         return () => clearInterval(id);
-    }, [phase, accessToken, cleanup, t]);
+    }, [phase, cleanup, t]);
 
     // 卸載 / 關閉分頁時收掉 session
     useEffect(() => {

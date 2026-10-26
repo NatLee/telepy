@@ -9,7 +9,7 @@ use super::sign_ins::{self, Attempt};
 use super::{body_object, AppJson};
 use crate::auth::password::{check_password, make_password, unusable_password};
 use crate::auth::google::{GoogleClaims, GoogleError};
-use crate::auth::{AuthUser, TokenType};
+use crate::auth::AuthUser;
 use crate::client_ip::ClientMeta;
 use crate::db::{self, users::NewUser};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
@@ -22,6 +22,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(setup_status))
         .routes(routes!(obtain_token))
         .routes(routes!(refresh_token))
+        .routes(routes!(logout))
         .routes(routes!(verify_token))
         .routes(routes!(profile))
         .routes(routes!(register))
@@ -35,11 +36,10 @@ async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "first_time_setup": n == 0 })))
 }
 
-pub(crate) fn token_pair(state: &AppState, user_id: i64) -> Value {
-    json!({
-        "refresh_token": state.jwt.refresh(user_id),
-        "access_token": state.jwt.access(user_id),
-    })
+/// 登入完成 → 開一個 session、發 `{refresh_token, access_token}`（`auth::sessions`）。
+/// Login done → start a session and issue the pair (`auth::sessions`).
+pub(crate) async fn token_pair(state: &AppState, user_id: i64, meta: &ClientMeta) -> ApiResult<Value> {
+    crate::auth::sessions::issue(state, user_id, meta).await
 }
 
 fn required_fields_error(body: &Value, fields: &[&str]) -> Option<ApiError> {
@@ -86,20 +86,33 @@ async fn obtain_token(State(state): State<AppState>, meta: ClientMeta, AppJson(b
     Ok(Json(super::mfa::complete_login(&state, &user, "password", &meta).await?))
 }
 
-fn token_not_valid() -> ApiError {
-    ApiError::new(StatusCode::UNAUTHORIZED, json!({ "detail": "Token is invalid or expired", "code": "token_not_valid" }))
-}
+use crate::auth::sessions::token_not_valid;
 
-/// simplejwt TokenRefreshView（ROTATE_REFRESH_TOKENS=False：只回新的 access）。
-#[utoipa::path(post, path = "/api/auth/token/refresh", tag = "Login", request_body = super::schemas::RefreshRequest, responses((status = 200, body = super::schemas::AccessToken), (status = 401, description = "Token is invalid or expired", body = super::schemas::ErrorBody)))]
-async fn refresh_token(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+/// simplejwt TokenRefreshView，但 ROTATE_REFRESH_TOKENS：回新的 access **和** 新的 refresh（舊的只在寬限內還能用），
+/// 登入效期每次續期都往後推（網站設定 `signin_lifetime`）。/ Like simplejwt's refresh view with rotation: a new
+/// access **and** refresh token (the old one works only within the grace); the sign-in's expiry slides.
+#[utoipa::path(post, path = "/api/auth/token/refresh", tag = "Login", request_body = super::schemas::RefreshRequest, responses((status = 200, body = super::schemas::RefreshResponse), (status = 401, description = "Token is invalid, expired, revoked or already replaced", body = super::schemas::ErrorBody)))]
+async fn refresh_token(State(state): State<AppState>, meta: ClientMeta, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let body = body_object(&body);
     if let Some(e) = required_fields_error(&body, &["refresh"]) {
         return Err(e);
     }
     let token = json_str(&body, "refresh").unwrap_or_default();
-    let claims = state.jwt.verify(&token, TokenType::Refresh).map_err(|_| token_not_valid())?;
-    Ok(Json(json!({ "access_token": state.jwt.access(claims.user_id) })))
+    Ok(Json(crate::auth::sessions::refresh(&state, &token, &meta).await?))
+}
+
+/// 登出：撤銷這顆 refresh token 的登入 session（之後不能再續期）。不需要 access token（它可能已經過期）；
+/// 無效的 token 也回 200（沒東西可撤）。/ Logout: revoke the refresh token's sign-in session. No access
+/// token needed (it may have expired); an invalid token is still a 200 (nothing to revoke).
+#[utoipa::path(post, path = "/api/auth/logout", tag = "Login", request_body = super::schemas::LogoutRequest, responses((status = 200, description = "{\"revoked\": bool}", body = Object)))]
+async fn logout(State(state): State<AppState>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let body = body_object(&body);
+    if let Some(e) = required_fields_error(&body, &["refresh"]) {
+        return Err(e);
+    }
+    let token = json_str(&body, "refresh").unwrap_or_default();
+    let revoked = crate::auth::sessions::revoke(&state, &token).await?;
+    Ok(Json(json!({ "revoked": revoked })))
 }
 
 /// simplejwt TokenVerifyView：任何型別的有效 token 都回 200 `{}`。

@@ -801,7 +801,7 @@ impl Lab {
     /// 直接在 DB 建帳號並簽 access token（不走註冊 / 登入：debug build 的 pbkdf2 一百萬次要好幾秒）。
     async fn account(&self, name: &str) -> (i64, String) {
         let u = db::users::create(&self.app.state.db, db::users::NewUser { username: name, password_hash: "!", email: "", first_name: "", last_name: "" }).await.unwrap();
-        (u.id, self.app.state.jwt.access(u.id))
+        (u.id, self.app.state.jwt.access(u.id, std::time::Duration::from_secs(3600)))
     }
 
     /// 一位 Telepy 使用者（已有 token），並登記他筆電的個人金鑰。

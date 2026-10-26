@@ -153,6 +153,8 @@ async fn initializer() -> Response {
       const access = d.access_token || d.access;
       if (!access) return false;
       localStorage.setItem("accessToken", access);
+      // 後端每次續期都換發 refresh token（舊的只在寬限內還能用）。/ The refresh token rotates on every renewal.
+      if (d.refresh_token) localStorage.setItem("refreshToken", d.refresh_token);
       return true;
     }} catch {{ return false; }}
   }}
