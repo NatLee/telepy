@@ -15,7 +15,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorSmartphone, MonitorX, Plus, RefreshCw, ScreenShare, ShieldCheck, TextCursorInput, Waypoints, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorSmartphone, MonitorX, Plus, RefreshCw, Route, ScreenShare, ShieldCheck, TextCursorInput, Waypoints, XCircle } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -44,6 +44,8 @@ import { DesktopViewer, loadGuacamole, type DesktopViewerHandle } from "@/compon
 import { RustDeskViewer, type RustDeskQuality, type RustDeskViewerHandle } from "@/components/desktop/RustDeskViewer";
 import { loadRustDeskCore } from "@/lib/rustdesk";
 import { DesktopInfoDialog } from "@/components/desktop/DesktopInfoDialog";
+import { ConnectionWaysDialog } from "@/components/desktop/ConnectionWays";
+import { wayFor } from "@/lib/connectionWays";
 import { DesktopStatsButton } from "@/components/desktop/DesktopStats";
 import type { FlowContext } from "@/components/desktop/DesktopFlow";
 import { CommandBar } from "@/components/cheatsheet/CommandView";
@@ -119,6 +121,8 @@ function DesktopPageInner() {
     const rdViewerRef = useRef<RustDeskViewerHandle | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const [infoOpen, setInfoOpen] = useState(false);
+    // 「比較連線方式」：RDP / VNC、RustDesk 經隧道、RustDesk 伺服器三條路的差別。/ The ways-to-connect comparison.
+    const [waysOpen, setWaysOpen] = useState(false);
     const [pasteOpen, setPasteOpen] = useState(false);
     const [pasteText, setPasteText] = useState("");
     const [typeOpen, setTypeOpen] = useState(false);
@@ -226,11 +230,17 @@ function DesktopPageInner() {
             <MonitorX size={15} /> <span className="hidden sm:inline">{t("desktop.disconnect")}</span>
         </Button>
     );
-    const infoButton = (
-        <Button variant="outline" onClick={() => setInfoOpen(true)}>
-            <Info size={16} /> {t("desktop.howItWorks")}
-        </Button>
+    const headerActions = (
+        <>
+            <Button variant="outline" onClick={() => setWaysOpen(true)}>
+                <Route size={16} /> {t("desktop.ways.button")}
+            </Button>
+            <Button variant="outline" onClick={() => setInfoOpen(true)}>
+                <Info size={16} /> {t("desktop.howItWorks")}
+            </Button>
+        </>
     );
+    const currentWay = wayFor({ protocol: form.protocol, idServer: !!rdDevice });
     const connected = phase === "connected";
     const isDeviceDesktop = !!session && session.target.lan_host_id === null;
     // RustDesk：畫質預設換了就告訴核心（連上時套一次）。/ RustDesk: push the quality profile to the core (once on connect too).
@@ -242,7 +252,7 @@ function DesktopPageInner() {
 
     return (
         <div className="animate-fade-in-up space-y-6">
-            <PageHeader icon={<ScreenShare />} title={t("desktop.title")} description={t("desktop.description")} actions={!session && !rdSession && infoButton} />
+            <PageHeader icon={<ScreenShare />} title={t("desktop.title")} description={t("desktop.description")} actions={!session && !rdSession && headerActions} />
 
             {session ? (
                 <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
@@ -495,7 +505,7 @@ function DesktopPageInner() {
                     </div>
                 </div>
             ) : (
-                <ConnectPanel state={state} actions={actions} onInfo={() => setInfoOpen(true)} />
+                <ConnectPanel state={state} actions={actions} onInfo={() => setInfoOpen(true)} onCompare={() => setWaysOpen(true)} />
             )}
 
             {!session && !rdSession && endedNormally && phase === "idle" && <Callout tone="info">{t("desktop.ended")}</Callout>}
@@ -506,7 +516,8 @@ function DesktopPageInner() {
                 </Callout>
             )}
 
-            <DesktopInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} />
+            <DesktopInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={ctx} onCompare={() => { setInfoOpen(false); setWaysOpen(true); }} />
+            <ConnectionWaysDialog isOpen={waysOpen} onClose={() => setWaysOpen(false)} current={currentWay} />
             <Modal
                 isOpen={pasteOpen}
                 onClose={() => setPasteOpen(false)}
@@ -651,7 +662,7 @@ function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; acti
     );
 }
 
-function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
+function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState; actions: PageActions; onInfo: () => void; onCompare: () => void }) {
     const { t, tn } = useI18n();
     const { tunnels, loading, tunnel, host, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk, rdDevice, rdDevices } = state;
     const portOk = isValidPort(form.port);
@@ -731,7 +742,14 @@ function ConnectPanel({ state, actions, onInfo }: { state: PageState; actions: P
                     </NativeSelect>
                 </Field>
 
-                <Field label={t("desktop.field.protocol")}>
+                <Field
+                    label={t("desktop.field.protocol")}
+                    hint={
+                        <button type="button" onClick={onCompare} className="inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline">
+                            <Route size={12} aria-hidden /> {t("desktop.ways.hint")}
+                        </button>
+                    }
+                >
                     <Segmented options={protocolOptions} value={form.protocol} onChange={actions.setProtocol} fullWidth aria-label={t("desktop.field.protocol")} />
                 </Field>
 
