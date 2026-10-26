@@ -90,6 +90,29 @@ impl LineTracker {
         self.anchor.is_some()
     }
 
+    /// 現在畫面上的文字（每列一行，尾端空白去掉；MCP 的 `shell_read` 給 agent 看 TUI 用）。
+    /// The screen as text, one line per row with trailing blanks trimmed (what MCP's `shell_read` shows an agent).
+    pub fn screen_text(&self) -> String {
+        let screen = self.parser.screen();
+        let rows = screen.size().0.get();
+        let mut lines: Vec<String> = (0..rows).map(|r| screen.contents_between(r, 0, r, screen.size().1.get()).trim_end().to_string()).collect();
+        while lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
+    }
+
+    /// 游標位置 (row, col)。/ The cursor position.
+    pub fn cursor(&self) -> (u16, u16) {
+        self.parser.screen().cursor_position()
+    }
+
+    /// 畫面大小 (rows, cols)。/ The screen size.
+    pub fn size(&self) -> (u16, u16) {
+        let (r, c) = self.parser.screen().size();
+        (r.get(), c.get())
+    }
+
     /// 這次 Enter 可能在跑的指令（幾種讀法，任何一種符合規則就算）；第一個是給人看的那一行。空 = 沒打東西。
     /// Readings of what this Enter runs (a rule matching any of them counts); the first is the one shown to people.
     /// Empty = nothing was typed.
@@ -333,6 +356,15 @@ mod tests {
         assert!(!t.started());
         t.output(b"\x1b[?1049l");
         assert!(!t.full_screen());
+    }
+
+    #[test]
+    fn screen_text_and_cursor() {
+        let mut t = LineTracker::new(4, 10);
+        t.output(b"hello\r\nworld   \r\n$ ");
+        assert_eq!(t.screen_text(), "hello\nworld\n$");
+        assert_eq!(t.cursor(), (2, 2));
+        assert_eq!(t.size(), (4, 10));
     }
 
     #[test]

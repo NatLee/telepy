@@ -43,6 +43,7 @@ pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
         "expires_at": db_to_iso(&s.expires_at(), tz),
         "idle_timeout_s": s.idle_timeout.as_secs(),
         "commands": s.commands(),
+        "shells": s.shell_count(),
         "busy": s.busy(),
     })
 }

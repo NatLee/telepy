@@ -220,6 +220,15 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
             let what = session_what(lang, s(d, "kind"), s(d, "account"));
             tri(lang, format!("{by} opened {what} on {t}"), format!("{by} 在 {t} 開了{what}"), format!("{by} が {t} で{what}を開きました"))
         }
+        Kind::McpSessionOpened if s(d, "kind") == "browser" => {
+            let (client, account) = (s(d, "client"), s(d, "account"));
+            tri(
+                lang,
+                format!("{client} ({by}) opened a remote browser through {t} as {account}"),
+                format!("{client}（{by}）以 {account} 經 {t} 開了遠端瀏覽器"),
+                format!("{client}（{by}）が {account} として {t} 経由のリモートブラウザを開きました"),
+            )
+        }
         Kind::McpSessionOpened => {
             let (client, account) = (s(d, "client"), s(d, "account"));
             tri(
@@ -227,6 +236,15 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
                 format!("{client} ({by}) opened an SSH session to {t} as {account}"),
                 format!("{client}（{by}）以 {account} 開了到 {t} 的 SSH session"),
                 format!("{client}（{by}）が {account} として {t} への SSH セッションを開きました"),
+            )
+        }
+        Kind::McpSessionClosed if s(d, "kind") == "browser" => {
+            let (client, reason) = (s(d, "client"), s(d, "reason"));
+            tri(
+                lang,
+                format!("The remote browser of {client} ({by}) on {t} was closed ({reason})"),
+                format!("{client}（{by}）在 {t} 的遠端瀏覽器已關閉（{reason}）"),
+                format!("{client}（{by}）の {t} 経由のリモートブラウザが終了しました（{reason}）"),
             )
         }
         Kind::McpSessionClosed => {

@@ -47,6 +47,7 @@ fn recording_json(r: &Recording, tunnel_name: Option<&str>, can_delete: bool) ->
         "user": { "id": r.user_id, "username": r.username },
         "os_user": r.os_user,
         "lan_host": r.lan_host,
+        "kind": r.kind,
         "started_at": db_to_iso_utc_z(&r.started_at),
         "ended_at": r.ended_at.as_deref().map(db_to_iso_utc_z),
         "live": r.ended_at.is_none(),

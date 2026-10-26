@@ -26,7 +26,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::ai::{self, AiSession, CloseReason, OpenRequest};
+use crate::ai::{self, shell, AiBrowser, AiSession, AiShell, CloseReason, OpenRequest};
 use crate::client_ip::ClientMeta;
 use crate::command_rules::{self, Action, AgentApproval, Requester, Source};
 use crate::auth::mcp::{self as mcp_auth, McpAuthError, McpPrincipal};
@@ -43,7 +43,12 @@ working. Commands run without a TTY: avoid interactive programs and pagers (use 
 Output is truncated to max_output_bytes per stream (start and end are kept). The tunnel owner is notified when you \
 open a session on a tunnel shared with the user. Command rules may block a command or hold it until the tunnel owner \
 approves it in Telepy: don't try to get around a rule; for a held command, tell the user and run exactly the same \
-command again once they approve it.";
+command again once they approve it. For interactive programs (TUIs, prompts, REPLs) open a shell on a session with \
+shell_open, type with shell_send (control characters such as \\u0003 for Ctrl+C are allowed; press_enter adds Enter) and \
+read with shell_read, which returns the new output and the current screen as text. With the browser:use permission, \
+browser_open starts a real Chromium that browses through the device (so it reaches the device's LAN and localhost); \
+drive it with browser_navigate / browser_read / browser_click / browser_type / browser_screenshot and close it with \
+browser_close.";
 
 // ---------------------------------------------------------------- HTTP wiring
 
@@ -186,6 +191,112 @@ pub struct WriteArgs {
     pub append: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShellOpenArgs {
+    /// session_id returned by ssh_session_open
+    pub session_id: String,
+    /// Terminal width in columns (default 120, 20–500)
+    pub cols: Option<u32>,
+    /// Terminal height in rows (default 40, 5–200)
+    pub rows: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShellSendArgs {
+    /// shell_id returned by shell_open
+    pub shell_id: String,
+    /// Keystrokes to send, as text; control characters are allowed (e.g. "\u0003" = Ctrl+C, "\u001b" = Esc, "\r" = Enter)
+    pub input: String,
+    /// Press Enter after the input (default false)
+    pub press_enter: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShellReadArgs {
+    /// shell_id returned by shell_open
+    pub shell_id: String,
+    /// Wait up to this many milliseconds for new output when there is none yet (default 1500, max 10000)
+    pub timeout_ms: Option<u64>,
+    /// Bytes of output returned at most (default 65536, max 1048576); `more` tells whether more is waiting
+    pub max_bytes: Option<usize>,
+    /// Include the current screen as text (default true)
+    pub screen: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShellResizeArgs {
+    /// shell_id returned by shell_open
+    pub shell_id: String,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ShellArgs {
+    /// shell_id returned by shell_open
+    pub shell_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserOpenArgs {
+    /// Tunnel id from list_tunnels; the browser reaches the web (and the device's LAN / localhost) through this device
+    pub tunnel_id: i64,
+    /// Device account used for the connection; omit for the tunnel's default
+    pub username: Option<String>,
+    /// Page to open first (http or https)
+    pub url: Option<String>,
+    /// Close after this many seconds without an action (can only be shorter than the site limit)
+    pub idle_timeout_s: Option<u64>,
+    /// Close after this many seconds in any case (can only be shorter than the site limit)
+    pub max_lifetime_s: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserArgs {
+    /// browser_id returned by browser_open
+    pub browser_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserNavigateArgs {
+    /// browser_id returned by browser_open
+    pub browser_id: String,
+    /// http or https URL (https:// is added when no scheme is given)
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserReadArgs {
+    /// browser_id returned by browser_open
+    pub browser_id: String,
+    /// CSS selector to read only part of the page; omit for the whole page
+    pub selector: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserClickArgs {
+    /// browser_id returned by browser_open
+    pub browser_id: String,
+    /// CSS selector of the element to click
+    pub selector: Option<String>,
+    /// Or: visible text of a link, button or label to click
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct BrowserTypeArgs {
+    /// browser_id returned by browser_open
+    pub browser_id: String,
+    /// CSS selector of the field to type into
+    pub selector: String,
+    /// Text to type (appended to what the field already holds)
+    pub text: String,
+    /// Press Enter afterwards, e.g. to submit a form (default false)
+    pub press_enter: Option<bool>,
+    /// The text is sensitive (default true): only its length is kept in Telepy's audit log. Pass false to log it
+    pub sensitive: Option<bool>,
+}
+
 // ---------------------------------------------------------------- server
 
 #[derive(Clone)]
@@ -254,6 +365,74 @@ impl TelepyMcp {
         }
     }
 
+    /// 這個 app 的 shell（找出它所在的 session）。/ A shell of this app, with its session.
+    fn shell(&self, p: &McpPrincipal, id: &str) -> Result<(Arc<AiSession>, Arc<AiShell>), String> {
+        for s in self.state.ai.list() {
+            if s.user_id == p.user.id && s.grant_id == p.grant_id {
+                if let Some(sh) = s.shell(id) {
+                    return Ok((s, sh));
+                }
+            }
+        }
+        Err(format!("Unknown or closed shell_id '{id}'. Shells close with their session, after a stretch without use, or when the program in them exits and you call shell_close; open a new one with shell_open."))
+    }
+
+    /// 這個 app 開的瀏覽器；被關掉的說明原因（例如「被誰結束」）。/ A browser of this app; a closed one says why.
+    fn browser(&self, p: &McpPrincipal, id: &str) -> Result<Arc<AiBrowser>, String> {
+        match self.state.ai.browsers.get(id) {
+            Some(b) if b.user_id == p.user.id && b.grant_id == p.grant_id => Ok(b),
+            _ => Err(match self.state.ai.browsers.closed_reason(id) {
+                Some(why) => format!("The browser '{id}' was closed ({why}). Open a new one with browser_open if you still need it."),
+                None => format!("Unknown or closed browser_id '{id}'. Browsers close when idle, at their maximum lifetime or when the device goes offline; open a new one with browser_open."),
+            }),
+        }
+    }
+
+    async fn audit_browser(&self, p: &McpPrincipal, tool: &str, started: Instant, b: &AiBrowser, detail: Option<String>, error: Option<String>) {
+        ai::audit(
+            &self.state,
+            db::ai_audit::NewEvent {
+                user_id: p.user.id,
+                grant_id: Some(p.grant_id),
+                client_name: &p.client_name,
+                tool,
+                tunnel_id: Some(b.tunnel_id),
+                session_id: Some(&b.id),
+                target_username: Some(&b.target_username),
+                detail: detail.as_deref(),
+                ok: error.is_none(),
+                duration_ms: Some(started.elapsed().as_millis() as i64),
+                error: error.as_deref(),
+                ip: p.ip.as_deref(),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+
+    /// 一個瀏覽器動作：查 scope、找瀏覽器、跑、寫稽核。/ One browser action: scope, lookup, run, audit.
+    async fn browser_action(&self, parts: &axum::http::request::Parts, tool: &str, id: &str, action: Value, detail: String) -> Result<Result<(Arc<AiBrowser>, Value), CallToolResult>, ErrorData> {
+        let p = principal(parts)?;
+        let started = Instant::now();
+        if !p.has_scope("browser:use") {
+            return Ok(Err(missing_scope("browser:use")));
+        }
+        let b = match self.browser(&p, id) {
+            Ok(b) => b,
+            Err(e) => return Ok(Err(fail(e))),
+        };
+        match b.action(&self.state, action).await {
+            Ok(v) => {
+                self.audit_browser(&p, tool, started, &b, Some(detail), None).await;
+                Ok(Ok((b, v)))
+            }
+            Err(e) => {
+                self.audit_browser(&p, tool, started, &b, Some(detail), Some(e.clone())).await;
+                Ok(Err(fail(format!("The browser action failed: {e}"))))
+            }
+        }
+    }
+
     fn online(&self, reverse_port: i64) -> Option<bool> {
         let listen = self.state.status.listen_ports()?;
         Some(u16::try_from(reverse_port).map(|p| listen.contains(&p)).unwrap_or(false))
@@ -283,8 +462,22 @@ impl TelepyMcp {
             "idle_timeout_s": s.idle_timeout.as_secs(),
             "max_lifetime_s": s.max_lifetime.as_secs(),
             "commands": s.commands(),
+            "shells": s.shells().iter().map(|sh| sh.id.clone()).collect::<Vec<_>>(),
             "busy": s.busy(),
         })
+    }
+}
+
+/// 規則擋下 / 等核准時 `shell_send` 的說明。/ What `shell_send` says when a command rule stepped in.
+fn hold_message(h: &shell::Hold, unsent: usize) -> Option<String> {
+    let why = |r: &command_rules::Rule| if r.note.is_empty() { String::new() } else { format!(" The rule says: {}", r.note) };
+    let rest = if unsent > 0 { format!(" {unsent} byte(s) of input after that Enter were not sent.") } else { String::new() };
+    match h {
+        shell::Hold::Sent => None,
+        shell::Hold::Blocked { rule, .. } => Some(format!("Telepy's command rules don't allow that command (rule `{}`).{} Ctrl+C was sent instead of Enter, so it did not run.{rest} Don't try to get around the rule; ask the user if it really has to run.", rule.pattern, why(rule))),
+        shell::Hold::Denied { rule, id, message, .. } => Some(format!("{message} (rule `{}`, request #{id}). Ctrl+C was sent instead of Enter.{rest} Don't run it another way.", rule.pattern)),
+        shell::Hold::Waiting { rule, id, .. } => Some(format!("This command needs the tunnel owner's approval (rule `{}`).{} Request #{id} is waiting in Telepy; the command is still typed at the prompt and has not run.{rest} Tell the user, and once they approve it call shell_send with input \"\" and press_enter: true; an approval is good for one run within 10 minutes.", rule.pattern, why(rule))),
+        shell::Hold::Error { rule, message, .. } => Some(format!("This command needs approval (rule `{}`), but the request could not be filed: {message}. Ctrl+C was sent instead of Enter.{rest}", rule.pattern)),
     }
 }
 
@@ -545,12 +738,13 @@ impl TelepyMcp {
         Ok(CallToolResult::structured(json!({ "session_id": s.id, "closed": true })))
     }
 
-    #[tool(description = "List the SSH sessions this app has open, with their remaining lifetime.", annotations(title = "List SSH sessions", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "List the SSH sessions (with their shells) and browsers this app has open, with their remaining lifetime.", annotations(title = "List SSH sessions", read_only_hint = true, open_world_hint = false))]
     async fn ssh_session_list(&self, Extension(parts): Extension<axum::http::request::Parts>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let tz = self.state.config.tz_offset_minutes;
         let sessions: Vec<Value> = self.state.ai.list().iter().filter(|s| s.user_id == p.user.id && s.grant_id == p.grant_id).map(|s| Self::session_json(s, tz)).collect();
-        Ok(CallToolResult::structured(json!({ "sessions": sessions })))
+        let browsers: Vec<Value> = self.state.ai.browsers.list().iter().filter(|b| b.user_id == p.user.id && b.grant_id == p.grant_id).map(|b| ai::browser::browser_json(b, tz)).collect();
+        Ok(CallToolResult::structured(json!({ "sessions": sessions, "browsers": browsers })))
     }
 
     #[tool(description = "List a directory on the device over SFTP (name, type, size, permissions, modification time).", annotations(title = "List directory", read_only_hint = true, open_world_hint = true))]
@@ -661,6 +855,285 @@ impl TelepyMcp {
                 Ok(fail(msg))
             }
         }
+    }
+
+    #[tool(description = "Open an interactive shell (a PTY, TERM=xterm-256color) on an SSH session, for TUI programs, prompts and REPLs. Returns a shell_id for shell_send / shell_read. At most 2 shells per session; a shell closes with its session, after the session's idle timeout without use, or with shell_close.", annotations(title = "Open shell", read_only_hint = false, destructive_hint = false, open_world_hint = false))]
+    async fn shell_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellOpenArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("ssh:exec") {
+            return Ok(missing_scope("ssh:exec"));
+        }
+        let s = match self.session(&p, &args.session_id) {
+            Ok(s) => s,
+            Err(e) => return Ok(fail(e)),
+        };
+        let (cols, rows) = shell::clamp_size(args.cols, args.rows);
+        match ai::open_shell(&self.state, &s, cols, rows).await {
+            Ok(sh) => {
+                self.audit(&p, "shell_open", started, Audit { session: Some(&s), detail: Some(format!("shell {}: {cols}x{rows}{}", sh.id, if sh.recorded { ", recorded" } else { "" })), ..Default::default() }).await;
+                Ok(CallToolResult::structured(json!({
+                    "shell_id": sh.id,
+                    "session_id": s.id,
+                    "cols": cols,
+                    "rows": rows,
+                    "recorded": sh.recorded,
+                    "hint": "Read the prompt with shell_read, then type with shell_send (press_enter: true runs the line).",
+                })))
+            }
+            Err(e) => {
+                self.audit(&p, "shell_open", started, Audit { session: Some(&s), error: Some(e.clone()), ..Default::default() }).await;
+                Ok(fail(e))
+            }
+        }
+    }
+
+    #[tool(description = "Type into an interactive shell. `input` is sent as keystrokes (control characters allowed: \\u0003 = Ctrl+C, \\u0004 = Ctrl+D, \\u001b = Esc, \\u001b[A = Up); press_enter adds Enter. Command rules apply to every Enter at a shell prompt: a blocked command gets Ctrl+C instead of Enter, a command that needs approval waits up to 45 seconds. Read the result with shell_read.", annotations(title = "Type into shell", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
+    async fn shell_send(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellSendArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("ssh:exec") {
+            return Ok(missing_scope("ssh:exec"));
+        }
+        let (s, sh) = match self.shell(&p, &args.shell_id) {
+            Ok(v) => v,
+            Err(e) => return Ok(fail(e)),
+        };
+        let mut input = args.input;
+        if args.press_enter.unwrap_or(false) {
+            input.push('\r');
+        }
+        if input.len() > shell::MAX_INPUT {
+            return Ok(fail(format!("input is too long ({} bytes; {} at most per call)", input.len(), shell::MAX_INPUT)));
+        }
+        if sh.exited().is_some() {
+            return Ok(fail("The program in this shell has exited. Close it with shell_close and open a new one."));
+        }
+        let detail = format!("shell {}: {}", sh.id, shell::describe_input(&input));
+        let requester = Requester {
+            tunnel_id: s.tunnel_id,
+            user_id: p.user.id,
+            username: p.user.username.clone(),
+            source: Source::Agent,
+            account: s.target_username.clone(),
+            lan_host: None,
+            client: Some(p.client_name.clone()),
+            grant_id: Some(p.grant_id),
+            session_ref: Some(s.id.clone()),
+        };
+        s.touch();
+        let result = sh.send(&self.state, &requester, &input).await;
+        s.touch();
+        match result {
+            Ok(r) => {
+                let refused = hold_message(&r.hold, r.unsent);
+                let error = match &r.hold {
+                    shell::Hold::Sent => None,
+                    shell::Hold::Blocked { rule, .. } => Some(format!("blocked by the rule `{}`", rule.pattern)),
+                    shell::Hold::Denied { id, message, .. } => Some(format!("approval request #{id}: {message}")),
+                    shell::Hold::Waiting { id, .. } => Some(format!("waiting for approval (request #{id})")),
+                    shell::Hold::Error { message, .. } => Some(message.clone()),
+                };
+                self.audit(&p, "shell_send", started, Audit { session: Some(&s), detail: Some(detail), bytes_out: Some(r.sent as i64), error, ..Default::default() }).await;
+                match refused {
+                    Some(msg) => Ok(fail(msg)),
+                    None => Ok(CallToolResult::structured(json!({ "shell_id": sh.id, "bytes_sent": r.sent, "hint": "Call shell_read to see what happened." }))),
+                }
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                self.audit(&p, "shell_send", started, Audit { session: Some(&s), detail: Some(detail), error: Some(msg.clone()), ..Default::default() }).await;
+                Ok(fail(msg))
+            }
+        }
+    }
+
+    #[tool(description = "Read from an interactive shell: `output` is the raw output since the last read (escape sequences included), `screen` the current screen as plain text (one line per row, like what a person would see, so full-screen programs such as top or vim are readable), `cursor` its {row, col} (0-based), `more` whether more output is waiting, `exited` whether the program ended. Waits up to timeout_ms for new output when there is none yet.", annotations(title = "Read shell", read_only_hint = true, open_world_hint = true))]
+    async fn shell_read(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellReadArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("ssh:exec") {
+            return Ok(missing_scope("ssh:exec"));
+        }
+        let (s, sh) = match self.shell(&p, &args.shell_id) {
+            Ok(v) => v,
+            Err(e) => return Ok(fail(e)),
+        };
+        let wait = args.timeout_ms.map(Duration::from_millis).unwrap_or(shell::DEFAULT_READ_WAIT).min(shell::MAX_READ_WAIT);
+        let max = args.max_bytes.unwrap_or(shell::DEFAULT_MAX_READ).clamp(1, shell::MAX_READ);
+        s.touch();
+        let r = sh.read(wait, max).await;
+        s.touch();
+        self.audit(&p, "shell_read", started, Audit { session: Some(&s), detail: Some(format!("shell {}", sh.id)), bytes_out: Some(r.output.len() as i64), ..Default::default() }).await;
+        let mut body = json!({
+            "shell_id": sh.id,
+            "output": String::from_utf8_lossy(&r.output),
+            "output_bytes": r.output.len(),
+            "more": r.more,
+            "cursor": { "row": r.cursor.0, "col": r.cursor.1 },
+            "size": { "cols": r.size.0, "rows": r.size.1 },
+            "exited": r.exited.is_some(),
+            "exit_status": r.exited.flatten(),
+        });
+        if r.dropped > 0 {
+            body["dropped_bytes"] = json!(r.dropped);
+        }
+        if args.screen.unwrap_or(true) {
+            body["screen"] = json!(r.screen);
+        }
+        Ok(CallToolResult::structured(body))
+    }
+
+    #[tool(description = "Change the size of an interactive shell's terminal.", annotations(title = "Resize shell", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    async fn shell_resize(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellResizeArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("ssh:exec") {
+            return Ok(missing_scope("ssh:exec"));
+        }
+        let (s, sh) = match self.shell(&p, &args.shell_id) {
+            Ok(v) => v,
+            Err(e) => return Ok(fail(e)),
+        };
+        let (cols, rows) = shell::clamp_size(Some(args.cols), Some(args.rows));
+        s.touch();
+        let r = sh.resize(cols, rows).await;
+        let error = r.as_ref().err().map(|e| format!("{e:#}"));
+        self.audit(&p, "shell_resize", started, Audit { session: Some(&s), detail: Some(format!("shell {}: {cols}x{rows}", sh.id)), error: error.clone(), ..Default::default() }).await;
+        match error {
+            Some(e) => Ok(fail(e)),
+            None => Ok(CallToolResult::structured(json!({ "shell_id": sh.id, "cols": cols, "rows": rows }))),
+        }
+    }
+
+    #[tool(description = "Close an interactive shell (the program in it is ended).", annotations(title = "Close shell", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    async fn shell_close(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let (s, sh) = match self.shell(&p, &args.shell_id) {
+            Ok(v) => v,
+            Err(e) => return Ok(fail(e)),
+        };
+        // 稽核由 ai::close_shell 寫。/ ai::close_shell writes the audit row.
+        ai::close_shell(&self.state, &s, &sh, "closed_by_agent").await;
+        Ok(CallToolResult::structured(json!({ "shell_id": sh.id, "closed": true })))
+    }
+
+    #[tool(description = "Open a real Chromium browser that reaches the web through a tunnel's device, as if it ran there: it sees the device's LAN, its localhost and its public IP. Returns a browser_id. The browser closes itself when idle or at its maximum lifetime (it counts against the same per-user limit as SSH sessions); close it with browser_close when you are done. The tunnel owner is notified.", annotations(title = "Open browser", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
+    async fn browser_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserOpenArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let started = Instant::now();
+        if !p.has_scope("browser:use") {
+            return Ok(missing_scope("browser:use"));
+        }
+        let url = match args.url.as_deref().map(ai::browser::normalize_url).transpose() {
+            Ok(u) => u,
+            Err(e) => return Ok(fail(e)),
+        };
+        let detail = format!("username: {}{}", args.username.as_deref().unwrap_or("(default)"), url.as_deref().map(|u| format!("; url: {u}")).unwrap_or_default());
+        let req = ai::browser::OpenBrowserRequest { tunnel_id: args.tunnel_id, username: args.username, idle_timeout_s: args.idle_timeout_s, max_lifetime_s: args.max_lifetime_s };
+        let b = match ai::browser::open(&self.state, &p, req).await {
+            Ok(b) => b,
+            Err(e) => {
+                self.audit(&p, "browser_open", started, Audit { tunnel_id: Some(args.tunnel_id), detail: Some(detail), error: Some(e.clone()), ..Default::default() }).await;
+                return Ok(fail(e));
+            }
+        };
+        let mut body = ai::browser::browser_json(&b, self.state.config.tz_offset_minutes);
+        let mut error = None;
+        if let Some(u) = &url {
+            match b.action(&self.state, json!({ "action": "navigate", "url": u })).await {
+                Ok(v) => body["page"] = json!({ "url": v.get("url"), "title": v.get("title") }),
+                Err(e) => error = Some(e),
+            }
+        }
+        self.audit_browser(&p, "browser_open", started, &b, Some(detail), error.clone()).await;
+        if let Some(e) = error {
+            body["navigate_error"] = json!(e);
+        }
+        body["hint"] = json!("Read the page with browser_read, look at it with browser_screenshot, and close it with browser_close when you are done.");
+        Ok(CallToolResult::structured(body))
+    }
+
+    #[tool(description = "Go to a URL (http or https) in the browser and wait for the page to load. Returns the final URL and the page title.", annotations(title = "Navigate", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
+    async fn browser_navigate(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserNavigateArgs>) -> Result<CallToolResult, ErrorData> {
+        let url = match ai::browser::normalize_url(&args.url) {
+            Ok(u) => u,
+            Err(e) => return Ok(fail(e)),
+        };
+        match self.browser_action(&parts, "browser_navigate", &args.browser_id, json!({ "action": "navigate", "url": url }), url.clone()).await? {
+            Ok((b, v)) => Ok(CallToolResult::structured(json!({ "browser_id": b.id, "url": v.get("url"), "title": v.get("title") }))),
+            Err(r) => Ok(r),
+        }
+    }
+
+    #[tool(description = "Take a PNG screenshot of what the browser shows (scaled to at most 1280 pixels wide).", annotations(title = "Screenshot", read_only_hint = true, open_world_hint = true))]
+    async fn browser_screenshot(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserArgs>) -> Result<CallToolResult, ErrorData> {
+        let action = json!({ "action": "screenshot", "max_width": ai::browser::SCREENSHOT_MAX_WIDTH });
+        match self.browser_action(&parts, "browser_screenshot", &args.browser_id, action, "screenshot".into()).await? {
+            Ok((_, v)) => {
+                let Some(data) = v.get("data").and_then(Value::as_str) else { return Ok(fail("The browser returned no image.")) };
+                let meta = json!({ "url": v.get("url"), "title": v.get("title"), "width": v.get("width"), "height": v.get("height") });
+                Ok(CallToolResult::success(vec![ContentBlock::image(data.to_string(), "image/png"), ContentBlock::text(meta.to_string())]))
+            }
+            Err(r) => Ok(r),
+        }
+    }
+
+    #[tool(description = "Read the page as text: title, URL and the visible text (of the element matching `selector`, or of the whole page), plus the links on it.", annotations(title = "Read page", read_only_hint = true, open_world_hint = true))]
+    async fn browser_read(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserReadArgs>) -> Result<CallToolResult, ErrorData> {
+        let action = json!({ "action": "read", "selector": args.selector, "max_chars": ai::browser::MAX_PAGE_TEXT });
+        let detail = args.selector.clone().unwrap_or_else(|| "(page)".into());
+        match self.browser_action(&parts, "browser_read", &args.browser_id, action, detail).await? {
+            Ok((b, mut v)) => {
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("browser_id".into(), json!(b.id));
+                }
+                Ok(CallToolResult::structured(v))
+            }
+            Err(r) => Ok(r),
+        }
+    }
+
+    #[tool(description = "Click an element: by CSS `selector`, or by the visible `text` of a link, button or label. The click is a real mouse click in the page.", annotations(title = "Click", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
+    async fn browser_click(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserClickArgs>) -> Result<CallToolResult, ErrorData> {
+        let detail = match (&args.selector, &args.text) {
+            (Some(s), _) if !s.trim().is_empty() => format!("selector: {s}"),
+            (_, Some(t)) if !t.trim().is_empty() => format!("text: {t}"),
+            _ => return Ok(fail("Give a selector or a text to click.")),
+        };
+        let action = json!({ "action": "click", "selector": args.selector, "text": args.text });
+        match self.browser_action(&parts, "browser_click", &args.browser_id, action, detail).await? {
+            Ok((b, v)) => Ok(CallToolResult::structured(json!({ "browser_id": b.id, "clicked": v.get("clicked"), "url": v.get("url"), "title": v.get("title") }))),
+            Err(r) => Ok(r),
+        }
+    }
+
+    #[tool(description = "Type text into a field (found by CSS selector), like a person typing; press_enter submits. Passwords and other secrets are only logged by length unless you pass sensitive: false.", annotations(title = "Type", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
+    async fn browser_type(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserTypeArgs>) -> Result<CallToolResult, ErrorData> {
+        if args.selector.trim().is_empty() {
+            return Ok(fail("selector is empty"));
+        }
+        let n = args.text.chars().count();
+        let shown = if args.sensitive.unwrap_or(true) { format!("{n} characters") } else { format!("\"{}\"", args.text) };
+        let enter = args.press_enter.unwrap_or(false);
+        let detail = format!("selector: {}; {shown}{}", args.selector, if enter { " + Enter" } else { "" });
+        let action = json!({ "action": "type", "selector": args.selector, "text": args.text, "press_enter": enter });
+        match self.browser_action(&parts, "browser_type", &args.browser_id, action, detail).await? {
+            Ok((b, v)) => Ok(CallToolResult::structured(json!({ "browser_id": b.id, "typed": n, "url": v.get("url"), "title": v.get("title") }))),
+            Err(r) => Ok(r),
+        }
+    }
+
+    #[tool(description = "Close a browser you opened.", annotations(title = "Close browser", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false))]
+    async fn browser_close(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserArgs>) -> Result<CallToolResult, ErrorData> {
+        let p = principal(&parts)?;
+        let b = match self.browser(&p, &args.browser_id) {
+            Ok(b) => b,
+            Err(e) => return Ok(fail(e)),
+        };
+        // 稽核由 ai::browser::close 寫。/ ai::browser::close writes the audit row.
+        ai::browser::close(&self.state, &b.id, CloseReason::ClosedByAgent, None).await;
+        Ok(CallToolResult::structured(json!({ "browser_id": b.id, "closed": true })))
     }
 }
 

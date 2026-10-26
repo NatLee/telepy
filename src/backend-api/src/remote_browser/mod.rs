@@ -154,6 +154,15 @@ impl RemoteBrowser {
         Ok(json!({ "session_id": session_id, "ws_path": format!("/ws/remote-browser/{session_id}/") }))
     }
 
+    /// agent 的動作：經 session-manager 的 CDP 端點（見 `kasm::KasmClient::cdp`）；順便續命。
+    /// An agent action through the session-manager's CDP endpoint; also keeps the session alive.
+    pub async fn cdp(&self, id: &str, action: Value, timeout: Duration) -> Result<Value, String> {
+        let Some(session) = self.get(id) else { return Err("the browser session is gone".into()) };
+        let Some(kid) = session.kasm_session_id.as_deref() else { return Err("the browser session is not ready".into()) };
+        *session.last_seen.lock().unwrap() = Instant::now();
+        self.kasm.cdp(kid, action, timeout).await.map_err(|e| e.0)
+    }
+
     /// `ping_remote_browser`：先做健康檢查（SOCKS 死 → 就地回收、回 false），再續命。
     pub async fn ping(&self, db: &Db, id: &str) -> bool {
         let Some(session) = self.get(id) else { return false };
