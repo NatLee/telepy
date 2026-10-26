@@ -79,8 +79,8 @@ start_background() {
         printf 'while :; do\n    %s %s\n    sleep 10\ndone\n' "$SSH_BIN" "$SSH_ARGS"
     } > "$RUNNER"
     chmod 700 "$RUNNER"
-    # 先停掉舊的迴圈和它的 ssh（重跑時）。/ Stop a previous loop and its ssh child (re-runs).
-    # 舊的 ssh 子程序用它的金鑰檔認（-R 寫 0，號碼認不出來）。/ The old ssh child is found by its key file (-R asks for 0).
+    # Stop a previous loop and its ssh child (re-runs).
+    # The old ssh child is found by its key file: -R asks for 0, so the number cannot identify it.
     PATTERN="-i $KEY "
     pkill -f "$RUNNER" 2>/dev/null || true
     pkill -f "$PATTERN" 2>/dev/null || true
@@ -379,8 +379,8 @@ main() {
     fi
 
     # --- SSH over WebSocket -------------------------------------------------------------------------
-    # 只放行網頁 port 的網路：ssh 透過 telepy-ws.py 把連線包進 WebSocket；裡面的 SSH（金鑰、host key）完全一樣。
-    # The web port only: ssh goes through telepy-ws.py, which carries it in a WebSocket; the SSH inside is unchanged.
+    # The web port only: ssh goes through telepy-ws.py, which carries it in a WebSocket;
+    # the SSH inside (keys, host key) is unchanged.
     PROXY_OPT=""
     if [ "$VIA_WEB" -eq 1 ]; then
         step "Setting up the WebSocket carrier (web port only)"

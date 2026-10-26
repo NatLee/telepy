@@ -12,21 +12,21 @@ function Out-Telepy([string]$Kind, [string]$What, [string]$Detail) {
     Write-Output ('TELEPY|{0}|{1}|{2}' -f $Kind, $What, ($Detail -replace '[\r\n]+', ' '))
 }
 $Hosts = '(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+'
-# 檔案裡的 forward；命令列上的 -R forward（不碰同號碼的 -L）。/ The forward in files; a -R forward on a command line.
+# The forward in files; a -R forward on a command line (never a -L with the same number).
 $PortRe = '(^|[^0-9])' + $TunnelPort + ':' + $Hosts
 $ProcRe = '-[A-Za-z]*R ?[''"]?([^ :''"]*:)?' + $TunnelPort + ':' + $Hosts
-# 任何 -R forward（新腳本寫 0，改認金鑰）。/ Any -R forward at all (new scripts ask for 0; the key tells).
+# Any -R forward at all (new scripts ask for 0, so the key tells).
 $AnyRRe = '-[A-Za-z]*R ?[''"]?([^ :''"]*:)?[0-9]+:'
 $EnvRe = 'SSH_TUNNEL_PORT[=:][" ]*' + $TunnelPort + '([^0-9]|$)'
 $ScriptRe = '[A-Za-z]:\\[^"*?<>|]*?\.(ps1|bat|cmd|vbs)'
 $KeyRe = '(?:-i ?|IdentityFile[ =]|KEY_FILE=)[''"]?([^ ''"]+)'
 
-# ~ 與 $env:USERPROFILE 展開。/ Expand ~ and %USERPROFILE%-style prefixes.
+# Expand ~ and %USERPROFILE%-style prefixes.
 function Expand-KeyPath([string]$Path) {
     $p = $Path -replace '^~', $HOME -replace '^\$env:USERPROFILE', $HOME -replace '^%USERPROFILE%', $HOME
     return [Environment]::ExpandEnvironmentVariables($p)
 }
-# 這個私鑰檔是不是這條隧道的金鑰：先看旁邊的 .pub，沒有就用 ssh-keygen。/ The .pub next to it first, else ssh-keygen.
+# Is this private key the tunnel's: the .pub next to it first, else ssh-keygen.
 function Test-KeyFile([string]$Path) {
     $f = Expand-KeyPath $Path
     if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
@@ -41,18 +41,17 @@ function Test-KeyFile([string]$Path) {
     $words = $out.Trim() -split '\s+'
     return ($words.Count -ge 2 -and $words[1] -eq $TunnelKey)
 }
-# 這段文字引用到這條隧道的金鑰？/ Does this text refer to the tunnel's key?
+# Does this text refer to the tunnel's key?
 function Test-UsesKey([string]$Text) {
     foreach ($m in [regex]::Matches([string]$Text, $KeyRe)) { if (Test-KeyFile $m.Groups[1].Value) { return $true } }
     return $false
 }
-# 檔案是這條隧道的：寫著它的號碼（舊腳本），或引用它的金鑰。/ A file of this tunnel: its number, or its key.
+# A file of this tunnel: it carries its number (older scripts) or refers to its key.
 function Test-Port([string]$Path) {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $text = [string](Get-Content -LiteralPath $Path -Raw)
     return ($text -match $PortRe) -or ($text -match $EnvRe) -or (Test-UsesKey $text)
 }
-# 命令列是這條隧道的：-R 帶它的號碼、-R 任何號碼加上它的金鑰，或指到它的腳本（絕不碰只有 -L 的）。
 # A command line of this tunnel: -R with its number, any -R plus its key, or pointing at its script (never -L only).
 function Test-Command([string]$Text) {
     if (-not $Text) { return $false }
@@ -95,7 +94,7 @@ foreach ($p in $Procs) {
     Out-Telepy 'found' 'process' ('{0} {1}' -f $p.ProcessId, $cl)
     $Pids.Add([int]$p.ProcessId)
     $parent = $ById[[int]$p.ParentProcessId]
-    # 範本的 while 迴圈會在 5 秒後重開 ssh，所以先停它。/ The template loop restarts ssh after 5 s: stop it first.
+    # The template loop restarts ssh after 5 s: stop it first.
     if ($parent -and $parent.Name -match '^(powershell|pwsh)\.exe$') {
         Out-Telepy 'found' 'loop' ('{0} {1}' -f $parent.ProcessId, [string]$parent.CommandLine)
         $Pids.Insert(0, [int]$parent.ProcessId)
@@ -178,7 +177,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
     foreach ($c in $ids) {
         $envs = @(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $c 2>$null)
         if (-not ($envs | Where-Object { $_ -match ('^SSH_TUNNEL_PORT=' + $TunnelPort + '$') })) {
-            # 新容器：掛到 /id_rsa 的金鑰是這條隧道的。/ New containers: the key mounted at /id_rsa is the tunnel's.
+            # New containers: the key mounted at /id_rsa is the tunnel's.
             $mounted = [string](docker inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' $c 2>$null)
             if (-not $mounted -or -not (Test-KeyFile $mounted.Trim())) { continue }
         }
