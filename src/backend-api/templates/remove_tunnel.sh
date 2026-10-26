@@ -10,14 +10,14 @@ T_NAME=${t_name}
 T_KEY=${t_key}
 
 out() { printf 'TELEPY|%s|%s|%s\n' "$1" "$2" "$3"; }
-# 檔案裡的 forward（unit、plist 的一行、腳本）——舊腳本寫著號碼。/ The forward as older files wrote it, with the number.
+# The forward as files write it (a unit, a plist line, a script): older scripts carry the number.
 PORT_RE="(^|[^0-9])$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
-# 程序 / crontab 裡的 -R forward（不碰同號碼的 -L）。/ A -R forward on a command line (never -L).
+# A -R forward in a process or crontab line (never a -L with the same number).
 PROC_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?$T_PORT:(localhost|127\.0\.0\.1|\[::1\]|::1):[0-9]+"
-# 任何 -R forward（新腳本寫 0，號碼認不出來，改認金鑰）。/ Any -R forward at all (new scripts ask for 0).
+# Any -R forward at all (new scripts ask for 0, so the number cannot tell; the key does).
 ANY_R_RE="-[A-Za-z]*R ?['\"]?([^ :'\"]*:)?[0-9]+:"
 
-# ~ 與 $HOME 開頭的路徑展開。/ Expand a leading ~ or $HOME.
+# Expand a leading ~ or $HOME.
 expand_path() {
     case "$1" in
         "~") printf '%s' "$HOME" ;;
@@ -27,35 +27,33 @@ expand_path() {
         *) printf '%s' "$1" ;;
     esac
 }
-# 這個私鑰檔是不是這條隧道的金鑰：先看旁邊的 .pub，沒有就用 ssh-keygen 算出公鑰。
 # Is this private key the tunnel's: the .pub next to it first, else ssh-keygen derives the public key.
-# （sh 的函式沒有區域變數：這裡的變數名稱不能和呼叫端的迴圈變數撞到。/ No locals in sh: names must not clash with callers' loop variables.）
+# (No locals in sh: names here must not clash with callers' loop variables.)
 key_matches() {
     km_file=$(expand_path "$1")
     [ -f "$km_file" ] || return 1
     if [ -r "$km_file.pub" ] && awk '{print $2}' "$km_file.pub" 2>/dev/null | grep -qxF -- "$T_KEY"; then return 0; fi
     command -v ssh-keygen >/dev/null 2>&1 && ssh-keygen -y -f "$km_file" 2>/dev/null | awk '{print $2}' | grep -qxF -- "$T_KEY"
 }
-# 一段文字（檔案內容或命令列）引用到的金鑰檔：`-i <path>`、`IdentityFile`、docker 的 `KEY_FILE=` / `<path>:/id_rsa`。
-# Key files a text refers to: -i, IdentityFile, docker's KEY_FILE= and <path>:/id_rsa.
+# Key files a text (file contents or a command line) refers to: -i <path>, IdentityFile,
+# docker's KEY_FILE= and <path>:/id_rsa.
 key_paths() {
     printf '%s\n' "$1" | grep -oE -- "-i ?['\"]?[^ '\"]+" | sed -E "s/^-i ?['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "IdentityFile[ =]['\"]?[^ '\"]+" | sed -E "s/^IdentityFile[ =]['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "KEY_FILE=['\"]?[^ '\"]+" | sed -E "s/^KEY_FILE=['\"]?//"
     printf '%s\n' "$1" | grep -oE -- "[^\"' ]+:/id_rsa" | sed 's#:/id_rsa$##'
 }
-# 這段文字用的是這條隧道的金鑰？/ Does this text use the tunnel's key?
+# Does this text use the tunnel's key?
 uses_key() {
     for uk_path in $(key_paths "$1"); do key_matches "$uk_path" && return 0; done
     return 1
 }
-# 檔案是這條隧道的：寫著它的號碼（舊腳本），或引用它的金鑰。/ A file of this tunnel: its number, or its key.
+# A file of this tunnel: it carries its number (older scripts) or refers to its key.
 has_port() {
     [ -f "$1" ] || return 1
     grep -Eq -- "$PORT_RE|SSH_TUNNEL_PORT[=:][\" ]*$T_PORT([^0-9]|$)" "$1" 2>/dev/null && return 0
     uses_key "$(cat "$1" 2>/dev/null)"
 }
-# 命令列是這條隧道的：-R 帶它的號碼，或 -R 任何號碼加上它的金鑰（絕不碰只有 -L 的）。
 # A command line of this tunnel: -R with its number, or any -R plus its key (never a -L only client).
 line_is_mine() {
     printf '%s' "$1" | grep -Eq -- "$PROC_RE" && return 0
@@ -89,17 +87,17 @@ fi
 chmod 700 "$STOP"
 STOPS=0
 LATE=""
-# 停止要做的事寫進停止腳本；log 等寫入者停了才刪（LATE）。/ Stopping steps; logs go last (LATE).
+# Stopping steps go into the stop script; logs are deleted last, once their writers have stopped (LATE).
 later() { printf '%s\n' "$1" >> "$STOP"; STOPS=$((STOPS + 1)); out scheduled "$2" "$3"; }
 latelog() { LATE="$LATE$1
 "; STOPS=$((STOPS + 1)); out scheduled log "$2"; }
-# 停止腳本會刪掉的檔案（判斷 known_hosts 還有沒有人用時要排除）。/ Files the stop script deletes.
+# Files the stop script deletes (left out when checking whether anything still uses known_hosts).
 GOING=" "
 FOUND_JOIN=0
 
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# 刪檔：自己刪不掉就用 sudo；還是不行就回報要 root。/ Delete; fall back to sudo; else report.
+# Delete; fall back to sudo; else report that root is needed.
 rmf() {
     [ -e "$1" ] || [ -L "$1" ] || return 0
     rm -f "$1" 2>/dev/null
@@ -134,7 +132,7 @@ if command -v systemctl >/dev/null 2>&1; then
         fi
         out note journal "journald keeps the old log lines of $name until it rotates them"
     done
-    # systemd --user（join 不用 sudo 時）。/ User units (join without sudo).
+    # systemd --user units (join without sudo).
     for f in "$HOME"/.config/systemd/user/*.service; do
         has_port "$f" || continue
         name=$(basename "$f")
@@ -177,7 +175,7 @@ if command -v launchctl >/dev/null 2>&1; then
 fi
 
 # --- processes running this tunnel, and the scripts that started them ---------------------------------
-# （背景迴圈、手動跑的 ssh / autossh 範本腳本）。/ Background loops, ssh / autossh template scripts.
+# (Background loops, ssh / autossh template scripts run by hand.)
 RUNNERS=""
 if has_port "$HOME/.ssh/telepy-tunnel-$T_ID.sh"; then
     RUNNERS=" $HOME/.ssh/telepy-tunnel-$T_ID.sh"
@@ -192,7 +190,7 @@ uid_of() {
     if [ -r "/proc/$1/status" ]; then awk '/^Uid:/ { print $2; exit }' "/proc/$1/status" 2>/dev/null
     else ps -o uid= -p "$1" 2>/dev/null | tr -d ' '; fi
 }
-# 別人的程序：沒有 root / sudo 就殺不掉，照實回報。/ Someone else's process: report it when we cannot kill it.
+# Someone else's process: without root / sudo we cannot kill it, so report it as it is.
 check_owner() {
     owner=$(uid_of "$1")
     if [ -n "$owner" ] && [ "$owner" != "$MY_UID" ] && [ "$ROOT" = 0 ]; then out needs_root process "sudo kill $1"; fi
@@ -235,7 +233,7 @@ done <<EOF
 $MATCHED
 EOF
 
-# crontab：指向這些腳本、或直接帶這條 forward 的行。/ Crontab lines pointing at the runners or with the forward.
+# Crontab lines pointing at the runners or carrying the forward.
 crontab_clean() {
     CR=$($1 crontab -l 2>/dev/null) || return 0
     KEEP=$(printf '%s\n' "$CR" | while IFS= read -r l; do line_is_mine "$l" || printf '%s\n' "$l"; done)
@@ -259,7 +257,7 @@ for r in $RUNNERS; do
     fi
 done
 
-# 下載下來沒在跑的這條隧道腳本（ssh / autossh / docker 範本）。/ Downloaded scripts of this tunnel that are not running.
+# Downloaded scripts of this tunnel that are not running (ssh / autossh / docker templates).
 for f in "$HOME"/*.sh "$HOME"/*.yml "$HOME"/*.yaml "$HOME"/Downloads/*.sh "$HOME"/Downloads/*.yml "$HOME"/Desktop/*.sh; do
     has_port "$f" || continue
     out found script "$f"
@@ -275,7 +273,7 @@ if command -v docker >/dev/null 2>&1; then
 fi
 if [ -n "$DOCKER" ]; then
     for c in $($DOCKER ps -aq 2>/dev/null); do
-        # 舊容器：環境變數帶號碼；新容器：掛到 /id_rsa 的金鑰是這條隧道的。/ Old: the port env; new: the key mounted at /id_rsa.
+        # Old containers carry the number in the env; new ones mount the tunnel's key at /id_rsa.
         if ! $DOCKER inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c" 2>/dev/null | grep -Eq "^SSH_TUNNEL_PORT=$T_PORT$"; then
             mounted=$($DOCKER inspect -f '{{range .Mounts}}{{if eq .Destination "/id_rsa"}}{{.Source}}{{end}}{{end}}' "$c" 2>/dev/null)
             [ -n "$mounted" ] && key_matches "$mounted" || continue
@@ -315,7 +313,7 @@ if [ -f "$U" ] && grep -qF "(#$T_ID)" "$U" 2>/dev/null; then
         rmf "$U" file
     fi
 fi
-# SSH over WebSocket 的小程式（只有這條隧道用）。/ The WebSocket carrier of this tunnel.
+# The SSH-over-WebSocket carrier (used by this tunnel only).
 for f in "$SSH_DIR/telepy-ws-$T_ID.py" "$SSH_DIR/telepy-ws-$T_ID.sh"; do
     [ -f "$f" ] && rmf "$f" file
 done
