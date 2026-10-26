@@ -44,7 +44,37 @@ pub fn router() -> Router<AppState> {
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
         .route("/ws/desktop/{session_id}/", get(desktop_upgrade))
         .route("/ws/rustdesk/{session_id}/", get(rustdesk_upgrade))
+        // Telepy 當 RustDesk 伺服器：裝置用網域時連 /ws/id、/ws/relay，用 IP 時 ID 連線打根路徑。
+        // Telepy as RustDesk's server: /ws/id and /ws/relay for a hostname; an IP makes RustDesk dial the root path.
+        .route("/ws/id", get(rustdesk_id_upgrade))
+        .route("/ws/relay", get(rustdesk_relay_upgrade))
+        .route("/", get(root_upgrade))
         .route("/ws/gateway/", get(gateway_upgrade))
+}
+
+/// RustDesk 裝置的 rendezvous 連線（公開；只有登記過的裝置會被接受）。/ A RustDesk device's rendezvous socket (public; enrolled devices only).
+async fn rustdesk_id_upgrade(State(state): State<AppState>, headers: axum::http::HeaderMap, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    let base = crate::oauth::issuer(state.config.public_url.as_deref(), &headers);
+    prepare(ws).on_upgrade(move |socket| rustdesk::device_rendezvous(state, socket, meta, base))
+}
+
+async fn rustdesk_relay_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| rustdesk::device_relay(state, socket, meta))
+}
+
+/// 根路徑只接 WebSocket（RustDesk 用 IP 位址時打這裡）；其他請求維持 404。/ The root path only takes WebSockets (RustDesk by IP).
+async fn root_upgrade(State(state): State<AppState>, req: axum::extract::Request) -> Response {
+    use axum::extract::FromRequestParts;
+    use axum::response::IntoResponse;
+    let (mut parts, _body) = req.into_parts();
+    match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+        Ok(ws) => {
+            let meta = ClientMeta::from_parts(&parts, &state.config);
+            let base = crate::oauth::issuer(state.config.public_url.as_deref(), &parts.headers);
+            prepare(ws).on_upgrade(move |socket| rustdesk::device_rendezvous(state, socket, meta, base))
+        }
+        Err(_) => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// SSH over WebSocket：沒有 auth 訊息（SSH 自己認證），來源 IP 取自轉送標頭。/ SSH over WebSocket; SSH authenticates inside.

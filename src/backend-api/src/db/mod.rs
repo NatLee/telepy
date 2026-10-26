@@ -15,6 +15,7 @@ pub mod oauth;
 pub mod pool;
 pub mod recordings;
 pub mod retention;
+pub mod rustdesk_devices;
 pub mod schema;
 pub mod settings;
 pub mod sharing;
