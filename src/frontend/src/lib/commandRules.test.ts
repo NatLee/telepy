@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bannerLifetime, countByFilter, countdown, dropRequest, matchesFilter, nextBanner, parseTerminalFrame, secondsLeft, showsInCenter, upsertRequest } from "./commandRules.ts";
-import type { CommandRequest } from "../types/commandRules.ts";
+import { bannerLifetime, countByFilter, countdown, decisionPath, dropRequest, matchesFilter, nextBanner, parseTerminalFrame, secondsLeft, showsInCenter, upsertRequest, verdictToDraw } from "./commandRules.ts";
+import type { CheckVerdict, CommandRequest, MatchedRule, ScopeVerdict } from "../types/commandRules.ts";
 
 const req = (over: Partial<CommandRequest> = {}): CommandRequest => ({
     id: 1,
@@ -88,4 +88,57 @@ test("the terminal banner carries the command from pending to its outcome", () =
     assert.equal(blocked.requestId, null);
     assert.equal(bannerLifetime("pending"), null);
     assert.equal(bannerLifetime("approved"), 4000);
+});
+
+test("decision path: which scope decided, exemptions, approvers", () => {
+    const rule = (over: Partial<MatchedRule>): MatchedRule => ({ id: 1, scope: "site", kind: "command", pattern: "rm -rf", note: "", action: "block", ...over });
+    const none: ScopeVerdict = { hit: null, allowed_by: null, exempted: false };
+    // 全站擋下 / A site block.
+    let p = decisionPath({ action: "block", rule: rule({}), site: { hit: rule({}), allowed_by: null, exempted: false }, tunnel: none });
+    assert.equal(p.outcome, "block");
+    assert.equal(p.site, "block");
+    assert.equal(p.tunnel, "none");
+    assert.equal(p.decidedBy, "site");
+    assert.equal(p.approvers, null);
+    // 全站被豁免、隧道要核准 → 要核准，核准人是隧道的擁有者 + Admin。/ Site exempted, tunnel approve → approve by default approvers.
+    const sudo = rule({ id: 3, scope: "tunnel", pattern: "sudo", action: "approve" });
+    p = decisionPath({
+        action: "approve",
+        rule: sudo,
+        allowed_by: null,
+        site: { hit: rule({}), allowed_by: rule({ id: 2, action: "allow", pattern: "rm -rf /tmp/*" }), exempted: true },
+        tunnel: { hit: sudo, allowed_by: null, exempted: false },
+        approvers: { default: true, users: [{ id: 1, username: "alice" }, { id: 4, username: "carol" }] },
+    });
+    assert.equal(p.outcome, "approve");
+    assert.equal(p.site, "exempted");
+    assert.equal(p.tunnel, "approve");
+    assert.equal(p.decidedBy, "tunnel");
+    assert.deepEqual(p.approvers, { byDefault: true, names: ["alice", "carol"] });
+    // 放行是因為允許規則。/ Allowed thanks to an allow rule.
+    const allow = rule({ id: 2, action: "allow", pattern: "rm -rf /tmp/*" });
+    p = decisionPath({ action: "allow", rule: null, allowed_by: allow, site: { hit: rule({}), allowed_by: allow, exempted: true }, tunnel: { hit: null, allowed_by: rule({ id: 9, scope: "tunnel", action: "allow", pattern: "rm" }), exempted: false } });
+    assert.equal(p.outcome, "allow");
+    assert.equal(p.site, "exempted");
+    assert.equal(p.tunnel, "allowOnly");
+    assert.equal(p.decidedBy, null);
+    assert.equal(p.allowedBy?.id, 2);
+    assert.equal(p.scopes.site.hit?.pattern, "rm -rf");
+    assert.equal(p.scopes.tunnel.allowedBy?.id, 9);
+    // 規則指定的核准人。/ A rule's own approvers.
+    p = decisionPath({ action: "approve", rule: sudo, approvers: { default: false, users: [{ id: 4, username: "carol" }] } });
+    assert.equal(p.tunnel, "approve", "an older verdict lights only the deciding scope");
+    assert.equal(p.site, "none");
+    assert.equal(p.scopes.tunnel.hit?.id, 3);
+    assert.deepEqual(p.approvers, { byDefault: false, names: ["carol"] });
+    // 什麼都沒符合。/ Nothing matched.
+    p = decisionPath({ action: "allow", rule: null, site: none, tunnel: none });
+    assert.deepEqual([p.outcome, p.site, p.tunnel, p.decidedBy, p.allowedBy], ["allow", "none", "none", null, null]);
+});
+
+test("verdictToDraw follows whether you approve", () => {
+    const v = (action: CheckVerdict["action"]): CheckVerdict => ({ action, rule: null });
+    const base = { commands: [], for_approvers: v("allow"), for_sharees: v("approve") };
+    assert.equal(verdictToDraw({ ...base, you_approve: true }).action, "allow");
+    assert.equal(verdictToDraw({ ...base, you_approve: false }).action, "approve");
 });

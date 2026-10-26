@@ -12,7 +12,7 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
-import type { CheckResult, CommandRequest, CommandRule, RuleInput, TunnelRules } from "@/types/commandRules";
+import type { CheckResult, CommandRequest, CommandRule, RuleInput, SiteRules, TunnelRules } from "@/types/commandRules";
 
 export type RulesTab = "rules" | "history";
 
@@ -28,7 +28,7 @@ export function useCommandRulesPage() {
     const tab: RulesTab = params.get("tab") === "history" ? "history" : "rules";
 
     const [tunnels, setTunnels] = useState<{ id: number; name: string }[]>([]);
-    const [site, setSite] = useState<{ rules: CommandRule[]; can_edit: boolean } | null>(null);
+    const [site, setSite] = useState<SiteRules | null>(null);
     const [tunnelRules, setTunnelRules] = useState<TunnelRules | null>(null);
     const [history, setHistory] = useState<CommandRequest[] | null>(null);
     const [failed, setFailed] = useState(false);
@@ -52,7 +52,7 @@ export function useCommandRulesPage() {
                 apiFetch("/api/command-rules"),
                 tunnelId ? apiFetch(`/api/reverse/server/${tunnelId}/command-rules`) : Promise.resolve(null),
             ]);
-            if (s.ok) setSite((await s.json()) as { rules: CommandRule[]; can_edit: boolean });
+            if (s.ok) setSite((await s.json()) as SiteRules);
             if (tr) {
                 if (tr.ok) setTunnelRules((await tr.json()) as TunnelRules);
                 else setTunnelRules(null);
@@ -125,7 +125,7 @@ export function useCommandRulesPage() {
         }
         const body = await readJson<Record<string, unknown>>(res);
         const errors: RuleErrors = {};
-        for (const k of ["action", "kind", "pattern", "who", "via", "note", "enabled"] as const) {
+        for (const k of ["action", "kind", "pattern", "who", "via", "note", "enabled", "approver_ids"] as const) {
             const v = body?.[k];
             if (Array.isArray(v) && typeof v[0] === "string") errors[k] = v[0];
         }
@@ -173,6 +173,9 @@ export function useCommandRulesPage() {
     const scopeName = tunnelId ? (tunnelRules?.tunnel.name ?? tunnels.find((x) => x.id === tunnelId)?.name ?? `#${tunnelId}`) : null;
     const rules = tunnelId ? (tunnelRules?.rules ?? null) : (site?.rules ?? null);
     const canEdit = tunnelId ? Boolean(tunnelRules?.can_edit) : Boolean(site?.can_edit);
+    // 「要核准」規則可以指定的核准人：隧道 = 擁有者 + Admin sharee；全站 = 所有啟用中的帳號（管理員才拿得到）。
+    // Who an approve rule may name: tunnel = owner + Admin sharees; site = every active account (admins only).
+    const approverCandidates = tunnelId ? (tunnelRules?.approver_candidates ?? []) : (site?.approver_candidates ?? []);
 
     return {
         tunnelId,
@@ -183,6 +186,7 @@ export function useCommandRulesPage() {
         rules,
         siteRules: site?.rules ?? [],
         canEdit,
+        approverCandidates,
         failed,
         history,
         reload: async () => {
