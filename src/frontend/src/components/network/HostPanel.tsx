@@ -145,7 +145,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
             <header className="flex items-start gap-3 border-b border-border p-4">
                 <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground" aria-hidden><Terminal size={17} /></span>
                 <div className="min-w-0 flex-1">
-                    <h2 className="truncate text-lg leading-tight text-foreground" title={name}>{name}</h2>
+                    <h2 className="text-lg leading-tight text-foreground [overflow-wrap:anywhere]">{name}</h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
                         {t("network.hostOn", { address: host.ssh_port === 22 ? host.address : `${host.address}:${host.ssh_port}`, device: tunnel.name })}
                     </p>

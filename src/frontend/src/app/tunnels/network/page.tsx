@@ -26,13 +26,21 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
+/**
+ * 統計卡。欄窄（手機三欄）時圖示縮到數字旁邊、標籤可以換行，字不會被截成「…」。
+ * A stat tile. In a narrow column (three across on a phone) the icon moves next to the value and the label wraps
+ * instead of being cut to "…".
+ */
 function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
     return (
         <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-2.5 shadow-card">
-            <span className="grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground [&_svg]:size-4" aria-hidden>{icon}</span>
+            <span className="hidden size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground @xl:grid [&_svg]:size-4" aria-hidden>{icon}</span>
             <div className="min-w-0">
-                <p className="text-lg leading-tight text-foreground">{value}</p>
-                <p className="truncate text-xs text-muted-foreground">{label}</p>
+                <p className="flex items-center gap-1.5 text-lg leading-tight text-foreground">
+                    <span className="text-muted-foreground @xl:hidden [&_svg]:size-3.5" aria-hidden>{icon}</span>
+                    {value}
+                </p>
+                <p className="text-xs leading-snug text-muted-foreground">{label}</p>
             </div>
         </div>
     );
