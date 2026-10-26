@@ -159,3 +159,81 @@ async fn device_ip_on_the_tunnel_list() {
     let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_tunnel_endpoint WHERE tunnel_id = ?").bind(t.id).fetch_one(&lab.app.state.db.read).await.unwrap();
     assert_eq!(left, 0);
 }
+
+/// 假的「Telepy 前面的代理 + 公網 IP 查詢服務」：`/api/whoami` 回 Docker bridge 位址（代理把來源換掉了），
+/// `/ip` 回真正的公網 IP，`/junk` 回錯誤頁。/ A fake proxy whose whoami answers a Docker bridge address, plus a lookup.
+async fn fake_upstream() -> u16 {
+    use axum::routing::get;
+    let app = axum::Router::new()
+        .route("/api/whoami", get(|| async { "172.19.0.1\n" }))
+        .route("/ip", get(|| async { "114.34.69.11\n" }))
+        .route("/junk", get(|| async { "<html>rate limited</html>" }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    port
+}
+
+/// Telepy 的 `/api/whoami` 看到的不是公網位址時（前面的代理 / Docker 換掉了來源，或裝置跟 Telepy 在同一個 NAT 後面），
+/// 裝置改問站台設定的查詢網址；留空就不問。裝置是真的 `/bin/sh` + `curl`。
+/// When Telepy's whoami only sees an internal address, the device asks the site's lookup URL (blank = never).
+#[tokio::test]
+async fn device_asks_the_lookup_when_whoami_sees_an_internal_address() {
+    let upstream = fake_upstream().await;
+    let Some(lab) = Lab::start_with(|c| c.public_url = Some(format!("http://127.0.0.1:{upstream}"))).await else { return };
+    let alice = lab.user("alice").await;
+    let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "pi").await;
+    let state = &lab.app.state;
+    let tunnel = db::tunnels::by_id(&state.db, dev.tunnel_id).await.unwrap().unwrap();
+    wait_for("endpoint row", async || endpoint(&lab, &alice.token, dev.tunnel_id).await.is_object()).await;
+
+    // 預設是 ipify；測試裡改成本機的假服務，不連外。/ Defaults to ipify; the test points it at the local fake.
+    let settings = "/api/site/settings";
+    let r = lab.app.get(settings, Some(&lab.admin_token)).await;
+    assert_eq!(r.json["values"]["device_ip_lookup_url"], "https://api.ipify.org", "{}", r.text);
+    assert_eq!(r.json["meta"]["device_ip_lookup_url"]["type"], "url");
+    // 網址會放進裝置上的 shell 指令：引號、$()、cmd.exe 的 %VAR% 都不收。/ Shell-unsafe URLs are refused.
+    for bad in ["https://x.example/$(id)", "https://x.example/'; reboot", "https://x.example/%PATH%"] {
+        let r = lab.app.post(settings, Some(&lab.admin_token), serde_json::json!({"device_ip_lookup_url": bad})).await;
+        assert_eq!(r.status, 400, "{bad}: {}", r.text);
+        assert!(r.json["device_ip_lookup_url"][0].as_str().unwrap().contains("Use only"), "{}", r.text);
+    }
+
+    let set = async |url: &str| {
+        let r = lab.app.post(settings, Some(&lab.admin_token), serde_json::json!({"device_ip_lookup_url": url})).await;
+        assert!(r.status.is_success(), "{url}: {}", r.text);
+    };
+
+    // 留空：whoami 只看到 172.19.0.1，不算公網，也不問第三方。/ Blank: no public IP, no third party asked.
+    set("").await;
+    let info = telepy_server::device_info::probe(state, &tunnel, true).await.expect("probe");
+    assert!(!info.lan.is_empty() || info.hostname.is_some(), "the real shell answered: {info:?}");
+    assert_eq!(info.whoami_saw, Some("172.19.0.1".parse().unwrap()));
+    assert_eq!((info.public_ip, info.public_source), (None, None));
+
+    // 查詢服務回錯誤頁：一樣不知道。/ A junk answer: still unknown.
+    set(&format!("http://127.0.0.1:{upstream}/junk")).await;
+    assert_eq!(telepy_server::device_info::probe(state, &tunnel, true).await.unwrap().public_ip, None);
+
+    // 設了查詢網址：裝置問它，拿到真正的公網 IP。/ With a lookup URL the device gets its real public IP.
+    set(&format!("http://127.0.0.1:{upstream}/ip")).await;
+    let info = telepy_server::device_info::probe(state, &tunnel, true).await.unwrap();
+    assert_eq!(info.public_ip, Some("114.34.69.11".parse().unwrap()), "{info:?}");
+    assert_eq!(info.public_source, Some(telepy_server::device_info::SOURCE_LOOKUP));
+    // gateway 已經看到公網來源時整段都不問。/ Nothing is asked when the gateway already sees a public peer.
+    let info = telepy_server::device_info::probe(state, &tunnel, false).await.unwrap();
+    assert_eq!((info.public_ip, info.whoami_saw), (None, None));
+
+    // 存進 endpoint：列表上是外網 IP + 來源 lookup，內網網卡也在。/ Stored: the list shows it with source "lookup".
+    telepy_server::device_info::probe_and_store(state, dev.tunnel_id, dev.reverse_port, false).await;
+    let e = endpoint(&lab, &alice.token, dev.tunnel_id).await;
+    assert_eq!(e["ip"], "127.0.0.1", "the gateway still sees loopback: {e}");
+    assert_eq!(e["public_ip"], "114.34.69.11", "{e}");
+    assert_eq!(e["public_source"], "lookup");
+    assert_eq!(e["public_geo"]["scope"], "public");
+    assert!(e["probe_error"].is_null(), "{e}");
+    assert!(e["probed_at"].is_string(), "{e}");
+}

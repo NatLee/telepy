@@ -256,7 +256,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             handleUpdate(key, num);
         } else {
             const s = raw.trim();
-            if (!s) return;
+            // 網址欄位可以清空（= 關閉）。/ URL fields may be cleared (= off).
+            if (!s && kind !== "url") return;
             handleUpdate(key, s);
         }
     };
@@ -317,8 +318,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                                 <>
                                                     <div className="flex items-center gap-2">
                                                         <Input
-                                                            type={kind === "integer" ? "number" : "text"}
-                                                            className={`${kind === "integer" ? "w-24" : "w-56"} h-8`}
+                                                            type={kind === "integer" ? "number" : kind === "url" ? "url" : "text"}
+                                                            className={`${kind === "integer" ? "w-24" : kind === "url" ? "w-56 sm:w-80" : "w-56"} h-8`}
                                                             value={current}
                                                             onChange={(e) => setEditValues((prev) => ({ ...prev, [key]: e.target.value }))}
                                                             onKeyDown={(e) => { if (e.key === "Enter") commit(key, kind, value); }}

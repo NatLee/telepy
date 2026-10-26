@@ -1,11 +1,14 @@
 //! 裝置自己的位址：hostname、內網 IP（網卡）、對外 IP。gateway 看到的來源常常只是代理或 Docker 的內部位址
 //! （例如 OrbStack / Docker Desktop 的 port 轉發），所以直接問裝置：用服務金鑰登入裝置的預設帳號，跑一次唯讀腳本。
-//! 對外 IP 不靠第三方服務：裝置連 Telepy 自己的 `/api/whoami`（網頁那條路的代理會帶 X-Forwarded-For）。
+//! 對外 IP 先問 Telepy 自己的 `/api/whoami`（網頁那條路的代理會帶 X-Forwarded-For）；它看到的不是公網位址時
+//! （Telepy 前面的代理 / Docker 把來源換掉了，或裝置跟 Telepy 在同一個 NAT 後面），再讓裝置問站台設定
+//! `device_ip_lookup_url` 的查詢服務（留空 = 不問）。
 //! 頻率：每次連上問一次（同一條隧道 10 分鐘內不重問），連著時每天最多再問一次；失敗也記時間，不會一直重試。
 //! The device's own addresses: hostname, LAN interfaces and public IP. The gateway's peer is often just a proxy's
 //! or Docker's internal address, so the device is asked directly — once per connection (10-minute cool-down) and
 //! at most daily while connected — through a read-only script run with the service key. The public IP comes from
-//! Telepy's own `/api/whoami`, never a third-party service.
+//! Telepy's own `/api/whoami` first; when that answer is not public (a proxy or Docker in front of Telepy hides
+//! client addresses, or the device shares Telepy's NAT), the device asks the site's `device_ip_lookup_url`.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -29,6 +32,11 @@ const EXEC_TIMEOUT: Duration = Duration::from_secs(20);
 const EXEC_OUTPUT: usize = 64 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// 公網 IP 來源：裝置經 Telepy 的 `/api/whoami` 回報。/ Public IP reported by the device through Telepy's `/api/whoami`.
+pub const SOURCE_DEVICE: &str = "device";
+/// 公網 IP 來源：裝置問站台設定的查詢服務。/ Public IP the device got from the site's public-IP lookup.
+pub const SOURCE_LOOKUP: &str = "lookup";
+
 /// 裝置回報的東西。/ What the device reported.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeviceInfo {
@@ -36,11 +44,16 @@ pub struct DeviceInfo {
     pub lan: Vec<Network>,
     /// 只收公網位址（裝置跟 Telepy 在同一個區網時會拿到內網位址，不算）。/ Public addresses only.
     pub public_ip: Option<IpAddr>,
+    /// [`SOURCE_DEVICE`] / [`SOURCE_LOOKUP`]（有 `public_ip` 時）。/ Where `public_ip` came from.
+    pub public_source: Option<&'static str>,
+    /// `/api/whoami` 回了一個非公網位址（只記 log，用來看出 Telepy 前面的代理把來源換掉了）。
+    /// A non-public whoami answer, logged only: it shows that something in front of Telepy rewrites client addresses.
+    pub whoami_saw: Option<IpAddr>,
 }
 
 impl DeviceInfo {
     fn is_empty(&self) -> bool {
-        self.hostname.is_none() && self.lan.is_empty() && self.public_ip.is_none()
+        self.hostname.is_none() && self.lan.is_empty() && self.public_ip.is_none() && self.whoami_saw.is_none()
     }
 
     /// 存進 DB 的 `lan` 欄位。/ The `lan` column value.
@@ -69,8 +82,25 @@ pub fn whoami_urls(config: &Config) -> Vec<String> {
     out
 }
 
-fn safe_url(u: &str) -> bool {
-    (u.starts_with("https://") || u.starts_with("http://")) && u.chars().all(|c| c.is_ascii_alphanumeric() || ".-_:/[]".contains(c))
+/// 網址只能有這些字元（會放進裝置上的 shell / cmd.exe 指令，單引號裡）。站台設定存檔時也用它檢查。
+/// Only these characters (the URL goes into a shell / cmd.exe command on the device); the site setting is checked with it too.
+pub fn safe_url(u: &str) -> bool {
+    (u.starts_with("https://") || u.starts_with("http://")) && u.chars().all(|c| c.is_ascii_alphanumeric() || ".-_:/[]?=&".contains(c))
+}
+
+/// 依序抓網址、第一個成功的就停（curl，沒有就 wget）。/ Fetch the URLs in order and stop at the first that answers.
+fn posix_fetch(urls: &[String]) -> String {
+    let list = urls.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(" ");
+    format!("for u in {list}; do curl -fsS -m 5 \"$u\" 2>/dev/null && break || wget -qO- -T 5 \"$u\" 2>/dev/null && break; done")
+}
+
+fn windows_fetch(urls: &[String]) -> String {
+    let tries = urls
+        .iter()
+        .map(|u| format!("try {{ (Invoke-RestMethod -UseBasicParsing -TimeoutSec 5 -Uri '{u}'); break }} catch {{}}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("foreach ($i in 1) {{ {tries} }}")
 }
 
 /// POSIX 腳本（包在 `sh -c` 裡，不管登入 shell 是 bash / zsh / fish）。/ The POSIX script, wrapped in `sh -c`.
@@ -79,22 +109,37 @@ pub fn posix_command(urls: &[String]) -> String {
         "hostname 2>/dev/null; echo {MARK}; ip -o -4 addr show scope global 2>/dev/null || ifconfig 2>/dev/null || /sbin/ifconfig 2>/dev/null; echo {MARK};"
     );
     if !urls.is_empty() {
-        let list = urls.iter().map(|u| format!("'{u}'")).collect::<Vec<_>>().join(" ");
-        script.push_str(&format!(" for u in {list}; do curl -fsS -m 5 \"$u\" 2>/dev/null && break || wget -qO- -T 5 \"$u\" 2>/dev/null && break; done"));
+        script.push(' ');
+        script.push_str(&posix_fetch(urls));
     }
     format!("sh -c {}", crate::tunnel_service::sh_quote(&script))
 }
 
 /// Windows（OpenSSH 預設 shell 是 cmd.exe）：同樣三段，用 PowerShell。/ The same three sections in PowerShell.
 pub fn windows_command(urls: &[String]) -> String {
-    let fetch = urls
-        .iter()
-        .map(|u| format!("try {{ (Invoke-RestMethod -UseBasicParsing -TimeoutSec 5 -Uri '{u}'); break }} catch {{}}"))
-        .collect::<Vec<_>>()
-        .join("; ");
+    let fetch = windows_fetch(urls);
     format!(
-        "powershell -NoProfile -NonInteractive -Command \"hostname; '{MARK}'; Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object {{ $_.InterfaceAlias + '|' + $_.IPAddress + '/' + $_.PrefixLength }}; '{MARK}'; foreach ($i in 1) {{ {fetch} }}\""
+        "powershell -NoProfile -NonInteractive -Command \"hostname; '{MARK}'; Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object {{ $_.InterfaceAlias + '|' + $_.IPAddress + '/' + $_.PrefixLength }}; '{MARK}'; {fetch}\""
     )
+}
+
+/// 只問查詢服務（`/api/whoami` 給不出公網位址時的第二次 exec）。/ Ask only the lookup service (the second exec).
+pub fn posix_lookup_command(url: &str) -> String {
+    format!("sh -c {}", crate::tunnel_service::sh_quote(&posix_fetch(&[url.to_string()])))
+}
+
+pub fn windows_lookup_command(url: &str) -> String {
+    format!("powershell -NoProfile -NonInteractive -Command \"{}\"", windows_fetch(&[url.to_string()]))
+}
+
+/// 回答的第一個字是 IP 就收（查詢服務回純文字；`<html>…` 之類的錯誤頁不算）。/ The first word, when it is an IP.
+fn first_ip(text: &str) -> Option<IpAddr> {
+    text.split_whitespace().next().and_then(|s| s.parse::<IpAddr>().ok()).map(|ip| ip.to_canonical())
+}
+
+/// 查詢服務的回答：只收公網位址。/ A lookup answer: public addresses only.
+pub fn parse_lookup(out: &str) -> Option<IpAddr> {
+    first_ip(out).filter(|ip| scope(*ip) == Scope::Public)
 }
 
 fn valid_hostname(h: &str) -> bool {
@@ -109,13 +154,15 @@ pub fn parse_output(out: &str) -> DeviceInfo {
     let ifaces = parts.next().unwrap_or_default();
     let whoami = parts.next().unwrap_or_default();
     let hostname = host.lines().map(str::trim).find(|l| !l.is_empty()).filter(|h| valid_hostname(h)).map(str::to_string);
-    let public_ip = whoami
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.parse::<IpAddr>().ok())
-        .map(|ip| ip.to_canonical())
-        .filter(|ip| scope(*ip) == Scope::Public);
-    DeviceInfo { hostname, lan: physical_first(parse_networks(ifaces)), public_ip }
+    let answer = first_ip(whoami);
+    let public_ip = answer.filter(|ip| scope(*ip) == Scope::Public);
+    DeviceInfo {
+        hostname,
+        lan: physical_first(parse_networks(ifaces)),
+        public_ip,
+        public_source: public_ip.map(|_| SOURCE_DEVICE),
+        whoami_saw: answer.filter(|_| public_ip.is_none()),
+    }
 }
 
 /// macOS 上 VM / OrbStack / Docker Desktop 的橋接網卡（`bridge100`…）不是裝置的區網。/ macOS VM bridges are not the LAN.
@@ -156,13 +203,36 @@ pub async fn probe(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: b
     let conn = device::connect(state, &username, tunnel.reverse_port).await.map_err(|e| format!("cannot log in as {username}: {e:#}"))?;
     let urls = if ask_public { whoami_urls(&state.config) } else { Vec::new() };
     let mut info = parse_output(&run_cmd(&conn, &posix_command(&urls)).await);
+    let mut windows = false;
     if info.is_empty() {
         info = parse_output(&run_cmd(&conn, &windows_command(&urls)).await);
+        windows = true;
     }
     if info.is_empty() {
         return Err("the device answered nothing usable (no sh / ip / ifconfig / PowerShell?)".into());
     }
+    if let Some(saw) = info.whoami_saw {
+        tracing::info!(
+            tunnel_id = tunnel.id,
+            whoami = %saw,
+            "device info: Telepy's /api/whoami saw a non-public address: a proxy or Docker in front of Telepy rewrites client addresses, or the device shares Telepy's network"
+        );
+    }
+    if ask_public && info.public_ip.is_none() {
+        if let Some(url) = lookup_url(state).await {
+            let cmd = if windows { windows_lookup_command(&url) } else { posix_lookup_command(&url) };
+            info.public_ip = parse_lookup(&run_cmd(&conn, &cmd).await);
+            info.public_source = info.public_ip.map(|_| SOURCE_LOOKUP);
+        }
+    }
     Ok(info)
+}
+
+/// 站台設定的公網 IP 查詢網址（留空 = 不問；不安全的字元也不問）。/ The site's public-IP lookup URL, if any.
+async fn lookup_url(state: &AppState) -> Option<String> {
+    let url = db::settings::get_solo(&state.db).await.ok()?.device_ip_lookup_url;
+    let url = url.trim();
+    (!url.is_empty() && safe_url(url)).then(|| url.to_string())
 }
 
 async fn run_cmd(conn: &device::DeviceConn, cmd: &str) -> String {
@@ -170,7 +240,7 @@ async fn run_cmd(conn: &device::DeviceConn, cmd: &str) -> String {
 }
 
 /// 問完存起來；拿到公網 IP 且換了就警示。/ Probe, store, and alert when the public IP changed.
-async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_public: bool) {
+pub async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_public: bool) {
     let Ok(Some(tunnel)) = db::tunnels::by_id(&state.db, tunnel_id).await else { return };
     let result = tokio::time::timeout(PROBE_TIMEOUT, probe(state, &tunnel, !peer_public)).await.unwrap_or_else(|_| Err("timed out".into()));
     let at = now_db();
@@ -184,7 +254,8 @@ async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_publi
             tracing::info!(tunnel_id, hostname = ?info.hostname, lan = info.lan.len(), public = ?info.public_ip, "device info refreshed");
             if let (Some(ip), false) = (info.public_ip, peer_public) {
                 let ip = ip.to_string();
-                if let Ok(Some(ch)) = db::tunnel_endpoints::update_public_ip(&state.db, tunnel_id, &ip, "device", &at).await {
+                let source = info.public_source.unwrap_or(SOURCE_DEVICE);
+                if let Ok(Some(ch)) = db::tunnel_endpoints::update_public_ip(&state.db, tunnel_id, &ip, source, &at).await {
                     state.gateway.announce_ip_change(port, &ch, &ip, None).await;
                 }
             }
@@ -240,6 +311,8 @@ mod tests {
         assert_eq!(info.lan[0].addr.to_string(), "192.168.1.23");
         assert_eq!(info.lan[0].prefix, 24);
         assert_eq!(info.public_ip, Some("114.34.69.11".parse().unwrap()));
+        assert_eq!(info.public_source, Some(SOURCE_DEVICE));
+        assert_eq!(info.whoami_saw, None);
         assert_eq!(info.lan_json().unwrap(), r#"[{"iface":"eth0","ip":"192.168.1.23","prefix":24}]"#);
     }
 
@@ -273,9 +346,15 @@ en1: flags=8863<UP> mtu 1500\n\tinet 192.168.0.205 netmask 0xffffff00 broadcast 
 
     #[test]
     fn rejects_non_public_whoami_answers_and_junk() {
-        // 裝置跟 Telepy 在同一個區網：whoami 回的是內網位址，不算公網 IP。/ Same LAN as Telepy: not a public IP.
-        assert_eq!(parse_output("h\n@@telepy@@\n@@telepy@@\n192.168.0.205\n").public_ip, None);
-        assert_eq!(parse_output("h\n@@telepy@@\n@@telepy@@\n<html>error</html>\n").public_ip, None);
+        // 裝置跟 Telepy 在同一個區網：whoami 回的是內網位址，不算公網 IP，但記下來給 log。
+        // Same LAN as Telepy: not a public IP, but kept for the log.
+        let same_lan = parse_output("h\n@@telepy@@\n@@telepy@@\n192.168.0.205\n");
+        assert_eq!((same_lan.public_ip, same_lan.public_source), (None, None));
+        assert_eq!(same_lan.whoami_saw, Some("192.168.0.205".parse().unwrap()));
+        // Telepy 前面的代理在 Docker 裡：每個人都是那個 bridge 位址。/ A proxy in Docker: everyone is the bridge address.
+        assert_eq!(parse_output("@@telepy@@\n@@telepy@@\n172.19.0.1\n").whoami_saw, Some("172.19.0.1".parse().unwrap()));
+        let junk = parse_output("h\n@@telepy@@\n@@telepy@@\n<html>error</html>\n");
+        assert_eq!((junk.public_ip, junk.whoami_saw), (None, None));
         assert_eq!(parse_output("bad host name!\n@@telepy@@\n@@telepy@@\n").hostname, None);
         assert!(parse_output("").is_empty());
     }
@@ -290,6 +369,24 @@ en1: flags=8863<UP> mtu 1500\n\tinet 192.168.0.205 netmask 0xffffff00 broadcast 
         assert!(!posix_command(&[]).contains("curl"), "no whoami when the gateway already sees a public peer");
         assert!(windows_command(&urls).contains("Invoke-RestMethod"));
         assert!(!safe_url("https://evil.example/'; rm -rf / #"));
+        assert!(!safe_url("https://x.example/$(id)"), "no command substitution");
+        assert!(!safe_url("https://x.example/%PATH%"), "no cmd.exe variables");
+        assert!(!safe_url("ftp://x.example/ip"));
         assert!(safe_url("http://127.0.0.1:8787/api/whoami"));
+        assert!(safe_url("https://api.ipify.org/?format=text&x=1"));
+        assert_eq!(posix_lookup_command("https://api.ipify.org"), "sh -c 'for u in '\\''https://api.ipify.org'\\''; do curl -fsS -m 5 \"$u\" 2>/dev/null && break || wget -qO- -T 5 \"$u\" 2>/dev/null && break; done'");
+        let win = windows_lookup_command("https://api.ipify.org");
+        assert!(win.starts_with("powershell -NoProfile -NonInteractive -Command \"foreach ($i in 1) { try { (Invoke-RestMethod"), "{win}");
+        assert!(win.contains("-Uri 'https://api.ipify.org'"), "{win}");
+    }
+
+    #[test]
+    fn lookup_answers_must_be_public() {
+        assert_eq!(parse_lookup("114.34.69.11\n"), Some("114.34.69.11".parse().unwrap()));
+        assert_eq!(parse_lookup("  2001:4860:4860::8888 "), Some("2001:4860:4860::8888".parse().unwrap()));
+        assert_eq!(parse_lookup("::ffff:114.34.69.11"), Some("114.34.69.11".parse().unwrap()), "IPv4-mapped is canonicalised");
+        for bad in ["", "192.168.0.1", "100.64.0.1", "127.0.0.1", "<html>rate limited</html>", "error: 114.34.69.11"] {
+            assert_eq!(parse_lookup(bad), None, "{bad:?}");
+        }
     }
 }
