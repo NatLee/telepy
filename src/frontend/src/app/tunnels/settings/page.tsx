@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
 import { Segmented } from "@/components/ui/segmented";
+import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Chip, SectionHeading } from "@/components/ui/section";
@@ -41,22 +42,6 @@ import { SignInHistory } from "@/components/layout/SignInHistory";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/** 站台設定/使用者 modal 共用的開關。/ Shared toggle switch for site settings and the user modal. */
-function ToggleSwitch({ checked, disabled, onToggle }: { checked: boolean; disabled?: boolean; onToggle: () => void }) {
-    return (
-        <button
-            type="button"
-            onClick={() => !disabled && onToggle()}
-            disabled={disabled}
-            className={`${checked ? "bg-primary" : "bg-foreground/15"} relative inline-flex h-6 w-11 shrink-0 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"} rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40`}
-            role="switch"
-            aria-checked={checked}
-        >
-            <span aria-hidden="true" className={`${checked ? "translate-x-5" : "translate-x-0"} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-[0_1px_3px_oklch(0_0_0/0.2)] ring-0 transition duration-200 ease-in-out`} />
-        </button>
-    );
 }
 
 /** 只能選固定值的字串設定：用下拉選單。/ String settings with a fixed set of values get a select. */
@@ -320,7 +305,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                                         </div>
                                         <div className="shrink-0 pt-0.5">
                                             {kind === "boolean" ? (
-                                                <ToggleSwitch checked={!!value} onToggle={() => handleToggle(key, value)} />
+                                                <Switch checked={!!value} onCheckedChange={() => handleToggle(key, value)} aria-label={labelOf(key, m)} />
                                             ) : SETTING_CHOICES[key] ? (
                                                 <NativeSelect className="h-8 w-56" value={String(value ?? "")} onChange={(e) => handleUpdate(key, e.target.value)} aria-label={labelOf(key, m)}>
                                                     {SETTING_CHOICES[key].map((c) => <option key={c.value} value={c.value}>{t(c.label)}</option>)}
@@ -548,10 +533,11 @@ function UserEditModal({
                         <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
                         <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
                     </div>
-                    <ToggleSwitch
+                    <Switch
                         checked={user.is_active}
                         disabled={isSelf || saving}
-                        onToggle={() => apply({ is_active: !user.is_active })}
+                        onCheckedChange={(v) => apply({ is_active: v })}
+                        aria-label={t("settings.userActiveLabel")}
                     />
                 </div>
 
@@ -561,10 +547,11 @@ function UserEditModal({
                         <p className="text-sm text-foreground">{t("settings.userSuperuserLabel")}</p>
                         <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
                     </div>
-                    <ToggleSwitch
+                    <Switch
                         checked={user.is_superuser}
                         disabled={isSelf || saving}
-                        onToggle={() => apply({ is_superuser: !user.is_superuser })}
+                        onCheckedChange={(v) => apply({ is_superuser: v })}
+                        aria-label={t("settings.userSuperuserLabel")}
                     />
                 </div>
 

@@ -27,6 +27,7 @@ import {
     type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
@@ -131,23 +132,6 @@ function Disclosure({ icon: Icon, title, children, defaultOpen = false }: { icon
             </summary>
             <div className="border-t border-border px-4 py-4">{children}</div>
         </details>
-    );
-}
-
-function OptionToggle({ checked, label, onChange }: { checked: boolean; label: string; onChange: (v: boolean) => void }) {
-    return (
-        <button
-            type="button"
-            role="switch"
-            aria-checked={checked}
-            onClick={() => onChange(!checked)}
-            className="flex items-center gap-2.5 rounded-lg px-1 py-1 text-left text-sm text-foreground hover:bg-muted/50"
-        >
-            <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition-colors", checked ? "bg-primary" : "bg-muted-foreground/30")} aria-hidden>
-                <span className={cn("absolute top-0.5 size-4 rounded-full bg-white shadow transition-[left]", checked ? "left-[18px]" : "left-0.5")} />
-            </span>
-            {label}
-        </button>
     );
 }
 
@@ -500,9 +484,9 @@ function CheatsheetInner() {
                                 </div>
                                 {def.forwarding && (
                                     <div className="flex flex-col">
-                                        <OptionToggle checked={options.background} label={t("sheet.opt.background")} onChange={(v) => setOptions((o) => ({ ...o, background: v }))} />
-                                        <OptionToggle checked={options.keepAlive} label={t("sheet.opt.keepAlive")} onChange={(v) => setOptions((o) => ({ ...o, keepAlive: v }))} />
-                                        <OptionToggle checked={options.exitOnFailure} label={t("sheet.opt.exitOnFailure")} onChange={(v) => setOptions((o) => ({ ...o, exitOnFailure: v }))} />
+                                        <Switch size="sm" checked={options.background} onCheckedChange={(v) => setOptions((o) => ({ ...o, background: v }))}>{t("sheet.opt.background")}</Switch>
+                                        <Switch size="sm" checked={options.keepAlive} onCheckedChange={(v) => setOptions((o) => ({ ...o, keepAlive: v }))}>{t("sheet.opt.keepAlive")}</Switch>
+                                        <Switch size="sm" checked={options.exitOnFailure} onCheckedChange={(v) => setOptions((o) => ({ ...o, exitOnFailure: v }))}>{t("sheet.opt.exitOnFailure")}</Switch>
                                     </div>
                                 )}
                             </div>
