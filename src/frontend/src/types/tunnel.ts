@@ -15,6 +15,11 @@ export interface Tunnel {
     can_share: boolean;
     can_delete: boolean;
     shared_with_count?: number;
+    /**
+     * 分享給誰（只在列表裡；分享的先後順序）。只給 owner / ADMIN（能管分享的人），其他人 null。
+     * Who it is shared with (list only, in sharing order); owner / ADMIN only, null for everyone else.
+     */
+    shared_with?: TunnelSharee[] | null;
     /** 裝置的公網 IP（只在列表裡；看不到或從沒連過時 null）。/ Device public IP (list only; null when hidden or never connected). */
     endpoint?: TunnelEndpoint | null;
     /** 誰在用（只在列表裡）。/ Who is using the tunnel (list only). */
@@ -48,6 +53,14 @@ export interface Tunnel {
  * online / degraded (tunnel up, device sshd not answering) / offline / never connected.
  */
 export type TunnelHealth = "online" | "degraded" | "offline" | "never";
+
+/** 一位分享對象；`permission` 是現在有效的那個（暫時提升過期就是原本的）。/ One sharee; `permission` is the one in force now. */
+export interface TunnelSharee {
+    id: number;
+    username: string;
+    /** view / edit / admin */
+    permission: string;
+}
 
 /** 人數給所有人；sessions 只給 owner / ADMIN / 管理員（其他人 null）。/ Count for all; sessions for owner / ADMIN / admins. */
 export interface TunnelPresence {

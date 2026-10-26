@@ -73,7 +73,7 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
                 <div className="flex flex-wrap items-center gap-1">
-                    <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} />
+                    <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} onShare={() => actions.onShare(tunnel.id)} />
                     <TunnelPresenceButton presence={tunnel.presence} tunnelId={tunnel.id} />
                 </div>
             </td>
