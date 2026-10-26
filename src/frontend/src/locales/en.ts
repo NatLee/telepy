@@ -2059,6 +2059,7 @@ export const en = {
     "keys.row.sharedName": "Shared Telepy key (legacy)",
     "keys.row.legacyShared": "Shared · legacy",
     "keys.row.legacySharedTip": "The old key every tunnel used. Telepy removes it from this account once every tunnel on this machine logs in with its own key.",
+    "keys.row.keptSharedTip": "The old key every tunnel used. This server is set to keep it (another Telepy server still signs in with it), so Telepy never removes it.",
     "keys.row.installed": "On the device",
     "keys.row.installedTip": "On the key list and seen in this file at the last check.",
     "keys.row.installedUnverified": "Installed",

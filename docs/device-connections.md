@@ -170,7 +170,8 @@ sharee）。
 - **遷移舊裝置**（`device_keys::sync_tunnel`）：隧道金鑰算進每個登入帳號的 wanted，同步時裝進去；下一條連線改用它；
   共用金鑰只在**同一台機器上每條列了這個帳號的隧道**都用自己的金鑰登入過之後才從那個帳號移掉
   （`tunnel_keys::shared_removable`，事件 `service_key_migrated`）。金鑰面板把共用金鑰標成 legacy；管理者可在同一條
-  規則下手動移除。
+  規則下手動移除。`KEEP_SHARED_SERVICE_KEY=true` 時共用金鑰永遠不移（自動或手動都不行）：搬家期間舊的 Telepy 還在用
+  同一把金鑰登入同一批裝置時用（隧道金鑰照樣裝進去、照樣先用它登入）。
 - **刪隧道**：它的金鑰一定從裝置移掉；「移除服務金鑰」的選項現在只管共用的那把。
 - **不能撞**：隧道的服務公鑰不能登記成裝置金鑰或個人金鑰（`device_key_problem` / `checked_key`）。
 - **換 `SECRET_KEY`**：密文解不開 → 退回共用金鑰；`doctor` 的 `tunnel keys` 會指出有幾把解不開。共用金鑰已經被移掉

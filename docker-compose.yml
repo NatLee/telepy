@@ -83,6 +83,8 @@ services:
       - GATEWAY_PROXY_PROTOCOL_FROM=${GATEWAY_PROXY_PROTOCOL_FROM:-}
       # 裝置連上時登入問一次它的 hostname / 內網 / 公網 IP（false 關閉）。/ Ask each device for its addresses once per connection.
       - DEVICE_PROBE=${DEVICE_PROBE:-true}
+      # 共用服務金鑰留在裝置上（另一台 Telepy 還用它登入時，例如並行的舊站）。/ Keep the shared service key on devices.
+      - KEEP_SHARED_SERVICE_KEY=${KEEP_SHARED_SERVICE_KEY:-false}
     volumes:
       # Mutable data (SQLite db)
       - ./telepy-data:/data
