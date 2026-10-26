@@ -131,6 +131,13 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   螢幕選單（對方 `peer_info` 的 displays → `switch_display`，RustDesk 原生切螢幕；畫質 best / balanced / low 對應 Telepy
   的三個預設）、鍵盤選單（送出文字、Ctrl+Alt+Del）、全螢幕、說明、中斷。info 路徑圖用 `inBrowser` 變體（三步）。
   剪貼簿：核心自己在分頁有焦點時讀瀏覽器剪貼簿送過去；遠端複製的文字顯示在工具列下方。
+- **準備清單（「讓那台電腦的 RustDesk 準備好」，`components/desktop/RustDeskSetup.tsx`，純函式 `lib/rustdeskSetup.ts` + 測試）**：
+  RustDesk 模式一打開（或換了目標）就從裝置探一次 Direct IP 埠，清單四步各有狀態與一張扁平的小視窗示意（用 RustDesk 自己
+  的翻譯標籤，標出要點的地方）：① RustDesk 開著且「啟用 IP 直接存取」（設定 → 安全 → 解鎖安全設定；探測被拒 =
+  `desktop.err.rdDirectIpOff`）② 固定密碼且密碼設定不是「使用一次性密碼」（連線回 `rdPassword` = 失敗）③ macOS 的螢幕錄製 /
+  輔助使用（`rdNoDisplay` = 失敗）④ 系統服務（看不到，只提醒：沒裝的話 app 一關、重開機就連不到）。這次開頁連上過 = 前三步
+  都好、清單收成一行。只有「現在該看的那一步」（第一個失敗的，否則第一個還不知道的）攤開示意，其他各一行、可點「看要點哪裡」。
+  起因：一台 Mac mini 開著 RustDesk 卻沒勾 IP 直接存取、密碼設定是「只用一次性密碼」，頁面只說沒偵測到。
 - 憑證庫：RustDesk 密碼也能存（`protocol: rustdesk`）；表單有「已存的登入」選單與「儲存這組登入」。start 帶
   `credential_id` 時後端解開、放進回應交給核心（見憑證庫一節）；`rustdesk_open` 事件註明 with saved login '<label>'。
   統計：隧道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
