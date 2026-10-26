@@ -53,6 +53,8 @@ export interface TerminalContentProps {
     palette: TerminalPalette;
     /** 指令規則的提示列，疊在終端機上方。/ The command-rule banner, overlaid on top of the terminal. */
     commandBanner?: React.ReactNode;
+    /** 隧道名稱（檔案管理的 info 圖用）。/ The tunnel name, for the file manager's info diagram. */
+    tunnelName?: string | null;
 }
 
 export function TerminalContent({
@@ -87,6 +89,7 @@ export function TerminalContent({
     onReconnect,
     palette,
     commandBanner,
+    tunnelName,
 }: TerminalContentProps) {
     const { t } = useI18n();
     const groupRef = useRef<GroupImperativeHandle>(null);
@@ -289,7 +292,7 @@ export function TerminalContent({
                         className="hidden md:flex min-h-0 min-w-0 bg-card rounded-lg border border-border flex-col"
                     >
                         {isDesktop === true && showFiles && username && accessToken && (
-                            <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                            <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} deviceName={tunnelName ?? undefined} />
                         )}
                     </ResizablePanel>
                 </ResizablePanelGroup>
@@ -297,7 +300,7 @@ export function TerminalContent({
                 {/* Mobile-only full-screen Files view */}
                 <div className={`md:hidden absolute inset-0 bg-card rounded-lg border border-border flex flex-col transition-opacity duration-200 ${mainView === "files" ? "opacity-100 z-30 pointer-events-auto" : "opacity-0 pointer-events-none z-0"}`}>
                     {isDesktop === false && mainView === "files" && username && accessToken && (
-                        <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} />
+                        <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} deviceName={tunnelName ?? undefined} />
                     )}
                 </div>
             </div>

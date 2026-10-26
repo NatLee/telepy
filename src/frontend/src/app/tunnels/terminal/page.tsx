@@ -163,6 +163,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                 />
 
                 <TerminalContent
+                    tunnelName={tunnelName}
                     mainView={mainView}
                     setMainView={setMainView}
                     connected={connected}

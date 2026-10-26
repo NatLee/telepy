@@ -153,7 +153,7 @@ impl Backend {
                     }
                     Err(e) => return Err(format!("Failed to list files: {e}")),
                 };
-                Ok((path, entries.iter().map(sftp::ws_entry_json).collect()))
+                Ok((path.clone(), sftp::ws_listing(sftp, &path, &entries).await))
             }
             Backend::Exec(s) => {
                 let is_ps = s.is_powershell().await;

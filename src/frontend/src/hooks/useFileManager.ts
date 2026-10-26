@@ -1,17 +1,16 @@
 /**
- * 檔案管理面板邏輯：WebSocket 僅負責列表與 shell 偵測；上傳／下載皆走 REST。
- * File manager panel logic: WebSocket for listing and shell only; upload/download via REST.
- * - 連線生命週期（ticket 認證、退避重連、心跳）由共用的 ReconnectingSocket 處理。
- *   Connection lifecycle (ticket auth, backoff reconnect, heartbeat) handled by the shared ReconnectingSocket.
- * - WebSocket：連線後 shell_detect、list_files；伺服器回傳目錄內容與路徑。
- * - 上傳／下載：直接呼叫 REST API（POST /api/sftp/upload、GET /api/sftp/download）。
+ * 檔案管理面板的連線與列表：WebSocket 只負責列目錄與 shell 偵測；檔案操作與上傳下載走 REST（見 useFileOps）。
+ * File manager connection + listing: the WebSocket lists folders and detects the shell; operations, uploads and
+ * downloads go through REST (see useFileOps).
+ * - 連線生命週期（認證、退避重連、心跳）由共用的 ReconnectingSocket 處理；關閉碼變成 `link`（離線 / 要 step-up…），
+ *   info 視覺說明用它標出卡在哪一段。
+ *   The shared ReconnectingSocket handles the lifecycle; close codes become `link` (offline / step-up …) for the diagram.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { apiFetch, readJson, responseError } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
 import { ReconnectingSocket } from "@/lib/reconnectingSocket";
 import { FileItem } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import { linkFromClose, parentPath, type FileLink } from "@/lib/fileManager";
 
 /**
  * 每個（隧道, 帳號）上次看的目錄：面板收起來就卸載、斷線，再打開回到同一個目錄。
@@ -20,19 +19,19 @@ import { useI18n } from "@/lib/i18n";
 const lastPaths = new Map<string, string>();
 
 export function useFileManager(serverId: string, username: string, accessToken: string, initialPath?: string) {
-    const { showError, showSuccess } = useToast();
     const { t } = useI18n();
     const [connected, setConnected] = useState(false);
     const [connecting, setConnecting] = useState(true);
+    const [link, setLink] = useState<FileLink>("connecting");
     const [currentPath, setCurrentPath] = useState("~/");
+    /** 上一次列成功的目錄（輸入框可以被改，操作用這個）。/ The last listed folder (the input may be edited). */
+    const [listedPath, setListedPath] = useState("~/");
     const [items, setItems] = useState<FileItem[]>([]);
     const [loading, setLoading] = useState(false);
     const [shellType, setShellType] = useState<"unix" | "powershell">("unix");
-    const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const socketRef = useRef<ReconnectingSocket | null>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // 語言切換不該讓 WebSocket 重連;t 走 ref,只在訊息真的送達時才取用最新翻譯。
     // A language switch shouldn't reconnect the WebSocket; read t via a ref at message time instead.
@@ -49,76 +48,11 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     const loadDirectoryRef = useRef(loadDirectory);
     useEffect(() => { loadDirectoryRef.current = loadDirectory; }, [loadDirectory]);
 
-    const performActualUpload = useCallback(async (uploadUrl: string, file: File) => {
-        try {
-            const formData = new FormData();
-            formData.append("file", file);
-
-            const res = await apiFetch(uploadUrl, {
-                method: "POST",
-                body: formData,
-            });
-
-            if (res.ok) {
-                showSuccess(t("files.uploaded"));
-                loadDirectory(currentPath);
-            } else {
-                const data = await readJson(res);
-                showError(responseError(res, data, t("files.uploadFailed")));
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (err: any) {
-            showError(t("files.uploadRequestFailed", { error: err.message }));
-        } finally {
-            setUploading(false);
-        }
-    }, [currentPath, loadDirectory, showError, showSuccess, t]);
-
-    const downloadUrl = useCallback(async (url: string, path?: string) => {
-        try {
-            const res = await apiFetch(url);
-            if (!res.ok) {
-                let message = t("files.downloadRequestFailed");
-                try {
-                    const data = await res.json();
-                    if (data?.error && typeof data.error === "string") message = data.error;
-                } catch {
-                    // ignore non-JSON body
-                }
-                throw new Error(message);
-            }
-
-            let filename = path && typeof path === 'string' ? path.split(/[/\\]/).pop() || "download" : "download";
-            const disposition = res.headers.get('Content-Disposition');
-            if (disposition && disposition.includes('filename=')) {
-                // eslint-disable-next-line no-useless-escape
-                const match = disposition.match(/filename="?([^"]+)"?/);
-                if (match && match[1]) {
-                    filename = match[1];
-                }
-            }
-
-            const blob = await res.blob();
-            const windowUrl = window.URL;
-            const blobUrl = windowUrl.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            windowUrl.revokeObjectURL(blobUrl);
-
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (err: any) {
-            showError(t("files.downloadFailed", { error: err.message }));
-        }
-    }, [showError, t]);
-
     // WebSocket 連線：交由共用 ReconnectingSocket（第一則訊息帶 token 認證 + 退避重連 + 心跳）。
     useEffect(() => {
         if (!serverId || !username || !accessToken) return;
         setConnecting(true);
+        setLink("connecting");
         const pathKey = `${serverId}\u0000${username}`;
 
         const socket = new ReconnectingSocket({
@@ -130,6 +64,20 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                 setConnecting(false);
                 if (c) setError(null);
             },
+            onPhase: (p) => {
+                setLink((prev) => {
+                    if (p.state === "open") return "open";
+                    if (p.state === "connecting") return prev === "offline" || prev === "stepup" ? prev : "connecting";
+                    // 離線 / 要 step-up 的時候，重試或停止都維持那個說明。/ Keep offline / step-up while retrying or stopped.
+                    if (prev === "offline" || prev === "stepup") return prev;
+                    return p.state === "retrying" ? "retrying" : "stopped";
+                });
+            },
+            // 一次不正常的斷線（1006）不蓋掉「裝置離線 / 要 step-up」的說明。/ A stray 1006 keeps the offline / step-up story.
+            onClose: (code) => setLink((prev) => {
+                const next = linkFromClose(code);
+                return next === "retrying" && (prev === "offline" || prev === "stepup") ? prev : next;
+            }),
             onOpen: (s) => {
                 s.send(JSON.stringify({ action: "shell_detect" }));
             },
@@ -140,6 +88,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                     const d = parsed.data || {};
 
                     if (action === "shell_detect" && d.status === "success") {
+                        setLink("open");
                         setShellType(d.shell);
                         const startPath = lastPaths.get(pathKey) ?? (d.shell === "powershell" ? "C:\\" : "~/");
                         setCurrentPath(startPath);
@@ -148,6 +97,7 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                         if (d.status === "success") {
                             setItems(d.files || []);
                             setCurrentPath(d.path);
+                            setListedPath(d.path);
                             if (typeof d.path === "string") lastPaths.set(pathKey, d.path);
                             setError(null);
                         } else {
@@ -157,7 +107,6 @@ export function useFileManager(serverId: string, username: string, accessToken: 
                     } else if (action === "error") {
                         setError(d.message || tRef.current("files.genericError"));
                         setLoading(false);
-                        setUploading(false);
                     }
                 } catch (e) {
                     console.error("Error parsing WS message", e);
@@ -178,7 +127,9 @@ export function useFileManager(serverId: string, username: string, accessToken: 
             setCurrentPath(initialPath);
             loadDirectory(initialPath);
         }
-    }, [initialPath, connected, currentPath, loadDirectory]);
+        // 只在終端機那邊同步了新路徑時跳過去。/ Only follow a newly synced path from the terminal.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialPath, connected]);
 
     const handlePathSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -186,96 +137,47 @@ export function useFileManager(serverId: string, username: string, accessToken: 
     };
 
     const navigateTo = (folderName: string) => {
-        let newPath = currentPath;
-        if (shellType === "powershell") {
-            newPath = currentPath.endsWith("\\") ? currentPath + folderName : currentPath + "\\" + folderName;
-        } else {
-            newPath = currentPath.endsWith("/") ? currentPath + folderName : currentPath + "/" + folderName;
-        }
-        loadDirectory(newPath);
+        const sep = shellType === "powershell" && !listedPath.includes("/") ? "\\" : "/";
+        const next = listedPath.endsWith(sep) ? listedPath + folderName : listedPath + sep + folderName;
+        loadDirectory(next);
     };
 
     const goUp = () => {
-        let newPath = currentPath;
-        if (shellType === "powershell") {
-            const parts = newPath.split("\\").filter(Boolean);
-            if (parts.length > 1) {
-                parts.pop();
-                newPath = parts.join("\\") + "\\";
-            } else {
-                newPath = parts[0] + "\\";
-            }
-        } else {
-            if (newPath === "/" || newPath === "~" || newPath === "~/") return;
-            const stripped = newPath.endsWith("/") ? newPath.slice(0, -1) : newPath;
-            const lastSlashIndex = stripped.lastIndexOf("/");
-            if (lastSlashIndex > 0) {
-                newPath = stripped.slice(0, lastSlashIndex);
-                if (newPath === "~") newPath = "~/";
-            } else if (lastSlashIndex === 0) {
-                newPath = "/";
-            }
-        }
-        loadDirectory(newPath);
+        const up = parentPath(listedPath);
+        if (up) loadDirectory(up);
     };
 
     const goHome = () => {
-        const homePath = shellType === "powershell" ? "C:\\" : "~/";
-        loadDirectory(homePath);
+        loadDirectory(shellType === "powershell" ? "C:\\" : "~/");
     };
 
-    const handleUploadClick = () => {
-        fileInputRef.current?.click();
-    };
-
-    const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        setUploading(true);
-        const uploadUrl = `/api/sftp/upload/${serverId}/${encodeURIComponent(username)}?destination_path=${encodeURIComponent(currentPath)}`;
-        performActualUpload(uploadUrl, file);
-
-        if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-        }
-    }, [serverId, username, currentPath, performActualUpload]);
-
-    const handleDownload = useCallback((item: FileItem) => {
-        showSuccess(t("files.downloading"));
-        const separator = shellType === "powershell" ? "\\" : "/";
-        const path = currentPath.endsWith(separator) ? currentPath + item.name : currentPath + separator + item.name;
-        const url = `/api/sftp/download/${serverId}/${encodeURIComponent(username)}?path=${encodeURIComponent(path)}`;
-        downloadUrl(url, path);
-    }, [serverId, username, currentPath, shellType, downloadUrl, showSuccess, t]);
+    const refresh = useCallback(() => loadDirectory(listedPath), [loadDirectory, listedPath]);
 
     return {
-        refs: {
-            fileInputRef
-        },
         state: {
             connected,
             connecting,
+            link,
             currentPath, setCurrentPath,
+            listedPath,
             items,
             loading,
             shellType,
-            uploading,
-            error
+            error,
+            setError,
         },
         actions: {
             loadDirectory,
+            refresh,
             handlePathSubmit,
             navigateTo,
             goUp,
             goHome,
-            handleUploadClick,
-            handleFileChange,
-            handleDownload
         },
         reconnect: () => {
             setError(null);
             setConnecting(true);
+            setLink("connecting");
             socketRef.current?.reconnect();
         }
     };
