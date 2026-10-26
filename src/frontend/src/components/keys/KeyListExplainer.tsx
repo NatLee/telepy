@@ -5,11 +5,16 @@
  * The "how device key lists work" panel: a three-column diagram (your keys → the device's list → each
  * account's authorized_keys) plus four rules. Owner and sharee keys are coloured differently and a revoked
  * key is struck through. Collapsible (remembered in localStorage).
+ * 下方的「金鑰去哪」：同一把金鑰從清單到每個帳號的金鑰檔（允許 ∩ 選定；Windows 管理員的共用檔），例子由
+ * `lib/keyPlacement` 的純函式算出，裝置面板用同一張圖顯示真實狀態。
+ * "Where a key goes" below: the same flow the device panel draws with real state, here on an example.
  */
 import React from "react";
 import { ArrowDown, ArrowRight, Check, Clock3, KeyRound, Laptop, Scissors, ShieldCheck, UserCheck, Users, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { EXAMPLE_ACCOUNTS, EXAMPLE_ALLOWED, EXAMPLE_CHOSEN, placeKey } from "@/lib/keyPlacement";
+import { KeyPlacementFlow } from "./KeyPlacementFlow";
 
 type Who = "owner" | "sharee" | "revoked";
 
@@ -139,6 +144,13 @@ export function KeyListExplainer({ onHide }: { onHide: () => void }) {
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-primary/60" aria-hidden />{t("keys.how.legendOwner")}</span>
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-info/70" aria-hidden />{t("keys.how.legendSharee")}</span>
                 <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm bg-muted-foreground/40" aria-hidden />{t("keys.how.legendRevoked")}</span>
+            </div>
+
+            {/* 金鑰去哪（允許 ∩ 選定 → 檔案）/ Where a key goes (allowed ∩ chosen → files) */}
+            <div className="mt-4 rounded-xl bg-card p-3 ring-1 ring-border sm:p-4">
+                <h3 className="text-sm text-foreground">{t("keys.place.title")}</h3>
+                <p className="mb-3 mt-0.5 text-xs text-muted-foreground">{t("keys.place.subtitle")}</p>
+                <KeyPlacementFlow keyLabel="macbook" listLabel="pi-lab" placements={placeKey(EXAMPLE_ACCOUNTS, EXAMPLE_ALLOWED, EXAMPLE_CHOSEN)} note={t("keys.place.exampleNote")} />
             </div>
 
             {/* 規則 / Rules */}

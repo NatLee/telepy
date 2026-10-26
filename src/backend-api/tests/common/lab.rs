@@ -11,6 +11,7 @@
 //!   之後每一跳 ProxyJump 穿過前一台。
 //! - 網頁終端機：真的 `/ws/terminal/`（Telepy 的權限）→ 池子連線上的 PTY channel → 裝置；區網主機那一跳由
 //!   OpenSSH（下面的包裝程式）連 `ssh::bridge` 的一次性入口。檔案管理：`filemanager`。
+//!
 //! 沒有 ssh / ssh-keygen 的環境 [`Lab::start`] 回 None，測試自行跳過。
 //! Reusable SSH topology for integration tests: gateway, real OpenSSH tunnels and laptops, scriptable device sshd.
 
@@ -152,6 +153,14 @@ impl Machine {
     pub fn authorized_keys(&self, user: &str) -> String {
         std::fs::read_to_string(self.home.join(user).join(".ssh/authorized_keys")).unwrap_or_default()
     }
+    /// pretend_windows：共用的管理員金鑰檔 `<home>/ProgramData/ssh/administrators_authorized_keys`。
+    /// pretend_windows: the shared admin key file.
+    pub fn admin_authorized_keys_path(&self) -> PathBuf {
+        self.home.join("ProgramData/ssh/administrators_authorized_keys")
+    }
+    pub fn admin_authorized_keys(&self) -> String {
+        std::fs::read_to_string(self.admin_authorized_keys_path()).unwrap_or_default()
+    }
     /// 收到過的 pty-req（term + 初始大小）。/ PTY requests seen so far.
     pub fn ptys(&self) -> Vec<PtyState> {
         self.ptys.lock().unwrap().clone()
@@ -205,6 +214,13 @@ pub struct MachineOpts {
     /// A tty-like shell: a `$ ` prompt, keystrokes echoed (backspace and Ctrl+C too), and Enter "runs" the line:
     /// prints `ran:<line>` and records it in [`Machine::commands`]. Command rules read the echoed line.
     pub echo_shell: bool,
+    /// 假裝是 Windows：`uname -s` 失敗（9009），`Get-LocalGroupMember` 的 PowerShell 探測印出 `<home>/ProgramData`
+    /// 與 `windows_admins`；像 Win32-OpenSSH 一樣，`windows_admins` 裡的帳號**只看**共用的
+    /// `<home>/ProgramData/ssh/administrators_authorized_keys`，不看自己的 `~/.ssh/authorized_keys`。
+    /// Pretend to be Windows: `uname` fails, the PowerShell probe answers with `<home>/ProgramData` and
+    /// `windows_admins`, and those accounts trust only the shared admin file (never their own).
+    pub pretend_windows: bool,
+    pub windows_admins: &'static [&'static str],
 }
 
 struct MachineState {
@@ -257,7 +273,13 @@ impl SshdHandler {
         if let Some(k) = self.m.accounts.get(user).and_then(|keys| keys.iter().find(|k| k.bare() == offered)) {
             return Some((k.name.clone(), offered));
         }
-        file_trusts(&self.m.home.join(user).join(".ssh/authorized_keys"), &offered).then(|| (String::new(), offered))
+        // Windows 管理員：只有共用的管理員檔算數。/ A Windows administrator: only the shared admin file counts.
+        let file = if self.m.opts.pretend_windows && self.m.opts.windows_admins.contains(&user) {
+            self.m.home.join("ProgramData/ssh/administrators_authorized_keys")
+        } else {
+            self.m.home.join(user).join(".ssh/authorized_keys")
+        };
+        file_trusts(&file, &offered).then(|| (String::new(), offered))
     }
 }
 
@@ -453,6 +475,11 @@ impl server::Handler for SshdHandler {
             "whereami" => (format!("{user}@{}\n", self.m.name), String::new(), 0),
             c if c.strip_prefix("sleep ").and_then(|n| n.parse::<u64>().ok()).is_some() => (String::new(), String::new(), 0),
             "uname -s" if self.m.opts.pretend_darwin => ("Darwin\n".to_string(), String::new(), 0),
+            "uname -s" if self.m.opts.pretend_windows => (String::new(), "'uname' is not recognized as an internal or external command\r\n".to_string(), 9009),
+            c if self.m.opts.pretend_windows && c.contains("Get-LocalGroupMember") => {
+                let members: String = self.m.opts.windows_admins.iter().map(|a| format!("{}\\{a}\r\n", self.m.name.to_uppercase())).collect();
+                (format!("{}\r\n---telepy---\r\n{members}", self.m.home.join("ProgramData").display()), String::new(), 0)
+            }
             c if self.m.opts.pretend_darwin && c.contains("dscacheutil -q host -a name ") => {
                 let name = c.rsplit("dscacheutil -q host -a name ").next().unwrap_or_default().trim_matches('\'').to_string();
                 self.m.resolves.lock().unwrap().push(name.clone());
@@ -555,6 +582,9 @@ impl server::Handler for SshdHandler {
 /// 起一台 sshd：`accounts` = OS 帳號 → 信任的金鑰。
 pub async fn start_machine(dir: &Path, name: &str, accounts: &[(&str, &[&LabKey])], opts: MachineOpts) -> Machine {
     let host_key = keygen(dir, &format!("{name}-hostkey"));
+    if opts.pretend_windows {
+        std::fs::create_dir_all(dir.join(format!("{name}-home")).join("ProgramData/ssh")).unwrap();
+    }
     let mut methods = MethodSet::empty();
     methods.push(MethodKind::PublicKey);
     let config = Arc::new(server::Config {
@@ -1107,7 +1137,7 @@ impl Lab {
         let id = r.json["usernames"].as_array().unwrap().iter().find(|u| u["username"] == os_user).unwrap_or_else(|| panic!("{os_user} not allowed for {}", user.username))["id"].as_i64().unwrap();
         let r = self.app.get(&format!("/tunnels/server/config/{}?username_id={id}", device.tunnel_id), Some(&user.token)).await;
         let generated = r.json["config"].as_str().unwrap().to_string();
-        let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != "telepy-ssh-server").last().unwrap().to_string();
+        let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != "telepy-ssh-server").next_back().unwrap().to_string();
         let path = self.dir.path().join(format!("{}-{}-generated.conf", user.username, device.name));
         // 後端給的 known_hosts（gateway 的 host key）存到 lab 目錄，絕不碰開發者的 ~/.ssh。
         // The known_hosts the backend hands out goes into the lab dir, never the developer's ~/.ssh.

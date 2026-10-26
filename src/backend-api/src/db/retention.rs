@@ -43,6 +43,8 @@ pub async fn purge(db: &Db) -> sqlx::Result<u64> {
         .execute(&db.write)
         .await?
         .rows_affected();
+    // 手動移除的 authorized_keys 行（還原用）：7 天。/ Removed authorized_keys lines (for undo): 7 days.
+    deleted += super::device_keys::removals_purge(db).await?;
     // 網頁登入 session（帶 IP）：到期或登出超過一天就沒用了。/ Web sign-in sessions (with IPs): gone a day after expiry or logout.
     deleted += super::web_sessions::purge(db, &db_time(chrono::Utc::now() - chrono::Duration::days(1))).await?;
     sqlx::query("DELETE FROM telepy_audit_anchor WHERE at < ? AND id NOT IN (SELECT MAX(id) FROM telepy_audit_anchor WHERE kind = 'prune' GROUP BY table_name)")

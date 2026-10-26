@@ -7,13 +7,16 @@
  */
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, KeyRound, Loader2, Plus, Search } from "lucide-react";
+import { ChevronDown, KeyRound, Loader2, Plus, Search, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SectionHeading } from "@/components/ui/section";
+import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { chosenCount, toggleChosen } from "@/lib/keyPlacement";
 import { fieldsMatch, queryTerms } from "@/lib/keyRows";
-import type { DeviceKeys } from "@/types/keys";
+import type { DeviceAccount, DeviceKeys } from "@/types/keys";
 
 /** 這麼多把以上才有搜尋與收合。/ Search and collapsing from this many keys on. */
 export const MY_KEYS_FILTER_FROM = 7;
@@ -21,6 +24,58 @@ export const MY_KEYS_FILTER_FROM = 7;
 export const MY_KEYS_COLLAPSED = 8;
 
 type MyKey = DeviceKeys["my_keys"][number];
+
+/**
+ * 清單上的金鑰要裝到哪些帳號：預設「我的每個帳號」，浮層裡每個帳號一個勾選框；取消勾選的帳號下次同步就移除。
+ * Which accounts a listed key goes into: "all my accounts" by default, one checkbox per account in a popover.
+ */
+function AccountPicker({ k, accounts, busy, onChange }: { k: MyKey; accounts: DeviceAccount[]; busy: boolean; onChange: (accounts: number[] | null) => void }) {
+    const { t } = useI18n();
+    const c = chosenCount(k.accounts, accounts);
+    const current = k.accounts === null ? accounts.map((a) => a.id) : k.accounts;
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    disabled={busy}
+                    aria-label={t("keys.accounts.aria", { key: k.name })}
+                    className={cn(
+                        "inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[0.75rem] leading-5 ring-1 ring-inset transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        c.all ? "text-muted-foreground ring-border" : "bg-warning/10 text-warning ring-warning/30"
+                    )}
+                >
+                    <Users size={12} aria-hidden />
+                    {c.all ? t("keys.accounts.all") : t("keys.accounts.some", { chosen: c.chosen, total: c.total })}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-64 p-3">
+                <p className="text-sm text-foreground">{t("keys.accounts.pickTitle")}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{t("keys.accounts.pickHint")}</p>
+                <ul className="mt-2 flex flex-col gap-1">
+                    <li>
+                        <label className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/50">
+                            <input type="checkbox" className="size-4 accent-primary" checked={c.all} disabled={busy || c.all} onChange={() => onChange(null)} />
+                            {t("keys.accounts.all")}
+                        </label>
+                    </li>
+                    {accounts.map((a) => {
+                        const on = current.includes(a.id);
+                        const last = on && current.length === 1;
+                        return (
+                            <li key={a.id}>
+                                <label className={cn("flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 font-mono text-sm hover:bg-muted/50", last && "cursor-not-allowed")} title={last ? t("keys.accounts.onlyOne") : undefined}>
+                                    <input type="checkbox" className="size-4 accent-primary" checked={on} disabled={busy || last} onChange={(e) => onChange(toggleChosen(k.accounts, accounts, a.id, e.target.checked))} />
+                                    {a.username}
+                                </label>
+                            </li>
+                        );
+                    })}
+                </ul>
+            </PopoverContent>
+        </Popover>
+    );
+}
 
 /** 已在清單上的排前面，其餘照原順序。/ Keys on the list first, otherwise in server order. */
 export function initialOrder(keys: MyKey[]): number[] {
@@ -32,12 +87,15 @@ export function MyKeysOnDevice({
     busy,
     onToggle,
     onAddAll,
+    onSetAccounts,
     onNavigate,
 }: {
     d: DeviceKeys;
     busy: string | null;
     onToggle: (keyId: number, on: boolean) => void;
     onAddAll: (keyIds: number[]) => void;
+    /** 這把金鑰只裝到這些帳號（null = 全部）。/ Limit a listed key to these accounts (null = all). */
+    onSetAccounts: (keyId: number, accounts: number[] | null) => void;
     /** 點「新增金鑰」離開面板時。/ Called when the "add a key" link leaves the panel. */
     onNavigate: () => void;
 }) {
@@ -104,22 +162,29 @@ export function MyKeysOnDevice({
                     )}
                     <div className="flex flex-wrap gap-1.5">
                         {visible.map((k) => {
-                            const keyBusy = busy === `key:${k.id}` || busy === "all";
+                            const keyBusy = busy === `key:${k.id}` || busy === "all" || busy === `accounts:${k.id}`;
+                            // 有一個以上的帳號才需要選；勾選框與帳號選擇並排在同一顆籤裡。/ The picker only matters with 2+ accounts.
+                            const picker = k.in_list && d.account_ids.length > 1;
                             return (
-                                <label
+                                <span
                                     key={k.id}
-                                    className="inline-flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 ring-1 ring-inset ring-border transition-colors hover:bg-muted/50 has-[:checked]:bg-primary/6 has-[:checked]:ring-primary/35"
-                                    title={k.fingerprint ?? ""}
-                                >
-                                    {keyBusy ? (
-                                        <Loader2 size={16} className="animate-spin text-primary" aria-hidden />
-                                    ) : (
-                                        <input type="checkbox" checked={k.in_list} onChange={(e) => onToggle(k.id, e.target.checked)} className="size-4 accent-primary" />
+                                    className={cn(
+                                        "inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 ring-1 ring-inset ring-border transition-colors hover:bg-muted/50",
+                                        k.in_list && "bg-primary/6 ring-primary/35"
                                     )}
-                                    <KeyRound size={14} className="text-muted-foreground" aria-hidden />
-                                    <span className="text-sm text-foreground">{k.name}</span>
-                                    <span className="font-mono text-xs text-muted-foreground">{k.key_type ?? "?"}</span>
-                                </label>
+                                >
+                                    <label className="inline-flex cursor-pointer items-center gap-2" title={k.fingerprint ?? ""}>
+                                        {keyBusy ? (
+                                            <Loader2 size={16} className="animate-spin text-primary" aria-hidden />
+                                        ) : (
+                                            <input type="checkbox" checked={k.in_list} onChange={(e) => onToggle(k.id, e.target.checked)} className="size-4 accent-primary" />
+                                        )}
+                                        <KeyRound size={14} className="text-muted-foreground" aria-hidden />
+                                        <span className="text-sm text-foreground">{k.name}</span>
+                                        <span className="font-mono text-xs text-muted-foreground">{k.key_type ?? "?"}</span>
+                                    </label>
+                                    {picker && <AccountPicker k={k} accounts={d.account_ids} busy={keyBusy} onChange={(accounts) => onSetAccounts(k.id, accounts)} />}
+                                </span>
                             );
                         })}
                         {collapsed && (
