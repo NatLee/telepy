@@ -388,7 +388,15 @@ export function useDesktopPage() {
         }
     }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody]);
 
+    // RustDesk 清單用：這個目標（隧道 + 主機 + 帳號 + 埠）這次開頁以來連上過。/ For the RustDesk checklist.
+    const [rdReadyKey, setRdReadyKey] = useState<string | null>(null);
+    const protocolRef = useRef(form.protocol);
+    useEffect(() => {
+        protocolRef.current = form.protocol;
+    }, [form.protocol]);
+
     const onConnected = useCallback(() => {
+        if (protocolRef.current === "rustdesk") setRdReadyKey(probeKeyRef.current);
         setPhase("connected");
         setConnectedAt(Date.now());
         // 連上了就不留密碼。/ Drop the password once connected.
@@ -548,6 +556,14 @@ export function useDesktopPage() {
         }
     }, [tunnel, host, form.port, form.account, address, probeKey]);
 
+    // RustDesk 模式一打開（或換了目標）就從裝置探一次，清單上的狀態才是真的。/ Probe once per target in RustDesk mode.
+    const autoProbe = isRustDesk && canProbe && probeState.state === "idle" && phase === "idle";
+    useEffect(() => {
+        if (!autoProbe) return;
+        const id = setTimeout(() => void runProbe(), 400);
+        return () => clearTimeout(id);
+    }, [autoProbe, runProbe]);
+
     // RustDesk 的 ssh 指令要別名：和命令表一樣讀 config（多個帳號時取這個帳號那一份）。/ The alias for the ssh command.
     const tunnelId = tunnel?.id ?? null;
     useEffect(() => {
@@ -600,7 +616,7 @@ export function useDesktopPage() {
         state: {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
-            customArea, selecting, isRustDesk, canProbe, probeState, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
+            customArea, selecting, isRustDesk, canProbe, probeState, rdReady: rdReadyKey === probeKey, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
             clipboard: clipboardPref,
         },
         actions: {

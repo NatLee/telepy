@@ -44,6 +44,8 @@ import { loadRustDeskCore } from "@/lib/rustdesk";
 import { DesktopInfoDialog } from "@/components/desktop/DesktopInfoDialog";
 import { ConnectionWaysDialog } from "@/components/desktop/ConnectionWays";
 import { wayFor } from "@/lib/connectionWays";
+import { RustDeskSetup } from "@/components/desktop/RustDeskSetup";
+import { setupStatus, tunnelProblem } from "@/lib/rustdeskSetup";
 import { DesktopStatsButton } from "@/components/desktop/DesktopStats";
 import type { FlowContext } from "@/components/desktop/DesktopFlow";
 import { CommandBar } from "@/components/cheatsheet/CommandView";
@@ -804,7 +806,7 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
  */
 function RustDeskPanel({ state, actions }: { state: PageState; actions: PageActions }) {
     const { t, tn } = useI18n();
-    const { tunnel, host, form, address, probeState, connectTarget, canProbe } = state;
+    const { tunnel, host, form, address, probeState, connectTarget, canProbe, phase, failure, rdReady } = state;
     const [open, setOpen] = useState(false);
     const probing = probeState.state === "checking";
     const port = isValidPort(form.port) ? form.port : String(RUSTDESK_PORT);
@@ -818,12 +820,27 @@ function RustDeskPanel({ state, actions }: { state: PageState; actions: PageActi
         <span className={cn("mt-0.5 grid size-5 shrink-0 place-items-center rounded-full text-xs tabular-nums", done ? "bg-success text-success-foreground" : "bg-muted text-muted-foreground")} aria-hidden>{n}</span>
     );
 
+    // 準備清單：探測、上一次連線失敗、這次有沒有連上過。/ The readiness checklist's inputs.
+    const setupInput = {
+        probe: probeState.state,
+        probeFailure: probeState.failure?.key ?? null,
+        failure: phase === "failed" ? failure?.key ?? null : null,
+        connected: rdReady,
+    };
+    const setup = setupStatus(setupInput);
+    // 第 1 步自己會說有沒有回應；這一行只講「檢查中」和隧道那段的問題。/ Step 1 tells the answer; this line covers checking and tunnel problems.
+    const probeLine = probing
+        ? { tone: "muted" as const, text: t("desktop.rdSetup.checkingLine") }
+        : tunnelProblem(setupInput) && probeState.failure
+          ? { tone: "danger" as const, text: t(probeState.failure.key, probeState.failure.vars) }
+          : null;
+
     return (
         <div className="space-y-4">
             <Callout tone="info">
                 <p>{t("desktop.rustdesk.intro")}</p>
-                <p className="mt-1">{t("desktop.rustdesk.step1")}</p>
             </Callout>
+            <RustDeskSetup status={setup} port={port} probeLine={probeLine} canCheck={canProbe} checking={probing} onCheck={() => void actions.runProbe()} />
             <div className="rounded-md border border-border bg-surface">
                 <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-foreground">
                     <ChevronDown size={15} className={cn("shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden />
