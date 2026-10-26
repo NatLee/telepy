@@ -128,9 +128,14 @@ pub struct UserProfile {
     /// Terminal font id (the frontend's list; default `hack`)
     #[schema(example = "hack")]
     pub terminal_font: String,
-    /// Terminal colour-scheme id (the frontend's list; default `telepy`)
+    /// Terminal colour-scheme id (a built-in from the frontend's list or a custom `custom-…`; default `telepy`)
     #[schema(example = "telepy")]
     pub terminal_scheme: String,
+    /// How bold text is drawn: face (real bold face) | bright (brighter colour only) | both
+    #[schema(example = "face")]
+    pub terminal_bold: String,
+    /// Programming ligatures in the web terminal (fonts that have them)
+    pub terminal_ligatures: bool,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
     /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
@@ -731,6 +736,10 @@ pub struct UserSettings {
     pub terminal_font: String,
     #[schema(example = "telepy")]
     pub terminal_scheme: String,
+    /// face | bright | both
+    #[schema(example = "face")]
+    pub terminal_bold: String,
+    pub terminal_ligatures: bool,
     /// Remote desktop clipboard direction this user picked: both | to_remote | off
     #[schema(example = "both")]
     pub desktop_clipboard: String,
@@ -753,6 +762,10 @@ pub struct UserSettingsPatch {
     pub terminal_font: Option<String>,
     #[schema(example = "solarized-dark")]
     pub terminal_scheme: Option<String>,
+    /// face | bright | both
+    #[schema(example = "bright")]
+    pub terminal_bold: Option<String>,
+    pub terminal_ligatures: Option<bool>,
     /// both | to_remote | off (capped by the site setting at connect time)
     #[schema(example = "to_remote")]
     pub desktop_clipboard: Option<String>,
@@ -768,14 +781,77 @@ pub struct TerminalProfile {
     pub font_size: Option<i64>,
     #[schema(example = "nord")]
     pub scheme: Option<String>,
+    /// face | bright | both
+    pub bold: Option<String>,
+    pub ligatures: Option<bool>,
 }
 
-/// PUT body: a missing or null field means "follow my default"; all three null removes the override
+/// PUT body: a missing or null field means "follow my default"; every field null removes the override
 #[derive(ToSchema)]
 pub struct TerminalProfilePatch {
     pub font: Option<String>,
     pub font_size: Option<i64>,
     pub scheme: Option<String>,
+    /// face | bright | both
+    pub bold: Option<String>,
+    pub ligatures: Option<bool>,
+}
+
+/// The colours of a custom terminal scheme: every value is `#rrggbb`; `cursorAccent` and `selectionForeground` are optional
+#[derive(ToSchema)]
+pub struct TerminalSchemeColors {
+    #[schema(example = "#f0f0f0")]
+    pub foreground: String,
+    #[schema(example = "#000000")]
+    pub background: String,
+    pub cursor: String,
+    /// The glyph under the cursor (defaults to the background in the frontend)
+    pub cursor_accent: Option<String>,
+    pub selection_background: String,
+    pub selection_foreground: Option<String>,
+    pub black: String,
+    pub red: String,
+    pub green: String,
+    pub yellow: String,
+    pub blue: String,
+    pub magenta: String,
+    pub cyan: String,
+    pub white: String,
+    pub bright_black: String,
+    pub bright_red: String,
+    pub bright_green: String,
+    pub bright_yellow: String,
+    pub bright_blue: String,
+    pub bright_magenta: String,
+    pub bright_cyan: String,
+    pub bright_white: String,
+}
+
+/// A custom terminal colour scheme (the caller's own; `id` is what `terminal_scheme` and per-tunnel overrides store)
+#[derive(ToSchema)]
+pub struct TerminalScheme {
+    #[schema(example = "custom-1a2b3c4d")]
+    pub id: String,
+    #[schema(example = "Office dark")]
+    pub name: String,
+    pub colors: TerminalSchemeColors,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// POST body (keys of `colors` are camelCase: `selectionBackground`, `brightBlack`, …)
+#[derive(ToSchema)]
+pub struct TerminalSchemeBody {
+    /// 1–40 characters
+    pub name: String,
+    pub colors: TerminalSchemeColors,
+}
+
+/// PATCH body: only the given fields change; `colors` replaces the whole set
+#[derive(ToSchema)]
+pub struct TerminalSchemePatch {
+    pub name: Option<String>,
+    pub colors: Option<TerminalSchemeColors>,
 }
 
 #[derive(ToSchema)]

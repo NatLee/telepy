@@ -20,6 +20,7 @@ pub mod settings;
 pub mod sharing;
 pub mod sign_ins;
 pub mod terminal_profile;
+pub mod terminal_scheme;
 pub mod tunnel_endpoints;
 pub mod tunnel_keys;
 pub mod tunnel_sessions;

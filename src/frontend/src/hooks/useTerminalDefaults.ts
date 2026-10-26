@@ -17,14 +17,16 @@ import {
     persistUserSetting,
     readTerminalDefaults,
     TERMINAL_APPEARANCE_EVENT,
+    TERMINAL_BOLD_KEY,
     TERMINAL_DEFAULTS_FALLBACK,
     TERMINAL_FONT_KEY,
     TERMINAL_FONT_SIZE_KEY,
+    TERMINAL_LIGATURES_KEY,
     TERMINAL_SCHEME_KEY,
     terminalDefaultsToSettings,
 } from "@/lib/userPrefs";
 
-const KEYS = [TERMINAL_FONT_KEY, TERMINAL_FONT_SIZE_KEY, TERMINAL_SCHEME_KEY];
+const KEYS = [TERMINAL_FONT_KEY, TERMINAL_FONT_SIZE_KEY, TERMINAL_SCHEME_KEY, TERMINAL_BOLD_KEY, TERMINAL_LIGATURES_KEY];
 
 function subscribe(onStoreChange: () => void) {
     window.addEventListener(TERMINAL_APPEARANCE_EVENT, onStoreChange);
@@ -42,7 +44,7 @@ function subscribe(onStoreChange: () => void) {
 let cached: { key: string; value: TerminalDefaults } | null = null;
 function getSnapshot(): TerminalDefaults {
     const value = readTerminalDefaults();
-    const key = `${value.font}|${value.fontSize}|${value.scheme}`;
+    const key = `${value.font}|${value.fontSize}|${value.scheme}|${value.bold}|${value.ligatures}`;
     if (cached?.key !== key) cached = { key, value };
     return cached.value;
 }

@@ -34,8 +34,16 @@ import { I18nProvider, UserSettingsSync } from "@/lib/i18n";
 // Monospace font: WOFF2 + display:swap + preload:false — next/font would otherwise preload it at high
 // priority on every route, competing with the JS that gates interactivity. xterm awaits
 // document.fonts.load itself before initialising (see useTerminalPage).
+// 0xProto 的 Bold / Italic 是給網頁終端機的真實字體(見 src/app/terminal-fonts.css 的說明);沒有 Bold Italic,
+// 由瀏覽器合成。一樣只在有文字用到該 weight / style 時才下載。
+// 0xProto's Bold / Italic are the real faces for the web terminal (see src/app/terminal-fonts.css); there is no
+// Bold Italic, the browser synthesises it. Like the rest, each downloads only once text uses that weight / style.
 const protoNerd = localFont({
-  src: "../fonts/0xProtoNerdFont-Regular.woff2",
+  src: [
+    { path: "../fonts/0xProtoNerdFont-Regular.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/0xProtoNerdFont-Bold.woff2", weight: "700", style: "normal" },
+    { path: "../fonts/0xProtoNerdFont-Italic.woff2", weight: "400", style: "italic" },
+  ],
   variable: "--font-0xproto",
   display: "swap",
   preload: false,

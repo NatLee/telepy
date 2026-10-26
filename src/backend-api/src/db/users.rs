@@ -30,6 +30,9 @@ pub struct UserSettings {
     /// 終端機字型 / 配色 id（清單在前端 lib/terminalAppearance.ts）。/ Terminal font / colour-scheme ids.
     pub terminal_font: String,
     pub terminal_scheme: String,
+    /// 粗體的畫法（face / bright / both）與連字。/ Bold style (face / bright / both) and ligatures.
+    pub terminal_bold: String,
+    pub terminal_ligatures: bool,
     /// 遠端桌面剪貼簿方向（both / to_remote / off；站台設定是上限）。/ Desktop clipboard direction; the site setting caps it.
     pub desktop_clipboard: String,
 }
@@ -44,6 +47,8 @@ pub struct SettingsPatch {
     pub ui_scale: Option<i64>,
     pub terminal_font: Option<String>,
     pub terminal_scheme: Option<String>,
+    pub terminal_bold: Option<String>,
+    pub terminal_ligatures: Option<bool>,
     pub desktop_clipboard: Option<String>,
 }
 
@@ -159,7 +164,7 @@ pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: 
 // ---------------------------------------------------------------- settings
 
 pub async fn settings_for(db: &Db, user_id: i64) -> sqlx::Result<Option<UserSettings>> {
-    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, desktop_clipboard FROM user_management_usersettings WHERE user_id = ?")
+    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard FROM user_management_usersettings WHERE user_id = ?")
         .bind(user_id)
         .fetch_optional(&db.read)
         .await
@@ -178,7 +183,7 @@ pub async fn settings_get_or_create(db: &Db, user_id: i64) -> sqlx::Result<UserS
 }
 
 pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sqlx::Result<UserSettings> {
-    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, desktop_clipboard } = patch;
+    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard } = patch;
     settings_get_or_create(db, user_id).await?;
     if let Some(lang) = language {
         sqlx::query("UPDATE user_management_usersettings SET language = ? WHERE user_id = ?")
@@ -218,6 +223,20 @@ pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sql
     if let Some(s) = terminal_scheme {
         sqlx::query("UPDATE user_management_usersettings SET terminal_scheme = ? WHERE user_id = ?")
             .bind(s)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(b) = terminal_bold {
+        sqlx::query("UPDATE user_management_usersettings SET terminal_bold = ? WHERE user_id = ?")
+            .bind(b)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(l) = terminal_ligatures {
+        sqlx::query("UPDATE user_management_usersettings SET terminal_ligatures = ? WHERE user_id = ?")
+            .bind(l)
             .bind(user_id)
             .execute(&db.write)
             .await?;

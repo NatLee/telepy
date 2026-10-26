@@ -27,6 +27,7 @@ import { UserProfile, AuthContextType } from "../types/auth";
 import { ACCESS_TOKEN_EVENT, refreshSession, revokeSession } from "./api";
 import { isAuthorizePath, loginPathFor } from "./oauthFlow";
 import { accessTokenExpiring, refreshDelayMs, RETRY_DELAY_MS } from "./session";
+import { resetTerminalSchemes } from "@/hooks/useTerminalSchemes";
 const AuthContext = createContext<AuthContextType>({
     accessToken: null,
     isAuthenticated: false,
@@ -226,6 +227,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (refresh) revokeSession(refresh);
         localStorage.removeItem("accessToken");
         localStorage.removeItem("refreshToken");
+        resetTerminalSchemes(); // 自訂配色是帳號的,別留給下一個登入的人看 / custom schemes belong to the account
         setAccessToken(null);
         setUser(null);
         router.push(loginPathFor(next));

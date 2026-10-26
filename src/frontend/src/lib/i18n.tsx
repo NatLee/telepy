@@ -29,7 +29,7 @@ import {
 } from "./locale";
 import { DICTIONARIES, readCookiePreference, resolveLocale, setActiveLocale } from "./translate";
 import { applyTerminalDefaults, applyTheme, applyUiScale, isTheme, readStoredTheme, readTerminalDefaults, readUiScale } from "./userPrefs";
-import { isKnownFont, isKnownScheme, type TerminalDefaults } from "./terminalAppearance";
+import { isBoldStyle, isKnownFont, isSchemeId, type TerminalDefaults } from "./terminalAppearance";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -188,7 +188,9 @@ export function UserSettingsSync() {
         const terminal: Partial<TerminalDefaults> = {};
         if (typeof user.terminal_font_size === "number" && user.terminal_font_size !== local.fontSize) terminal.fontSize = user.terminal_font_size;
         if (isKnownFont(user.terminal_font) && user.terminal_font !== local.font) terminal.font = user.terminal_font;
-        if (isKnownScheme(user.terminal_scheme) && user.terminal_scheme !== local.scheme) terminal.scheme = user.terminal_scheme;
+        if (isSchemeId(user.terminal_scheme) && user.terminal_scheme !== local.scheme) terminal.scheme = user.terminal_scheme;
+        if (isBoldStyle(user.terminal_bold) && user.terminal_bold !== local.bold) terminal.bold = user.terminal_bold;
+        if (typeof user.terminal_ligatures === "boolean" && user.terminal_ligatures !== local.ligatures) terminal.ligatures = user.terminal_ligatures;
         if (Object.keys(terminal).length > 0) applyTerminalDefaults(terminal);
         if (typeof user.ui_scale === "number" && user.ui_scale !== readUiScale()) {
             applyUiScale(user.ui_scale);

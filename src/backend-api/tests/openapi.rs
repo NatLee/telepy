@@ -69,6 +69,8 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/reverse/server/{id}/lan/scan", vec!["get", "post"]),
         ("/api/reverse/lan/topology", vec!["get"]),
         ("/api/reverse/server/{id}/terminal-profile", vec!["get", "put", "delete"]),
+        ("/api/user/terminal-schemes", vec!["get", "post"]),
+        ("/api/user/terminal-schemes/{id}", vec!["patch", "delete"]),
         ("/api/auth/passkeys/{id}", vec!["patch", "delete"]),
         ("/api/user/users/{id}/mfa", vec!["delete"]),
     ] {

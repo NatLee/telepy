@@ -45,7 +45,8 @@ import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
 import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed } from "@/lib/desktop";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
-import { TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
+import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
+import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
 import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
 import { ConnectedApps } from "./ConnectedApps";
@@ -68,6 +69,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const [theme, changeTheme] = useThemePreference();
     const [scale, changeScale] = useUiScale();
     const [terminalDefaults, changeTerminalDefaults] = useTerminalDefaults();
+    const customSchemes = useCustomSchemes();
+    const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
     const [tab, setTab] = useState<PrefsTab>("general");
     const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
@@ -203,14 +206,11 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                     {/* 終端機:預設字型 / 字級 / 配色(與終端機頁「外觀 → 我的預設」是同一份)。
                         Terminal: default font / size / colour scheme (the same values as the terminal's Appearance → My default). */}
                     <Section icon={<TerminalIcon />} title={t("prefs.terminal")} description={t("prefs.terminalDescription")}>
-                        <TerminalPreview look={resolveTerminalAppearance(terminalDefaults, null)} />
+                        <TerminalPreview look={terminalLook} />
                         <TerminalAppearanceFields
                             value={terminalDefaults}
-                            onChange={(patch) => changeTerminalDefaults({
-                                ...(patch.font ? { font: patch.font } : {}),
-                                ...(patch.fontSize ? { fontSize: patch.fontSize } : {}),
-                                ...(patch.scheme ? { scheme: patch.scheme } : {}),
-                            })}
+                            look={terminalLook}
+                            onChange={(patch) => changeTerminalDefaults(defaultsPatch(patch))}
                         />
                     </Section>
 

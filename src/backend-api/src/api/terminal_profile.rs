@@ -1,4 +1,4 @@
-//! `/api/reverse/server/{id}/terminal-profile`：使用者對這條隧道的終端機外觀覆寫（字型 / 字級 / 配色）。
+//! `/api/reverse/server/{id}/terminal-profile`：使用者對這條隧道的終端機外觀覆寫（字型 / 字級 / 配色 / 粗體 / 連字）。
 //! 看得到隧道的人就能設，只影響自己；NULL 欄位 = 跟隨個人預設（`/api/user/settings` 的 terminal_*）。
 //! 字型 / 配色 id 的清單在前端（lib/terminalAppearance.ts），後端只檢查形狀；不認得的 id 前端回到預設。
 //! Per-user terminal appearance override for one tunnel. Anyone who can see the tunnel may set one and it
@@ -13,7 +13,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::db::{self, terminal_profile::TerminalProfile};
+use crate::db::{self, terminal_profile::{ProfileFields, TerminalProfile}};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions;
 use crate::state::AppState;
@@ -28,6 +28,8 @@ fn profile_json(tunnel_id: i64, p: Option<&TerminalProfile>) -> Value {
         "font": p.and_then(|p| p.font.clone()),
         "font_size": p.and_then(|p| p.font_size),
         "scheme": p.and_then(|p| p.scheme.clone()),
+        "bold": p.and_then(|p| p.bold.clone()),
+        "ligatures": p.and_then(|p| p.ligatures),
     })
 }
 
@@ -54,27 +56,39 @@ async fn get_profile(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
     Ok(Json(profile_json(tunnel_id, p.as_ref())))
 }
 
-#[utoipa::path(put, path = "/api/reverse/server/{id}/terminal-profile", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TerminalProfilePatch, responses((status = 200, description = "The stored override (a missing or null field inherits the personal default)", body = super::schemas::TerminalProfile), (status = 400, description = "{field: [message]}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(put, path = "/api/reverse/server/{id}/terminal-profile", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), request_body = super::schemas::TerminalProfilePatch, responses((status = 200, description = "The stored override (a missing or null field inherits the personal default; every field null removes the row)", body = super::schemas::TerminalProfile), (status = 400, description = "{field: [message]}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
 async fn put_profile(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let tunnel_id = visible(&state, user.id, id).await?;
-    let font = optional_choice(&body, "font")?;
-    let scheme = optional_choice(&body, "scheme")?;
-    let font_size = match body.get("font_size") {
-        None | Some(Value::Null) => None,
-        Some(v) => {
-            let n = v.as_i64().ok_or_else(|| ApiError::field("font_size", "A valid integer is required."))?;
-            if !(10..=24).contains(&n) {
-                return Err(ApiError::field("font_size", "font_size must be between 10 and 24."));
+    let fields = ProfileFields {
+        font: optional_choice(&body, "font")?,
+        scheme: optional_choice(&body, "scheme")?,
+        font_size: match body.get("font_size") {
+            None | Some(Value::Null) => None,
+            Some(v) => {
+                let n = v.as_i64().ok_or_else(|| ApiError::field("font_size", "A valid integer is required."))?;
+                if !(10..=24).contains(&n) {
+                    return Err(ApiError::field("font_size", "font_size must be between 10 and 24."));
+                }
+                Some(n)
             }
-            Some(n)
-        }
+        },
+        bold: match body.get("bold") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(s)) if super::users::is_bold_style(s) => Some(s.clone()),
+            Some(_) => return Err(ApiError::field("bold", super::users::BOLD_RULE)),
+        },
+        ligatures: match body.get("ligatures") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(b)) => Some(*b),
+            Some(_) => return Err(ApiError::field("ligatures", "Must be a valid boolean.")),
+        },
     };
-    if font.is_none() && scheme.is_none() && font_size.is_none() {
+    if fields.is_empty() {
         // 全部跟隨預設 = 沒有覆寫：刪列，而不是存一列全 NULL。/ Everything inherits = no override: drop the row.
         db::terminal_profile::delete(&state.db, user.id, tunnel_id).await?;
         return Ok(Json(profile_json(tunnel_id, None)));
     }
-    let p = db::terminal_profile::upsert(&state.db, user.id, tunnel_id, font.as_deref(), font_size, scheme.as_deref()).await?;
+    let p = db::terminal_profile::upsert(&state.db, user.id, tunnel_id, &fields).await?;
     Ok(Json(profile_json(tunnel_id, Some(&p))))
 }
 

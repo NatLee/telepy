@@ -335,10 +335,17 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
-    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark"})).await;
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
+    let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
+    // 粗體畫法 / 連字的值。/ Bold style and ligature values.
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_bold": "heavy"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["terminal_bold"][0], "Must be one of: face, bright, both.");
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_ligatures": "yes"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["terminal_ligatures"][0], "Must be a valid boolean.");
     // 字型 / 配色 id 只檢查形狀（清單在前端）。/ Font / scheme ids are shape-checked only.
     let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_font": "Hack Nerd Font"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
@@ -359,6 +366,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["ui_scale"], 115);
     assert_eq!(r.json["terminal_font"], "fira-code");
     assert_eq!(r.json["terminal_scheme"], "solarized-dark");
+    assert_eq!(r.json["terminal_bold"], "bright");
+    assert_eq!(r.json["terminal_ligatures"], true);
 
     // admin users
     let r = app.get("/api/user/users", Some(&admin)).await;
@@ -478,15 +487,15 @@ async fn terminal_profile_per_tunnel() {
     // 還沒有覆寫 = 全 null。/ No override yet.
     let r = app.get(&path, Some(&owner)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null}));
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null, "bold": null, "ligatures": null}));
     // 看不到隧道 → 404（讀寫皆然）。/ Not visible → 404 for reads and writes.
     assert_eq!(app.get(&path, Some(&bob)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(put_profile(&app, &path, &bob, json!({"scheme": "nord"})).await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.get("/api/reverse/server/999/terminal-profile", Some(&owner)).await.status, StatusCode::NOT_FOUND);
 
-    let r = put_profile(&app, &path, &owner, json!({"font": "fira-code", "scheme": "nord"})).await;
+    let r = put_profile(&app, &path, &owner, json!({"font": "fira-code", "scheme": "nord", "bold": "both", "ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"tunnel_id": id, "font": "fira-code", "font_size": null, "scheme": "nord"}));
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": "fira-code", "font_size": null, "scheme": "nord", "bold": "both", "ligatures": true}));
     assert_eq!(app.get(&path, Some(&owner)).await.json["scheme"], "nord");
 
     // 驗證：字級範圍、id 形狀。/ Validation: size range, id shape.
@@ -498,15 +507,22 @@ async fn terminal_profile_per_tunnel() {
     assert_eq!(r.json["font"][0], "Use 1-32 lowercase letters, digits or '-'.");
     let r = put_profile(&app, &path, &owner, json!({"font_size": "big"})).await;
     assert_eq!(r.json["font_size"][0], "A valid integer is required.");
+    let r = put_profile(&app, &path, &owner, json!({"bold": "heavy"})).await;
+    assert_eq!(r.json["bold"][0], "Must be one of: face, bright, both.");
+    let r = put_profile(&app, &path, &owner, json!({"ligatures": 1})).await;
+    assert_eq!(r.json["ligatures"][0], "Must be a valid boolean.");
     // 錯誤的 PUT 不動原本的覆寫。/ A rejected PUT leaves the stored override alone.
     assert_eq!(app.get(&path, Some(&owner)).await.json["font"], "fira-code");
 
     // PUT 是整列覆寫：只給 font_size → font / scheme 回到跟隨預設。/ PUT replaces the whole row.
     let r = put_profile(&app, &path, &owner, json!({"font_size": 18, "font": null})).await;
-    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": 18, "scheme": null}));
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": 18, "scheme": null, "bold": null, "ligatures": null}));
+    // 只有連字 = 仍是一個覆寫（false 也算，它跟「跟隨預設」不同）。/ Ligatures alone is still an override (false counts: it differs from inheriting).
+    let r = put_profile(&app, &path, &owner, json!({"ligatures": false})).await;
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null, "bold": null, "ligatures": false}));
     // 全部跟隨預設 = 刪掉覆寫列。/ Everything inherits = the row goes away.
     let r = put_profile(&app, &path, &owner, json!({})).await;
-    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null}));
+    assert_eq!(r.json, json!({"tunnel_id": id, "font": null, "font_size": null, "scheme": null, "bold": null, "ligatures": null}));
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_terminal_profile").fetch_one(&app.state.db.read).await.unwrap();
     assert_eq!(n, 0);
 
@@ -584,4 +600,102 @@ async fn device_keys_are_unique_across_users_and_never_personal_or_service_keys(
     let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": KEY_B})).await;
     assert_eq!((r.status, r.json["key_exists"].as_bool(), r.json["key_reason"].is_null()), (StatusCode::OK, Some(false), true), "{}", r.text);
     assert_eq!(app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": KEY_B})).await.status, StatusCode::OK);
+}
+
+/// 自訂終端機配色：自己的清單、後端產生的 id、嚴格的顏色驗證、每人 20 個、別人的 id 看起來像不存在、
+/// 刪掉後引用它的設定留著（前端回到預設配色）。
+/// Custom terminal schemes: own list, server-made ids, strict colour validation, 20 per person, someone
+/// else's id looks missing, and a deleted scheme leaves the settings that point at it alone (the frontend
+/// falls back to the default).
+#[tokio::test]
+async fn terminal_schemes_crud() {
+    let app = common::spawn().await;
+    let (alice, bob) = app.admin_and_user("alice", "bob").await;
+    let path = "/api/user/terminal-schemes";
+    let colors = |fg: &str| {
+        let mut m = serde_json::Map::new();
+        for k in ["foreground", "background", "cursor", "selectionBackground", "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+            "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"] {
+            m.insert(k.into(), json!("#102030"));
+        }
+        m.insert("foreground".into(), json!(fg));
+        Value::Object(m)
+    };
+
+    assert_eq!(app.get(path, Some(&alice)).await.json, json!([]));
+
+    // 驗證：名稱、顏色。/ Validation: name, colours.
+    let r = app.post(path, Some(&alice), json!({"colors": colors("#ffffff")})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["name"][0], "This field is required.");
+    let r = app.post(path, Some(&alice), json!({"name": "  ", "colors": colors("#ffffff")})).await;
+    assert_eq!(r.json["name"][0], "This field may not be blank.");
+    let r = app.post(path, Some(&alice), json!({"name": "x".repeat(41), "colors": colors("#ffffff")})).await;
+    assert_eq!(r.json["name"][0], "Ensure this field has no more than 40 characters.");
+    let r = app.post(path, Some(&alice), json!({"name": "Mine", "colors": colors("white")})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["colors"][0], "colors.foreground must be a #rrggbb colour.");
+    let r = app.post(path, Some(&alice), json!({"name": "Mine"})).await;
+    assert_eq!(r.json["colors"][0], "colors must be an object.");
+    let mut partial = colors("#ffffff");
+    partial.as_object_mut().unwrap().remove("brightCyan");
+    let r = app.post(path, Some(&alice), json!({"name": "Mine", "colors": partial})).await;
+    assert_eq!(r.json["colors"][0], "colors.brightCyan is required.");
+
+    // 新增：id 由後端產生、顏色小寫化、選填的欄位照給的回。/ Create: server id, lower-cased colours, optional keys echoed.
+    let mut c = colors("#FFFFFF");
+    c.as_object_mut().unwrap().insert("cursorAccent".into(), json!("#000000"));
+    let r = app.post(path, Some(&alice), json!({"name": " Office dark ", "colors": c})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let id = r.json["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("custom-") && id.len() == 15, "{id}");
+    assert_eq!(r.json["name"], "Office dark");
+    assert_eq!(r.json["colors"]["foreground"], "#ffffff");
+    assert_eq!(r.json["colors"]["cursorAccent"], "#000000");
+    assert!(r.json["colors"].get("selectionForeground").is_none());
+    assert!(r.json["created_at"].as_str().unwrap().ends_with('Z'));
+    let list = app.get(path, Some(&alice)).await.json;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert_eq!(list[0]["id"], id);
+
+    // 只有本人看得到 / 改得到。/ Owner only.
+    assert_eq!(app.get(path, Some(&bob)).await.json, json!([]));
+    assert_eq!(app.patch(&format!("{path}/{id}"), Some(&bob), json!({"name": "Stolen"})).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.delete(&format!("{path}/{id}"), Some(&bob)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get(path, Some(&alice)).await.json[0]["name"], "Office dark");
+
+    // PATCH：只改給的欄位；colors 整組換。/ PATCH: only the given fields; colors replaces the whole set.
+    let r = app.patch(&format!("{path}/{id}"), Some(&alice), json!({"name": "Office"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["name"], "Office");
+    assert_eq!(r.json["colors"]["cursorAccent"], "#000000");
+    let r = app.patch(&format!("{path}/{id}"), Some(&alice), json!({"colors": colors("#eeeeee")})).await;
+    assert_eq!(r.json["colors"]["foreground"], "#eeeeee");
+    assert!(r.json["colors"].get("cursorAccent").is_none());
+    let r = app.patch(&format!("{path}/{id}"), Some(&alice), json!({"colors": colors("bad")})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(app.patch(&format!("{path}/custom-00000000"), Some(&alice), json!({"name": "x"})).await.status, StatusCode::NOT_FOUND);
+
+    // 自訂的 id 可以當個人預設與每條隧道的覆寫（後端只看形狀）。/ The id is accepted by the settings and overrides.
+    let r = app.post("/api/user/settings", Some(&alice), json!({"terminal_scheme": id})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["terminal_scheme"], id);
+
+    // 每人 20 個。/ 20 per person.
+    for i in 1..20 {
+        let r = app.post(path, Some(&alice), json!({"name": format!("s{i}"), "colors": colors("#ffffff")})).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    }
+    let r = app.post(path, Some(&alice), json!({"name": "one too many", "colors": colors("#ffffff")})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["code"], "limit");
+    assert_eq!(app.get(path, Some(&alice)).await.json.as_array().unwrap().len(), 20);
+    // bob 不受 alice 的數量影響。/ bob's quota is his own.
+    assert_eq!(app.post(path, Some(&bob), json!({"name": "b", "colors": colors("#ffffff")})).await.status, StatusCode::CREATED);
+
+    // 刪除：設定裡的引用留著（前端回到預設）。/ Delete: the setting keeps the id (the frontend falls back).
+    assert_eq!(app.delete(&format!("{path}/{id}"), Some(&alice)).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.delete(&format!("{path}/{id}"), Some(&alice)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get(path, Some(&alice)).await.json.as_array().unwrap().len(), 19);
+    assert_eq!(app.get("/api/user/settings", Some(&alice)).await.json["terminal_scheme"], id);
 }
