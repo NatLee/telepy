@@ -742,6 +742,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_userauthorizedkeys", "last_used_ip", "varchar(64) NULL"),
     // 個人金鑰的到期時間（NULL = 不到期）。/ Personal key expiry (NULL = never).
     ("authorized_keys_userauthorizedkeys", "expires_at", "datetime NULL"),
+    // 錄影的來源：terminal（網頁終端機）/ agent（MCP agent 的 shell）。/ What was recorded: the web terminal or an agent's shell.
+    ("telepy_terminal_recording", "kind", "varchar(16) NOT NULL DEFAULT 'terminal'"),
     // 限時分享：到期時間（NULL = 一直有效）。/ Timed sharing: when the share ends (NULL = never).
     ("tunnels_tunnelsharing", "expires_at", "datetime NULL"),
     // 核准的存取申請：暫時的帳號（到期就移除）與暫時提升的權限（到期回到 base_permission）。

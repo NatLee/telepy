@@ -43,6 +43,8 @@ pub fn may_end(entry_user: i64, me: i64, manages_tunnel: bool) -> bool {
 }
 
 fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64) -> Value {
+    // MCP agent 的 SSH session：開著幾個互動 shell。/ An MCP agent's SSH session: how many interactive shells are open.
+    let shells = (e.kind == Kind::Ai).then(|| state.ai.list().into_iter().find(|s| s.presence_id() == e.id).map(|s| s.shell_count()).unwrap_or(0));
     json!({
         "id": e.id,
         "tunnel": { "id": e.tunnel_id, "name": tunnel_name },
@@ -52,6 +54,7 @@ fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64)
         "geo": state.geoip.json(e.ip.as_deref()),
         "since": db_to_iso_utc_z(&e.since),
         "client": e.client,
+        "shells": shells,
         "mine": e.user_id == me,
     })
 }
@@ -90,6 +93,9 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
     if entry.kind == Kind::Ai {
         let ai = state.ai.list().into_iter().find(|s| s.presence_id() == id).ok_or_else(not_found)?;
         crate::ai::close(&state, &ai.id, crate::ai::CloseReason::ClosedByUser).await;
+    } else if let Some(b) = state.ai.browsers.list().into_iter().find(|b| b.presence_id() == id) {
+        // agent 開的遠端瀏覽器：沒有 WebSocket 迴圈在等，直接收掉並記下是誰。/ An agent browser has no socket loop: close it here.
+        crate::ai::browser::close(&state, &b.id, crate::ai::CloseReason::ClosedByUser, Some(&me.username)).await;
     } else {
         state.presence.end(id, &me.username).ok_or_else(not_found)?;
     }

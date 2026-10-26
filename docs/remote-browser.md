@@ -168,6 +168,25 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
    > 接受偶爾被要求登入(反正主宰因素是出口 IP)。**若日後要降低攔截,優先換住宅 IP 目標機,而非
    > 動 profile。** 不要在未取得使用者同意下重新加回 profile 持久化。
 
+## MCP agent 操作(CDP)
+
+MCP agent（scope `browser:use`）可以開一個瀏覽器自己操作，見 `docs/mcp.md`。它就是一般的 remote-browser session
+（同一個 SOCKS、同一個 kasm session、同樣算進 `remote_browser_max_sessions`），只是沒有人連 VNC：
+
+```
+MCP tool (browser_navigate / read / click / type / screenshot)
+  → backend ai/browser.rs → remote_browser::RemoteBrowser::cdp
+  → session-manager POST /sessions/<id>/cdp(X-Internal-Token)
+  → cdp.py → ws://127.0.0.1:<CDP_BASE + display>(chromium --remote-debugging-port,只聽容器內 loopback)
+```
+
+- DevTools 埠只在容器內的 127.0.0.1，backend 從不直接連 CDP；每個動作上限 30 秒（`CDP_ACTION_TIMEOUT`）。
+- 動作：`navigate`（只收 http / https；後端也擋 `file:` 之類，免得讀到容器自己的檔案）、`screenshot`（CDP clip.scale 縮到
+  ≤ 1280 px 寬）、`read`（innerText + 連結，可用 selector）、`click`（selector 或看得到的文字；真的滑鼠事件
+  `Input.dispatchMouseEvent`）、`type`（focus + `Input.insertText`，可按 Enter）。
+- 操作的分頁 = `/json/list` 裡第一個一般網頁；全部關掉時開一個 `about:blank`。
+- `cdp.py` 只用標準函式庫（自帶最小的 WebSocket client），測試在 `tests/test_cdp.py`。
+
 ## 環境變數(都有預設,通常不用設)
 
 | 變數 | 預設 | 用途 |
@@ -177,6 +196,7 @@ chromium --proxy-server=socks5://backend:<port> --proxy-bypass-list='<-loopback>
 | `KASM_PASSWORD_FILE` | `/etc/kasmvnc/kasmpasswd` | 密碼檔固定路徑 |
 | `REMOTE_BROWSER_HOMEPAGE` / `REMOTE_BROWSER_LANG` | Google / `zh-TW` | 首頁 / 語系(語系影響 navigator.languages,反爬蟲) |
 | `REMOTE_BROWSER_PROFILE_TMP` / `WS_BASE` | `/tmp` / `8443` | 臨時 profile 父目錄 / ws 埠基數 |
+| `CDP_BASE` / `CDP_ACTION_TIMEOUT` | `9300` / `30` | MCP agent 用的 DevTools 埠基數(埠 = `CDP_BASE + display`,只聽 127.0.0.1)/ 每個動作的秒數上限 |
 
 ## 疑難排解
 
