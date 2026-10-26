@@ -46,6 +46,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "ai_session_idle_timeout", kind: Kind::Int, label: "AI Session Idle Timeout (seconds)", description: "AI 工具（MCP）開的 SSH session 閒置多久沒有指令就自動關閉(秒)。執行中的指令不算閒置。變更後對新開的 session 生效。" },
     FieldMeta { name: "ai_session_max_lifetime", kind: Kind::Int, label: "AI Session Max Lifetime (seconds)", description: "AI 工具開的 SSH session 最長存活時間(秒),到期一律關閉(包含正在執行的指令)。變更後對新開的 session 生效。" },
     FieldMeta { name: "lan_scan_enabled", kind: Kind::Bool, label: "Allow LAN discovery", description: "允許隧道擁有者與 ADMIN 分享者經由裝置掃描它所在的區網(只探測私有網段、由裝置的 sshd 發出連線,不在裝置上安裝任何東西)。關閉後只能手動新增跳板機。每次掃描都會記錄在該隧道的 Logs。" },
+    FieldMeta { name: "device_ip_lookup_url", kind: Kind::Url(512), label: "Device public IP lookup", description: "裝置的公網 IP 先問 Telepy 自己(/api/whoami);Telepy 看到的不是公網位址時(前面的代理或 Docker 把來源換掉了,或裝置跟 Telepy 在同一個 NAT 後面),裝置改問這個網址,它要用純文字回傳呼叫者的 IP(例如 https://api.ipify.org、https://ifconfig.me/ip)。每台裝置每次連上最多問一次、連著時每天一次。留空 = 不問第三方,看不到時只顯示內網 IP。" },
     FieldMeta { name: "notify_webhook_url", kind: Kind::Url(512), label: "Status alert webhook", description: "隧道離線、恢復、降級(連著但 SSH 沒回應)時 POST 到這個網址。內容同時有 text(Slack、Google Chat、Mattermost)與 content(Discord)欄位,另附 event / tunnel 等結構化欄位。留空 = 關閉。只有管理員能設定,伺服器會從自己這裡連到這個網址。" },
     FieldMeta { name: "notify_down_delay", kind: Kind::Int, label: "Alert delay (seconds)", description: "狀況要持續多久才發告警(秒);在這之前恢復就什麼都不發,所以裝置閃斷不會洗版。只有發過「離線」的隧道,回來時才會發「恢復」。設 0 = 立刻通知。" },
     FieldMeta { name: "user_key_max_days", kind: Kind::Int, label: "Personal key lifetime (days)", description: "個人 SSH 金鑰最長可以用幾天。設了之後,新增或續期的金鑰都必須在這個天數內到期(沒填就自動用最長效期);到期的金鑰會被 gateway 拒絕,並從裝置的 authorized_keys 移除。設 0 = 不限制。" },
@@ -80,6 +81,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("ai_session_max_lifetime".into(), json!(s.ai_session_max_lifetime));
     m.insert("ai_max_sessions_per_user".into(), json!(s.ai_max_sessions_per_user));
     m.insert("lan_scan_enabled".into(), json!(s.lan_scan_enabled));
+    m.insert("device_ip_lookup_url".into(), json!(s.device_ip_lookup_url));
     m.insert("notify_webhook_url".into(), json!(s.notify_webhook_url));
     m.insert("notify_down_delay".into(), json!(s.notify_down_delay));
     m.insert("user_key_max_days".into(), json!(s.user_key_max_days));
@@ -204,6 +206,10 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         }
         ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
         ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
+        // 網址會放進裝置上的 shell 指令。/ The URL goes into a shell command on the device.
+        ("device_ip_lookup_url", SettingValue::Str(s)) if !s.is_empty() && !crate::device_info::safe_url(s) => {
+            Err(ApiError::field(name, "Use only letters, digits and . - _ : / ? = & in the address."))
+        }
         ("command_approval_timeout", SettingValue::Int(n)) if !(30..=86_400).contains(n) => Err(ApiError::field(name, "Must be between 30 and 86400 seconds.")),
         ("signin_lifetime", SettingValue::Int(n)) if !crate::auth::sessions::SIGNIN_LIFETIME_RANGE.contains(n) => {
             Err(ApiError::field(name, "Must be between 300 seconds (5 minutes) and 31536000 seconds (365 days)."))

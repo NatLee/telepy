@@ -276,11 +276,12 @@ pub struct TunnelEndpoint {
     #[schema(example = "198.51.100.20")]
     pub previous_ip: Option<String>,
     pub changed_at: Option<String>,
-    /// 裝置真正的公網 IP：gateway 看到的（是公網位址時）或裝置經 `/api/whoami` 回報的；不知道是 null。
-    /// The device's real public IP: the gateway's peer when public, else reported by the device via `/api/whoami`.
+    /// 裝置真正的公網 IP：gateway 看到的（是公網位址時）、裝置經 `/api/whoami` 回報的，或裝置問站台設定的查詢網址得到的；不知道是 null。
+    /// The device's real public IP: the gateway's peer when public, else reported by the device via `/api/whoami`,
+    /// else what the device got from the site's `device_ip_lookup_url`.
     #[schema(example = "114.34.69.11")]
     pub public_ip: Option<String>,
-    /// gateway / device
+    /// gateway / device / lookup
     pub public_source: Option<String>,
     pub public_geo: Option<IpGeo>,
     /// 裝置的內網網卡（每次連上問一次）。/ The device's LAN interfaces (asked once per connection).

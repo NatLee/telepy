@@ -395,12 +395,13 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 29);
+    assert_eq!(keys.len(), 30);
     assert_eq!(r.json["values"]["desktop_rustdesk_server"], true, "Telepy accepts enrolled RustDesk devices by default");
     assert_eq!(r.json["values"]["command_approval_timeout"], 300, "approvals wait five minutes by default");
     assert_eq!(r.json["values"]["signin_lifetime"], 2_592_000, "a sign-in lasts 30 days without a visit by default");
     assert_eq!(r.json["values"]["signin_access_lifetime"], 3600, "access tokens are renewed hourly by default");
     assert_eq!(r.json["values"]["user_key_max_days"], 0, "personal keys don't expire by default");
+    assert_eq!(r.json["values"]["device_ip_lookup_url"], "https://api.ipify.org", "devices ask ipify only when Telepy cannot see their public IP");
     assert_eq!(r.json["values"]["notify_webhook_url"], "", "alerts are off by default");
     assert_eq!(r.json["values"]["notify_down_delay"], 60);
     assert_eq!(r.json["meta"]["notify_webhook_url"]["type"], "url");
