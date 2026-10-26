@@ -19,6 +19,7 @@ import type { TranslationKey } from "@/locales/en";
 import type { CreateTunnelWizard } from "@/hooks/useCreateTunnelWizard";
 import { Disclosure, Segmented, StepFooter, StepHeading } from "./parts";
 import { DialInMonitor } from "@/components/tunnels/DialIn";
+import { TransportVisibility } from "@/components/tunnels/TransportVisibility";
 
 const METHODS: { id: ConnectMethod; icon: LucideIcon; title: TranslationKey; desc: TranslationKey; tag?: TranslationKey }[] = [
     { id: "autossh-service", icon: Power, title: "wizard.connect.service", desc: "wizard.connect.serviceDesc", tag: "wizard.connect.recommended" },
@@ -56,6 +57,7 @@ export function StepConnect({ wizard }: { wizard: CreateTunnelWizard }) {
                         ? t("wizard.connect.transportUnsupported")
                         : c.transport === "websocket" ? t("wizard.connect.transportWebHint") : t("wizard.connect.transportSshHint")}
                 </p>
+                <TransportVisibility selected={c.transportSupported ? c.transport : "ssh"} />
             </div>
 
             {/* gap-y-4：卡片頂端的標籤凸出 8px，手機兩欄時才不會碰到上一列。
