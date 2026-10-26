@@ -2366,6 +2366,11 @@ pub struct Webhook {
     /// 最近一次送出 `{status, at, http_status, error}`。/ The latest delivery.
     #[schema(value_type = Option<Object>)]
     pub last: Option<serde_json::Value>,
+    /// 自訂 header `{name, value}`。/ Custom headers.
+    #[schema(value_type = Vec<Object>)]
+    pub headers: Vec<serde_json::Value>,
+    /// 自訂 header 解不開（換了 SECRET_KEY），要重新輸入。/ The custom headers can't be opened (SECRET_KEY changed).
+    pub headers_unreadable: bool,
     /// 建立的人（全站 webhook 給管理員看）。/ Who created it.
     pub created_by: Option<String>,
     pub created_at: String,
@@ -2386,6 +2391,9 @@ pub struct WebhookInput {
     pub tunnel_ids: Option<Vec<i64>>,
     pub delay: Option<i64>,
     pub enabled: Option<bool>,
+    /// 自訂 header `[{name, value}]`（≤ 10；整組取代，沒帶 = 不變）。/ Custom headers (replaces the set; omitted = unchanged).
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub headers: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(ToSchema)]
@@ -2423,6 +2431,9 @@ pub struct WebhookList {
     #[schema(value_type = Object)]
     pub policy: serde_json::Value,
     pub can_manage_site: bool,
+    /// 全站 webhook 能限定的隧道 `{id, name}`（只給管理員）。/ Every tunnel, for site-wide webhooks (admins only).
+    #[schema(value_type = Option<Vec<Object>>)]
+    pub site_tunnels: Option<Vec<serde_json::Value>>,
     /// 訊息裡連結用的網址（PUBLIC_URL）。/ The base URL used for links in messages.
     pub public_url: Option<String>,
 }
@@ -2443,6 +2454,10 @@ pub struct WebhookDelivery {
     pub test: bool,
     /// 送出的內容（最多 16 KB）。/ What was sent (up to 16 KB).
     pub body: String,
+    /// 這是重送的話，原本那一筆。/ For a re-send, the original delivery.
+    pub redelivered_from: Option<i64>,
+    /// 能不能重送（測試送出不行）。/ Whether it can be sent again (test sends can't).
+    pub can_redeliver: bool,
 }
 
 #[derive(ToSchema)]

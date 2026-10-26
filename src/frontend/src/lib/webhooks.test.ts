@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectFormat, effectiveFormat, errorKey, groupCatalog, hasStatusEvent, hasTunnelEvent, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
+import { detectFormat, effectiveFormat, errorKey, groupCatalog, hasStatusEvent, hasTunnelEvent, headerProblem, headersToSave, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
 import type { CatalogEvent } from "../types/webhooks.ts";
 
 const ev = (event: string, group: CatalogEvent["group"], over: Partial<CatalogEvent> = {}): CatalogEvent => ({
@@ -79,4 +79,21 @@ test("urls are masked and bodies pretty-printed", () => {
     assert.equal(errorKey("private_target"), "webhooks.err.privateTarget");
     assert.equal(errorKey("nope"), null);
     assert.equal(errorKey(undefined), null);
+});
+
+test("custom headers follow the backend's rules", () => {
+    const h = (name: string, value: string) => ({ name, value });
+    const ok = h("Authorization", "Bearer abc");
+    assert.equal(headerProblem(ok, [ok]), null);
+    assert.equal(headerProblem(h("", ""), []), null, "a blank row is ignored");
+    assert.equal(headerProblem(h("bad name", "x"), []), "webhooks.headers.badName");
+    assert.equal(headerProblem(h("", "x"), []), "webhooks.headers.badName");
+    assert.equal(headerProblem(h("Content-Type", "x"), []), "webhooks.headers.reserved");
+    assert.equal(headerProblem(h("Webhook-Signature", "x"), []), "webhooks.headers.reserved");
+    const a = h("X-A", "1");
+    assert.equal(headerProblem(a, [a, h("x-a", "2")]), "webhooks.headers.duplicate");
+    assert.equal(headerProblem(h("X-A", ""), []), "webhooks.headers.badValue");
+    assert.equal(headerProblem(h("X-A", "中文"), []), "webhooks.headers.badValue");
+    assert.equal(headerProblem(h("X-A", "a\nb"), []), "webhooks.headers.badValue");
+    assert.deepEqual(headersToSave([h(" X-A ", "1"), h("", "")]), [h("X-A", "1")]);
 });

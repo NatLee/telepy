@@ -17,7 +17,7 @@ import type { Webhook, WebhookDelivery, WebhookInput, WebhookList, WebhookScope,
 /** 存檔時的欄位錯誤。/ Field errors from saving. */
 export type WebhookErrors = Partial<Record<keyof WebhookInput | "form", string>>;
 
-const FIELDS: (keyof WebhookInput)[] = ["name", "url", "format", "language", "events", "all_tunnels", "tunnel_ids", "delay", "enabled"];
+const FIELDS: (keyof WebhookInput)[] = ["name", "url", "format", "language", "events", "all_tunnels", "tunnel_ids", "delay", "enabled", "headers"];
 
 export function useWebhooksPage() {
     const { t } = useI18n();
@@ -124,6 +124,29 @@ export function useWebhooksPage() {
         }
     };
 
+    /** 重送一筆；結果用 toast 說。/ Send one delivery again; the result is toasted. */
+    const redeliver = useCallback(
+        async (hookId: number, deliveryId: number): Promise<boolean> => {
+            try {
+                const res = await apiFetch(`/api/webhooks/${hookId}/deliveries/${deliveryId}/redeliver`, { method: "POST" });
+                const body = await readJson<WebhookTestResult & { code?: string }>(res);
+                if (res.ok && body?.ok) {
+                    showSuccess(t("webhooks.deliveries.resent"));
+                    void load();
+                    return true;
+                }
+                const key = errorKey(body?.code);
+                showError(key ? t(key) : t("webhooks.deliveries.resendFailed", { error: body?.error ?? (body?.http_status ? `HTTP ${body.http_status}` : responseError(res, body, String(res.status))) }));
+                void load();
+                return false;
+            } catch (e) {
+                showError(t("webhooks.deliveries.resendFailed", { error: e instanceof Error ? e.message : "" }));
+                return false;
+            }
+        },
+        [load, showError, showSuccess, t],
+    );
+
     const deliveries = useCallback(async (id: number): Promise<WebhookDelivery[] | null> => {
         try {
             const res = await apiFetch(`/api/webhooks/${id}/deliveries`);
@@ -152,5 +175,8 @@ export function useWebhooksPage() {
     const list = scope === "site" ? (data?.site ?? []) : (data?.mine ?? []);
     const catalog = (scope === "site" ? data?.catalog.site : data?.catalog.personal) ?? [];
 
-    return { data, failed, scope, setScope, list, catalog, tunnels, reload: load, save, setEnabled, remove, sendTest, deliveries, secret };
+    // 全站 webhook 能選整台伺服器的隧道。/ Site-wide webhooks pick from every tunnel on the server.
+    const tunnelChoices = scope === "site" ? (data?.site_tunnels ?? []) : tunnels;
+
+    return { data, failed, scope, setScope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
 }

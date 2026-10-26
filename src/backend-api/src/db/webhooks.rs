@@ -32,6 +32,8 @@ pub struct WebhookRow {
     pub last_error: String,
     pub created_at: String,
     pub updated_at: String,
+    /// 自訂 header（密封的 JSON；空字串 = 沒有）。/ Custom headers (sealed JSON; empty = none).
+    pub headers: String,
 }
 
 impl WebhookRow {
@@ -53,7 +55,7 @@ pub struct Fields<'a> {
 }
 
 const COLS: &str = "id, user_id, scope, name, url, format, language, events, all_tunnels, delay, secret, enabled, paused_reason, failures, \
-    last_status, last_at, last_code, last_error, created_at, updated_at";
+    last_status, last_at, last_code, last_error, created_at, updated_at, headers";
 
 pub async fn create(db: &Db, user_id: Option<i64>, scope: &str, f: &Fields<'_>) -> sqlx::Result<WebhookRow> {
     let now = now_db();
@@ -167,6 +169,11 @@ pub async fn forget_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<()> {
     Ok(())
 }
 
+pub async fn set_headers(db: &Db, id: i64, sealed: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_webhook SET headers = ? WHERE id = ?").bind(sealed).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
 pub async fn set_secret(db: &Db, id: i64, sealed: &str) -> sqlx::Result<()> {
     sqlx::query("UPDATE telepy_webhook SET secret = ? WHERE id = ?").bind(sealed).bind(id).execute(&db.write).await?;
     Ok(())
@@ -219,6 +226,10 @@ pub struct DeliveryRow {
     pub duration_ms: i64,
     pub test: bool,
     pub body: String,
+    /// 重送用的事件（種類、隧道、欄位、連結）；測試送出沒有。/ The event, for re-sending; empty for test sends.
+    pub event_json: String,
+    /// 重送的話，原本那一筆。/ For a re-send, the original delivery.
+    pub redelivered_from: Option<i64>,
 }
 
 pub struct NewDelivery<'a> {
@@ -232,13 +243,16 @@ pub struct NewDelivery<'a> {
     pub duration_ms: i64,
     pub test: bool,
     pub body: &'a str,
+    pub event_json: &'a str,
+    pub redelivered_from: Option<i64>,
 }
 
-/// 記一筆送出，只留每個 webhook 最新的 [`DELIVERIES_KEPT`] 筆。/ Record a delivery, keeping the latest per webhook.
-pub async fn insert_delivery(db: &Db, d: &NewDelivery<'_>) -> sqlx::Result<()> {
-    sqlx::query(
-        "INSERT INTO telepy_webhook_delivery (webhook_id, event, message_id, at, status, http_status, error, attempts, duration_ms, test, body) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+/// 記一筆送出（送之前就記成 `sending`，送完再補結果），只留每個 webhook 最新的 [`DELIVERIES_KEPT`] 筆。回傳 id。
+/// Record a delivery (as `sending` before it goes out, finished afterwards), keeping the latest per webhook.
+pub async fn insert_delivery(db: &Db, d: &NewDelivery<'_>) -> sqlx::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO telepy_webhook_delivery (webhook_id, event, message_id, at, status, http_status, error, attempts, duration_ms, test, body, event_json, redelivered_from) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(d.webhook_id)
     .bind(d.event)
@@ -251,7 +265,9 @@ pub async fn insert_delivery(db: &Db, d: &NewDelivery<'_>) -> sqlx::Result<()> {
     .bind(d.duration_ms)
     .bind(d.test)
     .bind(d.body)
-    .execute(&db.write)
+    .bind(d.event_json)
+    .bind(d.redelivered_from)
+    .fetch_one(&db.write)
     .await?;
     sqlx::query(
         "DELETE FROM telepy_webhook_delivery WHERE webhook_id = ? AND id NOT IN \
@@ -262,16 +278,86 @@ pub async fn insert_delivery(db: &Db, d: &NewDelivery<'_>) -> sqlx::Result<()> {
     .bind(DELIVERIES_KEPT)
     .execute(&db.write)
     .await?;
+    Ok(id)
+}
+
+/// 送完了：補上結果。/ A delivery finished: fill in the outcome.
+#[allow(clippy::too_many_arguments)]
+pub async fn finish_delivery(db: &Db, id: i64, status: &str, http_status: Option<i64>, error: &str, attempts: i64, duration_ms: i64, body: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_webhook_delivery SET status = ?, http_status = ?, error = ?, attempts = ?, duration_ms = ?, body = ? WHERE id = ?")
+        .bind(status)
+        .bind(http_status)
+        .bind(error)
+        .bind(attempts)
+        .bind(duration_ms)
+        .bind(body)
+        .bind(id)
+        .execute(&db.write)
+        .await?;
     Ok(())
 }
 
+/// 啟動時：上次沒送完的（重試還在等就重啟了）記成失敗，之後可以重送。
+/// At startup: deliveries the last run didn't finish (restarted while retrying) become failed and can be re-sent.
+pub async fn fail_unfinished(db: &Db) -> sqlx::Result<u64> {
+    Ok(sqlx::query("UPDATE telepy_webhook_delivery SET status = 'failed', error = 'Telepy restarted before this was delivered.' WHERE status = 'sending'")
+        .execute(&db.write)
+        .await?
+        .rows_affected())
+}
+
+const D_COLS: &str = "id, webhook_id, event, message_id, at, status, http_status, error, attempts, duration_ms, test, body, event_json, redelivered_from";
+
 pub async fn deliveries(db: &Db, webhook_id: i64) -> sqlx::Result<Vec<DeliveryRow>> {
+    sqlx::query_as(&format!("SELECT {D_COLS} FROM telepy_webhook_delivery WHERE webhook_id = ? ORDER BY id DESC LIMIT ?"))
+        .bind(webhook_id)
+        .bind(DELIVERIES_KEPT)
+        .fetch_all(&db.read)
+        .await
+}
+
+pub async fn delivery(db: &Db, webhook_id: i64, id: i64) -> sqlx::Result<Option<DeliveryRow>> {
+    sqlx::query_as(&format!("SELECT {D_COLS} FROM telepy_webhook_delivery WHERE webhook_id = ? AND id = ?")).bind(webhook_id).bind(id).fetch_optional(&db.read).await
+}
+
+/// 有到期時間的個人金鑰：(id, 擁有者, 名稱, 公鑰, 到期)。/ Personal keys with an expiry: (id, owner, name, key, expires_at).
+pub async fn expiring_keys(db: &Db) -> sqlx::Result<Vec<(i64, i64, String, String, String)>> {
     sqlx::query_as(
-        "SELECT id, webhook_id, event, message_id, at, status, http_status, error, attempts, duration_ms, test, body \
-         FROM telepy_webhook_delivery WHERE webhook_id = ? ORDER BY id DESC LIMIT ?",
+        "SELECT k.id, k.user_id, k.host_friendly_name, k.key, k.expires_at FROM authorized_keys_userauthorizedkeys k \
+         JOIN auth_user u ON u.id = k.user_id WHERE k.expires_at IS NOT NULL AND u.is_active = 1 ORDER BY k.id",
     )
-    .bind(webhook_id)
-    .bind(DELIVERIES_KEPT)
     .fetch_all(&db.read)
     .await
+}
+
+/// 這把金鑰在這個到期時間的這個階段通知過了嗎（續期 = 到期時間變了 = 重新算）。
+/// Whether this stage was already sent for this key at this expiry (a renewal changes the expiry and re-arms it).
+pub async fn expiry_notice_sent(db: &Db, key_id: i64, stage: &str, expires_at: &str) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_key_expiry_notice WHERE key_id = ? AND stage = ? AND expires_at = ?")
+        .bind(key_id)
+        .bind(stage)
+        .bind(expires_at)
+        .fetch_one(&db.read)
+        .await?;
+    Ok(n > 0)
+}
+
+pub async fn mark_expiry_notice(db: &Db, key_id: i64, stage: &str, expires_at: &str) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO telepy_key_expiry_notice (key_id, stage, expires_at, sent_at) VALUES (?, ?, ?, ?) \
+         ON CONFLICT (key_id, stage) DO UPDATE SET expires_at = excluded.expires_at, sent_at = excluded.sent_at",
+    )
+    .bind(key_id)
+    .bind(stage)
+    .bind(expires_at)
+    .bind(now_db())
+    .execute(&db.write)
+    .await?;
+    Ok(())
+}
+
+/// 刪掉的金鑰不必再記。/ Forget notices of deleted keys.
+pub async fn prune_expiry_notices(db: &Db) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM telepy_key_expiry_notice WHERE key_id NOT IN (SELECT id FROM authorized_keys_userauthorizedkeys)").execute(&db.write).await?;
+    Ok(())
 }

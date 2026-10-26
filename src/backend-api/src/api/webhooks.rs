@@ -18,7 +18,7 @@ use crate::db::{self, users::User, webhooks::{DeliveryRow, Fields, WebhookRow}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::util::{db_to_iso_utc_z, opt_db_to_iso_utc_z};
-use crate::webhooks::{catalog, format::Format, target, text::Lang, Event, Hook, Kind};
+use crate::webhooks::{catalog, format::Format, target, text::Lang, validate_headers, Event, Header, Hook, How, Kind};
 
 const NAME_MAX: usize = 80;
 /// 狀態告警的延遲上限（一天）。/ The longest status alert delay (a day).
@@ -30,6 +30,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(retrieve, update, destroy))
         .routes(routes!(send_test))
         .routes(routes!(deliveries))
+        .routes(routes!(redeliver))
         .routes(routes!(get_secret, rotate_secret))
 }
 
@@ -62,7 +63,7 @@ fn host_of(url: &str) -> String {
     url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default()
 }
 
-fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>, creators: &HashMap<i64, String>) -> Value {
+fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>, creators: &HashMap<i64, String>, headers: Result<Vec<Header>, ()>) -> Value {
     let resolved = url::Url::parse(&row.url).ok().map(|u| Format::parse(&row.format).unwrap_or(Format::Auto).resolve(&u).as_str());
     json!({
         "id": row.id,
@@ -86,6 +87,8 @@ fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>,
             "http_status": row.last_code,
             "error": row.last_error,
         }) },
+        "headers_unreadable": headers.is_err(),
+        "headers": headers.unwrap_or_default(),
         "created_by": row.user_id.and_then(|u| creators.get(&u)),
         "created_at": db_to_iso_utc_z(&row.created_at),
         "updated_at": db_to_iso_utc_z(&row.updated_at),
@@ -102,7 +105,7 @@ async fn usernames(state: &AppState) -> ApiResult<HashMap<i64, String>> {
 
 async fn one_json(state: &AppState, row: &WebhookRow) -> ApiResult<Value> {
     let tunnels = db::webhooks::tunnels_of(&state.db, row.id).await?;
-    Ok(webhook_json(row, &tunnels, &tunnel_names(state).await?, &usernames(state).await?))
+    Ok(webhook_json(row, &tunnels, &tunnel_names(state).await?, &usernames(state).await?, state.webhooks.headers(row)))
 }
 
 /// 我看得到的隧道（個人 webhook 只能限定在這些）。/ Tunnels I can see (what a personal webhook may be limited to).
@@ -123,6 +126,8 @@ struct Form {
     tunnel_ids: Vec<i64>,
     delay: i64,
     enabled: bool,
+    /// None = 沒改。/ None = unchanged.
+    headers: Option<Vec<Header>>,
 }
 
 impl Form {
@@ -228,7 +233,21 @@ async fn parse_form(state: &AppState, me: &User, site: bool, body: &Value, curre
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(ApiError::field("enabled", "enabled must be true or false.")),
     };
-    Ok(Form { name, url, format, language, events, all_tunnels, tunnel_ids, delay, enabled })
+    let headers = match body.get("headers") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) => {
+            let mut list = Vec::new();
+            for item in items {
+                let name = item.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                let value = item.get("value").and_then(Value::as_str).unwrap_or("").to_string();
+                list.push(Header { name, value });
+            }
+            validate_headers(&list).map_err(|m| field_coded("headers", "bad_header", &m))?;
+            Some(list)
+        }
+        Some(_) => return Err(ApiError::field("headers", "headers must be a list of {name, value}.")),
+    };
+    Ok(Form { name, url, format, language, events, all_tunnels, tunnel_ids, delay, enabled, headers })
 }
 
 /// 全站 webhook 的變動記進 Logs（管理員看得到）。/ Site webhook changes go to the Logs (admins see them).
@@ -246,7 +265,9 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     let names = tunnel_names(&state).await?;
     let creators = usernames(&state).await?;
     let map = db::webhooks::tunnel_map(&state.db).await?;
-    let render = |rows: Vec<WebhookRow>| -> Vec<Value> { rows.iter().map(|r| webhook_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &creators)).collect() };
+    let render = |rows: Vec<WebhookRow>| -> Vec<Value> {
+        rows.iter().map(|r| webhook_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &creators, state.webhooks.headers(r))).collect()
+    };
     let mine = db::webhooks::for_user(&state.db, me.id).await?;
     let used = mine.len();
     let site = if me.is_superuser { Some(render(db::webhooks::site(&state.db).await?)) } else { None };
@@ -266,6 +287,14 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
             "per_minute": crate::webhooks::PER_MINUTE,
         },
         "can_manage_site": me.is_superuser,
+        // 全站 webhook 可以限定的隧道：整台伺服器的（只給管理員）。/ Tunnels a site-wide webhook may be limited to (admins only).
+        "site_tunnels": if me.is_superuser {
+            let mut all: Vec<(i64, String)> = names.iter().map(|(id, n)| (*id, n.clone())).collect();
+            all.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+            json!(all.into_iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>())
+        } else {
+            Value::Null
+        },
         "public_url": state.webhooks.base_url(),
     })))
 }
@@ -297,6 +326,9 @@ async fn create(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(b
     if !form.all_tunnels {
         db::webhooks::set_tunnels(&state.db, row.id, &form.tunnel_ids).await?;
     }
+    if let Some(h) = &form.headers {
+        state.webhooks.set_headers(row.id, h).await?;
+    }
     let secret = state.webhooks.rotate_secret(row.id).await?;
     state.webhooks.invalidate();
     log_site(&state, &me, "added", &row).await;
@@ -319,6 +351,9 @@ async fn update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
     let events = catalog::join_list(&form.events);
     db::webhooks::update(&state.db, id, &form.fields(&events)).await?;
     db::webhooks::set_tunnels(&state.db, id, &form.tunnel_ids).await?;
+    if let Some(h) = &form.headers {
+        state.webhooks.set_headers(id, h).await?;
+    }
     state.webhooks.invalidate();
     let row = db::webhooks::by_id(&state.db, id).await?.ok_or_else(not_found)?;
     log_site(&state, &me, "changed", &row).await;
@@ -342,7 +377,7 @@ async fn send_test(State(state): State<AppState>, AuthUser(me): AuthUser, Path(i
     let hook = Hook::new(row, tunnels);
     let allow_private = state.webhooks.allow_private(&hook).await;
     let event = Event::new(Kind::Test).data(json!({ "by": me.username })).link("/tunnels/webhooks");
-    let out = state.webhooks.deliver(&hook, &event, true, allow_private).await;
+    let out = state.webhooks.deliver(&hook, &event, &How::Test, allow_private).await;
     Ok(Json(json!({ "ok": out.ok, "http_status": out.status, "error": if out.error.is_empty() { Value::Null } else { json!(out.error) }, "duration_ms": out.duration_ms })))
 }
 
@@ -359,6 +394,8 @@ fn delivery_json(d: &DeliveryRow) -> Value {
         "duration_ms": d.duration_ms,
         "test": d.test,
         "body": d.body,
+        "redelivered_from": d.redelivered_from,
+        "can_redeliver": !d.test && !d.event_json.is_empty(),
     })
 }
 
@@ -387,4 +424,22 @@ async fn rotate_secret(State(state): State<AppState>, AuthUser(me): AuthUser, Pa
     let secret = state.webhooks.rotate_secret(row.id).await?;
     log_site(&state, &me, "rotated the signing secret of", &row).await;
     Ok(Json(json!({ "secret": secret })))
+}
+
+/// 重送一筆（同一個 `webhook-id`，用 webhook 現在的格式、語言與 header；不重試、不算進連續失敗，關著的也能送）。
+/// Re-send one delivery: same `webhook-id`, rendered with the webhook's current format, language and headers; no
+/// retries, not counted toward failures, works while the webhook is off.
+#[utoipa::path(post, path = "/api/webhooks/{id}/deliveries/{delivery_id}/redeliver", tag = "Webhooks", security(("bearer" = [])), params(("id" = i64, Path), ("delivery_id" = i64, Path)), responses((status = 200, body = super::schemas::WebhookTestResult), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "Test sends and old records can't be re-sent", body = super::schemas::ErrorBody)))]
+async fn redeliver(State(state): State<AppState>, AuthUser(me): AuthUser, Path((id, delivery_id)): Path<(i64, i64)>) -> ApiResult<Json<Value>> {
+    let row = manageable(&state, &me, id).await?;
+    let d = db::webhooks::delivery(&state.db, id, delivery_id).await?.ok_or_else(|| ApiError::not_found("Delivery not found"))?;
+    let event = serde_json::from_str::<Value>(&d.event_json).ok().filter(|_| !d.test).and_then(|v| Event::from_json(&v));
+    let Some(event) = event else {
+        return Err(coded(StatusCode::CONFLICT, "not_redeliverable", "This delivery can't be sent again."));
+    };
+    let tunnels = db::webhooks::tunnels_of(&state.db, id).await?;
+    let hook = Hook::new(row, tunnels);
+    let allow_private = state.webhooks.allow_private(&hook).await;
+    let out = state.webhooks.deliver(&hook, &event, &How::Again { from: d.id, message_id: d.message_id.clone() }, allow_private).await;
+    Ok(Json(json!({ "ok": out.ok, "http_status": out.status, "error": if out.error.is_empty() { Value::Null } else { json!(out.error) }, "duration_ms": out.duration_ms })))
 }

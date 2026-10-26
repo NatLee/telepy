@@ -52,6 +52,8 @@ export function WebhookCard({ hook, catalog, pauseAfter, testing, onToggle, onTe
     }
     if (hasStatusEvent(hook.events, catalog)) facts.push(hook.delay > 0 ? t("webhooks.card.delay", { delay: delayLabel(hook.delay) }) : t("webhooks.card.noDelay"));
     facts.push(LANGUAGES.find((l) => l.value === hook.language)?.label ?? hook.language);
+    if (hook.headers.length > 0) facts.push(t("webhooks.card.headers", { names: hook.headers.map((h) => h.name).join(", ") }));
+    if (hook.headers_unreadable) facts.push(t("webhooks.card.headersUnreadable"));
 
     return (
         <li className={cn("flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-card", !hook.enabled && "bg-surface")}>

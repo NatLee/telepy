@@ -8,7 +8,7 @@
  * webhooks always cover every tunnel, so they have no tunnel picker.
  */
 import React, { useMemo, useState } from "react";
-import { Search, UserRound, Webhook as WebhookIcon } from "lucide-react";
+import { Eye, EyeOff, Plus, Search, Trash2, UserRound, Webhook as WebhookIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field } from "@/components/ui/field";
@@ -29,12 +29,15 @@ import {
     FORMATS,
     GROUP_KEY,
     LANGUAGES,
+    MAX_HEADERS,
     PRESET_KEY,
     defaultInput,
     detectFormat,
     groupCatalog,
     hasStatusEvent,
     hasTunnelEvent,
+    headerProblem,
+    headersToSave,
     orderEvents,
     presetEvents,
     presetsFor,
@@ -83,7 +86,10 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
     const presets = presetsFor(catalog);
     const selected = orderEvents(input.events, catalog);
     const showDelay = hasStatusEvent(selected, catalog);
-    const showTunnels = scope === "user" && hasTunnelEvent(selected, catalog);
+    const showTunnels = hasTunnelEvent(selected, catalog);
+    const [showValues, setShowValues] = useState(false);
+    const headerProblems = input.headers.map((h) => headerProblem(h, input.headers));
+    const setHeader = (i: number, patch: Partial<WebhookInput["headers"][number]>) => set("headers", input.headers.map((h, j) => (j === i ? { ...h, ...patch } : h)));
     const delays = DELAY_CHOICES.includes(input.delay) ? DELAY_CHOICES : [...DELAY_CHOICES, input.delay].sort((a, b) => a - b);
     const shownTunnels = tunnels.filter((x) => !query.trim() || x.name.toLowerCase().includes(query.trim().toLowerCase()));
     // 選了但現在看不到的隧道（取消分享了）也列出來，才拿得掉。/ Picked tunnels that are no longer visible stay listed so they can be removed.
@@ -94,13 +100,13 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
 
     const save = async () => {
         setSaving(true);
-        const r = await onSave({ ...input, events: selected }, hook);
+        const r = await onSave({ ...input, events: selected, headers: headersToSave(input.headers) }, hook);
         setSaving(false);
         if ("saved" in r) onClose();
         else setErrors(r.errors);
     };
 
-    const canSave = !saving && Boolean(detected) && selected.length > 0 && (!showTunnels || input.all_tunnels || input.tunnel_ids.length > 0);
+    const canSave = !saving && Boolean(detected) && selected.length > 0 && (!showTunnels || input.all_tunnels || input.tunnel_ids.length > 0) && headerProblems.every((p) => p === null);
 
     return (
         <Modal
@@ -261,12 +267,14 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                             value={input.all_tunnels ? "all" : "some"}
                             onChange={(v) => set("all_tunnels", v === "all")}
                             options={[
-                                { value: "all", label: t("webhooks.form.allTunnels") },
+                                { value: "all", label: scope === "site" ? t("webhooks.form.everyTunnel") : t("webhooks.form.allTunnels") },
                                 { value: "some", label: t("webhooks.form.someTunnels") },
                             ]}
                             aria-label={t("webhooks.form.tunnels")}
                         />
-                        <p className="text-xs text-muted-foreground">{input.all_tunnels ? t("webhooks.form.allTunnelsHint") : t("webhooks.form.someTunnelsHint")}</p>
+                        <p className="text-xs text-muted-foreground">
+                            {input.all_tunnels ? t(scope === "site" ? "webhooks.form.everyTunnelHint" : "webhooks.form.allTunnelsHint") : t("webhooks.form.someTunnelsHint")}
+                        </p>
                         {!input.all_tunnels && (
                             <div className="space-y-2">
                                 {tunnels.length >= SEARCH_FROM && (
@@ -296,6 +304,77 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                         )}
                     </section>
                 )}
+
+                <section className="space-y-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <h3 className="text-base text-foreground">{t("webhooks.headers.title")}</h3>
+                        {input.headers.length > 0 && (
+                            <button type="button" onClick={() => setShowValues((v) => !v)} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                                {showValues ? <EyeOff size={13} aria-hidden /> : <Eye size={13} aria-hidden />}
+                                {showValues ? t("webhooks.headers.hideValues") : t("webhooks.headers.showValues")}
+                            </button>
+                        )}
+                    </div>
+                    <p className="-mt-1 text-sm text-muted-foreground">{t("webhooks.headers.hint")}</p>
+                    {hook?.headers_unreadable && <Callout tone="warning">{t("webhooks.headers.unreadable")}</Callout>}
+                    {input.headers.length > 0 && (
+                        <ul className="space-y-2">
+                            {input.headers.map((h, i) => (
+                                // 手機上名稱與值分兩行，框起來才看得出是一組。/ On phones name and value stack, so each pair gets a frame.
+                                <li key={i} className="rounded-lg border border-border p-2 sm:border-0 sm:p-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <Input
+                                            value={h.name}
+                                            onChange={(e) => setHeader(i, { name: e.target.value })}
+                                            placeholder="Authorization"
+                                            aria-label={t("webhooks.headers.name")}
+                                            aria-invalid={headerProblems[i] !== null}
+                                            className="w-full font-mono sm:w-48"
+                                            maxLength={64}
+                                            spellCheck={false}
+                                            autoCapitalize="off"
+                                            autoCorrect="off"
+                                        />
+                                        <Input
+                                            value={h.value}
+                                            onChange={(e) => setHeader(i, { value: e.target.value })}
+                                            type={showValues ? "text" : "password"}
+                                            placeholder="Bearer …"
+                                            aria-label={t("webhooks.headers.value")}
+                                            aria-invalid={headerProblems[i] !== null}
+                                            className="min-w-0 flex-1 font-mono"
+                                            maxLength={2048}
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                        />
+                                        <Button
+                                            type="button"
+                                            size="icon-sm"
+                                            variant="ghost"
+                                            onClick={() => set("headers", input.headers.filter((_, j) => j !== i))}
+                                            aria-label={t("webhooks.headers.remove", { name: h.name || "" })}
+                                            title={t("webhooks.headers.remove", { name: h.name || "" })}
+                                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                                        >
+                                            <Trash2 />
+                                        </Button>
+                                    </div>
+                                    {headerProblems[i] && (
+                                        <p className="mt-1 text-xs text-destructive" role="alert">
+                                            {t(headerProblems[i]!)}
+                                        </p>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {errors.headers && <p className="text-xs text-destructive" role="alert">{errors.headers}</p>}
+                    {input.headers.length < MAX_HEADERS && (
+                        <Button type="button" size="sm" variant="outline" onClick={() => set("headers", [...input.headers, { name: "", value: "" }])}>
+                            <Plus size={15} /> {t("webhooks.headers.add")}
+                        </Button>
+                    )}
+                </section>
 
                 <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
                     <Switch checked={input.enabled} onCheckedChange={(v) => set("enabled", v)}>

@@ -157,12 +157,12 @@ function WebhooksInner() {
                 hook={editing === "new" ? null : editing}
                 scope={editing && editing !== "new" ? editing.scope : page.scope}
                 catalog={(editing && editing !== "new" && editing.scope === "site" ? page.data?.catalog.site : editing && editing !== "new" ? page.data?.catalog.personal : page.catalog) ?? []}
-                tunnels={page.tunnels}
+                tunnels={(editing && editing !== "new" ? editing.scope : page.scope) === "site" ? page.siteTunnels : page.tunnels}
                 language={languageFor(locale)}
                 privateTargets={Boolean(policy?.private_targets)}
                 onSave={page.save}
             />
-            <DeliveriesDialog hook={history} onClose={() => setHistory(null)} load={page.deliveries} onTest={page.sendTest} />
+            <DeliveriesDialog hook={history} onClose={() => setHistory(null)} load={page.deliveries} onTest={page.sendTest} onRedeliver={page.redeliver} />
             <SecretDialog hook={secretOf} onClose={() => setSecretOf(null)} load={page.secret} />
             <ConfirmDialog
                 isOpen={deleting !== null}

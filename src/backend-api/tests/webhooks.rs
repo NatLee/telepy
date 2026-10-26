@@ -373,3 +373,154 @@ async fn status_alerts_follow_each_webhooks_delay_and_audience() {
     slow.quiet("tunnel.online").await; // never announced offline, so no online either
     assert_eq!(mine.of("tunnel.offline").len(), 1, "offline is sent once");
 }
+
+#[tokio::test]
+async fn custom_headers_are_sent_and_checked() {
+    let Some(lab) = Lab::start().await else { return };
+    settings(&lab, json!({"notify_private_targets": true})).await;
+    let hook = Receiver::start().await;
+    let alice = lab.user("alice").await;
+
+    // Telepy 自己的 header、換行、重複都不行。/ Telepy's own headers, line breaks and duplicates are refused.
+    for bad in [json!([{"name": "webhook-signature", "value": "v1,x"}]), json!([{"name": "X-A", "value": "a\r\nB: c"}]), json!([{"name": "X-A", "value": "1"}, {"name": "x-a", "value": "2"}])] {
+        let r = lab.app.post("/api/webhooks", Some(&alice.token), json!({"url": hook.url, "headers": bad})).await;
+        assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_header")), "{}", r.text);
+    }
+    let (id, _) = create(&lab, &alice.token, json!({"url": hook.url, "headers": [{"name": "Authorization", "value": "Bearer t0ken"}, {"name": "X-Team", "value": "ops"}]})).await;
+    let r = lab.app.get(&format!("/api/webhooks/{id}"), Some(&alice.token)).await;
+    assert_eq!(r.json["headers"][0], json!({"name": "Authorization", "value": "Bearer t0ken"}), "{}", r.text);
+    let raw: String = sqlx::query_scalar("SELECT headers FROM telepy_webhook WHERE id = ?").bind(id).fetch_one(&lab.app.state.db.read).await.unwrap();
+    assert!(!raw.contains("t0ken"), "sealed at rest");
+
+    lab.app.post(&format!("/api/webhooks/{id}/test"), Some(&alice.token), json!({})).await;
+    let got = hook.wait("webhook.test").await;
+    assert_eq!(got.headers.get("authorization").unwrap(), "Bearer t0ken");
+    assert_eq!(got.headers.get("x-team").unwrap(), "ops");
+    assert!(got.headers.get("webhook-signature").is_some(), "signature still there");
+
+    // PATCH 沒帶 headers = 不變；帶空的 = 清掉。/ PATCH without headers keeps them; an empty list clears them.
+    let r = lab.app.patch(&format!("/api/webhooks/{id}"), Some(&alice.token), json!({"name": "renamed"})).await;
+    assert_eq!(r.json["headers"].as_array().map(Vec::len), Some(2), "{}", r.text);
+    let r = lab.app.patch(&format!("/api/webhooks/{id}"), Some(&alice.token), json!({"headers": []})).await;
+    assert_eq!(r.json["headers"], json!([]), "{}", r.text);
+}
+
+async fn deliveries(lab: &Lab, token: &str, id: i64) -> Value {
+    lab.app.get(&format!("/api/webhooks/{id}/deliveries"), Some(token)).await.json
+}
+
+#[tokio::test]
+async fn failed_deliveries_can_be_sent_again() {
+    let Some(lab) = Lab::start().await else { return };
+    settings(&lab, json!({"notify_private_targets": true})).await;
+    let hook = Receiver::start().await;
+    hook.status.store(500, Ordering::SeqCst);
+    let alice = lab.user("alice").await;
+    let (id, _) = create(&lab, &alice.token, json!({"url": hook.url, "events": ["account.sign_in"]})).await;
+    lab.app.state.webhooks.set_retry_delays(vec![]);
+    lab.app.state.webhooks.emit(Event::new(Kind::AccountSignIn).to([alice.id], None).data(json!({"user": "alice", "method": "password", "ip": "203.0.113.9"})));
+    let first = hook.wait("account.sign_in").await;
+    let mut list = deliveries(&lab, &alice.token, id).await;
+    for _ in 0..50 {
+        if list.as_array().is_some_and(|a| !a.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        list = deliveries(&lab, &alice.token, id).await;
+    }
+    assert_eq!((list[0]["status"].as_str(), list[0]["can_redeliver"].as_bool()), (Some("failed"), Some(true)), "{list}");
+    let did = list[0]["id"].as_i64().unwrap();
+
+    // 對方修好了：重送成功，同一個 webhook-id，記成新的一筆。/ The receiver is fixed: the re-send works, same id, new record.
+    hook.status.store(204, Ordering::SeqCst);
+    let r = lab.app.post(&format!("/api/webhooks/{id}/deliveries/{did}/redeliver"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.json["ok"], true, "{}", r.text);
+    let again = hook.of("account.sign_in");
+    assert_eq!(again.len(), 2);
+    assert_eq!(again[1].headers.get("webhook-id"), first.headers.get("webhook-id"), "same message id");
+    assert_eq!(again[1].json()["data"]["ip"], "203.0.113.9");
+    let list = deliveries(&lab, &alice.token, id).await;
+    assert_eq!((list[0]["status"].as_str(), list[0]["redelivered_from"].as_i64()), (Some("ok"), Some(did)), "{list}");
+    let r = lab.app.get(&format!("/api/webhooks/{id}"), Some(&alice.token)).await;
+    assert_eq!(r.json["failures"], 0, "a successful re-send clears the failure count");
+
+    // 測試送出不能重送；別人的 webhook 一律 404。/ Test sends can't be re-sent; someone else's webhook is a 404.
+    lab.app.post(&format!("/api/webhooks/{id}/test"), Some(&alice.token), json!({})).await;
+    let test_id = deliveries(&lab, &alice.token, id).await[0]["id"].as_i64().unwrap();
+    let r = lab.app.post(&format!("/api/webhooks/{id}/deliveries/{test_id}/redeliver"), Some(&alice.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::CONFLICT, Some("not_redeliverable")), "{}", r.text);
+    let bob = lab.user("bob").await;
+    let r = lab.app.post(&format!("/api/webhooks/{id}/deliveries/{did}/redeliver"), Some(&bob.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+
+    // 重試還在等時重啟：那一筆停在 sending，啟動時改成失敗，還能重送。
+    // A restart during retries leaves the record at `sending`; startup marks it failed and it can still be re-sent.
+    let db = &lab.app.state.db;
+    sqlx::query("UPDATE telepy_webhook_delivery SET status = 'sending' WHERE id = ?").bind(did).execute(&db.write).await.unwrap();
+    assert_eq!(db::webhooks::fail_unfinished(db).await.unwrap(), 1);
+    let row = deliveries(&lab, &alice.token, id).await.as_array().unwrap().iter().find(|d| d["id"] == did).cloned().unwrap();
+    assert_eq!((row["status"].as_str(), row["can_redeliver"].as_bool()), (Some("failed"), Some(true)), "{row}");
+    assert!(row["error"].as_str().unwrap().contains("restarted"), "{row}");
+}
+
+#[tokio::test]
+async fn ssh_key_expiry_is_announced_once_per_stage() {
+    let Some(lab) = Lab::start().await else { return };
+    settings(&lab, json!({"notify_private_targets": true})).await;
+    let hook = Receiver::start().await;
+    let alice = lab.user("alice").await;
+    create(&lab, &alice.token, json!({"url": hook.url, "events": ["key.expiring", "key.expired"]})).await;
+    let key = lab.keygen("alice-work");
+    let soon = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+    let r = lab.app.post("/api/reverse/user/keys", Some(&alice.token), json!({"host_friendly_name": "work laptop", "key": key.public, "expires_at": soon})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let key_id = r.json["id"].as_i64().unwrap();
+    let state = &lab.app.state;
+    use telepy_server::webhooks::keys::run_once;
+
+    assert_eq!(run_once(state, chrono::Utc::now()).await.unwrap(), 1, "the new key is within 7 days");
+    let got = hook.wait("key.expiring").await.json();
+    assert_eq!((got["data"]["name"].as_str(), got["data"]["days_left"].as_i64()), (Some("work laptop"), Some(3)), "{got}");
+    assert!(got["text"].as_str().unwrap().contains("expires in 3 days"), "{got}");
+    assert_eq!(run_once(state, chrono::Utc::now()).await.unwrap(), 0, "once per stage");
+
+    // 兩天後到期了。/ Two days later it has expired.
+    assert_eq!(run_once(state, chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(1)).await.unwrap(), 1);
+    hook.wait("key.expired").await;
+
+    // 續期改了到期時間：重新算。/ A renewal changes the expiry and re-arms the notice.
+    let later = (chrono::Utc::now() + chrono::Duration::days(5)).to_rfc3339();
+    let r = lab.app.patch(&format!("/api/reverse/user/keys/{key_id}"), Some(&alice.token), json!({"expires_at": later})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    assert_eq!(run_once(state, chrono::Utc::now()).await.unwrap(), 1);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while hook.of("key.expiring").len() < 2 {
+        assert!(tokio::time::Instant::now() < deadline, "no second key.expiring");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn site_webhooks_can_be_limited_to_any_tunnel() {
+    let Some(lab) = Lab::start().await else { return };
+    let site = Receiver::start().await;
+    let alice = lab.user("alice").await;
+    let (k1, k2) = (lab.keygen("a-tunnel"), lab.keygen("b-tunnel"));
+    let a = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "alice-a", &k1)).await.unwrap();
+    let b = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "alice-b", &k2)).await.unwrap();
+    let list = lab.app.get("/api/webhooks", Some(&lab.admin_token)).await;
+    assert!(list.json["site_tunnels"].as_array().unwrap().iter().any(|t| t["name"] == "alice-a"), "admins see every tunnel: {}", list.text);
+    assert!(lab.app.get("/api/webhooks", Some(&alice.token)).await.json["site_tunnels"].is_null());
+    // 管理員的全站 webhook 可以限定在別人的隧道。/ A site-wide webhook may be limited to anyone's tunnel.
+    let (id, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "url": site.url, "events": ["tunnel.ip_changed"], "all_tunnels": false, "tunnel_ids": [a.id]})).await;
+    let r = lab.app.get(&format!("/api/webhooks/{id}"), Some(&lab.admin_token)).await;
+    assert_eq!(r.json["tunnels"], json!([{"id": a.id, "name": "alice-a"}]), "{}", r.text);
+    let hooks = lab.app.state.webhooks.clone();
+    for t in [&b, &a] {
+        hooks.emit(Event::new(Kind::TunnelIpChanged).tunnel(t).data(json!({"ip": "203.0.113.9", "previous_ip": "198.51.100.1"})));
+    }
+    let got = site.wait("tunnel.ip_changed").await.json();
+    assert_eq!(got["tunnel"]["name"], "alice-a", "{got}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(site.of("tunnel.ip_changed").len(), 1, "alice-b is not on the list");
+}

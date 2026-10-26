@@ -6,7 +6,7 @@
  * row to see (and copy) what was sent.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { ChevronDown, History, RefreshCw, Send } from "lucide-react";
+import { ChevronDown, History, RefreshCw, RotateCw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
@@ -19,11 +19,12 @@ import type { TranslationKey } from "@/locales/en";
 import type { Webhook, WebhookDelivery } from "@/types/webhooks";
 import { useEventLabel } from "./parts";
 
-const DOT: Record<WebhookDelivery["status"], string> = { ok: "bg-success", failed: "bg-destructive", skipped: "bg-warning" };
+const DOT: Record<WebhookDelivery["status"], string> = { ok: "bg-success", failed: "bg-destructive", skipped: "bg-warning", sending: "border border-dashed border-muted-foreground/70" };
 const STATUS_KEY: Record<WebhookDelivery["status"], TranslationKey> = {
     ok: "webhooks.deliveries.status.ok",
     failed: "webhooks.deliveries.status.failed",
     skipped: "webhooks.deliveries.status.skipped",
+    sending: "webhooks.deliveries.status.sending",
 };
 
 interface Props {
@@ -31,13 +32,14 @@ interface Props {
     onClose: () => void;
     load: (id: number) => Promise<WebhookDelivery[] | null>;
     onTest: (h: Webhook) => Promise<unknown>;
+    onRedeliver: (hookId: number, deliveryId: number) => Promise<boolean>;
 }
 
-export function DeliveriesDialog({ hook, onClose, load, onTest }: Props) {
-    return hook ? <Deliveries key={hook.id} hook={hook} onClose={onClose} load={load} onTest={onTest} /> : null;
+export function DeliveriesDialog({ hook, ...rest }: Props) {
+    return hook ? <Deliveries key={hook.id} hook={hook} {...rest} /> : null;
 }
 
-function Deliveries({ hook, onClose, load, onTest }: Props & { hook: Webhook }) {
+function Deliveries({ hook, onClose, load, onTest, onRedeliver }: Props & { hook: Webhook }) {
     const { t, locale } = useI18n();
     const eventLabel = useEventLabel();
     const [rows, setRows] = useState<WebhookDelivery[] | null>(null);
@@ -55,6 +57,14 @@ function Deliveries({ hook, onClose, load, onTest }: Props & { hook: Webhook }) 
         const first = setTimeout(() => void refresh(), 0);
         return () => clearTimeout(first);
     }, [refresh]);
+
+    const [resending, setResending] = useState<number | null>(null);
+    const resend = async (d: WebhookDelivery) => {
+        setResending(d.id);
+        await onRedeliver(hook.id, d.id);
+        await refresh();
+        setResending(null);
+    };
 
     const test = async () => {
         setBusy(true);
@@ -100,17 +110,19 @@ function Deliveries({ hook, onClose, load, onTest }: Props & { hook: Webhook }) 
                         const facts = [
                             d.http_status ? `HTTP ${d.http_status}` : null,
                             d.attempts > 1 ? t("webhooks.deliveries.attempts", { n: d.attempts }) : null,
-                            d.status !== "skipped" ? t("webhooks.deliveries.took", { ms: d.duration_ms }) : null,
+                            (d.status === "ok" || d.status === "failed") && d.attempts > 0 ? t("webhooks.deliveries.took", { ms: d.duration_ms }) : null,
                         ].filter(Boolean);
                         return (
                             <li key={d.id}>
-                                <button type="button" onClick={() => setOpen(expanded ? null : d.id)} aria-expanded={expanded} className="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/40">
+                                <div className="flex items-start">
+                                <button type="button" onClick={() => setOpen(expanded ? null : d.id)} aria-expanded={expanded} className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2.5 text-left hover:bg-muted/40">
                                     <span className={cn("mt-1.5 inline-flex size-2 shrink-0 rounded-full", DOT[d.status])} aria-hidden />
                                     <span className="min-w-0 flex-1">
                                         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                                             <span className="text-sm text-foreground">{eventLabel(d.event)}</span>
                                             <span className="text-xs text-muted-foreground">{t(STATUS_KEY[d.status])}</span>
                                             {d.test && d.event !== "webhook.test" && <Chip>{t("webhooks.deliveries.test")}</Chip>}
+                                            {d.redelivered_from !== null && <Chip>{t("webhooks.deliveries.resentChip")}</Chip>}
                                         </span>
                                         <span className="mt-0.5 block text-xs text-muted-foreground" title={new Date(d.at).toLocaleString(locale)}>
                                             {[formatRelativeTime(d.at, locale), ...facts].join(" · ")}
@@ -119,11 +131,25 @@ function Deliveries({ hook, onClose, load, onTest }: Props & { hook: Webhook }) 
                                     </span>
                                     {d.body && <ChevronDown size={16} className={cn("mt-1 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} aria-hidden />}
                                 </button>
+                                {/* 失敗 / 跳過的直接給重送鈕；送達的在展開後。/ Failed and skipped rows show Resend right away; delivered ones when expanded. */}
+                                {d.can_redeliver && (d.status === "failed" || d.status === "skipped") && (
+                                    <Button size="sm" variant="outline" className="my-2 mr-2 shrink-0" onClick={() => void resend(d)} disabled={resending !== null} title={t("webhooks.deliveries.resendHint")}>
+                                        <RotateCw size={14} /> {resending === d.id ? t("webhooks.deliveries.resending") : t("webhooks.deliveries.resend")}
+                                    </Button>
+                                )}
+                                </div>
                                 {expanded && d.body && (
                                     <div className="space-y-2 px-3 pb-3">
                                         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                                             <span className="font-mono [overflow-wrap:anywhere]">webhook-id: {d.message_id}</span>
-                                            <CopyButton value={d.body} />
+                                            <span className="flex items-center gap-2">
+                                                {d.can_redeliver && d.status === "ok" && (
+                                                    <Button size="sm" variant="ghost" onClick={() => void resend(d)} disabled={resending !== null} title={t("webhooks.deliveries.resendHint")}>
+                                                        <RotateCw size={14} /> {resending === d.id ? t("webhooks.deliveries.resending") : t("webhooks.deliveries.resend")}
+                                                    </Button>
+                                                )}
+                                                <CopyButton value={d.body} />
+                                            </span>
                                         </div>
                                         <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-surface p-3 font-mono text-xs leading-relaxed text-foreground">{prettyBody(d.body)}</pre>
                                     </div>

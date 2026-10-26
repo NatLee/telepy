@@ -583,7 +583,8 @@ const TABLES: &[(&str, &str)] = &[
             "last_code" integer NULL,
             "last_error" text NOT NULL DEFAULT '',
             "created_at" datetime NOT NULL,
-            "updated_at" datetime NOT NULL
+            "updated_at" datetime NOT NULL,
+            "headers" text NOT NULL DEFAULT ''
         )"#,
     ),
     // Rust 自有：webhook 只收這幾條隧道（all_tunnels = 0 時）。/ The tunnels a webhook is limited to.
@@ -610,7 +611,21 @@ const TABLES: &[(&str, &str)] = &[
             "attempts" integer NOT NULL DEFAULT 1,
             "duration_ms" integer NOT NULL DEFAULT 0,
             "test" bool NOT NULL DEFAULT 0,
-            "body" text NOT NULL DEFAULT ''
+            "body" text NOT NULL DEFAULT '',
+            "event_json" text NOT NULL DEFAULT '',
+            "redelivered_from" integer NULL
+        )"#,
+    ),
+    // Rust 自有：個人 SSH 金鑰的到期通知送過了沒（每把金鑰、每個階段、每個到期時間一次）。
+    // Which personal SSH key expiry notices were sent (once per key, stage and expiry time).
+    (
+        "telepy_key_expiry_notice",
+        r#"CREATE TABLE "telepy_key_expiry_notice" (
+            "key_id" integer NOT NULL,
+            "stage" varchar(8) NOT NULL,
+            "expires_at" datetime NOT NULL,
+            "sent_at" datetime NOT NULL,
+            PRIMARY KEY ("key_id", "stage")
         )"#,
     ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
@@ -720,6 +735,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "notify_user_webhooks", "bool NOT NULL DEFAULT 1"),
     ("site_settings_sitesettings", "notify_private_targets", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "notify_max_webhooks", "integer NOT NULL DEFAULT 10"),
+    ("telepy_webhook", "headers", "text NOT NULL DEFAULT ''"),
+    ("telepy_webhook_delivery", "event_json", "text NOT NULL DEFAULT ''"),
+    ("telepy_webhook_delivery", "redelivered_from", "integer NULL"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
     ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),

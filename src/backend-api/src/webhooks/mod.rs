@@ -11,6 +11,7 @@
 
 pub mod catalog;
 pub mod format;
+pub mod keys;
 pub mod sign;
 pub mod target;
 pub mod text;
@@ -94,6 +95,95 @@ impl Event {
         self.link = Some(path.into());
         self
     }
+
+    /// 存進送出紀錄（重送用）。/ Stored with the delivery, for re-sending.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "kind": self.kind.name(),
+            "tunnel": self.tunnel.as_ref().map(|t| json!({ "id": t.id, "name": t.name, "reverse_port": t.reverse_port })),
+            "data": self.data,
+            "link": self.link,
+        })
+    }
+
+    /// 從送出紀錄還原；`webhook.test` 與不認得的事件回 None。/ Back from a delivery record; None for tests and unknown events.
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let kind = Kind::parse(v.get("kind")?.as_str()?)?;
+        let tunnel = v.get("tunnel").filter(|t| t.is_object()).map(|t| TunnelRef {
+            id: t["id"].as_i64().unwrap_or(0),
+            name: t["name"].as_str().unwrap_or("").to_string(),
+            reverse_port: t["reverse_port"].as_i64().unwrap_or(0),
+        });
+        Some(Self { kind, tunnel, audience: Vec::new(), data: v.get("data").cloned().unwrap_or(json!({})), link: v.get("link").and_then(Value::as_str).map(str::to_string) })
+    }
+}
+
+/// 一個自訂 header。/ One custom header.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Header {
+    pub name: String,
+    pub value: String,
+}
+
+pub const MAX_HEADERS: usize = 10;
+const HEADER_VALUE_MAX: usize = 2048;
+/// Telepy 自己設的、或會壞掉 HTTP 的 header 不能自訂。/ Headers Telepy sets itself, or that would break HTTP.
+const RESERVED_HEADERS: &[&str] = &[
+    "host",
+    "content-type",
+    "content-length",
+    "content-encoding",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "upgrade",
+    "te",
+    "trailer",
+    "expect",
+    "proxy-authorization",
+    "proxy-connection",
+    "user-agent",
+    "webhook-id",
+    "webhook-timestamp",
+    "webhook-signature",
+    "x-telepy-event",
+];
+
+/// 檢查自訂 header（純函式）：名稱是 HTTP token、不重複、不是保留的；值是可見的 ASCII。錯誤回一句說明。
+/// Check custom headers (pure): names are HTTP tokens, unique and not reserved; values are visible ASCII.
+pub fn validate_headers(list: &[Header]) -> Result<(), String> {
+    if list.len() > MAX_HEADERS {
+        return Err(format!("At most {MAX_HEADERS} custom headers."));
+    }
+    let mut seen: Vec<String> = Vec::new();
+    for h in list {
+        let name = h.name.trim();
+        let token = |c: char| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c);
+        if name.is_empty() || name.len() > 64 || !name.chars().all(token) {
+            return Err(format!("\"{name}\" is not a valid header name."));
+        }
+        let lower = name.to_ascii_lowercase();
+        if RESERVED_HEADERS.contains(&lower.as_str()) {
+            return Err(format!("{name} is set by Telepy and can't be changed."));
+        }
+        if seen.contains(&lower) {
+            return Err(format!("{name} is listed twice."));
+        }
+        seen.push(lower);
+        if h.value.is_empty() || h.value.len() > HEADER_VALUE_MAX || !h.value.chars().all(|c| c == '\t' || (' '..='~').contains(&c)) {
+            return Err(format!("The value of {name} must be 1 to {HEADER_VALUE_MAX} printable ASCII characters."));
+        }
+    }
+    Ok(())
+}
+
+/// 怎麼送：一般事件（有流量限制、重試、算連續失敗）、測試、或重送某一筆（都不重試、不算失敗）。
+/// How to send: a normal event (rate limit, retries, failure count), a test, or a re-send (neither retries nor counts).
+#[derive(Debug, Clone)]
+pub enum How {
+    Event,
+    Test,
+    Again { from: i64, message_id: String },
 }
 
 /// 發送端看到的 webhook。/ A webhook as the dispatcher sees it.
@@ -313,7 +403,7 @@ impl Webhooks {
         let me = self.clone();
         tokio::spawn(async move {
             let allow_private = me.allow_private(&hook).await;
-            me.deliver(&hook, &event, false, allow_private).await;
+            me.deliver(&hook, &event, &How::Event, allow_private).await;
         });
     }
 
@@ -346,6 +436,25 @@ impl Webhooks {
         format!("telepy-webhook:{id}")
     }
 
+    fn headers_aad(id: i64) -> String {
+        format!("telepy-webhook-headers:{id}")
+    }
+
+    /// 自訂 header 密封後存起來（空的就清掉）。/ Seal and store the custom headers (empty clears them).
+    pub async fn set_headers(&self, id: i64, headers: &[Header]) -> sqlx::Result<()> {
+        let sealed = if headers.is_empty() { String::new() } else { self.vault.seal(&Self::headers_aad(id), &serde_json::to_vec(headers).unwrap_or_default()) };
+        db::webhooks::set_headers(&self.db, id, &sealed).await
+    }
+
+    /// 解開自訂 header；解不開（換了 SECRET_KEY）回 Err。/ Open the custom headers; Err when SECRET_KEY changed.
+    pub fn headers(&self, row: &WebhookRow) -> Result<Vec<Header>, ()> {
+        if row.headers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let raw = self.vault.open(&Self::headers_aad(row.id), &row.headers).ok_or(())?;
+        serde_json::from_slice(&raw).map_err(|_| ())
+    }
+
     /// 簽章密鑰；還沒有就產生一把存起來。解不開（換了 SECRET_KEY）回 None。
     /// The signing secret, created on first use; None when it cannot be opened (SECRET_KEY changed).
     pub async fn secret(&self, row: &WebhookRow) -> Option<String> {
@@ -362,51 +471,74 @@ impl Webhooks {
         Ok(secret)
     }
 
-    /// 送一則（含重試）並記錄。`test` = 「送測試」：不受流量限制、不算進連續失敗。
-    /// Deliver one message (with retries) and record it. `test` skips the rate limit and the failure count.
-    pub async fn deliver(&self, hook: &Hook, event: &Event, test: bool, allow_private: bool) -> Outcome {
+    /// 送一則並記錄。一般事件受流量限制、會重試、算進連續失敗；測試與重送都不會。
+    /// Deliver one message and record it. Normal events are rate limited, retried and counted; tests and re-sends aren't.
+    pub async fn deliver(&self, hook: &Hook, event: &Event, how: &How, allow_private: bool) -> Outcome {
         let _permit = self.gate.acquire().await;
         let row = &hook.row;
-        let msg_id = format!("msg_{}", crate::util::random_alnum(24));
-        if !test {
-            match self.admit(row.id) {
-                Admit::Yes => {}
-                admit => {
-                    let error = format!("More than {PER_MINUTE} events in a minute: skipped until it calms down.");
-                    if matches!(admit, Admit::SkipNote) {
-                        let rec = db::webhooks::NewDelivery { webhook_id: row.id, event: event.kind.name(), message_id: &msg_id, status: "skipped", http_status: None, error: &error, attempts: 0, duration_ms: 0, test, body: "" };
-                        if let Err(e) = db::webhooks::insert_delivery(&self.db, &rec).await {
-                            tracing::warn!(webhook = row.id, error = %e, "webhooks: cannot record a delivery");
-                        }
-                    }
-                    return Outcome { ok: false, skipped: true, status: None, error, attempts: 0, duration_ms: 0 };
-                }
-            }
-        }
-        let started = Instant::now();
-        let (outcome, body) = self.attempt_all(hook, event, test, allow_private, &msg_id).await;
-        let outcome = Outcome { duration_ms: started.elapsed().as_millis() as u64, ..outcome };
-        let rec = db::webhooks::NewDelivery {
+        let (test, from) = match how {
+            How::Event => (false, None),
+            How::Test => (true, None),
+            How::Again { from, .. } => (false, Some(*from)),
+        };
+        let msg_id = match how {
+            How::Again { message_id, .. } => message_id.clone(),
+            _ => format!("msg_{}", crate::util::random_alnum(24)),
+        };
+        let event_json = if test { String::new() } else { event.to_json().to_string() };
+        let skipped_msg = format!("More than {PER_MINUTE} events in a minute: skipped until it calms down.");
+        let new_record = |status: &'static str| db::webhooks::NewDelivery {
             webhook_id: row.id,
             event: event.kind.name(),
             message_id: &msg_id,
-            status: if outcome.ok { "ok" } else { "failed" },
-            http_status: outcome.status.map(i64::from),
-            error: &outcome.error,
-            attempts: i64::from(outcome.attempts),
-            duration_ms: outcome.duration_ms as i64,
+            status,
+            http_status: None,
+            error: if status == "skipped" { &skipped_msg } else { "" },
+            attempts: 0,
+            duration_ms: 0,
             test,
-            body: &body,
+            body: "",
+            event_json: &event_json,
+            redelivered_from: from,
         };
-        if let Err(e) = db::webhooks::insert_delivery(&self.db, &rec).await {
-            tracing::warn!(webhook = row.id, error = %e, "webhooks: cannot record a delivery");
+        if matches!(how, How::Event) {
+            match self.admit(row.id) {
+                Admit::Yes => {}
+                admit => {
+                    if matches!(admit, Admit::SkipNote) {
+                        if let Err(e) = db::webhooks::insert_delivery(&self.db, &new_record("skipped")).await {
+                            tracing::warn!(webhook = row.id, error = %e, "webhooks: cannot record a delivery");
+                        }
+                    }
+                    return Outcome { ok: false, skipped: true, status: None, error: skipped_msg, attempts: 0, duration_ms: 0 };
+                }
+            }
         }
-        let failures = db::webhooks::record_result(&self.db, row.id, outcome.ok, outcome.status.map(i64::from), &outcome.error, !test).await.unwrap_or(0);
+        // 先記成「送出中」：重試還在等時重啟，至少留得下紀錄（啟動時改成失敗，可以重送）。
+        // Recorded as sending first, so a restart during retries still leaves a record (failed at startup, re-sendable).
+        let record_id = match db::webhooks::insert_delivery(&self.db, &new_record("sending")).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!(webhook = row.id, error = %e, "webhooks: cannot record a delivery");
+                None
+            }
+        };
+        let started = Instant::now();
+        let (outcome, body) = self.attempt_all(hook, event, matches!(how, How::Event), allow_private, &msg_id).await;
+        let outcome = Outcome { duration_ms: started.elapsed().as_millis() as u64, ..outcome };
+        if let Some(id) = record_id {
+            let status = if outcome.ok { "ok" } else { "failed" };
+            if let Err(e) = db::webhooks::finish_delivery(&self.db, id, status, outcome.status.map(i64::from), &outcome.error, i64::from(outcome.attempts), outcome.duration_ms as i64, &body).await {
+                tracing::warn!(webhook = row.id, error = %e, "webhooks: cannot record a delivery");
+            }
+        }
+        let counts = matches!(how, How::Event);
+        let failures = db::webhooks::record_result(&self.db, row.id, outcome.ok, outcome.status.map(i64::from), &outcome.error, counts).await.unwrap_or(0);
         if outcome.ok {
             tracing::info!(webhook = row.id, event = event.kind.name(), "webhook delivered");
         } else {
             tracing::warn!(webhook = row.id, event = event.kind.name(), error = %outcome.error, "webhook delivery failed");
-            if !test && failures >= PAUSE_AFTER {
+            if counts && failures >= PAUSE_AFTER {
                 self.pause(row).await;
             }
         }
@@ -415,7 +547,7 @@ impl Webhooks {
 
     /// 組訊息、送出、失敗就照間隔重試。回傳結果與送出的內容（記錄用）。
     /// Render, send and retry. Returns the outcome and the body sent (for the record).
-    async fn attempt_all(&self, hook: &Hook, event: &Event, test: bool, allow_private: bool, msg_id: &str) -> (Outcome, String) {
+    async fn attempt_all(&self, hook: &Hook, event: &Event, retry: bool, allow_private: bool, msg_id: &str) -> (Outcome, String) {
         let fail = |error: String, attempts: u32| Outcome { ok: false, skipped: false, status: None, error, attempts, duration_ms: 0 };
         let mut url = match target::parse(&hook.row.url) {
             Ok(u) => u,
@@ -450,8 +582,11 @@ impl Webhooks {
             return (fail(target::Problem::Private.message().to_string(), 0), body);
         }
         let client = if allow_private { &self.open } else { &self.strict };
+        let Ok(custom) = self.headers(&hook.row) else {
+            return (fail("The custom headers can't be read any more (the server's SECRET_KEY changed). Enter them again.".into(), 0), body);
+        };
         let secret = self.secret(&hook.row).await;
-        let delays: Vec<Duration> = if test { Vec::new() } else { self.retries.lock().unwrap().clone() };
+        let delays: Vec<Duration> = if retry { self.retries.lock().unwrap().clone() } else { Vec::new() };
         let mut attempts = 0u32;
         let mut last = fail(String::new(), 0);
         for wait in std::iter::once(Duration::ZERO).chain(delays) {
@@ -471,6 +606,9 @@ impl Webhooks {
                 .header("webhook-timestamp", ts.to_string())
                 .header("x-telepy-event", event.kind.name())
                 .body(rendered.body.clone());
+            for h in &custom {
+                req = req.header(h.name.trim(), &h.value);
+            }
             if let Some(sig) = secret.as_deref().and_then(|s| sign::signature(s, msg_id, ts, &rendered.body)) {
                 req = req.header("webhook-signature", sig);
             }
@@ -561,6 +699,7 @@ mod tests {
             last_error: String::new(),
             created_at: String::new(),
             updated_at: String::new(),
+            headers: String::new(),
         }
     }
 
@@ -614,6 +753,31 @@ mod tests {
         let site = Hook::new(row("site", None, "tunnel.offline", false), vec![5]);
         assert!(site.receives_status_of(5, &[]));
         assert!(!site.receives_status_of(6, &[]));
+    }
+
+    #[test]
+    fn custom_headers_are_checked() {
+        let h = |n: &str, v: &str| Header { name: n.into(), value: v.into() };
+        assert!(validate_headers(&[h("Authorization", "Bearer abc"), h("X-Team", "ops")]).is_ok());
+        assert!(validate_headers(&[h("bad name", "x")]).is_err(), "space in the name");
+        assert!(validate_headers(&[h("Content-Type", "text/plain")]).is_err(), "set by Telepy");
+        assert!(validate_headers(&[h("webhook-signature", "v1,x")]).is_err(), "would forge the signature");
+        assert!(validate_headers(&[h("X-A", "1"), h("x-a", "2")]).is_err(), "listed twice");
+        assert!(validate_headers(&[h("X-A", "line\r\nInjected: yes")]).is_err(), "no CR / LF");
+        assert!(validate_headers(&[h("X-A", "")]).is_err(), "empty value");
+        assert!(validate_headers(&[h("X-A", "中文")]).is_err(), "ASCII only");
+        assert!(validate_headers(&(0..11).map(|i| h(&format!("X-{i}"), "1")).collect::<Vec<_>>()).is_err(), "too many");
+    }
+
+    #[test]
+    fn events_round_trip_through_delivery_records() {
+        let e = Event::new(Kind::TunnelIpChanged).tunnel_ref(tunnel(4)).data(json!({"ip": "203.0.113.9"}));
+        let back = Event::from_json(&e.to_json()).unwrap();
+        assert_eq!((back.kind, back.tunnel, back.data, back.link), (e.kind, e.tunnel.clone(), e.data.clone(), e.link.clone()));
+        assert!(Event::from_json(&Event::new(Kind::Test).to_json()).is_none(), "tests are not re-sent");
+        assert!(Event::from_json(&json!({"kind": "nope"})).is_none());
+        let no_tunnel = Event::from_json(&Event::new(Kind::AccountSignIn).to_json()).unwrap();
+        assert!(no_tunnel.tunnel.is_none());
     }
 
     #[test]
