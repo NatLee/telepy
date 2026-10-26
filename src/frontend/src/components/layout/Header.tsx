@@ -18,14 +18,12 @@ export function Header() {
 
     // Get current page name for header title
     const currentLink = navLinks.find(link => isNavActive(pathname, link.href));
-    // 不在導覽列裡的頁面:設定(管理員區)、建立通道、終端機(屬於通道)。
-    // Pages outside navLinks: settings (admin section), the create wizard, the terminal (part of Tunnels).
+    // 不在導覽列裡的頁面:設定(管理員區)、建立通道。/ Pages outside navLinks: settings (admin section), the create wizard.
     const currentPage = currentLink
         ? t(currentLink.key)
         : pathname.startsWith("/tunnels/settings") ? t("nav.settings")
             : pathname.startsWith("/tunnels/create") ? t("wizard.title")
-                : pathname.startsWith("/tunnels/terminal") ? t("nav.tunnels")
-                    : t("nav.dashboard");
+                : t("nav.dashboard");
 
     return (
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background px-4 sm:px-6">

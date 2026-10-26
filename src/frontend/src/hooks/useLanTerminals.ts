@@ -13,6 +13,8 @@ export interface LanTerminalSession {
     key: number;
     tunnelId: number;
     tunnelName: string;
+    /** 隧道的埠（開到終端機頁的連結要帶）。/ The tunnel's port (for the link to the terminal page). */
+    reversePort: number;
     hostId: number;
     hostName: string;
     /** 區網主機上的帳號（空 = 用主機預設）。/ Login on the LAN host (empty = the host's default). */
@@ -40,6 +42,14 @@ export function useLanTerminals() {
         return true;
     }, [sessions.length, nextKey]);
 
+    /** 同一台機器再開一個 shell（dock 的「+」）。/ Another shell on the same machine (the dock's "+"). */
+    const duplicate = useCallback((key: number): boolean => {
+        const src = sessions.find((s) => s.key === key);
+        if (!src) return false;
+        const { tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser } = src;
+        return open({ tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser });
+    }, [sessions, open]);
+
     const close = useCallback((key: number) => {
         setSessions((prev) => {
             const rest = prev.filter((s) => s.key !== key);
@@ -66,5 +76,5 @@ export function useLanTerminals() {
         setSize((v) => (v === "min" ? "normal" : v));
     }, []);
 
-    return { sessions, activeKey, size, open, close, closeAll, setStatus, reconnect, select, setSize };
+    return { sessions, activeKey, size, open, duplicate, close, closeAll, setStatus, reconnect, select, setSize };
 }

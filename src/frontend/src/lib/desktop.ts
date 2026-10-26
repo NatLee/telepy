@@ -5,6 +5,9 @@
  * error codes → a translation key plus the hop where it stopped (drives the DesktopFlow diagram).
  */
 import type { TranslationKey } from "@/locales/en";
+import type { SpotState } from "@/lib/flow";
+
+export type { SpotState };
 
 export type DesktopProtocol = "rdp" | "vnc";
 /**
@@ -216,8 +219,6 @@ export function formatElapsed(seconds: number): string {
  * - idle：全部待命；starting：Telepy→裝置那段在做（開通道）；connecting：前兩段好了，裝置→桌面在登入；
  *   connected：全部通；failed：失敗那段之前都算通、那段標紅、之後待命。
  */
-export type SpotState = "waiting" | "active" | "ok" | "failed";
-
 const ORDER: FlowSpot[] = ["browser", "web", "telepy", "tunnel", "device", "reach", "target"];
 
 export function spotStates(phase: DesktopPhase, failure: DesktopFailure | null): Record<FlowSpot, SpotState> {

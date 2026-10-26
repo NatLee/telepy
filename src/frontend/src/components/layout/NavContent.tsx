@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { useI18n } from "@/lib/i18n";
@@ -30,6 +30,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
         key: "nav.sectionWorkspace",
         links: [
             { key: "nav.tunnels", href: "/tunnels", icon: <Network size={18} /> },
+            { key: "nav.terminal", href: "/tunnels/terminal", icon: <TerminalSquare size={18} /> },
             { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
             { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} /> },
             { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} /> },

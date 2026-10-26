@@ -1,8 +1,11 @@
 "use client";
 
 /**
- * 終端機頁面：連線、xterm 與檔案管理。
- * Terminal page: connection, xterm and file manager.
+ * 終端機頁面：帶 `serverId` 時是連線、xterm 與檔案管理；沒帶時是連線選擇器（側欄的「終端機」），
+ * 用路徑圖選裝置 / 帳號 / 區網主機後再進來。「怎麼運作」打開作用中分頁的即時路徑圖（卡在哪一段）。
+ * Terminal page: with `serverId` the connection, xterm and file manager; without it the connect picker (the
+ * sidebar's Terminal entry), a path diagram that picks the device / account / LAN host first. The info button
+ * opens the active tab's live path diagram (where it stopped).
  */
 import React, { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -12,6 +15,10 @@ import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent } from "@/components/tunnels/TerminalContent";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
 import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
+import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
+import { TerminalConnectPage } from "@/components/tunnels/TerminalConnectPanel";
+import type { TerminalFlowContext } from "@/components/tunnels/TerminalFlow";
+import { terminalPhase } from "@/lib/terminalFlow";
 import { StatusCard } from "@/components/ui/StatusCard";
 import "xterm/css/xterm.css";
 
@@ -24,9 +31,16 @@ import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 
 export default function TerminalPage() {
-    const { t } = useI18n();
     const searchParams = useSearchParams();
     const serverId = searchParams.get("serverId");
+    // 沒選裝置：連線選擇器。/ No device chosen: the connect picker.
+    if (!serverId) return <TerminalConnectPage />;
+    return <TerminalSession serverId={serverId} />;
+}
+
+function TerminalSession({ serverId }: { serverId: string }) {
+    const { t } = useI18n();
+    const searchParams = useSearchParams();
     const port = searchParams.get("port");
     // 區網主機（經裝置跳過去）。/ Optional LAN host reached through the device.
     const lanHostId = searchParams.get("lanHost");
@@ -58,10 +72,27 @@ export default function TerminalPage() {
         username, setUsername,
         availableUsernames,
         lanHost,
+        tunnelName,
+        recorded,
         appearance,
         commandBanner,
     } = state;
     const [appearanceOpen, setAppearanceOpen] = useState(false);
+    const [infoOpen, setInfoOpen] = useState(false);
+    // 作用中分頁的階段 → 路徑圖。/ The active tab's phase → the path diagram.
+    const activeTab = tabs.find((x) => x.id === activeTabId) ?? null;
+    const { phase, failure } = terminalPhase(activeTab?.status ?? null, activeTab?.closeCode, !!lanHostId);
+    const flowCtx: TerminalFlowContext = {
+        phase: !activeTab && (permissionDenied || noUsers) ? "failed" : phase,
+        failure,
+        deviceName: tunnelName ?? (serverId || "").slice(0, 8),
+        account: username ?? "",
+        lanHost: lanHostId ? { name: lanHost ? (lanHost.label || lanHost.address) : t("terminal.lanHostFallback"), address: lanHost?.address ?? "?", port: lanHost?.ssh_port ?? 22, login: lanUser || lanHost?.username || "" } : null,
+        youToServerMs: latencyMs,
+        serverToDeviceMs,
+        recorded,
+    };
+    const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}`;
     const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner } = actions;
 
     // Set initial tab from URL param (mount only)
@@ -73,7 +104,7 @@ export default function TerminalPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    if (!serverId || !accessToken) {
+    if (!accessToken) {
         return (
             <StatusCard
                 title={t("terminal.noConnectionTitle")}
@@ -126,6 +157,9 @@ export default function TerminalPage() {
                     onOpenAppearance={() => setAppearanceOpen(true)}
                     appearanceCustomized={appearance.customized}
                     lan={lanHostId ? { host: lanHost, login: lanUser || lanHost?.username || null } : null}
+                    tunnelName={tunnelName}
+                    onOpenInfo={() => setInfoOpen(true)}
+                    switchHref={switchHref}
                 />
 
                 <TerminalContent
@@ -149,7 +183,7 @@ export default function TerminalPage() {
                     onSelectShellTab={selectTab}
                     onAddShellTab={addTab}
                     onCloseShellTab={closeTab}
-                    serverId={serverId!}
+                    serverId={serverId}
                     username={username}
                     accessToken={accessToken}
                     syncedPath={syncedPath}
@@ -164,6 +198,7 @@ export default function TerminalPage() {
             </div>
 
             <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
+            <TerminalInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={flowCtx} />
         </div>
     );
 }

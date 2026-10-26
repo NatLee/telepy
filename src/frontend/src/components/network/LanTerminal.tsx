@@ -45,7 +45,7 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
     /** 指令規則的提示列。/ The command-rule banner. */
     const [banner, setBanner] = useState<HoldBanner | null>(null);
     const { key, tunnelId, hostId, login, deviceUser, attempt } = session;
-    const { resolved } = useTerminalAppearance(String(tunnelId));
+    const { resolved, ready: appearanceReady } = useTerminalAppearance(String(tunnelId));
     // xterm 是 async 建的,要讀建立當下最新的外觀。/ The xterm is created asynchronously; read the latest look.
     const resolvedRef = useRef(resolved);
     useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
@@ -67,8 +67,11 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
     }, []);
     useLiveTerminalLook(resolved, forEachTerm, sendResize);
 
-    // xterm 一個 session 只建一次。/ One xterm per session.
+    // xterm 一個 session 只建一次；等這台裝置的外觀覆寫載好再建，才不會先用預設字型再換一次（和終端機頁一樣）。
+    // One xterm per session, created once this device's appearance override is known (like the terminal page), so
+    // it never opens in the default font and switches.
     useEffect(() => {
+        if (!appearanceReady) return;
         let disposed = false;
         let cleanup = () => {};
         (async () => {
@@ -103,7 +106,7 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
             disposed = true;
             cleanup();
         };
-    }, [sendResize]);
+    }, [sendResize, appearanceReady]);
 
     // 連線（attempt 變了就重連）。/ (Re)connect whenever `attempt` changes.
     useEffect(() => {
