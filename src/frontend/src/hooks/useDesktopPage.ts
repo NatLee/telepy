@@ -244,8 +244,9 @@ export function useDesktopPage() {
 
     const address = host ? `${host.address}:${form.port}` : `127.0.0.1:${form.port}`;
     const isRustDesk = form.protocol === "rustdesk";
-    // 這個桌面（隧道 + 主機 + 協定）存過的登入；RustDesk 存的是固定密碼。/ Logins saved for this desktop (tunnel + host + protocol).
-    const saved = useSavedLogins(tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel);
+    // 這個桌面（隧道 + 主機 + 協定，或 RustDesk 伺服器上的裝置）存過的登入；RustDesk 存的是固定密碼。
+    // Logins saved for this desktop (tunnel + host + protocol, or the RustDesk-server device).
+    const saved = useSavedLogins(rdDevice ? { deviceId: rdDevice.id } : tunnel ? { tunnelId: tunnel.id, hostId: host?.id ?? null, protocol: form.protocol } : null, !!tunnel || !!rdDevice);
     const savedLogin = saved.list.find((c) => c.id === form.savedId) ?? null;
     const idle = phase === "idle" || phase === "failed";
     const canConnect = rdDevice ? rdDevice.online && idle : !!tunnel && online && !!form.account && isValidPort(form.port) && idle;
@@ -267,14 +268,41 @@ export function useDesktopPage() {
 
     const connect = useCallback(async () => {
         if (rdDevice) {
-            // 經 Telepy 的 RustDesk 伺服器：密碼留在瀏覽器給核心。/ Through Telepy's RustDesk server; the password stays here.
+            // 經 Telepy 的 RustDesk 伺服器：手打的密碼留在瀏覽器給核心，存檔的由後端解開放進回應。
+            // Through Telepy's RustDesk server: a typed password stays here, a saved one comes back in the response.
             setFailure(null);
             setEndedNormally(false);
             setPhase("starting");
             try {
-                const res = await apiFetch(`/api/rustdesk/devices/${rdDevice.id}/start`, { method: "POST", body: "{}" });
-                const data = await readJson<RustDeskStart & { code?: string }>(res);
+                let credentialId = savedLogin?.id ?? null;
+                if (!credentialId && form.save && form.password) {
+                    const created = await saved.create({
+                        label: form.saveLabel.trim() || `RustDesk@${rdDevice.name}`,
+                        protocol: "rustdesk",
+                        tunnel_id: 0,
+                        lan_host_id: null,
+                        port: null,
+                        login: "",
+                        domain: "",
+                        password: form.password,
+                        rustdesk_device_id: rdDevice.id,
+                    });
+                    if (typeof created === "string") {
+                        setFailure({ key: "desktop.err.saveLogin", vars: { message: created }, at: "telepy" });
+                        setPhase("failed");
+                        return;
+                    }
+                    credentialId = created.id;
+                    setForm((f) => ({ ...f, savedId: created.id, save: false, saveLabel: "" }));
+                }
+                const res = await apiFetch(`/api/rustdesk/devices/${rdDevice.id}/start`, { method: "POST", body: JSON.stringify(credentialId ? { credential_id: credentialId } : {}) });
+                const data = await readJson<RustDeskStart & { code?: string; credential_id?: string[]; password?: string }>(res);
                 if (!res.ok || !data?.ticket) {
+                    if (data?.credential_id?.[0]) {
+                        setFailure({ key: "desktop.err.savedLogin", vars: { message: data.credential_id[0] }, at: "telepy" });
+                        setPhase("failed");
+                        return;
+                    }
                     const code = data?.code;
                     setFailure(code === "device_offline" ? { key: "desktop.err.rdServerOffline", vars: { name: rdDevice.name }, at: "device" }
                         : code === "rustdesk_server_disabled" ? { key: "rustdesk.serverOff", at: "telepy" }
@@ -282,7 +310,7 @@ export function useDesktopPage() {
                     setPhase("failed");
                     return;
                 }
-                setRdPassword(form.password);
+                setRdPassword(typeof data.password === "string" ? data.password : form.password);
                 setTunnelMs(null);
                 setStats(null);
                 setUnstable(false);

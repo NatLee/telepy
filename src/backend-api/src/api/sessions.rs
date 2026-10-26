@@ -42,9 +42,22 @@ pub fn may_end(entry_user: i64, me: i64, manages_tunnel: bool) -> bool {
     entry_user == me || manages_tunnel
 }
 
+/// RustDesk 伺服器裝置上的 session：擁有者也看得到、能結束（純函式）。/ A RustDesk-server session: its device owner may too.
+pub fn may_end_device(entry_user: i64, me: i64, device_owner: i64, is_admin: bool) -> bool {
+    entry_user == me || device_owner == me || is_admin
+}
+
+fn visible(e: &Entry, me: &User, managed: &HashMap<i64, Tunnel>) -> bool {
+    match &e.device {
+        Some(d) => may_end_device(e.user_id, me.id, d.owner_id, me.is_superuser),
+        None => may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)),
+    }
+}
+
 fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64) -> Value {
     json!({
         "id": e.id,
+        "device": e.device.as_ref().map(|d| json!({ "id": d.id, "name": d.name })),
         "tunnel": { "id": e.tunnel_id, "name": tunnel_name },
         "user": { "id": e.user_id, "username": e.username },
         "kind": e.kind.as_str(),
@@ -63,10 +76,10 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::new();
     for e in state.presence.all() {
-        if !may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)) {
+        if !visible(&e, &me, &managed) {
             continue;
         }
-        if !names.contains_key(&e.tunnel_id) {
+        if e.device.is_none() && !names.contains_key(&e.tunnel_id) {
             if let Some(t) = db::tunnels::by_id(&state.db, e.tunnel_id).await? {
                 names.insert(t.id, t.host_friendly_name);
             }
@@ -84,8 +97,22 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
     let not_found = || ApiError::not_found("Session not found");
     let entry = state.presence.get(id).ok_or_else(not_found)?;
     let managed = managed(&state, &me).await?;
-    if !may_end(entry.user_id, me.id, managed.contains_key(&entry.tunnel_id)) {
+    if !visible(&entry, &me, &managed) {
         return Err(not_found());
+    }
+    // RustDesk 伺服器裝置：沒有隧道，通知與事件都掛在裝置上。/ A RustDesk-server device: no tunnel.
+    if let Some(d) = &entry.device {
+        state.presence.end(id, &me.username).ok_or_else(not_found)?;
+        if entry.user_id != me.id {
+            state.hub.notify_user(
+                entry.user_id,
+                &json!({ "action": "SESSION-ENDED", "tunnel_id": 0, "device_id": d.id, "kind": entry.kind.as_str(), "by": me.username,
+                         "details": format!("{} ended your RustDesk session on \"{}\"", me.username, d.name) }),
+            );
+        }
+        let ip = entry.ip.as_deref().unwrap_or("-");
+        state.gateway.event("session_ended", None, None, None, format!("{} ended {}'s rustdesk session on {} (from {ip})", me.username, entry.username, d.name)).await;
+        return Ok(StatusCode::NO_CONTENT);
     }
     if entry.kind == Kind::Ai {
         let ai = state.ai.list().into_iter().find(|s| s.presence_id() == id).ok_or_else(not_found)?;
@@ -114,12 +141,15 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
 
 #[cfg(test)]
 mod tests {
-    use super::may_end;
+    use super::{may_end, may_end_device};
 
     #[test]
     fn who_may_end_a_session() {
         assert!(may_end(7, 7, false), "your own");
         assert!(may_end(7, 9, true), "someone else's on a tunnel you manage");
         assert!(!may_end(7, 9, false), "someone else's elsewhere");
+        assert!(may_end_device(7, 9, 9, false), "someone else's on your RustDesk device");
+        assert!(may_end_device(7, 9, 3, true), "admins");
+        assert!(!may_end_device(7, 9, 3, false), "someone else's on someone else's device");
     }
 }

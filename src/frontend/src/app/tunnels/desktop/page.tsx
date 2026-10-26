@@ -601,9 +601,66 @@ function DevicePicker({ state, actions }: { state: PageState; actions: PageActio
  * 用 Telepy 當 RustDesk 伺服器的裝置：只要密碼與畫質；連線端對端加密。
  * A device that uses Telepy as its RustDesk server: just the password and the quality; end-to-end encrypted.
  */
+/** 這個桌面存過的登入（有才顯示）。/ The logins saved for this desktop, when there are any. */
+function SavedLoginSelect({ state, actions, rustdesk }: { state: PageState; actions: PageActions; rustdesk: boolean }) {
+    const { t } = useI18n();
+    const { savedLogins, form } = state;
+    if (savedLogins.length === 0) return null;
+    return (
+        <Field label={t("desktop.field.saved")} hint={t(rustdesk ? "desktop.field.savedHintRd" : "desktop.field.savedHint")}>
+            <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
+                <option value="">{t("desktop.field.savedNone")}</option>
+                {savedLogins.map((c) => (
+                    <option key={c.id} value={c.id}>{c.label}{c.login ? ` (${c.login})` : ""}</option>
+                ))}
+            </NativeSelect>
+        </Field>
+    );
+}
+
+/** RustDesk 的固定密碼：用存的那筆（卡片），或手打＋「存起來」。隧道與 RustDesk 伺服器兩種表單共用。
+ *  RustDesk's permanent password: the saved one (a card), or typed plus "save it"; shared by both forms. */
+function RustDeskSecret({ state, actions, hint, labelPlaceholder }: { state: PageState; actions: PageActions; hint: string; labelPlaceholder: string }) {
+    const { t, tn } = useI18n();
+    const { form, savedLogin } = state;
+    if (savedLogin) {
+        return (
+            <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
+                <span className="flex flex-wrap items-center gap-2 text-foreground">
+                    <KeyRound size={15} className="text-muted-foreground" aria-hidden />
+                    <span>{tn("desktop.savedUsesRd", { label: <strong>{savedLogin.label}</strong> })}</span>
+                </span>
+                <span className="text-xs text-muted-foreground">{t("desktop.savedNoteRd")}</span>
+                <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
+                    {t("desktop.savedForget")}
+                </button>
+            </div>
+        );
+    }
+    return (
+        <>
+            <Field label={t("desktop.field.rdPassword")} hint={hint}>
+                <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
+            </Field>
+            <label className="flex items-start gap-2 self-center text-sm text-foreground">
+                <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
+                <span>
+                    {t("desktop.saveLogin")}
+                    <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHintRd")}</span>
+                </span>
+            </label>
+            {form.save && (
+                <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
+                    <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={labelPlaceholder} maxLength={100} />
+                </Field>
+            )}
+        </>
+    );
+}
+
 function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; actions: PageActions; onInfo: () => void }) {
     const { t } = useI18n();
-    const { rdDevice, form, phase, failure, canConnect, quality } = state;
+    const { rdDevice, phase, failure, canConnect, quality } = state;
     const busy = phase === "starting";
     if (!rdDevice) return null;
     const qualityOptions: { value: DesktopQuality; label: string }[] = [
@@ -641,9 +698,8 @@ function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; acti
                         <Link href="/tunnels/rustdesk" prefetch={false} className="text-xs text-primary underline-offset-2 hover:underline">{t("desktop.rdServer.manage")}</Link>
                     </div>
                 </div>
-                <Field label={t("desktop.field.rdPassword")} hint={t("desktop.rdServer.passwordHint")}>
-                    <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
-                </Field>
+                <SavedLoginSelect state={state} actions={actions} rustdesk />
+                <RustDeskSecret state={state} actions={actions} hint={t("desktop.rdServer.passwordHint")} labelPlaceholder={`RustDesk@${rdDevice.name}`} />
                 <Field label={t("desktop.field.quality")} hint={t("desktop.rustdesk.qualityHint")}>
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
@@ -664,7 +720,7 @@ function RustDeskServerForm({ state, actions, onInfo }: { state: PageState; acti
 
 function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState; actions: PageActions; onInfo: () => void; onCompare: () => void }) {
     const { t, tn } = useI18n();
-    const { tunnels, loading, tunnel, host, form, phase, failure, canConnect, address, savedLogins, savedLogin, quality, isRustDesk, rdDevice, rdDevices } = state;
+    const { tunnels, loading, tunnel, host, form, phase, failure, canConnect, address, savedLogin, quality, isRustDesk, rdDevice, rdDevices } = state;
     const portOk = isValidPort(form.port);
     const busy = phase === "starting";
     // 預熱畫面元件的 chunk（與填表並行）；RustDesk 是 vendored 的核心。/ Warm up the viewer chunk (the RustDesk core in that mode).
@@ -761,49 +817,11 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
                     <Segmented options={qualityOptions} value={quality} onChange={actions.setQuality} fullWidth aria-label={t("desktop.field.quality")} />
                 </Field>
 
-                {savedLogins.length > 0 && (
-                    <Field label={t("desktop.field.saved")} hint={t(isRustDesk ? "desktop.field.savedHintRd" : "desktop.field.savedHint")}>
-                        <NativeSelect value={form.savedId ? String(form.savedId) : ""} onChange={(e) => actions.update({ savedId: e.target.value ? Number(e.target.value) : null })}>
-                            <option value="">{t("desktop.field.savedNone")}</option>
-                            {savedLogins.map((c) => (
-                                <option key={c.id} value={c.id}>{c.label}{c.login ? ` (${c.login})` : ""}</option>
-                            ))}
-                        </NativeSelect>
-                    </Field>
-                )}
+                <SavedLoginSelect state={state} actions={actions} rustdesk={isRustDesk} />
 
                 {isRustDesk ? (
                     <>
-                        {savedLogin ? (
-                            <div className="flex flex-col justify-center gap-2 rounded-md border border-border bg-surface px-3 py-2.5 text-sm">
-                                <span className="flex flex-wrap items-center gap-2 text-foreground">
-                                    <KeyRound size={15} className="text-muted-foreground" aria-hidden />
-                                    <span>{tn("desktop.savedUsesRd", { label: <strong>{savedLogin.label}</strong> })}</span>
-                                </span>
-                                <span className="text-xs text-muted-foreground">{t("desktop.savedNoteRd")}</span>
-                                <button type="button" onClick={() => void actions.forgetSaved(savedLogin.id)} className="self-start text-xs text-destructive underline-offset-2 hover:underline">
-                                    {t("desktop.savedForget")}
-                                </button>
-                            </div>
-                        ) : (
-                            <Field label={t("desktop.field.rdPassword")} hint={t("desktop.field.rdPasswordHint")}>
-                                <Input type="password" value={form.password} onChange={(e) => actions.update({ password: e.target.value })} autoComplete="off" />
-                            </Field>
-                        )}
-                        {!savedLogin && (
-                            <label className="flex items-start gap-2 self-center text-sm text-foreground">
-                                <input type="checkbox" className="mt-1 size-4 accent-primary" checked={form.save} onChange={(e) => actions.update({ save: e.target.checked })} />
-                                <span>
-                                    {t("desktop.saveLogin")}
-                                    <span className="block text-xs text-muted-foreground">{t("desktop.saveLoginHintRd")}</span>
-                                </span>
-                            </label>
-                        )}
-                        {!savedLogin && form.save && (
-                            <Field label={t("desktop.saveLabel")} addon={t("common.optional")}>
-                                <Input value={form.saveLabel} onChange={(e) => actions.update({ saveLabel: e.target.value })} placeholder={`RustDesk@${host ? host.address : tunnel?.name ?? ""}`} maxLength={100} />
-                            </Field>
-                        )}
+                        <RustDeskSecret state={state} actions={actions} hint={t("desktop.field.rdPasswordHint")} labelPlaceholder={`RustDesk@${host ? host.address : tunnel?.name ?? ""}`} />
                         <div className="sm:col-span-2">
                             <RustDeskPanel state={state} actions={actions} />
                         </div>

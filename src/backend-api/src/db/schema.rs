@@ -575,6 +575,22 @@ const TABLES: &[(&str, &str)] = &[
             "last_seen_at" datetime NULL
         )"#,
     ),
+    // 經 Telepy RustDesk 伺服器的連線紀錄（帶 IP，90 天；隨裝置刪除）。/ Sessions to RustDesk-server devices (IPs, 90 days).
+    (
+        "telepy_rustdesk_session",
+        r#"CREATE TABLE "telepy_rustdesk_session" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "device_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "username" varchar(150) NOT NULL,
+            "ip" varchar(64) NULL,
+            "started_at" datetime NOT NULL,
+            "ended_at" datetime NULL,
+            "to_browser" integer NOT NULL DEFAULT 0,
+            "to_device" integer NOT NULL DEFAULT 0,
+            "reason" varchar(32) NOT NULL DEFAULT ''
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -607,6 +623,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_credential_user" ON "telepy_credential" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_rustdesk_device_rustdesk_id" ON "telepy_rustdesk_device" ("rustdesk_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_rustdesk_device_user" ON "telepy_rustdesk_device" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_rustdesk_session_device" ON "telepy_rustdesk_session" ("device_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_gateway_event_at" ON "telepy_gateway_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_tunnel_session_tunnel" ON "telepy_tunnel_session" ("tunnel_id", "connected_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
@@ -697,6 +714,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "signin_access_lifetime", "integer NOT NULL DEFAULT 3600"),
     // Telepy 當 RustDesk 的 ID / 中繼伺服器（登記過的裝置不經 SSH 也能連）。/ Telepy as RustDesk's ID and relay server.
     ("site_settings_sitesettings", "desktop_rustdesk_server", "bool NOT NULL DEFAULT 1"),
+    // 憑證庫：綁在 RustDesk 伺服器裝置上的登入（這時 tunnel_id = 0）。/ Saved logins bound to a RustDesk-server device (tunnel_id = 0).
+    ("telepy_credential", "rustdesk_device_id", "integer NULL"),
     ("user_management_usersettings", "theme", "varchar(8) NOT NULL DEFAULT 'system'"),
     ("user_management_usersettings", "terminal_font_size", "smallint unsigned NOT NULL DEFAULT 14"),
     // 介面顯示大小（百分比，85–130；前端把它設成 <html> 的 font-size）。/ UI display scale in percent.

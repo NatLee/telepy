@@ -67,6 +67,7 @@ pub enum Via {
         device_id: i64,
         rustdesk_id: String,
         device_name: String,
+        owner_id: i64,
         relay_rx: Mutex<Option<oneshot::Receiver<WebSocket>>>,
     },
 }
@@ -165,6 +166,9 @@ pub struct NewIdSession {
     pub device_id: i64,
     pub rustdesk_id: String,
     pub device_name: String,
+    /// 擁有者（presence / 即時 session 頁用）。/ The device owner, for presence.
+    pub owner_id: i64,
+    pub saved_label: Option<String>,
 }
 
 #[derive(Default)]
@@ -218,8 +222,8 @@ impl RustDesk {
     }
 
     pub fn create_id_session(&self, new: NewIdSession) -> (Arc<Session>, String) {
-        let via = Via::IdServer { device_id: new.device_id, rustdesk_id: new.rustdesk_id, device_name: new.device_name, relay_rx: Mutex::new(None) };
-        self.insert(new.user_id, new.user_name, via, None)
+        let via = Via::IdServer { device_id: new.device_id, rustdesk_id: new.rustdesk_id, device_name: new.device_name, owner_id: new.owner_id, relay_rx: Mutex::new(None) };
+        self.insert(new.user_id, new.user_name, via, new.saved_label)
     }
 
     /// 某台 ID 伺服器裝置正在用的 session 數。/ Sessions open to one ID-server device.

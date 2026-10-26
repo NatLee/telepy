@@ -115,6 +115,9 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         Ok(n) => tracing::info!(rows = n, "closed connection history rows left open by the previous run"),
         Err(e) => tracing::warn!(error = %e, "cannot close orphaned connection history rows"),
     }
+    if let Err(e) = telepy_server::db::rustdesk_devices::close_orphans(&state.db).await {
+        tracing::warn!(error = %e, "cannot close RustDesk session rows left open by the previous run");
+    }
     if config.gateway_enabled {
         match tokio::net::TcpListener::bind(&config.gateway_bind).await {
             Ok(listener) => match telepy_server::gateway::start(state.gateway.clone(), listener) {

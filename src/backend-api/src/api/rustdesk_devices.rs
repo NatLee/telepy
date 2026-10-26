@@ -4,7 +4,9 @@
 //! 使用者：
 //! - `GET /api/rustdesk/devices`：自己的裝置（管理員：全部）＋裝置要設的伺服器位址
 //! - `PATCH` / `DELETE /api/rustdesk/devices/{id}`：改名 / 移除（擁有者或管理員）
-//! - `POST /api/rustdesk/devices/{id}/start`：瀏覽器 session（核心用 RustDesk ID 經 Telepy 連，端對端加密）
+//! - `POST /api/rustdesk/devices/{id}/start`：瀏覽器 session（核心用 RustDesk ID 經 Telepy 連，端對端加密）；
+//!   `{credential_id}` = 憑證庫裡綁這台的 RustDesk 密碼，解開後只放進這次回應的 `password`（核心要自己回挑戰）
+//! - `GET /api/rustdesk/devices/{id}/sessions`：最近的連線（誰、從哪、多久、流量）
 //! - `POST /api/rustdesk/enroll`、`GET` / `DELETE /api/rustdesk/enroll/{id}`：一次性登記指令（30 分鐘）
 //!
 //! 裝置（RustDesk 的 API 形狀）：
@@ -31,7 +33,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::rustdesk::idserver::{device_commands, device_settings, valid_rustdesk_id, ClaimError, Enrolment};
 use crate::rustdesk::{NewIdSession, TICKET_TTL};
 use crate::state::AppState;
-use crate::util::{db_to_iso_utc_z, json_str};
+use crate::util::{db_to_iso_utc_z, json_i64, json_str};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
@@ -39,6 +41,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(list))
         .routes(routes!(update, remove))
         .routes(routes!(start))
+        .routes(routes!(sessions))
         .routes(routes!(create_enrolment))
         .routes(routes!(enrolment_status, cancel_enrolment))
         .routes(routes!(deploy))
@@ -78,7 +81,8 @@ fn server_json(state: &AppState, base: &str, enabled: bool) -> Value {
     json!({ "enabled": enabled, "rendezvous": s.rendezvous, "api_server": s.api_server, "relay_url": s.relay_url, "problem": s.problem, "key": state.rustdesk_ids.key.public_b64() })
 }
 
-fn device_json(state: &AppState, d: &RustDeskDevice, owner: Option<&str>, me: i64) -> Value {
+/// `last_used` = 最後一次被連（誰、何時），沒連過是 null。/ The latest session (who, when) or null.
+fn device_json(state: &AppState, d: &RustDeskDevice, owner: Option<&str>, me: i64, last: Option<&(String, String)>) -> Value {
     json!({
         "id": d.id,
         "name": d.name,
@@ -93,6 +97,7 @@ fn device_json(state: &AppState, d: &RustDeskDevice, owner: Option<&str>, me: i6
         "owner": { "id": d.user_id, "username": owner },
         "mine": d.user_id == me,
         "in_use": state.rustdesk.count_for_device(d.id),
+        "last_used": last.map(|(username, at)| json!({ "username": username, "at": db_to_iso_utc_z(at) })),
     })
 }
 
@@ -122,7 +127,8 @@ async fn list(State(state): State<AppState>, AuthUser(user): AuthUser, headers: 
         let name = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_default();
         owners.insert(uid, name);
     }
-    let devices: Vec<Value> = rows.iter().map(|d| device_json(&state, d, owners.get(&d.user_id).map(String::as_str), user.id)).collect();
+    let last = db::rustdesk_devices::last_sessions(&state.db).await?;
+    let devices: Vec<Value> = rows.iter().map(|d| device_json(&state, d, owners.get(&d.user_id).map(String::as_str), user.id, last.get(&d.id))).collect();
     let enabled = server_enabled(&state).await?;
     Ok(Json(json!({ "server": server_json(&state, &base_url(&state, &headers), enabled), "devices": devices })))
 }
@@ -135,7 +141,8 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let d = db::rustdesk_devices::by_id(&state.db, d.id).await?.ok_or_else(|| ApiError::not_found("Device not found"))?;
     notify(&state, d.user_id, d.id, json!({}));
     let owner = db::users::by_id(&state.db, d.user_id).await?.map(|u| u.username);
-    Ok(Json(device_json(&state, &d, owner.as_deref(), user.id)))
+    let last = db::rustdesk_devices::last_sessions(&state.db).await?;
+    Ok(Json(device_json(&state, &d, owner.as_deref(), user.id, last.get(&d.id))))
 }
 
 #[utoipa::path(delete, path = "/api/rustdesk/devices/{id}", tag = "RustDesk server", security(("bearer" = [])), params(("id" = i64, Path, description = "Device id")), responses((status = 204, description = "Removed; the device is disconnected and refused from now on"), (status = 404, body = super::schemas::ErrorBody)))]
@@ -149,8 +156,8 @@ async fn remove(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[utoipa::path(post, path = "/api/rustdesk/devices/{id}/start", tag = "RustDesk server", security(("bearer" = [])), params(("id" = i64, Path, description = "Device id")), responses((status = 200, description = "Session created; the browser core connects to ws_path with ?ticket= (twice: ID-server role, then relay role) within expires_in seconds, asks for peer_id and verifies the device with key", body = super::schemas::RustDeskIdSession), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | rustdesk_server_disabled | desktop_busy", body = super::schemas::DesktopError)))]
-async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+#[utoipa::path(post, path = "/api/rustdesk/devices/{id}/start", tag = "RustDesk server", security(("bearer" = [])), params(("id" = i64, Path, description = "Device id")), request_body = super::schemas::RustDeskIdStart, responses((status = 200, description = "Session created; the browser core connects to ws_path with ?ticket= (twice: ID-server role, then relay role) within expires_in seconds, asks for peer_id and verifies the device with key", body = super::schemas::RustDeskIdSession), (status = 400, description = "{credential_id: [message]}: not your saved login, saved for another desktop, or unreadable after a SECRET_KEY change", body = Object), (status = 404, body = super::schemas::ErrorBody), (status = 502, description = "code = device_offline", body = super::schemas::DesktopError), (status = 503, description = "code = desktop_disabled | rustdesk_server_disabled | desktop_busy", body = super::schemas::DesktopError)))]
+async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
     if !settings.desktop_enabled {
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_disabled", "Remote desktop is disabled on this server."));
@@ -166,9 +173,26 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
     if max > 0 && (state.desktop.count() + state.rustdesk.count()) as i64 >= max {
         return Err(coded(StatusCode::SERVICE_UNAVAILABLE, "desktop_busy", "All remote desktop slots are in use. Please wait for someone to disconnect and try again."));
     }
-    let (session, ticket) = state.rustdesk.create_id_session(NewIdSession { user_id: user.id, user_name: user.username.clone(), device_id: d.id, rustdesk_id: d.rustdesk_id.clone(), device_name: d.name.clone() });
-    tracing::info!(session = %session.id, user = %user.username, device = d.id, "rustdesk: id-server session created");
-    Ok(Json(json!({
+    // 憑證庫：只有綁這台裝置的解得開，密碼只放進這次回應（RustDesk 的挑戰由瀏覽器核心回）。
+    // A saved password: only one bound to this device opens, and it goes into this response only.
+    let (password, saved_label) = match json_i64(&body, "credential_id") {
+        Some(cid) => {
+            let (c, password) = super::credentials::unseal_for_device(&state, user.id, cid, d.id).await?;
+            (Some(password), Some(c.label))
+        }
+        None => (None, None),
+    };
+    let (session, ticket) = state.rustdesk.create_id_session(NewIdSession {
+        user_id: user.id,
+        user_name: user.username.clone(),
+        device_id: d.id,
+        rustdesk_id: d.rustdesk_id.clone(),
+        device_name: d.name.clone(),
+        owner_id: d.user_id,
+        saved_label,
+    });
+    tracing::info!(session = %session.id, user = %user.username, device = d.id, saved = session.saved_label.is_some(), "rustdesk: id-server session created");
+    let mut out = json!({
         "session_id": session.id,
         "ws_path": format!("/ws/rustdesk/{}/", session.id),
         "ticket": ticket,
@@ -176,7 +200,42 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id)
         "peer_id": d.rustdesk_id,
         "key": state.rustdesk_ids.key.public_b64(),
         "device": { "id": d.id, "name": d.name, "rustdesk_id": d.rustdesk_id },
-    })))
+    });
+    if let Some(p) = password {
+        out["password"] = json!(p);
+    }
+    Ok(Json(out))
+}
+
+const SESSIONS_SHOWN: i64 = 20;
+
+#[utoipa::path(get, path = "/api/rustdesk/devices/{id}/sessions", tag = "RustDesk server", security(("bearer" = [])), params(("id" = i64, Path, description = "Device id")), responses((status = 200, description = "The latest browser sessions to this device, newest first (owner or admin)", body = super::schemas::RustDeskDeviceSessions), (status = 404, body = super::schemas::ErrorBody)))]
+async fn sessions(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let d = device_for(&state, user.id, user.is_superuser, id).await?;
+    let rows = db::rustdesk_devices::recent_sessions(&state.db, d.id, SESSIONS_SHOWN).await?;
+    let sessions: Vec<Value> = rows
+        .iter()
+        .map(|s| {
+            let seconds = s.ended_at.as_deref().and_then(|end| {
+                let (a, b) = (crate::util::parse_db_datetime(&s.started_at)?, crate::util::parse_db_datetime(end)?);
+                Some((b - a).num_seconds().max(0))
+            });
+            json!({
+                "id": s.id,
+                "user": { "id": s.user_id, "username": s.username },
+                "mine": s.user_id == user.id,
+                "ip": s.ip,
+                "geo": state.geoip.json(s.ip.as_deref()),
+                "started_at": db_to_iso_utc_z(&s.started_at),
+                "ended_at": s.ended_at.as_deref().map(db_to_iso_utc_z),
+                "seconds": seconds,
+                "to_browser": s.to_browser,
+                "to_device": s.to_device,
+                "reason": s.reason,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "sessions": sessions })))
 }
 
 fn enrolment_json(e: &Enrolment) -> Value {

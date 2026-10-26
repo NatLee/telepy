@@ -39,8 +39,14 @@ export function SavedLogins({ onNavigate }: { onNavigate?: () => void }) {
                                     <Chip mono>{c.protocol === "rustdesk" ? "RustDesk" : c.protocol.toUpperCase()}</Chip>
                                 </div>
                                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                                    {(c.tunnel_name ?? `#${c.tunnel_id}`) + (c.lan_host ? ` › ${c.lan_host}` : "")}
-                                    {c.port ? `:${c.port}` : ""} · <span className="font-mono">{c.login || "—"}{c.domain ? ` @ ${c.domain}` : ""}</span>
+                                    {c.rustdesk_device_id ? (
+                                        t("vault.rustdeskDevice", { name: c.rustdesk_device ?? `#${c.rustdesk_device_id}` })
+                                    ) : (
+                                        <>
+                                            {(c.tunnel_name ?? `#${c.tunnel_id}`) + (c.lan_host ? ` › ${c.lan_host}` : "")}
+                                            {c.port ? `:${c.port}` : ""} · <span className="font-mono">{c.login || "—"}{c.domain ? ` @ ${c.domain}` : ""}</span>
+                                        </>
+                                    )}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
                                     {c.last_used_at ? t("vault.lastUsed", { date: date(c.last_used_at) }) : t("vault.neverUsed")}

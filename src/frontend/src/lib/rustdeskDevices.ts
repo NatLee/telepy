@@ -2,6 +2,7 @@
  * Telepy 當 RustDesk 的 ID / 中繼伺服器時的裝置與登記指令（純函式，無 React）。後端：`api/rustdesk_devices.rs`。
  * RustDesk devices enrolled with Telepy's RustDesk server, and the one-time enrolment commands (pure helpers).
  */
+import type { IpGeo } from "@/lib/geo";
 import type { TranslationKey } from "@/locales/en";
 
 export interface RustDeskServerSettings {
@@ -30,6 +31,26 @@ export interface RustDeskDevice {
     owner: { id: number; username: string | null };
     mine: boolean;
     in_use: number;
+    /** 最後一次被連（誰、何時）；沒連過是 null。/ The latest browser session, or null. */
+    last_used: { username: string; at: string } | null;
+}
+
+/** 一次瀏覽器連線（`GET /api/rustdesk/devices/{id}/sessions`）。/ One browser session to the device. */
+export interface RustDeskDeviceSession {
+    id: number;
+    user: { id: number; username: string };
+    mine: boolean;
+    ip: string | null;
+    geo?: IpGeo | null;
+    started_at: string;
+    /** null = 還連著。/ null while it is open. */
+    ended_at: string | null;
+    seconds: number | null;
+    /** 裝置 → 瀏覽器的位元組。/ Bytes device → browser. */
+    to_browser: number;
+    /** 瀏覽器 → 裝置。/ Bytes browser → device. */
+    to_device: number;
+    reason: string;
 }
 
 export type EnrolPhase = "waiting" | "enrolled" | "online";
@@ -112,4 +133,26 @@ export function enrolSteps(phase: EnrolPhase, expired: boolean): ["done" | "acti
 /** 依名稱排序，在線的排前面。/ Online first, then by name. */
 export function sortDevices(list: RustDeskDevice[]): RustDeskDevice[] {
     return [...list].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name) || a.id - b.id);
+}
+
+/** 連線怎麼結束的 → 說明文字的 key。/ How a session ended → its explanation. */
+export function endReasonKey(reason: string): TranslationKey {
+    switch (reason) {
+        case "user":
+            return "rustdesk.history.reason.user";
+        case "device":
+            return "rustdesk.history.reason.device";
+        case "ended":
+            return "rustdesk.history.reason.ended";
+        case "stopped":
+            return "rustdesk.history.reason.stopped";
+        case "removed":
+            return "rustdesk.history.reason.removed";
+        case "revoked":
+            return "rustdesk.history.reason.revoked";
+        case "restart":
+            return "rustdesk.history.reason.restart";
+        default:
+            return "rustdesk.history.reason.other";
+    }
 }

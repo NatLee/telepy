@@ -31,6 +31,12 @@ pub async fn purge(db: &Db) -> sqlx::Result<u64> {
         .execute(&db.write)
         .await?
         .rows_affected();
+    // RustDesk 伺服器裝置的連線紀錄（帶 IP）。/ RustDesk-server session history (IPs).
+    deleted += sqlx::query("DELETE FROM telepy_rustdesk_session WHERE ended_at IS NOT NULL AND ended_at < ?")
+        .bind(&cutoff)
+        .execute(&db.write)
+        .await?
+        .rows_affected();
     // 指令紀錄（指令裡可能有機密）。/ Command records (commands may hold secrets).
     deleted += sqlx::query("DELETE FROM telepy_command_event WHERE status != 'pending' AND created_at < ?")
         .bind(&cutoff)

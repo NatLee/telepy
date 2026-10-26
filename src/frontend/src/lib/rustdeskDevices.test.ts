@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deviceDetails, enrolSteps, formatRustDeskId, guessOs, serverProblemKey, shortOs, sortDevices, type RustDeskDevice } from "./rustdeskDevices.ts";
+import { deviceDetails, endReasonKey, enrolSteps, formatRustDeskId, guessOs, serverProblemKey, shortOs, sortDevices, type RustDeskDevice } from "./rustdeskDevices.ts";
 
 test("RustDesk IDs are grouped like RustDesk shows them", () => {
     assert.equal(formatRustDeskId("113668456"), "113 668 456");
@@ -40,4 +40,11 @@ test("enrolment steps", () => {
 test("online devices come first", () => {
     const d = (id: number, name: string, online: boolean) => ({ id, name, online }) as RustDeskDevice;
     assert.deepEqual(sortDevices([d(1, "b", false), d(2, "a", false), d(3, "z", true)]).map((x) => x.id), [3, 2, 1]);
+});
+
+test("end reasons map to explanations", () => {
+    assert.equal(endReasonKey("user"), "rustdesk.history.reason.user");
+    assert.equal(endReasonKey("ended"), "rustdesk.history.reason.ended");
+    assert.equal(endReasonKey("restart"), "rustdesk.history.reason.restart");
+    assert.equal(endReasonKey("something new"), "rustdesk.history.reason.other");
 });
