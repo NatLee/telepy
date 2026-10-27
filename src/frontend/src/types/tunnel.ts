@@ -179,7 +179,7 @@ export interface TunnelModalProps {
  * Tunnel list action callbacks, shared by the card, the table row and the actions menu.
  */
 export interface TunnelActionHandlers {
-    onDetails: (tunnelId: number) => void;
+    onDetails: (tunnelId: number, tab?: TunnelDetailsTab) => void;
     onConfig: (tunnelId: number) => void;
     onScript: (tunnelId: number) => void;
     /** 這條隧道的 gateway 日誌（/tunnels/logs?tunnel=<id>）。/ This tunnel's gateway log. */
@@ -211,3 +211,6 @@ export interface TunnelActionHandlers {
     /** 換到別的通道群組（每個人自己的分組）。/ Move it to another of my tunnel groups. */
     onMoveToGroup?: (tunnelId: number) => void;
 }
+
+/** 通道詳細資訊對話框的分頁。/ Tabs of the tunnel details dialog. */
+export type TunnelDetailsTab = "general" | "device" | "identity" | "sessions" | "connections";

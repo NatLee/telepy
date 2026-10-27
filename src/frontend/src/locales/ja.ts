@@ -754,6 +754,18 @@ export const ja: Record<TranslationKey, string> = {
     "tunnelDetails.labelsTooMany": "トンネルあたりのラベルは最大 12 個です。",
     "tunnelDetails.updated": "トンネルを更新しました",
     "tunnelDetails.updateFailed": "トンネルの更新に失敗しました",
+    "tunnelDetails.tabGeneral": "基本情報",
+    "tunnelDetails.tabGeneralHint": "名前・説明・ラベル",
+    "tunnelDetails.tabDevice": "デバイス",
+    "tunnelDetails.tabDeviceHint": "システム・メモリ・ディスク",
+    "tunnelDetails.tabIdentity": "鍵と識別",
+    "tunnelDetails.tabIdentityHint": "デバイス鍵とホスト鍵",
+    "tunnelDetails.tabSessions": "セッション",
+    "tunnelDetails.tabSessionsHint": "本人確認・録画・保持",
+    "tunnelDetails.tabConnections": "接続履歴",
+    "tunnelDetails.tabConnectionsHint": "稼働率と履歴",
+    "tunnelDetails.tabUnsaved": "未保存の変更があります",
+    "tunnelDetails.tabHasError": "修正が必要です",
 
     // ── 建立精靈 / Create wizard ───────────────────────────────────
     "wizard.title": "トンネルを作成",

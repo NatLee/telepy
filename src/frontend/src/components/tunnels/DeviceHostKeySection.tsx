@@ -25,7 +25,13 @@ const REGENERATE_COMMANDS = "sudo rm /etc/ssh/ssh_host_*_key*\nsudo ssh-keygen -
 
 const SOURCE_KEY = { join: "hostKey.sourceJoin", accepted: "hostKey.sourceAccepted" } as const;
 
-export function DeviceHostKeySection({ tunnelId, isOpen, onChanged }: { tunnelId: number | null; isOpen: boolean; onChanged?: () => void }) {
+export function DeviceHostKeySection({ tunnelId, isOpen, onChanged, onAlert }: {
+    tunnelId: number | null;
+    isOpen: boolean;
+    onChanged?: () => void;
+    /** 金鑰變了 / 機器是別人的(通道詳細資訊用來標紅分頁並切過來)。/ Key changed or machine claimed (the details dialog marks and opens its tab). */
+    onAlert?: (alert: boolean) => void;
+}) {
     const { t, tn, locale } = useI18n();
     const { data, loaded, busy, accept, forget } = useDeviceHostKey(tunnelId, isOpen, onChanged);
     const [confirmAccept, setConfirmAccept] = useState<HostKey | null>(null);
@@ -37,7 +43,8 @@ export function DeviceHostKeySection({ tunnelId, isOpen, onChanged }: { tunnelId
     const anchorRef = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
         if (changed || claimed) anchorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-    }, [changed, claimed]);
+        onAlert?.(changed || claimed);
+    }, [changed, claimed, onAlert]);
 
     if (!loaded) return null;
 

@@ -4,7 +4,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
-import { Tunnel, type DeviceWarningKind } from "@/types/tunnel";
+import { Tunnel, type DeviceWarningKind, type TunnelDetailsTab } from "@/types/tunnel";
 import { WARNING_KINDS } from "@/lib/deviceFacts";
 import { useI18n } from "@/lib/i18n";
 
@@ -22,7 +22,7 @@ export function useTunnelsPage() {
     const [configModal, setConfigModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [scriptModal, setScriptModal] = useState<{ isOpen: boolean, tunnelId: number | null, sshPort: number | null }>({ isOpen: false, tunnelId: null, sshPort: null });
     const [usersModal, setUsersModal] = useState<{ isOpen: boolean, tunnelId: number | null, readOnly: boolean }>({ isOpen: false, tunnelId: null, readOnly: false });
-    const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
+    const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean, tunnelId: number | null, tab?: TunnelDetailsTab }>({ isOpen: false, tunnelId: null });
     const [shareModal, setShareModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [requestModal, setRequestModal] = useState<{ isOpen: boolean, tunnelId: number | null }>({ isOpen: false, tunnelId: null });
     const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean, tunnelId: number | null, name: string }>({ isOpen: false, tunnelId: null, name: "" });
