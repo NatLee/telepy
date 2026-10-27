@@ -163,7 +163,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                 ) : undefined
             }
             icon={<Server />}
-            size="4xl"
+            size="5xl"
             fixedHeight
             nav={details && !loading ? <NavTabs tabs={tabs} value={activeTab} onChange={setTab} aria-label={t("tunnelDetails.title")} /> : undefined}
             isLoading={loading || !details}

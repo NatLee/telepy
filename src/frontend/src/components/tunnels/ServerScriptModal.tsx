@@ -89,7 +89,7 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
             title={t("scripts.title")}
             description={tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}
             icon={<Rocket />}
-            size="4xl"
+            size="5xl"
             isLoading={isInitialLoading}
             toolbar={
                 <Segmented

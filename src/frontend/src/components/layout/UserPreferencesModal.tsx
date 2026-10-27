@@ -152,7 +152,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             onClose={onClose}
             title={t("prefs.title")}
             icon={<SlidersHorizontal />}
-            size="4xl"
+            size="5xl"
             fixedHeight
             nav={
                 <div className="space-y-4">

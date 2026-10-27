@@ -93,7 +93,8 @@ export function MoreBelow({ className }: { className?: string }) {
     }, []);
     return (
         <>
-            <div ref={end} className="h-px shrink-0" aria-hidden />
+            {/* -mt-px:哨兵本身不佔高度,剛好放得下的內容才不會多出 1px 捲軸。/ -mt-px: the sentinel adds no height, so content that just fits gets no 1px scrollbar. */}
+            <div ref={end} className="-mt-px h-px shrink-0" aria-hidden />
             <div
                 aria-hidden
                 className={cn(
@@ -168,14 +169,18 @@ export function Modal({
                     }}
                     className={cn(
                         "fixed z-50 flex flex-col overflow-hidden bg-card text-card-foreground shadow-dialog outline-none",
-                        // 桌面:置中卡片。/ Desktop: centred card.
-                        "sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-[calc(100%-2rem)] sm:max-h-[min(90dvh,64rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl",
+                        // 桌面:置中卡片,上下各留 2rem(不是 10% 視窗高:高視窗上那 10% 太多,內容只差一點就冒出捲軸)。
+                        // Desktop: centred card with 2rem above and below (not 10% of the viewport, which wasted
+                        // space on tall windows and left content that only just fit with a sliver of scrollbar).
+                        "sm:top-1/2 sm:left-1/2 sm:w-full sm:max-w-[calc(100%-2rem)] sm:max-h-[min(calc(100dvh-4rem),64rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl",
                         "sm:data-[state=open]:animate-dialog-content-show sm:data-[state=closed]:animate-dialog-content-hide",
                         // 手機:底部 sheet。/ Phone: bottom sheet.
                         "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-xl",
                         "max-sm:data-[state=open]:animate-sheet-up-show max-sm:data-[state=closed]:animate-sheet-up-hide",
                         SIZE_CLASS[size],
-                        fixedHeight && "sm:h-[min(90dvh,46rem)] max-sm:h-[92dvh]",
+                        // 54rem:分頁對話框的一般內容(通道詳細資訊、金鑰詳細資訊、偏好設定…)在 1080p 上不用捲。
+                        // 54rem: the usual tabs of the settings-style dialogs (tunnel / key details, preferences…) fit without scrolling at 1080p.
+                        fixedHeight && "sm:h-[min(calc(100dvh-4rem),54rem)] max-sm:h-[92dvh]",
                     )}
                 >
                     <div className="sm:hidden mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
