@@ -351,6 +351,15 @@ async fn code_exchange_refresh_rotation_and_revocation() {
     app.post("/api/site/settings", Some(&web), json!({"allow_registration": true})).await;
     let bob = app.login("bob", "pw").await;
     assert_eq!(app.get("/api/oauth/grants", Some(&bob)).await.json, json!([]));
+    // 管理員在「管理使用者」看得到別人的；一般人不行，不存在的人 404。
+    // Admins see someone's apps from Manage user; others can't, unknown users are a 404.
+    let bob_id = app.get("/api/auth/user/profile", Some(&bob)).await.json["id"].as_i64().unwrap();
+    let theirs = app.get(&format!("/api/user/users/{me}/grants"), Some(&web)).await;
+    assert_eq!(theirs.status, StatusCode::OK, "{}", theirs.text);
+    assert_eq!(theirs.json, grants);
+    assert_eq!(app.get(&format!("/api/user/users/{bob_id}/grants"), Some(&web)).await.json, json!([]));
+    assert_eq!(app.get(&format!("/api/user/users/{me}/grants"), Some(&bob)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(app.get("/api/user/users/99999/grants", Some(&web)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.delete(&format!("/api/oauth/grants/{gid}"), Some(&bob)).await.status, StatusCode::NOT_FOUND);
     assert_eq!(app.delete(&format!("/api/oauth/grants/{gid}"), Some(&web)).await.status, StatusCode::NO_CONTENT);
     assert_eq!(mcp::resolve(&app.state, &access).await.unwrap_err(), McpAuthError::Invalid);
