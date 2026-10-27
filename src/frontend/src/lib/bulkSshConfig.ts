@@ -1,0 +1,122 @@
+/**
+ * 多台裝置一次寫進 ~/.ssh/config（`GET /tunnels/server/config`）的純函式：把後端的 config 依裝置拆開、挑出勾選的、
+ * 從金鑰矩陣判斷「我的金鑰進不進得去」。不碰 React。
+ * Pure helpers for the bulk ~/.ssh/config (`GET /tunnels/server/config`): split the backend's config per device,
+ * pick the ticked ones, and tell from the key matrix whether my keys get in. No React.
+ */
+import { parseStanzas, type ConfigStanza } from "./sshConfig.ts";
+import type { KeyDevice } from "../types/keys.ts";
+
+export type BulkAccounts = "default" | "all";
+
+export interface BulkConfigHost {
+    alias: string;
+    username: string;
+    username_id: number;
+}
+
+export interface BulkConfigTunnel {
+    id: number;
+    name: string;
+    reverse_port: number;
+    hosts: BulkConfigHost[];
+    usernames: { id: number; username: string }[];
+}
+
+export interface BulkConfigData {
+    config: string;
+    server: { alias: string; host: string; port: string };
+    accounts: BulkAccounts;
+    tunnels: BulkConfigTunnel[];
+    skipped: { id: number; name: string; reason: "no_accounts" }[];
+    known_hosts: string;
+    known_hosts_path: string;
+    transport: "ssh" | "websocket";
+    ws_url: string;
+    ws_client_url: string;
+    ws_client_path: string;
+}
+
+export interface SplitConfig {
+    server: ConfigStanza | null;
+    /** 裝置 id → 它的 Host 區塊（照後端的順序）。/ Device id → its stanzas, in the backend's order. */
+    byTunnel: Map<number, ConfigStanza[]>;
+}
+
+/** 依 `tunnels[].hosts` 的別名把 config 拆成伺服器區塊 + 每台的區塊。/ Split the config by the aliases in `tunnels[].hosts`. */
+export function splitBulkConfig(data: Pick<BulkConfigData, "config" | "server" | "tunnels">): SplitConfig {
+    const owner = new Map<string, number>();
+    for (const t of data.tunnels) for (const h of t.hosts) owner.set(h.alias, t.id);
+    const byTunnel = new Map<number, ConfigStanza[]>();
+    let server: ConfigStanza | null = null;
+    for (const s of parseStanzas(data.config)) {
+        if (s.alias === data.server.alias) {
+            server = s;
+            continue;
+        }
+        const id = owner.get(s.alias);
+        if (id === undefined) continue;
+        byTunnel.set(id, [...(byTunnel.get(id) ?? []), s]);
+    }
+    return { server, byTunnel };
+}
+
+/** 勾選的裝置的區塊，照清單順序（= 依名稱）。/ The ticked devices' stanzas in list order (= by name). */
+export function pickStanzas(split: SplitConfig, order: number[], selected: ReadonlySet<number>): ConfigStanza[] {
+    return order.filter((id) => selected.has(id)).flatMap((id) => split.byTunnel.get(id) ?? []);
+}
+
+/**
+ * 我的金鑰在一台裝置上的狀態（只看 config 要用的帳號）：ready = 每個帳號都裝好了；installing = 在清單上、還在裝；
+ * error = 有帳號失敗；missing = 有帳號不在清單上；unknown = 矩陣裡沒有這台（還沒載入）。
+ * My keys on one device, for the accounts the config uses: ready = installed everywhere; installing = listed, on its
+ * way; error = an account failed; missing = an account is not covered by the list; unknown = not in the matrix yet.
+ */
+export type DeviceAccess = "ready" | "installing" | "error" | "missing" | "unknown";
+
+export function deviceAccess(device: KeyDevice | undefined, usernames: string[]): DeviceAccess {
+    if (!device || usernames.length === 0) return "unknown";
+    const ids = new Map(device.account_list.map((a) => [a.username, a.id]));
+    const per = usernames.map((name): DeviceAccess => {
+        const statuses = device.keys.flatMap((k) => k.targets.filter((t) => t.username === name).map((t) => t.status));
+        if (statuses.includes("installed")) return "ready";
+        if (statuses.includes("error")) return "error";
+        if (statuses.includes("pending")) return "installing";
+        // 在清單上但還沒讀過裝置：只要清單涵蓋這個帳號就算「在裝」。只經由金鑰群組的那把 `accounts` 是 null，
+        // 要看群組自己的帳號名稱。/ Listed but not read yet: covered = on its way. A group-only key has `accounts: null`,
+        // so its groups' own account names decide.
+        const id = ids.get(name);
+        const covered = device.keys.some(
+            (k) =>
+                ((k.direct ?? true) && (k.accounts === null || (id !== undefined && k.accounts.includes(id)))) ||
+                (k.groups ?? []).some((g) => g.accounts === null || g.accounts.includes(name))
+        );
+        return covered ? "installing" : "missing";
+    });
+    if (per.every((s) => s === "ready")) return "ready";
+    if (per.includes("error")) return "error";
+    if (per.includes("missing")) return "missing";
+    return "installing";
+}
+
+/** 我有哪些金鑰還不在這台的清單上（一鍵補上時要送的）。/ My key ids not yet on this device's list. */
+export function keysToAdd(device: KeyDevice | undefined, myKeyIds: number[]): number[] {
+    const listed = new Set((device?.keys ?? []).map((k) => k.user_key_id));
+    return myKeyIds.filter((id) => !listed.has(id));
+}
+
+export type AccessCounts = Record<DeviceAccess, number>;
+
+export function countAccess(states: DeviceAccess[]): AccessCounts {
+    const out: AccessCounts = { ready: 0, installing: 0, error: 0, missing: 0, unknown: 0 };
+    for (const s of states) out[s] += 1;
+    return out;
+}
+
+/** 對話框打開時先勾哪些：通道頁有篩選時 = 畫面上那些（能放的），否則全部。/ The first selection. */
+export function initialSelection(eligible: number[], shownOnPage: number[] | null): Set<number> {
+    if (!shownOnPage) return new Set(eligible);
+    const shown = new Set(shownOnPage);
+    const picked = eligible.filter((id) => shown.has(id));
+    return new Set(picked.length > 0 ? picked : eligible);
+}

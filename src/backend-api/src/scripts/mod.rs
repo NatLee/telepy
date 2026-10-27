@@ -2,7 +2,7 @@
 //! Python `string.Template.safe_substitute`（`$name` / `${name}`；未知名稱原樣保留；`$$` → `$`）。
 //! Script/config rendering with Python `string.Template.safe_substitute` semantics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -278,6 +278,27 @@ pub fn sanitize_host_alias(value: &str) -> String {
     }
 }
 
+/// 筆電 config 裡伺服器區塊的別名（每台裝置的 ProxyCommand 都跳它）。/ The server stanza's alias (every device jumps through it).
+pub const SERVER_ALIAS: &str = "telepy-ssh-server";
+
+/// 一台裝置的 Host 別名：一個帳號 = 裝置名稱；多個帳號 = `<名稱>-<帳號>`。`used` 裡已有的（多台一起產生時，
+/// 名稱經過清理後撞名，或撞到伺服器別名）加上 `-2`、`-3`…，並記進 `used`。
+/// A device's Host aliases: one account = the device name; several = `<name>-<account>`. An alias already in `used`
+/// (two devices whose cleaned names collide in a bulk config, or the server alias) gets `-2`, `-3`, …; every alias
+/// returned is added to `used`.
+pub fn device_aliases(tunnel_name: &str, usernames: &[&str], used: &mut HashSet<String>) -> Vec<String> {
+    let multi = usernames.len() > 1;
+    usernames
+        .iter()
+        .map(|u| {
+            let base = sanitize_host_alias(&if multi { format!("{tunnel_name}-{u}") } else { tunnel_name.to_string() });
+            let alias = if used.contains(&base) { (2..).map(|n| format!("{base}-{n}")).find(|a| !used.contains(a)).unwrap() } else { base };
+            used.insert(alias.clone());
+            alias
+        })
+        .collect()
+}
+
 fn ensure_newline(mut s: String) -> String {
     if !s.is_empty() && !s.ends_with('\n') {
         s.push('\n');
@@ -325,7 +346,7 @@ pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, 
     m.insert("ssh_port", "-1".into());
     m.insert("reverse_server_ssh_port", reverse_server_ssh_port.into());
     m.insert("ssh_username", "telepy".into());
-    m.insert("host_friendly_name", "telepy-ssh-server".into());
+    m.insert("host_friendly_name", SERVER_ALIAS.into());
     m.insert(
         "host_key_lines",
         if gateway_host_keys.is_empty() {
@@ -341,6 +362,20 @@ pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_aliases_follow_the_account_count_and_never_repeat() {
+        let mut used = HashSet::from([SERVER_ALIAS.to_string()]);
+        assert_eq!(device_aliases("pi", &["root"], &mut used), ["pi"]);
+        assert_eq!(device_aliases("nas", &["root", "admin"], &mut used), ["nas-root", "nas-admin"]);
+        // 清理後撞名、撞到別台的「名稱-帳號」或伺服器別名 → 加編號。/ Collisions get a number.
+        assert_eq!(device_aliases("pi!", &["root"], &mut used), ["pi-2"]);
+        assert_eq!(device_aliases("nas-root", &["x"], &mut used), ["nas-root-2"]);
+        assert_eq!(device_aliases("telepy-ssh-server", &["x"], &mut used), ["telepy-ssh-server-2"]);
+        // 單台（空的 used）跟以前一樣。/ The single config (empty set) is unchanged.
+        assert_eq!(device_aliases("my pi", &["a", "b"], &mut HashSet::new()), ["my-pi-a", "my-pi-b"]);
+        assert!(device_aliases("pi", &[], &mut HashSet::new()).is_empty());
+    }
 
     #[test]
     fn substitute_semantics() {

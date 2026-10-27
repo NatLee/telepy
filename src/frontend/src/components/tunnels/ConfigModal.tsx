@@ -20,86 +20,46 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { ConfigRouteMap, type ConfigPart } from "@/components/sshconfig/ConfigRouteMap";
 import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
+import { CheckRow, Step, ToolbarField } from "@/components/sshconfig/ConfigSteps";
 import { TunnelModalProps, TargetUser } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
-type ConfigModalProps = TunnelModalProps;
+type ConfigModalProps = TunnelModalProps & {
+    /** 有就顯示「一次設定多台」。/ When given, offers "set up several devices at once". */
+    onBulk?: () => void;
+};
 type AccessState = TargetStatus | "missing";
 
 function AccountPicker({ users, value, onChange }: { users: TargetUser[]; value: string; onChange: (v: string) => void }) {
     const { t } = useI18n();
     const all = { value: "all", label: t("config.allAccounts", { count: users.length }) };
     return (
-        <div className="flex min-w-0 items-center gap-3">
-            <span className="shrink-0 text-sm text-muted-foreground">{t("config.loginAs")}</span>
+        <ToolbarField label={t("config.loginAs")}>
             {users.length <= 4 ? (
                 <Segmented
                     size="sm"
+                    fullWidth
                     aria-label={t("config.loginAs")}
                     value={value}
                     onChange={onChange}
                     options={[...users.map((u) => ({ value: String(u.id), label: <span className="font-mono">{u.username}</span>, title: u.username })), all]}
                 />
             ) : (
-                <NativeSelect className="w-56" aria-label={t("config.loginAs")} value={value} onChange={(e) => onChange(e.target.value)}>
+                <NativeSelect className="w-full sm:w-56" aria-label={t("config.loginAs")} value={value} onChange={(e) => onChange(e.target.value)}>
                     {users.map((u) => (
                         <option key={u.id} value={String(u.id)}>{u.username}</option>
                     ))}
                     <option value="all">{all.label}</option>
                 </NativeSelect>
             )}
-        </div>
+        </ToolbarField>
     );
 }
 
-function Step({ n, done = false, title, status, hint, last = false, children }: {
-    n: number;
-    done?: boolean;
-    title: React.ReactNode;
-    status?: React.ReactNode;
-    hint?: React.ReactNode;
-    last?: boolean;
-    children: React.ReactNode;
-}) {
-    return (
-        <li className="relative grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
-            <span
-                className={cn(
-                    "grid size-7 place-items-center rounded-full text-xs",
-                    done ? "bg-success text-success-foreground" : "bg-muted text-foreground ring-1 ring-inset ring-border"
-                )}
-                aria-hidden
-            >
-                {done ? <Check size={15} strokeWidth={3} /> : n}
-            </span>
-            {!last && <span className="absolute bottom-1 left-[0.8125rem] top-9 w-px bg-border" aria-hidden />}
-            <div className={cn("min-w-0", !last && "pb-7")}>
-                <div className="flex min-h-7 flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <h3 className="text-base text-foreground">{title}</h3>
-                    {status}
-                </div>
-                {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
-                <div className="mt-3 space-y-3 text-sm">{children}</div>
-            </div>
-        </li>
-    );
-}
-
-/** 一列檢查項目：圖示 + 說明 + 右側狀態 / 動作。/ One check row: icon + text + status or action on the right. */
-function CheckRow({ icon, children, right }: { icon: React.ReactNode; children: React.ReactNode; right: React.ReactNode }) {
-    return (
-        <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5">
-            <span className="shrink-0 text-muted-foreground [&>svg]:size-4" aria-hidden>{icon}</span>
-            <span className="min-w-0 flex-1 text-foreground">{children}</span>
-            <span className="shrink-0">{right}</span>
-        </li>
-    );
-}
-
-export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
+export function ConfigModal({ isOpen, onClose, tunnelId, onBulk }: ConfigModalProps) {
     const { t, tn } = useI18n();
     const {
         state: { data, loading, targetUsers, selectedUserId, serverStanza, deviceStanzas, deviceKeys, transport },
@@ -163,10 +123,10 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
             toolbar={
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                     {targetUsers.length > 1 && <AccountPicker users={targetUsers} value={selectedUserId} onChange={handleUserChange} />}
-                    <div className="flex min-w-0 items-center gap-3">
-                        <span className="shrink-0 text-sm text-muted-foreground">{t("config.transportLabel")}</span>
+                    <ToolbarField label={t("config.transportLabel")}>
                         <Segmented
                             size="sm"
+                            fullWidth
                             aria-label={t("config.transportLabel")}
                             value={transport}
                             onChange={handleTransportChange}
@@ -175,7 +135,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
                                 { value: "websocket", label: t("config.transportWeb") },
                             ]}
                         />
-                    </div>
+                    </ToolbarField>
                 </div>
             }
         >
@@ -205,6 +165,14 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
                     <ol className="list-none">
                         <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
                             <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} active={active} onActive={setActive} />
+                            {onBulk && (
+                                <p className="text-xs text-muted-foreground">
+                                    {t("config.bulk.fromSingle")}{" "}
+                                    <button type="button" onClick={onBulk} className="text-primary underline-offset-4 hover:underline">
+                                        {t("config.bulk.fromSingleAction")}
+                                    </button>
+                                </p>
+                            )}
                         </Step>
 
                         {hosts.length > 0 && (

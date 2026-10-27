@@ -204,9 +204,9 @@ export function Modal({
                             </span>
                         )}
                         <div className={cn("min-w-0 flex-1", icon && "pt-0.5")}>
-                            {/* min-w-0 + truncate:長的在地化標題(帶使用者名稱等)才不會把關閉鈕擠出去。
-                                min-w-0 + truncate so long localized titles don't push out the close button. */}
-                            <DialogPrimitive.Title className="truncate text-lg leading-snug text-foreground">
+                            {/* min-w-0 + 換行:長的在地化標題(帶使用者名稱等)不會把關閉鈕擠出去，也不會被截成「…」(手機放大顯示時)。
+                                min-w-0 + wrapping: long localized titles neither push out the close button nor end in "…" on phones. */}
+                            <DialogPrimitive.Title className="text-lg leading-snug text-foreground [overflow-wrap:anywhere]">
                                 {title}
                             </DialogPrimitive.Title>
                             {description && (

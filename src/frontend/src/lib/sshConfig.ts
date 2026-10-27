@@ -65,12 +65,14 @@ function aliasGroup(aliases: string[]): string {
 }
 
 /**
- * awk 程式：照抄每一行，但標記之間的完整區塊丟掉；沒有結尾標記的話，緩衝的內容在檔尾原樣印回去。
- * awk program: copy every line except complete marked blocks; an unterminated block is printed back unchanged.
+ * awk 的參數：照抄每一行，但標記之間的完整區塊丟掉；沒有結尾標記的話，緩衝的內容在檔尾原樣印回去。別名用 `-v` 傳成
+ * 一串、在 BEGIN 拆成集合逐行查——一次放幾百台時，macOS 的 awk 處理一個超長的 `(a|b|…)` 正規式要好幾秒。
+ * awk arguments: copy every line except complete marked blocks; an unterminated block is printed back unchanged.
+ * The aliases go in once through `-v` and become a set in BEGIN — with hundreds of devices, macOS awk took seconds
+ * on one huge `(a|b|…)` regex.
  */
 function stripAwk(aliases: string[]): string {
-    const g = aliasGroup(aliases);
-    return `/^# >>> telepy ${g} >>>$/{if(s)printf "%s",b;s=1;b=""} s{b=b $0 "\\n";if($0~/^# <<< telepy ${g} <<<$/){s=0;b=""};next} 1;END{if(s)printf "%s",b}`;
+    return `-v t='${aliases.join(" ")}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1} /^# >>> telepy [^ ]+ >>>$/&&($4 in K){if(s)printf "%s",b;s=1;c=$4;b=""} s{b=b $0 "\\n";if($0=="# <<< telepy " c " <<<"){s=0;b=""};next} 1;END{if(s)printf "%s",b}'`;
 }
 
 /**
@@ -132,7 +134,7 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
                 : []),
             "mkdir -p ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config \\",
             "  && cp ~/.ssh/config ~/.ssh/config.bak \\",
-            `  && awk '${stripAwk(aliases)}' ~/.ssh/config.bak > ~/.ssh/config \\`,
+            `  && awk ${stripAwk(aliases)} ~/.ssh/config.bak > ~/.ssh/config \\`,
             `  && cat >> ~/.ssh/config <<'${HEREDOC}'`,
             blocks + HEREDOC,
         ].join("\n") + "\n";
@@ -156,7 +158,7 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
  */
 export function removeCommand(shell: ConfigShell, aliases: string[]): string {
     if (shell === "posix") {
-        return `cp ~/.ssh/config ~/.ssh/config.bak && awk '${stripAwk(aliases)}' ~/.ssh/config.bak > ~/.ssh/config\n`;
+        return `cp ~/.ssh/config ~/.ssh/config.bak && awk ${stripAwk(aliases)} ~/.ssh/config.bak > ~/.ssh/config\n`;
     }
     return [
         `$cfg = "$HOME\\.ssh\\config"; Copy-Item $cfg "$cfg.bak" -Force`,

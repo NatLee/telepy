@@ -1182,16 +1182,23 @@ impl Lab {
         let r = self.app.get(&format!("/tunnels/server/config/{}?username_id={id}", device.tunnel_id), Some(&user.token)).await;
         let generated = r.json["config"].as_str().unwrap().to_string();
         let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != "telepy-ssh-server").next_back().unwrap().to_string();
-        let path = self.dir.path().join(format!("{}-{}-generated.conf", user.username, device.name));
-        // 後端給的 known_hosts（gateway 的 host key）存到 lab 目錄，絕不碰開發者的 ~/.ssh。
-        // The known_hosts the backend hands out goes into the lab dir, never the developer's ~/.ssh.
-        let known_hosts = self.dir.path().join(format!("{}-{}-known_hosts", user.username, device.name));
-        std::fs::write(&known_hosts, r.json["known_hosts"].as_str().unwrap_or_default()).unwrap();
+        let path = self.write_ssh_config(user, &device.name, &generated, r.json["known_hosts"].as_str().unwrap_or_default());
+        (path, alias)
+    }
+
+    /// 把 API 給的 config 存進 lab 目錄（`<user>-<name>-generated.conf`）：ProxyCommand 的 ssh 指到同一個檔、
+    /// known_hosts 存在旁邊（`<user>-<name>-known_hosts`，絕不碰開發者的 ~/.ssh），再補上金鑰預設值。
+    /// Save a config the API produced into the lab dir: ProxyCommand's ssh reads the same file, the known_hosts sits
+    /// next to it (never the developer's ~/.ssh), plus the key defaults.
+    pub fn write_ssh_config(&self, user: &LabUser, name: &str, generated: &str, known_hosts: &str) -> PathBuf {
+        let path = self.dir.path().join(format!("{}-{name}-generated.conf", user.username));
+        let known = self.dir.path().join(format!("{}-{name}-known_hosts", user.username));
+        std::fs::write(&known, known_hosts).unwrap();
         let patched = generated
             .replace("ProxyCommand ssh -W", &format!("ProxyCommand ssh -F {} -W", path.display()))
-            .replace("UserKnownHostsFile ~/.ssh/telepy_known_hosts", &format!("UserKnownHostsFile {}", known_hosts.display()));
+            .replace("UserKnownHostsFile ~/.ssh/telepy_known_hosts", &format!("UserKnownHostsFile {}", known.display()));
         std::fs::write(&path, format!("{patched}\n{}", laptop_defaults(&user.key))).unwrap();
-        (path, alias)
+        path
     }
 
     /// `generated_ssh_config` 存下的 known_hosts 檔。/ The known_hosts file `generated_ssh_config` wrote.

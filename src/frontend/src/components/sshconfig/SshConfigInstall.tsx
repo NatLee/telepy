@@ -10,17 +10,20 @@
  * (telepy.sshConfigShell) and guessed from the browser at first.
  */
 import React, { useState } from "react";
-import { Check, ChevronDown, ClipboardPaste, SquareTerminal } from "lucide-react";
+import { Check, ChevronDown, ClipboardPaste, Copy, SquareTerminal } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { Segmented } from "@/components/ui/segmented";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
-import { adaptForShell, guessShell, installCommand, openEditorCommand, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza, type WsClient } from "@/lib/sshConfig";
+import { adaptForShell, guessShell, installCommand, markedBlocks, openEditorCommand, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza, type WsClient } from "@/lib/sshConfig";
 import { ConfigStanzaCard } from "./ConfigStanzaCard";
 import type { ConfigPart } from "./ConfigRouteMap";
 
 const SHELL_STORAGE_KEY = "telepy.sshConfigShell";
+/** 多台時預覽先列幾個裝置區塊。/ Device stanzas previewed before "and N more". */
+const BULK_PREVIEW = 2;
 
 function readShell(): ConfigShell {
     try {
@@ -57,15 +60,23 @@ interface Props {
     wsClient?: WsClient | null;
     active: ConfigPart | null;
     onActive: (part: ConfigPart | null) => void;
+    /**
+     * 多台一次：預覽只列前幾個裝置區塊，手動貼上改成一整段（帶標記，之後跑指令還認得出來）。
+     * Several devices: the preview lists a few device stanzas, and pasting by hand is one block with the markers
+     * (so the command can replace it later).
+     */
+    bulk?: boolean;
 }
 
-export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, active, onActive }: Props) {
+export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, active, onActive, bulk = false }: Props) {
     const { t, tn } = useI18n();
     // 只在對話框打開後才掛載，直接讀 localStorage 不會有 hydration 不一致。/ Mounted only inside an open dialog.
     const [shell, setShellState] = useState<ConfigShell>(readShell);
     const [method, setMethod] = useState<"command" | "manual">("command");
     const [preview, setPreview] = useState(false);
     const [removeOpen, setRemoveOpen] = useState(false);
+    const [commandOpen, setCommandOpen] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     const setShell = (s: ConfigShell) => {
         setShellState(s);
@@ -75,6 +86,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
     };
 
     const all = [...(serverStanza ? [serverStanza] : []), ...deviceStanzas];
+    const command = installCommand(shell, all, knownHosts, wsClient);
     // 卡片照目前選的作業系統顯示（Windows 的 ProxyCommand 寫法不同）。/ Cards follow the chosen OS (Windows ProxyCommand differs).
     const shownServer = serverStanza ? adaptForShell([serverStanza], shell)[0] : null;
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
@@ -93,7 +105,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     onActive={onActive}
                 />
             )}
-            {deviceStanzas.map((s) => (
+            {(bulk ? deviceStanzas.slice(0, BULK_PREVIEW) : deviceStanzas).map((s) => (
                 <ConfigStanzaCard
                     key={s.alias}
                     n={2}
@@ -105,39 +117,68 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     onActive={onActive}
                 />
             ))}
+            {bulk && deviceStanzas.length > BULK_PREVIEW && (
+                <p className="text-sm text-muted-foreground">{t("config.bulk.previewMore", { count: deviceStanzas.length - BULK_PREVIEW })}</p>
+            )}
         </div>
     );
 
     return (
         <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-                <Segmented
-                    kind="tabs"
-                    size="sm"
-                    aria-label={t("config.method.aria")}
-                    value={method}
-                    onChange={setMethod}
-                    options={[
-                        { value: "command", label: t("config.method.command"), icon: <SquareTerminal size={14} /> },
-                        { value: "manual", label: t("config.method.manual"), icon: <ClipboardPaste size={14} /> },
-                    ]}
-                />
-                <Segmented
-                    size="sm"
-                    aria-label={t("config.shell.aria")}
-                    value={shell}
-                    onChange={setShell}
-                    options={[
-                        { value: "posix", label: "macOS / Linux" },
-                        { value: "powershell", label: "Windows" },
-                    ]}
-                />
+            {/* 手機上兩個切換各佔一行（放大顯示時並排會撐出對話框）。/ Phones: one toggle per row, full width. */}
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <div className="w-full sm:w-auto">
+                    <Segmented
+                        kind="tabs"
+                        size="sm"
+                        fullWidth
+                        aria-label={t("config.method.aria")}
+                        value={method}
+                        onChange={setMethod}
+                        options={[
+                            { value: "command", label: t("config.method.command"), icon: <SquareTerminal size={14} /> },
+                            { value: "manual", label: t("config.method.manual"), icon: <ClipboardPaste size={14} /> },
+                        ]}
+                    />
+                </div>
+                <div className="w-full sm:w-auto">
+                    <Segmented
+                        size="sm"
+                        fullWidth
+                        aria-label={t("config.shell.aria")}
+                        value={shell}
+                        onChange={setShell}
+                        options={[
+                            { value: "posix", label: "macOS / Linux" },
+                            { value: "powershell", label: "Windows" },
+                        ]}
+                    />
+                </div>
             </div>
 
             {method === "command" ? (
                 <>
                     <p className="text-muted-foreground">{t(shell === "posix" ? "config.cmd.introPosix" : "config.cmd.introPowershell")}</p>
-                    <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={installCommand(shell, all, knownHosts, wsClient)} />
+                    {bulk ? (
+                        // 多台時指令有上百行：先給複製鈕與摘要，整段收在下面。/ Hundreds of lines: copy + summary first.
+                        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-border/70">
+                            <span className="min-w-0 text-foreground">{t("config.bulk.cmdSummary", { blocks: all.length, lines: command.split("\n").length - 1 })}</span>
+                            <Button
+                                size="sm"
+                                onClick={() =>
+                                    navigator.clipboard.writeText(command).then(() => {
+                                        setCopied(true);
+                                        setTimeout(() => setCopied(false), 2000);
+                                    })
+                                }
+                            >
+                                {copied ? <Check size={15} /> : <Copy size={15} />}
+                                {copied ? t("common.copied") : t("config.bulk.copyCommand")}
+                            </Button>
+                        </div>
+                    ) : (
+                        <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={command} />
+                    )}
                     <ul className="space-y-1 text-xs text-muted-foreground">
                         {[
                             ...(wsClient ? [tn("config.cmd.wsClient", { path: code(shell === "posix" ? wsClient.path : "%USERPROFILE%\\.ssh\\telepy-ws.py") })] : []),
@@ -153,6 +194,11 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                         ))}
                         <li className="pl-5">{t("config.cmd.handPasted")}</li>
                     </ul>
+                    {bulk && (
+                        <Disclosure title={t("config.bulk.showCommand")} open={commandOpen} onToggle={() => setCommandOpen((v) => !v)}>
+                            <CodeBlock language={shell === "posix" ? "bash" : "powershell"} value={command} />
+                        </Disclosure>
+                    )}
                     <Disclosure title={t("config.cmd.preview")} open={preview} onToggle={() => setPreview((v) => !v)}>
                         {cards}
                     </Disclosure>
@@ -171,9 +217,9 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                             <MiniCommand command={openEditorCommand(shell)} />
                             {shell === "powershell" && <p className="text-xs">{tn("config.manual.notepad", { name: code("config") })}</p>}
                         </li>
-                        <li><span className="text-foreground">2.</span> {t("config.manual.paste")}</li>
+                        <li><span className="text-foreground">2.</span> {t(bulk ? "config.bulk.manualPaste" : "config.manual.paste")}</li>
                     </ol>
-                    {cards}
+                    {bulk ? <CodeBlock language="text" value={markedBlocks(adaptForShell(all, shell))} /> : cards}
                     {knownHosts?.trim() && (
                         <div className="space-y-1.5 text-muted-foreground">
                             <p><span className="text-foreground">3.</span> {tn("config.manual.knownHosts", { path: code(KNOWN_HOSTS_PATH) })}</p>

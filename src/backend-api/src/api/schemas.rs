@@ -734,6 +734,51 @@ pub struct ConfigResponse {
     pub ws_client_path: String,
 }
 
+/// `GET /tunnels/server/config`：多台裝置一次。/ Several devices at once.
+#[derive(ToSchema)]
+pub struct BulkConfigResponse {
+    /// 一個伺服器區塊 + 每台裝置的區塊。/ One server stanza plus every listed device's stanzas.
+    pub config: String,
+    pub server: ConfigServer,
+    /// default = 每台一個 Host（隧道預設帳號）；all = 每個帳號一個。/ default = one Host per device; all = one per account.
+    #[schema(example = "default")]
+    pub accounts: String,
+    /// 寫進 config 的裝置，依名稱排序。/ The devices in `config`, sorted by name.
+    pub tunnels: Vec<BulkConfigTunnel>,
+    /// 看得到但沒有可用帳號的裝置。/ Devices you can see but have no login account on.
+    pub skipped: Vec<BulkConfigSkipped>,
+    pub known_hosts: String,
+    #[schema(example = "~/.ssh/telepy_known_hosts")]
+    pub known_hosts_path: String,
+    /// ssh | websocket
+    pub transport: String,
+    pub ws_url: String,
+    pub ws_client_url: String,
+    #[schema(example = "~/.ssh/telepy-ws.py")]
+    pub ws_client_path: String,
+}
+
+#[derive(ToSchema)]
+pub struct BulkConfigTunnel {
+    pub id: i64,
+    #[schema(example = "my-pi")]
+    pub name: String,
+    pub reverse_port: i64,
+    /// 這台的 Host 區塊。/ This device's Host stanzas.
+    pub hosts: Vec<ConfigHost>,
+    /// 我在這台能用的帳號。/ The accounts I may use here.
+    pub usernames: Vec<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct BulkConfigSkipped {
+    pub id: i64,
+    pub name: String,
+    /// no_accounts
+    #[schema(example = "no_accounts")]
+    pub reason: String,
+}
+
 #[derive(ToSchema)]
 pub struct ConfigServer {
     #[schema(example = "telepy-ssh-server")]
