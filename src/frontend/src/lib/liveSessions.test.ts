@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { filterSessions, groupByTunnel } from "./liveSessions.ts";
+import { filterSessions, groupByTunnel, usersIn } from "./liveSessions.ts";
 import type { LiveSession } from "../types/liveSession.ts";
 
 const s = (id: number, tunnel: [number, string], kind: string, mine: boolean, since: string): LiveSession => ({
@@ -18,6 +18,15 @@ test("filters", () => {
     assert.deepEqual(filterSessions(list, { kind: "terminal", mineOnly: false, tunnelId: null }).map((x) => x.id), [1]);
     assert.deepEqual(filterSessions(list, { kind: "all", mineOnly: true, tunnelId: null }).map((x) => x.id), [1]);
     assert.deepEqual(filterSessions(list, { kind: "all", mineOnly: false, tunnelId: 2 }).map((x) => x.id), [1, 3]);
+    // 管理區的使用者篩選；null / 沒給 = 不篩。/ The admin user filter; null / missing = no filter.
+    assert.deepEqual(filterSessions(list, { kind: "all", mineOnly: false, tunnelId: null, userId: 2 }).map((x) => x.id), [2, 3]);
+    assert.deepEqual(filterSessions(list, { kind: "all", mineOnly: false, tunnelId: 2, userId: 2 }).map((x) => x.id), [3]);
+    assert.deepEqual(filterSessions(list, { kind: "all", mineOnly: false, tunnelId: null, userId: null }).map((x) => x.id), [1, 2, 3]);
+});
+
+test("the people in the list, once each, by name", () => {
+    assert.deepEqual(usersIn(list), [{ id: 2, username: "bob" }, { id: 1, username: "me" }]);
+    assert.deepEqual(usersIn([]), []);
 });
 
 test("groups per tunnel, sorted by name then start", () => {
