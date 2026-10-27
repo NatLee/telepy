@@ -26,6 +26,11 @@ export function groupNameProblem(raw: string, existing: { id: number; name: stri
     return null;
 }
 
+/** 通道頁的「依群組 / 單一清單」（localStorage `telepy.tunnelGrouping`）；金鑰頁的裝置矩陣跟著同一個選擇。
+ *  The tunnels page's "by group / one list" choice; the keys page's device matrix follows it too. */
+export const TUNNEL_GROUPING_KEY = "telepy.tunnelGrouping";
+export const TUNNEL_GROUPINGS = ["groups", "flat"] as const;
+
 /** 通道 id → 我的群組 id。/ Tunnel id → my group id. */
 export function groupOf(groups: TunnelGroup[]): Map<number, number> {
     const m = new Map<number, number>();

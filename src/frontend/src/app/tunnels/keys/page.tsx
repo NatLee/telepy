@@ -8,7 +8,7 @@
  * key lists, the keys × devices matrix (a tick makes Telepy install the key on the device) and the per-device
  * panel (`?device=<id>`, linked from the tunnel menu).
  */
-import React, { Suspense, useCallback, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { CircleHelp, Key as KeyIcon, Plus, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -16,7 +16,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AddKeyModal } from "@/components/keys/AddKeyModal";
 import { DeviceKeysModal } from "@/components/keys/DeviceKeysModal";
 import { DeviceMatrix } from "@/components/keys/DeviceMatrix";
-import { KeyCard } from "@/components/keys/KeyCard";
+import { KeyList } from "@/components/keys/KeyList";
 import { KeyDetailsModal } from "@/components/keys/KeyDetailsModal";
 import { KeyListExplainer } from "@/components/keys/KeyListExplainer";
 import { KeyListFilterBar, KeyListFilterFooter, useKeyListFilter } from "@/components/keys/KeyListFilter";
@@ -56,19 +56,25 @@ function UserKeysPage() {
         return m;
     }, [keyGroups.groups]);
     // 頁面在 Suspense 裡只在瀏覽器端算繪，直接讀 localStorage 不會造成 hydration 不一致。
-    // The page renders client-side inside Suspense, so reading localStorage up front is safe.
-    const [explainer, setExplainer] = useState(() => {
+    // 沒選過時，只有還沒有金鑰的人看到說明（已有金鑰的人用標題列的「怎麼運作」打開），免得它把清單推到第二個畫面。
+    // The page renders client-side inside Suspense, so reading localStorage up front is safe. Without a stored
+    // choice only people with no keys yet see the explainer (others open it from the header), so it never pushes
+    // the lists below the fold.
+    const [explainerChoice, setExplainerChoice] = useState<"shown" | "hidden" | null>(() => {
         try {
-            return localStorage.getItem(EXPLAINER_KEY) !== "hidden";
+            const v = localStorage.getItem(EXPLAINER_KEY);
+            return v === "shown" || v === "hidden" ? v : null;
         } catch {
-            return true;
+            return null;
         }
     });
+    const explainer = explainerChoice === "shown" || (explainerChoice === null && !page.loading && page.keys.length === 0);
+    const keysTop = useRef<HTMLElement>(null);
     const [addOpen, setAddOpen] = useState(false);
     const [detailsId, setDetailsId] = useState<number | null>(null);
     const [deleting, setDeleting] = useState<UserKey | null>(null);
     const showExplainer = (show: boolean) => {
-        setExplainer(show);
+        setExplainerChoice(show ? "shown" : "hidden");
         try {
             localStorage.setItem(EXPLAINER_KEY, show ? "shown" : "hidden");
         } catch {
@@ -94,7 +100,7 @@ function UserKeysPage() {
                 description={t("keys.subtitle")}
                 actions={
                     <>
-                        {!explainer && (
+                        {!explainer && !(page.loading && page.keys.length === 0) && (
                             <Button variant="ghost" onClick={() => showExplainer(true)}>
                                 <CircleHelp size={16} /> {t("keys.how.show")}
                             </Button>
@@ -123,7 +129,7 @@ function UserKeysPage() {
                 </Callout>
             )}
 
-            <section aria-labelledby="keys-mine">
+            <section aria-labelledby="keys-mine" ref={keysTop} className="scroll-mt-20">
                 <div id="keys-mine">
                     <SectionHeader title={t("keys.mine")} count={page.loading ? undefined : page.keys.length} description={t("keys.mineDescription")} />
                 </div>
@@ -144,19 +150,16 @@ function UserKeysPage() {
                 ) : (
                     <>
                         <KeyListFilterBar filter={keyFilter} />
-                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                            {keyFilter.visible.map((k) => (
-                                <KeyCard
-                                    key={k.id}
-                                    keyItem={k}
-                                    placements={page.placements.get(k.id) ?? []}
-                                    groupName={groupNameOf.get(k.id) ?? null}
-                                    onDetails={() => setDetailsId(k.id)}
-                                    onDelete={() => setDeleting(k)}
-                                />
-                            ))}
-                        </div>
-                        <KeyListFilterFooter filter={keyFilter} />
+                        {keyFilter.visible.length > 0 && (
+                            <KeyList
+                                keys={keyFilter.visible}
+                                placements={page.placements}
+                                groupNameOf={groupNameOf}
+                                onDetails={(k) => setDetailsId(k.id)}
+                                onDelete={setDeleting}
+                            />
+                        )}
+                        <KeyListFilterFooter filter={keyFilter} anchor={keysTop} />
                     </>
                 )}
             </section>
@@ -172,6 +175,7 @@ function UserKeysPage() {
                         devices={page.devices}
                         keys={keyFilter.keys}
                         totalKeys={page.keys.length}
+                        tunnelGroups={tunnelGroups.groups}
                         pending={page.pending}
                         syncing={page.syncing}
                         onToggle={page.toggle}

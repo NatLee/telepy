@@ -32,6 +32,8 @@ export function useDeviceFilter<T>(
         isOn?: (item: T) => boolean;
         isProblem?: (item: T) => boolean;
         initial?: DeviceFilterMode;
+        /** false = 不先收起來（裝置矩陣分段時，每段自己收合）。/ false = never cut the list (the matrix's sections collapse instead). */
+        collapse?: boolean;
     }
 ) {
     const { device, isOn, isProblem } = opts;
@@ -61,7 +63,7 @@ export function useDeviceFilter<T>(
         });
     }, [items, query, effective, isOn, isProblem, device]);
 
-    const collapsible = !query && !expanded && filtered.length > COLLAPSE_AT;
+    const collapsible = opts.collapse !== false && !query && !expanded && filtered.length > COLLAPSE_AT;
     const visible = collapsible ? filtered.slice(0, COLLAPSE_AT) : filtered;
     return {
         query,

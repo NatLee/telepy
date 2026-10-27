@@ -26,7 +26,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { EmptyGroup, GroupHeader, GroupHeaderRow, type GroupHeaderProps } from "@/components/tunnels/TunnelGroupSection";
 import { TunnelGroupDialogs } from "@/components/tunnels/TunnelGroupDialogs";
 import { sectionKey, useTunnelGroupsUi } from "@/hooks/useTunnelGroupsUi";
-import { groupOf, groupSections, type Section } from "@/lib/groups";
+import { groupOf, groupSections, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, type Section } from "@/lib/groups";
 
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
@@ -38,7 +38,6 @@ import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 
 const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
 /** 依群組分段或一個列表（有群組時才有這個選擇）。/ Sections by group or one list (offered once groups exist). */
-const GROUPINGS = ["groups", "flat"] as const;
 
 export default function TunnelsPage() {
     const { t } = useI18n();
@@ -70,7 +69,7 @@ export default function TunnelsPage() {
     const isOnline = (tunnel: Tunnel) => portsMap[String(tunnel.reverse_port)] === true;
     // 我的通道群組（每個人自己的資料夾）。/ My tunnel groups (personal folders).
     const groupsUi = useTunnelGroupsUi(tunnels, isOnline);
-    const [grouping, setGrouping] = useStoredChoice("telepy.tunnelGrouping", GROUPINGS, "groups");
+    const [grouping, setGrouping] = useStoredChoice(TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, "groups");
     const groupNames = useMemo(() => {
         const names = new Map(groupsUi.groups.map((g) => [g.id, g.name]));
         const of = groupOf(groupsUi.groups);
