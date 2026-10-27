@@ -26,6 +26,11 @@ export function SessionEndedNotice() {
             }
             showToast(t("sessions.endedToast", { by: String(msg.by ?? ""), kind: kind ? t(kind.label) : String(msg.kind ?? "") }), "warning");
         },
+        // 有人開始看你的終端機（停止的那一則不吵你，終端機裡已經有一行）。/ Someone started watching your terminal.
+        [NOTIFICATION_ACTIONS.TERMINAL_WATCHED]: (msg) => {
+            if (msg.watching !== true) return;
+            showToast(t("watch.toast", { by: String(msg.by ?? ""), tunnel: String(msg.tunnel_name ?? "") }), "info");
+        },
     });
     return null;
 }

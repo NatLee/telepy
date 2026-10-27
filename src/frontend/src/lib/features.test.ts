@@ -67,6 +67,8 @@ test("the profile check: admins and older backends have everything", () => {
 
 test("pages that belong to a feature", () => {
     assert.equal(featureForPath("/tunnels/terminal"), "terminal");
+    assert.equal(featureForPath("/tunnels/sessions/watch"), "terminal", "watching a terminal needs the terminal");
+    assert.equal(featureForPath("/tunnels/sessions"), null);
     assert.equal(featureForPath("/tunnels/create"), "tunnels.create");
     assert.equal(featureForPath("/tunnels/webhooks"), "webhooks.personal");
     assert.equal(featureForPath("/tunnels"), null);

@@ -19,6 +19,8 @@ import { Modal } from "@/components/ui/Modal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ToolboxTarget } from "@/lib/snippets";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { WatchersChip, WatchRequestBanner } from "@/components/watch/WatchersBar";
+import { pendingRequests, controller } from "@/lib/terminalWatch";
 import { ReconnectBanner } from "@/components/tunnels/ReconnectBanner";
 import { ReconnectWhy } from "@/components/tunnels/ReconnectWhy";
 import { useTerminalDetach } from "@/hooks/useTerminalDetach";
@@ -115,7 +117,8 @@ function TerminalSession({ serverId }: { serverId: string }) {
         recorded,
     };
     const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}${lanHostId && lanAuthParam(lanAuth) ? `&lanAuth=${lanAuthParam(lanAuth)}` : ""}`;
-    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow } = actions;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow, answerWatch, revokeWatch } = actions;
+    const watchers = state.watchers;
 
     // 工具箱：桌機 = 側欄的第二個分頁（跟檔案共用一塊），手機 = 底部面板（送出後自動收起，看得到結果）。
     // Toolbox: on desktop the side panel's second tab (sharing the files panel), on phones a bottom sheet that closes
@@ -251,6 +254,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     onSideTab={setSideTab}
                     onToolbox={canToolbox ? toggleToolbox : undefined}
                     toolboxOpen={toolboxOpen}
+                    watchers={<WatchersChip frame={watchers} onRevoke={revokeWatch} />}
                 />
 
                 <TerminalContent
@@ -288,13 +292,15 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     sideTab={sideTab}
                     onSideTab={setSideTab}
                     toolbox={isDesktop && canToolbox ? toolboxPanel : null}
-                    commandBanner={(commandBanner || reconnecting) && (
+                    commandBanner={(commandBanner || reconnecting || pendingRequests(watchers).length > 0 || controller(watchers)) && (
                         <div className="space-y-2">
                             {/* 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */}
                             {reconnecting && (
                                 <ReconnectBanner state={reconnecting} onWhy={() => setWhyOpen(true)} onRetry={reconnectNow} />
                             )}
                             {commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                            {/* 看的人想打字 / 正在一起打字。/ A watcher asks to type, or is typing along. */}
+                            <WatchRequestBanner frame={watchers} onAnswer={answerWatch} onRevoke={revokeWatch} />
                         </div>
                     )}
                 />

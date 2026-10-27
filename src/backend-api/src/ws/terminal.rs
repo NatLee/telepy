@@ -16,12 +16,13 @@
 //! Web terminal: a PTY channel on the shared device connection; the LAN hop is OpenSSH over a pool bridge. A shell
 //! outlives a dropped socket for the grace time and is resumed with `resume: <id>` (see `crate::terminal_detach`).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use bytes::Bytes;
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::recording::Recorder;
 use super::{auth, close, close_with, device_offline, send, send_text, Heartbeat, CLOSE_ENDED};
@@ -35,6 +36,7 @@ use crate::ssh::process::{lan_terminal_args, prepare_lan_auth, spawn_in_pty, val
 use crate::ssh::terminal::{Output, PtySession, WindowSize};
 use crate::state::AppState;
 use crate::terminal_detach::{self, Backlog, Refusal, ShellKey, Takeover};
+use crate::terminal_watch::{self as watching, Change, Cmd as WatchCmd, Frame, Joined, Watchers};
 use crate::util::{db_time, now_db};
 
 /// 指令規則停住的那個 Enter。/ The Enter that a command rule holds.
@@ -217,6 +219,23 @@ pub struct Shell {
     size: WindowSize,
     /// 有人要接回這個 shell。/ Someone wants to resume this shell.
     takeover: mpsc::Receiver<Takeover<Shell>>,
+    /// 誰在看、誰能打字（`crate::terminal_watch`）。/ Who watches and who may type.
+    watchers: Watchers,
+    /// 給看的人的即時輸出與事件。/ Live output and events for watchers.
+    watch_out: broadcast::Sender<Frame>,
+    /// 看的人那邊來的要求。/ Requests from watchers' sockets.
+    watch_cmds: mpsc::Receiver<WatchCmd>,
+    /// 看的人在打字時，指令規則把那一行算在他頭上。/ While a watcher types, command rules attribute the line to them.
+    controller: Option<Requester>,
+    port: Option<u16>,
+}
+
+/// 要給被看的人那條 socket 的東西。/ Something for the watched user's socket.
+enum ToOwner {
+    /// 終端機裡的一行提示（已經進緩衝）。/ A notice line in the terminal (already in the backlog).
+    Text(String),
+    /// binary JSON（`watchers` 狀態）。/ A binary JSON frame (the `watchers` state).
+    Frame(Value),
 }
 
 /// socket 為什麼不接著 shell 了。/ Why a socket let go of its shell.
@@ -241,12 +260,153 @@ impl Shell {
                 r.output(&text).await;
             }
             self.backlog.push(&text);
+            if self.watch_out.receiver_count() > 0 {
+                let _ = self.watch_out.send(Frame::Output(Arc::from(text.as_str())));
+            }
         }
         text
     }
 
+    /// 給看的人一個事件（指令規則的通知對他們只是看看，不能核准）。/ An event for watchers (command notices are read-only).
+    fn fan_out(&self, v: &Value) {
+        if self.watch_out.receiver_count() == 0 {
+            return;
+        }
+        let mut v = v.clone();
+        if v.get("can_decide").is_some() {
+            v["can_decide"] = Value::Bool(false);
+        }
+        let _ = self.watch_out.send(Frame::Event(Arc::new(v)));
+    }
+
+    /// 這一行算誰打的：有看的人在打字就是他。/ Who the line belongs to: the typing watcher, if any.
+    fn line_requester(&self) -> Requester {
+        self.controller.clone().unwrap_or_else(|| self.requester.clone())
+    }
+
+    /// 在終端機裡插一行提示（全螢幕程式裡不插，免得弄亂畫面）：進緩衝、錄影、給看的人；回傳要送給被看的人的文字。
+    /// Insert a notice line (not inside a full-screen program): into the backlog, the recording and the watchers;
+    /// returns the text for the watched user's socket.
+    async fn announce(&mut self, text: &str) -> Option<String> {
+        let redraw = self.guard.tracker.redraw_cursor_row()?;
+        let line = format!("{}{redraw}", watching::notice_line(text));
+        if let Some(r) = self.recorder.as_mut() {
+            r.output(&line).await;
+        }
+        self.backlog.push(&line);
+        if self.watch_out.receiver_count() > 0 {
+            let _ = self.watch_out.send(Frame::Output(Arc::from(line.as_str())));
+        }
+        Some(line)
+    }
+
+    /// 看的人那邊來的要求。`detached` = 現在沒有 socket 接著（斷線保留中）。
+    /// A request from a watcher's socket; `detached` = no socket holds the shell right now.
+    async fn on_watch(&mut self, state: &AppState, cmd: WatchCmd, detached: bool) -> Vec<ToOwner> {
+        match cmd {
+            WatchCmd::Join { watcher, reply } => {
+                let (wid, name) = (watcher.id, watcher.username.clone());
+                // 滿了：不回覆，那一端當作 shell 不收。/ Full: no reply; that side treats it as refused.
+                let Some(fresh) = self.watchers.join(watcher) else { return Vec::new() };
+                // 先訂閱再拿畫面：同一刻，不漏不重複。/ Subscribe, then take the screen: one instant, no gap.
+                let rx = self.watch_out.subscribe();
+                let (rows, cols) = self.guard.tracker.size();
+                let joined = Joined {
+                    screen: self.guard.tracker.screen_formatted(),
+                    cols: u32::from(cols),
+                    rows: u32::from(rows),
+                    detached,
+                    watchers: self.watchers.json(),
+                    pending: self.pending_notice.clone(),
+                    rx,
+                };
+                if reply.send(joined).is_err() {
+                    // 那一端剛好走了。/ That side just left.
+                    if fresh {
+                        self.watchers.leave(wid);
+                    }
+                    return Vec::new();
+                }
+                if !fresh {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                if let Some(t) = self.announce(&watching::watching_text(&name)).await {
+                    out.push(ToOwner::Text(t));
+                }
+                out.extend(self.watchers_changed());
+                out
+            }
+            WatchCmd::Leave { id } => {
+                let Some((w, had)) = self.watchers.leave(id) else { return Vec::new() };
+                let mut out = Vec::new();
+                if had {
+                    self.controller = None;
+                    self.audit_change(state, &Change::Revoked { who: w.username.clone(), by_owner: false }).await;
+                }
+                if let Some(t) = self.announce(&watching::stopped_text(&w.username)).await {
+                    out.push(ToOwner::Text(t));
+                }
+                out.extend(self.watchers_changed());
+                out
+            }
+            WatchCmd::Control { id, want, force } => match self.watchers.control(id, want, force) {
+                Some(change) => self.apply_change(state, change).await,
+                None => Vec::new(),
+            },
+            WatchCmd::Input { id, text } => {
+                if self.watchers.has_control(id) {
+                    self.input(state, &text).await;
+                }
+                Vec::new()
+            }
+        }
+    }
+
+    /// 被看的人回應「想打字」：允許 / 拒絕。/ The watched user answers a request to type.
+    async fn answer(&mut self, state: &AppState, id: u64, allow: bool) -> Vec<ToOwner> {
+        match self.watchers.answer(id, allow) {
+            Some(change) => self.apply_change(state, change).await,
+            None => Vec::new(),
+        }
+    }
+
+    /// 被看的人收回控制權。/ The watched user takes control back.
+    async fn revoke(&mut self, state: &AppState) -> Vec<ToOwner> {
+        match self.watchers.revoke() {
+            Some(change) => self.apply_change(state, change).await,
+            None => Vec::new(),
+        }
+    }
+
+    /// 控制權變了：指令規則的歸屬、提示、稽核、狀態。/ Control changed: rule attribution, notice, audit, state.
+    async fn apply_change(&mut self, state: &AppState, change: Change) -> Vec<ToOwner> {
+        self.controller = self.watchers.controller().map(|w| Requester { user_id: w.user_id, username: w.username.clone(), ..self.requester.clone() });
+        let mut out = Vec::new();
+        if let Some(t) = self.announce(&watching::change_text(&change)).await {
+            out.push(ToOwner::Text(t));
+        }
+        self.audit_change(state, &change).await;
+        out.extend(self.watchers_changed());
+        out
+    }
+
+    async fn audit_change(&self, state: &AppState, change: &Change) {
+        if let Some((kind, msg)) = watching::change_event(change, &self.requester.username, &self.id) {
+            state.gateway.event(kind, None, self.port, Some(self.requester.tunnel_id), msg).await;
+        }
+    }
+
+    /// 誰在看的狀態給大家（被看的人與看的人）。/ The watchers state for everyone.
+    fn watchers_changed(&self) -> Vec<ToOwner> {
+        let v = self.watchers.json();
+        self.fan_out(&v);
+        vec![ToOwner::Frame(v)]
+    }
+
     async fn resize(&mut self, size: WindowSize) {
         self.size = size;
+        self.fan_out(&json!({ "type": "resize", "cols": size.cols, "rows": size.rows }));
         self.guard.tracker.resize(size.rows.min(u32::from(u16::MAX)) as u16, size.cols.min(u32::from(u16::MAX)) as u16);
         if let Some(r) = self.recorder.as_mut() {
             r.resize(size.cols, size.rows).await;
@@ -291,7 +451,8 @@ impl Shell {
                 let Some(Hold::Settle { rest, .. }) = self.hold.take() else { return Vec::new() };
                 let lines = self.guard.tracker.candidates();
                 let shown = lines.first().cloned().unwrap_or_default();
-                match command_rules::check(state, &self.requester, &lines).await {
+                let requester = self.line_requester();
+                match command_rules::check(state, &requester, &lines).await {
                     None => {
                         pty_write(&self.pty, b"\r").await;
                         self.guard.reset();
@@ -301,10 +462,10 @@ impl Shell {
                     Some(rule) if rule.action == Action::Block => {
                         pty_write(&self.pty, b"\x03").await;
                         self.guard.reset();
-                        command_rules::record_block(state, &self.requester, &shown, &rule).await;
+                        command_rules::record_block(state, &requester, &shown, &rule).await;
                         vec![json!({ "type": "command", "state": "blocked", "command": shown, "rule": command_rules::matched_json(&rule) })]
                     }
-                    Some(rule) => match command_rules::request(state, &self.requester, &shown, &rule).await {
+                    Some(rule) => match command_rules::request(state, &requester, &shown, &rule).await {
                         Ok((row, rx)) => {
                             let can_decide = command_rules::decides(state, self.user_id, &row).await;
                             let n = json!({
@@ -437,6 +598,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             notice(&mut socket, n).await;
         }
     }
+    // 有人在看（或在等你回應想打字）：接回時也要知道。/ Someone is watching (or waiting to type): tell the resumed page.
+    if !shell.watchers.is_empty() {
+        notice(&mut socket, shell.watchers.json()).await;
+    }
 
     let exit = attached(&state, &mut socket, &mut shell, &mut signout).await;
     match exit {
@@ -471,6 +636,7 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
     let marker = (now_db(), db_time(ends));
     shell.presence.set_detached(Some(marker.clone()));
     state.shells.set_detached(&shell.id, true);
+    shell.fan_out(&json!({ "type": "detached", "detached": true }));
     // 一個人留太多：最舊的先結束。/ Too many for one person: the oldest go first.
     for pid in state.shells.over_limit(shell.user_id, terminal_detach::MAX_DETACHED_PER_USER) {
         state.presence.end(pid, "Telepy (too many detached shells)");
@@ -482,6 +648,7 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
             Some(tx) = shell.takeover.recv() => {
                 shell.presence.set_detached(None);
                 state.shells.set_detached(&shell.id, false);
+                shell.fan_out(&json!({ "type": "detached", "detached": false }));
                 match tx.send(shell) {
                     Ok(()) => return,
                     // 要接回的 socket 剛好又斷了：繼續留著。/ The resuming socket vanished: keep holding it.
@@ -489,6 +656,7 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
                         shell = back;
                         shell.presence.set_detached(Some(marker.clone()));
                         state.shells.set_detached(&shell.id, true);
+                        shell.fan_out(&json!({ "type": "detached", "detached": true }));
                     }
                 }
             }
@@ -508,10 +676,15 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
             ev = hold_event(&mut shell.hold, &shell.guard) => {
                 // 等核准的通知由 pending_notice 帶；其他結果接回時補送。/ Pending is carried by pending_notice; outcomes are stashed.
                 for n in shell.hold_step(&state, ev).await {
+                    shell.fan_out(&n);
                     if n["state"] != "pending" {
                         shell.stash.push(n);
                     }
                 }
+            }
+            // 看的人：提示已經進緩衝，狀態接回時再送。/ Watchers: notices are in the backlog, the state is sent on reattach.
+            Some(cmd) = shell.watch_cmds.recv() => {
+                let _ = shell.on_watch(&state, cmd, true).await;
             }
             read = read_pty(&mut shell.pty, &mut buf) => match read {
                 Ok(n) if n > 0 => {
@@ -565,6 +738,23 @@ async fn attached(state: &AppState, socket: &mut WebSocket, shell: &mut Shell, s
                                 shell.resize(size).await;
                             }
                         }
+                        // 回應看的人「想打字」：`{action:"watch_answer", watcher, allow}`。/ Answer a watcher's request to type.
+                        Some("watch_answer") => {
+                            if let Some(id) = data.get("watcher").and_then(Value::as_u64) {
+                                let allow = data.get("allow").and_then(Value::as_bool).unwrap_or(false);
+                                let out = shell.answer(state, id, allow).await;
+                                if !to_owner(socket, out).await {
+                                    return Exit::Detach;
+                                }
+                            }
+                        }
+                        // 收回控制權。/ Take control back.
+                        Some("watch_revoke") => {
+                            let out = shell.revoke(state).await;
+                            if !to_owner(socket, out).await {
+                                return Exit::Detach;
+                            }
+                        }
                         // 關分頁 / 換帳號：明確結束，不保留。/ Closing the tab / switching account: an explicit end, never kept.
                         Some("end") => {
                             send(socket, Message::Close(None)).await;
@@ -579,7 +769,14 @@ async fn attached(state: &AppState, socket: &mut WebSocket, shell: &mut Shell, s
             },
             ev = hold_event(&mut shell.hold, &shell.guard) => {
                 for n in shell.hold_step(state, ev).await {
+                    shell.fan_out(&n);
                     notice(socket, n).await;
+                }
+            }
+            Some(cmd) = shell.watch_cmds.recv() => {
+                let out = shell.on_watch(state, cmd, false).await;
+                if !to_owner(socket, out).await {
+                    return Exit::Detach;
                 }
             }
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
@@ -615,9 +812,25 @@ async fn attached(state: &AppState, socket: &mut WebSocket, shell: &mut Shell, s
     }
 }
 
+/// 把提示行與狀態送給被看的人；socket 斷了回 false。/ Send notices and state to the watched user; false when gone.
+async fn to_owner(socket: &mut WebSocket, out: Vec<ToOwner>) -> bool {
+    for m in out {
+        let ok = match m {
+            ToOwner::Text(t) => send_text(socket, t).await,
+            ToOwner::Frame(v) => send(socket, Message::Binary(Bytes::from(v.to_string()))).await,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
 /// 收掉 shell：撤回等核准的指令、離開「使用中」、記結束、收錄影、關 channel / 程序。
 /// End the shell: withdraw a pending command, leave presence, audit, finish the recording, close the PTY.
 async fn finish(state: &AppState, shell: Box<Shell>, note: Option<String>) {
+    // 看的人：shell 結束了。/ Watchers: the shell is over.
+    shell.fan_out(&json!({ "type": "ended", "note": note }));
     let Shell { id, hold, presence, audit, recorder, mut pty, .. } = *shell;
     // 還在等核准的指令跟著取消。/ A command still waiting for approval is withdrawn.
     if let Some(Hold::Pending { id, .. }) = &hold {
@@ -793,7 +1006,8 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
         session_ref: Some(presence.id().to_string()),
     };
     let id = crate::util::random_alnum(24);
-    let takeover = state.shells.register(&id, ShellKey { user_id: user.id, tunnel_id, account: username, lan_host: lan_raw, presence_id: presence.id() });
+    let (watch_tx, watch_cmds) = mpsc::channel(32);
+    let takeover = state.shells.register(&id, ShellKey { user_id: user.id, tunnel_id, account: username, lan_host: lan_raw, presence_id: presence.id(), watch: Some(watch_tx) });
     Ok(Box::new(Shell {
         id,
         user_id: user.id,
@@ -813,6 +1027,11 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
         pending_notice: None,
         size: WindowSize::default(),
         takeover,
+        watchers: Watchers::default(),
+        watch_out: broadcast::channel(watching::QUEUE).0,
+        watch_cmds,
+        controller: None,
+        port: u16::try_from(reverse_port).ok(),
     }))
 }
 

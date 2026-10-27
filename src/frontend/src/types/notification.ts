@@ -42,6 +42,8 @@ export const NOTIFICATION_ACTIONS = {
     JOIN_UPDATED: "JOIN-UPDATED",
     // 有人從即時 session 頁結束了你的 session：{tunnel_id, kind, by}。/ Someone ended your session: {tunnel_id, kind, by}.
     SESSION_ENDED: "SESSION-ENDED",
+    // 有人開始 / 停止看你的網頁終端機：{tunnel_id, tunnel_name, shell_id, by, watching}。/ Someone started / stopped watching your terminal.
+    TERMINAL_WATCHED: "TERMINAL-WATCHED",
     // 從 90 天內沒見過的國家 / 瀏覽器登入你的帳號：{ip, geo, device, user_agent, method, second_factor, at}。
     // A sign-in from a country or browser not seen in 90 days.
     SIGN_IN_NEW_DEVICE: "SIGN-IN-NEW-DEVICE",

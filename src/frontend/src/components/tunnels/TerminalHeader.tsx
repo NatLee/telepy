@@ -50,6 +50,8 @@ interface TerminalHeaderProps {
     /** 打開 / 收起工具箱（桌機側欄、手機底部面板）。/ Toggle the toolbox (desktop side panel, phone sheet). */
     onToolbox?: () => void;
     toolboxOpen?: boolean;
+    /** 「N 人在看」chip（有人在看你的 shell 時）。/ The "N watching" chip, when someone watches your shell. */
+    watchers?: React.ReactNode;
 }
 
 /** 區網主機徽章。/ LAN host badge. */
@@ -94,6 +96,7 @@ export function TerminalHeader({
     onSideTab,
     onToolbox,
     toolboxOpen = false,
+    watchers = null,
 }: TerminalHeaderProps) {
     const router = useRouter();
     const { t } = useI18n();
@@ -127,6 +130,7 @@ export function TerminalHeader({
                                 <span className="truncate">{tunnelName ?? (serverId || "").slice(0, 8)}</span>
                             </Badge>
                         </h1>
+                        {watchers && <span className="shrink-0">{watchers}</span>}
 
                         {/*
                           Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見；桌機上標題列窄到放不下

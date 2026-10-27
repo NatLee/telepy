@@ -42,9 +42,25 @@ pub fn may_end(entry_user: i64, me: i64, manages_tunnel: bool) -> bool {
     entry_user == me || manages_tunnel
 }
 
-fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64) -> Value {
+/// 誰在看哪個 shell：{shell id: [看的人]}。/ Who watches which shell.
+fn watchers_by_shell(all: &[Entry]) -> HashMap<String, Vec<String>> {
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for e in all {
+        if let Some(w) = &e.watching {
+            out.entry(w.shell.clone()).or_default().push(e.username.clone());
+        }
+    }
+    out
+}
+
+fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64, manages: bool, watchers: &HashMap<String, Vec<String>>) -> Value {
     // MCP agent 的 SSH session：開著幾個互動 shell。/ An MCP agent's SSH session: how many interactive shells are open.
     let shells = (e.kind == Kind::Ai).then(|| state.ai.list().into_iter().find(|s| s.presence_id() == e.id).map(|s| s.shell_count()).unwrap_or(0));
+    // 網頁終端機：能管的人拿得到 shell 代號（「看」按鈕），也看得到誰在看。/ Web terminals: the shell id for managers, and who watches.
+    let shell = if e.kind == Kind::Terminal { state.shells.by_presence(e.id) } else { None };
+    let shell_id = shell.as_ref().filter(|_| manages && e.user_id != me);
+    let watched_by = shell.as_ref().and_then(|s| watchers.get(s)).cloned().unwrap_or_default();
+    let watching = e.watching.as_ref().map(|w| json!({ "user": { "id": w.user_id, "username": w.username }, "shell_id": w.shell }));
     json!({
         "id": e.id,
         "tunnel": { "id": e.tunnel_id, "name": tunnel_name },
@@ -57,6 +73,9 @@ fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64)
         "shells": shells,
         "detached": super::serialize::detached_json(e),
         "mine": e.user_id == me,
+        "shell_id": shell_id,
+        "watched_by": watched_by,
+        "watching": watching,
     })
 }
 
@@ -66,7 +85,11 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     let managed = managed(&state, &me).await?;
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::new();
-    for e in state.presence.all() {
+    let all = state.presence.all();
+    let watchers = watchers_by_shell(&all);
+    // 「看」要能用終端機。/ Watching needs the terminal feature.
+    let can_watch = state.features.allowed(&me, crate::features::Feature::Terminal).await.unwrap_or(false);
+    for e in all {
         if !may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)) {
             continue;
         }
@@ -75,7 +98,8 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
                 names.insert(t.id, t.host_friendly_name);
             }
         }
-        out.push(session_json(&state, &e, names.get(&e.tunnel_id).map(String::as_str), me.id));
+        let manages = managed.contains_key(&e.tunnel_id) && can_watch;
+        out.push(session_json(&state, &e, names.get(&e.tunnel_id).map(String::as_str), me.id, manages, &watchers));
     }
     Ok(Json(json!({ "sessions": out })))
 }
