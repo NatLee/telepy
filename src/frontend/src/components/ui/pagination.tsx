@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { pageWindow, PAGE_SIZES } from "@/lib/pagination";
+import { pageWindow } from "@/lib/pagination";
 import type { PaginationState } from "@/hooks/usePagination";
 
 export function Pagination({
@@ -24,7 +24,7 @@ export function Pagination({
     className?: string;
 }) {
     const { t } = useI18n();
-    if (pager.total <= PAGE_SIZES[0]) return null;
+    if (pager.total <= pager.sizes[0]) return null;
     const go = (p: number) => {
         pager.setPage(p);
         requestAnimationFrame(() => {
@@ -37,7 +37,7 @@ export function Pagination({
             <span className="tabular-nums">{t("ui.page.range", { from: pager.from, to: pager.to, total: pager.total })}</span>
             <div className="flex flex-wrap items-center gap-2">
                 <NativeSelect value={pager.size} onChange={(e) => pager.setSize(Number(e.target.value))} aria-label={t("ui.page.size")} className="w-auto [&>select]:h-8 [&>select]:text-xs">
-                    {PAGE_SIZES.map((n) => (
+                    {pager.sizes.map((n) => (
                         <option key={n} value={n}>
                             {t("ui.page.sizeOption", { size: n })}
                         </option>
