@@ -8,6 +8,7 @@
  * tunnels they own).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
@@ -15,8 +16,8 @@ import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import { toolLabel } from "@/lib/aiAccess";
-import { countCalls, filterCalls, type ToolFilter } from "@/lib/aiActivity";
-import { dayKey, labelDays, type LabeledDayGroup } from "@/lib/timeline";
+import { countCalls, filterCalls, withTimes, type CallTimes, type ToolFilter } from "@/lib/aiActivity";
+import { labelDays, type LabeledDayGroup } from "@/lib/timeline";
 
 export interface AiSession {
     id: string;
@@ -57,16 +58,7 @@ export interface AiActivityRow {
 }
 
 /** 加上頁面要顯示的時間欄位。/ A row plus the formatted time fields the page shows. */
-export interface AiActivityEntry extends AiActivityRow {
-    /** 時:分:秒（日期在分組標題）。/ Time of day (the date is in the group heading). */
-    time: string;
-    /** 依 locale 格式化的日期。/ Locale-formatted date. */
-    date: string;
-    /** 本地日期鍵 YYYY-MM-DD。/ Local day key. */
-    day: string;
-    /** 完整時間戳（含時區），滑過時間時顯示。/ Full timestamp with time zone, shown on hover. */
-    full: string;
-}
+export type AiActivityEntry = AiActivityRow & CallTimes;
 
 export interface FilterOption {
     id: number;
@@ -87,7 +79,9 @@ export function useAiActivityPage() {
     const [rows, setRows] = useState<AiActivityRow[]>([]);
     const [loading, setLoading] = useState(true);
     const [tunnelFilter, setTunnelFilter] = useState<string>(ALL);
-    const [userFilter, setUserFilter] = useState<string>(ALL);
+    // `?user=<id>`（管理使用者對話框的連結）當起始篩選（只有管理員看得到使用者選單；後端本來就只回看得到的列）。/ `?user=<id>` (from Manage user) seeds the filter (the user select only shows for admins; the backend scopes rows anyway).
+    const userParam = useSearchParams().get("user");
+    const [userFilter, setUserFilter] = useState<string>(() => (userParam && /^\d+$/.test(userParam) ? userParam : ALL));
     const [search, setSearch] = useState("");
     const [toolFilter, setToolFilter] = useState<ToolFilter>("all");
     const [failedOnly, setFailedOnly] = useState(false);
@@ -224,18 +218,7 @@ export function useAiActivityPage() {
     );
 
     // 每列的時間欄位（時:分:秒、日期、完整時間戳）。/ Per-row time fields (time of day, date, full timestamp).
-    const entries = useMemo<AiActivityEntry[]>(() => {
-        const year = (fetchedAt ?? new Date(0)).getFullYear();
-        const timeFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
-        const dateFmt = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", weekday: "short" });
-        const dateYearFmt = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", weekday: "short" });
-        const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "long" });
-        return rows.map((r) => {
-            const d = new Date(r.at);
-            if (isNaN(d.getTime())) return { ...r, time: r.at, date: "", day: "", full: r.at };
-            return { ...r, time: timeFmt.format(d), date: (d.getFullYear() === year ? dateFmt : dateYearFmt).format(d), day: dayKey(d), full: fullFmt.format(d) };
-        });
-    }, [rows, fetchedAt, locale]);
+    const entries = useMemo<AiActivityEntry[]>(() => withTimes(rows, fetchedAt ?? new Date(0), locale), [rows, fetchedAt, locale]);
 
     const label = useCallback((tool: string) => toolLabel(tool, t), [t]);
     const counts = useMemo(() => countCalls(entries, search, toolFilter, label), [entries, search, toolFilter, label]);

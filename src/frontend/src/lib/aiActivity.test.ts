@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { countCalls, filterCalls, formatBytes, formatDuration, isCodeDetail, toolCategory } from "./aiActivity.ts";
+import { countCalls, filterCalls, formatBytes, formatDuration, isCodeDetail, toolCategory, withTimes } from "./aiActivity.ts";
 
 const call = (id: number, tool: string, ok: boolean, detail: string | null, extra: { error?: string; tunnel?: string; app?: string } = {}) => ({
     id,
@@ -70,4 +70,20 @@ test("durations and sizes", () => {
     assert.equal(formatBytes(313), "313 B");
     assert.equal(formatBytes(4660), "4.6 KB");
     assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
+});
+
+test("withTimes adds the time of day, the day key and a year only outside this year", () => {
+    const now = new Date(2026, 9, 27, 12, 0, 0);
+    const [a, b, bad] = withTimes(
+        [{ id: 1, at: new Date(2026, 9, 27, 9, 5, 7).toISOString() }, { id: 2, at: new Date(2025, 0, 3, 23, 0, 0).toISOString() }, { id: 3, at: "not a time" }],
+        now,
+        "en",
+    );
+    assert.equal(a.id, 1);
+    assert.equal(a.time, "09:05:07");
+    assert.equal(a.day, "2026-10-27");
+    assert.ok(!a.date.includes("2026"), a.date);
+    assert.equal(b.day, "2025-01-03");
+    assert.ok(b.date.includes("2025"), b.date);
+    assert.deepEqual([bad.time, bad.day, bad.full], ["not a time", "", "not a time"]);
 });

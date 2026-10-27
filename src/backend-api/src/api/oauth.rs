@@ -43,6 +43,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(token))
         .routes(routes!(revoke))
         .routes(routes!(list_grants))
+        .routes(routes!(list_grants_for_user))
         .routes(routes!(grant_details, revoke_grant))
 }
 
@@ -724,6 +725,22 @@ async fn grant_json(state: &AppState, g: &db::oauth::GrantWithClient) -> sqlx::R
 #[utoipa::path(get, path = "/api/oauth/grants", tag = "OAuth", security(("bearer" = [])), responses((status = 200, description = "Apps the current user has authorized (active grants, newest first)", body = Vec<super::schemas::OAuthGrant>)))]
 async fn list_grants(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let grants = db::oauth::active_grants_for_user(&state.db, user.id).await?;
+    let mut out = Vec::with_capacity(grants.len());
+    for g in &grants {
+        out.push(grant_json(&state, g).await?);
+    }
+    Ok(Json(Value::Array(out)))
+}
+
+#[utoipa::path(get, path = "/api/user/users/{id}/grants", tag = "User Management", security(("bearer" = [])), params(("id" = i64, Path, description = "User id")), responses((status = 200, description = "Apps that user has authorized (active grants, newest first; admins only)", body = Vec<super::schemas::OAuthGrant>), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn list_grants_for_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    // 管理使用者對話框的「已連接的應用程式」；詳細資料與撤銷沿用 /api/oauth/grants/{id}（管理員本來就能用）。
+    // The Manage-user dialog's connected apps; details and revoke reuse /api/oauth/grants/{id} (admins already may).
+    if !me.is_superuser {
+        return Err(ApiError::forbidden("Permission denied. Only administrators can see other people's connected apps."));
+    }
+    db::users::by_id(&state.db, id).await?.ok_or_else(ApiError::drf_not_found)?;
+    let grants = db::oauth::active_grants_for_user(&state.db, id).await?;
     let mut out = Vec::with_capacity(grants.len());
     for g in &grants {
         out.push(grant_json(&state, g).await?);

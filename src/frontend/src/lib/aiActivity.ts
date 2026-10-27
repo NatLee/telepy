@@ -4,6 +4,8 @@
  * AI activity helpers: tool categories (commands / files / sessions / tunnels & network), filtering and counts,
  * which details are commands or paths, and duration / size formatting.
  */
+import { dayKey } from "./timeline.ts";
+
 export type ToolCategory = "exec" | "files" | "browser" | "session" | "read";
 export type ToolFilter = "all" | ToolCategory;
 export const TOOL_FILTERS: ToolFilter[] = ["all", "exec", "files", "browser", "session", "read"];
@@ -115,4 +117,34 @@ export function formatBytes(n: number | null | undefined): string {
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
     return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 列表要顯示的時間欄位。/ The time fields a list row shows. */
+export interface CallTimes {
+    /** 時:分:秒（日期在分組標題）。/ Time of day (the date is in the group heading). */
+    time: string;
+    /** 依 locale 格式化的日期（不是今年才帶年份）。/ Locale-formatted date (with the year only when not this year). */
+    date: string;
+    /** 本地日期鍵 YYYY-MM-DD。/ Local day key. */
+    day: string;
+    /** 完整時間戳（含時區），滑過時間時顯示。/ Full timestamp with time zone, shown on hover. */
+    full: string;
+}
+
+/**
+ * 每列加上時間欄位；`now` 決定「今年」（今年的日期不寫年份）。解析不了的時間原樣顯示、沒有日期鍵。
+ * Adds the time fields to every row; `now` decides "this year" (dates in it omit the year). An unparsable time is
+ * shown as is, with no day key.
+ */
+export function withTimes<T extends { at: string }>(rows: T[], now: Date, locale: string): (T & CallTimes)[] {
+    const year = now.getFullYear();
+    const timeFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" });
+    const dateFmt = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", weekday: "short" });
+    const dateYearFmt = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", weekday: "short" });
+    const fullFmt = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "long" });
+    return rows.map((r) => {
+        const d = new Date(r.at);
+        if (isNaN(d.getTime())) return { ...r, time: r.at, date: "", day: "", full: r.at };
+        return { ...r, time: timeFmt.format(d), date: (d.getFullYear() === year ? dateFmt : dateYearFmt).format(d), day: dayKey(d), full: fullFmt.format(d) };
+    });
 }

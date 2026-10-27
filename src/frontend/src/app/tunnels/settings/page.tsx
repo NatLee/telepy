@@ -41,6 +41,8 @@ import type { TranslationKey } from "@/locales/en";
 import { SignInHistory } from "@/components/layout/SignInHistory";
 import { SignInDevices } from "@/components/layout/SignInDevices";
 import { ApiTokens } from "@/components/tokens/ApiTokens";
+import { ConnectedApps } from "@/components/layout/ConnectedApps";
+import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 
 function titleize(key: string) {
@@ -489,11 +491,12 @@ function UsersTab() {
 }
 
 /** 單一使用者的「管理」modal:帳號旗標 + 個人設定,變更即時套用。分頁跟偏好設定一樣放在左側欄
- *  (帳號 / 安全性 / 登入紀錄 / API token),fixedHeight 讓切換分頁時視窗不跳動。
+ *  (帳號 / 安全性 / 登入紀錄 / 已連接的應用程式 / API token / AI 活動),fixedHeight 讓切換分頁時視窗不跳動。
  *  Per-user "Manage" modal: account flags + personal settings; changes apply immediately. Tabs sit in
- *  the side rail like the preferences modal (account / security / sign-in history / API tokens), and
+ *  the side rail like the preferences modal (account / security / sign-in history / connected apps / API tokens /
+ *  AI activity), and
  *  fixedHeight keeps the dialog the same size when switching tabs. */
-type UserModalTab = "account" | "security" | "history" | "tokens";
+type UserModalTab = "account" | "security" | "history" | "apps" | "tokens" | "activity";
 
 function UserEditModal({
     user,
@@ -529,7 +532,9 @@ function UserEditModal({
         { value: "account" as const, label: t("settings.userTabAccount"), hint: t("settings.userTabAccountHint"), icon: <UserCog /> },
         { value: "security" as const, label: t("settings.userTabSecurity"), hint: t("settings.userTabSecurityHint"), icon: <ShieldCheck /> },
         { value: "history" as const, label: t("settings.userTabHistory"), hint: t("settings.userTabHistoryHint"), icon: <History /> },
+        { value: "apps" as const, label: t("settings.userTabApps"), hint: t("settings.userTabAppsHint"), icon: <Plug /> },
         { value: "tokens" as const, label: t("settings.userTabTokens"), hint: t("settings.userTabTokensHint"), icon: <KeySquare /> },
+        { value: "activity" as const, label: t("settings.userTabActivity"), hint: t("settings.userTabActivityHint"), icon: <Activity /> },
     ];
 
     const role = (
@@ -671,7 +676,13 @@ function UserEditModal({
             )}
 
             {/* 這個人的個人 API token（可撤銷）/ Their personal API tokens (revoke) */}
+            {/* 這個人核可過的 OAuth 應用程式（可看詳細、可撤銷）/ The OAuth apps they approved (details, revoke) */}
+            {tab === "apps" && <ConnectedApps userId={user.id} />}
+
             {tab === "tokens" && <ApiTokens userId={user.id} />}
+
+            {/* 這個人的 app 與 token 呼叫過的工具 / Tool calls by their apps and tokens */}
+            {tab === "activity" && <UserActivity userId={user.id} onNavigate={onClose} />}
 
             <ConfirmDialog
                 isOpen={confirmReset}
