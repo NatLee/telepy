@@ -17,14 +17,17 @@ export function Pagination({
     pager,
     anchor,
     className,
+    compact = false,
 }: {
     pager: PaginationState;
     /** 換頁後若它已捲出畫面就捲回來（清單或段落的頂端）。/ Scrolled back into view after a page change when off screen. */
     anchor?: React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
     className?: string;
+    /** 只有「‹ 1–10 / 40 ›」（樹裡、卡片裡的小分頁）。/ Just "‹ 1–10 of 40 ›" (small pagers inside trees and cards). */
+    compact?: boolean;
 }) {
     const { t } = useI18n();
-    if (pager.total <= pager.sizes[0]) return null;
+    if (pager.total <= (compact ? pager.size : pager.sizes[0])) return null;
     const go = (p: number) => {
         pager.setPage(p);
         requestAnimationFrame(() => {
@@ -32,6 +35,19 @@ export function Pagination({
             if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: "start" });
         });
     };
+    if (compact) {
+        return (
+            <nav aria-label={t("ui.page.aria")} className={cn("flex items-center gap-1 text-xs text-muted-foreground", className)}>
+                <Button variant="ghost" size="icon-xs" disabled={pager.page <= 1} onClick={() => go(pager.page - 1)} aria-label={t("ui.page.prev")} title={t("ui.page.prev")}>
+                    <ChevronLeft />
+                </Button>
+                <span className="tabular-nums">{t("ui.page.range", { from: pager.from, to: pager.to, total: pager.total })}</span>
+                <Button variant="ghost" size="icon-xs" disabled={pager.page >= pager.count} onClick={() => go(pager.page + 1)} aria-label={t("ui.page.next")} title={t("ui.page.next")}>
+                    <ChevronRight />
+                </Button>
+            </nav>
+        );
+    }
     return (
         <nav aria-label={t("ui.page.aria")} className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted-foreground", className)}>
             <span className="tabular-nums">{t("ui.page.range", { from: pager.from, to: pager.to, total: pager.total })}</span>

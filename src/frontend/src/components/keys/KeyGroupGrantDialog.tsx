@@ -16,6 +16,7 @@ import { SectionHeading } from "@/components/ui/section";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { KeyGroupFlow } from "@/components/keys/KeyGroupFlow";
 import { DeviceFilterBar, DeviceFilterFooter, useDeviceFilter } from "@/components/keys/DeviceFilter";
+import { GroupSearchBox, GroupSearchFooter, useGroupSearch } from "@/components/groups/GroupSearch";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { accountChoices } from "@/lib/groups";
@@ -50,6 +51,7 @@ export function KeyGroupGrantDialog({
     const [some, setSome] = useState<string[] | null>(null);
     const [saving, setSaving] = useState(false);
     const filter = useDeviceFilter(devices, { device: (d) => d });
+    const groupSearch = useGroupSearch(ordered, groupId);
 
     const targetIds = kind === "group" ? (ordered.find((g) => g.id === groupId)?.tunnel_ids ?? []) : deviceId !== null ? [deviceId] : [];
     const choices = accountChoices(targetIds, devices);
@@ -121,8 +123,9 @@ export function KeyGroupGrantDialog({
                     ) : (
                         <fieldset className="space-y-2">
                             <legend className="sr-only">{t("groups.grant.toGroup")}</legend>
+                            <GroupSearchBox s={groupSearch} />
                             <div className="grid gap-1.5 p-px sm:grid-cols-2">
-                                {ordered.map((g) => (
+                                {groupSearch.visible.map((g) => (
                                     <label key={g.id} className={choice}>
                                         <input type="radio" name="grant-group" checked={groupId === g.id} onChange={() => setGroupId(g.id)} className="size-4 shrink-0 accent-primary" />
                                         <FolderTree size={14} className="shrink-0 text-muted-foreground" aria-hidden />
@@ -131,6 +134,7 @@ export function KeyGroupGrantDialog({
                                     </label>
                                 ))}
                             </div>
+                            <GroupSearchFooter s={groupSearch} />
                             <p className="text-xs text-muted-foreground">{t("groups.grant.groupLater")}</p>
                         </fieldset>
                     )
