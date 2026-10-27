@@ -1,15 +1,25 @@
 "use client";
 
 /**
- * 拓撲樹：Telepy → 裝置 → 區網主機。樹本身窄（手機、或旁邊開著主機面板）時主機縮排在裝置下方，夠寬（容器
+ * 拓撲樹：Telepy →（我的通道群組）→ 裝置 → 區網主機。群組是可收合的資料夾節點；裝置收起來時是一行摘要（狀態、
+ * 各種主機幾台、掃描進度），展開才是裝置卡 + 主機；裝置與主機在樹裡分頁（「‹ 1–10 / 40 ›」掛在最後一個分支），
+ * 機器再多樹也不會長到好幾個畫面。樹本身窄（手機、或旁邊開著主機面板）時主機縮排在裝置下方，夠寬（容器
  * ≥ 48rem）時排在裝置右邊；連線用細線畫，線上的裝置是實線、離線是虛線。選到的主機用 primary 框起來。
- * The topology tree: Telepy → devices → LAN hosts. Hosts sit under the device while the tree itself is
- * narrow (phones, or beside the host panel) and to its right once it is ≥ 48rem wide (container query);
- * links are hairlines, solid for online devices and dashed for offline ones. The selected host is outlined.
+ * The topology tree: Telepy → (my tunnel groups) → devices → LAN hosts. Groups are collapsible folder nodes; a
+ * collapsed device is a one-line summary (status, how many hosts of each kind, scan progress) and expands into the
+ * device card + hosts; devices and hosts page inside the tree ("‹ 1–10 of 40 ›" on the last branch), so many
+ * machines never make it screens long. Hosts sit under the device while the tree itself is narrow (phones, or
+ * beside the host panel) and to its right once it is ≥ 48rem wide (container query); links are hairlines, solid
+ * for online devices and dashed for offline ones. The selected host is outlined.
  */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef } from "react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
-import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronDown } from "lucide-react";
+import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Loader2, ChevronRight, Folder, FolderOpen } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { useSectionPages, type PaginationState } from "@/hooks/usePagination";
+import { pageSlice } from "@/lib/pagination";
+import { kindCounts } from "@/lib/topology";
+import type { MatrixSection } from "@/lib/deviceMatrix";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
@@ -17,6 +27,16 @@ import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 import { hasSsh, hostKind, hostName, shortVendor, scanPercent, scanRunning, type HostKind } from "@/lib/lanConnect";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
+
+const KIND_ORDER: readonly HostKind[] = ["ssh", "desktop", "files", "web", "other"];
+
+const KIND_LABEL: Record<HostKind, TranslationKey> = {
+    ssh: "network.kind.ssh",
+    desktop: "network.kind.desktop",
+    files: "network.kind.files",
+    web: "network.kind.web",
+    other: "network.kind.other",
+};
 
 const KIND_ICON: Record<HostKind, React.ReactNode> = {
     ssh: <Terminal size={16} />,
@@ -51,9 +71,6 @@ export const PHASE_LABEL: Record<string, TranslationKey> = {
     failed: "network.phase.failed",
 };
 
-/** 一開始最多列出幾台主機（其餘收起來）。/ Hosts shown before "show more". */
-const HOSTS_COLLAPSED = 8;
-
 /**
  * 樹的一個分支：左邊一條縱線（最後一個子節點只畫到橫線為止）+ 一條橫線接到內容。`tickTop` = 橫線離分支頂端的距離。
  * One branch: a vertical trunk (the last child stops at its tick) plus a tick into the content.
@@ -68,12 +85,12 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
     children: React.ReactNode;
 }) {
     return (
-        <li className="relative pl-5 pt-2 @md:pl-7">
+        <li className="relative pl-4 pt-2 @md:pl-7">
             <span aria-hidden className={cn("absolute left-0 top-0 w-px bg-border", first && hideFirstStubOnWide && "@3xl:hidden")} style={{ height: tickTop }} />
             {!last && <span aria-hidden className="absolute left-0 bottom-0 w-px bg-border" style={{ top: tickTop }} />}
             <span
                 aria-hidden
-                className={cn("absolute left-0 w-4 border-t @md:w-6", solid ? "border-success/60" : "border-dashed border-muted-foreground/40")}
+                className={cn("absolute left-0 w-3 border-t @md:w-6", solid ? "border-success/60" : "border-dashed border-muted-foreground/40")}
                 style={{ top: tickTop }}
             />
             {children}
@@ -150,12 +167,13 @@ function ScanProgress({ tn }: { tn: TopologyTunnel }) {
     );
 }
 
-function DeviceCard({ tn, online, onScan, onAdd, focused }: {
+function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
     tn: TopologyTunnel;
     online: boolean;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
     focused: boolean;
+    onCollapse: () => void;
 }) {
     const { t } = useI18n();
     const running = scanRunning(tn.scan);
@@ -183,6 +201,9 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
                 {permission && tn.permission !== "owner" && (
                     <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
                 )}
+                <Button variant="ghost" size="icon-sm" className="-mr-1 -mt-1 shrink-0 text-muted-foreground" onClick={onCollapse} aria-expanded aria-label={t("network.collapseDevice", { name: tn.name })} title={t("network.collapseDevice", { name: tn.name })}>
+                    <ChevronRight className="rotate-90" />
+                </Button>
             </div>
             {(tn.can_scan || tn.can_edit) && (
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -203,50 +224,124 @@ function DeviceCard({ tn, online, onScan, onAdd, focused }: {
     );
 }
 
-function DeviceBranch({ tn, online, last, first, focused, selectedHostId, onOpenHost, onScan, onAdd }: {
+/** 收起來時的主機摘要：各種主機幾台（圖示 + 數字，滑過看種類）。/ The collapsed summary: hosts per kind (icon + count, hover for the kind). */
+function KindSummary({ hosts }: { hosts: LanHost[] }) {
+    const { t } = useI18n();
+    if (hosts.length === 0) return <span className="text-xs text-muted-foreground">{t("network.noHostsShort")}</span>;
+    return (
+        <span className="flex flex-wrap items-center justify-end gap-1">
+            {kindCounts(hosts, hostKind, KIND_ORDER).map(({ kind, count }) => (
+                <span
+                    key={kind}
+                    title={t("network.kindCount", { count, kind: t(KIND_LABEL[kind]) })}
+                    className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-px text-xs tabular-nums ring-1 ring-inset [&_svg]:size-3", KIND_TONE[kind])}
+                >
+                    {KIND_ICON[kind]}
+                    {count}
+                </span>
+            ))}
+        </span>
+    );
+}
+
+/** 收起來的裝置：一行（展開箭頭、狀態、名稱、權限、主機摘要 / 掃描進度）。/ A collapsed device: one line. */
+function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boolean; onExpand: () => void }) {
+    const { t } = useI18n();
+    const permission = PERMISSION_LABEL[tn.permission];
+    const running = scanRunning(tn.scan);
+    const pct = running ? scanPercent(tn.scan!) : null;
+    return (
+        <button
+            type="button"
+            onClick={onExpand}
+            aria-expanded={false}
+            className="flex w-full min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 rounded-xl border border-border bg-card px-2.5 py-2 text-left shadow-card transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+            <ChevronRight size={16} className="shrink-0 text-muted-foreground" aria-hidden />
+            <span className={cn("relative grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
+                <Router size={14} />
+                <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
+            </span>
+            {/* 名稱至少留一段寬度；摘要放不下就換到下一行（手機）。/ The name keeps a minimum width; the summary wraps below when it doesn't fit (phones). */}
+            <span className="min-w-[7rem] flex-1">
+                <span className="block truncate text-sm text-foreground" title={tn.name}>{tn.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                    {online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}
+                    {permission && tn.permission !== "owner" && ` · ${t(permission)}`}
+                </span>
+            </span>
+            {running ? (
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-primary">
+                    <Loader2 size={12} className="animate-spin" />
+                    {pct !== null ? `${pct}%` : t("network.scanning")}
+                </span>
+            ) : (
+                <span className="ml-auto">
+                    <KindSummary hosts={tn.hosts} />
+                </span>
+            )}
+        </button>
+    );
+}
+
+function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, selectedHostId, hostPager, onOpenHost, onScan, onAdd }: {
     tn: TopologyTunnel;
     online: boolean;
     last: boolean;
     first: boolean;
+    expanded: boolean;
+    onToggle: () => void;
     focused: boolean;
     selectedHostId: number | null;
+    hostPager: PaginationState;
     onOpenHost: (h: LanHost) => void;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
 }) {
     const { t } = useI18n();
-    const [expanded, setExpanded] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (focused) ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, [focused]);
-    // 選到的主機就算在收合範圍外也要看得到。/ Keep the selected host visible even when collapsed.
-    const selectedHidden = tn.hosts.findIndex((h) => h.id === selectedHostId) >= HOSTS_COLLAPSED;
-    const hosts = expanded || selectedHidden ? tn.hosts : tn.hosts.slice(0, HOSTS_COLLAPSED);
-    const hidden = tn.hosts.length - hosts.length;
+    // 選到的主機在別頁時，跳到那一頁。/ Jump to the page holding the selected host.
+    const selectedAt = tn.hosts.findIndex((h) => h.id === selectedHostId);
+    const { page, size, setPage } = hostPager;
+    useEffect(() => {
+        if (selectedAt >= 0 && Math.floor(selectedAt / size) + 1 !== page) setPage(Math.floor(selectedAt / size) + 1);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedAt, size]);
+    if (!expanded) {
+        return (
+            <Branch last={last} first={first} tickTop={26} solid={online}>
+                <div ref={ref}>
+                    <DeviceRow tn={tn} online={online} onExpand={onToggle} />
+                </div>
+            </Branch>
+        );
+    }
+    const hosts = pageSlice(tn.hosts, hostPager.page, hostPager.size);
+    const paged = tn.hosts.length > hostPager.size;
     return (
         <Branch last={last} first={first} tickTop={40} solid={online}>
             <div ref={ref} className="flex flex-col @3xl:flex-row @3xl:items-start">
-                <DeviceCard tn={tn} online={online} onScan={onScan} onAdd={onAdd} focused={focused} />
+                <DeviceCard tn={tn} online={online} onScan={onScan} onAdd={onAdd} focused={focused} onCollapse={onToggle} />
                 {/* 裝置 → 主機的橫線（只在寬螢幕）。/ Device → hosts connector on wide screens. */}
                 <span aria-hidden className={cn("mt-8 hidden w-6 shrink-0 border-t @3xl:block", online ? "border-success/60" : "border-dashed border-muted-foreground/40")} />
                 {tn.hosts.length > 0 ? (
-                    <ul className="ml-5 @3xl:ml-0">
+                    <ul className="ml-2.5 @md:ml-5 @3xl:ml-0">
                         {hosts.map((h, i) => (
-                            <Branch key={h.id} last={i === hosts.length - 1 && hidden === 0} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
+                            <Branch key={h.id} last={i === hosts.length - 1 && !paged} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
                                 <HostChip host={h} selected={h.id === selectedHostId} onOpen={onOpenHost} />
                             </Branch>
                         ))}
-                        {hidden > 0 && (
-                            <Branch last first={false} tickTop={24} solid={false}>
-                                <button type="button" onClick={() => setExpanded(true)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-muted">
-                                    <ChevronDown size={14} /> {t("network.showMore", { count: hidden })}
-                                </button>
+                        {paged && (
+                            <Branch last first={false} tickTop={20} solid={false}>
+                                <Pagination compact pager={hostPager} anchor={ref} />
                             </Branch>
                         )}
                     </ul>
                 ) : (
-                    <div className="ml-5 mt-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground @3xl:ml-0 @3xl:mt-3 @3xl:w-80">
+                    <div className="ml-2.5 mt-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-xs text-muted-foreground @md:ml-5 @3xl:ml-0 @3xl:mt-3 @3xl:w-80">
                         {tn.can_scan ? t("network.noHostsScan") : tn.can_edit ? t("network.noHostsAdd") : t("network.noHostsView")}
                     </div>
                 )}
@@ -255,8 +350,59 @@ function DeviceBranch({ tn, online, last, first, focused, selectedHostId, onOpen
     );
 }
 
-export function TopologyTree({ tunnels, isOnline, focusTunnel, selectedHostId = null, onOpenHost, onScan, onAdd }: {
+/** 資料夾節點（我的通道群組）。/ A folder node (one of my tunnel groups). */
+function FolderNode({ sec, collapsed, onToggle, online, hosts, filtering }: {
+    sec: MatrixSection<TopologyTunnel>;
+    collapsed: boolean;
+    onToggle: () => void;
+    online: number;
+    hosts: number;
+    filtering: boolean;
+}) {
+    const { t } = useI18n();
+    const name = sec.group?.name ?? t("groups.tunnel.ungrouped");
+    const Icon = collapsed ? Folder : FolderOpen;
+    return (
+        <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? t("groups.tunnel.expand", { name }) : t("groups.tunnel.collapse", { name })}
+            className="flex min-w-0 max-w-full items-start gap-2 rounded-lg py-1.5 pl-1 pr-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+            <ChevronRight size={16} className={cn("mt-0.5 shrink-0 text-muted-foreground transition-transform", !collapsed && "rotate-90")} aria-hidden />
+            <Icon size={17} className={cn("mt-0.5 shrink-0", sec.group ? "text-foreground/70" : "text-muted-foreground")} aria-hidden />
+            {/* 名稱優先；數量放不下就換到下一行。/ The name first; the counts wrap to the next line when they don't fit. */}
+            <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            <span className={cn("min-w-0 max-w-full truncate text-[0.9375rem]", sec.group ? "text-foreground" : "text-muted-foreground")} title={name}>{name}</span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+                {filtering ? t("groups.tunnel.matches", { shown: sec.items.length, total: sec.total }) : t("network.folderCount", { count: sec.total })}
+                {" · "}
+                {t("groups.tunnel.online", { count: online })}
+                {" · "}
+                {t("network.folderHosts", { count: hosts })}
+            </span>
+            </span>
+        </button>
+    );
+}
+
+export interface TopologyExpansion {
+    isExpanded: (id: number) => boolean;
+    toggle: (id: number) => void;
+    isFolderCollapsed: (key: string) => boolean;
+    toggleFolder: (key: string) => void;
+}
+
+export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion, isOnline, focusTunnel, selectedHostId = null, onOpenHost, onScan, onAdd }: {
+    /** 篩選後的裝置（沒分段時用）。/ The filtered devices (used without sections). */
     tunnels: TopologyTunnel[];
+    /** 依群組分段（null = 不分段）。/ Group sections (null = no sections). */
+    sections: MatrixSection<TopologyTunnel>[] | null;
+    filtering: boolean;
+    /** 搜尋 / 篩選一變就回第 1 頁。/ Back to page 1 when the search / filter changes. */
+    pageKey: string;
+    expansion: TopologyExpansion;
     isOnline: (tn: TopologyTunnel) => boolean;
     focusTunnel: string | null;
     selectedHostId?: number | null;
@@ -265,6 +411,42 @@ export function TopologyTree({ tunnels, isOnline, focusTunnel, selectedHostId = 
     onAdd: (tn: TopologyTunnel) => void;
 }) {
     const { t } = useI18n();
+    // 裝置在每個資料夾（或整棵樹）裡分頁；主機在每台裝置裡分頁。/ Devices page per folder (or the whole tree); hosts per device.
+    const devicePages = useSectionPages({ storageKey: "telepy.networkPageSize", resetKey: pageKey });
+    const hostPages = useSectionPages({ storageKey: "telepy.networkHostsPageSize", resetKey: pageKey });
+
+    const deviceList = (list: TopologyTunnel[], key: string) => {
+        const pager = devicePages.pager(key, list.length);
+        const items = pageSlice(list, pager.page, pager.size);
+        const paged = list.length > pager.size;
+        return (
+            <>
+                {items.map((tn, i) => (
+                    <DeviceBranch
+                        key={tn.id}
+                        tn={tn}
+                        online={isOnline(tn)}
+                        first={i === 0}
+                        last={i === items.length - 1 && !paged}
+                        expanded={filtering || expansion.isExpanded(tn.id)}
+                        onToggle={() => expansion.toggle(tn.id)}
+                        focused={focusTunnel === String(tn.id)}
+                        selectedHostId={selectedHostId}
+                        hostPager={hostPages.pager(String(tn.id), tn.hosts.length)}
+                        onOpenHost={onOpenHost}
+                        onScan={onScan}
+                        onAdd={onAdd}
+                    />
+                ))}
+                {paged && (
+                    <Branch last first={false} tickTop={20} solid={false}>
+                        <Pagination compact pager={pager} />
+                    </Branch>
+                )}
+            </>
+        );
+    };
+
     return (
         // 版面依「樹自己的寬度」切換（旁邊開著主機面板時會窄）。/ Layout follows the tree's own width (narrower beside the host panel).
         <div className="@container overflow-x-auto rounded-xl border border-border bg-card p-4 shadow-card sm:p-6">
@@ -277,21 +459,27 @@ export function TopologyTree({ tunnels, isOnline, focusTunnel, selectedHostId = 
                     <p className="text-xs text-muted-foreground">{t("network.serverNode")}</p>
                 </div>
             </div>
-            <ul className="ml-5">
-                {tunnels.map((tn, i) => (
-                    <DeviceBranch
-                        key={tn.id}
-                        tn={tn}
-                        online={isOnline(tn)}
-                        first={i === 0}
-                        last={i === tunnels.length - 1}
-                        focused={focusTunnel === String(tn.id)}
-                        selectedHostId={selectedHostId}
-                        onOpenHost={onOpenHost}
-                        onScan={onScan}
-                        onAdd={onAdd}
-                    />
-                ))}
+            {/* 窄的時候每層縮排小一點（多了資料夾這層，手機上主機才放得下）。/ Narrow trees indent less per level (the folder level adds one). */}
+            <ul className="ml-2.5 @md:ml-5">
+                {sections
+                    ? sections.map((sec, i) => {
+                          const collapsed = !filtering && expansion.isFolderCollapsed(sec.key);
+                          const members = sec.items;
+                          return (
+                              <Branch key={sec.key} first={i === 0} last={i === sections.length - 1} tickTop={22} solid={members.some(isOnline)}>
+                                  <FolderNode
+                                      sec={sec}
+                                      collapsed={collapsed}
+                                      onToggle={() => expansion.toggleFolder(sec.key)}
+                                      online={members.filter(isOnline).length}
+                                      hosts={members.reduce((n, tn) => n + tn.hosts.length, 0)}
+                                      filtering={filtering}
+                                  />
+                                  {!collapsed && <ul className="ml-2.5 @md:ml-5">{deviceList(members, sec.key)}</ul>}
+                              </Branch>
+                          );
+                      })
+                    : deviceList(tunnels, "all")}
             </ul>
         </div>
     );

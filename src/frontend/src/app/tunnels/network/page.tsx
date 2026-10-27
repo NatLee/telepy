@@ -9,11 +9,12 @@
  */
 import React, { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Waypoints, RefreshCw, Search, Router, Server, Terminal } from "lucide-react";
+import { Waypoints, RefreshCw, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
+import { Segmented } from "@/components/ui/segmented";
 import { TopologyTree } from "@/components/network/TopologyTree";
 import { HostPanel, type OpenTerminalRequest } from "@/components/network/HostPanel";
 import { DOCK_BAR, DOCK_GAP, DOCK_HEIGHT, TerminalDock } from "@/components/network/TerminalDock";
@@ -21,6 +22,12 @@ import { ScanDialog } from "@/components/network/ScanDialog";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
 import { useNetworkPage } from "@/hooks/useNetworkPage";
 import { useLanTerminals } from "@/hooks/useLanTerminals";
+import { useTopologyExpansion } from "@/hooks/useTopologyExpansion";
+import { useTunnelGroups } from "@/hooks/useTunnelGroups";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { filterDevices, type TopologyFilter } from "@/lib/topology";
+import { hasGroupedDevice, matrixSections } from "@/lib/deviceMatrix";
+import { TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS } from "@/lib/groups";
 import { hostName } from "@/lib/lanConnect";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -77,6 +84,18 @@ function NetworkInner() {
     const dockOffset = terms.sessions.length && terms.size !== "max" ? `calc(${DOCK_BAR} + ${DOCK_HEIGHT[terms.size]} + ${DOCK_GAP} + 0.5rem)` : "0px";
     const onScan = (tn: TopologyTunnel) => setScanFor(tn.id);
     const onAdd = (tn: TopologyTunnel) => setAddFor(tn.id);
+
+    // 機器多時：篩選（全部 / 有主機的 / 在線）、依我的通道群組分成資料夾（跟通道頁的「依群組 / 單一清單」同一個選擇）、
+    // 裝置收成一行摘要（展開狀態記在 localStorage）。/ Many machines: a filter, folders by my tunnel groups (the tunnels
+    // page's grouping choice) and devices folded into one-line summaries (expansion kept in localStorage).
+    const [filter, setFilter] = useState<TopologyFilter>("all");
+    const tunnelGroups = useTunnelGroups();
+    const [grouping] = useStoredChoice(TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, "groups");
+    const expansion = useTopologyExpansion(allTunnels, focusTunnel);
+    const filtered = filterDevices(tunnels, filter, actions.isOnline);
+    const filtering = query.trim() !== "" || filter !== "all";
+    const grouped = grouping === "groups" && hasGroupedDevice(allTunnels.map((x) => x.id), tunnelGroups.groups);
+    const sections = grouped ? matrixSections(filtered.shown, allTunnels, tunnelGroups.groups, (x) => x.id, filtering) : null;
 
     return (
         <div ref={pageRef} className="flex min-h-[calc(100vh-8rem)] flex-col animate-fade-in-up" style={{ "--dock-h": dockOffset, paddingBottom: dockOffset } as React.CSSProperties}>
@@ -141,10 +160,46 @@ function NetworkInner() {
 
                     {stats.hosts === 0 && <Callout tone="tip">{t("network.firstScanTip")}</Callout>}
 
-                    {tunnels.length === 0 ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Segmented
+                            size="sm"
+                            value={filter}
+                            onChange={setFilter}
+                            aria-label={t("network.filterAria")}
+                            options={[
+                                { value: "all", label: `${t("network.filter.all")} (${filtered.counts.all})` },
+                                { value: "hosts", label: `${t("network.filter.hosts")} (${filtered.counts.hosts})` },
+                                { value: "online", label: `${t("network.filter.online")} (${filtered.counts.online})` },
+                            ]}
+                        />
+                        {!filtering && (
+                            <span className="ml-auto flex items-center gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => expansion.expandAll(filtered.shown.filter((x) => x.hosts.length > 0).map((x) => x.id))}>
+                                    <ChevronsUpDown /> {t("network.expandAll")}
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={expansion.collapseAll} disabled={!expansion.anyExpanded}>
+                                    <ChevronsDownUp /> {t("network.collapseAll")}
+                                </Button>
+                            </span>
+                        )}
+                    </div>
+
+                    {filtered.shown.length === 0 ? (
                         <p className="py-8 text-center text-sm text-muted-foreground">{t("network.noMatch", { query })}</p>
                     ) : (
-                        <TopologyTree tunnels={tunnels} isOnline={actions.isOnline} focusTunnel={focusTunnel} selectedHostId={host?.id ?? null} onOpenHost={onOpenHost} onScan={onScan} onAdd={onAdd} />
+                        <TopologyTree
+                            tunnels={filtered.shown}
+                            sections={sections}
+                            filtering={filtering}
+                            pageKey={`${query}|${filter}|${grouped}`}
+                            expansion={expansion}
+                            isOnline={actions.isOnline}
+                            focusTunnel={focusTunnel}
+                            selectedHostId={host?.id ?? null}
+                            onOpenHost={onOpenHost}
+                            onScan={onScan}
+                            onAdd={onAdd}
+                        />
                     )}
 
                     <p className="text-xs text-muted-foreground">{t("network.howItWorks")}</p>
