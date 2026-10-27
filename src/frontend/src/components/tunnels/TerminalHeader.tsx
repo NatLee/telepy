@@ -109,56 +109,66 @@ export function TerminalHeader({
     return (
         <Card className="shrink-0 mb-2 md:mb-4 rounded-lg overflow-hidden border-border/50">
             <div className={`transition-all ${headerExpanded ? 'p-3 md:p-4' : 'p-2 md:p-4'}`}>
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center justify-between gap-3 w-full md:w-auto">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-primary/10 rounded-md">
-                                <TerminalIcon className="text-primary" size={18} />
-                            </div>
-                            <h1 className="flex min-w-0 items-center text-sm text-foreground md:text-base">
-                                <span className="shrink-0">{t("common.terminal")}</span>
-                                <Badge variant="secondary" className="ml-2 max-w-[10rem] truncate font-mono text-[0.6875rem] md:max-w-[16rem] md:text-xs" title={tunnelName ?? undefined}>{tunnelName ?? (serverId || "").slice(0, 8)}</Badge>
-                            </h1>
-
-                            {/* Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見 */}
-                            <div className="md:hidden">
-                                <TerminalLatencyBadge
-                                    youToServerMs={youToServerMs}
-                                    serverToDeviceMs={serverToDeviceMs}
-                                    connected={connected}
-                                    connecting={connecting}
-                                    compact
-                                />
-                            </div>
+                {/*
+                  標題、延遲、按鈕各自是一塊，放不下就整塊換到下一行；機器名稱可以縮短（…，完整名稱在 title），
+                  不會再被延遲或按鈕蓋住。
+                  Title, latency and actions are separate blocks that wrap to the next line as a whole when they don't
+                  fit; the machine name shortens with an ellipsis (full name in its title) instead of being covered.
+                */}
+                <div className="@container flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="flex min-w-0 flex-auto items-center gap-3">
+                        <div className="shrink-0 p-2 bg-primary/10 rounded-md">
+                            <TerminalIcon className="text-primary" size={18} />
                         </div>
-                        <div className="flex items-center gap-1 md:hidden">
-                        {onToolbox && (
-                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onToolbox} title={t("toolbox.show")} aria-label={t("toolbox.show")}>
-                                <Wrench size={16} />
+                        <h1 className="flex min-w-0 items-center gap-2 text-sm text-foreground md:text-base">
+                            {/* 標題列窄（手機、側欄展開 + 放大）時把位子讓給機器名稱，圖示已經說了是終端機。/ When the card is narrow the machine name gets the room; the icon says "terminal". */}
+                            <span className="sr-only @min-[26rem]:not-sr-only @min-[26rem]:shrink-0">{t("common.terminal")}</span>
+                            <Badge variant="secondary" className="min-w-0 shrink justify-start font-mono text-[0.6875rem] md:max-w-[16rem] md:text-xs" title={tunnelName ?? undefined}>
+                                <span className="truncate">{tunnelName ?? (serverId || "").slice(0, 8)}</span>
+                            </Badge>
+                        </h1>
+
+                        {/*
+                          Mobile: 精簡雙段延遲（總和 + 訊號格，明細走 tooltip），收合時也一直可見；桌機上標題列窄到放不下
+                          整條路徑（側欄展開 + 放大顯示）時也用這個。
+                          Compact latency (total + bars, breakdown in the tooltip) on phones, and on desktop when the card
+                          is too narrow for the full path (sidebar open + a large display size).
+                        */}
+                        <div className="ml-auto flex shrink-0 items-center gap-1 md:@min-[20rem]:hidden">
+                            <TerminalLatencyBadge
+                                youToServerMs={youToServerMs}
+                                serverToDeviceMs={serverToDeviceMs}
+                                connected={connected}
+                                connecting={connecting}
+                                compact
+                            />
+                            {onToolbox && (
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 md:hidden" onClick={onToolbox} title={t("toolbox.show")} aria-label={t("toolbox.show")}>
+                                    <Wrench size={16} />
+                                </Button>
+                            )}
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 w-8 p-0 md:hidden"
+                                onClick={() => setHeaderExpanded(!headerExpanded)}
+                            >
+                                {headerExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                             </Button>
-                        )}
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            className="md:hidden h-8 w-8 p-0"
-                            onClick={() => setHeaderExpanded(!headerExpanded)}
-                        >
-                            {headerExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </Button>
                         </div>
                     </div>
 
+                    {/* 雙段延遲：你→伺服器 / 伺服器→裝置（整條路徑約 16.5–19.3rem，依語言）。/ Full path, ~16.5–19.3rem wide by language. */}
+                    <TerminalLatencyBadge
+                        youToServerMs={youToServerMs}
+                        serverToDeviceMs={serverToDeviceMs}
+                        connected={connected}
+                        connecting={connecting}
+                        className="hidden md:@min-[20rem]:inline-flex ml-auto shrink-0"
+                    />
+
                     {/* Desktop Actions */}
-                    <div className="hidden md:flex items-center justify-end gap-3 flex-wrap">
-
-                        {/* 雙段延遲：你→伺服器 / 伺服器→裝置 */}
-                        <TerminalLatencyBadge
-                            youToServerMs={youToServerMs}
-                            serverToDeviceMs={serverToDeviceMs}
-                            connected={connected}
-                            connecting={connecting}
-                        />
-
+                    <div className="hidden md:flex ml-auto flex-wrap items-center justify-end gap-x-3 gap-y-2">
                         {lan && <LanBadge lan={lan} />}
 
                         {/* Username Switcher */}
@@ -195,111 +205,112 @@ export function TerminalHeader({
                             </button>
                         )}
 
-                        <div className="h-6 w-px bg-border mx-1"></div>
+                        {/* 檢視切換與按鈕一組換行，不會拆到一半。/ View switch and buttons wrap as one group. */}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            {/* ═══ Terminal / Browser Tabs ═══ */}
+                            <div className="flex items-center bg-muted/50 border border-border rounded-lg p-0.5 gap-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => setMainView("terminal")}
+                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${mainView === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                                    title={connecting ? t("common.connecting") : connected ? t("common.connected") : t("common.disconnected")}
+                                >
+                                    <TerminalIcon size={13} /> {t("common.terminal")}
+                                    <span className="flex h-2 w-2 ml-0.5">
+                                        <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
+                                    </span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setMainView("browser")}
+                                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                                    title={isBrowserActive ? t("terminal.sessionActive") : t("terminal.noSession")}
+                                >
+                                    <MonitorPlay size={13} /> {t("common.browser")}
+                                    {isBrowserActive && mainView !== "browser" && (
+                                        <span className="flex h-2 w-2 ml-0.5">
+                                            <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                                        </span>
+                                    )}
+                                    {isBrowserActive && mainView === "browser" && (
+                                        <span className="flex h-2 w-2 ml-0.5">
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+                                        </span>
+                                    )}
+                                    {!isBrowserActive && (
+                                        <span className="flex h-2 w-2 ml-0.5">
+                                            <span className="relative inline-flex rounded-full h-2 w-2 border-2 border-muted-foreground/50"></span>
+                                        </span>
+                                    )}
+                                </button>
+                            </div>
 
-                        {/* ═══ Terminal / Browser Tabs ═══ */}
-                        <div className="flex items-center bg-muted/50 border border-border rounded-lg p-0.5 gap-0.5">
-                            <button
-                                type="button"
-                                onClick={() => setMainView("terminal")}
-                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${mainView === "terminal" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                title={connecting ? t("common.connecting") : connected ? t("common.connected") : t("common.disconnected")}
-                            >
-                                <TerminalIcon size={13} /> {t("common.terminal")}
-                                <span className="flex h-2 w-2 ml-0.5">
-                                    <span className={`relative inline-flex rounded-full h-2 w-2 ${connecting ? 'bg-warning animate-pulse' : connected ? 'bg-success' : 'bg-destructive'}`}></span>
-                                </span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setMainView("browser")}
-                                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all relative ${mainView === "browser" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                                title={isBrowserActive ? t("terminal.sessionActive") : t("terminal.noSession")}
-                            >
-                                <MonitorPlay size={13} /> {t("common.browser")}
-                                {isBrowserActive && mainView !== "browser" && (
-                                    <span className="flex h-2 w-2 ml-0.5">
-                                        <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-success opacity-75"></span>
-                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
-                                    </span>
-                                )}
-                                {isBrowserActive && mainView === "browser" && (
-                                    <span className="flex h-2 w-2 ml-0.5">
-                                        <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
-                                    </span>
-                                )}
-                                {!isBrowserActive && (
-                                    <span className="flex h-2 w-2 ml-0.5">
-                                        <span className="relative inline-flex rounded-full h-2 w-2 border-2 border-muted-foreground/50"></span>
-                                    </span>
-                                )}
-                            </button>
-                        </div>
-
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={toggleFiles}
-                            title={filesOn ? t("terminal.hideFiles") : t("terminal.showFiles")}
-                            className={`h-8 w-8 p-0 ${filesOn ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
-                        >
-                            <FolderSync size={14} />
-                        </Button>
-                        {onToolbox && (
                             <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={onToolbox}
-                                title={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
-                                aria-label={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
-                                aria-pressed={toolboxOpen}
-                                className={`h-8 w-8 p-0 ${toolboxOpen ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                                onClick={toggleFiles}
+                                title={filesOn ? t("terminal.hideFiles") : t("terminal.showFiles")}
+                                className={`h-8 w-8 p-0 ${filesOn ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                             >
-                                <Wrench size={14} />
+                                <FolderSync size={14} />
                             </Button>
-                        )}
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={onOpenInfo}
-                            title={t("terminal.howItWorks")}
-                            aria-label={t("terminal.howItWorks")}
-                            className="h-8 w-8 p-0"
-                        >
-                            <Info size={14} />
-                        </Button>
-                        <Button variant="outline" size="sm" asChild className="h-8 text-xs gap-1.5" title={t("terminal.switchTargetHint")}>
-                            <Link href={switchHref} prefetch={false}>
-                                <Route size={14} /> {t("terminal.switchTarget")}
-                            </Link>
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={onOpenAppearance}
-                            title={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
-                            aria-label={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
-                            className="relative h-8 w-8 p-0"
-                        >
-                            <Palette size={14} />
-                            {appearanceCustomized && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary ring-2 ring-card" aria-hidden />}
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onLoadServiceKeys()}
-                            className="h-8 text-xs gap-1.5"
-                        >
-                            <KeyRound size={14} /> {t("terminal.serviceKeys")}
-                        </Button>
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => router.push("/tunnels")}
-                            className="h-8 text-xs gap-1.5"
-                        >
-                            <X size={14} /> {t("common.close")}
-                        </Button>
+                            {onToolbox && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={onToolbox}
+                                    title={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
+                                    aria-label={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
+                                    aria-pressed={toolboxOpen}
+                                    className={`h-8 w-8 p-0 ${toolboxOpen ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                                >
+                                    <Wrench size={14} />
+                                </Button>
+                            )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={onOpenInfo}
+                                title={t("terminal.howItWorks")}
+                                aria-label={t("terminal.howItWorks")}
+                                className="h-8 w-8 p-0"
+                            >
+                                <Info size={14} />
+                            </Button>
+                            <Button variant="outline" size="sm" asChild className="h-8 text-xs gap-1.5" title={t("terminal.switchTargetHint")}>
+                                <Link href={switchHref} prefetch={false}>
+                                    <Route size={14} /> {t("terminal.switchTarget")}
+                                </Link>
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={onOpenAppearance}
+                                title={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
+                                aria-label={appearanceCustomized ? t("terminal.appearanceCustomized") : t("terminal.appearance")}
+                                className="relative h-8 w-8 p-0"
+                            >
+                                <Palette size={14} />
+                                {appearanceCustomized && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary ring-2 ring-card" aria-hidden />}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onLoadServiceKeys()}
+                                className="h-8 text-xs gap-1.5"
+                            >
+                                <KeyRound size={14} /> {t("terminal.serviceKeys")}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => router.push("/tunnels")}
+                                className="h-8 text-xs gap-1.5"
+                            >
+                                <X size={14} /> {t("common.close")}
+                            </Button>
+                        </div>
                     </div>
                 </div>
 
