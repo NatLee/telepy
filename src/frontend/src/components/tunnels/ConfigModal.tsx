@@ -19,7 +19,10 @@ import { Segmented } from "@/components/ui/segmented";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { ConfigRouteMap, type ConfigPart } from "@/components/sshconfig/ConfigRouteMap";
 import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
-import { CheckRow, Step, ToolbarField } from "@/components/sshconfig/ConfigSteps";
+import { CheckRow, StepPanel, ToolbarField } from "@/components/sshconfig/ConfigSteps";
+import { StepFooter, StepTabs, type StepTab } from "@/components/ui/step-tabs";
+import { firstOpenStep, type StepState } from "@/lib/stepTabs";
+import { allDone, configDoneKey, markKeys, readConfigDone, writeConfigDone, type ConfigDone } from "@/lib/configDone";
 import { TransportInfoDialog } from "@/components/sshconfig/TransportInfoDialog";
 import { AccountChips } from "@/components/sshconfig/AccountChips";
 import { withoutPrefix } from "@/lib/aliasPrefix";
@@ -36,6 +39,7 @@ type ConfigModalProps = TunnelModalProps & {
     onBulk?: () => void;
 };
 type AccessState = TargetStatus | "missing";
+type ConfigStep = "add" | "access" | "connect";
 
 export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: ConfigModalProps) {
     const { t, tn } = useI18n();
@@ -77,7 +81,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
         switch (s) {
             case "installed": return <Chip tone="success"><Check />{t("config.access.installed")}</Chip>;
             case "pending": return <Chip tone="warning">{online === false ? t("config.access.waitingOnline") : t("config.access.pending")}</Chip>;
-            case "error": return <Chip tone="danger" className="max-w-56 truncate" title={error ?? ""}>{t("config.access.error", { error: error ?? "" })}</Chip>;
+            case "error": return <Chip tone="danger" className="h-auto max-w-full whitespace-normal [overflow-wrap:anywhere] sm:max-w-56 sm:truncate sm:whitespace-nowrap" title={error ?? ""}>{t("config.access.error", { error: error ?? "" })}</Chip>;
             default: return <Chip>{t("config.access.missing")}</Chip>;
         }
     };
@@ -90,16 +94,42 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
         : t("config.map.captionNoHost");
     const role = keysData?.tunnel.role;
 
-    return (
-        <Modal
-            isOpen={isOpen}
-            onClose={onClose}
-            title={t("config.title")}
-            description={tn("config.subtitle", { cmd: code(firstAlias ? `ssh ${firstAlias}` : "ssh") })}
-            icon={<FileCode2 />}
-            size="4xl"
-            isLoading={loading}
-            toolbar={
+    // 「我已經加好了」：每個帳號一筆，跟指令速查的清單共用。/ "I've added it", per account, shared with the command sheet.
+    const [configDone, setConfigDone] = useState<ConfigDone>(readConfigDone);
+    const doneKeys = tunnelId === null ? [] : hosts.map((h) => configDoneKey(tunnelId, h.username));
+    const addDone = allDone(configDone, doneKeys);
+    const markAdded = (done: boolean) => setConfigDone((prev) => {
+        const next = markKeys(prev, doneKeys, done);
+        writeConfigDone(next);
+        return next;
+    });
+    const pendingCount = states.filter((s) => s === "pending").length;
+    const readyCount = states.filter((s) => s === "installed").length;
+    const accessState: StepState = !keysData ? "todo" : accessDone ? "done" : keyCount === 0 ? "attention" : pendingCount > 0 ? "working" : "attention";
+    const connectState: StepState = addDone && accessDone && online ? "done" : online === false ? "attention" : "todo";
+    const steps: StepTab<ConfigStep>[] = [
+        { value: "add", label: t("config.step.add"), state: addDone ? "done" : "todo", status: addDone ? t("config.steps.addDone") : t("config.steps.addTodo") },
+        {
+            value: "access",
+            label: t("config.step.access"),
+            state: accessState,
+            status: !keysData ? t("config.access.loading") : keyCount === 0 ? t("config.steps.noKey") : t("config.steps.accessCount", { ready: readyCount, count: hosts.length }),
+        },
+        {
+            value: "connect",
+            label: t("config.step.connect"),
+            state: connectState,
+            status: connectState === "done" ? t("config.steps.connectReady") : online === false ? t("config.state.offline") : t("config.steps.connectTodo"),
+        },
+    ];
+    // 使用者點過就照他的；不然停在第一個沒做完的那步。/ The clicked step, else the first unfinished one.
+    const [picked, setPicked] = useState<{ tunnel: number | null; step: ConfigStep } | null>(null);
+    const current: ConfigStep = picked?.tunnel === tunnelId ? picked.step : (firstOpenStep(steps) ?? "add");
+    const go = (step: ConfigStep) => setPicked({ tunnel: tunnelId, step });
+
+    // 帳號與連到 Telepy 的方式：只影響要加進 config 的內容，所以放在第一步（不佔對話框固定的一列）。
+    // Accounts and how to reach Telepy only change what goes into the config, so they live in the first step.
+    const settings = (
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                     {targetUsers.length > 1 && (
                         <ToolbarField label={t("config.loginAs")}>
@@ -126,46 +156,87 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                         />
                     </ToolbarField>
                 </div>
-            }
+    );
+    const routeMap = (
+        <div className="space-y-2.5">
+            <ConfigRouteMap
+                server={data?.server ? { host: data.server.host, port: String(data.server.port) } : null}
+                hosts={hosts}
+                deviceName={deviceName}
+                reversePort={data?.reverse_port ?? null}
+                online={online}
+                active={active}
+                onActive={setActive}
+            />
+            <p className="text-center text-sm leading-relaxed text-muted-foreground">{caption}</p>
+        </div>
+    );
+    const installer = data && (
+        <>
+            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} legacyAlias={data.server.legacy_alias} aliasPrefix={{ value: data.alias_prefix ?? "", example: withoutPrefix(hosts[0]?.alias, data.alias_prefix ?? ""), onSave: savePrefix }} active={active} onActive={setActive} />
+            {onBulk && (
+                <p className="text-xs text-muted-foreground">
+                    {t("config.bulk.fromSingle")}{" "}
+                    <button type="button" onClick={onBulk} className="text-primary underline-offset-4 hover:underline">
+                        {t("config.bulk.fromSingleAction")}
+                    </button>
+                </p>
+            )}
+        </>
+    );
+    // 跑完指令後自己勾（Telepy 看不到筆電的 config）。/ Ticked by hand after running it (Telepy can't see the laptop's config).
+    const addMark = addDone ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-success/10 px-3 py-2.5 text-success ring-1 ring-inset ring-success/30">
+            <Check size={16} aria-hidden />
+            <span className="min-w-0 flex-1 text-foreground">{t("config.steps.addDoneBody")}</span>
+            <Button type="button" variant="ghost" size="sm" onClick={() => markAdded(false)}>{t("sheet.setup.configUnmark")}</Button>
+        </div>
+    ) : (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-border/70">
+            <span className="min-w-0 flex-1 text-muted-foreground">{t("config.steps.addAsk")}</span>
+            <Button type="button" size="sm" onClick={() => { markAdded(true); go("access"); }}>
+                <Check size={15} />
+                {t("sheet.setup.configMark")}
+            </Button>
+        </div>
+    );
+
+    return (
+        <Modal
+            isOpen={isOpen}
+            onClose={onClose}
+            title={t("config.title")}
+            description={tn("config.subtitle", { cmd: code(firstAlias ? `ssh ${firstAlias}` : "ssh") })}
+            icon={<FileCode2 />}
+            size="5xl"
+            isLoading={loading}
+            nav={hosts.length > 0 ? <StepTabs aria-label={t("ui.steps.aria")} tabs={steps} value={current} onChange={go} /> : undefined}
+            fixedHeight={hosts.length > 0}
+            footer={hosts.length > 0 ? <StepFooter tabs={steps} value={current} onChange={go} final={<Button type="button" onClick={onClose}>{t("common.close")}</Button>} /> : undefined}
         >
             {data && (
                 <div className="space-y-6">
-                    <div className="space-y-2.5">
-                        <ConfigRouteMap
-                            server={data.server ? { host: data.server.host, port: String(data.server.port) } : null}
-                            hosts={hosts}
-                            deviceName={deviceName}
-                            reversePort={data.reverse_port ?? null}
-                            online={online}
-                            active={active}
-                            onActive={setActive}
-                        />
-                        <p className="text-center text-sm leading-relaxed text-muted-foreground">{caption}</p>
-                    </div>
+                    {hosts.length === 0 ? (
+                        <>
+                            {settings}
+                            {routeMap}
+                            <Callout tone="warning">
+                                {role === "owner" || role === "admin"
+                                    ? t("config.noAccounts.owner", { action: t("tunnelActions.targetServerUsers") })
+                                    : t("config.noAccounts.sharee")}
+                            </Callout>
+                            {installer}
+                        </>
+                    ) : (
+                        <>
+                            <StepPanel hidden={current !== "add"} title={t("config.step.add")} hint={t("config.step.addHint")}>
+                                {settings}
+                                {routeMap}
+                                {installer}
+                                {addMark}
+                            </StepPanel>
 
-                    {hosts.length === 0 && (
-                        <Callout tone="warning">
-                            {role === "owner" || role === "admin"
-                                ? t("config.noAccounts.owner", { action: t("tunnelActions.targetServerUsers") })
-                                : t("config.noAccounts.sharee")}
-                        </Callout>
-                    )}
-
-                    <ol className="list-none">
-                        <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
-                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} legacyAlias={data.server.legacy_alias} aliasPrefix={{ value: data.alias_prefix ?? "", example: withoutPrefix(hosts[0]?.alias, data.alias_prefix ?? ""), onSave: savePrefix }} active={active} onActive={setActive} />
-                            {onBulk && (
-                                <p className="text-xs text-muted-foreground">
-                                    {t("config.bulk.fromSingle")}{" "}
-                                    <button type="button" onClick={onBulk} className="text-primary underline-offset-4 hover:underline">
-                                        {t("config.bulk.fromSingleAction")}
-                                    </button>
-                                </p>
-                            )}
-                        </Step>
-
-                        {hosts.length > 0 && (
-                            <Step n={2} done={accessDone} title={t("config.step.access")} status={accessStatus}>
+                            <StepPanel hidden={current !== "access"} title={t("config.step.access")} status={accessStatus}>
                                 {!keysData ? (
                                     <p className="flex items-center gap-2 text-muted-foreground">
                                         {deviceKeys.loading && <Loader2 size={14} className="animate-spin" aria-hidden />}
@@ -206,13 +277,10 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                                         </p>
                                     </>
                                 )}
-                            </Step>
-                        )}
+                            </StepPanel>
 
-                        {hosts.length > 0 && (
-                            <Step
-                                n={3}
-                                last
+                            <StepPanel
+                                hidden={current !== "connect"}
                                 title={t("config.step.connect")}
                                 status={online === null ? null : (
                                     <span className={cn("inline-flex items-center gap-1.5 text-xs", online ? "text-success" : "text-muted-foreground")}>
@@ -221,11 +289,15 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                                     </span>
                                 )}
                             >
+                                {connectState !== "done" && (
+                                    <Callout tone={online === false ? "warning" : "info"}>
+                                        {online === false ? t("config.connect.offline") : t("config.steps.connectFirst")}
+                                    </Callout>
+                                )}
                                 <p className="text-muted-foreground">{t("config.connect.body")}</p>
                                 <div className="space-y-2">
                                     {hosts.map((h) => <MiniCommand key={h.alias} command={`ssh ${h.alias}`} />)}
                                 </div>
-                                {online === false && <p className="text-xs text-muted-foreground">{t("config.connect.offline")}</p>}
                                 <Link
                                     href={`/tunnels/cheatsheet?tunnel=${tunnelId}`}
                                     prefetch={false}
@@ -234,9 +306,9 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
                                     {t("config.connect.more")}
                                     <ArrowRight size={14} aria-hidden />
                                 </Link>
-                            </Step>
-                        )}
-                    </ol>
+                            </StepPanel>
+                        </>
+                    )}
                 </div>
             )}
             <TransportInfoDialog

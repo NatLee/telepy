@@ -116,6 +116,38 @@ async fn cli_against_the_server() {
     assert_eq!(o.code, 0, "lan rm: {}", o.stderr);
     assert_eq!(telepy(h, &["lan", "ls", "box", "--json"]).await.stdout.trim(), "[]");
 
+    // api tokens / activity：用 token 讀自己的呼叫紀錄（上面那些 ls / exec / lan 都在裡面）；--all 不是管理員 → 說清楚。
+    // api tokens / activity: the token reads its own call log (the ls / exec / lan calls above); --all as a non-admin says why not.
+    lab.app.state.api_calls.flush().await;
+    let o = telepy(h, &["api", "activity", "--json", "--limit", "500"]).await;
+    assert_eq!(o.code, 0, "api activity: {}", o.stderr);
+    let rows: Value = serde_json::from_str(&o.stdout).unwrap_or_else(|_| panic!("api activity: {} {}", o.stdout, o.stderr));
+    let rows = rows.as_array().unwrap();
+    let has = |m: &str, route: &str| rows.iter().any(|c| c["method"] == m && c["route"] == route && c["token"]["name"] == "cli test" && c["user"]["username"] == "alice");
+    assert!(has("GET", "/api/reverse/server/dashboard"), "{rows:?}");
+    assert!(has("POST", "/api/ai/sessions/{id}/exec"), "{rows:?}");
+    assert!(has("POST", "/api/reverse/server/{id}/lan/hosts"), "{rows:?}");
+    let ids: Vec<i64> = rows.iter().map(|c| c["id"].as_i64().unwrap()).collect();
+    assert!(ids.windows(2).all(|w| w[0] > w[1]), "newest first: {ids:?}");
+    let o = telepy(h, &["api", "activity", "--api-token", "cli test", "--method", "post", "--json"]).await;
+    let posts: Value = serde_json::from_str(&o.stdout).unwrap_or_else(|_| panic!("{} {}", o.stdout, o.stderr));
+    assert!(!posts.as_array().unwrap().is_empty() && posts.as_array().unwrap().iter().all(|c| c["method"] == "POST"), "{posts}");
+    let o = telepy(h, &["api", "activity", "--limit", "3"]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.starts_with("TIME") && o.stdout.contains("cli test"), "{}", o.stdout);
+    assert_eq!(o.stdout.lines().count(), 4, "header + 3 rows: {}", o.stdout);
+    let o = telepy(h, &["api", "activity", "--since", "1h", "--status", "5xx", "--json"]).await;
+    assert_eq!((o.code, o.stdout.trim()), (0, "[]"), "{}", o.stderr);
+    let o = telepy(h, &["api", "activity", "--all"]).await;
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("Only admins can see other people's API activity"), "{}", o.stderr);
+    let o = telepy(h, &["api", "tokens"]).await;
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.starts_with("NAME") && o.stdout.contains("cli test") && o.stdout.contains("active"), "{}", o.stdout);
+    let o = telepy(h, &["api", "tokens", "--json"]).await;
+    let toks: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert!(toks[0]["calls"]["calls_24h"].as_i64().unwrap() > 0, "{toks}");
+
     // doctor 通過；撤銷 token 之後一切都失效。/ doctor passes; after a revoke everything fails.
     let o = telepy(h, &["doctor"]).await;
     assert!(o.stdout.contains("✓ sign-in: alice"), "{}", o.stdout);

@@ -145,6 +145,10 @@ pub const ROUTES: &[RouteRule] = {
     use TunnelFrom::*;
     &[
         RouteRule { methods: "GET", pattern: "/api/auth/user/profile", scope: Option::None, tunnel: None },
+        // 自己的 token 清單與呼叫紀錄（唯讀；`telepy api tokens` / `api activity`）。建立 / 撤銷仍只限網頁登入。
+        // Your own tokens and call log, read-only (`telepy api tokens` / `api activity`); create / revoke stay web-only.
+        RouteRule { methods: "GET", pattern: "/api/auth/tokens", scope: Option::None, tunnel: None },
+        RouteRule { methods: "GET", pattern: "/api/auth/tokens/calls", scope: Option::None, tunnel: None },
         // 讀：隧道、狀態、連線紀錄、帳號、ssh config、群組、區網主機、裝置身分。/ Reads.
         rule("GET", "/api/reverse/server/dashboard", READ, None),
         rule("GET", "/api/reverse/server/keys", READ, None),
@@ -352,8 +356,11 @@ mod tests {
             ("POST", "/tunnels/share/4", rule("tunnels:manage", Path(4))),
             ("DELETE", "/api/sessions/12", rule("tunnels:manage", Unrestricted)),
             // 帳號、兩步驟、token 本身、管理員設定、網頁登入：token 不能碰。/ Never reachable with a token.
+            ("GET", "/api/auth/tokens", Some(TokenRoute { scope: Option::None, tunnel: None })),
+            ("GET", "/api/auth/tokens/calls", Some(TokenRoute { scope: Option::None, tunnel: None })),
             ("POST", "/api/auth/tokens", Option::None),
-            ("GET", "/api/auth/tokens", Option::None),
+            ("DELETE", "/api/auth/tokens/3", Option::None),
+            ("GET", "/api/auth/tokens/routes", Option::None),
             ("POST", "/api/auth/mfa/totp/setup", Option::None),
             ("POST", "/api/user/settings", Option::None),
             ("GET", "/api/site/settings", Option::None),

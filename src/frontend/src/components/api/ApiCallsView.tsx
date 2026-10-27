@@ -81,7 +81,7 @@ function CallLine({ c, query, showUser }: { c: ApiCallEntry; query: string; show
 }
 
 export function ApiCallsView({ scope, tokens }: { scope: ViewScope; tokens?: ApiToken[] | null }) {
-    const { t } = useI18n();
+    const { t, tn } = useI18n();
     const { state, actions } = useApiCalls(scope);
     const { all, rows, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, tokenFilter, userFilter, users, status, method, search, filtering, dropped } = state;
     const { refresh, setTokenFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore } = actions;
@@ -222,6 +222,9 @@ export function ApiCallsView({ scope, tokens }: { scope: ViewScope; tokens?: Api
                 )}
             </div>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("apiPage.calls.footnote")}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {tn("apiPage.calls.cliHint", { cmd: <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-foreground">{all ? "telepy api activity --all" : "telepy api activity"}</code> })}
+            </p>
         </div>
     );
 }

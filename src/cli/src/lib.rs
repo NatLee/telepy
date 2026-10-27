@@ -8,6 +8,7 @@
 //! recordings, run toolbox snippets, and `doctor`. Sign in with the browser (OAuth + PKCE, loopback) or a personal
 //! API token (`--token tpt_…`, `TELEPY_TOKEN` for CI).
 
+pub mod activity;
 pub mod api;
 pub mod cast;
 pub mod creds;
@@ -84,6 +85,8 @@ pub enum Cmd {
     Browse(BrowseArgs),
     /// The LAN hosts behind a device: ls / add / rm
     Lan(LanArgs),
+    /// Your API tokens and the calls made with them: `api tokens`, `api activity [--follow]`
+    Api(ApiArgs),
     /// Check the server, the sign-in, its scopes and the local ssh
     Doctor,
 }
@@ -407,6 +410,54 @@ pub enum LanAction {
     Rm { tunnel: String, host: String },
 }
 
+#[derive(Args, Debug)]
+pub struct ApiArgs {
+    #[command(subcommand)]
+    pub action: ApiAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ApiAction {
+    /// Your API tokens: scopes, expiry, last use and calls in the last 24 hours / 7 days
+    Tokens {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Calls made with your API tokens and connected apps, newest first (the web API page's Activity tab)
+    Activity(ActivityArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ActivityArgs {
+    /// Only one token's calls: its name, id or prefix (`--token` is taken: it is the sign-in override)
+    #[arg(long = "api-token", value_name = "NAME|ID")]
+    pub api_token: Option<String>,
+    /// ok, 4xx, 5xx or error (= 4xx + 5xx)
+    #[arg(long, value_parser = |s: &str| activity::parse_status(s))]
+    pub status: Option<String>,
+    /// GET, POST, PUT, PATCH, DELETE, or MCP for tool calls
+    #[arg(long, value_parser = |s: &str| activity::parse_method(s))]
+    pub method: Option<String>,
+    /// Only calls since then: 30m, 2h, 7d, or an RFC 3339 time
+    #[arg(long)]
+    pub since: Option<String>,
+    /// How many calls (at most 1000)
+    #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..=1000))]
+    pub limit: u16,
+    /// Everyone's calls (admins only)
+    #[arg(long)]
+    pub all: bool,
+    /// Only this person's calls, by username or id (admins only; implies --all)
+    #[arg(long, value_name = "NAME|ID")]
+    pub user: Option<String>,
+    /// Keep watching and print new calls as they come (every 2 s); Ctrl+C stops
+    #[arg(long, short = 'f')]
+    pub follow: bool,
+    /// Machine-readable output (with --follow: one JSON object per line)
+    #[arg(long)]
+    pub json: bool,
+}
+
 // ---------------------------------------------------------------- entry
 
 /// 跑一次指令列；回 process 的結束碼。/ Run one command line; returns the exit code.
@@ -435,6 +486,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Cmd::Run(a) => run_snippet(&api, &a),
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
+                Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
                 Cmd::Login(_) | Cmd::Logout | Cmd::Doctor => unreachable!(),
             }
         }
@@ -1493,6 +1545,136 @@ fn lan(api: &Api, a: LanArgs) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- api tokens / activity
+
+/// 本機時區（這一刻的位移）。/ This machine's UTC offset right now.
+fn local_offset() -> chrono::FixedOffset {
+    *chrono::Local::now().offset()
+}
+
+fn api_cmd(api: &Api, a: ApiArgs) -> Result<()> {
+    match a.action {
+        ApiAction::Tokens { json: as_json } => {
+            let list = api.get("/api/auth/tokens")?.as_array().cloned().unwrap_or_default();
+            if as_json {
+                return print_json(&Value::Array(list));
+            }
+            if list.is_empty() {
+                eprintln!("No API tokens. Create one on the web app's API page.");
+                return Ok(());
+            }
+            let (n, off) = (now(), local_offset());
+            let rows: Vec<Vec<String>> = list.iter().map(|t| activity::token_row(t, n, off)).collect();
+            print!("{}", table::render(activity::TOKEN_HEADERS, &rows));
+            Ok(())
+        }
+        ApiAction::Activity(a) => api_activity(api, &a),
+    }
+}
+
+/// 管理員才能看全站：把 403 admin_only 說清楚。/ Say plainly that the admin view needs an admin.
+fn admin_only(e: anyhow::Error) -> anyhow::Error {
+    match e.downcast_ref::<api::HttpError>() {
+        Some(h) if h.status == 403 && h.body["code"] == "admin_only" => anyhow!("Only admins can see other people's API activity. Leave out --all / --user to see your own."),
+        _ => e,
+    }
+}
+
+/// 一頁一頁往前翻（`before`），直到夠 `limit` 列、比 `since` 舊、或沒有了。`skip` 的列不算數。
+/// Page back with `before` until `limit` rows, a row older than `since`, or the end. Rows `skip` hides don't count.
+fn fetch_calls(api: &Api, f: &activity::Filters, limit: usize, since: Option<i64>, skip: impl Fn(&Value) -> bool) -> Result<Vec<Value>> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut before: Option<i64> = None;
+    loop {
+        let want = (limit - out.len()).clamp(1, activity::PAGE_MAX);
+        let v = api.get(&activity::query(f, want, before)).map_err(admin_only)?;
+        let rows = v["calls"].as_array().cloned().unwrap_or_default();
+        for r in &rows {
+            if since.is_some_and(|s| activity::call_time(r).is_some_and(|t| t < s)) {
+                return Ok(out);
+            }
+            if skip(r) {
+                continue;
+            }
+            out.push(r.clone());
+            if out.len() >= limit {
+                return Ok(out);
+            }
+        }
+        match rows.last().and_then(|r| r["id"].as_i64()) {
+            Some(last) if v["has_more"].as_bool() == Some(true) => before = Some(last),
+            _ => return Ok(out),
+        }
+    }
+}
+
+fn api_activity(api: &Api, a: &ActivityArgs) -> Result<()> {
+    let mut f = activity::Filters { all: a.all || a.user.is_some(), status: a.status.clone(), method: a.method.clone(), ..Default::default() };
+    if let Some(u) = &a.user {
+        activity::user_filter(u, &mut f);
+    }
+    if let Some(t) = &a.api_token {
+        let tokens = api.get("/api/auth/tokens")?.as_array().cloned().unwrap_or_default();
+        f.token_id = Some(activity::find_token(&tokens, t).map_err(|e| anyhow!(e))?);
+    }
+    let since = a.since.as_deref().map(|s| activity::parse_since(s, now())).transpose().map_err(|e| anyhow!(e))?;
+    let show_user = f.all;
+    let off = local_offset();
+    if !a.follow {
+        let rows = fetch_calls(api, &f, a.limit as usize, since, |_| false)?;
+        if a.json {
+            return print_json(&Value::Array(rows));
+        }
+        if rows.is_empty() {
+            eprintln!("No API calls{}.", if f == (activity::Filters { all: f.all, ..Default::default() }) && since.is_none() { "" } else { " match" });
+            return Ok(());
+        }
+        let cells: Vec<Vec<String>> = rows.iter().map(|c| activity::row(c, off, show_user)).collect();
+        print!("{}", table::render(&activity::headers(show_user), &cells));
+        return Ok(());
+    }
+    // --follow：先印最近的（舊的在上，像 tail），再每 2 秒印新的；自己的輪詢不印。
+    // --follow: the recent ones first (oldest on top, like tail), then new ones every 2 s; our own polling is hidden.
+    let first = fetch_calls(api, &f, a.limit as usize, since, activity::is_log_read)?;
+    let mut last_id = first.iter().filter_map(|c| c["id"].as_i64()).max().unwrap_or(0);
+    let emit = |c: &Value| -> Result<()> {
+        if a.json {
+            println!("{}", serde_json::to_string(c)?);
+        } else {
+            println!("{}", activity::follow_line(c, off, show_user));
+        }
+        std::io::stdout().flush()?;
+        Ok(())
+    };
+    for c in first.iter().rev() {
+        emit(c)?;
+    }
+    if !a.json {
+        eprintln!("(watching for new calls every 2 s; Ctrl+C stops)");
+    }
+    loop {
+        std::thread::sleep(Duration::from_secs(2));
+        let page = match api.get(&activity::query(&f, activity::PAGE_MAX, None)) {
+            Ok(v) => v,
+            Err(e) => {
+                // 登入失效 / 權限不足就停；網路抖一下就下次再試。/ Stop on auth errors; retry on a network hiccup.
+                if e.downcast_ref::<api::HttpError>().is_some_and(|h| matches!(h.status, 401 | 403)) {
+                    return Err(admin_only(e));
+                }
+                eprintln!("(cannot reach the server: {e:#}; trying again)");
+                continue;
+            }
+        };
+        let fresh: Vec<Value> = page["calls"].as_array().cloned().unwrap_or_default().into_iter().filter(|c| c["id"].as_i64().is_some_and(|i| i > last_id)).collect();
+        if let Some(max) = fresh.iter().filter_map(|c| c["id"].as_i64()).max() {
+            last_id = max;
+        }
+        for c in fresh.iter().rev().filter(|c| !activity::is_log_read(c)) {
+            emit(c)?;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1535,6 +1717,29 @@ mod tests {
         assert!(matches!(c.command, Cmd::Browse(BrowseArgs { action: Some(BrowseAction::Type { enter: true, show: false, .. }), .. })));
         let c = Cli::try_parse_from(["telepy", "lan", "add", "box", "192.168.1.9", "--label", "nas", "--port", "2222"]).unwrap();
         assert!(matches!(c.command, Cmd::Lan(LanArgs { action: LanAction::Add { port: Some(2222), .. } })));
+    }
+
+    #[test]
+    fn api_activity_arguments() {
+        let parse = |args: &[&str]| Cli::try_parse_from([&["telepy", "api"], args].concat());
+        let c = parse(&["activity", "--api-token", "ci", "--status", "4XX", "--method", "post", "--since", "2h", "-f", "--json"]).unwrap();
+        match c.command {
+            Cmd::Api(ApiArgs { action: ApiAction::Activity(a) }) => {
+                assert_eq!((a.api_token.as_deref(), a.status.as_deref(), a.method.as_deref(), a.since.as_deref()), (Some("ci"), Some("4xx"), Some("POST"), Some("2h")));
+                assert!(a.follow && a.json && !a.all);
+                assert_eq!(a.limit, 50);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(parse(&["activity", "--status", "teapot"]).is_err());
+        assert!(parse(&["activity", "--method", "HEAD"]).is_err());
+        assert!(parse(&["activity", "--limit", "1001"]).is_err());
+        assert!(parse(&["activity", "--limit", "0"]).is_err());
+        assert!(matches!(parse(&["activity", "--all", "--user", "bob", "--limit", "1000"]).unwrap().command, Cmd::Api(ApiArgs { action: ApiAction::Activity(ActivityArgs { all: true, limit: 1000, .. }) })));
+        assert!(matches!(parse(&["tokens", "--json"]).unwrap().command, Cmd::Api(ApiArgs { action: ApiAction::Tokens { json: true } })));
+        // 全域的 --token（登入用）照舊能跟 api 一起用。/ The global sign-in --token still works with it.
+        let c = Cli::try_parse_from(["telepy", "--token", "tpt_x", "api", "activity"]).unwrap();
+        assert_eq!(c.token.as_deref(), Some("tpt_x"));
     }
 
     #[test]

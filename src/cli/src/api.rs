@@ -49,6 +49,7 @@ impl std::fmt::Display for HttpError {
             Some("token_scope") => write!(f, "\n  The token lacks this scope: create one that has it, or `telepy login <url> --scope …` again."),
             Some("token_route") => write!(f, "\n  Tokens can't do this; use the Telepy web app."),
             Some("token_tunnels") => write!(f, "\n  The token is limited to some tunnels; this needs a token without a tunnel limit."),
+            Some("admin_only") => write!(f, "\n  Only admins can see everyone's; leave out --all / --user."),
             Some("step_up_required") => write!(f, "\n  This tunnel asks you to confirm it's you in the web app; tokens can't."),
             _ => Ok(()),
         }

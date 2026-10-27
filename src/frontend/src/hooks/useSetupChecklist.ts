@@ -11,6 +11,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useDeviceKeys } from "@/hooks/useDeviceKeys";
 import type { ConnectMode } from "@/lib/forwardRecipes";
 import type { KeyTarget } from "@/types/keys";
+import { configDoneKey, markKeys, readConfigDone, writeConfigDone, type ConfigDone } from "@/lib/configDone";
 
 export type SetupStepId = "key" | "online" | "deviceKey" | "config";
 /** done / todo；working = Telepy 正在處理（等裝置寫入）；error = 寫入失敗；loading = 還在讀。 */
@@ -21,17 +22,6 @@ export interface SetupStep {
     state: SetupStepState;
 }
 
-const CONFIG_STORAGE_KEY = "telepy.cheatsheetConfigDone";
-
-function readConfigDone(): Record<string, true> | null {
-    try {
-        const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
-        const v = raw ? JSON.parse(raw) : null;
-        return v && typeof v === "object" ? v : null;
-    } catch {
-        return null;
-    }
-}
 
 interface Args {
     tunnelId: number | null;
@@ -49,19 +39,15 @@ export function useSetupChecklist({ tunnelId, username, keyCount, online, mode }
 
     // 頁面在清單載入前只顯示轉圈，所以這裡直接讀 localStorage 不會造成 hydration 不一致。
     // The page shows a spinner until its data loads, so reading localStorage up front can't cause a hydration mismatch.
-    const [configDone, setConfigDone] = useState<Record<string, true>>(() => readConfigDone() ?? {});
-    const configKey = tunnelId !== null && username ? `${tunnelId}:${username}` : null;
+    const [configDone, setConfigDone] = useState<ConfigDone>(readConfigDone);
+    const configKey = tunnelId !== null && username ? configDoneKey(tunnelId, username) : null;
 
     const markConfig = useCallback(
         (done: boolean) => {
             if (!configKey) return;
             setConfigDone((prev) => {
-                const next = { ...prev };
-                if (done) next[configKey] = true;
-                else delete next[configKey];
-                try {
-                    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(next));
-                } catch { /* 忽略 / ignore */ }
+                const next = markKeys(prev, [configKey], done);
+                writeConfigDone(next);
                 return next;
             });
         },

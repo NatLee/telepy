@@ -47,12 +47,11 @@ async fn token_calls_are_logged_and_scoped() {
     assert_eq!(app.get("/api/reverse/server/dashboard", Some(&read)).await.status, StatusCode::OK);
     assert_eq!(app.get(&format!("/api/reverse/server/keys/{a}?secret=never-stored"), Some(&read)).await.status, StatusCode::OK);
     assert_eq!(app.request(Method::DELETE, &format!("/api/reverse/server/keys/{a}"), Some(&read), None).await.status, StatusCode::FORBIDDEN);
-    assert_eq!(app.get("/api/auth/tokens", Some(&read)).await.status, StatusCode::FORBIDDEN);
-    // 用 token 讀呼叫紀錄 / 目錄：不行（token_route）。/ The log and the catalogue are web-only.
-    for p in ["/api/auth/tokens/calls", "/api/auth/tokens/routes"] {
-        let r = app.get(p, Some(&read)).await;
-        assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("token_route")), "{p}");
-    }
+    // token 讀自己的 token 清單與呼叫紀錄：可以（唯讀）；目錄、建立、撤銷仍只限網頁。/ Own list + call log: readable; the rest web-only.
+    assert_eq!(app.get("/api/auth/tokens", Some(&read)).await.status, StatusCode::OK);
+    assert_eq!(app.get("/api/auth/tokens/calls", Some(&read)).await.status, StatusCode::OK);
+    let r = app.get("/api/auth/tokens/routes", Some(&read)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("token_route")));
 
     let rows = calls(&app, &admin, "").await;
     let seen: Vec<(String, String, i64)> = rows.iter().map(|c| (c["method"].as_str().unwrap().to_string(), c["route"].as_str().unwrap().to_string(), c["status"].as_i64().unwrap())).collect();
@@ -60,7 +59,8 @@ async fn token_calls_are_logged_and_scoped() {
     assert!(seen.contains(&("GET".into(), "/api/reverse/server/dashboard".into(), 200)), "{seen:?}");
     assert!(seen.contains(&("GET".into(), "/api/reverse/server/keys/{id}".into(), 200)), "route templates: {seen:?}");
     assert!(seen.contains(&("DELETE".into(), "/api/reverse/server/keys/{id}".into(), 403)), "{seen:?}");
-    assert!(seen.contains(&("GET".into(), "/api/auth/tokens".into(), 403)), "{seen:?}");
+    assert!(seen.contains(&("GET".into(), "/api/auth/tokens".into(), 200)), "{seen:?}");
+    assert!(seen.contains(&("GET".into(), "/api/auth/tokens/routes".into(), 403)), "{seen:?}");
     assert!(!serde_json::to_string(&rows).unwrap().contains("never-stored"), "no query strings");
     let row = rows.iter().find(|c| c["status"] == 200 && c["route"] == "/api/reverse/server/keys/{id}").unwrap();
     assert_eq!((row["token"]["id"].as_i64(), row["token"]["name"].as_str(), row["kind"].as_str()), (Some(read_id), Some("ci read"), Some("rest")));
@@ -68,8 +68,8 @@ async fn token_calls_are_logged_and_scoped() {
     assert_eq!(row["user"]["username"], "admin");
 
     // 篩選：狀態、方法、token、往前翻頁。/ Filters and paging.
-    assert_eq!(calls(&app, &admin, "?status=4xx").await.len(), 4);
-    assert_eq!(calls(&app, &admin, "?status=ok").await.len(), 2);
+    assert_eq!(calls(&app, &admin, "?status=4xx").await.len(), 2);
+    assert_eq!(calls(&app, &admin, "?status=ok").await.len(), 4);
     assert_eq!(calls(&app, &admin, "?method=delete").await.len(), 1);
     assert_eq!(calls(&app, &admin, &format!("?token_id={read_id}")).await.len(), 6);
     let page = calls(&app, &admin, "?limit=2").await;
@@ -81,7 +81,7 @@ async fn token_calls_are_logged_and_scoped() {
     // token 清單的摘要。/ The per-token summary in the list.
     let list = app.get("/api/auth/tokens", Some(&admin)).await;
     let t = list.json.as_array().unwrap().iter().find(|t| t["id"] == read_id).unwrap().clone();
-    assert_eq!((t["call_count"].as_i64(), t["calls"]["calls_24h"].as_i64(), t["calls"]["errors_7d"].as_i64()), (Some(6), Some(6), Some(4)), "{t}");
+    assert_eq!((t["call_count"].as_i64(), t["calls"]["calls_24h"].as_i64(), t["calls"]["errors_7d"].as_i64()), (Some(6), Some(6), Some(2)), "{t}");
     assert!(t["calls"]["last_call_at"].is_string());
 
     // 範圍：一般人只看自己的；all 只給管理員；user_id 要搭 all。/ Scope rules.
@@ -106,6 +106,28 @@ async fn token_calls_are_logged_and_scoped() {
     let probe = mine.iter().find(|c| c["route"] == "/api/reverse/server/keys/{id}").unwrap();
     assert_eq!(probe["status"], 404);
     assert!(probe["tunnel"].is_null() || probe["tunnel"]["name"].is_null(), "{probe}");
+
+    // bob 用 token 讀自己的紀錄：看得到自己的；scope=all / 別人的 user 不行；管理員的 token 可以看全部、可以用帳號名找人。
+    // bob's token reads his own calls; scope=all and someone else's user are refused; an admin's token may, by username too.
+    app.state.api_calls.flush().await;
+    let r = app.get("/api/auth/tokens/calls", Some(&bob_tok)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let own = r.json["calls"].as_array().unwrap();
+    assert!(!own.is_empty() && own.iter().all(|c| c["user"]["username"] == "bob"), "{own:?}");
+    let r = app.get("/api/auth/tokens/calls?scope=all", Some(&bob_tok)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")));
+    assert_eq!(app.get("/api/auth/tokens/calls?username=admin", Some(&bob_tok)).await.status, StatusCode::BAD_REQUEST);
+    let r = app.get("/api/auth/tokens", Some(&bob_tok)).await;
+    assert_eq!(r.json.as_array().map(|a| a.len()), Some(1), "only bob's own token: {}", r.text);
+    app.state.api_calls.flush().await;
+    let r = app.get("/api/auth/tokens/calls?scope=all&username=bob", Some(&read)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rows = r.json["calls"].as_array().unwrap();
+    assert!(!rows.is_empty() && rows.iter().all(|c| c["user"]["username"] == "bob"), "{rows:?}");
+    assert_eq!(app.get("/api/auth/tokens/calls?scope=all&username=nobody", Some(&read)).await.status, StatusCode::BAD_REQUEST);
+    // 建立 / 撤銷仍然只限網頁登入。/ Create and revoke stay web-only.
+    let r = app.post("/api/auth/tokens", Some(&bob_tok), json!({"name": "x", "scopes": ["tunnels:read"], "expires_at": in_days(1)})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("token_route")));
 
     // 目錄：跟白名單一樣。/ The catalogue matches the allow-list.
     let r = app.get("/api/auth/tokens/routes", Some(&admin)).await;

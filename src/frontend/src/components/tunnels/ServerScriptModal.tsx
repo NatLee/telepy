@@ -2,11 +2,9 @@
 
 /**
  * 目標主機連線腳本:六種腳本(ssh / PowerShell / autossh / systemd / docker run / compose)+ 一次性 curl 網址。
- * 分頁放在對話框的工具列(固定、不捲動):以前放在內容區的 flex 欄裡,切到有額外欄位的分頁(systemd 服務要選
- * 帳號)時內容變高、分頁列被擠成一條線,看起來像被蓋掉。
- * Target-host connection script dialog: six script kinds plus a one-time curl URL. The tabs live in the
- * dialog's fixed toolbar: inside the scrolling body's flex column they got squashed to a sliver as soon
- * as a tab added fields (the systemd tab's account picker), which looked like something covering them.
+ * 六種腳本是左側分頁(Modal 的 `nav`,每種附一行說明;不跟著內容捲,手機上是內容上方的一列)。
+ * Target-host connection script dialog: six script kinds plus a one-time curl URL. The kinds are side tabs (Modal's
+ * `nav`, a one-line hint each; never scrolled with the body, a row above it on phones).
  */
 import React from "react";
 import { Modal } from "@/components/ui/Modal";
@@ -17,7 +15,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Terminal, Monitor, RefreshCw, Cog, Container, FileCode, Link2, Loader2, Rocket, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { Segmented } from "@/components/ui/segmented";
+import { NavTabs } from "@/components/ui/nav-tabs";
 
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
@@ -43,6 +41,16 @@ const TAB_DESCRIPTIONS: Record<string, TranslationKey> = {
     "autossh-service": "scripts.descAutosshService",
     "docker-run": "scripts.descDockerRun",
     "docker-compose": "scripts.descDockerCompose",
+};
+
+/** 左側每種腳本下面的一行（短的；長的說明在內容上方）。/ The one-liner under each kind in the rail. */
+const TAB_HINTS: Record<string, TranslationKey> = {
+    ssh: "scripts.short.ssh",
+    powershell: "scripts.short.powershell",
+    autossh: "scripts.short.autossh",
+    "autossh-service": "scripts.short.autosshService",
+    "docker-run": "scripts.short.dockerRun",
+    "docker-compose": "scripts.short.dockerCompose",
 };
 
 const TAB_CURL_HELPERS: Record<string, TranslationKey> = {
@@ -90,14 +98,14 @@ export function ServerScriptModal({ isOpen, onClose, tunnelId, sshPort: defaultS
             description={tn("scripts.banner", { onTargetServer: <strong>{t("scripts.bannerOnTarget")}</strong> })}
             icon={<Rocket />}
             size="5xl"
+            fixedHeight
             isLoading={isInitialLoading}
-            toolbar={
-                <Segmented
-                    kind="tabs"
+            nav={
+                <NavTabs
                     aria-label={t("scripts.tabsAria")}
                     value={activeTab}
                     onChange={setActiveTab}
-                    options={TABS.map((tab) => ({ value: tab.id, label: tab.label, icon: <tab.icon size={14} /> }))}
+                    tabs={TABS.map((tab) => ({ value: tab.id, label: tab.label, icon: <tab.icon />, hint: t(TAB_HINTS[tab.id]) }))}
                 />
             }
         >

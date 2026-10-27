@@ -1014,6 +1014,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_key_group", "labels", "text NOT NULL DEFAULT '[]'"),
     // 個人 API token 被呼叫了幾次（呼叫紀錄只留 90 天，這個一直累加）。/ Calls made with a token (the log keeps 90 days; this keeps counting).
     ("telepy_api_token", "call_count", "integer NOT NULL DEFAULT 0"),
+    // 登入頁的樣子（standard = 產品介紹；discreet = 只寫 Telepy 的低調畫面）與低調畫面上的一句話（空白 = 內建的句子）。
+    // How the sign-in pages look (standard = product highlights; discreet = a plain "Telepy" page) and the discreet page's line (blank = built-in).
+    ("site_settings_sitesettings", "signin_page_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    ("site_settings_sitesettings", "signin_oauth_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    ("site_settings_sitesettings", "signin_page_message", "varchar(200) NOT NULL DEFAULT ''"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

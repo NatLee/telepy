@@ -20,6 +20,8 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+# 本機時區的時間（`api activity`）。/ Local times for `api activity`.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
