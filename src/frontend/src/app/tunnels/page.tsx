@@ -86,11 +86,11 @@ export default function TunnelsPage() {
     const groupsUi = useTunnelGroupsUi(tunnels, isOnline);
     const [grouping, setGrouping] = useStoredChoice(TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, "groups");
     const groupNames = useMemo(() => {
-        const names = new Map(groupsUi.groups.map((g) => [g.id, g.name]));
+        const byId = new Map(groupsUi.groups.map((g) => [g.id, g]));
         const of = groupOf(groupsUi.groups);
         return (tn: Tunnel) => {
             const id = of.get(tn.id);
-            return id === undefined ? null : (names.get(id) ?? null);
+            return id === undefined ? null : (byId.get(id) ?? null);
         };
     }, [groupsUi.groups]);
 
@@ -110,7 +110,10 @@ export default function TunnelsPage() {
     // 方塊篩選 AND 搜尋語法（lib/tunnelQuery），再依選的方式排序。/ Tile filter AND the query, then sorted.
     const visible = useMemo(() => {
         const now = Date.now();
-        const ctx = (tn: Tunnel): MatchContext => ({ health: liveHealth(tn, isOnline(tn)), now, group: groupNames(tn) });
+        const ctx = (tn: Tunnel): MatchContext => {
+            const g = groupNames(tn);
+            return { health: liveHealth(tn, isOnline(tn)), now, group: g?.name ?? null, groupLabels: g?.labels };
+        };
         return tunnels
             .filter((tn) => {
                 const online = isOnline(tn);
@@ -141,6 +144,8 @@ export default function TunnelsPage() {
         const pg = sectionPages.pager(sectionKey(s.group), s.items.length);
         return { pg, items: pageSlice(s.items, pg.page, pg.size) };
     };
+    // 點標籤（通道或群組的）：把 label:x 加進搜尋（已經有就不重複）。/ Clicking a label (a tunnel's or a group's) adds label:x.
+    const addLabel = (label: string) => setQuery((q) => (q.split(/\s+/).includes(`label:${label}`) ? q : `${q.trim()} label:${label}`.trim()));
     const headerProps = (s: Section<Tunnel>): GroupHeaderProps => ({
         id: `tunnels-sec-${sectionKey(s.group)}`,
         group: s.group,
@@ -155,6 +160,7 @@ export default function TunnelsPage() {
         onEdit: s.group ? () => groupsUi.openEdit(s.group!) : undefined,
         onMove: s.group ? (delta) => groupsUi.moveGroup(s.group!, delta) : undefined,
         onDelete: s.group ? () => void groupsUi.requestDelete(s.group!) : undefined,
+        onLabel: addLabel,
     });
 
     const actions: TunnelActionHandlers = {
@@ -178,8 +184,7 @@ export default function TunnelsPage() {
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),
-        // 點標籤：把 label:x 加進搜尋（已經有就不重複）。/ Clicking a label adds label:x to the search.
-        onLabel: (label) => setQuery((q) => (q.split(/\s+/).includes(`label:${label}`) ? q : `${q.trim()} label:${label}`.trim())),
+        onLabel: addLabel,
         onMoveToGroup: (tunnelId) => groupsUi.openMove(tunnelId),
     };
 

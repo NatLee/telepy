@@ -6,6 +6,10 @@
 //!   `PUT /api/reverse/user/key-groups/{id}/keys`、`POST /api/reverse/user/key-groups/{id}/grants`、
 //!   `PATCH/DELETE /api/reverse/user/key-groups/{id}/grants/{grant_id}`
 //!
+//! 兩種群組都有說明（≤ 500 字）與標籤（規則同通道標籤，≤ 12 個）：建立時可給，PATCH 只改有給的欄位。
+//! Both kinds carry a description (≤ 500 characters) and labels (the tunnel label rules, ≤ 12): optional on
+//! create, and PATCH changes only the fields it is given.
+//!
 //! 改動都回傳整份清單 `{groups, group?}`（`group` = 新建 / 改到的那組）。動到金鑰群組或通道群組的成員、授予時，
 //! 受影響的裝置立刻同步金鑰（`device_keys.kick`）。
 //!
@@ -50,6 +54,33 @@ fn not_found() -> ApiError {
 fn name_from(body: &Value) -> ApiResult<String> {
     let raw = body.get("name").and_then(Value::as_str).ok_or_else(|| ApiError::field("name", "This field is required."))?;
     g::normalize_name(raw).map_err(|m| ApiError::field("name", m))
+}
+
+/// `description` / `labels`：沒給就用 `base`（建立時是空的，修改時是原本的）。
+/// `description` / `labels`: absent fields keep `base` (empty when creating, the current values when updating).
+fn meta_from(body: &Value, base: g::Meta) -> ApiResult<g::Meta> {
+    let mut meta = base;
+    match body.get("description") {
+        None => {}
+        Some(Value::Null) => meta.description = String::new(),
+        Some(Value::String(d)) => meta.description = g::normalize_description(d).map_err(|m| ApiError::field("description", m))?,
+        Some(_) => return Err(ApiError::field("description", "Expected text.")),
+    }
+    match body.get("labels") {
+        None => {}
+        Some(Value::Null) => meta.labels = Vec::new(),
+        Some(Value::Array(a)) => {
+            let raw = a.iter().map(|v| v.as_str().map(str::to_string).ok_or_else(|| ApiError::field("labels", "Expected a list of labels."))).collect::<ApiResult<Vec<_>>>()?;
+            meta.labels = db::tunnel_tags::normalize_labels(&raw).map_err(|m| ApiError::field("labels", m))?;
+        }
+        Some(_) => return Err(ApiError::field("labels", "Expected a list of labels.")),
+    }
+    Ok(meta)
+}
+
+/// PATCH 的名稱：沒給就是原本的。/ The name on PATCH: absent = unchanged.
+fn name_or(body: &Value, current: &str) -> ApiResult<String> {
+    if body.get("name").is_some() { name_from(body) } else { Ok(current.to_string()) }
 }
 
 /// 一串 id（`field` 必須是整數陣列；去重複、保留順序）。/ A list of ids (deduplicated, order kept).
@@ -97,7 +128,15 @@ async fn tunnel_groups_json(state: &AppState, user_id: i64) -> ApiResult<Vec<Val
         .map(|grp| {
             let mut ids: Vec<i64> = membership.iter().filter(|(t, gid)| **gid == grp.id && visible.contains(t)).map(|(t, _)| *t).collect();
             ids.sort_unstable();
-            json!({ "id": grp.id, "name": grp.name, "position": grp.position, "tunnel_ids": ids, "created_at": db_to_iso_utc_z(&grp.created_at) })
+            json!({
+                "id": grp.id,
+                "name": grp.name,
+                "description": grp.description,
+                "labels": g::parse_labels(&grp.labels),
+                "position": grp.position,
+                "tunnel_ids": ids,
+                "created_at": db_to_iso_utc_z(&grp.created_at),
+            })
         })
         .collect())
 }
@@ -121,6 +160,7 @@ async fn list_tunnel_groups(State(state): State<AppState>, AuthUser(user): AuthU
 #[utoipa::path(post, path = "/api/reverse/tunnel-groups", tag = "Groups", security(("bearer" = [])), request_body = super::schemas::TunnelGroupWrite, responses((status = 201, body = super::schemas::TunnelGroups), (status = 400, description = "{name: [message]} / {tunnel_ids: [message]}", body = super::schemas::ErrorBody)))]
 async fn create_tunnel_group(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let name = name_from(&body)?;
+    let meta = meta_from(&body, g::Meta::default())?;
     let tunnels = ids_from(&body, "tunnel_ids")?.unwrap_or_default();
     if g::tunnel_groups(&state.db, user.id).await?.len() >= g::MAX_GROUPS {
         return Err(ApiError::field("name", format!("You can have at most {} tunnel groups.", g::MAX_GROUPS)));
@@ -129,7 +169,7 @@ async fn create_tunnel_group(State(state): State<AppState>, AuthUser(user): Auth
         return Err(ApiError::field("name", "You already have a group with this name."));
     }
     check_tunnels(&state, user.id, &tunnels).await?;
-    let grp = g::create_tunnel_group(&state.db, user.id, &name).await?;
+    let grp = g::create_tunnel_group(&state.db, user.id, &name, &meta).await?;
     if !tunnels.is_empty() {
         let moved = g::replace_tunnel_group_members(&state.db, user.id, grp.id, &tunnels).await?;
         state.device_keys.kick_many(moved);
@@ -144,14 +184,15 @@ async fn reorder_tunnel_groups(State(state): State<AppState>, AuthUser(user): Au
     tunnel_groups_reply(&state, user.id, None).await
 }
 
-#[utoipa::path(patch, path = "/api/reverse/tunnel-groups/{id}", tag = "Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel group id")), request_body = super::schemas::GroupRename, responses((status = 200, body = super::schemas::TunnelGroups), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(patch, path = "/api/reverse/tunnel-groups/{id}", tag = "Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel group id")), request_body = super::schemas::GroupUpdate, responses((status = 200, body = super::schemas::TunnelGroups), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_tunnel_group(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
-    own_tunnel_group(&state, user.id, id).await?;
-    let name = name_from(&body)?;
+    let grp = own_tunnel_group(&state, user.id, id).await?;
+    let name = name_or(&body, &grp.name)?;
+    let meta = meta_from(&body, g::Meta { description: grp.description.clone(), labels: g::parse_labels(&grp.labels) })?;
     if g::tunnel_group_name_taken(&state.db, user.id, &name, Some(id)).await? {
         return Err(ApiError::field("name", "You already have a group with this name."));
     }
-    g::rename_tunnel_group(&state.db, id, &name).await?;
+    g::update_tunnel_group(&state.db, id, &name, &meta).await?;
     tunnel_groups_reply(&state, user.id, Some(id)).await
 }
 
@@ -210,7 +251,15 @@ async fn key_groups_json(state: &AppState, user_id: i64) -> ApiResult<Vec<Value>
             let mut keys: Vec<i64> = membership.iter().filter(|(_, gid)| **gid == grp.id).map(|(k, _)| *k).collect();
             keys.sort_unstable();
             let grants: Vec<Value> = grants.iter().filter(|gr| gr.key_group_id == grp.id).map(grant_json).collect();
-            json!({ "id": grp.id, "name": grp.name, "key_ids": keys, "grants": grants, "created_at": db_to_iso_utc_z(&grp.created_at) })
+            json!({
+                "id": grp.id,
+                "name": grp.name,
+                "description": grp.description,
+                "labels": g::parse_labels(&grp.labels),
+                "key_ids": keys,
+                "grants": grants,
+                "created_at": db_to_iso_utc_z(&grp.created_at),
+            })
         })
         .collect())
 }
@@ -252,6 +301,7 @@ async fn list_key_groups(State(state): State<AppState>, AuthUser(user): AuthUser
 #[utoipa::path(post, path = "/api/reverse/user/key-groups", tag = "Groups", security(("bearer" = [])), request_body = super::schemas::KeyGroupWrite, responses((status = 201, body = super::schemas::KeyGroups), (status = 400, description = "{name: [message]} / {key_ids: [message]}", body = super::schemas::ErrorBody)))]
 async fn create_key_group(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let name = name_from(&body)?;
+    let meta = meta_from(&body, g::Meta::default())?;
     let keys = ids_from(&body, "key_ids")?.unwrap_or_default();
     if g::key_groups(&state.db, user.id).await?.len() >= g::MAX_GROUPS {
         return Err(ApiError::field("name", format!("You can have at most {} key groups.", g::MAX_GROUPS)));
@@ -260,7 +310,7 @@ async fn create_key_group(State(state): State<AppState>, AuthUser(user): AuthUse
         return Err(ApiError::field("name", "You already have a group with this name."));
     }
     check_keys(&state, user.id, &keys).await?;
-    let grp = g::create_key_group(&state.db, user.id, &name).await?;
+    let grp = g::create_key_group(&state.db, user.id, &name, &meta).await?;
     if !keys.is_empty() {
         let others = g::replace_key_group_members(&state.db, grp.id, &keys).await?;
         kick_key_groups(&state, others).await?;
@@ -268,14 +318,15 @@ async fn create_key_group(State(state): State<AppState>, AuthUser(user): AuthUse
     Ok((StatusCode::CREATED, key_groups_reply(&state, user.id, Some(grp.id)).await?))
 }
 
-#[utoipa::path(patch, path = "/api/reverse/user/key-groups/{id}", tag = "Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Key group id")), request_body = super::schemas::GroupRename, responses((status = 200, body = super::schemas::KeyGroups), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(patch, path = "/api/reverse/user/key-groups/{id}", tag = "Groups", security(("bearer" = [])), params(("id" = i64, Path, description = "Key group id")), request_body = super::schemas::GroupUpdate, responses((status = 200, body = super::schemas::KeyGroups), (status = 400, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
 async fn update_key_group(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
-    own_key_group(&state, user.id, id).await?;
-    let name = name_from(&body)?;
+    let grp = own_key_group(&state, user.id, id).await?;
+    let name = name_or(&body, &grp.name)?;
+    let meta = meta_from(&body, g::Meta { description: grp.description.clone(), labels: g::parse_labels(&grp.labels) })?;
     if g::key_group_name_taken(&state.db, user.id, &name, Some(id)).await? {
         return Err(ApiError::field("name", "You already have a group with this name."));
     }
-    g::rename_key_group(&state.db, id, &name).await?;
+    g::update_key_group(&state.db, id, &name, &meta).await?;
     key_groups_reply(&state, user.id, Some(id)).await
 }
 

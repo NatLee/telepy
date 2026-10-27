@@ -13,14 +13,16 @@ import { usePagination } from "@/hooks/usePagination";
 import { useI18n } from "@/lib/i18n";
 import { pageSlice } from "@/lib/pagination";
 import { pickerTerms } from "@/lib/memberPicker";
+import { groupMatches } from "@/lib/groups";
 
 /** 這麼多組以上才有搜尋。/ Search from this many groups on (as in the member picker). */
 const SEARCH_FROM = 7;
 
-export function useGroupSearch<T extends { id: number; name: string }>(groups: T[], current: number | null) {
+export function useGroupSearch<T extends { id: number; name: string; description?: string; labels?: string[] }>(groups: T[], current: number | null) {
     const [query, setQuery] = useState("");
     const terms = pickerTerms(query);
-    const matching = terms.length ? groups.filter((g) => terms.every((term) => g.name.toLowerCase().includes(term))) : groups;
+    // 名稱、說明、標籤都搜得到。/ Name, description and labels are all searched.
+    const matching = terms.length ? groups.filter((g) => groupMatches(g, terms)) : groups;
     const pager = usePagination(matching.length, { storageKey: "telepy.groupListPageSize", resetKey: query });
     const page = pageSlice(matching, pager.page, pager.size);
     const chosen = current === null || page.some((g) => g.id === current) ? undefined : matching.find((g) => g.id === current);

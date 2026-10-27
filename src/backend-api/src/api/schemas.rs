@@ -3305,6 +3305,12 @@ pub struct TunnelGroup {
     pub id: i64,
     #[schema(example = "Production")]
     pub name: String,
+    /// Free text, up to 500 characters ("" = none)
+    #[schema(example = "Customer-facing web servers")]
+    pub description: String,
+    /// Same rules as tunnel labels: lowercase, sorted, up to 12
+    #[schema(example = json!(["env=prod", "web"]))]
+    pub labels: Vec<String>,
     pub position: i64,
     /// Tunnels in it that I can see
     pub tunnel_ids: Vec<i64>,
@@ -3316,13 +3322,20 @@ pub struct TunnelGroupWrite {
     /// 1–48 characters, unique among your groups (ignoring case)
     #[schema(example = "Production")]
     pub name: String,
+    pub description: Option<String>,
+    pub labels: Option<Vec<String>>,
     /// Tunnels to move into it (out of any other group)
     pub tunnel_ids: Option<Vec<i64>>,
 }
 
+/// Only the fields given change; `description` / `labels` null clears them.
 #[derive(ToSchema)]
-pub struct GroupRename {
-    pub name: String,
+pub struct GroupUpdate {
+    pub name: Option<String>,
+    /// Up to 500 characters
+    pub description: Option<String>,
+    /// Same rules as tunnel labels (up to 12)
+    pub labels: Option<Vec<String>>,
 }
 
 /// Group ids in the new order; groups not listed keep their order after them.
@@ -3355,6 +3368,8 @@ pub struct KeyGroup {
     pub id: i64,
     #[schema(example = "Laptops")]
     pub name: String,
+    pub description: String,
+    pub labels: Vec<String>,
     pub key_ids: Vec<i64>,
     pub grants: Vec<KeyGroupGrant>,
     pub created_at: String,
@@ -3376,6 +3391,8 @@ pub struct KeyGroupGrant {
 pub struct KeyGroupWrite {
     #[schema(example = "Laptops")]
     pub name: String,
+    pub description: Option<String>,
+    pub labels: Option<Vec<String>>,
     /// Your keys to move into it (out of any other group)
     pub key_ids: Option<Vec<i64>>,
 }

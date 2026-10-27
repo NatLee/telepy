@@ -4,10 +4,43 @@
  * Pure helpers for groups (tested in groups.test.ts): name checks, tunnel list sections, reordering, where a key
  * group reaches (grants → tunnels → accounts) and the install progress on each device.
  */
-import type { KeyGroup, KeyGroupGrant, TunnelGroup } from "../types/groups";
+import type { GroupMeta, KeyGroup, KeyGroupGrant, TunnelGroup } from "../types/groups";
 
 /** 群組名稱最長幾個字（與後端 `db::groups::MAX_NAME_CHARS` 相同）。/ Same as the backend limit. */
 export const MAX_GROUP_NAME = 48;
+/** 群組說明最長幾個字（與後端 `db::groups::MAX_DESCRIPTION_CHARS` 相同）。/ Same as the backend limit. */
+export const MAX_GROUP_DESCRIPTION = 500;
+
+/** 說明：去頭尾空白、CRLF 變 LF（與後端一樣）。/ Trim and turn CRLF into LF, like the backend. */
+export function normalizeGroupDescription(raw: string): string {
+    return raw.trim().replace(/\r\n/g, "\n");
+}
+
+/** 說明與標籤有沒有改。/ Whether the description or the labels changed. */
+export function sameMeta(a: GroupMeta, b: GroupMeta): boolean {
+    return a.description === b.description && a.labels.length === b.labels.length && a.labels.every((l, i) => l === b.labels[i]);
+}
+
+/** 編輯後要送的 PATCH：只放有改的欄位；什麼都沒改 = null。/ The PATCH for an edit: only changed fields; null = nothing changed. */
+export function groupPatch(
+    g: { name: string; description?: string; labels?: string[] },
+    name: string,
+    meta: GroupMeta
+): (Partial<GroupMeta> & { name?: string }) | null {
+    const patch: Partial<GroupMeta> & { name?: string } = {};
+    if (name !== g.name) patch.name = name;
+    if (meta.description !== (g.description ?? "")) patch.description = meta.description;
+    const old = g.labels ?? [];
+    if (meta.labels.length !== old.length || meta.labels.some((l, i) => l !== old[i])) patch.labels = meta.labels;
+    return Object.keys(patch).length ? patch : null;
+}
+
+/** 群組搜尋：每個詞（小寫）都要出現在名稱、說明或某個標籤裡。/ Group search: every (lower-case) term must appear in the
+ *  name, the description or a label. */
+export function groupMatches(g: { name: string; description?: string; labels?: string[] }, terms: string[]): boolean {
+    const hay = [g.name, g.description ?? "", ...(g.labels ?? [])].map((h) => h.toLowerCase());
+    return terms.every((term) => hay.some((h) => h.includes(term)));
+}
 
 /** 去頭尾空白、連續空白變一個（與後端一樣）。/ Trim and collapse whitespace, like the backend. */
 export function normalizeGroupName(raw: string): string {

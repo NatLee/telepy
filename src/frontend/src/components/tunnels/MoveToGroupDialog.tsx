@@ -92,7 +92,10 @@ export function MoveToGroupDialog({
                     {search.visible.map((g) => (
                         <label key={g.id} className={row}>
                             <input type="radio" name="group" checked={choice.kind === "group" && choice.id === g.id} onChange={() => setChoice({ kind: "group", id: g.id })} className="size-4 accent-primary" />
-                            <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={g.name}>{g.name}</span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm text-foreground" title={g.name}>{g.name}</span>
+                                {g.description && <span className="block truncate text-xs text-muted-foreground" title={g.description}>{g.description.replace(/\s+/g, " ")}</span>}
+                            </span>
                             <span className="shrink-0 text-xs text-muted-foreground">{t("groups.tunnel.count", { count: g.tunnel_ids.length })}</span>
                         </label>
                     ))}

@@ -14,15 +14,16 @@ import { Modal } from "@/components/ui/Modal";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Chip } from "@/components/ui/section";
+import { TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/components/ui/Toast";
 import { KeyGroupEditor } from "@/components/keys/KeyGroupEditor";
 import { KeyGroupGrantDialog } from "@/components/keys/KeyGroupGrantDialog";
 import { GrantAccounts, GrantTarget, KeyGroupFlow } from "@/components/keys/KeyGroupFlow";
 import { useI18n } from "@/lib/i18n";
-import { keyGroupReach } from "@/lib/groups";
+import { groupPatch, keyGroupReach } from "@/lib/groups";
 import type { useKeyGroups } from "@/hooks/useKeyGroups";
-import type { KeyGroup, KeyGroupGrant, TunnelGroup } from "@/types/groups";
+import type { GroupMeta, KeyGroup, KeyGroupGrant, TunnelGroup } from "@/types/groups";
 import type { KeyDevice, UserKey } from "@/types/keys";
 
 type KeyGroupsApi = ReturnType<typeof useKeyGroups>;
@@ -88,6 +89,12 @@ function KeyGroupCard({
                 <h3 className="min-w-0 flex-1 truncate text-base text-foreground" title={group.name}>{group.name}</h3>
                 <GroupMenu name={group.name} onEdit={onEdit} onDelete={onDelete} />
             </header>
+            {(group.description || group.labels.length > 0) && (
+                <div className="-mt-1.5 space-y-1.5">
+                    {group.description && <p className="line-clamp-3 whitespace-pre-line text-sm text-muted-foreground" title={group.description}>{group.description}</p>}
+                    <TunnelLabels labels={group.labels} />
+                </div>
+            )}
             <div className="flex flex-wrap gap-1.5">
                 {members.length === 0 ? (
                     <span className="text-sm text-muted-foreground">{t("groups.key.noKeys")}</span>
@@ -178,6 +185,16 @@ function KeyGroupRow({ group, keys, tunnelGroups, devices, onEdit, onDelete, onG
                 </Button>
                 <GroupMenu name={group.name} onEdit={onEdit} onDelete={onDelete} />
             </div>
+            {/* 標籤與說明：窄的時候在名稱下面，寬的時候是整列下面的一行（名稱欄太窄放不下）。
+                Labels and description: under the name when narrow, a full-width line under the row when wide (the name column is too narrow). */}
+            {(group.description || group.labels.length > 0) && (
+                <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pl-6 @4xl:order-last @4xl:col-span-full">
+                    <TunnelLabels labels={group.labels} />
+                    {group.description && (
+                        <p className="line-clamp-2 min-w-[min(100%,16rem)] flex-1 text-xs text-muted-foreground" title={group.description}>{group.description.replace(/\s+/g, " ")}</p>
+                    )}
+                </div>
+            )}
             <p className="col-span-2 min-w-0 truncate text-xs text-muted-foreground @4xl:col-span-1" title={names.join(", ")}>
                 <KeyRound size={12} className="mr-1 inline align-[-0.125rem]" aria-hidden />
                 {members.length === 0 ? t("groups.key.noKeys") : names.slice(0, 3).join(", ")}
@@ -222,7 +239,7 @@ function KeyGroupRow({ group, keys, tunnelGroups, devices, onEdit, onDelete, onG
 
 /** 還沒有群組時 info 圖用的例子。/ The example the info diagram shows before there is a group. */
 function exampleData(t: (k: "groups.example.group" | "groups.example.tunnelGroup") => string) {
-    const tg: TunnelGroup = { id: -10, name: t("groups.example.tunnelGroup"), position: 0, tunnel_ids: [-1, -2], created_at: "" };
+    const tg: TunnelGroup = { id: -10, name: t("groups.example.tunnelGroup"), description: "", labels: [], position: 0, tunnel_ids: [-1, -2], created_at: "" };
     const keys = [
         { id: -1, host_friendly_name: "MacBook", key_type: "ED25519", fingerprint: null },
         { id: -2, host_friendly_name: "ThinkPad", key_type: "ED25519", fingerprint: null },
@@ -232,7 +249,7 @@ function exampleData(t: (k: "groups.example.group" | "groups.example.tunnelGroup
         { tunnel_id: -1, host_friendly_name: "web-1", online: true, role: "owner", accounts: ["deploy", "ubuntu"], account_list: [], keys: [{ user_key_id: -1, accounts: null, targets: target("installed") }, { user_key_id: -2, accounts: null, targets: target("installed") }] },
         { tunnel_id: -2, host_friendly_name: "web-2", online: false, role: "owner", accounts: ["deploy"], account_list: [], keys: [] },
     ] as KeyDevice[];
-    const group: KeyGroup = { id: -5, name: t("groups.example.group"), key_ids: [-1, -2], grants: [{ id: -7, tunnel: null, tunnel_group: { id: -10, name: tg.name }, accounts: ["deploy"], created_at: "" }], created_at: "" };
+    const group: KeyGroup = { id: -5, name: t("groups.example.group"), description: "", labels: [], key_ids: [-1, -2], grants: [{ id: -7, tunnel: null, tunnel_group: { id: -10, name: tg.name }, accounts: ["deploy"], created_at: "" }], created_at: "" };
     return { tg, keys, devices, group };
 }
 
@@ -296,14 +313,15 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
         if ((await api.revoke(g.id, gr.id)).ok) showSuccess(t("groups.grant.removed", { group: g.name, target }));
     };
 
-    const save = async (name: string, ids: number[]): Promise<string | null> => {
+    const save = async (name: string, meta: GroupMeta, ids: number[]): Promise<string | null> => {
         const g = editor?.group;
         if (!g) {
-            const r = await api.create(name, ids);
+            const r = await api.create(name, ids, meta);
             return r.ok ? null : (r.nameError ?? "");
         }
-        if (name !== g.name) {
-            const r = await api.rename(g.id, name);
+        const patch = groupPatch(g, name, meta);
+        if (patch) {
+            const r = await api.update(g.id, patch);
             if (!r.ok) return r.nameError ?? "";
         }
         const same = ids.length === g.key_ids.length && ids.every((id) => g.key_ids.includes(id));

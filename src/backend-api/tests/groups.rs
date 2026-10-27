@@ -302,3 +302,44 @@ async fn tunnel_groups_order_and_rename() {
     let r = lab.app.get("/api/reverse/user/key-groups", Some(&alice.token)).await;
     assert_eq!(names(&r.json), vec!["Beta", "zeta"]);
 }
+
+#[tokio::test]
+async fn groups_carry_description_and_labels() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    for base in ["/api/reverse/tunnel-groups", "/api/reverse/user/key-groups"] {
+        // 建立時給說明與標籤：標籤整理成小寫、去重複、排序；說明去頭尾空白。
+        // Created with both: labels lower-cased, de-duplicated and sorted; the description trimmed.
+        let r = lab.app.post(base, Some(&alice.token), json!({"name": "Prod", "description": "  web servers\nin Tokyo ", "labels": ["Web", "env=prod", "web"]})).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+        let id = r.json["group"]["id"].as_i64().unwrap();
+        assert_eq!(r.json["group"]["description"], "web servers\nin Tokyo", "{}", r.text);
+        assert_eq!(r.json["group"]["labels"], json!(["env=prod", "web"]), "{}", r.text);
+        // 只給名稱的群組：空說明、沒有標籤。/ A name-only group: empty description, no labels.
+        let r = lab.app.post(base, Some(&alice.token), json!({"name": "Plain"})).await;
+        assert_eq!(r.json["group"]["description"], "", "{}", r.text);
+        assert_eq!(r.json["group"]["labels"], json!([]), "{}", r.text);
+        // PATCH 只改有給的欄位。/ PATCH changes only what it is given.
+        let r = lab.app.patch(&format!("{base}/{id}"), Some(&alice.token), json!({"labels": ["db"]})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+        assert_eq!(r.json["group"]["name"], "Prod");
+        assert_eq!(r.json["group"]["description"], "web servers\nin Tokyo");
+        assert_eq!(r.json["group"]["labels"], json!(["db"]));
+        let r = lab.app.patch(&format!("{base}/{id}"), Some(&alice.token), json!({"description": null, "name": "Production"})).await;
+        assert_eq!(r.json["group"]["name"], "Production", "{}", r.text);
+        assert_eq!(r.json["group"]["description"], "");
+        assert_eq!(r.json["group"]["labels"], json!(["db"]));
+        // 壞標籤、太多標籤、太長的說明 = 欄位錯誤，什麼都不改。/ Bad / too many labels and a long description are field errors.
+        let r = lab.app.patch(&format!("{base}/{id}"), Some(&alice.token), json!({"labels": ["-bad"]})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+        assert!(r.json["labels"].is_array(), "{}", r.text);
+        let many: Vec<String> = (0..13).map(|i| format!("l{i}")).collect();
+        let r = lab.app.patch(&format!("{base}/{id}"), Some(&alice.token), json!({"labels": many})).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+        let r = lab.app.patch(&format!("{base}/{id}"), Some(&alice.token), json!({"description": "x".repeat(501)})).await;
+        assert!(r.json["description"].is_array(), "{}", r.text);
+        let r = lab.app.get(base, Some(&alice.token)).await;
+        let g = r.json["groups"].as_array().unwrap().iter().find(|g| g["id"] == id).unwrap().clone();
+        assert_eq!(g["labels"], json!(["db"]), "{}", r.text);
+    }
+}
