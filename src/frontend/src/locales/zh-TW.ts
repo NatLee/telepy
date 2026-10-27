@@ -5240,6 +5240,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "apiPage.baseUrl": "基底網址",
     "apiPage.cliDoc": "CLI 說明",
     "apiPage.fullReference": "完整參考",
+    "apiPage.how.show": "三種存取方式",
     "apiPage.tab.tokens": "你的 token",
     "apiPage.tab.endpoints": "token 能呼叫什麼",
     "apiPage.tab.activity": "活動",

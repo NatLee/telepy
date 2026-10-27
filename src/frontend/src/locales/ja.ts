@@ -5240,6 +5240,7 @@ export const ja: Record<TranslationKey, string> = {
     "apiPage.baseUrl": "ベース URL",
     "apiPage.cliDoc": "CLI ガイド",
     "apiPage.fullReference": "完全なリファレンス",
+    "apiPage.how.show": "3 つの入り口",
     "apiPage.tab.tokens": "あなたのトークン",
     "apiPage.tab.endpoints": "トークンで呼べるもの",
     "apiPage.tab.activity": "アクティビティ",

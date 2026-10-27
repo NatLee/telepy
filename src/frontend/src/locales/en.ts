@@ -5258,6 +5258,7 @@ export const en = {
     "apiPage.baseUrl": "Base URL",
     "apiPage.cliDoc": "CLI guide",
     "apiPage.fullReference": "Full reference",
+    "apiPage.how.show": "Three ways in",
     "apiPage.tab.tokens": "Your tokens",
     "apiPage.tab.endpoints": "What a token can call",
     "apiPage.tab.activity": "Activity",
