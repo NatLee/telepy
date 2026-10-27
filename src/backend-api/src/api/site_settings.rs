@@ -25,6 +25,8 @@ enum Kind {
     Url(usize),
     /// 可以空白的短文字（`signin_page_message`）。/ Short text that may be blank.
     Text(usize),
+    /// 逗號分隔的 email 網域清單，可以空白（= 系統預設）。/ Comma-separated email domains; may be blank (= the system default).
+    Domains(usize),
 }
 
 struct FieldMeta {
@@ -36,7 +38,7 @@ struct FieldMeta {
 
 const META: &[FieldMeta] = &[
     FieldMeta { name: "allow_registration", kind: Kind::Bool, label: "Allow registration", description: "是否開放新帳號自行註冊。關閉時只有管理員能建立帳號。變更後立即生效。" },
-    FieldMeta { name: "valid_register_domains", kind: Kind::Str(512), label: "Allowed Registration Email Domains", description: "允許用 Google 登入自行註冊的 email 網域白名單,用逗號分隔(例如 gmail.com,mycorp.com)。只有這些網域的 Google 帳號能註冊。留空則沿用系統預設。變更後立即生效。" },
+    FieldMeta { name: "valid_register_domains", kind: Kind::Domains(512), label: "Allowed Registration Email Domains", description: "允許用 Google 登入的 email 網域白名單,用逗號分隔(例如 gmail.com,mycorp.com);網域須完全相符,子網域要另外列出。只有這些網域的 Google 帳號能登入或註冊。留空則使用系統預設 gmail.com。變更後立即生效。" },
     FieldMeta { name: "remote_browser_session_idle_timeout", kind: Kind::Int, label: "Remote Browser Session Idle Timeout (seconds)", description: "閒置多久沒有心跳就自動關閉並回收該瀏覽器 session(秒),避免沒人用的 session 一直占用資源與目標機連線。你開著瀏覽器分頁時,伺服器每 20 秒會自動續命,所以正常使用不會被關;只有分頁關掉/斷線後才開始倒數。變更後即時生效。" },
     FieldMeta { name: "remote_browser_max_sessions", kind: Kind::Int, label: "Remote Browser Max Concurrent Sessions", description: "同時可存在的代理瀏覽器 session 數上限,用來控管資源。達到上限時,新的「開啟瀏覽器」會被拒絕並提示稍後再試。設 0 = 不限制。下次開啟瀏覽器時生效。" },
     FieldMeta { name: "remote_browser_geometry", kind: Kind::Str(32), label: "Remote Browser Screen Geometry", description: "每個代理瀏覽器桌面的解析度,格式「寬x高」(例如 1280x720、1920x1080)。下次開啟瀏覽器時生效。" },
@@ -121,6 +123,7 @@ fn meta_json() -> Value {
             Kind::Str(_) => "string",
             Kind::Url(_) => "url",
             Kind::Text(_) => "text",
+            Kind::Domains(_) => "string",
         };
         m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
     }
@@ -173,7 +176,81 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             Value::Null => Ok(SettingValue::Str(String::new())),
             _ => Err(ApiError::field(f.name, "Not a valid string.")),
         },
+        Kind::Domains(max) => match v {
+            Value::String(s) => normalize_domains(s, max).map(SettingValue::Str).map_err(|msg| ApiError::field(f.name, msg)),
+            Value::Null => Ok(SettingValue::Str(String::new())),
+            _ => Err(ApiError::field(f.name, "Not a valid string.")),
+        },
     }
+}
+
+/**
+ * 一個 email 網域：小寫、去掉前面的 `@` 或整個信箱的使用者部分、結尾的 `.`；要是合法的主機名稱（ASCII、至少兩段、
+ * 每段 1–63 字、不以 `-` 開頭或結尾、最後一段不是純數字）。不支援萬用字元，子網域要另外列出。與前端 `lib/registerDomains.ts` 一致。
+ * One email domain: lower-cased, a leading `@` or a whole address's local part and a trailing `.` removed; must be a valid
+ * hostname (ASCII, at least two labels, 1–63 characters each, no leading / trailing `-`, last label not all digits). No
+ * wildcards: subdomains are listed separately. Mirrors `lib/registerDomains.ts`.
+ */
+pub fn normalize_domain(raw: &str) -> Result<String, String> {
+    let mut d = raw.trim();
+    if let Some((_, after)) = d.rsplit_once('@') {
+        d = after;
+    }
+    let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d.is_empty() {
+        return Err("is empty".into());
+    }
+    if d.contains('*') {
+        return Err("wildcards are not supported; list each subdomain".into());
+    }
+    if !d.is_ascii() {
+        return Err("use the ASCII (xn--) form of the domain".into());
+    }
+    if d.len() > 253 {
+        return Err("is longer than 253 characters".into());
+    }
+    if !d.contains('.') {
+        return Err("needs a dot, like example.com".into());
+    }
+    for label in d.split('.') {
+        if label.is_empty() {
+            return Err("has an empty part between dots".into());
+        }
+        if label.len() > 63 {
+            return Err("has a part longer than 63 characters".into());
+        }
+        if !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err("may only contain letters, digits, hyphens and dots".into());
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err("has a part that starts or ends with a hyphen".into());
+        }
+    }
+    if d.rsplit('.').next().is_some_and(|tld| tld.bytes().all(|b| b.is_ascii_digit())) {
+        return Err("must end in a name, not a number".into());
+    }
+    Ok(d)
+}
+
+/**
+ * 網域清單：以逗號、分號或空白分開，逐一正規化、去重（保留順序），用逗號接起來；空白 = 沿用系統預設。
+ * 第一個壞掉的值會被點名。接起來的長度不可超過 `max`。
+ * A domain list: split on commas, semicolons or whitespace, each normalised and de-duplicated (order kept), joined with
+ * commas; blank = the system default. The first bad value is named. The joined text may not exceed `max`.
+ */
+pub fn normalize_domains(raw: &str, max: usize) -> Result<String, String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+        let d = normalize_domain(part).map_err(|why| format!("\"{part}\" {why}."))?;
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    let joined = out.join(",");
+    if joined.chars().count() > max {
+        return Err(format!("Ensure this field has no more than {max} characters."));
+    }
+    Ok(joined)
 }
 
 /// 登入頁的兩種樣子。/ The two sign-in page looks.
@@ -274,6 +351,34 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn domains_are_normalised_and_deduplicated() {
+        assert_eq!(normalize_domains(" Gmail.com, @MyCorp.com ;alice@mycorp.com  sub.mycorp.com. ", 512).unwrap(), "gmail.com,mycorp.com,sub.mycorp.com");
+        assert_eq!(normalize_domains("", 512).unwrap(), "", "blank = the system default");
+        assert_eq!(normalize_domains(" , ,", 512).unwrap(), "");
+        assert_eq!(normalize_domains("xn--fiqs8s.cn", 512).unwrap(), "xn--fiqs8s.cn");
+    }
+
+    #[test]
+    fn bad_domains_are_named() {
+        for bad in ["localhost", "*.mycorp.com", "a..com", "-a.com", "a-.com", "exa_mple.com", "1.2.3.4", "公司.tw", "mycorp.123"] {
+            let e = normalize_domains(&format!("gmail.com,{bad}"), 512);
+            assert!(e.is_err(), "{bad} should be refused");
+            assert!(e.unwrap_err().contains(bad), "the message names {bad}");
+        }
+        assert!(normalize_domains("my corp@.com", 512).is_err(), "split on the space: `my` has no dot");
+        assert!(normalize_domains(&format!("{}.com", "a".repeat(64)), 512).is_err(), "label over 63");
+        assert!(normalize_domains(&format!("{}.com", "a".repeat(250)), 512).is_err(), "domain over 253");
+    }
+
+    #[test]
+    fn domains_respect_the_length_limit() {
+        let many: Vec<String> = (0..60).map(|i| format!("d{i:02}.example.com")).collect();
+        let e = normalize_domains(&many.join(","), 512).unwrap_err();
+        assert!(e.contains("512"));
+        assert!(normalize_domains(&many[..20].join(","), 512).is_ok());
+    }
 
     #[test]
     fn signin_message_is_trimmed_and_limited() {
