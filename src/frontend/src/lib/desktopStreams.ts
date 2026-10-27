@@ -9,6 +9,7 @@
  */
 import type { TranslationKey } from "@/locales/en";
 import type { ClipboardPolicy, DesktopMode } from "@/lib/desktop";
+import { FILE_OP_KINDS, type FileActivity, type FileOpKind, type FileOpState } from "./rustdeskFileOps.ts";
 
 export type StreamId = "picture" | "input" | "clipboard" | "sound" | "files";
 export const STREAM_IDS: readonly StreamId[] = ["picture", "input", "clipboard", "sound", "files"];
@@ -22,6 +23,8 @@ export interface StreamRow {
     dir: StreamDir;
     /** 這一列為什麼是這個狀態（一句話）。/ Why this row is in this state. */
     reason: TranslationKey;
+    /** 「檔案」這一列底下的動作（下載 / 上傳 / 改名 / 刪除）與各自的狀態。/ The file actions under the Files row. */
+    ops?: { kind: FileOpKind; state: FileOpState }[];
 }
 
 export interface StreamInput {
@@ -40,6 +43,8 @@ export interface StreamInput {
     fileTransfer: boolean;
     /** 「檔案」面板開著。/ The Files panel is open. */
     filesOpen: boolean;
+    /** 面板裡各種檔案動作的狀態。/ The state of each kind of file action in the panel. */
+    fileActivity?: FileActivity;
 }
 
 function clipboardRow(c: ClipboardPolicy | null, limit: ClipboardPolicy): StreamRow {
@@ -68,8 +73,9 @@ function filesRow(i: StreamInput): StreamRow {
     const base = { id: "files" as const, dir: "both" as const };
     if (i.mode !== "rustdesk") return { ...base, state: "unsupported", reason: "desktop.streams.reason.filesGuacd" };
     if (!i.fileTransfer) return { ...base, state: "blocked", reason: "desktop.streams.reason.filesBlocked" };
-    if (!i.filesOpen) return { ...base, state: "off", reason: "desktop.streams.reason.filesClosed" };
-    return { ...base, state: "on", reason: "desktop.streams.reason.filesOpen" };
+    const ops = FILE_OP_KINDS.map((kind) => ({ kind, state: i.fileActivity?.[kind] ?? "idle" }));
+    if (!i.filesOpen) return { ...base, state: "off", reason: "desktop.streams.reason.filesClosed", ops };
+    return { ...base, state: "on", reason: "desktop.streams.reason.filesOpen", ops };
 }
 
 /** 五條資料流，順序固定。/ The five streams in a fixed order. */

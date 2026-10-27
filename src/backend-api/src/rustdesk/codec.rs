@@ -115,10 +115,11 @@ pub fn relay_response(uuid: &str, relay_server: &str) -> Vec<u8> {
     out
 }
 
-/// 一個 protobuf 欄位：編號 + 值（長度分隔的是內容，varint / 定長的是空切片）。/ One protobuf field.
+/// 一個 protobuf 欄位：編號 + 值（長度分隔的是內容，varint / 定長的是空切片；varint 的值在 `value`）。/ One protobuf field.
 struct Field<'a> {
     num: u32,
     bytes: &'a [u8],
+    value: u64,
 }
 
 /// 逐一讀出最外層欄位；格式壞了 → None。/ The top-level fields of a message; None when malformed.
@@ -130,24 +131,24 @@ fn fields(mut msg: &[u8]) -> Option<Vec<Field<'_>>> {
         let num = (tag >> 3) as u32;
         match tag & 7 {
             0 => {
-                let (_, used) = read_varint(msg)?;
+                let (value, used) = read_varint(msg)?;
                 msg = &msg[used..];
-                out.push(Field { num, bytes: &[] });
+                out.push(Field { num, bytes: &[], value });
             }
             1 => {
                 msg = msg.get(8..)?;
-                out.push(Field { num, bytes: &[] });
+                out.push(Field { num, bytes: &[], value: 0 });
             }
             2 => {
                 let (len, used) = read_varint(msg)?;
                 let end = used.checked_add(usize::try_from(len).ok()?)?;
                 let bytes = msg.get(used..end)?;
                 msg = &msg[end..];
-                out.push(Field { num, bytes });
+                out.push(Field { num, bytes, value: 0 });
             }
             5 => {
                 msg = msg.get(4..)?;
-                out.push(Field { num, bytes: &[] });
+                out.push(Field { num, bytes: &[], value: 0 });
             }
             _ => return None,
         }
@@ -210,6 +211,154 @@ pub fn starts_encryption(msg: &[u8]) -> bool {
     top.iter().any(|f| f.num == MSG_PUBLIC_KEY && fields(f.bytes).map(|inner| inner.iter().any(|i| !i.bytes.is_empty())).unwrap_or(true))
 }
 
+/// 最外層是 `file_action` 或 `file_response`。/ A top-level file action or file response.
+pub fn is_file_message(msg: &[u8]) -> bool {
+    match fields(msg) {
+        Some(top) => top.iter().any(|f| f.num == MSG_FILE_ACTION || f.num == MSG_FILE_RESPONSE),
+        None => matches!(top_field(msg), Some(MSG_FILE_ACTION | MSG_FILE_RESPONSE)),
+    }
+}
+
+// ---- 檔案動作（稽核用）/ File actions, for the audit ------------------------------------------------------
+
+/// `FileAction` 的 oneof 分支（message.proto）。/ The `FileAction` oneof arms.
+pub const FA_SEND: u32 = 2;
+pub const FA_RECEIVE: u32 = 3;
+pub const FA_CREATE: u32 = 4;
+pub const FA_REMOVE_DIR: u32 = 5;
+pub const FA_REMOVE_FILE: u32 = 6;
+pub const FA_ALL_FILES: u32 = 7;
+pub const FA_RENAME: u32 = 10;
+pub const FA_READ_EMPTY_DIRS: u32 = 11;
+/// `FileResponse` 的 oneof 分支。/ The `FileResponse` oneof arms.
+pub const FR_ERROR: u32 = 3;
+pub const FR_DONE: u32 = 4;
+
+/// 瀏覽器要裝置做的檔案動作裡，稽核要記的幾種（其餘 = `Other`）。路徑是裝置上的原樣字串。
+/// The file actions the audit records (the rest is `Other`); paths are the device's own strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOp {
+    /// `ReadAllFiles`：遞迴列出（下載整個資料夾前、刪除資料夾前）。/ A recursive listing.
+    AllFiles { id: i32, path: String },
+    RemoveFile { id: i32, path: String },
+    /// `recursive` = 由下往上刪掉空資料夾（RustDesk 的刪資料夾 = 先逐一刪檔，再刪空的樹）。
+    RemoveDir { id: i32, path: String, recursive: bool },
+    Rename { id: i32, path: String, new_name: String },
+    Create { id: i32, path: String },
+    Other,
+}
+
+/// 裝置對檔案動作的回答。/ The device's answer to a file action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileReply {
+    Done { id: i32 },
+    Error { id: i32, error: String },
+    Other,
+}
+
+fn str_field(fs: &[Field<'_>], num: u32) -> String {
+    fs.iter().find(|f| f.num == num).map(|f| String::from_utf8_lossy(f.bytes).into_owned()).unwrap_or_default()
+}
+
+/// int32 欄位（負數是 10 bytes 的 varint）。/ An int32 field.
+fn int_field(fs: &[Field<'_>], num: u32) -> i32 {
+    fs.iter().find(|f| f.num == num).map(|f| f.value as i64 as i32).unwrap_or(0)
+}
+
+fn bool_field(fs: &[Field<'_>], num: u32) -> bool {
+    fs.iter().any(|f| f.num == num && f.value != 0)
+}
+
+/// 最外層 `file_action` 的內容（第一個 oneof 分支）。不是檔案動作 → None。/ The file action in a peer message.
+pub fn file_op(msg: &[u8]) -> Option<FileOp> {
+    let top = fields(msg)?;
+    let action = top.iter().find(|f| f.num == MSG_FILE_ACTION)?;
+    let Some(arms) = fields(action.bytes) else { return Some(FileOp::Other) };
+    let Some(arm) = arms.first() else { return Some(FileOp::Other) };
+    let Some(inner) = fields(arm.bytes) else { return Some(FileOp::Other) };
+    let id = int_field(&inner, 1);
+    let path = str_field(&inner, 2);
+    Some(match arm.num {
+        FA_ALL_FILES => FileOp::AllFiles { id, path },
+        FA_REMOVE_FILE => FileOp::RemoveFile { id, path },
+        FA_REMOVE_DIR => FileOp::RemoveDir { id, path, recursive: bool_field(&inner, 3) },
+        FA_RENAME => FileOp::Rename { id, path, new_name: str_field(&inner, 3) },
+        FA_CREATE => FileOp::Create { id, path },
+        _ => FileOp::Other,
+    })
+}
+
+/// 最外層 `file_response` 的 done / error。不是檔案回應 → None。/ A done or error file response.
+pub fn file_reply(msg: &[u8]) -> Option<FileReply> {
+    let top = fields(msg)?;
+    let resp = top.iter().find(|f| f.num == MSG_FILE_RESPONSE)?;
+    let Some(arms) = fields(resp.bytes) else { return Some(FileReply::Other) };
+    let Some(arm) = arms.first() else { return Some(FileReply::Other) };
+    let Some(inner) = fields(arm.bytes) else { return Some(FileReply::Other) };
+    Some(match arm.num {
+        FR_DONE => FileReply::Done { id: int_field(&inner, 1) },
+        FR_ERROR => FileReply::Error { id: int_field(&inner, 1), error: str_field(&inner, 2) },
+        _ => FileReply::Other,
+    })
+}
+
+fn field_varint(num: u32, v: u64, out: &mut Vec<u8>) {
+    varint((num as u64) << 3, out);
+    varint(v, out);
+}
+
+/// 測試與假裝置用：一則 `file_action`。/ For tests and the fake device: a file action message.
+pub fn file_action_message(op: &FileOp) -> Vec<u8> {
+    let mut inner = Vec::new();
+    let arm = match op {
+        FileOp::AllFiles { id, path } | FileOp::RemoveFile { id, path } | FileOp::Create { id, path } => {
+            field_varint(1, *id as i64 as u64, &mut inner);
+            field_bytes(2, path.as_bytes(), &mut inner);
+            match op {
+                FileOp::AllFiles { .. } => FA_ALL_FILES,
+                FileOp::RemoveFile { .. } => FA_REMOVE_FILE,
+                _ => FA_CREATE,
+            }
+        }
+        FileOp::RemoveDir { id, path, recursive } => {
+            field_varint(1, *id as i64 as u64, &mut inner);
+            field_bytes(2, path.as_bytes(), &mut inner);
+            field_varint(3, *recursive as u64, &mut inner);
+            FA_REMOVE_DIR
+        }
+        FileOp::Rename { id, path, new_name } => {
+            field_varint(1, *id as i64 as u64, &mut inner);
+            field_bytes(2, path.as_bytes(), &mut inner);
+            field_bytes(3, new_name.as_bytes(), &mut inner);
+            FA_RENAME
+        }
+        FileOp::Other => FA_READ_EMPTY_DIRS,
+    };
+    let mut action = Vec::new();
+    field_bytes(arm, &inner, &mut action);
+    peer_message(MSG_FILE_ACTION, &action)
+}
+
+/// 測試與假裝置用：一則 `file_response`（done / error）。/ For tests and the fake device: a file response.
+pub fn file_reply_message(reply: &FileReply) -> Vec<u8> {
+    let mut inner = Vec::new();
+    let arm = match reply {
+        FileReply::Done { id } => {
+            field_varint(1, *id as i64 as u64, &mut inner);
+            FR_DONE
+        }
+        FileReply::Error { id, error } => {
+            field_varint(1, *id as i64 as u64, &mut inner);
+            field_bytes(2, error.as_bytes(), &mut inner);
+            FR_ERROR
+        }
+        FileReply::Other => 1,
+    };
+    let mut resp = Vec::new();
+    field_bytes(arm, &inner, &mut resp);
+    peer_message(MSG_FILE_RESPONSE, &resp)
+}
+
 /// 登入之前最多容忍幾則訊息（核心在裝置的 hash 之後就登入）。/ Messages tolerated before the login.
 pub const MESSAGES_BEFORE_LOGIN: u32 = 32;
 
@@ -241,6 +390,13 @@ impl LoginGuard {
     pub fn check(&mut self, msg: &[u8]) -> Result<(), String> {
         if starts_encryption(msg) {
             return Err("the browser tried to encrypt the RustDesk stream (Telepy's own client never does)".into());
+        }
+        // 檔案動作 / 回應只准走檔案 session：畫面那條上的檔案訊息只會來自改過的客戶端（核心的檔案 API 只用傳檔連線），
+        // 放行的話站台的 `desktop_file_transfer` 關掉也擋不住。
+        // File actions and responses belong on the files session only: the core's file API only uses the
+        // file-transfer connection, and letting them through a screen session would bypass `desktop_file_transfer`.
+        if self.expect != LoginKind::FileTransfer && is_file_message(msg) {
+            return Err(format!("a file transfer message on a {} session", self.expect.as_str()));
         }
         match login_kind(msg) {
             Some(Ok(kind)) if kind == self.expect => {
@@ -367,7 +523,13 @@ mod tests {
         assert!(g.check(&peer_message(MSG_PUBLIC_KEY, &[])).is_ok(), "an empty public key = stay unencrypted");
         assert!(g.check(&login_request(None)).is_ok());
         assert!(g.logged_in());
-        assert!(g.check(&peer_message(MSG_FILE_ACTION, b"x")).is_ok());
+        assert!(g.check(&peer_message(MSG_AUDIO_FRAME, b"x")).is_ok());
+        // 畫面 session 上的檔案訊息（兩個方向的型別都算）→ 拒絕。/ File messages on a screen session are refused.
+        let mut fg = LoginGuard::new(LoginKind::Control);
+        assert!(fg.check(&login_request(None)).is_ok());
+        assert!(fg.check(&file_action_message(&FileOp::RemoveFile { id: 1, path: "/etc/passwd".into() })).unwrap_err().contains("file transfer message on a remote control session"));
+        let mut fg = LoginGuard::new(LoginKind::Control);
+        assert!(fg.check(&file_reply_message(&FileReply::Done { id: 1 })).is_err(), "before the login too");
         // 登入後再送一個傳檔登入。/ A second, file-transfer login after the first.
         assert!(g.check(&login_request(Some(LOGIN_FILE_TRANSFER))).unwrap_err().contains("file transfer login on a remote control session"));
 
@@ -375,6 +537,18 @@ mod tests {
         assert!(g.check(&login_request(None)).is_err(), "remote control on a files session");
         let mut g = LoginGuard::new(LoginKind::FileTransfer);
         assert!(g.check(&login_request(Some(LOGIN_FILE_TRANSFER))).is_ok());
+        // 檔案 session：刪除、改名、建資料夾、遞迴列出、上傳的回應都放行。/ Every file action passes on a files session.
+        for op in [
+            FileOp::AllFiles { id: 3, path: "/home/a".into() },
+            FileOp::RemoveFile { id: 3, path: "/home/a/x".into() },
+            FileOp::RemoveDir { id: 3, path: "/home/a".into(), recursive: true },
+            FileOp::Rename { id: 4, path: "/home/b".into(), new_name: "c".into() },
+            FileOp::Create { id: 5, path: "/home/d".into() },
+            FileOp::Other,
+        ] {
+            assert!(g.check(&file_action_message(&op)).is_ok(), "{op:?}");
+        }
+        assert!(g.check(&file_reply_message(&FileReply::Done { id: 9 })).is_ok(), "upload blocks travel as file responses");
 
         // 要加密 → 拒絕（之後就看不到登入了）。/ Encryption is refused.
         let mut key = Vec::new();
@@ -388,6 +562,32 @@ mod tests {
             assert!(g.check(&peer_message(MSG_AUDIO_FRAME, b"x")).is_ok());
         }
         assert!(g.check(&peer_message(MSG_AUDIO_FRAME, b"x")).is_err());
+    }
+
+    #[test]
+    fn file_actions_and_replies_round_trip() {
+        let ops = [
+            FileOp::AllFiles { id: 7, path: "/home/dev/photos".into() },
+            FileOp::RemoveFile { id: 7, path: "/home/dev/photos/a.jpg".into() },
+            FileOp::RemoveDir { id: 7, path: "/home/dev/photos".into(), recursive: true },
+            FileOp::RemoveDir { id: 8, path: "C:\\tmp".into(), recursive: false },
+            FileOp::Rename { id: -2, path: "/home/dev/a b.txt".into(), new_name: "../moved/甲.txt".into() },
+            FileOp::Create { id: 9, path: "/home/dev/new".into() },
+        ];
+        for op in ops {
+            assert_eq!(file_op(&file_action_message(&op)), Some(op.clone()));
+        }
+        assert_eq!(file_op(&file_action_message(&FileOp::Other)), Some(FileOp::Other), "read_empty_dirs is not audited");
+        assert_eq!(file_op(&login_request(None)), None);
+        assert_eq!(file_op(&[]), None);
+        for r in [FileReply::Done { id: 7 }, FileReply::Error { id: 7, error: "Permission denied (os error 13)".into() }] {
+            assert_eq!(file_reply(&file_reply_message(&r)), Some(r.clone()));
+        }
+        assert_eq!(file_reply(&file_action_message(&FileOp::Create { id: 1, path: "/x".into() })), None);
+        // 其他回應（dir、block …）= Other。/ Other responses.
+        assert_eq!(file_reply(&peer_message(MSG_FILE_RESPONSE, &peer_message(2, b"block"))), Some(FileReply::Other));
+        assert!(is_file_message(&file_reply_message(&FileReply::Done { id: 1 })));
+        assert!(!is_file_message(&peer_message(MSG_AUDIO_FRAME, b"x")));
     }
 
     #[test]

@@ -35,6 +35,13 @@ test("files: only RustDesk, blocked by the site switch, on while the panel is op
     assert.equal(row({ mode: "rustdesk" }, "files").state, "off");
     assert.equal(row({ mode: "rustdesk", filesOpen: true }, "files").state, "on");
     assert.equal(row({ mode: "rustdesk", filesOpen: true, fileTransfer: false }, "files").state, "blocked");
+    assert.equal(row({ mode: "rdp" }, "files").ops, undefined, "no file actions where files are unsupported");
+});
+
+test("files: the four file actions carry the panel's state", () => {
+    const r = row({ mode: "rustdesk", filesOpen: true, fileActivity: { download: "running", upload: "idle", rename: "done", delete: "failed" } }, "files");
+    assert.deepEqual(r.ops, [{ kind: "download", state: "running" }, { kind: "upload", state: "idle" }, { kind: "rename", state: "done" }, { kind: "delete", state: "failed" }]);
+    assert.deepEqual(row({ mode: "rustdesk" }, "files").ops!.map((o) => o.state), ["idle", "idle", "idle", "idle"]);
 });
 
 test("only on and one-way streams move", () => {

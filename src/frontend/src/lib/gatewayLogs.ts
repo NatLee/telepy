@@ -55,6 +55,8 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     desktop_close: { key: "logs.event.desktop_close", tone: "secondary", category: "session" },
     rustdesk_open: { key: "logs.event.rustdesk_open", tone: "default", category: "session" },
     rustdesk_close: { key: "logs.event.rustdesk_close", tone: "secondary", category: "session" },
+    rustdesk_file_delete: { key: "logs.event.rustdesk_file_delete", tone: "warning", category: "change" },
+    rustdesk_file_rename: { key: "logs.event.rustdesk_file_rename", tone: "outline", category: "change" },
     session_ended: { key: "logs.event.session_ended", tone: "warning", category: "session" },
     terminal_watch: { key: "logs.event.terminal_watch", tone: "warning", category: "session" },
     terminal_watch_end: { key: "logs.event.terminal_watch_end", tone: "secondary", category: "session" },

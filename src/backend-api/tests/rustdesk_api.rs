@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use common::lab::{free_port, Lab};
-use telepy_server::rustdesk::codec::{decode_frame, encode_frame, login_request, peer_message, rendezvous_with_id, top_field, MSG_AUDIO_FRAME, MSG_FILE_ACTION, PUNCH_HOLE_REQUEST, RELAY_RESPONSE, REQUEST_RELAY};
+use telepy_server::rustdesk::codec::{decode_frame, encode_frame, file_action_message, file_op, file_reply, file_reply_message, login_request, peer_message, rendezvous_with_id, top_field, FileOp, FileReply, MSG_AUDIO_FRAME, MSG_FILE_ACTION, MSG_FILE_RESPONSE, PUNCH_HOLE_REQUEST, RELAY_RESPONSE, REQUEST_RELAY};
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -46,8 +46,7 @@ async fn fake_rustdesk_device() -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
                         let payload = payload.to_vec();
                         buf.drain(..used);
                         seen.lock().unwrap().push(payload.clone());
-                        let mut reply = b"echo:".to_vec();
-                        reply.extend_from_slice(&payload);
+                        let reply = device_reply(&payload);
                         if s.write_all(&encode_frame(&reply)).await.is_err() {
                             return;
                         }
@@ -57,6 +56,26 @@ async fn fake_rustdesk_device() -> (u16, Arc<Mutex<Vec<Vec<u8>>>>) {
         }
     });
     (port, received)
+}
+
+/// 假裝置的回答：檔案動作照 RustDesk 的樣子回 done / error（路徑含 `denied` = 沒權限；遞迴列出回一個 dir），
+/// 其他訊息回 `echo:` + 原文。/ The fake device's answer: file actions get done / error like RustDesk, the rest an echo.
+fn device_reply(payload: &[u8]) -> Vec<u8> {
+    match file_op(payload) {
+        Some(FileOp::AllFiles { .. }) => peer_message(MSG_FILE_RESPONSE, &peer_message(1, b"dir")),
+        Some(FileOp::RemoveFile { id, path } | FileOp::RemoveDir { id, path, .. } | FileOp::Rename { id, path, .. } | FileOp::Create { id, path }) => {
+            if path.contains("denied") {
+                file_reply_message(&FileReply::Error { id, error: "Permission denied (os error 13)".into() })
+            } else {
+                file_reply_message(&FileReply::Done { id })
+            }
+        }
+        _ => {
+            let mut reply = b"echo:".to_vec();
+            reply.extend_from_slice(payload);
+            reply
+        }
+    }
 }
 
 async fn open_ws(lab: &Lab, start: &Value) -> Ws {
@@ -368,4 +387,71 @@ async fn rustdesk_files_session_and_login_guard() {
     assert_eq!(recv(&mut frelay4).await.err(), Some(4014));
     // 畫面那條不受影響。/ The screen session carries on.
     round_trip(&mut relay, peer_message(MSG_AUDIO_FRAME, b"still here")).await;
+}
+
+/// 「檔案」面板的刪除 / 改名：動作原樣穿過中繼到裝置，裝置回答後 tunnel 的 Logs 各寫一筆
+/// （刪資料夾 = 列出 + 每個檔案 + 資料夾那步，合成一筆）；畫面 session 上的檔案動作被拒（4403）。
+/// Deletions and renames from the Files panel pass through and are written to the tunnel's Logs once the device
+/// answers (a folder delete is one event); a file action on the screen session is refused.
+#[tokio::test]
+async fn rustdesk_file_operations_are_relayed_and_audited() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let (rd_port, received) = fake_rustdesk_device().await;
+    let id = dev.tunnel_id;
+
+    let r = app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&alice.token), json!({"username": "ubuntu", "port": rd_port})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let screen = r.json.clone();
+    let sid = screen["session_id"].as_str().unwrap().to_string();
+    let mut relay = connect_core(&lab, &screen).await;
+    round_trip(&mut relay, login_request(None)).await;
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let files = r.json.clone();
+    let fid = files["session_id"].as_str().unwrap().to_string();
+    let mut frelay = connect_core(&lab, &files).await;
+    round_trip(&mut frelay, login_request(Some(7))).await;
+
+    // 送一個動作、收裝置的回答。/ Send one action, read the device's answer.
+    async fn act(ws: &mut Ws, op: FileOp) -> Option<FileReply> {
+        ws.send(Message::Binary(file_action_message(&op).into())).await.unwrap();
+        file_reply(&recv(ws).await.expect("an answer"))
+    }
+    // 刪資料夾：列出 → 兩個檔案 → 資料夾。/ A folder delete: listing, two files, the folder.
+    assert_eq!(act(&mut frelay, FileOp::AllFiles { id: 4, path: "/home/ubuntu/photos".into() }).await, Some(FileReply::Other));
+    for f in ["a.jpg", "b.jpg"] {
+        assert_eq!(act(&mut frelay, FileOp::RemoveFile { id: 4, path: format!("/home/ubuntu/photos/{f}") }).await, Some(FileReply::Done { id: 4 }));
+    }
+    assert_eq!(act(&mut frelay, FileOp::RemoveDir { id: 4, path: "/home/ubuntu/photos".into(), recursive: true }).await, Some(FileReply::Done { id: 4 }));
+    // 改名（也可以是搬移）、建資料夾、沒權限的刪除。/ A rename (or move), a new folder, a refused delete.
+    assert_eq!(act(&mut frelay, FileOp::Rename { id: 5, path: "/home/ubuntu/notes.txt".into(), new_name: "../shared/notes.txt".into() }).await, Some(FileReply::Done { id: 5 }));
+    assert_eq!(act(&mut frelay, FileOp::Create { id: 6, path: "/home/ubuntu/new".into() }).await, Some(FileReply::Done { id: 6 }));
+    assert!(matches!(act(&mut frelay, FileOp::RemoveFile { id: 7, path: "/root/denied.txt".into() }).await, Some(FileReply::Error { id: 7, .. })));
+    // 每個動作都原樣到了裝置。/ Every action reached the device unchanged.
+    let seen: Vec<FileOp> = received.lock().unwrap().iter().filter_map(|m| file_op(m)).collect();
+    assert_eq!(seen.len(), 7, "{seen:?}");
+
+    let short = &fid[..8];
+    let ev = events(&lab, &alice.token, id).await;
+    let of = |kind: &str| ev.iter().filter(|e| e["event"] == kind).map(|e| e["message"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>();
+    let deletes = of("rustdesk_file_delete");
+    assert_eq!(deletes, vec![
+        format!("RustDesk deleted folder /home/ubuntu/photos (2 files) by alice (session {short})"),
+        format!("RustDesk could not delete file /root/denied.txt: Permission denied (os error 13) by alice (session {short})"),
+    ], "{ev:?}");
+    assert_eq!(of("rustdesk_file_rename"), vec![format!("RustDesk renamed /home/ubuntu/notes.txt to ../shared/notes.txt by alice (session {short})")]);
+    assert!(ev.iter().all(|e| !e["message"].as_str().unwrap_or("").contains("/home/ubuntu/new")), "creating a folder is not an audit event");
+
+    // 畫面 session 上送檔案動作 → 4403。/ A file action on the screen session is refused.
+    relay.send(Message::Binary(file_action_message(&FileOp::RemoveFile { id: 1, path: "/etc/hosts".into() }).into())).await.unwrap();
+    assert_eq!(recv(&mut relay).await.err(), Some(4403));
+    wait_for("screen session removed", || app.state.rustdesk.get(&sid).is_none()).await;
+    let ev = events(&lab, &alice.token, id).await;
+    assert!(ev.iter().any(|e| e["event"] == "rustdesk_close" && e["message"].as_str().unwrap_or("").contains("refused: a file transfer message on a remote control session")), "{ev:?}");
+    assert!(!received.lock().unwrap().iter().any(|m| file_op(m) == Some(FileOp::RemoveFile { id: 1, path: "/etc/hosts".into() })), "the refused action never reached the device");
 }

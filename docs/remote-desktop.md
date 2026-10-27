@@ -177,17 +177,40 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   - 對話框要使用者的手勢：存檔對話框（`showSaveFilePicker`）在這一頁的點擊裡開，把手換進 iframe 的核心；選檔用這一頁的
     `<input type=file>`（也能拖放），iframe 裡核心建的 input 的 `click()` 被換成「放進這一頁已選好的檔案」。沒有存檔對話框的
     瀏覽器（Firefox / Safari）由核心整個放記憶體再下載，所以每個檔案 ≤ 2 GB（上傳同樣限制）。
-  - 面板：麵包屑（Windows 最上層 = 磁碟機）、上一層、家目錄、隱藏檔、上傳、每個檔案的下載鈕、傳輸清單（進度、速度、取消、
-    同名時「略過 / 取代」，只顯示最近 4 筆、進行中的在前）。桌面寬度在畫面右邊（`lg:w-80`），手機在畫面下面。
+  - 面板：麵包屑（Windows 最上層 = 磁碟機）、上一層、家目錄、隱藏檔、新資料夾、上傳資料夾、上傳、每一列的下載鈕與「⋯」選單
+    （下載 / 改名 / 刪除）、勾選多個一起刪、傳輸清單（進度、速度、取消、同名時「略過 / 取代」，只顯示最近 4 筆、進行中的在前）。
+    桌面寬度在畫面右邊（`lg:w-80`），手機在畫面下面。
+  - **整個資料夾下載成 .zip**（純函式 `lib/rustdeskFileOps.ts`、`lib/zipStream.ts`，zip 用 client-zip（MIT，串流 + ZIP64））：
+    點下載 → 存檔對話框（要在點擊裡開）→ `read_dir_to_remove_recursive`（= `ReadAllFiles`，回答是帶 id 的 `file_dir`，名稱是
+    相對路徑）數檔案與大小 → 再問一次空資料夾（`ReadEmptyDirs`：核心處理回答（`empty_dirs` 事件）但沒有送出的呼叫，面板自己
+    編這一則從 iframe 的 WebSocket 送；舊版 RustDesk 不回答，4 秒後當沒有）→ 超過 500 個檔案或 2 GB 先在傳輸清單裡問 →
+    `send_files {is_dir: true}`：核心向 `showDirectoryPicker()` 要資料夾把手再逐檔 `getFileHandle().createWritable()`，面板換成
+    一個假把手（`zipDirectoryHandle`），每個檔案的內容一塊一塊流進 zip，再串流寫進使用者選的 .zip；沒有存檔對話框的瀏覽器收在
+    記憶體（≤ 2 GB，事先就擋）。核心不會為 0 byte 的檔案開把手，所以完成後依清單補上空檔案與空資料夾。進度 = 第幾個檔案 / 總數 + 位元組。
+  - **刪除**：檔案 = `remove_file`；資料夾 = 先（連隱藏檔）遞迴列出、確認對話框講資料夾名稱與裡面幾個檔案多大，再逐一
+    `remove_file`（沿用列出的 id）最後 `remove_all_empty_dirs`（RustDesk 只刪「空的」樹）。可多選。**改名**（`rename_file`）：
+    裝置把 `new_name` 接在原本的上一層後面，所以打 `../x/名字` 或絕對路徑就是同一顆磁碟裡的搬移（對話框即時顯示結果路徑，
+    換資料夾時按鈕變「搬移」）。**新資料夾**（`create_dir`）。**上傳資料夾**（`webkitdirectory` 或拖進資料夾，拖放保留空資料夾）：
+    先依序建好資料夾（「已存在」不算錯）再逐檔上傳。每個動作等裝置對那個 id 的 `job_done` / `job_error`，錯誤原樣顯示裝置的訊息。
+  - **稽核（`rustdesk/file_audit.rs`，純函式 + 單元測試）**：中繼看得到檔案 session 的明文（加密被拒），所以讀瀏覽器送的
+    `file_action`（`ReadAllFiles` / `RemoveFile` / `RemoveDir` / `Rename`）與裝置回的 `done` / `error`，寫 `rustdesk_file_delete`
+    / `rustdesk_file_rename` 事件（只有路徑與數量，不含內容）：刪資料夾整個合成一筆（「deleted folder /x (12 files)」，有失敗就
+    附上數量與第一個錯誤），單一檔案與改名等裝置回答後各一筆，session 結束時還沒回答的也寫出來。
+  - 說明圖：面板的 info 鈕（`RustDeskFilesFlow.tsx`）畫 你的瀏覽器（第二份核心）─ Telepy 中繼 ─ 隧道 ─ 裝置上的 RustDesk ─ 磁碟，
+    依階段與正在做的動作亮起，下面是四種動作各自的狀態；頁面的資料流圖在「檔案」那一列底下也列出下載 / 上傳 / 改名 / 刪除的狀態。
 - **登入守門（`rustdesk::codec::LoginGuard`）**：中繼唯一解析的東西是瀏覽器 → 裝置方向的 peer `Message` 最外層：
   `login_request`（欄位 7）的 oneof 分支決定這條連線登入成什麼（遙控 / 傳檔 / 埠轉發 / 鏡頭 / 終端機）。畫面 session 只准遙控、
   檔案 session 只准傳檔，不符 → 4403，`rustdesk_close` 事件寫 `refused: a file transfer login on a remote control session`。
   帶內容的 `public_key`（欄位 4，= 要加密）也拒絕：Telepy 的假 hbbs 從不給裝置的金鑰，我們的核心永遠走不加密的 Direct IP
   （整段在 TLS + SSH 裡），會加密的只會是改過的客戶端，而加密後就看不到它登入成什麼了。登入前超過 32 則訊息也拒絕。
+  畫面 session 上出現的 `file_action` / `file_response`（核心的檔案 API 只走傳檔連線，只有改過的客戶端會這樣送）也拒絕。
   所以站台設定 `desktop_file_transfer` 是伺服器把關，不只是隱藏按鈕。
 - 實測（OrbStack：Debian + RustDesk 1.5.0）：畫面 session 開著時開「檔案」，遠端畫面持續更新；容器裡的 RustDesk 沒有
   連線管理員 UI（Linux 的檔案操作、聲音擷取都交給它），所以傳檔用一層測試用的前置代理（遙控照轉、傳檔由代理服務）驗證：
-  清單、下載文字檔與 3 MB 二進位（md5 相同）、上傳、同名取代、資料流圖、手機寬度無水平捲動。聲音：開著時裝置進入 audio
+  清單、下載文字檔與 3 MB 二進位（md5 相同）、上傳、同名取代、資料流圖、手機寬度無水平捲動。之後的資料夾 / 刪除 / 改名
+  也用同一層代理（加上 `ReadAllFiles`、`ReadEmptyDirs`、多檔 `send`、`remove_*`、`create`、`rename`）驗證：資料夾 zip（串流
+  與記憶體兩條路，空資料夾、0 byte 檔案都在、md5 相同）、501 個檔案先問、改名與 `../` 搬移、新資料夾、上傳資料夾、多選刪除
+  （確認數到隱藏檔）、裝置錯誤原樣顯示、Logs 的兩種事件。聲音：開著時裝置進入 audio
   service，關著登入時不進入、連線中切關時退出（容器沒有可擷取的聲音，所以沒聽到實際聲音）。
 - 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
   `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
