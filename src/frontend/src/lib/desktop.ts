@@ -44,6 +44,12 @@ export const RUSTDESK_PORT = 21118;
 /** 畫質預設（start 時送給後端 → guacd 參數）。/ Quality preset, turned into guacd parameters at start. */
 export type DesktopQuality = "auto" | "speed" | "sharp";
 export const QUALITY_VALUES: readonly DesktopQuality[] = ["auto", "speed", "sharp"];
+export const QUALITY_LABEL: Record<DesktopQuality, TranslationKey> = { auto: "desktop.quality.auto", speed: "desktop.quality.speed", sharp: "desktop.quality.sharp" };
+export const QUALITY_HINT: Record<DesktopQuality, TranslationKey> = {
+    auto: "desktop.quality.hint.auto",
+    speed: "desktop.quality.hint.speed",
+    sharp: "desktop.quality.hint.sharp",
+};
 /** Ctrl 當 ⌘：auto = 偵測到 macOS 桌面且瀏覽器不是 Mac 時開。/ auto = on for macOS desktops from a non-Mac browser. */
 export type CtrlAsCmdMode = "auto" | "on" | "off";
 export const CTRL_MODE_VALUES: readonly CtrlAsCmdMode[] = ["auto", "on", "off"];
