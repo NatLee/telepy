@@ -6,7 +6,7 @@ import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network, Palette, Info, Route } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, KeyRound, FolderOpen, FolderSync, ChevronDown, ChevronUp, User as UserIcon, MonitorPlay, Network, Palette, Info, Route, Wrench } from "lucide-react";
 import Link from "next/link";
 import { TerminalLanHost, TerminalUsername } from "@/hooks/useTerminalPage";
 import { TerminalMainView } from "@/lib/tunnelUrls";
@@ -44,6 +44,12 @@ interface TerminalHeaderProps {
     onOpenInfo: () => void;
     /** 回到選擇器換一台裝置 / 主機。/ Back to the picker to choose another device or host. */
     switchHref: string;
+    /** 側欄目前的分頁（檔案 / 工具箱）。/ The side panel's current tab. */
+    sideTab?: "files" | "toolbox";
+    onSideTab?: (tab: "files" | "toolbox") => void;
+    /** 打開 / 收起工具箱（桌機側欄、手機底部面板）。/ Toggle the toolbox (desktop side panel, phone sheet). */
+    onToolbox?: () => void;
+    toolboxOpen?: boolean;
 }
 
 /** 區網主機徽章。/ LAN host badge. */
@@ -84,9 +90,21 @@ export function TerminalHeader({
     tunnelName = null,
     onOpenInfo,
     switchHref,
+    sideTab = "files",
+    onSideTab,
+    onToolbox,
+    toolboxOpen = false,
 }: TerminalHeaderProps) {
     const router = useRouter();
     const { t } = useI18n();
+    const filesOn = showFiles && sideTab === "files";
+    const toggleFiles = () => {
+        if (filesOn) setShowFiles(false);
+        else {
+            onSideTab?.("files");
+            setShowFiles(true);
+        }
+    };
 
     return (
         <Card className="shrink-0 mb-2 md:mb-4 rounded-lg overflow-hidden border-border/50">
@@ -113,6 +131,12 @@ export function TerminalHeader({
                                 />
                             </div>
                         </div>
+                        <div className="flex items-center gap-1 md:hidden">
+                        {onToolbox && (
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={onToolbox} title={t("toolbox.show")} aria-label={t("toolbox.show")}>
+                                <Wrench size={16} />
+                            </Button>
+                        )}
                         <Button
                             variant="ghost"
                             size="sm"
@@ -121,6 +145,7 @@ export function TerminalHeader({
                         >
                             {headerExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                         </Button>
+                        </div>
                     </div>
 
                     {/* Desktop Actions */}
@@ -214,12 +239,25 @@ export function TerminalHeader({
                         <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setShowFiles(!showFiles)}
-                            title={showFiles ? t("terminal.hideFiles") : t("terminal.showFiles")}
-                            className={`h-8 w-8 p-0 ${showFiles ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            onClick={toggleFiles}
+                            title={filesOn ? t("terminal.hideFiles") : t("terminal.showFiles")}
+                            className={`h-8 w-8 p-0 ${filesOn ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
                         >
                             <FolderSync size={14} />
                         </Button>
+                        {onToolbox && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={onToolbox}
+                                title={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
+                                aria-label={toolboxOpen ? t("toolbox.hide") : t("toolbox.show")}
+                                aria-pressed={toolboxOpen}
+                                className={`h-8 w-8 p-0 ${toolboxOpen ? "bg-primary text-primary-foreground hover:bg-primary/90" : ""}`}
+                            >
+                                <Wrench size={14} />
+                            </Button>
+                        )}
                         <Button
                             variant="outline"
                             size="sm"

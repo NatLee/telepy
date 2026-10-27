@@ -3008,6 +3008,86 @@ pub struct WebhookSecret {
     pub secret: String,
 }
 
+// ---------------------------------------------------------------- toolbox (command snippets)
+
+/// 片段要問的變數。秘密變數沒有預設值（值永遠不存）。/ A variable a snippet asks for; a secret one never has a default.
+#[derive(ToSchema)]
+pub struct SnippetVariable {
+    /// `$name` / `${name}` 裡的名稱。/ The name used as `$name` / `${name}`.
+    pub name: String,
+    pub label: String,
+    pub default: String,
+    pub secret: bool,
+}
+
+/// 工具箱裡的一個指令片段。/ A command snippet in the toolbox.
+#[derive(ToSchema)]
+pub struct Snippet {
+    pub id: i64,
+    /// user（自己的）/ tunnel（這條隧道的）/ site（全站）。/ user (your own), tunnel (this tunnel's) or site (site-wide).
+    pub scope: String,
+    pub tunnel_id: Option<i64>,
+    pub name: String,
+    pub command: String,
+    pub description: String,
+    pub variables: Vec<SnippetVariable>,
+    /// 送出前先問一次。/ Ask before running.
+    pub confirm: bool,
+    pub sort_order: i64,
+    pub use_count: i64,
+    pub last_used_at: Option<String>,
+    /// 你能不能改它。/ Whether you may change it.
+    pub can_edit: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct SnippetTunnel {
+    pub id: i64,
+    pub name: String,
+    /// 能用這條隧道的片段（能開它的終端機）。/ May use this tunnel's snippets (can open its terminal).
+    pub can_use: bool,
+    /// owner / ADMIN：能新增 / 修改它的片段。/ Owner / ADMIN: may add and change its snippets.
+    pub can_edit: bool,
+}
+
+/// `GET /api/snippets`：自己的 + 那條隧道的 + 全站的。/ Your own + that tunnel's + site-wide.
+#[derive(ToSchema)]
+pub struct SnippetList {
+    pub snippets: Vec<Snippet>,
+    /// 帶了 `tunnel_id` 才有。/ Present with `tunnel_id`.
+    pub tunnel: Option<SnippetTunnel>,
+    pub can_edit_site: bool,
+    /// 每個範圍最多幾個。/ Snippets per scope at most.
+    pub limit: i64,
+}
+
+/// 新增或修改片段（修改時只帶要改的欄位；`scope` / `tunnel_id` 只在新增時用）。
+/// Create or change a snippet (send only what changes on PATCH; `scope` / `tunnel_id` only on create).
+#[derive(ToSchema)]
+pub struct SnippetInput {
+    /// user（預設）/ tunnel / site
+    pub scope: Option<String>,
+    pub tunnel_id: Option<i64>,
+    /// ≤ 60
+    pub name: Option<String>,
+    /// ≤ 4000；多行 = 每行一個 Enter。/ ≤ 4000; several lines = one Enter each.
+    pub command: Option<String>,
+    pub description: Option<String>,
+    /// ≤ 20
+    pub variables: Option<Vec<SnippetVariable>>,
+    pub confirm: Option<bool>,
+    pub sort_order: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct SnippetUse {
+    pub id: i64,
+    pub use_count: i64,
+    pub last_used_at: Option<String>,
+}
+
 // ---------------------------------------------------------------- groups
 
 /// 我的通道群組（照我排的順序）；改動回傳整份。/ My tunnel groups, in my order; every write answers the whole list.

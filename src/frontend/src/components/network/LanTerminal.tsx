@@ -8,7 +8,12 @@
  * 外觀(字型 / 字級 / 配色)跟終端機頁一樣:個人預設 + 這台裝置(隧道)的覆寫,改了即時套用。
  * Appearance follows the terminal page: personal default + this device's (tunnel's) override, applied live.
  */
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Wrench } from "lucide-react";
+import { Modal } from "@/components/ui/Modal";
+import { ToolboxPanel } from "@/components/toolbox/ToolboxPanel";
+import { useI18n } from "@/lib/i18n";
+import type { ToolboxTarget } from "@/lib/snippets";
 import "xterm/css/xterm.css";
 import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
@@ -313,10 +318,48 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     }, []);
     const dismiss = useCallback(() => setBanner(null), []);
 
+    // 工具箱：送進這個區網終端機（同一條 pty_input，指令規則照樣檢查）。/ The toolbox types into this LAN terminal.
+    const { t } = useI18n();
+    const [toolboxOpen, setToolboxOpen] = useState(false);
+    const bannerRef = useRef(banner);
+    useEffect(() => { bannerRef.current = banner; }, [banner]);
+    const toolboxTarget: ToolboxTarget = useMemo(() => ({
+        tunnelId,
+        send: (input: string) => {
+            const ws = wsRef.current;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+            ws.send(JSON.stringify({ action: "pty_input", payload: { input } }));
+            return true;
+        },
+        onOutput: (cb: () => void) => {
+            const sub = termRef.current?.term?.onWriteParsed?.(cb) as { dispose: () => void } | undefined;
+            return () => sub?.dispose();
+        },
+        connected: session.status === "connected",
+        banner: () => bannerRef.current,
+        where: `${login || "?"}@${session.hostName}`,
+    }), [tunnelId, session.status, session.hostName, login]);
+    const afterSend = useCallback(() => {
+        setToolboxOpen(false);
+        setTimeout(() => termRef.current?.term?.focus(), 50);
+    }, []);
+
     // 外框跟著配色的背景色(淺色配色不會留一圈黑邊)。/ The padding follows the scheme background (no black ring on light schemes).
     return (
         <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
             <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ background: resolved.scheme.theme.background }} />
+            <button
+                type="button"
+                onClick={() => setToolboxOpen(true)}
+                title={t("toolbox.show")}
+                aria-label={t("toolbox.show")}
+                className="absolute bottom-2 right-3 z-10 grid size-8 place-items-center rounded-md border border-border bg-card/90 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            >
+                <Wrench size={15} />
+            </button>
+            <Modal isOpen={toolboxOpen} onClose={() => setToolboxOpen(false)} title={t("toolbox.title")} icon={<Wrench />} size="lg" bodyClassName="px-2 py-2 sm:px-3">
+                <ToolboxPanel target={toolboxTarget} tunnelName={session.tunnelName} onSent={afterSend} embedded />
+            </Modal>
             {(banner || reconnect) && (
                 <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex justify-end">
                     <div className="pointer-events-auto w-full max-w-md space-y-2">
