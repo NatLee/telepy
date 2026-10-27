@@ -4382,4 +4382,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "access.info.b.linkLogin": "登入",
     "access.info.bothTitle": "兩道門都要過",
     "access.info.bothGates": "{user} 要在某台裝置上用「{feature}」，上面那條要是「開」，下面那條也要讓他拿到那條隧道和允許的帳號。Telepy 先看功能，所以功能被關掉時，連別人分享給他的隧道也會被拒。",
+    "groups.searchGroups": "搜尋群組",
+    "groups.tunnel.fromShown": "把這 {count} 條建成群組",
+    "groups.tunnel.fromShownHint": "用目前搜尋結果的所有通道（所有頁）建立群組",
 };
