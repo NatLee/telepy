@@ -10,10 +10,25 @@ export interface SessionFilter {
     kind: KindFilter;
     mineOnly: boolean;
     tunnelId: number | null;
+    /** 只看某個人的（管理區）。/ Only one person's (admin section). */
+    userId?: number | null;
 }
 
 export function filterSessions(list: LiveSession[], f: SessionFilter): LiveSession[] {
-    return list.filter((s) => (f.kind === "all" || s.kind === f.kind) && (!f.mineOnly || s.mine) && (f.tunnelId === null || s.tunnel.id === f.tunnelId));
+    return list.filter(
+        (s) =>
+            (f.kind === "all" || s.kind === f.kind) &&
+            (!f.mineOnly || s.mine) &&
+            (f.tunnelId === null || s.tunnel.id === f.tunnelId) &&
+            (f.userId === null || f.userId === undefined || s.user.id === f.userId)
+    );
+}
+
+/** 清單裡出現的人（依名稱），給管理區的使用者選單。/ The people in the list, by name, for the admin user filter. */
+export function usersIn(list: { user: { id: number; username: string } }[]): { id: number; username: string }[] {
+    const m = new Map<number, string>();
+    for (const s of list) m.set(s.user.id, s.user.username);
+    return [...m.entries()].map(([id, username]) => ({ id, username })).sort((a, b) => a.username.localeCompare(b.username));
 }
 
 export interface TunnelGroup {

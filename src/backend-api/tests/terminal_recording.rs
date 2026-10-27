@@ -78,6 +78,16 @@ async fn terminal_sessions_can_be_recorded() {
     assert_eq!(recordings(&lab, &bob).await[0]["can_delete"], false);
     assert!(recordings(&lab, &carol).await.is_empty());
     assert_eq!(lab.app.get(&format!("/api/recordings/{id}/cast"), Some(&carol.token)).await.status, StatusCode::NOT_FOUND);
+    // 管理員：自己的清單是空的（沒有隧道），全站的在 `scope=all`，而且照樣能開、能刪；非管理員要全站 = 403。
+    // An admin: their own list is empty (no tunnels); everyone's is under `scope=all`, still openable and deletable;
+    // a non-admin asking for it gets 403.
+    let r = lab.app.get("/api/recordings", Some(&lab.admin_token)).await;
+    assert_eq!(r.json["recordings"], json!([]), "{}", r.text);
+    let r = lab.app.get("/api/recordings?scope=all", Some(&lab.admin_token)).await;
+    assert_eq!((r.json["recordings"][0]["id"].as_i64(), r.json["recordings"][0]["can_delete"].as_bool()), (Some(id), Some(true)), "{}", r.text);
+    assert_eq!(lab.app.get(&format!("/api/recordings/{id}/cast"), Some(&lab.admin_token)).await.status, StatusCode::OK);
+    let r = lab.app.get("/api/recordings?scope=all", Some(&carol.token)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")), "{}", r.text);
     assert_eq!(lab.app.delete(&format!("/api/recordings/{id}"), Some(&bob.token)).await.status, StatusCode::FORBIDDEN);
     assert_eq!(lab.app.delete(&format!("/api/recordings/{id}"), Some(&alice.token)).await.status, StatusCode::NO_CONTENT);
     assert!(recordings(&lab, &alice).await.is_empty());

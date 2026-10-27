@@ -1,6 +1,8 @@
 /**
- * 終端機錄影清單：讀 `/api/recordings`（可只看一條隧道）、下載檔案、刪除。隧道設定變了（UPDATED-TUNNELS）就重抓。
- * Terminal recordings: list (optionally one tunnel), fetch a file, delete. Refetches when tunnels change.
+ * 終端機錄影清單：讀 `/api/recordings`（可只看一條隧道；`all` = 管理區的全站清單）、下載檔案、刪除。
+ * 隧道設定變了（UPDATED-TUNNELS）就重抓。
+ * Terminal recordings: list (optionally one tunnel; `all` = the admin section's site-wide list), fetch a file,
+ * delete. Refetches when tunnels change.
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
@@ -9,8 +11,9 @@ import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import type { Recording } from "@/types/recording";
+import type { ViewScope } from "@/components/layout/AdminViews";
 
-export function useRecordings(tunnelId: number | null) {
+export function useRecordings(tunnelId: number | null, scope: ViewScope = "mine") {
     const { t } = useI18n();
     const { showSuccess, showError } = useToast();
     const [list, setList] = useState<Recording[] | null>(null);
@@ -18,7 +21,10 @@ export function useRecordings(tunnelId: number | null) {
 
     const reload = useCallback(async () => {
         try {
-            const res = await apiFetch(`/api/recordings${tunnelId ? `?tunnel_id=${tunnelId}` : ""}`);
+            const qs = new URLSearchParams();
+            if (tunnelId) qs.set("tunnel_id", String(tunnelId));
+            if (scope === "all") qs.set("scope", "all");
+            const res = await apiFetch(`/api/recordings${qs.size ? `?${qs.toString()}` : ""}`);
             if (!res.ok) {
                 setFailed(true);
                 return;
@@ -28,7 +34,7 @@ export function useRecordings(tunnelId: number | null) {
         } catch {
             setFailed(true);
         }
-    }, [tunnelId]);
+    }, [tunnelId, scope]);
 
     useEffect(() => {
         const first = setTimeout(() => void reload(), 0);

@@ -53,6 +53,16 @@ async fn live_sessions_can_be_seen_and_ended() {
     assert!(sessions(&lab, &dave).await.is_empty());
     assert_eq!(lab.app.delete(&format!("/api/sessions/{id}"), Some(&dave.token)).await.status, StatusCode::NOT_FOUND);
 
+    // 管理員：自己的清單只有自己的（他沒有隧道 = 空的），全站的要 `scope=all`（管理區）；非管理員要 = 403。
+    // An admin's own list holds only their own (no tunnels = empty); everyone's needs `scope=all` (the admin
+    // section); a non-admin asking for it gets 403.
+    let r = lab.app.get("/api/sessions", Some(&lab.admin_token)).await;
+    assert_eq!(r.json["sessions"], serde_json::json!([]), "{}", r.text);
+    let r = lab.app.get("/api/sessions?scope=all", Some(&lab.admin_token)).await;
+    assert_eq!(r.json["sessions"][0]["user"]["username"], "bob", "{}", r.text);
+    let r = lab.app.get("/api/sessions?scope=all", Some(&dave.token)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")), "{}", r.text);
+
     // carol（ADMIN）結束它：bob 的終端機以 4009 關掉，清單上也沒了。/ carol ends it: 4009, and it leaves the list.
     assert_eq!(lab.app.delete(&format!("/api/sessions/{id}"), Some(&carol.token)).await.status, StatusCode::NO_CONTENT);
     assert_eq!(term.wait_closed().await, Some(4009));

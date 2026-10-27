@@ -1,16 +1,19 @@
 //! 即時 session：誰現在連在哪台裝置上（網頁終端機 / 檔案 / 遠端瀏覽器 / 遠端桌面 / 筆電經 gateway 的 ssh / MCP agent），
-//! 以及結束其中一個。看得到：自己的；自己擁有或 ADMIN 的隧道上所有人的；管理員看全部。結束的權限一樣。
-//! Live sessions: who is connected to which device right now, and ending one. Visible: your own, everyone's on
-//! tunnels you own or ADMIN, and everything for admins; ending follows the same rule.
+//! 以及結束其中一個。清單（`?scope=`）：`mine`（預設，管理員也一樣）= 自己的 ∪ 自己擁有或 ADMIN 的隧道上所有人的；
+//! `all`（只有管理員，管理區）= 全部。結束：同樣那些，管理員任何一個都能結束。
+//! Live sessions: who is connected to which device right now, and ending one. The list (`?scope=`): `mine`
+//! (default, admins too) = your own plus everyone's on tunnels you own or ADMIN; `all` (admins only, the admin
+//! section) = everything. Ending: the same ones, and admins may end any.
 
 use std::collections::HashMap;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use super::ViewScope;
 use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::Tunnel, users::User};
@@ -24,9 +27,15 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(list)).routes(routes!(end))
 }
 
-/// 這個人能管的隧道：{tunnel_id: 隧道}（管理員 = 全部）。/ Tunnels this user manages (all for admins).
+/// 這個人能管的隧道：{tunnel_id: 隧道}（管理員 = 全部）。權限檢查用這個。/ Tunnels this user manages (all for admins); for permission checks.
 pub(super) async fn managed(state: &AppState, me: &User) -> ApiResult<HashMap<i64, Tunnel>> {
-    if me.is_superuser {
+    managed_in(state, me, if me.is_superuser { ViewScope::All } else { ViewScope::Mine }).await
+}
+
+/// 清單用的範圍：`Mine` = 自己擁有或 ADMIN 的隧道（管理員也一樣），`All` = 全部（呼叫端已確認是管理員）。
+/// The list's range: `Mine` = tunnels you own or ADMIN (admins too); `All` = every tunnel (the caller checked admin).
+pub(super) async fn managed_in(state: &AppState, me: &User, scope: ViewScope) -> ApiResult<HashMap<i64, Tunnel>> {
+    if scope == ViewScope::All {
         return Ok(db::tunnels::all(&state.db).await?.into_iter().map(|t| (t.id, t)).collect());
     }
     let (mine, _) = db::sharing::permission_context(&state.db, me.id).await?;
@@ -81,8 +90,12 @@ fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64,
 }
 
 /// 現在的 session（依開始時間）。/ Live sessions, oldest first.
-#[utoipa::path(get, path = "/api/sessions", tag = "Sessions", security(("bearer" = [])), responses((status = 200, body = super::schemas::LiveSessions)))]
-async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
+#[utoipa::path(get, path = "/api/sessions", tag = "Sessions", security(("bearer" = [])), params(("scope" = Option<String>, Query, description = "mine (default, admins too: yours plus everyone's on tunnels you own or ADMIN) or all (admins only)")), responses((status = 200, body = super::schemas::LiveSessions), (status = 403, description = "scope=all from a non-admin (code admin_only)", body = super::schemas::ErrorBody)))]
+async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let scope = ViewScope::parse(q.get("scope").map(String::as_str), me.is_superuser)?;
+    // 列哪些：照範圍；能「看」哪些：照權限（管理員在自己的清單裡也能看別人在他隧道上的）。
+    // Which to list follows the scope; which may be watched follows the permission.
+    let listed = managed_in(&state, &me, scope).await?;
     let managed = managed(&state, &me).await?;
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::new();
@@ -91,7 +104,7 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegate
     // 「看」要能用終端機。/ Watching needs the terminal feature.
     let can_watch = state.features.allowed(&me, crate::features::Feature::Terminal).await.unwrap_or(false);
     for e in all {
-        if !may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)) || !d.allows(e.tunnel_id) {
+        if !may_end(e.user_id, me.id, listed.contains_key(&e.tunnel_id)) || !d.allows(e.tunnel_id) {
             continue;
         }
         if !names.contains_key(&e.tunnel_id) {

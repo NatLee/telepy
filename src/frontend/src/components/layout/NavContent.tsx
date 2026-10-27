@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -66,14 +66,17 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         ],
     },
     {
-        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、AI 活動、全站 webhook）在這裡，加上網站設定。
-        // The admin section: the pages above only hold "mine"; everyone's (logs, AI activity, site webhooks) live here,
+        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、即時連線、錄影、AI 活動、全站 webhook）在這裡，加上網站設定。
+        // The admin section: the pages above only hold "mine"; everyone's (logs, live sessions, recordings, AI
+        // activity, site webhooks) live here,
         // next to the site settings.
         key: "nav.admin",
         admin: true,
         links: [
             { key: "nav.settings", href: "/tunnels/settings", icon: <Settings size={18} /> },
             { key: "nav.adminLogs", href: "/tunnels/admin/logs", icon: <ScrollText size={18} /> },
+            { key: "nav.adminSessions", href: "/tunnels/admin/sessions", icon: <RadioReceiver size={18} /> },
+            { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },
             { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
             { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
         ],
