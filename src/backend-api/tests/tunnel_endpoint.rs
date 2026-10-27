@@ -136,7 +136,7 @@ async fn device_ip_on_the_tunnel_list() {
 
     // 裝置回報的 hostname / 內網網卡，以及「這次連線已經問過」。/ Reported hostname / LAN, and "already asked".
     let lan = r#"[{"iface":"eth0","ip":"192.168.1.23","prefix":24}]"#;
-    db::tunnel_endpoints::record_probe(db_, t.id, Some("box"), Some(lan), None, &telepy_server::util::now_db()).await.unwrap();
+    db::tunnel_endpoints::record_probe(db_, t.id, Some("box"), Some(lan), None, None, &telepy_server::util::now_db()).await.unwrap();
     let now = endpoint(&lab, &alice.token, t.id).await;
     assert_eq!(now["ip"], "127.0.0.1", "{now}");
     assert_eq!(now["public_ip"], "203.0.113.9");
@@ -236,4 +236,107 @@ async fn device_asks_the_lookup_when_whoami_sees_an_internal_address() {
     assert_eq!(e["public_geo"]["scope"], "public");
     assert!(e["probe_error"].is_null(), "{e}");
     assert!(e["probed_at"].is_string(), "{e}");
+    // 同一個腳本也讀了裝置的基本狀況。/ The same script read the device facts.
+    assert!(e["facts"]["kernel"].is_string(), "{e}");
+    assert!(e["facts_at"].is_string(), "{e}");
+}
+
+/// 裝置的基本狀況：跟位址同一個唯讀腳本（真的 `/bin/sh`），存在 endpoint 上、單筆 retrieve 也帶；「立即重新整理」
+/// 只給 owner / ADMIN、每分鐘一次、離線是 409；新的警示每條隧道每種 24 小時只發一次（Logs + 通知 owner / ADMIN）。
+/// Device facts come from the same read-only script (a real `/bin/sh`), are stored on the endpoint and served by the
+/// single retrieve; "Refresh now" is owner / ADMIN only, once a minute, 409 when offline; alerts are de-duplicated.
+#[tokio::test]
+async fn device_facts_and_refresh_now() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await; // owner
+    let bob = lab.user("bob").await; // VIEW + pi: sees the facts, cannot refresh
+    let carol = lab.user("carol").await; // EDIT without accounts: no facts
+    let opts = common::lab::MachineOpts { shell: true, ..Default::default() };
+    let boxm = lab.machine_with("box", &[("pi", &[&lab.service])], opts).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let pi = lab.username(&alice, &dev, "pi").await;
+    lab.share(&alice, &dev, &bob, "view", &[pi]).await;
+    lab.share(&alice, &dev, &carol, "edit", &[]).await;
+    let state = &lab.app.state;
+    wait_for("endpoint row", async || endpoint(&lab, &alice.token, dev.tunnel_id).await.is_object()).await;
+    let path = format!("/api/reverse/server/{}/probe", dev.tunnel_id);
+
+    // VIEW / EDIT 不能叫裝置跑腳本。/ VIEW and EDIT sharees cannot make the device run the script.
+    for u in [&bob, &carol] {
+        let r = lab.app.post(&path, Some(&u.token), serde_json::json!({})).await;
+        assert_eq!(r.status, 403, "{}", r.text);
+    }
+
+    let mut bob_rx = state.hub.subscribe_user(bob.id);
+    let r = lab.app.post(&path, Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.text);
+    let facts = &r.json["facts"];
+    assert!(r.json["probe_error"].is_null(), "{}", r.text);
+    assert!(facts["kernel"].is_string() && facts["os"].is_string(), "uname answered: {facts}");
+    assert!(facts["disk_total_kb"].as_u64().unwrap_or(0) > 0, "df answered: {facts}");
+    assert!(facts["warnings"].is_array(), "{facts}");
+    assert!(r.json["facts_at"].as_str().unwrap().ends_with('Z'), "{}", r.text);
+    let mut got = false;
+    while let Ok(m) = bob_rx.try_recv() {
+        got |= m.contains("DEVICE-FACTS-UPDATED");
+    }
+    assert!(got, "the tunnel audience is told to refetch");
+
+    // 每分鐘一次。/ Once a minute.
+    let r = lab.app.post(&path, Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, 429, "{}", r.text);
+    assert_eq!(r.json["code"], "too_soon");
+    assert!(r.json["retry_after"].as_u64().unwrap() >= 1);
+
+    // 列表與單筆 retrieve 都帶，看得到的人同 `endpoint`。/ List and retrieve carry them for the same viewers.
+    assert_eq!(endpoint(&lab, &bob.token, dev.tunnel_id).await["facts"]["kernel"], facts["kernel"]);
+    let single = |token: String| {
+        let path = format!("/api/reverse/server/keys/{}", dev.tunnel_id);
+        let app = &lab.app;
+        async move { app.get(&path, Some(&token)).await.json }
+    };
+    assert_eq!(single(alice.token.clone()).await["endpoint"]["facts"]["os"], facts["os"]);
+    assert!(single(carol.token.clone()).await["endpoint"].is_null());
+
+    // 警示：Logs 一筆、owner 收到通知、VIEW 不收；24 小時內同一種不再發。用另一條還沒讀過的隧道（上面真的讀過的
+    // 那台可能真的磁碟快滿，已經發過）。/ Alerts on a second, never-read tunnel (the real machine above may really be short on disk).
+    let key2 = lab.keygen("box2-tunnel");
+    let port2 = free_port();
+    let t2 = db::tunnels::create(
+        &state.db,
+        db::tunnels::NewTunnel { user_id: alice.id, host_friendly_name: "box2", key: &key2.public, reverse_port: port2 as i64, description: None, default_username_id: None },
+    )
+    .await
+    .unwrap();
+    let dev2 = Device { tunnel_id: t2.id, name: "box2".into(), reverse_port: port2, target: boxm.clone(), key: key2 };
+    let pi2 = lab.username(&alice, &dev2, "pi").await;
+    lab.share(&alice, &dev2, &bob, "view", &[pi2]).await;
+    let tunnel = db::tunnels::by_id(&state.db, dev2.tunnel_id).await.unwrap().unwrap();
+    let low = telepy_server::device_facts::parse_facts("disk_total_kb=10000000\ndisk_avail_kb=100000\nreboot=1\n");
+    assert_eq!(low.warnings.len(), 2);
+    let mut alice_rx = state.hub.subscribe_user(alice.id);
+    let mut bob_rx = state.hub.subscribe_user(bob.id);
+    let warned = || async {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM telepy_gateway_event WHERE event = 'device_warning' AND tunnel_id = ?").bind(dev2.tunnel_id).fetch_one(&state.db.read).await.unwrap()
+    };
+    telepy_server::device_info::announce(state, &tunnel, dev2.reverse_port, &low).await;
+    assert_eq!(warned().await, 2);
+    let mut seen = Vec::new();
+    while let Ok(m) = alice_rx.try_recv() {
+        seen.push(m);
+    }
+    assert!(seen.iter().any(|m| m.contains("DEVICE-WARNING") && m.contains("\"disk\"") && m.contains("\"reboot\"")), "{seen:?}");
+    while let Ok(m) = bob_rx.try_recv() {
+        assert!(!m.contains("DEVICE-WARNING"), "VIEW sharees get no alert: {m}");
+    }
+    telepy_server::device_info::announce(state, &tunnel, dev2.reverse_port, &low).await;
+    assert_eq!(warned().await, 2, "once per kind per 24 h");
+
+    // 離線：409。/ Offline: 409.
+    lab.disconnect_device(&dev).await;
+    let status = state.status.clone();
+    wait_for("forward released", async || !status.listen_ports().is_some_and(|p| p.contains(&dev.reverse_port))).await;
+    let r = lab.app.post(&path, Some(&alice.token), serde_json::json!({})).await;
+    assert_eq!(r.status, 409, "{}", r.text);
+    assert_eq!(r.json["code"], "device_offline");
 }

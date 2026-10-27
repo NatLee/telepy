@@ -532,7 +532,7 @@ impl TelepyMcp {
         }
     }
 
-    #[tool(description = "Status of one tunnel: online, health (online, degraded = the tunnel is up but the device's SSH server does not answer, offline), latency, uptime over the last 24 hours (0..1, null without history) and the latest SSH gateway events (connects, disconnects, forwards, degraded, recovered).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
+    #[tool(description = "Status of one tunnel: online, health (online, degraded = the tunnel is up but the device's SSH server does not answer, offline), latency, uptime over the last 24 hours (0..1, null without history), the device facts read once a day (OS, kernel, arch, uptime_s, CPU, memory / root disk in KB, load average, ssh version, reboot_required; null when you may not see the device's details or it was never read), `warnings` (disk, memory, load or reboot, each with a detail) and the latest SSH gateway events (connects, disconnects, forwards, degraded, recovered).", annotations(title = "Tunnel status", read_only_hint = true, open_world_hint = false))]
     async fn tunnel_status(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
@@ -551,8 +551,19 @@ impl TelepyMcp {
             .into_iter()
             .map(|(at, event, message)| json!({ "at": crate::util::db_to_iso(&at, tz), "event": event, "message": message }))
             .collect();
+        // 裝置的基本狀況：跟網頁一樣只給能登入裝置的人（`can_see_endpoint`）。/ Facts follow `can_see_endpoint`, as on the web.
+        let eff = permissions::effective_for(db, p.user.id, &tunnel).await.ok().flatten();
+        let with_accounts = db::sharing::tunnels_with_allowed_usernames(db, p.user.id).await.map(|s| s.contains(&tunnel.id)).unwrap_or(false);
+        let facts: Value = if permissions::can_see_endpoint(eff, with_accounts, p.user.is_superuser) {
+            db::tunnel_endpoints::of_tunnel(db, tunnel.id).await.ok().flatten().and_then(|e| e.facts).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+        let warnings = facts.get("warnings").cloned().unwrap_or_else(|| json!([]));
         self.audit(&p, "tunnel_status", started, Audit { tunnel_id: Some(tunnel.id), ..Default::default() }).await;
         Ok(CallToolResult::structured(json!({
+            "facts": facts,
+            "warnings": warnings,
             "id": tunnel.id,
             "name": tunnel.host_friendly_name,
             "online": self.online(tunnel.reverse_port),

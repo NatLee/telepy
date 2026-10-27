@@ -27,6 +27,12 @@ export const NOTIFICATION_ACTIONS = {
     DEVICE_CLAIM_ATTEMPT: "DEVICE-CLAIM-ATTEMPT",
     // 裝置金鑰清單同步完（送給隧道擁有者與被分享者）。/ A device's key list was synced (tunnel audience).
     DEVICE_KEYS_UPDATED: "DEVICE-KEYS-UPDATED",
+    // 裝置的位址 / 基本狀況重新讀過了：{tunnel_id}（送給看得到隧道的人，開著的詳細資訊視窗重抓）。
+    // A device's addresses / facts were read again (tunnel audience; open details dialogs refetch).
+    DEVICE_FACTS_UPDATED: "DEVICE-FACTS-UPDATED",
+    // 裝置需要注意（磁碟 / 記憶體 / 負載 / 重開機）：{tunnel_id, tunnel_name, warnings}（送給擁有者與 ADMIN）。
+    // A device needs attention (disk / memory / load / reboot): owner + ADMIN sharees.
+    DEVICE_WARNING: "DEVICE-WARNING",
     // 區網掃描（#20）：進度 / 完成只送給發起的人，主機表更新送給看得到隧道的人。
     // LAN scan progress / done go to the scanner; host-list updates go to the tunnel's audience.
     LAN_SCAN_PROGRESS: "LAN-SCAN-PROGRESS",

@@ -66,6 +66,9 @@ pub fn endpoint_json(live: Option<&Endpoint>, last: Option<&LastEndpoint>, geo: 
     v["hostname"] = json!(last.and_then(|l| l.hostname.as_deref()));
     v["probed_at"] = json!(last.and_then(|l| l.probed_at.as_deref()).map(db_to_iso_utc_z));
     v["probe_error"] = json!(last.and_then(|l| l.probe_error.as_deref()));
+    // 裝置的基本狀況（`device_facts`，含 `warnings`）與讀到的時間。/ Device facts (with `warnings`) and when they were read.
+    v["facts"] = last.and_then(|l| l.facts.as_deref()).and_then(|s| serde_json::from_str::<Value>(s).ok()).unwrap_or(Value::Null);
+    v["facts_at"] = json!(last.and_then(|l| l.facts_at.as_deref()).map(db_to_iso_utc_z));
     v
 }
 

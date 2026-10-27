@@ -15,6 +15,7 @@ import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections
 import { DeviceHostKeySection } from "@/components/tunnels/DeviceHostKeySection";
 import { StepUpSetting } from "@/components/tunnels/StepUpSetting";
 import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
+import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -150,6 +151,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                             </span>
                         )}
                     </Section>
+
+                    {/* 裝置的基本狀況（能登入裝置的人才看得到）。/ Device facts (people who can log in to the device). */}
+                    <DeviceFactsSection tunnelId={details.id} isOpen={isOpen} endpoint={details.endpoint} deviceName={details.host_friendly_name} canRefresh={role === "owner" || role === "admin"} />
 
                     {/* 開 session 前確認是你（owner / ADMIN 可改）。/ Step-up before sessions (owner / ADMIN). */}
                     <StepUpSetting tunnelId={details.id} required={!!details.require_step_up} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
