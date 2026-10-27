@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, splitBulkConfig, type BulkConfigTunnel } from "./bulkSshConfig.ts";
+import { countAccess, deviceAccess, firstAccount, initialSelection, keysToAdd, pickParam, pickStanzas, splitBulkConfig, toggleAccount, type BulkConfigTunnel } from "./bulkSshConfig.ts";
 import type { KeyDevice } from "../types/keys.ts";
 
 const CONFIG = `# ===
@@ -77,4 +77,16 @@ test("counts and the first selection", () => {
     assert.deepEqual([...initialSelection([1, 2, 3], [2, 9])], [2]);
     // 篩出來的都放不進去 → 全部 / Nothing shown is eligible → everything
     assert.deepEqual([...initialSelection([1, 2], [9])], [1, 2]);
+});
+
+test("account picks: toggle in list order, never empty, and the pick parameter", () => {
+    const order = [5, 6, 7];
+    assert.deepEqual(toggleAccount([7], 5, order), [5, 7]);
+    assert.deepEqual(toggleAccount([5, 7], 5, order), [7]);
+    assert.deepEqual(toggleAccount([7], 7, order), [7], "the last one stays");
+    assert.deepEqual(firstAccount([5, 6], 6), [6]);
+    assert.deepEqual(firstAccount([5, 6], 9), [5], "a default I can't use falls back to the first");
+    assert.deepEqual(firstAccount([], 6), []);
+    assert.equal(pickParam({ 13: [7], 2: [5, 6], 4: [] }), "2:5.6,13:7");
+    assert.equal(pickParam({}), "");
 });

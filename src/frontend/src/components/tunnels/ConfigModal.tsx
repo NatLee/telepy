@@ -16,13 +16,13 @@ import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
-import { NativeSelect } from "@/components/ui/native-select";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { ConfigRouteMap, type ConfigPart } from "@/components/sshconfig/ConfigRouteMap";
 import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "@/components/sshconfig/ConfigSteps";
 import { TransportInfoDialog } from "@/components/sshconfig/TransportInfoDialog";
-import { TunnelModalProps, TargetUser, type Tunnel } from "@/types/tunnel";
+import { AccountChips } from "@/components/sshconfig/AccountChips";
+import { TunnelModalProps, type Tunnel } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
 import { cn } from "@/lib/utils";
@@ -36,37 +36,11 @@ type ConfigModalProps = TunnelModalProps & {
 };
 type AccessState = TargetStatus | "missing";
 
-function AccountPicker({ users, value, onChange }: { users: TargetUser[]; value: string; onChange: (v: string) => void }) {
-    const { t } = useI18n();
-    const all = { value: "all", label: t("config.allAccounts", { count: users.length }) };
-    return (
-        <ToolbarField label={t("config.loginAs")}>
-            {users.length <= 4 ? (
-                <Segmented
-                    size="sm"
-                    fullWidth
-                    aria-label={t("config.loginAs")}
-                    value={value}
-                    onChange={onChange}
-                    options={[...users.map((u) => ({ value: String(u.id), label: <span className="font-mono">{u.username}</span>, title: u.username })), all]}
-                />
-            ) : (
-                <NativeSelect className="w-full sm:w-56" aria-label={t("config.loginAs")} value={value} onChange={(e) => onChange(e.target.value)}>
-                    {users.map((u) => (
-                        <option key={u.id} value={String(u.id)}>{u.username}</option>
-                    ))}
-                    <option value="all">{all.label}</option>
-                </NativeSelect>
-            )}
-        </ToolbarField>
-    );
-}
-
 export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: ConfigModalProps) {
     const { t, tn } = useI18n();
     const {
-        state: { data, loading, targetUsers, selectedUserId, serverStanza, deviceStanzas, deviceKeys, transport },
-        actions: { handleUserChange, handleTransportChange }
+        state: { data, loading, targetUsers, selectedIds, serverStanza, deviceStanzas, deviceKeys, transport },
+        actions: { toggleUser, selectAllUsers, handleTransportChange }
     } = useConfigModal(isOpen, tunnelId);
     // SSH over WebSocket：筆電先存小程式，伺服器區塊的 ProxyCommand 用它。/ The carrier the server stanza's ProxyCommand runs.
     const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
@@ -122,11 +96,21 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
             title={t("config.title")}
             description={tn("config.subtitle", { cmd: code(firstAlias ? `ssh ${firstAlias}` : "ssh") })}
             icon={<FileCode2 />}
-            size="3xl"
+            size="4xl"
             isLoading={loading}
             toolbar={
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-                    {targetUsers.length > 1 && <AccountPicker users={targetUsers} value={selectedUserId} onChange={handleUserChange} />}
+                    {targetUsers.length > 1 && (
+                        <ToolbarField label={t("config.loginAs")}>
+                            <AccountChips
+                                accounts={targetUsers}
+                                selected={new Set(selectedIds)}
+                                onToggle={toggleUser}
+                                onAll={selectAllUsers}
+                                defaultId={data?.default_username_id}
+                            />
+                        </ToolbarField>
+                    )}
                     <ToolbarField label={t("config.transportLabel")} info={{ label: t("config.ti.open"), onClick: () => setTransportInfo(true) }}>
                         <Segmented
                             size="sm"
@@ -168,7 +152,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
 
                     <ol className="list-none">
                         <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
-                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} active={active} onActive={setActive} />
+                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} legacyAlias={data.server.legacy_alias} active={active} onActive={setActive} />
                             {onBulk && (
                                 <p className="text-xs text-muted-foreground">
                                     {t("config.bulk.fromSingle")}{" "}

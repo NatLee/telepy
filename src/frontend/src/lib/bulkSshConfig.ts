@@ -21,11 +21,15 @@ export interface BulkConfigTunnel {
     reverse_port: number;
     hosts: BulkConfigHost[];
     usernames: { id: number; username: string }[];
+    /** 隧道的預設帳號（我能用時）。/ The tunnel's default account, when I may use it. */
+    default_username_id?: number | null;
+    /** 這台的帳號是 `pick` 指定的。/ This device's accounts came from `pick`. */
+    picked?: boolean;
 }
 
 export interface BulkConfigData {
     config: string;
-    server: { alias: string; host: string; port: string };
+    server: { alias: string; host: string; port: string; legacy_alias?: string };
     accounts: BulkAccounts;
     tunnels: BulkConfigTunnel[];
     skipped: { id: number; name: string; reason: "no_accounts" }[];
@@ -119,4 +123,26 @@ export function initialSelection(eligible: number[], shownOnPage: number[] | nul
     const shown = new Set(shownOnPage);
     const picked = eligible.filter((id) => shown.has(id));
     return new Set(picked.length > 0 ? picked : eligible);
+}
+
+/** 換一個帳號的勾選（照帳號清單的順序）；最後一個不取消。/ Toggle one account, kept in list order; never untick the last. */
+export function toggleAccount(current: number[], id: number, order: number[]): number[] {
+    if (current.includes(id)) return current.length > 1 ? current.filter((x) => x !== id) : current;
+    const next = new Set([...current, id]);
+    return order.filter((x) => next.has(x));
+}
+
+/** 單台一開始勾哪個帳號：隧道的預設帳號（能用時），否則第一個。/ The single config's first pick: the default, else the first. */
+export function firstAccount(ids: number[], defaultId: number | null | undefined): number[] {
+    if (ids.length === 0) return [];
+    return [defaultId != null && ids.includes(defaultId) ? defaultId : ids[0]];
+}
+
+/** 逐台帳號 → 後端的 `pick` 參數（`<隧道>:<帳號>.<帳號>,…`，依隧道 id 排序，空的不送）。/ Per-device picks → `pick`. */
+export function pickParam(picks: Record<number, number[]>): string {
+    return Object.entries(picks)
+        .filter(([, ids]) => ids.length > 0)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([t, ids]) => `${t}:${ids.join(".")}`)
+        .join(",");
 }

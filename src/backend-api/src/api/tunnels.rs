@@ -483,20 +483,26 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
 async fn usernames_for_server(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let not_found = || ApiError::not_found("Server not found");
     let t = db::tunnels::by_id(&state.db, id).await?.ok_or_else(not_found)?;
-    if permissions::effective_for(&state.db, user.id, &t).await?.is_none() {
-        return Err(not_found());
-    }
+    let Some(eff) = permissions::effective_for(&state.db, user.id, &t).await? else { return Err(not_found()) };
     let usernames = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let ids: Vec<i64> = usernames.iter().map(|u| u.id).collect();
     let default_id = t.default_username_id.filter(|d| ids.contains(d));
+    // 管理的人（owner / ADMIN）才看得到每個帳號分給了幾位 sharee、有幾位 ADMIN（他們不用清單、每個帳號都能用）。
+    // Only managers (owner / ADMIN) see how many sharees hold each account and how many ADMIN sharees there are.
+    let manager = eff.satisfies(Permission::Admin);
+    let counts = if manager { db::sharing::allowed_counts(&state.db, t.id).await? } else { Default::default() };
+    let admins = if manager { Some(db::sharing::admin_sharee_ids(&state.db, t.id).await?.len()) } else { None };
     Ok(Json(json!({
         "usernames": usernames.iter().map(|u| json!({
             "id": u.id,
             "username": u.username,
             "created_by": u.created_by,
             "created_by_id": u.user_id,
+            "shared_with": manager.then(|| counts.get(&u.id).copied().unwrap_or(0)),
         })).collect::<Vec<_>>(),
         "default_username_id": default_id,
+        "admin_sharees": admins,
+        "can_manage": manager,
     })))
 }
 

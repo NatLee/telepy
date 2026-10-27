@@ -132,9 +132,75 @@ pub fn standalone(stanzas: &[Stanza], self_path: &str, known_hosts: &str, identi
     out
 }
 
-/// 裝置那一段的別名（不是 `telepy-ssh-server` 的那個）。/ The device stanza's alias.
-pub fn device_alias(stanzas: &[Stanza]) -> Option<&str> {
-    stanzas.iter().rev().map(|s| s.alias.as_str()).find(|a| *a != "telepy-ssh-server")
+/// 舊版每台 Telepy 共用的伺服器區塊別名（回應沒帶 `server.legacy_alias` 時用）。/ The old shared server alias.
+pub const LEGACY_SERVER_ALIAS: &str = "telepy-ssh-server";
+
+/// 回應裡伺服器區塊的別名（`server.alias`；舊版伺服器沒給就是共用的那個）。/ The server stanza's alias from a response.
+pub fn server_alias(cfg: &serde_json::Value) -> &str {
+    cfg["server"]["alias"].as_str().filter(|a| !a.is_empty()).unwrap_or(LEGACY_SERVER_ALIAS)
+}
+
+/// 裝置那一段的別名（不是伺服器區塊的那個）。/ The device stanza's alias (not the server stanza's).
+pub fn device_alias<'a>(stanzas: &'a [Stanza], server_alias: &str) -> Option<&'a str> {
+    stanzas.iter().rev().map(|s| s.alias.as_str()).find(|a| *a != server_alias)
+}
+
+/// known_hosts 合併：拿掉 `new` 裡出現的別名的舊行（換金鑰時不留舊的），別的伺服器的行原樣，再接上新的。
+/// Merge known_hosts: drop the old lines of the aliases in `new` (a rotated key leaves nothing behind), keep every
+/// other server's lines, append the new ones.
+pub fn merge_known_hosts(existing: &str, new: &[String]) -> String {
+    let aliases: Vec<&str> = new.iter().filter_map(|l| l.split_whitespace().next()).collect();
+    let mut lines: Vec<String> = existing.lines().filter(|l| l.split_whitespace().next().is_some_and(|a| !aliases.contains(&a))).map(str::to_string).collect();
+    lines.extend(new.iter().cloned());
+    lines.join("\n") + "\n"
+}
+
+/// 舊版的共用伺服器區塊：第一個寫著 `HostKeyAlias <me>` 的完整 `legacy` 標記區塊，只有在檔案裡其他非註解行都不再用
+/// `legacy` 這個名字（ProxyCommand / ProxyJump / Host …）時才拿掉——它一定是這台的，也沒有裝置區塊還指著它。網頁的
+/// 安裝指令（sh / PowerShell）照同一條規則。
+/// The old shared server block: the first complete `legacy` block that says `HostKeyAlias <me>` is removed only when
+/// no other non-comment line in the file names `legacy` (ProxyCommand / ProxyJump / Host …) — so it is provably this
+/// server's and no device block still jumps through it. The web's install commands follow the same rule.
+pub fn prune_legacy(text: &str, legacy: &str, me: &str) -> String {
+    if legacy.is_empty() || legacy == me {
+        return text.to_string();
+    }
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let bare = |l: &str| l.trim_end_matches(['\n', '\r']).to_string();
+    let mut block: Option<(usize, usize)> = None;
+    let mut i = 0;
+    while i < lines.len() && block.is_none() {
+        if bare(lines[i]) == open_marker(legacy) {
+            let mut j = i + 1;
+            while j < lines.len() {
+                let b = bare(lines[j]);
+                if b == close_marker(legacy) {
+                    let mine = lines[i + 1..j].iter().any(|l| {
+                        let mut w = l.split_whitespace();
+                        w.next().is_some_and(|k| k.eq_ignore_ascii_case("HostKeyAlias")) && w.next() == Some(me)
+                    });
+                    if mine {
+                        block = Some((i, j));
+                    }
+                    break;
+                }
+                if b.starts_with("# >>> telepy ") {
+                    break;
+                }
+                j += 1;
+            }
+        }
+        i += 1;
+    }
+    let Some((start, end)) = block else { return text.to_string() };
+    let used = lines.iter().enumerate().filter(|(k, _)| *k < start || *k > end).any(|(_, l)| {
+        let t = l.trim();
+        !t.starts_with('#') && t.split(|c: char| c.is_whitespace() || c == ',').any(|w| w == legacy)
+    });
+    if used {
+        return text.to_string();
+    }
+    lines[..start].concat() + &lines[end + 1..].concat()
 }
 
 #[cfg(test)]
@@ -149,8 +215,37 @@ mod tests {
         assert_eq!(s.len(), 2);
         assert_eq!(s[0].alias, "telepy-ssh-server");
         assert!(s[0].options.contains(&("Port".into(), "24242".into())));
-        assert_eq!(device_alias(&s), Some("box"));
+        assert_eq!(device_alias(&s, "telepy-ssh-server"), Some("box"));
+        assert_eq!(server_alias(&serde_json::json!({"server": {"alias": "telepy-t.example-24242"}})), "telepy-t.example-24242");
+        assert_eq!(server_alias(&serde_json::json!({})), "telepy-ssh-server");
         assert!(s[1].options.contains(&("ProxyCommand".into(), "ssh -W %h:%p telepy-ssh-server".into())));
+    }
+
+    #[test]
+    fn known_hosts_merge_replaces_only_this_servers_lines() {
+        let old = "telepy-a-1 ssh-ed25519 OLD\ntelepy-b-2 ssh-ed25519 B\n";
+        assert_eq!(merge_known_hosts(old, &["telepy-a-1 ssh-ed25519 NEW".into()]), "telepy-b-2 ssh-ed25519 B\ntelepy-a-1 ssh-ed25519 NEW\n");
+        assert_eq!(merge_known_hosts("", &["telepy-a-1 k".into()]), "telepy-a-1 k\n");
+    }
+
+    #[test]
+    fn the_legacy_block_goes_only_when_it_is_ours_and_unused() {
+        let legacy = "# >>> telepy telepy-ssh-server >>>\nHost telepy-ssh-server\n    HostName t\n    HostKeyAlias telepy-t-1\n# <<< telepy telepy-ssh-server <<<\n";
+        let new_dev = "# >>> telepy box >>>\nHost box\n    ProxyCommand ssh -W %h:%p telepy-t-1\n# <<< telepy box <<<\n";
+        let old_dev = "# >>> telepy cam >>>\nHost cam\n    ProxyCommand ssh -W %h:%p telepy-ssh-server\n# <<< telepy cam <<<\n";
+        // 沒人用了 → 拿掉 / Nothing uses it → removed
+        assert_eq!(prune_legacy(&format!("Host x\n{legacy}{new_dev}"), "telepy-ssh-server", "telepy-t-1"), format!("Host x\n{new_dev}"));
+        // 還有舊的裝置區塊跳它 → 留著 / An old device block still jumps through it → kept
+        let text = format!("{legacy}{old_dev}{new_dev}");
+        assert_eq!(prune_legacy(&text, "telepy-ssh-server", "telepy-t-1"), text);
+        // 別台伺服器的（HostKeyAlias 不同）→ 留著 / Another server's (different HostKeyAlias) → kept
+        assert_eq!(prune_legacy(&format!("{legacy}{new_dev}"), "telepy-ssh-server", "telepy-other-9"), format!("{legacy}{new_dev}"));
+        // 沒有結尾標記 → 留著；註解裡提到不算 / Unterminated → kept; a mention in a comment does not count
+        let open = "# >>> telepy telepy-ssh-server >>>\nHost telepy-ssh-server\n    HostKeyAlias telepy-t-1\n";
+        assert_eq!(prune_legacy(&format!("{open}{new_dev}"), "telepy-ssh-server", "telepy-t-1"), format!("{open}{new_dev}"));
+        assert_eq!(prune_legacy(&format!("# was telepy-ssh-server\n{legacy}"), "telepy-ssh-server", "telepy-t-1"), "# was telepy-ssh-server\n");
+        // 舊版伺服器（別名還是共用的）→ 不動 / An old server (alias still the shared one) → untouched
+        assert_eq!(prune_legacy(legacy, "telepy-ssh-server", "telepy-ssh-server"), legacy);
     }
 
     #[test]

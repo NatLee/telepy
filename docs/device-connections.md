@@ -186,7 +186,9 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 事件會註明）。使用者金鑰認不出隧道，照舊只能開自己擁有的隧道的號碼。
 
 筆電的 `direct-tcpip` 除了 `localhost:<號碼>`，也接受 `<隧道名稱>:<任意 port>`（名稱全站唯一）：產生的 ssh config
-裝置區塊改成 `HostName <名稱>` / `Port 22`，`ProxyCommand ssh -W %h:%p telepy-ssh-server` 不變；舊的設定檔照常可用。
+裝置區塊改成 `HostName <名稱>` / `Port 22`，經 `ProxyCommand ssh -W %h:%p <伺服器區塊>` 跳過去；舊的設定檔照常可用。
+伺服器區塊的別名是 `telepy-<網域>-<port>`（跟 `HostKeyAlias` 同一個字串），每台 Telepy 各自一個，裝在同一份 config 裡互不干擾；
+舊版共用的 `telepy-ssh-server` 區塊由安裝指令在「確定是這台、又沒有區塊再用它」時清掉。
 存取規則與以前相同（擁有者、ADMIN、或至少有一個允許帳號的 sharee；敏感隧道要先在網頁確認）。
 
 裝置端腳本一律寫 `-R 0`（Docker 版 `SSH_TUNNEL_PORT=0`，一鍵加入也是）：號碼只存在伺服器裡。網頁刪除隧道時的移除腳本

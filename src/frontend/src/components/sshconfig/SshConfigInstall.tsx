@@ -58,6 +58,8 @@ interface Props {
     knownHosts?: string | null;
     /** SSH over WebSocket：伺服器區塊的 ProxyCommand 要用的小程式。/ The carrier the server stanza's ProxyCommand runs. */
     wsClient?: WsClient | null;
+    /** 舊版共用的伺服器別名（後端的 `server.legacy_alias`）：確定是這台、沒人用時清掉。/ The old shared alias, cleaned up when safe. */
+    legacyAlias?: string | null;
     active: ConfigPart | null;
     onActive: (part: ConfigPart | null) => void;
     /**
@@ -68,7 +70,7 @@ interface Props {
     bulk?: boolean;
 }
 
-export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, active, onActive, bulk = false }: Props) {
+export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, legacyAlias, active, onActive, bulk = false }: Props) {
     const { t, tn } = useI18n();
     // 只在對話框打開後才掛載，直接讀 localStorage 不會有 hydration 不一致。/ Mounted only inside an open dialog.
     const [shell, setShellState] = useState<ConfigShell>(readShell);
@@ -86,7 +88,8 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
     };
 
     const all = [...(serverStanza ? [serverStanza] : []), ...deviceStanzas];
-    const command = installCommand(shell, all, knownHosts, wsClient);
+    const legacy = legacyAlias && serverStanza && legacyAlias !== serverStanza.alias ? { alias: legacyAlias, me: serverStanza.alias } : null;
+    const command = installCommand(shell, all, knownHosts, wsClient, legacy);
     // 卡片照目前選的作業系統顯示（Windows 的 ProxyCommand 寫法不同）。/ Cards follow the chosen OS (Windows ProxyCommand differs).
     const shownServer = serverStanza ? adaptForShell([serverStanza], shell)[0] : null;
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
@@ -185,6 +188,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                             ...(knownHosts?.trim() ? [tn("config.cmd.knownHosts", { path: code(KNOWN_HOSTS_PATH) })] : []),
                             tn("config.cmd.backup", { path: code(shell === "posix" ? "~/.ssh/config.bak" : "config.bak") }),
                             t("config.cmd.rerun"),
+                            ...(legacy ? [tn("config.cmd.legacy", { alias: code(legacy.alias) })] : []),
                             t("config.cmd.untouched"),
                         ].map((line, i) => (
                             <li key={i} className="flex items-start gap-2">

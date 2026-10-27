@@ -278,8 +278,18 @@ pub fn sanitize_host_alias(value: &str) -> String {
     }
 }
 
-/// 筆電 config 裡伺服器區塊的別名（每台裝置的 ProxyCommand 都跳它）。/ The server stanza's alias (every device jumps through it).
-pub const SERVER_ALIAS: &str = "telepy-ssh-server";
+/// 舊版每台 Telepy 都用的伺服器區塊別名；第二台 Telepy 裝進同一份 config 時會把前一台的裝置導到自己。安裝指令在它
+/// 確定是這台的、而且沒有區塊再用它時才拿掉。/ The server stanza alias every Telepy used before: a second Telepy in
+/// the same config repointed the first one's devices. Install commands drop it only when it is provably this server's
+/// and nothing uses it any more.
+pub const LEGACY_SERVER_ALIAS: &str = "telepy-ssh-server";
+
+/// 筆電 config 裡伺服器區塊的別名 = `telepy-<網域>-<port>`，跟 `HostKeyAlias`（known_hosts 的名字）同一個字串，所以每台
+/// Telepy 各有自己的區塊。/ The laptop's server stanza alias: `telepy-<domain>-<port>`, the same string as its
+/// `HostKeyAlias` (the known_hosts name), so every Telepy server gets its own block.
+pub fn server_alias(server_domain: &str, reverse_server_ssh_port: &str) -> String {
+    sanitize_host_alias(&gateway_alias(server_domain, reverse_server_ssh_port))
+}
 
 /// 一台裝置的 Host 別名：一個帳號 = 裝置名稱；多個帳號 = `<名稱>-<帳號>`。`used` 裡已有的（多台一起產生時，
 /// 名稱經過清理後撞名，或撞到伺服器別名）加上 `-2`、`-3`…，並記進 `used`。
@@ -299,6 +309,26 @@ pub fn device_aliases(tunnel_name: &str, usernames: &[&str], used: &mut HashSet<
         .collect()
 }
 
+/// `1,2,3` → id 清單（空白忽略）；有一個不是數字就是 `Err`。/ `1,2,3` → ids; any non-number is an error.
+pub fn parse_id_list(s: &str) -> Result<Vec<i64>, ()> {
+    s.split(',').map(str::trim).filter(|p| !p.is_empty()).map(|p| p.parse::<i64>().map_err(|_| ())).collect()
+}
+
+/// 多台 config 的逐台帳號：`<隧道>:<帳號>.<帳號>,<隧道>:<帳號>` → 隧道 id → 帳號 id。同一條隧道出現兩次 = 錯。
+/// Per-device accounts for the bulk config: `<tunnel>:<account>.<account>,…` → tunnel id → account ids.
+pub fn parse_picks(s: &str) -> Result<HashMap<i64, Vec<i64>>, ()> {
+    let mut out = HashMap::new();
+    for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (tunnel, accounts) = part.split_once(':').ok_or(())?;
+        let tunnel = tunnel.trim().parse::<i64>().map_err(|_| ())?;
+        let ids: Vec<i64> = accounts.split('.').map(|a| a.trim().parse::<i64>().map_err(|_| ())).collect::<Result<_, _>>()?;
+        if ids.is_empty() || out.insert(tunnel, ids).is_some() {
+            return Err(());
+        }
+    }
+    Ok(out)
+}
+
 fn ensure_newline(mut s: String) -> String {
     if !s.is_empty() && !s.ends_with('\n') {
         s.push('\n');
@@ -309,12 +339,12 @@ fn ensure_newline(mut s: String) -> String {
 /// 筆電端 `~/.ssh/known_hosts` 旁的檔案。/ The laptop-side file next to `~/.ssh/known_hosts`.
 pub const LAPTOP_KNOWN_HOSTS: &str = "~/.ssh/telepy_known_hosts";
 
-/// `SshClientTemplate`：筆電 `~/.ssh/config` 的裝置區塊（經 telepy-ssh-server 跳板）。`HostName` 是隧道的名稱：
+/// `SshClientTemplate`：筆電 `~/.ssh/config` 的裝置區塊（經伺服器區塊 [`server_alias`] 跳板）。`HostName` 是隧道的名稱：
 /// gateway 的 direct-tcpip 以名稱認隧道（名稱全站唯一），port 只是給 ssh 看的（裝置的 sshd 在隧道另一端），舊的
 /// `localhost:<號碼>` 寫法照常可用。裝置的 host key 不在這裡釘（ProxyCommand 後面那一跳照舊不驗證）。
 /// The laptop's device stanza: `HostName` is the tunnel's name (the gateway resolves it; the old
 /// `localhost:<number>` form keeps working). The device's own host key is not pinned here.
-pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel_name: &str) -> String {
+pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel_name: &str, server_alias: &str) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
     m.insert("server_domain", tunnel_name.into());
@@ -324,7 +354,7 @@ pub fn render_client_config(host_friendly_name: &str, ssh_username: &str, tunnel
     m.insert("ssh_username", ssh_username.into());
     m.insert("host_friendly_name", sanitize_host_alias(host_friendly_name));
     m.insert("host_key_lines", "StrictHostKeyChecking no".into());
-    m.insert("client_proxy_command", "ProxyCommand ssh -W %h:%p telepy-ssh-server".into());
+    m.insert("client_proxy_command", format!("ProxyCommand ssh -W %h:%p {server_alias}"));
     ensure_newline(safe_substitute(SSH_CONFIG, &m))
 }
 
@@ -334,10 +364,10 @@ pub fn laptop_proxy_command(ws_url: &str) -> String {
     format!("ProxyCommand python3 {WS_CLIENT_PATH} {ws_url}")
 }
 
-/// `SshServerTemplate`：`Host telepy-ssh-server` 區塊。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
+/// `SshServerTemplate`：`Host telepy-<網域>-<port>` 區塊（[`server_alias`]）。有 gateway host key 就釘住（`~/.ssh/telepy_known_hosts` +
 /// `HostKeyAlias`，檔案內容見 [`known_hosts_lines`]），沒有就照舊不驗證。`ws_proxy` = SSH over WebSocket 的
 /// ProxyCommand 行（[`laptop_proxy_command`]），筆電只能出網頁 port 時用。
-/// The `Host telepy-ssh-server` stanza; pins the gateway's host keys when known, else no checking as before.
+/// The `Host telepy-<domain>-<port>` stanza ([`server_alias`]); pins the gateway's host keys when known, else no checking as before.
 pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, gateway_host_keys: &[String], ws_proxy: Option<&str>) -> String {
     let mut m: HashMap<&str, String> = HashMap::new();
     m.insert("username", "root".into());
@@ -346,7 +376,7 @@ pub fn render_server_config(server_domain: &str, reverse_server_ssh_port: &str, 
     m.insert("ssh_port", "-1".into());
     m.insert("reverse_server_ssh_port", reverse_server_ssh_port.into());
     m.insert("ssh_username", "telepy".into());
-    m.insert("host_friendly_name", SERVER_ALIAS.into());
+    m.insert("host_friendly_name", server_alias(server_domain, reverse_server_ssh_port));
     m.insert(
         "host_key_lines",
         if gateway_host_keys.is_empty() {
@@ -364,14 +394,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn id_lists_and_picks() {
+        assert_eq!(parse_id_list("3, 1,,2"), Ok(vec![3, 1, 2]));
+        assert_eq!(parse_id_list(""), Ok(vec![]));
+        assert!(parse_id_list("1,x").is_err());
+        let p = parse_picks("12:5.6, 13:7").unwrap();
+        assert_eq!(p.get(&12), Some(&vec![5, 6]));
+        assert_eq!(p.get(&13), Some(&vec![7]));
+        assert!(parse_picks("").unwrap().is_empty());
+        for bad in ["12", "12:", "x:1", "12:1.y", "12:1,12:2"] {
+            assert!(parse_picks(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn device_aliases_follow_the_account_count_and_never_repeat() {
-        let mut used = HashSet::from([SERVER_ALIAS.to_string()]);
+        let mut used = HashSet::from([server_alias("telepy.test", "24242")]);
         assert_eq!(device_aliases("pi", &["root"], &mut used), ["pi"]);
         assert_eq!(device_aliases("nas", &["root", "admin"], &mut used), ["nas-root", "nas-admin"]);
         // 清理後撞名、撞到別台的「名稱-帳號」或伺服器別名 → 加編號。/ Collisions get a number.
         assert_eq!(device_aliases("pi!", &["root"], &mut used), ["pi-2"]);
         assert_eq!(device_aliases("nas-root", &["x"], &mut used), ["nas-root-2"]);
-        assert_eq!(device_aliases("telepy-ssh-server", &["x"], &mut used), ["telepy-ssh-server-2"]);
+        assert_eq!(device_aliases("telepy-telepy.test-24242", &["x"], &mut used), ["telepy-telepy.test-24242-2"]);
         // 單台（空的 used）跟以前一樣。/ The single config (empty set) is unchanged.
         assert_eq!(device_aliases("my pi", &["a", "b"], &mut HashSet::new()), ["my-pi-a", "my-pi-b"]);
         assert!(device_aliases("pi", &[], &mut HashSet::new()).is_empty());
@@ -521,15 +565,16 @@ mod tests {
         assert!(pinned.contains("    StrictHostKeyChecking yes\n    UserKnownHostsFile ~/.ssh/telepy_known_hosts\n    HostKeyAlias telepy-telepy.test-24242\n    User telepy\n"), "{pinned}");
         assert_eq!(known_hosts_lines("telepy-telepy.test-24242", &["ssh-ed25519 AAAAgateway".to_string()]), "telepy-telepy.test-24242 ssh-ed25519 AAAAgateway\n");
         let server = render_server_config("telepy.test", "24242", &[], None);
-        assert!(server.starts_with("Host telepy-ssh-server\n"));
+        assert!(server.starts_with("Host telepy-telepy.test-24242\n"), "the server alias is its HostKeyAlias: {server}");
+        assert_eq!(server_alias("telepy.test", ""), "telepy-telepy.test");
         assert!(server.contains("Port  24242\n"));
         assert!(server.contains("User telepy\n"));
         assert!(server.ends_with('\n'));
-        let client = render_client_config("My Box!", "ubuntu", "My Box!");
+        let client = render_client_config("My Box!", "ubuntu", "My Box!", "telepy-telepy.test-24242");
         assert!(client.starts_with("Host My-Box\n"), "{client}");
         assert!(client.contains("HostName My Box!\n"), "the tunnel's name picks the tunnel at the gateway: {client}");
         assert!(client.contains("Port 22 \n"));
-        assert!(client.contains("ProxyCommand ssh -W %h:%p telepy-ssh-server"));
+        assert!(client.contains("ProxyCommand ssh -W %h:%p telepy-telepy.test-24242\n"), "{client}");
         assert_eq!(sanitize_host_alias("   "), "telepy-endpoint");
     }
 }

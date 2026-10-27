@@ -638,7 +638,7 @@ fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)
     let id = t["id"].as_i64().unwrap_or_default();
     let cfg = api.get(&format!("/tunnels/server/config/{id}?username_id={uid}"))?;
     let stanzas = sshcfg::parse_stanzas(s(&cfg, "config"));
-    let alias = sshcfg::device_alias(&stanzas).ok_or_else(|| anyhow!("the server sent no device stanza"))?.to_string();
+    let alias = sshcfg::device_alias(&stanzas, sshcfg::server_alias(&cfg)).ok_or_else(|| anyhow!("the server sent no device stanza"))?.to_string();
     let dir = ssh_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let kh = dir.join(format!("known_hosts-{}", server_slug(&api.server)));
@@ -728,9 +728,14 @@ fn config(api: &Api, a: ConfigArgs) -> Result<()> {
     };
     let mut stanzas: Vec<sshcfg::Stanza> = Vec::new();
     let mut known: Vec<String> = Vec::new();
+    // 這台 Telepy 的伺服器區塊別名與舊版的共用別名（每個回應都一樣）。/ This server's alias and the old shared one.
+    let mut server = sshcfg::LEGACY_SERVER_ALIAS.to_string();
+    let mut legacy = sshcfg::LEGACY_SERVER_ALIAS.to_string();
     for t in &picked {
         let id = t["id"].as_i64().unwrap_or_default();
         let cfg = api.get(&format!("/tunnels/server/config/{id}"))?;
+        server = sshcfg::server_alias(&cfg).to_string();
+        legacy = cfg["server"]["legacy_alias"].as_str().unwrap_or(sshcfg::LEGACY_SERVER_ALIAS).to_string();
         for st in sshcfg::parse_stanzas(s(&cfg, "config")) {
             if !stanzas.iter().any(|x| x.alias == st.alias) {
                 stanzas.push(st);
@@ -742,7 +747,7 @@ fn config(api: &Api, a: ConfigArgs) -> Result<()> {
             }
         }
     }
-    if stanzas.iter().all(|s| s.alias == "telepy-ssh-server") {
+    if stanzas.iter().all(|s| s.alias == server) {
         bail!("None of these tunnels has an account you can use.");
     }
     if print {
@@ -754,29 +759,23 @@ fn config(api: &Api, a: ConfigArgs) -> Result<()> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // 生成的 config 指到 ~/.ssh/telepy_known_hosts：先存它（合併，不覆蓋別的伺服器的行）。
-    // The generated config points at ~/.ssh/telepy_known_hosts: save it first (merged with other servers' lines).
+    // 生成的 config 指到 ~/.ssh/telepy_known_hosts：先存它（只換這台的行，別的伺服器的留著）。
+    // The generated config points at ~/.ssh/telepy_known_hosts: save it first (this server's lines replaced, others kept).
     if !known.is_empty() {
         let kh = target.parent().unwrap_or(&ssh_home).join("telepy_known_hosts");
-        let mut lines: Vec<String> = std::fs::read_to_string(&kh).unwrap_or_default().lines().map(str::to_string).collect();
-        for k in known {
-            if !lines.contains(&k) {
-                lines.push(k);
-            }
-        }
-        std::fs::write(&kh, lines.join("\n") + "\n")?;
+        std::fs::write(&kh, sshcfg::merge_known_hosts(&std::fs::read_to_string(&kh).unwrap_or_default(), &known))?;
     }
     let existing = std::fs::read_to_string(&target).unwrap_or_default();
     if !existing.is_empty() {
         std::fs::write(target.with_extension("bak"), &existing)?;
     }
-    std::fs::write(&target, sshcfg::install(&existing, &stanzas))?;
+    std::fs::write(&target, sshcfg::prune_legacy(&sshcfg::install(&existing, &stanzas), &legacy, &server))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
     }
-    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != "telepy-ssh-server").collect();
+    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != server).collect();
     eprintln!("Wrote {} host(s) to {}: {}. Connect with: ssh {}", aliases.len(), target.display(), aliases.join(", "), aliases.first().unwrap_or(&""));
     Ok(())
 }

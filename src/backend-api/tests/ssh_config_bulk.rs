@@ -11,6 +11,12 @@ fn hosts_in(config: &str) -> Vec<String> {
     config.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(|h| h.trim().to_string()).collect()
 }
 
+/// nas 上 admin 帳號的 id。/ The id of nas's admin account.
+async fn r_admin_id(lab: &Lab, user: &common::lab::LabUser, dev: &common::lab::Device) -> i64 {
+    let r = lab.app.get(&format!("/tunnels/server/config/{}", dev.tunnel_id), Some(&user.token)).await;
+    r.json["usernames"].as_array().unwrap().iter().find(|u| u["username"] == "admin").unwrap()["id"].as_i64().unwrap()
+}
+
 fn names(list: &Value) -> Vec<&str> {
     list.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect()
 }
@@ -44,15 +50,23 @@ async fn one_config_for_many_devices() {
     let r = lab.app.get("/tunnels/server/config", Some(&alice.token)).await;
     assert!(r.status.is_success(), "{}", r.text);
     let config = r.json["config"].as_str().unwrap();
-    assert_eq!(hosts_in(config), ["telepy-ssh-server", "nas", "pi"], "{config}");
+    // 伺服器區塊叫 telepy-<網域>-<port>（= HostKeyAlias），每台裝置的 ProxyCommand 都跳它。
+    // The server stanza is telepy-<domain>-<port> (= its HostKeyAlias); every device's ProxyCommand jumps through it.
+    let server = r.json["server"]["alias"].as_str().unwrap().to_string();
+    assert!(server.starts_with("telepy-") && server != "telepy-ssh-server", "{server}");
+    assert!(config.contains(&format!("HostKeyAlias {server}\n")), "{config}");
+    assert_eq!(config.matches(&format!("ProxyCommand ssh -W %h:%p {server}\n")).count(), 2, "{config}");
+    assert_eq!(hosts_in(config), [server.as_str(), "nas", "pi"], "{config}");
     assert_eq!(r.json["accounts"], "default");
     assert_eq!(names(&r.json["tunnels"]), ["nas", "pi"]);
     assert_eq!(r.json["tunnels"][0]["hosts"], json!([{ "alias": "nas", "username": "backup", "username_id": backup }]));
+    assert_eq!(r.json["tunnels"][0]["default_username_id"], backup);
+    assert_eq!(r.json["tunnels"][0]["picked"], false);
     assert_eq!(r.json["tunnels"][0]["usernames"].as_array().unwrap().len(), 2);
     assert_eq!(r.json["skipped"], json!([{ "id": dev_cam.tunnel_id, "name": "cam", "reason": "no_accounts" }]));
     assert!(!r.text.contains("vault"), "a device that is not shared must not appear: {}", r.text);
-    assert_eq!(r.json["server"]["alias"], "telepy-ssh-server");
-    assert!(r.json["known_hosts"].as_str().unwrap().starts_with("telepy-"), "{}", r.text);
+    assert_eq!(r.json["server"]["legacy_alias"], "telepy-ssh-server");
+    assert!(r.json["known_hosts"].as_str().unwrap().starts_with(&format!("{server} ")), "{}", r.text);
 
     // 存起來原樣可用：每一台都用自己的帳號登入 / The file works as is for every device
     let cfg = lab.write_ssh_config(&alice, "all-devices", config, r.json["known_hosts"].as_str().unwrap());
@@ -62,7 +76,7 @@ async fn one_config_for_many_devices() {
     // --- 每個帳號一個 Host：別名跟單台的「全部帳號」一樣 / one Host per account, same aliases as the single config
     let r = lab.app.get("/tunnels/server/config?accounts=all", Some(&alice.token)).await;
     let config = r.json["config"].as_str().unwrap();
-    assert_eq!(hosts_in(config), ["telepy-ssh-server", "nas-admin", "nas-backup", "pi"], "{config}");
+    assert_eq!(hosts_in(config), [server.as_str(), "nas-admin", "nas-backup", "pi"], "{config}");
     let single = lab.app.get(&format!("/tunnels/server/config/{}", dev_nas.tunnel_id), Some(&alice.token)).await;
     assert_eq!(single.json["hosts"], r.json["tunnels"][0]["hosts"]);
     let cfg = lab.write_ssh_config(&alice, "all-accounts", config, r.json["known_hosts"].as_str().unwrap());
@@ -71,11 +85,38 @@ async fn one_config_for_many_devices() {
 
     // --- 只挑幾台；看不到的 id 直接略過 / Picked devices; ids I can't see are ignored
     let r = lab.app.get(&format!("/tunnels/server/config?ids={},{}", dev_pi.tunnel_id, dev_vault.tunnel_id), Some(&alice.token)).await;
-    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), ["telepy-ssh-server", "pi"]);
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "pi"]);
     assert_eq!(r.json["skipped"], json!([]));
     let r = lab.app.get(&format!("/tunnels/server/config?ids={}", dev_vault.tunnel_id), Some(&alice.token)).await;
     assert_eq!(r.json["tunnels"], json!([]));
-    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), ["telepy-ssh-server"]);
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str()]);
+
+    // --- 逐台挑帳號：pick 蓋過模式；只挑一個 = 一般別名，挑幾個 = <名稱>-<帳號>；不能用的 id 略過
+    // Per-device accounts: pick overrides the mode; one = the plain alias, several = <name>-<account>
+    let admin = r_admin_id(&lab, &alice, &dev_nas).await;
+    let r = lab.app.get(&format!("/tunnels/server/config?pick={}:{admin}", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "nas", "pi"], "{}", r.text);
+    assert_eq!(r.json["tunnels"][0]["hosts"][0]["username"], "admin");
+    assert_eq!(r.json["tunnels"][0]["picked"], true);
+    let cfg = lab.write_ssh_config(&alice, "picked", r.json["config"].as_str().unwrap(), r.json["known_hosts"].as_str().unwrap());
+    assert_eq!(lab.ssh_with_config(&cfg, "nas", "whereami").await.stdout, "admin@nas");
+    let r = lab.app.get(&format!("/tunnels/server/config?accounts=all&pick={}:{backup}.999999", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "nas", "pi"], "an id I may not use is dropped: {}", r.text);
+    assert_eq!(r.json["tunnels"][0]["hosts"][0]["username"], "backup");
+    let r = lab.app.get(&format!("/tunnels/server/config?pick={}:999999", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.json["tunnels"][0]["hosts"][0]["username"], "backup", "nothing usable left falls back to the mode: {}", r.text);
+    let r = lab.app.get("/tunnels/server/config?pick=1:x", Some(&alice.token)).await;
+    assert_eq!(r.status.as_u16(), 400, "{}", r.text);
+    assert!(r.json["pick"].is_array(), "{}", r.text);
+
+    // --- 單台也能挑幾個帳號：username_ids / The single config takes several accounts too
+    let r = lab.app.get(&format!("/tunnels/server/config/{}?username_ids={backup},{admin}", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "nas-admin", "nas-backup"], "{}", r.text);
+    assert_eq!(r.json["default_username_id"], backup);
+    let r = lab.app.get(&format!("/tunnels/server/config/{}?username_ids={admin}", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "nas"]);
+    let r = lab.app.get(&format!("/tunnels/server/config/{}?username_ids=1,x", dev_nas.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.status.as_u16(), 400, "{}", r.text);
 
     // WebSocket 載體：伺服器區塊多 ProxyCommand，裝置區塊不變 / WebSocket transport only changes the server stanza
     let r = lab.app.get("/tunnels/server/config?transport=websocket", Some(&alice.token)).await;
