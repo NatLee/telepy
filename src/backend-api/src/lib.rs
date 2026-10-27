@@ -24,6 +24,7 @@ pub mod geoip;
 pub mod hub;
 pub mod join;
 pub mod lan;
+pub mod mascot;
 pub mod mcp;
 pub mod mfa;
 pub mod monitor;

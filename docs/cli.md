@@ -96,6 +96,9 @@ Manager; on Linux (and with `TELEPY_NO_KEYRING=1`) in `~/.config/telepy/credenti
 
 In CI there is nothing to store: set `TELEPY_URL` and `TELEPY_TOKEN` (or pass `--server` / `--token`).
 
+In a terminal, `telepy login` and a clean `telepy doctor` show Tapi, Telepy's little ghost, next to the result (never when the
+output is piped; `NO_COLOR` draws it without colour). Set `TELEPY_NO_MASCOT=1` to leave it out.
+
 ## Commands
 
 ```sh

@@ -127,7 +127,8 @@ export default function TunnelsPage() {
     }, [tunnels, portsMap, filter, parsed, sort, groupNames]);
 
     // 有群組時依群組分段（搜尋 / 篩選中只留有符合的段）。/ Sections by group once groups exist.
-    const filtering = filter !== "all" || query.trim() !== "";
+    // 彩蛋的回答（make me a sandwich）不算在篩選。/ The sandwich easter egg filters nothing.
+    const filtering = filter !== "all" || (query.trim() !== "" && !parsed.reply);
     const grouped = grouping === "groups" && groupsUi.groups.length > 0;
     const sections = useMemo(() => groupSections(visible, tunnels, groupsUi.groups, filtering), [visible, tunnels, groupsUi.groups, filtering]);
     // 分頁：搜尋 / 篩選 / 排序對全部通道做完再分頁；分段時每段各自分頁（段標題都在），條件一變回第 1 頁。
@@ -292,6 +293,7 @@ export default function TunnelsPage() {
                         query={query}
                         onQueryChange={setQuery}
                         invalid={parsed.invalid}
+                        reply={parsed.reply}
                         sort={sort}
                         onSortChange={setSort}
                         shown={visible.length}

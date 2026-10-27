@@ -5,7 +5,7 @@
  * examples that append to the query, a hint for terms it could not understand, sort and the view toggle.
  */
 import React from "react";
-import { ListFilter, Search, X } from "lucide-react";
+import { ListFilter, Sandwich, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
@@ -48,6 +48,8 @@ interface TunnelSearchBarProps {
     query: string;
     onQueryChange: (q: string) => void;
     invalid: string[];
+    /** 彩蛋：make me a sandwich 的回答（lib/tunnelQuery）。/ Easter egg reply. */
+    reply?: "okay" | "makeItYourself";
     sort: TunnelSort;
     onSortChange: (s: TunnelSort) => void;
     shown: number;
@@ -58,7 +60,7 @@ interface TunnelSearchBarProps {
     groupControls?: React.ReactNode;
 }
 
-export function TunnelSearchBar({ query, onQueryChange, invalid, sort, onSortChange, shown, total, viewToggle, groupControls }: TunnelSearchBarProps) {
+export function TunnelSearchBar({ query, onQueryChange, invalid, reply, sort, onSortChange, shown, total, viewToggle, groupControls }: TunnelSearchBarProps) {
     const { t } = useI18n();
     const add = (term: string) => {
         const base = query.trim();
@@ -124,6 +126,12 @@ export function TunnelSearchBar({ query, onQueryChange, invalid, sort, onSortCha
                     {viewToggle}
                 </div>
             </div>
+            {reply && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
+                    {reply === "okay" && <Sandwich size={14} aria-hidden />}
+                    {t(reply === "okay" ? "eggs.sandwich.okay" : "eggs.sandwich.makeItYourself")}
+                </p>
+            )}
             {invalid.length > 0 && (
                 <p className="text-xs text-warning" role="status">
                     {t("tunnels.invalidFilter", { terms: invalid.join(" ") })}

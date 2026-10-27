@@ -23,6 +23,10 @@ export interface UserProfile {
     terminal_ligatures?: boolean;
     /** 各頁的卡片 / 清單顯示（lib/viewModes.ts）。/ Card / list view per page. */
     view_modes?: Record<string, string>;
+    /** Tapi（彩蛋）十字髮夾的顏色；空 = 還沒找到 Tapi；`daily` = 每天換一個。/ Tapi's clip colour; empty = not found yet. */
+    tapi_color?: string;
+    /** 「每天換一個」解鎖了（看完片尾名單）。/ "Daily" is unlocked (watched the credits). */
+    tapi_daily?: boolean;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
     /** 已設定任一第二因素。/ A passkey or an authenticator app is set up. */
