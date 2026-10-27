@@ -307,7 +307,11 @@ export function useNetworkPage() {
         if (!q) return tunnels;
         return tunnels
             .map((tn) => {
-                if (tn.name.toLowerCase().includes(q)) return tn;
+                // 裝置名稱或它自己的位址（內網網卡、外網 IP、hostname）符合 = 整台連主機一起顯示。
+                // A match on the device's name or its own addresses keeps the device with every host.
+                const ep = tn.endpoint;
+                const own = [tn.name, ep?.hostname, ep?.public_ip, ep?.ip, ...(ep?.lan ?? []).map((a) => a.ip)];
+                if (own.some((v) => v && v.toLowerCase().includes(q))) return tn;
                 const hosts = tn.hosts.filter((h) =>
                     [h.address, h.hostname, h.label, h.mac, h.vendor, h.ssh_banner].some((v) => v && v.toLowerCase().includes(q)) ||
                     h.open_ports.some((p) => String(p) === q)

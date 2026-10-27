@@ -1,3 +1,5 @@
+import type { TunnelEndpoint } from "@/types/tunnel";
+
 /**
  * 區網探索 / 跳板機（#20）的型別，對應 `/api/reverse/lan/topology` 與 `/api/reverse/server/{id}/lan/*`。
  * Types for LAN discovery and jump hosts.
@@ -57,6 +59,8 @@ export interface TopologyTunnel {
     /** 你可以用的裝置帳號（跳板那一跳）。/ Device accounts you may use (the jump hop). */
     usernames: string[];
     default_username: string | null;
+    /** 裝置自己的位址（內網網卡、公網 IP），同隧道列表；不能登入裝置的人是 null。/ The device's own addresses, as on the tunnel list; null without an allowed account. */
+    endpoint?: TunnelEndpoint | null;
     scan: LanScan | null;
     hosts: LanHost[];
 }
