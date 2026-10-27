@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
+import { lanAuthParam } from "@/lib/lanAuth";
 import { LanTerminal } from "@/components/network/LanTerminal";
 import { MAX_LAN_TERMINALS, type DockSize, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
 
@@ -103,7 +104,7 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
     if (sessions.length === 0) return null;
     const active = sessions.find((s) => s.key === activeKey) ?? null;
     const canAdd = sessions.length < MAX_LAN_TERMINALS && !!active;
-    const pageHref = active ? getTerminalPageUrl({ id: active.tunnelId, reverse_port: active.reversePort }, { lanHost: active.hostId, lanUser: active.login || undefined }) : null;
+    const pageHref = active ? getTerminalPageUrl({ id: active.tunnelId, reverse_port: active.reversePort }, { lanHost: active.hostId, lanUser: active.login || undefined, lanAuth: lanAuthParam(active.auth) }) : null;
 
     return (
         <section

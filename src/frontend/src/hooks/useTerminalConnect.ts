@@ -15,6 +15,7 @@ import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificationActions";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { isValidLogin } from "@/lib/lanConnect";
+import { lanAuthFromValue, lanAuthParam, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
 const PICK_KEY = "telepy.terminalPick";
@@ -34,6 +35,7 @@ export function useTerminalConnect() {
     const searchParams = useSearchParams();
     const tunnelParam = searchParams.get("tunnel");
     const hostParam = searchParams.get("lanHost");
+    const authParam = searchParams.get("lanAuth");
 
     const [tunnels, setTunnels] = useState<TopologyTunnel[]>([]);
     const [loading, setLoading] = useState(true);
@@ -42,6 +44,8 @@ export function useTerminalConnect() {
     const [latency, setLatency] = useState<Record<string, number>>({});
     const [account, setAccount] = useState("");
     const [login, setLogin] = useState("");
+    // 區網那一跳怎麼登入（網址帶的只用來起頭；換主機就回預設）。/ How the LAN hop logs in (the URL seeds it; a new host resets it).
+    const [auth, setAuth] = useState<LanAuth>(() => lanAuthFromValue(authParam));
 
     const load = useCallback(async () => {
         try {
@@ -111,12 +115,15 @@ export function useTerminalConnect() {
     }, [host]);
 
     const setTunnel = useCallback((id: number) => replaceQuery({ tunnel: String(id), lanHost: null }), [replaceQuery]);
-    const setHost = useCallback((id: number | null) => replaceQuery({ lanHost: id === null ? null : String(id) }), [replaceQuery]);
+    const setHost = useCallback((id: number | null) => {
+        setAuth(TELEPY_AUTH);
+        replaceQuery({ lanHost: id === null ? null : String(id) });
+    }, [replaceQuery]);
 
     const cleanLogin = login.trim();
     const loginOk = !host || isValidLogin(cleanLogin);
     const canOpen = !!tunnel && online && !!account && loginOk;
-    const href = tunnel ? getTerminalPageUrl({ id: tunnel.id, reverse_port: tunnel.reverse_port }, host ? { lanHost: host.id, lanUser: cleanLogin || undefined } : undefined) : null;
+    const href = tunnel ? getTerminalPageUrl({ id: tunnel.id, reverse_port: tunnel.reverse_port }, host ? { lanHost: host.id, lanUser: cleanLogin || undefined, lanAuth: lanAuthParam(auth) } : undefined) : null;
 
     const open = useCallback(() => {
         if (!href || !tunnel) return;
@@ -125,7 +132,7 @@ export function useTerminalConnect() {
     }, [href, tunnel, router]);
 
     return {
-        state: { tunnels, loading, failed, tunnel, host, online, rtt, account, login, loginOk, canOpen, href },
-        actions: { setTunnel, setHost, setAccount, setLogin, open, isOnline, reload: load },
+        state: { tunnels, loading, failed, tunnel, host, online, rtt, account, login, loginOk, canOpen, href, auth },
+        actions: { setTunnel, setHost, setAccount, setLogin, setAuth, open, isOnline, reload: load },
     };
 }

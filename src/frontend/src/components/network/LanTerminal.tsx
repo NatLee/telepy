@@ -26,6 +26,7 @@ import type { TranslationKey } from "@/locales/en";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import { lanShellEnders, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
+import { lanAuthFrame } from "@/lib/lanAuth";
 import { canResume, detachLayers, isDropCode, parseShellFrame, reconnectDelay, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE, type DetachGrace } from "@/lib/terminalDetach";
 import { endKeptShell } from "@/lib/terminalShellSocket";
 import { ReconnectBanner, type ReconnectState } from "@/components/tunnels/ReconnectBanner";
@@ -38,6 +39,7 @@ const CLOSE_MESSAGES: Record<number, TranslationKey> = {
     4003: "terminal.lanLoginInvalidXterm",
     4004: "terminal.lanHostMissingXterm",
     4006: "terminal.noUsersXterm",
+    4010: "terminal.savedLoginXterm",
     1000: "terminal.disconnectedXterm",
 };
 
@@ -62,7 +64,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     const [whyOpen, setWhyOpen] = useState(false);
     /** 接回時伺服器說的保留時間是誰決定的（說明圖用）。/ Who decided the grace, for the explainer. */
     const [decidedBy, setDecidedBy] = useState<string | null>(null);
-    const { key, tunnelId, hostId, login, deviceUser, attempt } = session;
+    const { key, tunnelId, hostId, login, deviceUser, auth: lanAuth, attempt } = session;
     const { resolved, ready: appearanceReady } = useTerminalAppearance(String(tunnelId));
     // xterm 是 async 建的,要讀建立當下最新的外觀。/ The xterm is created asynchronously; read the latest look.
     const resolvedRef = useRef(resolved);
@@ -136,7 +138,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
         let grace: DetachGrace | null = null;
         let droppedAt: number | null = null;
         let tries = 0;
-        const auth = { server_id: String(tunnelId), username: deviceUser, lan_host_id: String(hostId), ...(login ? { lan_username: login } : {}) };
+        const auth = { server_id: String(tunnelId), username: deviceUser, lan_host_id: String(hostId), ...(login ? { lan_username: login } : {}), ...lanAuthFrame(lanAuth) };
 
         const write = (line: string) => termRef.current?.term.write(line);
         const forget = () => {
@@ -307,7 +309,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
             try { wsRef.current?.close(); } catch { /* noop */ }
             wsRef.current = null;
         };
-    }, [attempt, key, tunnelId, hostId, login, deviceUser, onStatus, onShell, sendResize]);
+    }, [attempt, key, tunnelId, hostId, login, deviceUser, lanAuth, onStatus, onShell, sendResize]);
 
     // 顯示時 fit + 聚焦（桌機）。/ Refit (and focus on desktop) when shown.
     useEffect(() => {

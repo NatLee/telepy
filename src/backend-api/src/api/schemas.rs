@@ -1323,6 +1323,8 @@ pub struct SavedCredential {
     pub domain: String,
     /// The password itself is never returned
     pub has_password: bool,
+    /// `ssh` rows only: a private key is stored (never returned)
+    pub has_key: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
 }
@@ -1330,14 +1332,17 @@ pub struct SavedCredential {
 #[derive(ToSchema)]
 pub struct SavedCredentialCreate {
     pub label: String,
-    /// `rdp`, `vnc` or `rustdesk`
+    /// `rdp`, `vnc`, `rustdesk`, or `ssh` (a LAN host's SSH login for the web terminal's hop)
     pub protocol: String,
     pub tunnel_id: i64,
     pub lan_host_id: Option<i64>,
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
-    pub password: String,
+    /// Required for rdp / vnc / rustdesk; for `ssh` a password and / or `private_key`
+    pub password: Option<String>,
+    /// `ssh` only: an unencrypted private key (OpenSSH or PEM); keys with a passphrase are refused
+    pub private_key: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1346,8 +1351,10 @@ pub struct SavedCredentialUpdate {
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
-    /// Leave out to keep the current password
+    /// Leave out to keep the current password (`ssh`: an empty string removes it)
     pub password: Option<String>,
+    /// `ssh` only: replace the private key (an empty string removes it)
+    pub private_key: Option<String>,
 }
 
 // ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)

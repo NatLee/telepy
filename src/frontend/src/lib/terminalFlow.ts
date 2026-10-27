@@ -50,6 +50,8 @@ export function closeFailure(code: number, lan: boolean): TerminalFailure | null
             return { key: "stepUp.deniedCard", at: "telepy" };
         case 4009:
             return { key: "terminal.flow.err.ended", at: "telepy" };
+        case 4010:
+            return { key: "terminal.savedLoginCard", at: "telepy" };
         case 4012:
             return { key: "access.featureOffCard", at: "telepy" };
         case 1006:

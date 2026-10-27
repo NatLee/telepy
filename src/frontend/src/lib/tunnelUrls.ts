@@ -9,12 +9,12 @@ export type TerminalMainView = "terminal" | "browser" | "files";
 /**
  * Build the URL for the terminal page.
  * @param tunnel - Object with tunnel id and reverse_port.
- * @param options - Optional mainView to open a specific tab; `lanHost` (+ `lanUser`) opens the
- *   shell on a machine of the device's LAN, reached through the device.
+ * @param options - Optional mainView to open a specific tab; `lanHost` (+ `lanUser`, `lanAuth` = how that hop
+ *   logs in, see lib/lanAuth.ts) opens the shell on a machine of the device's LAN, reached through the device.
  */
 export function getTerminalPageUrl(
     tunnel: { id: number; reverse_port: number },
-    options?: { mainView?: TerminalMainView; lanHost?: number; lanUser?: string }
+    options?: { mainView?: TerminalMainView; lanHost?: number; lanUser?: string; lanAuth?: string }
 ): string {
     let url = `/tunnels/terminal?serverId=${tunnel.id}&port=${tunnel.reverse_port}`;
     if (options?.mainView && options.mainView !== "terminal") {
@@ -23,6 +23,7 @@ export function getTerminalPageUrl(
     if (options?.lanHost !== undefined) {
         url += `&lanHost=${options.lanHost}`;
         if (options.lanUser) url += `&lanUser=${encodeURIComponent(options.lanUser)}`;
+        if (options.lanAuth) url += `&lanAuth=${encodeURIComponent(options.lanAuth)}`;
     }
     return url;
 }
