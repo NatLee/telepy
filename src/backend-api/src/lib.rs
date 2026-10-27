@@ -33,6 +33,7 @@ pub mod remote_browser;
 pub mod rustdesk;
 pub mod scripts;
 pub mod session_audit;
+pub mod terminal_detach;
 pub mod sftp;
 pub mod ssh;
 pub mod state;

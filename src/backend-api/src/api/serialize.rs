@@ -35,6 +35,7 @@ pub fn tunnel_json(t: &Tunnel, eff: Option<Effective>, shared_with_count: i64, t
         "default_username": t.default_username_id,
         "require_step_up": t.require_step_up,
         "record_sessions": t.record_sessions,
+        "terminal_detach_policy": t.terminal_detach_policy,
     })
 }
 
@@ -87,11 +88,20 @@ pub fn presence_json(entries: &[Entry], details: bool, geo: &GeoIp) -> Value {
                     "geo": geo.json(e.ip.as_deref()),
                     "since": db_to_iso_utc_z(&e.since),
                     "client": e.client,
+                    "detached": detached_json(e),
                 })
             })
             .collect::<Vec<_>>()
     });
     json!({ "count": presence::distinct_users(entries), "sessions": sessions })
+}
+
+/// 斷線保留中的網頁終端機：`{since, ends_at}`，否則 null。/ A detached web terminal: `{since, ends_at}`, else null.
+pub fn detached_json(e: &Entry) -> Value {
+    match &e.detached {
+        Some((since, ends)) => json!({ "since": db_to_iso_utc_z(since), "ends_at": db_to_iso_utc_z(ends) }),
+        None => Value::Null,
+    }
 }
 
 /// `ReverseServerUsernamesSerializer`

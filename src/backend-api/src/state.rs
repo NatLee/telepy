@@ -73,6 +73,8 @@ pub struct Inner {
     pub commands: crate::command_rules::CommandRules,
     /// webhook 發送（跟 gateway 共用）。/ Webhook delivery (shared with the gateway).
     pub webhooks: Arc<crate::webhooks::Webhooks>,
+    /// 開著的網頁終端機 shell（連著或斷線保留中）。/ Open web terminal shells, attached or detached.
+    pub shells: crate::terminal_detach::Shells<crate::ws::terminal::Shell>,
     /// 裝置狀況：警示去重複與「立即重新整理」的頻率限制。/ Device facts: alert de-dup and the refresh rate limit.
     pub device_info: crate::device_info::DeviceInfoState,
 }
@@ -138,6 +140,7 @@ impl AppState {
             step_up,
             commands: Default::default(),
             webhooks,
+            shells: Default::default(),
             device_info: Default::default(),
             config,
             db,

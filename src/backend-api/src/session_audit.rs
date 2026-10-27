@@ -99,7 +99,15 @@ impl ConsoleSession {
 
     /// 記結束（含持續時間）。/ Record the end with the duration.
     pub async fn close(self, state: &AppState) {
-        let msg = closed_message(&self.what, self.started.elapsed().as_secs(), &self.id);
+        self.close_with(state, None).await;
+    }
+
+    /// 同 [`close`]，後面加一句為什麼結束（例如「斷線保留 300 秒後結束」）。/ Same, with why it ended.
+    pub async fn close_with(self, state: &AppState, note: Option<&str>) {
+        let mut msg = closed_message(&self.what, self.started.elapsed().as_secs(), &self.id);
+        if let Some(note) = note {
+            msg = format!("{msg}; {note}");
+        }
         state.gateway.event(self.kind.close_event(), None, self.port, Some(self.tunnel_id), msg).await;
     }
 }

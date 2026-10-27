@@ -208,3 +208,222 @@ async fn file_manager_sftp_and_exec_fallback_share_the_connection() {
     assert_eq!(r["data"]["shell"], "unix", "{r}");
     assert_eq!(plain.login_count("ubuntu", &lab.service), 1, "terminal + exec fallback on one connection: {:?}", plain.logins());
 }
+
+// ---------------------------------------------------------------- 斷線保留 / detach & resume
+
+async fn set_detach(lab: &Lab, user: &common::lab::LabUser, secs: i64) {
+    let r = lab.app.post("/api/user/settings", Some(&user.token), json!({"terminal_detach_secs": secs})).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["terminal_detach_secs"], secs);
+}
+
+/// 等這條隧道的「使用中」變成符合條件。/ Wait until the tunnel's presence matches.
+async fn wait_presence(lab: &Lab, tunnel_id: i64, what: &str, ok: impl Fn(&[telepy_server::presence::Entry]) -> bool) {
+    for _ in 0..100 {
+        if ok(&lab.app.state.presence.for_tunnel(tunnel_id)) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("presence never became {what}: {:?}", lab.app.state.presence.for_tunnel(tunnel_id));
+}
+
+async fn events(lab: &Lab, token: &str, tunnel_id: i64) -> Vec<serde_json::Value> {
+    lab.app.get(&format!("/api/log/ssh/events?tunnel_id={tunnel_id}"), Some(token)).await.json.as_array().cloned().unwrap_or_default()
+}
+
+/// 斷線後 shell 照跑、輸出進緩衝；同一個人帶 `resume` 接回：補送沒看到的輸出、同一個 shell 繼續（同一個 PTY、
+/// 換視窗前打了一半的字還在）；在別的視窗接回會把舊的那個以 4016 關掉；重新整理（不帶 offset）= 清畫面重畫；
+/// 明確結束（`end`）之後就接不回來了（4015）。
+/// A dropped browser leaves the shell running and buffering; the same user resumes it: the missed output arrives and
+/// the same shell continues (one PTY, a half-typed line survives the switch); resuming elsewhere closes the old socket
+/// with 4016; a reload (no offset) redraws everything; after an explicit end there is nothing to resume (4015).
+#[tokio::test]
+async fn a_dropped_terminal_is_kept_and_resumed() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine_with("box", &[("ubuntu", &[&lab.service])], MachineOpts { echo_shell: true, ..Default::default() }).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    set_detach(&lab, &alice, 300).await;
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    assert_eq!(t.detach(), (300, "user".to_string()), "{:?}", t.shell);
+    let id = t.shell_id();
+    // 跑一個要一下子才回的指令，馬上斷線。/ Run a command that answers late, and the network drops at once.
+    t.input("later\r").await;
+    let seen = t.offset;
+    t.drop_connection();
+
+    // 還在：「使用中」標成斷線保留中，即時 session 頁看得到。/ Still there: presence marks it detached.
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    let r = lab.app.get("/api/sessions", Some(&alice.token)).await;
+    assert!(r.json["sessions"][0]["detached"]["ends_at"].is_string(), "{}", r.text);
+    tokio::time::sleep(Duration::from_millis(1200)).await; // `later` 在斷線期間回來 / answers while detached
+
+    let mut t2 = lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id, "offset": seen})).await.expect("resume");
+    let frame = t2.shell.clone().expect("shell frame");
+    assert_eq!((frame["id"].as_str(), frame["resumed"].as_bool(), frame["reset"].as_bool()), (Some(id.as_str()), Some(true), Some(false)), "{frame}");
+    t2.expect("ran:later").await;
+    assert!(!t2.seen.contains("login:"), "only what was missed is replayed: {:?}", t2.seen);
+    wait_presence(&lab, dev.tunnel_id, "attached again", |p| p.len() == 1 && p[0].detached.is_none()).await;
+    t2.input("ab").await;
+    t2.expect("ab").await;
+
+    // 另一個視窗接回：舊的以 4016 關掉，新的繼續同一行。/ Resumed in another window: the old one gets 4016.
+    let mut t3 = lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.expect("resume elsewhere");
+    assert_eq!(t2.wait_closed().await, Some(4016));
+    assert_eq!(t3.shell.as_ref().unwrap()["reset"], true, "no offset = a reload: clear and redraw");
+    t3.expect("login:ubuntu@box").await;
+    t3.input("c\r").await;
+    t3.expect("ran:abc").await;
+    assert_eq!(boxm.commands(), vec!["later".to_string(), "abc".to_string()], "the same shell all along");
+    assert_eq!(boxm.ptys().len(), 1, "never a second shell");
+
+    // 關分頁 = 明確結束：shell 收掉，再也接不回來。/ Closing the tab ends it; nothing left to resume.
+    t3.end().await;
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+}
+
+/// 保留時間 0（預設）：斷線就結束，跟以前一樣；接回 = 4015。/ Grace 0 (the default): a drop ends it, resume = 4015.
+#[tokio::test]
+async fn grace_zero_ends_the_shell_at_once() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    assert_eq!(t.detach(), (0, "user".to_string()));
+    let id = t.shell_id();
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+}
+
+/// 時間到：shell 收掉，結束事件寫「斷線保留 N 秒後結束」；站台上限比個人選擇小時用上限。
+/// Time is up: the shell ends and the close event says so; the site ceiling caps a longer personal choice.
+#[tokio::test]
+async fn a_detached_shell_ends_when_time_is_up() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    set_detach(&lab, &alice, 60).await;
+    let r = lab.app.post("/api/site/settings", Some(&lab.admin_token), json!({"terminal_detach_max_secs": 1})).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    assert_eq!(t.detach(), (1, "site".to_string()), "the site ceiling decides");
+    let id = t.shell_id();
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    wait_presence(&lab, dev.tunnel_id, "empty after the grace", |p| p.is_empty()).await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+    let mut close = None;
+    for _ in 0..50 {
+        close = events(&lab, &alice.token, dev.tunnel_id).await.into_iter().find(|e| e["event"] == "terminal_close");
+        if close.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let close = close.expect("terminal_close event");
+    assert!(close["message"].as_str().unwrap().contains("ended after 1 s detached"), "{close}");
+}
+
+/// 隧道設成 `never`：個人選了要留也一樣斷線就結束；放寬回 `user` 才又會留。設定只有 owner / ADMIN 能改。
+/// A `never` tunnel ends the shell at once whatever the user picked; only owner / ADMIN change it.
+#[tokio::test]
+async fn a_never_tunnel_ends_shells_at_once() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "edit", &[ubuntu]).await;
+    set_detach(&lab, &alice, 300).await;
+    let path = format!("/api/reverse/server/{}/terminal-detach", dev.tunnel_id);
+    assert_eq!(lab.app.put(&path, Some(&bob.token), json!({"policy": "never"})).await.status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(lab.app.put(&path, Some(&alice.token), json!({"policy": "sometimes"})).await.status, axum::http::StatusCode::BAD_REQUEST);
+    let r = lab.app.put(&path, Some(&alice.token), json!({"policy": "never"})).await;
+    assert_eq!(r.json["policy"], "never", "{}", r.text);
+    let r = lab.app.get(&format!("/api/reverse/server/keys/{}", dev.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(r.json["terminal_detach_policy"], "never", "{}", r.text);
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    assert_eq!(t.detach(), (0, "tunnel".to_string()), "the device's policy wins");
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+
+    // 放寬回 user（沒有第二因素的帳號不用再驗證）：又會留。/ Back to `user`: kept again.
+    assert_eq!(lab.app.put(&path, Some(&alice.token), json!({"policy": "user"})).await.json["policy"], "user");
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    assert_eq!(t.detach(), (300, "user".to_string()));
+}
+
+/// 別人的 shell 接不了（4004），即使他也能用同一個帳號；從即時 session 頁結束斷線中的 shell 會真的收掉。
+/// Nobody else resumes your shell (4004), even with access to the same account; ending a detached shell from the
+/// live sessions page really ends it.
+#[tokio::test]
+async fn only_the_owner_resumes_and_a_detached_shell_can_be_ended() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    set_detach(&lab, &alice, 300).await;
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    let id = t.shell_id();
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    assert_eq!(lab.terminal_with(&bob, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4004));
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": "nope"})).await.err(), Some(4015));
+
+    // 即時 session 頁結束它。/ End it from the live sessions page.
+    let sid = lab.app.state.presence.for_tunnel(dev.tunnel_id)[0].id;
+    assert_eq!(lab.app.delete(&format!("/api/sessions/{sid}"), Some(&alice.token)).await.status, axum::http::StatusCode::NO_CONTENT);
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+}
+
+/// 區網主機終端機也一樣：OpenSSH 子程序在斷線期間照跑，接回同一個。/ LAN-host terminals too: the OpenSSH child is kept.
+#[tokio::test]
+async fn a_lan_terminal_is_kept_too() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let nas = lab.machine_with("nas", &[("backup", &[&lab.service])], MachineOpts { echo_shell: true, ..Default::default() }).await;
+    let edge = lab.machine("edge", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "edge", &edge).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let nas_id = lab.lan_host(&alice, &dev, "127.0.0.1", nas.port, Some("backup")).await;
+    set_detach(&lab, &alice, 300).await;
+
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.expect("LAN terminal");
+    t.expect("login:backup@nas").await;
+    let id = t.shell_id();
+    t.input("x").await;
+    t.expect("x").await;
+    let seen = t.offset;
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    // 別的區網主機（或不帶）接不了。/ A different LAN host (or none) can't resume it.
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4004));
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "resume": id, "offset": seen})).await.expect("resume");
+    t.input("y\r").await;
+    t.expect("ran:xy").await;
+    assert_eq!(nas.commands(), vec!["xy".to_string()]);
+}

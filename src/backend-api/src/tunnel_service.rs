@@ -293,6 +293,7 @@ mod tests {
             updated_at: String::new(),
             require_step_up: false,
             record_sessions: false,
+            terminal_detach_policy: "user".into(),
         }
     }
 

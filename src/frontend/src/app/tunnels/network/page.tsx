@@ -162,6 +162,7 @@ function NetworkInner() {
                 onCloseAll={terms.closeAll}
                 onReconnect={terms.reconnect}
                 onStatus={terms.setStatus}
+                onShell={terms.setShell}
                 setSize={terms.setSize}
                 anchorRef={pageRef}
             />

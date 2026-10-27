@@ -49,6 +49,7 @@ import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/comp
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
 import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
+import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
@@ -214,6 +215,10 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
                             onChange={(patch) => changeTerminalDefaults(defaultsPatch(patch))}
                         />
                     </Section>
+
+                    {/* 網頁終端機斷線後 shell 留多久（存在帳號上；站台上限、裝置政策會再收窄）。
+                        How long a web terminal's shell is kept after a drop (on the account; narrowed by the site and device). */}
+                    <TerminalDetachPref />
 
                     {/* 遠端桌面剪貼簿（存在帳號上；超過站台上限的選項關掉）。/ Remote desktop clipboard (on the account; choices above the site's limit are disabled). */}
                     <Section icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>

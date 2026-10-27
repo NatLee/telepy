@@ -50,6 +50,8 @@ interface Props {
     onCloseAll: () => void;
     onReconnect: (key: number) => void;
     onStatus: (key: number, status: LanTerminalStatus) => void;
+    /** 分頁的 shell id 變了（斷線保留）。/ A tab's kept shell id changed. */
+    onShell?: (key: number, shellId: string | null) => void;
     setSize: (size: DockSize) => void;
     /** 頁面那一欄：浮動面板的左右邊跟著它。/ The page column the floating panel aligns with. */
     anchorRef: React.RefObject<HTMLElement | null>;
@@ -83,7 +85,7 @@ export function sessionLabel(s: LanTerminalSession): string {
     return s.login ? `${s.login}@${s.hostName}` : s.hostName;
 }
 
-export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, setSize, anchorRef }: Props) {
+export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, onShell, setSize, anchorRef }: Props) {
     const { t } = useI18n();
     const maximized = size === "max";
     const box = useAnchorBox(anchorRef, sessions.length > 0 && !maximized);
@@ -199,7 +201,7 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
             </div>
             <div className={cn("relative bg-black", maximized ? "min-h-0 flex-1" : "transition-[height] duration-200")} style={maximized ? undefined : { height: DOCK_HEIGHT[size] }}>
                 {sessions.map((s) => (
-                    <LanTerminal key={`${s.key}`} session={s} visible={size !== "min" && s.key === activeKey} onStatus={onStatus} />
+                    <LanTerminal key={`${s.key}`} session={s} visible={size !== "min" && s.key === activeKey} onStatus={onStatus} onShell={onShell} />
                 ))}
                 {active && active.status === "closed" && size !== "min" && (
                     <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-sm shadow-pop">
