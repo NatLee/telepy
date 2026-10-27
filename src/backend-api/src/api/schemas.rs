@@ -105,6 +105,20 @@ pub struct SetupStatus {
     pub first_time_setup: bool,
 }
 
+/// 登入頁的樣子（公開）。/ How the sign-in pages look (public).
+#[derive(ToSchema)]
+pub struct SignInPage {
+    /// The sign-in page: standard | discreet
+    #[schema(example = "discreet")]
+    pub style: String,
+    /// The OAuth (app connection) sign-in page: standard | discreet
+    #[schema(example = "standard")]
+    pub oauth_style: String,
+    /// The discreet page's line; blank = the built-in ones
+    #[schema(example = "")]
+    pub message: String,
+}
+
 /// 呼叫用的委派 token。/ The delegated token the call came with.
 #[derive(ToSchema)]
 pub struct ProfileCredential {

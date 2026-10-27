@@ -51,7 +51,9 @@ const protoNerd = localFont({
 
 export const metadata: Metadata = {
   title: "Telepy",
-  description: "Telepy Reverse Proxy Dashboard",
+  // 每一頁（含登入頁）的 HTML 都帶著這行，低調登入頁也是，所以不寫產品在做什麼。
+  // Every page's HTML carries this line, the discreet sign-in page too, so it doesn't say what the product does.
+  description: "Telepy",
 };
 
 // 繪製前先把 <html lang>、主題 class 與顯示大小設好(語言:cookie → 瀏覽器語言;主題:localStorage →

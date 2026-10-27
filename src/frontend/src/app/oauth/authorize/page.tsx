@@ -13,17 +13,24 @@
 import React, { Suspense } from "react";
 import { Check, ShieldCheck } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
+import { SignInPending } from "@/components/auth/DiscreetShell";
 import { EnrollmentGate } from "@/components/auth/EnrollmentGate";
 import { AppTile, ConnectAppAside, ConnectProgress, OAuthProblem, ReturnsTo, type ConnectStep } from "@/components/oauth/ConnectFlow";
 import { AccountRow, ConsentSkeleton, DecisionView, ExistingConnection, ScopeChoices, TunnelChoice } from "@/components/oauth/ConsentSections";
 import { Button } from "@/components/ui/button";
 import { useOAuthConsent } from "@/hooks/useOAuthConsent";
+import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 
 function ConsentInner() {
     const { t } = useI18n();
+    const { isAuthenticated, isLoading } = useAuth();
     const { state, actions, reauthDialog } = useOAuthConsent();
     const { info, error, loading, submitting, selectedScopes, tunnelMode, tunnelIds, tunnelQuery, allTunnels, shownTunnels, replace, decision, enrollMissing, canApprove, stepUpError } = state;
+
+    // 還沒登入（正要被送去 /oauth/login）：只畫空外框，不先閃過連接流程（低調登入頁也不會露出）。
+    // Signed out (about to go to /oauth/login): only the empty frame, so the connection flow never flashes by.
+    if (isLoading || !isAuthenticated) return <SignInPending />;
 
     // 管理員要求兩步驟而帳號還沒設好：先設定，完成後回到這個請求。/ Required two-step setup first, then back here.
     if (enrollMissing) return <EnrollmentGate missing={enrollMissing} onDone={actions.enrollmentDone} />;

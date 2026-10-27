@@ -2,7 +2,8 @@
 
 /**
  * 設定頁(管理員專用),分頁並以 ?tab= 記在網址(MCP 頁可直接連到 AI 分頁):
- * - 帳號與註冊 / 登入 / 遠端瀏覽器 / AI 存取(MCP)…:站台設定依 key 前綴分到各分頁。label 與說明優先用前端字典
+ * - 帳號與註冊 / 登入 / 遠端瀏覽器 / AI 存取(MCP)…:站台設定依 key 前綴分到各分頁。登入分頁另有「登入頁的樣子」
+ *   面板(一般 / 低調 + 預覽,components/auth/SignInLookSettings)。label 與說明優先用前端字典
  *   (siteSettings.<key>.label/.description,隨介面語言切換),找不到才退回後端 meta。
  *   以秒為單位的設定用「數字 + 單位(秒/分/時/天)」輸入(DurationField)。AI 分頁另外顯示 MCP 端點網址。
  * - 使用者:使用者列表 + 「管理」modal,可調整帳號狀態/角色與個人設定(語言)。
@@ -45,6 +46,7 @@ import { ConnectedApps } from "@/components/layout/ConnectedApps";
 import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
+import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -242,8 +244,9 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
     // 後端的鍵是字母序；開關整個功能的那個排最前面。/ Keys arrive sorted; the switch that turns a feature on goes first.
+    // 登入頁的樣子有自己的面板（含預覽），不在一般清單裡。/ The sign-in look has its own panel (with a preview).
     const entries = Object.entries(settingsObj)
-        .filter(([k]) => SITE_TAB_KEYS[tab](k))
+        .filter(([k]) => SITE_TAB_KEYS[tab](k) && !SIGNIN_LOOK_KEYS.includes(k))
         .sort(([a], [b]) => Number(!LEAD_KEYS.includes(a)) - Number(!LEAD_KEYS.includes(b)));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
@@ -350,6 +353,8 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                     </ul>
                 </div>
             )}
+
+            {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
         </div>
     );
 }

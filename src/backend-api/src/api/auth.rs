@@ -20,6 +20,7 @@ use crate::util::{json_str, opt_db_to_iso_utc_z, db_to_iso_utc_z};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(setup_status))
+        .routes(routes!(sign_in_page))
         .routes(routes!(obtain_token))
         .routes(routes!(refresh_token))
         .routes(routes!(logout))
@@ -34,6 +35,18 @@ pub fn router() -> OpenApiRouter<AppState> {
 async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let n = db::users::count(&state.db).await?;
     Ok(Json(json!({ "first_time_setup": n == 0 })))
+}
+
+/**
+ * 公開：登入頁要畫成哪個樣子（管理員在網站設定 → 登入切換）。登入頁在知道答案之前只畫一個空的外框，
+ * 所以靜態 HTML 裡不會出現產品介紹。
+ * Public: which look the sign-in pages use (Site settings → Sign-in). The pages paint an empty frame until they
+ * know, so the static HTML never carries the product description.
+ */
+#[utoipa::path(get, path = "/api/auth/sign-in-page", tag = "Login", responses((status = 200, description = "How the sign-in pages look", body = super::schemas::SignInPage)))]
+async fn sign_in_page(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let s = db::settings::get_solo(&state.db).await?;
+    Ok(Json(json!({ "style": s.signin_page_style, "oauth_style": s.signin_oauth_style, "message": s.signin_page_message })))
 }
 
 /// 登入完成 → 開一個 session、發 `{refresh_token, access_token}`（`auth::sessions`）。

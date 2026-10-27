@@ -23,6 +23,8 @@ enum Kind {
     Str(usize),
     /// 可以空白（= 關閉）；有值就必須是 http(s) 網址。/ May be blank (= off); otherwise an http(s) URL.
     Url(usize),
+    /// 可以空白的短文字（`signin_page_message`）。/ Short text that may be blank.
+    Text(usize),
 }
 
 struct FieldMeta {
@@ -65,6 +67,9 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard Limit", description: "剪貼簿最多能開到哪個方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。每個人在桌面頁或偏好設定裡自己選方向，實際用的是兩者較窄的那個；RDP / VNC 由伺服器（guacd）把關，RustDesk 由瀏覽器裡的核心套用。下次開桌面時生效。" },
     FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
     FieldMeta { name: "desktop_file_transfer", kind: Kind::Bool, label: "Remote Desktop File Transfer (RustDesk)", description: "允許在網頁內的 RustDesk 連線裡上傳 / 下載檔案（桌面頁的「檔案」面板）。關閉後面板不出現，中繼也會拒絕 RustDesk 的檔案傳輸登入。RDP / VNC 不經這裡傳檔。下次開面板時生效。" },
+    FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面。變更後立即生效。" },
+    FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
+    FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page message", description: "低調登入頁在 Telepy 下面顯示的一句話(最多 200 字、3 行)。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -101,6 +106,9 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("signin_lifetime".into(), json!(s.signin_lifetime));
     m.insert("signin_access_lifetime".into(), json!(s.signin_access_lifetime));
     m.insert("terminal_detach_max_secs".into(), json!(s.terminal_detach_max_secs));
+    m.insert("signin_page_style".into(), json!(s.signin_page_style));
+    m.insert("signin_oauth_style".into(), json!(s.signin_oauth_style));
+    m.insert("signin_page_message".into(), json!(s.signin_page_message));
     Value::Object(m)
 }
 
@@ -112,6 +120,7 @@ fn meta_json() -> Value {
             Kind::Int => "integer",
             Kind::Str(_) => "string",
             Kind::Url(_) => "url",
+            Kind::Text(_) => "text",
         };
         m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
     }
@@ -159,7 +168,38 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             },
             _ => Err(ApiError::field(f.name, "Enter a valid http:// or https:// URL, or leave it blank.")),
         },
+        Kind::Text(max) => match v {
+            Value::String(s) => normalize_text(s, max).map(SettingValue::Str).map_err(|msg| ApiError::field(f.name, msg)),
+            Value::Null => Ok(SettingValue::Str(String::new())),
+            _ => Err(ApiError::field(f.name, "Not a valid string.")),
+        },
     }
+}
+
+/// 登入頁的兩種樣子。/ The two sign-in page looks.
+pub const SIGNIN_STYLES: [&str; 2] = ["standard", "discreet"];
+/// 低調登入頁那句話的上限（字元 / 行）。/ Limits of the discreet page's line (characters / lines).
+pub const SIGNIN_MESSAGE_MAX: usize = 200;
+const SIGNIN_MESSAGE_LINES: usize = 3;
+
+/**
+ * 可以空白的短文字：換行統一成 `\n`、每行去掉尾端空白、整段去頭尾空白；超過字數、超過三行或有其他控制字元就拒絕。
+ * Blank-able short text: newlines normalised to `\n`, trailing spaces per line and outer whitespace trimmed; too long,
+ * more than three lines or other control characters are refused.
+ */
+fn normalize_text(raw: &str, max: usize) -> Result<String, String> {
+    let lines: Vec<&str> = raw.split('\n').map(|l| l.trim_end_matches('\r').trim_end()).collect();
+    let text = lines.join("\n").trim().to_string();
+    if text.chars().any(|c| c.is_control() && c != '\n') {
+        return Err("Use plain text without control characters.".into());
+    }
+    if text.chars().count() > max {
+        return Err(format!("Ensure this field has no more than {max} characters."));
+    }
+    if text.lines().count() > SIGNIN_MESSAGE_LINES {
+        return Err(format!("Use at most {SIGNIN_MESSAGE_LINES} lines."));
+    }
+    Ok(text)
 }
 
 #[utoipa::path(post, path = "/api/site/settings", tag = "Site Settings", security(("bearer" = [])), request_body(content = Object, description = "Partial update: {field: value, …} using the keys of `values`"), responses((status = 200, body = super::schemas::SiteSettingsResponse), (status = 400, description = "{field: [message]}", body = Object), (status = 403, body = super::schemas::ErrorBody)))]
@@ -209,6 +249,9 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
             Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
         }
+        ("signin_page_style" | "signin_oauth_style", SettingValue::Str(s)) if !SIGNIN_STYLES.contains(&s.as_str()) => {
+            Err(ApiError::field(name, format!("Must be one of: {}.", SIGNIN_STYLES.join(", "))))
+        }
         ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),
         ("desktop_max_sessions" | "desktop_session_idle_timeout", SettingValue::Int(n)) if *n < 0 => Err(ApiError::field(name, "Must be 0 or more.")),
         // 網址會放進裝置上的 shell 指令。/ The URL goes into a shell command on the device.
@@ -225,5 +268,21 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
             Err(ApiError::field(name, "Must be between 60 seconds (1 minute) and 86400 seconds (24 hours)."))
         }
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signin_message_is_trimmed_and_limited() {
+        assert_eq!(normalize_text("  Hello \r\n  world  \n", 200).unwrap(), "Hello\n  world");
+        assert_eq!(normalize_text("   ", 200).unwrap(), "", "blank = the built-in lines");
+        assert!(normalize_text(&"字".repeat(200), 200).is_ok(), "counted in characters, not bytes");
+        assert!(normalize_text(&"x".repeat(201), 200).is_err());
+        assert!(normalize_text("a\nb\nc\nd", 200).is_err(), "at most three lines");
+        assert!(normalize_text("tab\there", 200).is_err());
+        assert!(normalize_text("bell\u{7}", 200).is_err());
     }
 }

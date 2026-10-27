@@ -986,6 +986,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),
     ("telepy_key_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_key_group", "labels", "text NOT NULL DEFAULT '[]'"),
+    // 登入頁的樣子（standard = 產品介紹；discreet = 只寫 Telepy 的低調畫面）與低調畫面上的一句話（空白 = 內建的句子）。
+    // How the sign-in pages look (standard = product highlights; discreet = a plain "Telepy" page) and the discreet page's line (blank = built-in).
+    ("site_settings_sitesettings", "signin_page_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    ("site_settings_sitesettings", "signin_oauth_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    ("site_settings_sitesettings", "signin_page_message", "varchar(200) NOT NULL DEFAULT ''"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
