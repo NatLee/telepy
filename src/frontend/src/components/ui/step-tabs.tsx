@@ -121,18 +121,20 @@ export function StepFooter<T extends string>({ tabs, value, onChange, final }: {
     const done = doneCount(tabs);
     return (
         <>
-            <span className={cn("mr-auto text-sm", done === tabs.length ? "text-success" : "text-muted-foreground")}>
+            {/* 手機上不顯示（上面的圓點已經看得出進度），按鈕列才放得進一行。/ Hidden on phones: the dots already show it. */}
+            <span className={cn("mr-auto text-sm max-sm:hidden", done === tabs.length ? "text-success" : "text-muted-foreground")}>
                 {done === tabs.length && <Check size={14} className="mr-1 inline align-[-2px]" aria-hidden />}
                 {t("ui.steps.progress", { done, total: tabs.length })}
             </span>
             {prev && (
-                <Button type="button" variant="outline" onClick={() => onChange(prev)}>
+                <Button type="button" variant="outline" onClick={() => onChange(prev)} aria-label={t("ui.steps.back")} title={t("ui.steps.back")}>
                     <ArrowLeft />
-                    {t("ui.steps.back")}
+                    {/* 手機上只剩箭頭。/ Just the arrow on phones. */}
+                    <span className="max-sm:hidden">{t("ui.steps.back")}</span>
                 </Button>
             )}
             {next && nextTab ? (
-                <Button type="button" onClick={() => onChange(next)}>
+                <Button type="button" onClick={() => onChange(next)} className="max-sm:h-auto max-sm:min-h-9 max-sm:flex-1 max-sm:whitespace-normal">
                     {t("ui.steps.next", { step: typeof nextTab.label === "string" ? nextTab.label : "" })}
                     <ArrowRight />
                 </Button>

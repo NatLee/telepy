@@ -23,6 +23,12 @@
  * doesn't read as scrollable and the content looks cut off). When the body overflows, a "More below"
  * cue floats at the bottom; clicking it scrolls to the end.
  *
+ * 手機上固定的部分越少越好（使用者放大到 130% 時，固定的標題列與底部按鈕列曾吃掉大半個畫面）：說明文字移進內容區最上面
+ * 跟著捲走、標題左邊的圖示方塊不顯示、`fixedHeight` 的對話框佔滿整個螢幕。
+ * On phones the fixed parts stay as small as possible (at 130 % display size the fixed header and footer used to
+ * take most of the screen): the description moves to the top of the body and scrolls away, the icon tile is hidden,
+ * and `fixedHeight` dialogs fill the whole screen.
+ *
  * 設定類的分頁對話框用 `nav`(桌面在內容左側的一欄、手機在內容上方的一列,不跟著內容捲)加 `fixedHeight`:
  * 切換分頁時對話框大小不變,內容多的分頁自己在內容區捲動。
  * Settings-style tabbed dialogs use `nav` (a rail left of the body from `sm` up, a row above it on phones;
@@ -33,6 +39,7 @@ import { ChevronDown, Loader2, X } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { DialogOverlay, DialogPortal } from "./dialog";
 
 export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
@@ -141,6 +148,14 @@ export function Modal({
     const hasBody = children !== undefined && children !== null && children !== false;
     const hasToolbar = toolbar !== undefined && toolbar !== null && toolbar !== false;
     const hasNav = nav !== undefined && nav !== null && nav !== false;
+    // 手機：說明放進內容區（只放一處——說明裡可能有按鈕）。/ Phones: the description goes into the body (in one place only — it may hold buttons).
+    const phone = useMediaQuery("(max-width: 639.98px)") === true;
+    const descriptionInBody = phone && hasBody && description !== undefined && description !== null && description !== false;
+    const descriptionNode = description && (
+        <DialogPrimitive.Description asChild>
+            <div className={cn("text-sm leading-relaxed text-muted-foreground", descriptionInBody ? "mb-4" : "mt-0.5")}>{description}</div>
+        </DialogPrimitive.Description>
+    );
 
     const body = hasBody && (
         <div className={cn("relative flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain px-5 sm:px-6 py-5", isLoading && "min-h-40", bodyClassName)}>
@@ -150,6 +165,7 @@ export function Modal({
                     <span className="sr-only">{t("common.loading")}</span>
                 </div>
             )}
+            {descriptionInBody && descriptionNode}
             {children}
             <MoreBelow />
         </div>
@@ -178,16 +194,19 @@ export function Modal({
                         "max-sm:inset-x-0 max-sm:bottom-0 max-sm:max-h-[92dvh] max-sm:rounded-t-xl",
                         "max-sm:data-[state=open]:animate-sheet-up-show max-sm:data-[state=closed]:animate-sheet-up-hide",
                         SIZE_CLASS[size],
-                        // 54rem:分頁對話框的一般內容(通道詳細資訊、金鑰詳細資訊、偏好設定…)在 1080p 上不用捲。
-                        // 54rem: the usual tabs of the settings-style dialogs (tunnel / key details, preferences…) fit without scrolling at 1080p.
-                        fixedHeight && "sm:h-[min(calc(100dvh-4rem),54rem)] max-sm:h-[92dvh]",
+                        // 桌面 54rem:分頁對話框的一般內容(通道詳細資訊、金鑰詳細資訊、偏好設定…)在 1080p 上不用捲;
+                        // 手機上佔滿整個螢幕（頂端讓出瀏海 / 動態島）。
+                        // Desktop 54rem: the usual tabs of the settings-style dialogs (tunnel / key details, preferences…)
+                        // fit without scrolling at 1080p. Phones: the whole screen (clear of the notch).
+                        fixedHeight && "sm:h-[min(calc(100dvh-4rem),54rem)] max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:rounded-none max-sm:pt-[env(safe-area-inset-top)]",
                     )}
                 >
-                    <div className="sm:hidden mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />
+                    {!fixedHeight && <div className="sm:hidden mx-auto mt-2.5 h-1 w-10 shrink-0 rounded-full bg-border" aria-hidden />}
 
                     <div
                         className={cn(
                             "flex shrink-0 items-start gap-3.5 px-5 sm:px-6 pt-4 sm:pt-5",
+                            descriptionInBody && "items-center",
                             hasToolbar || hasNav ? "pb-3" : "pb-4",
                             hasBody && !hasToolbar && !hasNav && "border-b border-border/70",
                             // 側欄:桌面上標題列和下面兩欄用細線分開;手機上導覽列自己有底線。/ Desktop: hairline above the rail + body.
@@ -200,7 +219,10 @@ export function Modal({
                                 className={cn(
                                     // 圖示方塊是中性的；只有危險操作才上色，免得每個對話框都一片橘。
                                     // The icon tile is neutral; only dangerous actions get colour, so dialogs aren't all orange.
+                                    // 手機上不顯示，標題多一點寬度；危險操作的紅色圖示是警示，留著。
+                                    // Hidden on phones so the title gets the width — except the red tile of a dangerous action.
                                     "grid size-9 shrink-0 place-items-center rounded-md border [&_svg]:size-[18px]",
+                                    tone !== "danger" && "max-sm:hidden",
                                     tone === "danger"
                                         ? "border-destructive/20 bg-destructive/10 text-destructive"
                                         : "border-border bg-surface text-foreground/70",
@@ -209,17 +231,13 @@ export function Modal({
                                 {icon}
                             </span>
                         )}
-                        <div className={cn("min-w-0 flex-1", icon && "pt-0.5")}>
+                        <div className={cn("min-w-0 flex-1", icon && (tone === "danger" ? "pt-0.5" : "sm:pt-0.5"))}>
                             {/* min-w-0 + 換行:長的在地化標題(帶使用者名稱等)不會把關閉鈕擠出去，也不會被截成「…」(手機放大顯示時)。
                                 min-w-0 + wrapping: long localized titles neither push out the close button nor end in "…" on phones. */}
                             <DialogPrimitive.Title className="text-lg leading-snug text-foreground [overflow-wrap:anywhere]">
                                 {title}
                             </DialogPrimitive.Title>
-                            {description && (
-                                <DialogPrimitive.Description asChild>
-                                    <div className="mt-0.5 text-sm leading-relaxed text-muted-foreground">{description}</div>
-                                </DialogPrimitive.Description>
-                            )}
+                            {!descriptionInBody && descriptionNode}
                         </div>
                         <DialogPrimitive.Close
                             className="-mr-1.5 -mt-0.5 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
