@@ -1,9 +1,11 @@
 /**
  * 網路拓撲頁的純函式：裝置篩選（全部 / 有主機的 / 在線，附數量）、一台裝置的主機種類統計（收起來時的摘要），以及
- * 沒選過時哪些裝置先展開。
+ * 沒選過時哪些裝置先展開，以及裝置自己的位址（收起來那一行用）。
  * Pure helpers for the network topology page: the device filter (all / with hosts / online, with counts), a
- * device's host-kind counts (its summary while collapsed), and which devices start expanded without a stored choice.
+ * device's host-kind counts (its summary while collapsed), which devices start expanded without a stored choice, and
+ * the device's own addresses (for the collapsed row).
  */
+import { devicePublicIp, type IpGeo } from "./geo.ts";
 
 export type TopologyFilter = "all" | "hosts" | "online";
 
@@ -34,4 +36,15 @@ export function defaultExpanded(devices: { id: number; hosts: unknown[] }[], foc
     const out = new Set<number>(devices.length <= EXPAND_ALL_UP_TO ? devices.filter((d) => d.hosts.length > 0).map((d) => d.id) : []);
     if (focus !== null) out.add(focus);
     return out;
+}
+
+/**
+ * 裝置自己的位址：第一張網卡的內網 IP（+ 還有幾張）與外網 IP（不明 = null）；`endpoint` 為 null（看不到）回 null。
+ * The device's own addresses: the first LAN IP (+ how many more) and the public IP (null = unknown); null when the
+ * viewer gets no `endpoint`.
+ */
+export function deviceAddresses(endpoint: { ip: string; public_ip?: string | null; geo?: IpGeo | null; lan?: { ip: string }[] } | null | undefined): { lan: string | null; lanMore: number; public: string | null } | null {
+    if (!endpoint) return null;
+    const lan = endpoint.lan ?? [];
+    return { lan: lan[0]?.ip ?? null, lanMore: Math.max(0, lan.length - 1), public: devicePublicIp(endpoint) };
 }

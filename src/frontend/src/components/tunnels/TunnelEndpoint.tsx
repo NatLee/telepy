@@ -14,7 +14,7 @@ import { Check, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
-import { flagEmoji, isNonPublic, placeLabel } from "@/lib/geo";
+import { devicePublicIp, flagEmoji, placeLabel } from "@/lib/geo";
 import { TunnelEndpoint } from "@/types/tunnel";
 
 const chipClass = (live: boolean) =>
@@ -48,10 +48,11 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
 
     // 知道真正的公網 IP 就顯示它；gateway 看到的是公網位址也行；都不是就是「不明」。
     // The real public IP when known, else the gateway's peer when that is public, else unknown.
+    const shownIp = devicePublicIp(endpoint);
     const publicIp = endpoint.public_ip ?? null;
     const when = formatRelativeTime(endpoint.live ? endpoint.connected_at : endpoint.last_seen_at ?? endpoint.connected_at, locale);
 
-    if (!publicIp && isNonPublic(endpoint.geo)) {
+    if (!shownIp) {
         const label = endpoint.live ? t("tunnels.endpointUnknownLive", { time: when }) : t("tunnels.endpointUnknownLast", { time: when });
         const why = endpoint.probe_error
             ? t("tunnels.endpointProbeFailed", { error: endpoint.probe_error })
@@ -68,7 +69,7 @@ export function TunnelEndpointChip({ endpoint, className }: { endpoint?: TunnelE
         );
     }
 
-    const ip = publicIp ?? endpoint.ip;
+    const ip = shownIp;
     const geo = publicIp ? endpoint.public_geo : endpoint.geo;
     const label = endpoint.live ? t("tunnels.endpointLive", { ip, time: when }) : t("tunnels.endpointLast", { ip, time: when });
     const place = placeLabel(geo, locale);
