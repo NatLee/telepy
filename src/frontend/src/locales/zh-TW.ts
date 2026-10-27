@@ -1539,7 +1539,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "desktop.ways.title": "兩種連線方式",
     "desktop.ways.description": "兩條路並排比較：各自需要什麼、畫面由誰畫、哪幾段有加密。",
     "desktop.ways.current": "目前選的",
-    "desktop.ways.draws": "畫面在這裡畫出來",
+    "desktop.ways.draws": "畫面在此繪製",
     "desktop.ways.tableCaption": "比較",
     "desktop.ways.legend": "圖例",
     "desktop.ways.legend.wss": "加密的 WebSocket",
