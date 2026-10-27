@@ -25,6 +25,10 @@ import type { KeyDevice, UserKey } from "@/types/keys";
 
 type KeyGroupsApi = ReturnType<typeof useKeyGroups>;
 
+/** 卡片先顯示幾個金鑰籤、幾筆授予。/ Key chips and grants a card shows before folding the rest. */
+const CHIPS_SHOWN = 6;
+const GRANTS_SHOWN = 3;
+
 function KeyGroupCard({
     group,
     keys,
@@ -45,8 +49,13 @@ function KeyGroupCard({
     onRevoke: (g: KeyGroupGrant) => void;
 }) {
     const { t } = useI18n();
+    const [allGrants, setAllGrants] = useState(false);
     const members = keys.filter((k) => group.key_ids.includes(k.id));
     const reached = keyGroupReach(group, tunnelGroups).filter((r) => devices.some((d) => d.tunnel_id === r.tunnelId)).length;
+    // 群組很大時卡片不跟著長：金鑰籤與授予先各顯示幾個。/ Big groups keep the card short: a few key chips and grants first.
+    const shownKeys = members.length > CHIPS_SHOWN + 1 ? members.slice(0, CHIPS_SHOWN) : members;
+    const restKeys = members.slice(shownKeys.length);
+    const grants = allGrants || group.grants.length <= GRANTS_SHOWN + 1 ? group.grants : group.grants.slice(0, GRANTS_SHOWN);
     return (
         <article className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-card">
             <header className="flex items-center gap-2">
@@ -73,11 +82,18 @@ function KeyGroupCard({
                 {members.length === 0 ? (
                     <span className="text-sm text-muted-foreground">{t("groups.key.noKeys")}</span>
                 ) : (
-                    members.map((k) => (
-                        <Chip key={k.id} className="max-w-full" title={k.fingerprint ?? ""}>
-                            <KeyRound aria-hidden /> <span className="truncate">{k.host_friendly_name}</span>
-                        </Chip>
-                    ))
+                    <>
+                        {shownKeys.map((k) => (
+                            <Chip key={k.id} className="max-w-full" title={k.fingerprint ?? ""}>
+                                <KeyRound aria-hidden /> <span className="truncate">{k.host_friendly_name}</span>
+                            </Chip>
+                        ))}
+                        {restKeys.length > 0 && (
+                            <Chip title={restKeys.map((k) => k.host_friendly_name).join(", ")} className="text-muted-foreground">
+                                {t("groups.key.moreKeys", { count: restKeys.length })}
+                            </Chip>
+                        )}
+                    </>
                 )}
             </div>
             <div className="space-y-1.5">
@@ -86,7 +102,7 @@ function KeyGroupCard({
                     <p className="text-sm text-muted-foreground">{t("groups.key.nowhere")}</p>
                 ) : (
                     <ul className="flex flex-col gap-1">
-                        {group.grants.map((g) => {
+                        {grants.map((g) => {
                             const target = g.tunnel_group?.name ?? g.tunnel?.name ?? "";
                             return (
                                 <li key={g.id} className="flex min-w-0 items-center gap-2 rounded-lg bg-surface px-2 py-1.5 ring-1 ring-inset ring-border">
@@ -107,6 +123,13 @@ function KeyGroupCard({
                                 </li>
                             );
                         })}
+                        {grants.length < group.grants.length && (
+                            <li>
+                                <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={() => setAllGrants(true)}>
+                                    {t("groups.key.moreGrants", { count: group.grants.length - grants.length })}
+                                </Button>
+                            </li>
+                        )}
                     </ul>
                 )}
             </div>

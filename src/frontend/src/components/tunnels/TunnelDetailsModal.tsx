@@ -25,7 +25,7 @@ import { Field } from "@/components/ui/field";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip, Section } from "@/components/ui/section";
-import { KeyTypeBadge } from "@/components/keys/KeyCard";
+import { KeyTypeBadge } from "@/components/keys/KeyList";
 import { fingerprint, parsePublicKey } from "@/lib/sshKeys";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";

@@ -1,15 +1,19 @@
 "use client";
 
 /**
- * 網路頁底部的終端機 dock：在這頁開區網主機的終端機，不必跳到終端機頁。每個 session 一個分頁（狀態點 + 帳號@主機），
- * 「+」在同一台機器再開一個 shell，換分頁 / 換主機都不會斷；可縮小成一條、一般高度、或放大成整個視窗的覆蓋層
- * （Esc 還原）。「在終端機頁開啟」把作用中的那台帶到完整的終端機頁。所有 session 都掛著，只顯示作用中的那個。
- * The network page's terminal dock: LAN-host terminals open right here. One tab per session, "+" opens another
+ * 網路頁的終端機 dock：在這頁開區網主機的終端機，不必跳到終端機頁。它是一塊**浮在內容上方**的面板（fixed，
+ * 離視窗底一點距離、四角圓角、有陰影、彈出動畫），寬度跟著頁面那一欄（`anchorRef` 量出來的），不是貼在內容
+ * 下面的一條。每個 session 一個分頁（狀態點 + 帳號@主機），「+」在同一台機器再開一個 shell，換分頁 / 換主機都
+ * 不會斷；可縮小成一條、一般高度、或放大成整個視窗的覆蓋層（Esc 還原）。「在終端機頁開啟」把作用中的那台帶到
+ * 完整的終端機頁。所有 session 都掛著，只顯示作用中的那個。
+ * The network page's terminal dock: LAN-host terminals open right here. It is a panel **floating above the
+ * content** (fixed, a little off the bottom edge, rounded on every corner, shadowed, popping in), as wide as the
+ * page column (`anchorRef` is measured), not a strip glued under the tree. One tab per session, "+" opens another
  * shell on the same machine, switching never disconnects. Minimise to a bar, normal height, or maximise into a
  * full-window overlay (Esc restores). "Open in the terminal page" takes the active machine to the full page.
  * Every session stays mounted.
  */
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, Plus, RotateCw, SquareArrowOutUpRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +23,7 @@ import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { LanTerminal } from "@/components/network/LanTerminal";
 import { MAX_LAN_TERMINALS, type DockSize, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
 
-/** dock 本體高度（給主機面板扣掉，免得被蓋住）。放大是覆蓋層，不佔版面。/ Body height, also subtracted from the host panel. */
+/** dock 本體高度（頁面底部要留這麼多空間，免得被蓋住）。放大是覆蓋層，不佔版面。/ Body height; the page keeps that much room below. */
 export const DOCK_HEIGHT: Record<DockSize, string> = {
     min: "0px",
     normal: "min(24rem, 45vh)",
@@ -27,6 +31,8 @@ export const DOCK_HEIGHT: Record<DockSize, string> = {
 };
 /** 標題列高度。/ Header bar height. */
 export const DOCK_BAR = "2.75rem";
+/** 浮動面板離視窗底的距離。/ The floating panel's gap from the bottom edge. */
+export const DOCK_GAP = "1rem";
 
 const DOT: Record<LanTerminalStatus, string> = {
     connecting: "bg-warning animate-pulse",
@@ -47,15 +53,42 @@ interface Props {
     /** 分頁的 shell id 變了（斷線保留）。/ A tab's kept shell id changed. */
     onShell?: (key: number, shellId: string | null) => void;
     setSize: (size: DockSize) => void;
+    /** 頁面那一欄：浮動面板的左右邊跟著它。/ The page column the floating panel aligns with. */
+    anchorRef: React.RefObject<HTMLElement | null>;
+}
+
+/** 量 anchor 的左緣與寬度（側欄收合、視窗縮放時會變）。/ The anchor's left edge and width (sidebar collapse, resizes). */
+function useAnchorBox(anchorRef: React.RefObject<HTMLElement | null>, enabled: boolean) {
+    const [box, setBox] = useState<{ left: number; width: number } | null>(null);
+    useEffect(() => {
+        if (!enabled) return;
+        const el = anchorRef.current;
+        if (!el) return;
+        const measure = () => {
+            const r = el.getBoundingClientRect();
+            setBox((prev) => (prev && prev.left === r.left && prev.width === r.width ? prev : { left: r.left, width: r.width }));
+        };
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        // 側欄收合是 200 ms 的寬度動畫，ResizeObserver 會一路跟著；視窗縮放另外聽。/ The sidebar animates; the observer follows.
+        window.addEventListener("resize", measure);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener("resize", measure);
+        };
+    }, [anchorRef, enabled]);
+    return box;
 }
 
 export function sessionLabel(s: LanTerminalSession): string {
     return s.login ? `${s.login}@${s.hostName}` : s.hostName;
 }
 
-export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, onShell, setSize }: Props) {
+export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate, onClose, onCloseAll, onReconnect, onStatus, onShell, setSize, anchorRef }: Props) {
     const { t } = useI18n();
     const maximized = size === "max";
+    const box = useAnchorBox(anchorRef, sessions.length > 0 && !maximized);
 
     // 放大時 Esc 還原（沒有對話框開著時）。/ Esc restores from the overlay.
     useEffect(() => {
@@ -76,11 +109,13 @@ export function TerminalDock({ sessions, activeKey, size, onSelect, onDuplicate,
         <section
             aria-label={t("network.dock.title")}
             className={cn(
-                "flex flex-col overflow-hidden border-border bg-card",
+                "fixed z-40 flex flex-col overflow-hidden border-border bg-card",
                 maximized
-                    ? "fixed inset-0 z-40 border-0"
-                    : "sticky bottom-0 z-30 mt-6 rounded-t-xl border border-b-0 shadow-dialog",
+                    ? "inset-0 border-0"
+                    : "rounded-xl border shadow-dialog animate-pop-in",
             )}
+            // 浮在頁面那一欄上方：左右跟著欄、離底一點距離（量不到時先貼齊視窗左右）。/ Floats over the page column; falls back to the viewport edges.
+            style={maximized ? undefined : { bottom: DOCK_GAP, left: box ? box.left : 16, width: box ? box.width : "calc(100vw - 2rem)" }}
         >
             <div className="flex shrink-0 items-center gap-1 border-b border-border px-1.5" style={{ height: DOCK_BAR }}>
                 <div role="tablist" aria-label={t("network.dock.title")} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

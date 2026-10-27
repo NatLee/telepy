@@ -1,12 +1,14 @@
 /**
- * 金鑰頁「我的金鑰」金鑰很多時：搜尋、分類（附數量）、排序，卡片先顯示三列再「全部顯示」。
+ * 金鑰頁「我的金鑰」金鑰很多時：搜尋、分類（附數量）、排序，以及分頁（每頁筆數記在 localStorage
+ * `telepy.keysPageSize`）。搜尋 / 分類 / 排序永遠對全部金鑰做，結果再分頁；條件一變就回第 1 頁。
  * 金鑰少時控制項不出現、順序不變。下方的裝置矩陣用同一份篩選結果當欄位。外觀對齊 DeviceFilter。
- * "My keys" with many keys: search, buckets with counts, sort, and three rows of cards before "show all".
- * With few keys nothing appears and the order is unchanged. The device matrix below uses the same result
- * for its columns. Looks like DeviceFilter.
+ * "My keys" with many keys: search, buckets with counts, sort, and pages (page size kept in localStorage
+ * `telepy.keysPageSize`). Search / buckets / sort always run over every key and the result is paged; any change
+ * goes back to page 1. With few keys nothing appears and the order is unchanged. The device matrix below uses the
+ * same result for its columns. Looks like DeviceFilter.
  */
 import React, { useCallback, useDeferredValue, useMemo, useState } from "react";
-import { ChevronDown, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -14,7 +16,10 @@ import { Segmented } from "@/components/ui/segmented";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { UserKey } from "@/types/keys";
-import { filterKeys, KEY_LIST_COLLAPSED, KEY_LIST_FILTER_FROM, type KeyListBucket, type KeyListSort } from "@/lib/userKeyList";
+import { filterKeys, KEY_LIST_FILTER_FROM, type KeyListBucket, type KeyListSort } from "@/lib/userKeyList";
+import { pageSlice } from "@/lib/pagination";
+import { usePagination } from "@/hooks/usePagination";
+import { Pagination } from "@/components/ui/pagination";
 
 const BUCKETS: { value: KeyListBucket; label: TranslationKey }[] = [
     { value: "all", label: "keys.list.bucket.all" },
@@ -35,7 +40,6 @@ export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => num
     const deferred = useDeferredValue(query);
     const [bucket, setBucket] = useState<KeyListBucket>("all");
     const [sort, setSort] = useState<KeyListSort>("recent");
-    const [expanded, setExpanded] = useState(false);
     const showControls = keys.length >= KEY_LIST_FILTER_FROM;
 
     const result = useMemo(() => {
@@ -48,8 +52,8 @@ export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => num
     }, [keys, deferred, bucket, sort, devicesOf, locale, showControls]);
 
     const filtering = showControls && (deferred.trim() !== "" || result.bucket !== "all");
-    const collapsible = showControls && !expanded && !filtering && result.keys.length > KEY_LIST_COLLAPSED + 2;
-    const visible = collapsible ? result.keys.slice(0, KEY_LIST_COLLAPSED) : result.keys;
+    const pager = usePagination(result.keys.length, { storageKey: "telepy.keysPageSize", resetKey: `${deferred}|${result.bucket}|${sort}` });
+    const visible = pageSlice(result.keys, pager.page, pager.size);
     const reset = useCallback(() => {
         setQuery("");
         setBucket("all");
@@ -65,10 +69,9 @@ export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => num
         counts: result.counts,
         /** 符合條件、排好序的全部金鑰（矩陣用）。/ Every matching key, sorted (used by the matrix). */
         keys: result.keys,
-        /** 要畫成卡片的。/ The cards to render. */
+        /** 這一頁要畫出來的列。/ The rows on this page. */
         visible,
-        hidden: result.keys.length - visible.length,
-        expand: () => setExpanded(true),
+        pager,
         filtering,
         reset,
         showControls,
@@ -115,8 +118,8 @@ export function KeyListFilterBar({ filter }: { filter: KeyListFilterState }) {
     );
 }
 
-/** 「全部顯示 N 把」與「沒有符合的金鑰」。/ The "show all" button and the no-match line. */
-export function KeyListFilterFooter({ filter }: { filter: KeyListFilterState }) {
+/** 分頁列與「沒有符合的金鑰」。/ The pager and the no-match line. */
+export function KeyListFilterFooter({ filter, anchor }: { filter: KeyListFilterState; anchor?: React.RefObject<HTMLElement | null> }) {
     const { t } = useI18n();
     if (filter.keys.length === 0 && filter.total > 0) {
         return (
@@ -128,10 +131,5 @@ export function KeyListFilterFooter({ filter }: { filter: KeyListFilterState }) 
             </p>
         );
     }
-    if (filter.hidden <= 0) return null;
-    return (
-        <Button type="button" variant="ghost" size="sm" className="mt-3 w-full text-primary hover:text-primary" onClick={filter.expand}>
-            <ChevronDown /> {t("keys.list.showAll", { count: filter.keys.length })}
-        </Button>
-    );
+    return <Pagination pager={filter.pager} anchor={anchor} className="mt-3" />;
 }
