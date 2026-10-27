@@ -922,6 +922,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "desktop_session_idle_timeout", "integer NOT NULL DEFAULT 900"),
     ("site_settings_sitesettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
     ("site_settings_sitesettings", "desktop_max_resolution", "integer NOT NULL DEFAULT 2560"),
+    // 網頁內 RustDesk 的檔案傳輸（上傳 / 下載）。/ File transfer in in-browser RustDesk sessions.
+    ("site_settings_sitesettings", "desktop_file_transfer", "bool NOT NULL DEFAULT 1"),
     // 管理員要求每個帳號都要有 TOTP / passkey（各自獨立）。/ Admin-required second factors, one switch each.
     ("site_settings_sitesettings", "mfa_require_totp", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "mfa_require_passkey", "bool NOT NULL DEFAULT 0"),

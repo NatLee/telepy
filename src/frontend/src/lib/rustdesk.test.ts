@@ -76,3 +76,7 @@ test("msgboxes and close codes map to actions", () => {
     assert.equal(rustdeskCloseFailure(4013)?.key, "desktop.err.rdDeviceClosed");
     assert.equal(rustdeskCloseFailure(4404)?.key, "desktop.err.expired");
 });
+
+test("signed out elsewhere closes with its own explanation", () => {
+    assert.equal(rustdeskCloseFailure(4010)?.key, "desktop.err.signedOut");
+});

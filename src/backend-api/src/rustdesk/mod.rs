@@ -9,6 +9,10 @@
 //! 後端 ws/rustdesk.rs ── russh direct-tcpip 通道（連線池）→ 裝置 127.0.0.1:21118（RustDesk 的 Direct IP）或區網主機
 //! ```
 //!
+//! 傳檔：RustDesk 的檔案傳輸是另一條連線（登入時帶 `file_transfer`），所以「檔案」面板向 `…/rustdesk/{sid}/files`
+//! 要一個掛在畫面 session 底下的子 session（[`Kind::Files`]，自己的票證與通道，不另佔名額、不另算 presence，畫面那條
+//! 結束就跟著結束）。中繼用 [`codec::LoginGuard`] 看瀏覽器送的登入：畫面 session 只准遙控、檔案 session 只准傳檔，
+//! 站台設定 `desktop_file_transfer` 關掉時不發檔案 session、已開的也收掉。
 //! 不需要 hbbs / hbbr、不開新的公開埠、不用 UDP。裝置的 Direct IP 連線本身不加密（RustDesk 設計如此：沒有金鑰
 //! 交換，第一則訊息就是密碼挑戰），整段由 SSH 隧道與 TLS 保護；RustDesk 的固定密碼由瀏覽器端核心直接雜湊回應，
 //! **後端看不到密碼**。權限和桌面一樣：隧道 VIEW + 允許的裝置帳號 + step-up。
@@ -31,12 +35,35 @@ use crate::util::random_alnum;
 /// 票證壽命：start 回來後瀏覽器要在這段時間內開兩條 WS（hbbs 角色、relay 角色）。/ Both sockets must open within this.
 pub const TICKET_TTL: Duration = Duration::from_secs(60);
 pub const REAP_INTERVAL: Duration = Duration::from_secs(10);
+/// 一個畫面 session 底下最多幾個檔案 session（再開就收掉最舊的）。允許兩個：重新整理 / React 的雙重 effect
+/// 時新舊兩條會短暫重疊，不能讓晚到的舊請求把新的那條收掉。
+/// Files sessions per screen session; another one ends the oldest. Two, because a reload (or React's double
+/// effect in development) briefly overlaps an old and a new request, and the late old one must not end the new one.
+pub const MAX_FILES_PER_SCREEN: usize = 2;
 /// RustDesk 的 Direct IP Access 預設埠。/ RustDesk's default Direct IP port.
 pub const DEFAULT_PORT: u16 = 21118;
 
 /// 不是自己的 session（也不是管理員）。/ Someone else's session and not an admin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotOwner;
+
+/// 這條 RustDesk 連線做什麼：看畫面 / 操作，或傳檔（畫面 session 底下的子 session）。
+/// What a RustDesk connection is for: the screen (remote control) or file transfer (a child of a screen session).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Screen,
+    Files,
+}
+
+impl Kind {
+    /// 中繼准許的登入。/ The login the relay admits.
+    pub fn login(self) -> codec::LoginKind {
+        match self {
+            Self::Screen => codec::LoginKind::Control,
+            Self::Files => codec::LoginKind::FileTransfer,
+        }
+    }
+}
 
 /// 同一張票證的兩個角色，各用一次。/ The two roles one ticket admits, once each.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -49,6 +76,9 @@ pub enum Role {
 
 pub struct Session {
     pub id: String,
+    pub kind: Kind,
+    /// 檔案 session 掛在哪個畫面 session 底下。/ The screen session a files session belongs to.
+    pub parent: Option<String>,
     pub user_id: i64,
     pub user_name: String,
     pub tunnel_id: i64,
@@ -94,11 +124,17 @@ impl Session {
     pub fn describe(&self) -> String {
         let to = if self.target.lan_host_id.is_some() { format!("{}:{}", self.target.host, self.target.port) } else { format!("device:{}", self.target.port) };
         let saved = self.saved_label.as_deref().map(|l| format!(" with saved login '{l}'")).unwrap_or_default();
-        format!("RustDesk in the browser by {} to {} through {}@{}{saved}", self.user_name, to, self.hop_username, self.tunnel_name)
+        let what = match self.kind {
+            Kind::Screen => "RustDesk in the browser",
+            Kind::Files => "RustDesk file transfer",
+        };
+        format!("{what} by {} to {} through {}@{}{saved}", self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
 pub struct NewSession {
+    pub kind: Kind,
+    pub parent: Option<String>,
     pub user_id: i64,
     pub user_name: String,
     pub tunnel_id: i64,
@@ -126,8 +162,44 @@ impl RustDesk {
         self.sessions.get(id).map(|s| s.clone())
     }
 
+    /// 佔名額的 session（畫面）；檔案 session 是畫面那條的一部分，不另算。/ Sessions that take a slot (screens only).
     pub fn count(&self) -> usize {
-        self.sessions.len()
+        self.sessions.iter().filter(|e| e.kind == Kind::Screen).count()
+    }
+
+    /// 某個畫面 session 底下的檔案 session。/ The files sessions of a screen session.
+    pub fn children(&self, parent: &str) -> Vec<Arc<Session>> {
+        self.sessions.iter().filter(|e| e.parent.as_deref() == Some(parent)).map(|e| e.value().clone()).collect()
+    }
+
+    /// 再開一個檔案 session 之前：已經有 [`MAX_FILES_PER_SCREEN`] 個就收掉最舊的。/ Make room for another files session.
+    pub fn make_room_for_files(&self, parent: &str) {
+        let mut list = self.children(parent);
+        if list.len() < MAX_FILES_PER_SCREEN {
+            return;
+        }
+        list.sort_by_key(|s| s.created);
+        for old in list.iter().take(list.len() + 1 - MAX_FILES_PER_SCREEN) {
+            if old.connected.load(Ordering::SeqCst) {
+                old.request_stop("replaced");
+            } else {
+                self.sessions.remove(&old.id);
+            }
+        }
+    }
+
+    /// 畫面 session 結束：它的檔案 session 也結束（連線中的請中繼收尾，還沒連的直接丟）。
+    /// A screen session ended: end its files sessions too.
+    pub fn end_children(&self, parent: &str, reason: &'static str) -> usize {
+        let list = self.children(parent);
+        for c in &list {
+            if c.connected.load(Ordering::SeqCst) {
+                c.request_stop(reason);
+            } else {
+                self.sessions.remove(&c.id);
+            }
+        }
+        list.len()
     }
 
     pub fn create(&self, new: NewSession) -> (Arc<Session>, String) {
@@ -135,6 +207,8 @@ impl RustDesk {
         let now = Instant::now();
         let session = Arc::new(Session {
             id: uuid::Uuid::new_v4().to_string(),
+            kind: new.kind,
+            parent: new.parent,
             user_id: new.user_id,
             user_name: new.user_name,
             tunnel_id: new.tunnel_id,
@@ -202,6 +276,14 @@ impl RustDesk {
                 tracing::info!(session = %id, "rustdesk: ticket expired before the browser connected; dropping the session");
                 self.sessions.remove(&id);
                 n += 1;
+            } else if let Some(parent) = s.parent.as_deref().filter(|p| self.get(p).is_none()) {
+                // 保險：畫面 session 不在了，檔案 session 也收掉。/ Safety net: the screen session is gone.
+                tracing::info!(session = %id, parent, "rustdesk: files session without its screen session; closing");
+                s.request_stop("parent ended");
+                if !s.connected.load(Ordering::SeqCst) {
+                    self.sessions.remove(&id);
+                }
+                n += 1;
             }
         }
         n
@@ -221,11 +303,29 @@ impl RustDesk {
         n
     }
 
+    /// 站台關掉了檔案傳輸：收掉所有檔案 session。/ The site turned file transfer off: end every files session.
+    pub fn end_all_files(&self) -> usize {
+        let files: Vec<Arc<Session>> = self.sessions.iter().filter(|e| e.kind == Kind::Files).map(|e| e.value().clone()).collect();
+        for s in &files {
+            if s.connected.load(Ordering::SeqCst) {
+                s.request_stop("file transfer turned off");
+            } else {
+                self.sessions.remove(&s.id);
+            }
+        }
+        files.len()
+    }
+
     pub async fn run_reaper(self: Arc<Self>, db: Db) {
         loop {
             tokio::time::sleep(REAP_INTERVAL).await;
             self.reap();
             self.revoke_lost(&db).await;
+            if let Ok(settings) = crate::db::settings::get_solo(&db).await {
+                if !settings.desktop_file_transfer {
+                    self.end_all_files();
+                }
+            }
         }
     }
 }

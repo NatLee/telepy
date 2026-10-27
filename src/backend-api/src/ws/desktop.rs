@@ -32,8 +32,11 @@ pub const CLOSE_GUACD_CLOSED: u16 = 4013;
 pub const CLOSE_STOPPED: u16 = 4014;
 pub const CLOSE_BAD_FRAME: u16 = 4400;
 
-/// 瀏覽器可以送給 guacd 的指令：輸入、畫面大小、同步、剪貼簿串流、斷線。其餘（`argv`、`put`、`pipe`、
-/// `audio`、`file`…）一律丟掉。/ Opcodes the browser may send; everything else is dropped.
+/// 瀏覽器可以送給 guacd 的指令：輸入、畫面大小、同步、剪貼簿串流、斷線，以及 `ack`（回覆 guacd 開的串流，
+/// 例如聲音）。其餘（`argv`、`put`、`pipe`、`audio` = 麥克風、`file`…）一律丟掉。反方向（guacd → 瀏覽器）全部透傳，
+/// 所以 guacd 的 `audio` / `blob` / `end`（遠端的聲音）照樣到瀏覽器，由 guacamole-common-js 播放。
+/// Opcodes the browser may send; everything else is dropped (`audio` from the browser would be a microphone).
+/// guacd → browser passes through untouched, so guacd's `audio` / `blob` / `end` (the remote's sound) reach the player.
 pub const ALLOWED_OPCODES: &[&str] = &["key", "mouse", "touch", "size", "sync", "nop", "disconnect", "clipboard", "blob", "end", "ack"];
 /// 算「使用者有在用」的指令（閒置計時）。/ Opcodes that count as user activity.
 const INPUT_OPCODES: &[&str] = &["key", "mouse", "touch", "clipboard"];
@@ -134,9 +137,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             b.abort();
         }
     };
-    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, session.quality, &state.desktop.callback_host, callback_port, size);
+    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, session.quality, session.audio, &state.desktop.callback_host, callback_port, size);
     drop(credentials);
-    let connection_id = match guacd.handshake(session.protocol.as_str(), size, &params, desktop::HANDSHAKE_TIMEOUT).await {
+    let audio: &[&str] = if session.audio { desktop::AUDIO_MIMETYPES } else { &[] };
+    let connection_id = match guacd.handshake(session.protocol.as_str(), size, audio, &params, desktop::HANDSHAKE_TIMEOUT).await {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(session = %session_id, error = %e, "desktop: guacd handshake failed");
@@ -333,6 +337,7 @@ mod tests {
         for ok in ["key", "mouse", "size", "clipboard", "blob", "end", "disconnect"] {
             assert!(is_allowed(ok), "{ok}");
         }
+        // `audio` from the browser = a microphone stream: never forwarded. / 瀏覽器送的 audio 是麥克風：不轉。
         for bad in ["put", "argv", "pipe", "audio", "file", "connect", "select", ""] {
             assert!(!is_allowed(bad), "{bad}");
         }

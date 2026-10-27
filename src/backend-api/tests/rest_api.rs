@@ -412,7 +412,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 31);
+    assert_eq!(keys.len(), 32);
+    assert_eq!(r.json["values"]["desktop_file_transfer"], true, "RustDesk file transfer is allowed by default");
     assert_eq!(r.json["values"]["terminal_detach_max_secs"], 1800, "a detached web terminal is kept at most 30 minutes by default");
     assert_eq!(r.json["values"]["command_approval_timeout"], 300, "approvals wait five minutes by default");
     assert_eq!(r.json["values"]["signin_lifetime"], 2_592_000, "a sign-in lasts 30 days without a visit by default");

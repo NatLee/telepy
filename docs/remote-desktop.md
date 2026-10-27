@@ -70,6 +70,22 @@ backend desktop/bridge.rs
 
 記在 localStorage `telepy.desktopQuality`；start 回應帶 `quality`。
 
+## 聲音（RDP 經 guacd；RustDesk 見下一節）
+
+- 表單的「聲音」開關（RDP 與 RustDesk 才有；guacd 的 VNC 沒有聲音 —— 它要另接 PulseAudio，裝置那邊不會有 —— 所以 VNC
+  不顯示），記在 localStorage `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬）。
+- RDP：`POST …/desktop/start` 帶 `audio: true`（VNC 帶了也當 false；非布林 → 欄位錯誤），回應帶 `audio`（實際）。
+  開：握手的 `audio` 指令列出 `audio/L8`、`audio/L16`（guacamole-common-js 的 RawAudioPlayer 會播的原始 PCM），
+  guacd 開音訊串流（`audio` / `blob` / `end`）。guacd → 瀏覽器本來就整個透傳；瀏覽器 → guacd 的白名單放 `ack`（接受串流），
+  瀏覽器送的 `audio`（= 麥克風）照樣丟掉。關：連線參數帶 `disable-audio=true`，guacd 不載入 rdpsnd，遠端根本不送。
+  `desktop_open` 事件寫 `Remote desktop (RDP, sound) …`。
+- 工具列：聲音開著時有「正在播 / 靜音」按鈕（`DesktopViewer` 的 `onaudio` 包住預設播放器：最近 1.5 秒有 blob = 正在播；
+  靜音 = 在瀏覽器這邊丟掉 blob，取消靜音時不會一次湧出來）。瀏覽器的自動播放限制：第一次按鍵 / 點擊時 resume 共用的
+  AudioContext。
+- 實測：真的 guacd 1.6 + xrdp（OrbStack）：握手後 guacd 開 `audio/L16;rate=44100,channels=2` 串流，瀏覽器回 `ack … OK`；
+  測試 `tests/desktop_api.rs` 的 `desktop_rdp_sound_is_offered_and_relayed`（假 guacd 檢查握手格式、`disable-audio`、串流透傳、
+  麥克風被擋）。
+
 ## 多螢幕：只看一個螢幕（`desktop/screens.rs`、`GET …/desktop/screens`、前端 `lib/desktopScreens.ts`）
 
 VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x11vnc、TightVNC 都是），guacd 沒有選螢幕的參數，所以
@@ -142,7 +158,37 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   `credential_id` 時後端解開、放進回應交給核心（見憑證庫一節）；`rustdesk_open` 事件註明 with saved login '<label>'。
   統計：隧道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
   待畫幀（核心在瀏覽器解碼，沒有這兩個數字），「網路往返」是核心自己量的瀏覽器 ↔ 裝置。
-- 範圍（MVP）：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質。沒有傳檔、聲音、終端機 —— 要這些用下面的 app 路。
+- 範圍：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質、**聲音**、**傳檔**。沒有終端機、遠端列印、麥克風 —— 要這些用下面的 app 路。
+- **聲音**：核心自己解（RustDesk 送 Opus，WebCodecs `AudioDecoder` → `AudioContext`；瀏覽器沒有 WebCodecs 音訊就沒有聲音，
+  按鈕停用並說明）。關 = 那台的 `disable-audio`：登入的 `OptionMessage` 就請裝置別送（裝置不開 audio service，不只是靜音）；
+  連線中工具列切換走核心的 `option:toggle`（送 option 給裝置並靜音 / 取消靜音）。和 RDP 共用 `telepy.desktopAudio`。
+- **傳檔（「檔案」面板，`components/desktop/RustDeskFiles.tsx`、純函式 `lib/rustdeskFiles.ts`）**：RustDesk 的傳檔是**另一條
+  連線**（登入時帶 `file_transfer`），所以面板向 `POST /api/reverse/server/rustdesk/{sid}/files` 要一個掛在畫面 session 底下的
+  子 session（`rustdesk::Kind::Files`：同目標、同帳號、自己的票證與 direct-tcpip 通道；只有開畫面的人能開；不佔
+  `desktop_max_sessions`、不另算 presence、不另發 webhook；同一個畫面最多兩個，再開收掉最舊的 —— 重新整理或 React 開發模式的
+  雙重 effect 會短暫重疊；畫面那條結束就一起結束）。錯誤碼：409 `not_connected`、503 `file_transfer_disabled` /
+  `desktop_disabled`、502 同 start。站台設定 `desktop_file_transfer`（預設開）關掉 → 不發子 session、start 回應
+  `file_transfer: false`（按鈕停用並說明）、reaper 收掉開著的。
+  - 為什麼要第二份核心：核心是 window 上的全域物件，而且同一個核心裡只有「最上面」的 session 拿得到畫面（`videoFrame` /
+    `rgba` 只給 top）；檔案 session 開在畫面那個核心裡，遠端畫面就停了。所以面板在看不見的同源 iframe 裡再載一份核心。
+  - 用的是核心自己的檔案 API：`read_remote_dir`（登入後主動要一次，空路徑 = 家目錄）、`send_files {is_remote: true}`（下載）、
+    `select_files` + `send_local_files`（上傳）、`confirm_override_file`、`cancel_job`；事件 `file_dir`、`job_progress`、
+    `job_done`、`job_error`、`update_folder_files`、`override_file_confirm`、`selected_files`。
+  - 對話框要使用者的手勢：存檔對話框（`showSaveFilePicker`）在這一頁的點擊裡開，把手換進 iframe 的核心；選檔用這一頁的
+    `<input type=file>`（也能拖放），iframe 裡核心建的 input 的 `click()` 被換成「放進這一頁已選好的檔案」。沒有存檔對話框的
+    瀏覽器（Firefox / Safari）由核心整個放記憶體再下載，所以每個檔案 ≤ 2 GB（上傳同樣限制）。
+  - 面板：麵包屑（Windows 最上層 = 磁碟機）、上一層、家目錄、隱藏檔、上傳、每個檔案的下載鈕、傳輸清單（進度、速度、取消、
+    同名時「略過 / 取代」，只顯示最近 4 筆、進行中的在前）。桌面寬度在畫面右邊（`lg:w-80`），手機在畫面下面。
+- **登入守門（`rustdesk::codec::LoginGuard`）**：中繼唯一解析的東西是瀏覽器 → 裝置方向的 peer `Message` 最外層：
+  `login_request`（欄位 7）的 oneof 分支決定這條連線登入成什麼（遙控 / 傳檔 / 埠轉發 / 鏡頭 / 終端機）。畫面 session 只准遙控、
+  檔案 session 只准傳檔，不符 → 4403，`rustdesk_close` 事件寫 `refused: a file transfer login on a remote control session`。
+  帶內容的 `public_key`（欄位 4，= 要加密）也拒絕：Telepy 的假 hbbs 從不給裝置的金鑰，我們的核心永遠走不加密的 Direct IP
+  （整段在 TLS + SSH 裡），會加密的只會是改過的客戶端，而加密後就看不到它登入成什麼了。登入前超過 32 則訊息也拒絕。
+  所以站台設定 `desktop_file_transfer` 是伺服器把關，不只是隱藏按鈕。
+- 實測（OrbStack：Debian + RustDesk 1.5.0）：畫面 session 開著時開「檔案」，遠端畫面持續更新；容器裡的 RustDesk 沒有
+  連線管理員 UI（Linux 的檔案操作、聲音擷取都交給它），所以傳檔用一層測試用的前置代理（遙控照轉、傳檔由代理服務）驗證：
+  清單、下載文字檔與 3 MB 二進位（md5 相同）、上傳、同名取代、資料流圖、手機寬度無水平捲動。聲音：開著時裝置進入 audio
+  service，關著登入時不進入、連線中切關時退出（容器沒有可擷取的聲音，所以沒聽到實際聲音）。
 - 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
   `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
   `setTimeout(…, 0)` 下一個 tick 再答。裝置端 RustDesk 跑在 C locale（沒有 `LANG`）時 xdo 拒絕多位元組文字（log
@@ -186,6 +232,8 @@ WebSocket 關閉時把代碼也放進 reason（guacamole-common-js 的 WebSocket
 | 4013 | guacd 斷線或送了壞指令 |
 | 4014 | 伺服器端結束（閒置、stop、權限被收回） |
 | 4400 | 瀏覽器送了解析不了的指令 |
+| 4009 | 從即時 session 頁被結束 |
+| 4010 | 開它的那個網頁登入被登出（「這個瀏覽器已被登出」） |
 
 guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203 / 0x0301 = RDP 登入被拒），
 前端 `lib/desktop.ts` 的 `sessionFailure` 對到翻譯與「卡在哪一段」。
@@ -225,6 +273,14 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 | `desktop_session_idle_timeout` | 900 | 沒有鍵盤 / 滑鼠 / 剪貼簿輸入多久就斷線（秒），0 = 不斷 |
 | `desktop_clipboard` | both | **上限**：both / to_remote / off。每個人在桌面頁或偏好設定裡自己選方向（個人設定 `desktop_clipboard`），實際用兩者較窄的那個；guacd 用 disable-copy / disable-paste 把關，RustDesk 由瀏覽器裡的核心套用（off = 那台的 `disable-clipboard`） |
 | `desktop_max_resolution` | 2560 | 寬或高的上限（像素） |
+| `desktop_file_transfer` | true | 網頁內 RustDesk 的「檔案」面板（上傳 / 下載）；關掉時中繼也拒絕傳檔登入、收掉開著的 |
+
+## 這條連線上走什麼（info 對話框的資料流圖）
+
+`lib/desktopStreams.ts`（純函式 + 測試）→ `components/desktop/DesktopStreams.tsx`，放在 `DesktopFlow` 路徑圖下面：畫面、鍵盤與
+滑鼠、剪貼簿、聲音、檔案五條並排的直線（左 = 你的瀏覽器、右 = 桌面，箭頭 = 方向），每條的狀態 on / oneWay（剪貼簿 to_remote）/
+off（自己關的、RDP 在這個分頁靜音）/ blocked（站台上限）/ unsupported（這種連法沒有：guacd 的 VNC 沒聲音、RDP / VNC 畫面不傳檔、
+瀏覽器沒有 WebCodecs 音訊），旁邊一句為什麼。「比較連線方式」的 `ROWS` 也多了聲音與檔案兩列。
 
 ## 部署
 

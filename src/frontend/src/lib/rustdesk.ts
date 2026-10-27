@@ -19,6 +19,19 @@ export interface RustDeskStart {
     /** 剪貼簿方向（選擇套上站台上限），由這一頁的核心套用。/ The clipboard direction, applied by the core in this tab. */
     clipboard?: ClipboardPolicy;
     clipboard_limit?: ClipboardPolicy;
+    /** 站台允許傳檔（「檔案」面板）。/ The site allows file transfer (the Files panel). */
+    file_transfer?: boolean;
+}
+
+/** `POST /api/reverse/server/rustdesk/{sid}/files` 的回應：畫面 session 底下的傳檔子 session。/ The files child session. */
+export interface RustDeskFilesStart {
+    session_id: string;
+    parent: string;
+    ws_path: string;
+    ticket: string;
+    expires_in: number;
+    target: { host: string; port: number; label: string; lan_host_id: number | null };
+    username: string;
 }
 
 export const RUSTDESK_CORE_URL = "/vendor/rustdesk-web-core/rustdesk-web-core.js";
@@ -60,7 +73,7 @@ export function loadRustDeskCore(): Promise<RustDeskCore> {
 }
 
 /** 核心要連的網址：票證放 query，核心會把它當 proxy，id 與 relay 都連同一條。/ The one URL both of the core's sockets use. */
-export function rustdeskWsUrl(wsOrigin: string, start: RustDeskStart): string {
+export function rustdeskWsUrl(wsOrigin: string, start: { ws_path: string; ticket: string }): string {
     return `${wsOrigin}${start.ws_path}?ticket=${encodeURIComponent(start.ticket)}`;
 }
 
@@ -68,7 +81,7 @@ export function rustdeskWsUrl(wsOrigin: string, start: RustDeskStart): string {
  * 登入用的 peer id：裝置只接受自己的 ID 或「看起來像 IP」的 id（Direct IP Access），所以用目標位址。
  * The peer id for the login: a device accepts its own ID or an IP-looking id, so use the target address.
  */
-export function peerIdFor(start: RustDeskStart): string {
+export function peerIdFor(start: { target: { host: string; port: number } }): string {
     return `${start.target.host}:${start.target.port}`;
 }
 
@@ -284,8 +297,9 @@ export function rustdeskCloseFailure(code: number): DesktopFailure | null {
         case 4400:
             return { key: "desktop.err.protocol", at: "web" };
         case 4009:
-        case 4010:
             return { key: "desktop.err.stopped", at: "telepy" };
+        case 4010:
+            return { key: "desktop.err.signedOut", at: "web" };
     }
     return { key: "desktop.err.generic", vars: { message: String(code) }, at: "telepy" };
 }

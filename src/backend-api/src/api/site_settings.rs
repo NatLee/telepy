@@ -64,6 +64,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_session_idle_timeout", kind: Kind::Int, label: "Remote Desktop Idle Timeout (seconds)", description: "遠端桌面多久沒有鍵盤 / 滑鼠 / 剪貼簿輸入就自動斷線(秒)。設 0 = 不自動斷線。變更後即時生效。" },
     FieldMeta { name: "desktop_clipboard", kind: Kind::Str(16), label: "Remote Desktop Clipboard Limit", description: "剪貼簿最多能開到哪個方向：both = 雙向、to_remote = 只能把文字貼進遠端、off = 關閉。每個人在桌面頁或偏好設定裡自己選方向，實際用的是兩者較窄的那個；RDP / VNC 由伺服器（guacd）把關，RustDesk 由瀏覽器裡的核心套用。下次開桌面時生效。" },
     FieldMeta { name: "desktop_max_resolution", kind: Kind::Int, label: "Remote Desktop Max Resolution", description: "遠端桌面畫面寬或高的上限(像素)，超過會被縮到這個值。下次開桌面時生效。" },
+    FieldMeta { name: "desktop_file_transfer", kind: Kind::Bool, label: "Remote Desktop File Transfer (RustDesk)", description: "允許在網頁內的 RustDesk 連線裡上傳 / 下載檔案（桌面頁的「檔案」面板）。關閉後面板不出現，中繼也會拒絕 RustDesk 的檔案傳輸登入。RDP / VNC 不經這裡傳檔。下次開面板時生效。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -92,6 +93,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("desktop_session_idle_timeout".into(), json!(s.desktop_session_idle_timeout));
     m.insert("desktop_clipboard".into(), json!(s.desktop_clipboard));
     m.insert("desktop_max_resolution".into(), json!(s.desktop_max_resolution));
+    m.insert("desktop_file_transfer".into(), json!(s.desktop_file_transfer));
     m.insert("mfa_require_totp".into(), json!(s.mfa_require_totp));
     m.insert("mfa_require_passkey".into(), json!(s.mfa_require_passkey));
     m.insert("recording_retention_days".into(), json!(s.recording_retention_days));

@@ -13,6 +13,9 @@
  * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；放大後框是裁切框、畫面元素往左上挪。
  * - 串流統計：中繼每秒送 `telepy-ping`（這裡立刻回 `telepy-pong`）與 `telepy-stats`（交給 onStats）；
  *   兩者在交給 Guacamole.Client 前攔下。tunnel 的 UNSTABLE 狀態也往上報。
+ * - 聲音（只有 RDP、start 時開了才有）：guacd 開 `audio` 串流（L16 PCM），guacamole-common-js 的 RawAudioPlayer 播；
+ *   靜音 = 在這裡把 blob 丟掉（不排進 AudioContext，取消靜音時不會一次湧出來）。最近 1.5 秒有收到就回報「正在播」。
+ *   瀏覽器的自動播放限制：第一次按鍵 / 點擊時把共用的 AudioContext resume。
  * - 錯誤：guacd 的 `error` 指令（client.onerror）或後端的關閉碼（後端把代碼放在 close reason，tunnel.onerror
  *   拿到的 status.code 就是它）；VNC 伺服器要求我們沒給的帳密（onrequired）時直接斷線，請使用者補填。
  * Remote desktop canvas on guacamole-common-js; see the backend relay in `ws/desktop.rs`.
@@ -103,9 +106,13 @@ interface Props {
     onDisplaySize: (size: Framebuffer) => void;
     /** 目前的顯示比例（1 = 1:1）。/ The current display scale. */
     onScale: (scale: number) => void;
+    /** 聲音靜音（只在瀏覽器這邊；串流照收）。/ Mute the sound locally (the stream keeps coming). */
+    muted?: boolean;
+    /** 遠端的聲音開始 / 停止播放。/ The remote's sound started or stopped playing. */
+    onAudio?: (playing: boolean) => void;
 }
 
-export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale }, ref) {
+export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, muted = false, onAudio }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -118,11 +125,11 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
     const typingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const endedRef = useRef(false);
     // 最新的回呼與選項（連線只建一次，這些每次 render 都可能換）。/ Latest callbacks and options; the connection is set up once.
-    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected });
-    const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting });
+    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onAudio });
+    const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting, muted });
     useLayoutEffect(() => {
-        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected };
-        options.current = { viewport, pixelRatio, ctrlAsCmd, selecting };
+        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onAudio };
+        options.current = { viewport, pixelRatio, ctrlAsCmd, selecting, muted };
     });
     const [focused, setFocused] = useState(false);
     // 框選時不縮放（兩指手勢交給框選層）。/ No zooming while selecting an area.
@@ -324,6 +331,35 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 end({ key: "desktop.err.required", vars: { fields: params.join(", ") }, at: "target" });
                 client.disconnect();
             };
+            // 遠端的聲音：照預設的播放器播，靜音時 blob 直接丟掉；記下最後一塊的時間給「正在播」指示。
+            // The remote's sound: the default player, with blobs dropped while muted; the last blob's time drives the indicator.
+            let lastAudioAt = 0;
+            let audioPlaying = false;
+            client.onaudio = (stream, mimetype) => {
+                const player = G.AudioPlayer.getInstance(stream, mimetype);
+                if (!player) return null;
+                const play = stream.onblob;
+                stream.onblob = (data: string) => {
+                    lastAudioAt = Date.now();
+                    if (!options.current.muted) play?.call(stream, data);
+                };
+                return player;
+            };
+            const audioTimer = setInterval(() => {
+                const playing = Date.now() - lastAudioAt < 1500;
+                if (playing !== audioPlaying) {
+                    audioPlaying = playing;
+                    callbacks.current.onAudio?.(playing);
+                }
+            }, 500);
+            // 自動播放限制：使用者第一次操作時讓共用的 AudioContext 動起來。/ Autoplay: resume the shared context on a gesture.
+            const resumeAudio = () => {
+                const factory = (G as unknown as { AudioContextFactory?: { getAudioContext?: () => AudioContext | null } }).AudioContextFactory;
+                const ctx = start.audio ? factory?.getAudioContext?.() : null;
+                if (ctx && ctx.state === "suspended") void ctx.resume().catch(() => undefined);
+            };
+            frame.addEventListener("pointerdown", resumeAudio, true);
+            frame.addEventListener("keydown", resumeAudio, true);
             client.onclipboard = (stream, mimetype) => {
                 if (!/^text\//.test(mimetype)) return;
                 const reader = new G.StringReader(stream);
@@ -373,6 +409,10 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
 
             cleanup = () => {
                 observer.disconnect();
+                clearInterval(audioTimer);
+                frame.removeEventListener("pointerdown", resumeAudio, true);
+                frame.removeEventListener("keydown", resumeAudio, true);
+                client.onaudio = null;
                 if (resizeTimer) clearTimeout(resizeTimer);
                 if (typingRef.current) clearTimeout(typingRef.current);
                 typingRef.current = null;

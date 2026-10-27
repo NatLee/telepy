@@ -10,6 +10,8 @@
  * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；canvas 放在裁切框裡、往左上挪平移量。
  * - 鍵盤：焦點放在隱藏的 textarea（輸入法才能組字），按鍵走 `input_key`（legacy 鍵名），組好的字走 `input_string`。
  * - 游標：`cursor_data`（RGBA）→ data URL → CSS cursor，`cursor_id` 切換。
+ * - 聲音：核心自己解（WebCodecs Opus → AudioContext）。關掉 = 這台的 `disable-audio`（登入時就請裝置別送，不是只靜音）；
+ *   連線中切換走 `option:toggle`，核心會送 option 給裝置並靜音 / 取消靜音。
  * - 剪貼簿：start 回的方向（使用者的選擇套上站台上限）在這裡套用——off = 這台的 `disable-clipboard`，
  *   to_remote = 本機照送、遠端複製的不收。資料流是 RustDesk 的（端對端或 Direct IP），後端管不到。
  * In-browser RustDesk: the vendored core decodes in this page, Telepy relays. See `lib/rustdesk.ts`.
@@ -61,6 +63,8 @@ interface Props {
     onPeerInfo: (info: RustDeskPeerInfo) => void;
     onStats: (stats: StreamStats) => void;
     onRemoteClipboard: (text: string) => void;
+    /** 要不要遠端的聲音（連線中也能切換）。/ Whether to receive the remote's sound (switchable while connected). */
+    audio: boolean;
 }
 
 type Globals = Partial<RustDeskCore> & {
@@ -71,7 +75,7 @@ type Globals = Partial<RustDeskCore> & {
     onInitFinished?: (() => void) | null;
 };
 
-export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard }, ref) {
+export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, audio }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -85,6 +89,9 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
     const endedRef = useRef(false);
     const callbacks = useRef({ onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard });
     const passwordRef = useRef(password);
+    // 核心目前的 disable-audio 狀態（連線時設好；之後跟著 `audio` 切換）。/ The core's disable-audio state.
+    const audioRef = useRef(audio);
+    const appliedAudioRef = useRef<boolean | null>(null);
     useLayoutEffect(() => {
         callbacks.current = { onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard };
     });
@@ -355,6 +362,9 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
                 // 剪貼簿關掉 = 這台的 disable-clipboard：核心不再送本機的剪貼簿，登入時也請裝置別送它的。
                 // Clipboard off = the peer's disable-clipboard: the core stops sending ours and asks the device not to send its own.
                 call("option:peer", { id: peerIdFor(start), name: "disable-clipboard", value: clipboard === "off" ? "Y" : "N" });
+                // 聲音關掉 = disable-audio：登入時就請裝置別送（省頻寬），不只是靜音。/ Sound off asks the device not to send it at all.
+                call("option:peer", { id: peerIdFor(start), name: "disable-audio", value: audioRef.current ? "N" : "Y" });
+                appliedAudioRef.current = audioRef.current;
                 call("session_add_sync", { id: peerIdFor(start), password: passwordRef.current, isFileTransfer: false, isTerminal: false });
                 call("session_start", { id: peerIdFor(start) });
             })
@@ -387,8 +397,19 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
             g.onRgba = null;
             coreRef.current = null;
             infoRef.current = null;
+            appliedAudioRef.current = null;
         };
     }, [start]);
+
+    // 連線中切換聲音：核心的 option:toggle 會翻轉 disable-audio、送給裝置並（取消）靜音。
+    // Switching sound while connected: option:toggle flips disable-audio, tells the device and (un)mutes.
+    useEffect(() => {
+        audioRef.current = audio;
+        const applied = appliedAudioRef.current;
+        if (applied === null || applied === audio || !coreRef.current) return;
+        call("option:toggle", "disable-audio");
+        appliedAudioRef.current = audio;
+    }, [audio]);
 
     return (
         <div

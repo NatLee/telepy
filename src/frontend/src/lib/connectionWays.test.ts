@@ -66,3 +66,12 @@ test("the page's protocol maps to a way", () => {
     assert.equal(wayFor("vnc"), "guacd");
     assert.equal(wayFor("rustdesk"), "rustdeskTunnel");
 });
+
+test("the table says where sound and files work", () => {
+    const sound = ROWS.find((r) => r.label === "desktop.ways.row.sound");
+    const files = ROWS.find((r) => r.label === "desktop.ways.row.files");
+    assert.ok(sound && files);
+    assert.equal(files!.cells.guacd.tone, "bad", "no file transfer in the RDP / VNC viewer");
+    assert.equal(files!.cells.rustdeskTunnel.tone, "good");
+    assert.equal(sound!.cells.rustdeskTunnel.tone, "good");
+});

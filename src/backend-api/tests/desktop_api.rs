@@ -29,9 +29,11 @@ struct Seen {
     connect: Vec<(String, String)>,
     /// `ready` 之後從後端收到的指令（opcode）。/ Opcodes received after `ready`.
     after_ready: Vec<String>,
+    /// 握手時 `audio` 指令帶的格式（空 = 不要聲音）。/ The formats in the handshake's `audio` instruction.
+    audio: Vec<String>,
 }
 
-const ARG_NAMES: [&str; 7] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy", "disable-paste"];
+const ARG_NAMES: [&str; 8] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy", "disable-paste", "disable-audio"];
 
 struct Conn {
     s: TcpStream,
@@ -70,13 +72,18 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 assert_eq!(select.opcode(), "select");
                 c.s.write_all(encode(&[&["args"][..], &ARG_NAMES[..]].concat(), Unit::CodePoints).as_bytes()).await.unwrap();
                 let mut opcodes = Vec::new();
+                let mut audio: Vec<String> = Vec::new();
                 let connect = loop {
                     let i = c.next().await.unwrap();
                     if i.opcode() == "connect" {
                         break i;
                     }
+                    if i.opcode() == "audio" {
+                        audio = i.args().map(str::to_string).collect();
+                    }
                     opcodes.push(i.opcode().to_string());
                 };
+                seen.lock().unwrap().audio = audio.clone();
                 assert_eq!(opcodes, ["size", "audio", "video", "image"], "handshake order");
                 let values: Vec<String> = connect.args().map(str::to_string).collect();
                 let pairs: Vec<(String, String)> = ARG_NAMES.iter().map(|n| n.to_string()).zip(values).collect();
@@ -93,6 +100,14 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 // A real frame end (numeric timestamp, two logical frames merged) in its own packet, for the stats.
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 c.s.write_all(encode(&["sync", "1000", "2"], Unit::CodePoints).as_bytes()).await.unwrap();
+                // 有要聲音：開一個 L16 音訊串流、送一塊、結束（RDP 的 rdpsnd 經 guacd 就是這樣到瀏覽器）。
+                // Sound asked for: one L16 audio stream, one blob, end (how rdpsnd reaches the browser through guacd).
+                if !audio.is_empty() {
+                    let mut out = encode(&["audio", "1", "audio/L16;rate=44100,channels=2"], Unit::CodePoints);
+                    out.push_str(&encode(&["blob", "1", "AAAAAA=="], Unit::CodePoints));
+                    out.push_str(&encode(&["end", "1"], Unit::CodePoints));
+                    c.s.write_all(out.as_bytes()).await.unwrap();
+                }
                 while let Some(i) = c.next().await {
                     let op = i.opcode().to_string();
                     seen.lock().unwrap().after_ready.push(op.clone());
@@ -544,4 +559,73 @@ async fn desktop_refusals() {
     }
     let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"desktop_clipboard": "to_remote"})).await;
     assert_eq!(r.json["values"]["desktop_clipboard"], "to_remote", "{}", r.text);
+}
+
+/// RDP 的聲音：開了 → 握手給 audio/L8 + audio/L16、不帶 disable-audio，guacd 的音訊串流（audio / blob / end）
+/// 原樣到瀏覽器，瀏覽器的 ack 回到 guacd，但瀏覽器自己送的 audio（麥克風）被擋。沒開 → disable-audio、握手不給格式；
+/// VNC 帶 audio 也當沒開。
+/// RDP sound: offered in the handshake when asked, the audio stream reaches the browser, the browser's ack reaches
+/// guacd and a browser `audio` (a microphone) is dropped. Off = `disable-audio`; VNC never has sound.
+#[tokio::test]
+async fn desktop_rdp_sound_is_offered_and_relayed() {
+    let (guacd, seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.guacd_addr = guacd.clone();
+        c.desktop_callback_host = "127.0.0.1".into();
+    });
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let desktop = echo_service().await;
+    let id = dev.tunnel_id;
+    let token = alice.token.clone();
+    let start = |body: Value| {
+        let token = token.clone();
+        async move { app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&token), body).await }
+    };
+
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "a", "password": "b", "audio": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["audio"], true);
+    let mut ws = open_ws(&lab, &r.json).await.unwrap();
+    let mut got = String::new();
+    while !got.contains("3.end,1.1;") {
+        got.push_str(&recv(&mut ws).await.expect("the audio stream"));
+    }
+    assert!(got.contains("5.audio,1.1,31.audio/L16;rate=44100,channels=2;") && got.contains("4.blob,1.1,8.AAAAAA==;"), "{got}");
+    {
+        let s = seen.lock().unwrap();
+        assert_eq!(s.audio, ["audio/L8", "audio/L16"]);
+        assert_eq!(s.connect.iter().find(|(k, _)| k == "disable-audio").map(|(_, v)| v.as_str()), Some(""), "sound on = no disable-audio");
+    }
+    // 瀏覽器回 ack（接受串流）→ 到 guacd；瀏覽器送 audio（麥克風）→ 擋下。/ The ack passes, a microphone stream does not.
+    ws.send(Message::Text("3.ack,1.1,2.OK,1.0;5.audio,1.2,9.audio/L16;4.blob,1.2,4.AAAA;3.key,5.65307,1.1;".into())).await.unwrap();
+    wait_for("ack and key at guacd", || {
+        let s = seen.lock().unwrap();
+        s.after_ready.contains(&"ack".to_string()) && s.after_ready.contains(&"key".to_string())
+    })
+    .await;
+    assert!(!seen.lock().unwrap().after_ready.iter().any(|o| o == "audio"), "{:?}", seen.lock().unwrap().after_ready);
+    let ev = events(&lab, &alice.token, id).await;
+    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (RDP, sound) by alice")), "{ev:?}");
+    drop(ws);
+
+    // 沒開聲音（預設）→ disable-audio、握手不給格式。/ Sound off (the default): disable-audio, no formats.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "a", "password": "b"})).await;
+    assert_eq!(r.json["audio"], false);
+    let mut ws = open_ws(&lab, &r.json).await.unwrap();
+    assert!(recv(&mut ws).await.is_ok());
+    wait_for("the second handshake", || seen.lock().unwrap().connect.iter().any(|(k, v)| k == "disable-audio" && v == "true")).await;
+    assert!(seen.lock().unwrap().audio.is_empty());
+    drop(ws);
+
+    // VNC 沒有聲音：帶 true 也回 false；型別錯 → 400。/ VNC never has sound; a non-boolean is a field error.
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "audio": true})).await;
+    assert_eq!(r.json["audio"], false, "{}", r.text);
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "audio": "loud"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json["audio"][0].is_string(), "{}", r.text);
 }

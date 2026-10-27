@@ -69,8 +69,19 @@ export interface DesktopStart {
     /** 站台上限。/ The site's ceiling. */
     clipboard_limit: ClipboardPolicy;
     quality: DesktopQuality;
+    /** 這次有聲音（只有 RDP）。/ Sound is on for this session (RDP only). */
+    audio?: boolean;
     target: { host: string; port: number; label: string; lan_host_id: number | null };
     username: string;
+}
+
+/** 聲音偏好（localStorage `telepy.desktopAudio`，預設關：吃頻寬）。/ The sound preference (off by default: it costs bandwidth). */
+export type AudioPref = "on" | "off";
+export const AUDIO_PREF_VALUES: readonly AudioPref[] = ["on", "off"];
+
+/** 這種連法有沒有聲音可開：RDP、RustDesk 有；guacd 的 VNC 沒有。/ Whether this mode can carry sound (not guacd's VNC). */
+export function soundAvailable(mode: DesktopMode): boolean {
+    return mode !== "vnc";
 }
 
 /** sharp 時向 guacd 要原生解析度的倍率（最多 2 倍）。/ The HiDPI factor requested for the sharp preset (capped at 2). */
@@ -179,6 +190,10 @@ export function sessionFailure(code: number, message?: string): DesktopFailure |
             return { key: "desktop.err.stopped", at: "telepy" };
         case 4400:
             return { key: "desktop.err.protocol", at: "web" };
+        case 4009:
+            return { key: "desktop.err.stopped", at: "telepy" };
+        case 4010:
+            return { key: "desktop.err.signedOut", at: "web" };
         // Guacamole.Status.Code
         case 0x0201: // SERVER_BUSY
             return { key: "desktop.err.busy", at: "telepy" };

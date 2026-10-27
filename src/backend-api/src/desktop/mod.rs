@@ -52,6 +52,11 @@ pub const RENDEZVOUS_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MIN_DIMENSION: u32 = 200;
 pub const DEFAULT_MAX_RESOLUTION: u32 = 2560;
 pub const DEFAULT_DPI: u32 = 96;
+/// 開聲音時握手給 guacd 的音訊格式：guacamole-common-js 的 RawAudioPlayer 會播的兩種原始 PCM。
+/// 只有 RDP 有聲音（guacd 的 VNC 要另接 PulseAudio，裝置那邊不會有），所以 VNC 一律不給。
+/// The audio formats offered in the handshake when sound is on: the raw PCM that guacamole-common-js's
+/// RawAudioPlayer plays. Only RDP carries sound (guacd's VNC audio needs a PulseAudio server), so VNC never offers them.
+pub const AUDIO_MIMETYPES: &[&str] = &["audio/L8", "audio/L16"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Protocol {
@@ -284,6 +289,8 @@ pub struct Session {
     pub target: Target,
     pub clipboard: Clipboard,
     pub quality: Quality,
+    /// 遠端的聲音（只有 RDP；預設關，因為吃頻寬）。/ The remote's sound (RDP only; off by default because it costs bandwidth).
+    pub audio: bool,
     pub saved_label: Option<String>,
     /// 開這個 session 的網頁登入（撤銷時連線以 4010 結束）。/ The web sign-in that opened it (revoked = 4010).
     pub web_session: Option<i64>,
@@ -332,7 +339,8 @@ impl Session {
     pub fn describe(&self) -> String {
         let to = if self.target.lan_host_id.is_some() { format!("{}:{}", self.target.host, self.target.port) } else { format!("device:{}", self.target.port) };
         let saved = self.saved_label.as_deref().map(|l| format!(" with saved login '{l}'")).unwrap_or_default();
-        format!("Remote desktop ({}) by {} to {} through {}@{}{saved}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
+        let sound = if self.audio { ", sound" } else { "" };
+        format!("Remote desktop ({}{sound}) by {} to {} through {}@{}{saved}", self.protocol.label(), self.user_name, to, self.hop_username, self.tunnel_name)
     }
 }
 
@@ -347,6 +355,7 @@ pub struct NewSession {
     pub target: Target,
     pub clipboard: Clipboard,
     pub quality: Quality,
+    pub audio: bool,
     pub credentials: Credentials,
     pub prepared: Prepared,
     /// 用了憑證庫的哪一筆（日誌用）。/ The saved login used, for the logs.
@@ -392,6 +401,7 @@ impl Desktop {
             target: new.target,
             clipboard: new.clipboard,
             quality: new.quality,
+            audio: new.audio,
             saved_label: new.saved_label,
             web_session: new.web_session,
             created: now,
@@ -514,7 +524,10 @@ fn constant_eq(a: &str, b: &str) -> bool {
 /// guacd 的連線參數。`hostname` / `port` 指向後端的 rendezvous（guacd 連回來），真正的目標在通道另一端。
 /// 參數名依 guacd 的 `args` 清單查表，用不到的自然留空。畫質預設：speed 少位元（慢隧道用）、sharp 無損。
 /// guacd connection parameters; `hostname`/`port` point at the rendezvous, the real target sits behind the channel.
-pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboard, quality: Quality, callback_host: &str, callback_port: u16, size: guac::Size) -> HashMap<String, String> {
+/// 聲音關著時 RDP 帶 `disable-audio`：guacd 不載入 rdpsnd，遠端也就不送聲音（不只是瀏覽器不播）。
+/// With sound off RDP gets `disable-audio`, so guacd never loads rdpsnd and the remote sends no audio at all.
+#[allow(clippy::too_many_arguments)]
+pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboard, quality: Quality, audio: bool, callback_host: &str, callback_port: u16, size: guac::Size) -> HashMap<String, String> {
     let mut p: HashMap<String, String> = HashMap::new();
     p.insert("hostname".into(), callback_host.to_string());
     p.insert("port".into(), callback_port.to_string());
@@ -555,6 +568,9 @@ pub fn guacd_params(protocol: Protocol, creds: &Credentials, clipboard: Clipboar
             // speed：鋸齒字型的位元少得多（平滑字型讓每一塊圖都更難壓）。/ Smoothed text compresses badly.
             if quality != Quality::Speed {
                 p.insert("enable-font-smoothing".into(), "true".into());
+            }
+            if !audio {
+                p.insert("disable-audio".into(), "true".into());
             }
         }
         Protocol::Vnc => {
@@ -616,7 +632,7 @@ mod tests {
     fn rdp_params_point_guacd_at_the_rendezvous_and_apply_the_clipboard_policy() {
         let creds = Credentials { login: "alice".into(), password: "pw".into(), domain: "CORP".into() };
         let size = guac::Size { width: 1280, height: 720, dpi: 96 };
-        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::ToRemote, Quality::Auto, "backend", 40123, size);
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::ToRemote, Quality::Auto, false, "backend", 40123, size);
         assert_eq!(p["hostname"], "backend");
         assert_eq!(p["port"], "40123");
         assert_eq!(p["domain"], "CORP");
@@ -626,27 +642,40 @@ mod tests {
         assert_eq!(p["enable-font-smoothing"], "true");
         assert!(!p.contains_key("disable-paste"));
         assert!(!p.contains_key("color-depth"), "auto leaves the depth to guacd");
-        let p = guacd_params(Protocol::Vnc, &Credentials { password: "secret".into(), ..Default::default() }, Clipboard::Off, Quality::Auto, "backend", 1, size);
+        let p = guacd_params(Protocol::Vnc, &Credentials { password: "secret".into(), ..Default::default() }, Clipboard::Off, Quality::Auto, false, "backend", 1, size);
         assert_eq!(p["password"], "secret");
         assert!(!p.contains_key("username"));
         assert_eq!(p["disable-paste"], "true");
     }
 
     #[test]
+    fn sound_is_rdp_only_and_off_unless_asked() {
+        let creds = Credentials::default();
+        let size = guac::Size { width: 1280, height: 720, dpi: 96 };
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Auto, false, "backend", 1, size);
+        assert_eq!(p["disable-audio"], "true", "sound off = guacd never loads rdpsnd");
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Auto, true, "backend", 1, size);
+        assert!(!p.contains_key("disable-audio"));
+        // VNC：guacd 的聲音要 PulseAudio，這裡不碰。/ VNC: guacd's audio needs PulseAudio; untouched.
+        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Auto, true, "backend", 1, size);
+        assert!(!p.contains_key("disable-audio") && !p.contains_key("enable-audio"));
+    }
+
+    #[test]
     fn quality_presets_change_depth_and_compression() {
         let creds = Credentials::default();
         let size = guac::Size { width: 1280, height: 720, dpi: 96 };
-        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Speed, "backend", 1, size);
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Speed, false, "backend", 1, size);
         assert_eq!(p["color-depth"], "16");
         assert!(!p.contains_key("enable-font-smoothing"));
         assert!(!p.contains_key("force-lossless"));
-        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Sharp, "backend", 1, size);
+        let p = guacd_params(Protocol::Rdp, &creds, Clipboard::Both, Quality::Sharp, false, "backend", 1, size);
         assert_eq!(p["color-depth"], "24");
         assert_eq!(p["force-lossless"], "true");
         assert_eq!(p["enable-font-smoothing"], "true");
-        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Speed, "backend", 1, size);
+        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Speed, false, "backend", 1, size);
         assert_eq!((p["color-depth"].as_str(), p["compress-level"].as_str(), p["quality-level"].as_str()), ("16", "6", "5"));
-        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Sharp, "backend", 1, size);
+        let p = guacd_params(Protocol::Vnc, &creds, Clipboard::Both, Quality::Sharp, false, "backend", 1, size);
         assert_eq!((p["color-depth"].as_str(), p["quality-level"].as_str(), p["force-lossless"].as_str()), ("24", "9", "true"));
         assert_eq!(Quality::parse(""), Some(Quality::Auto));
         assert_eq!(Quality::parse("sharp"), Some(Quality::Sharp));

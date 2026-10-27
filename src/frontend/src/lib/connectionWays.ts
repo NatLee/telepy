@@ -142,6 +142,20 @@ export const ROWS: readonly WayRow[] = [
         },
     },
     {
+        label: "desktop.ways.row.sound",
+        cells: {
+            guacd: { text: "desktop.ways.cell.soundRdpOnly", tone: "neutral" },
+            rustdeskTunnel: { text: "desktop.ways.cell.soundRd", tone: "good" },
+        },
+    },
+    {
+        label: "desktop.ways.row.files",
+        cells: {
+            guacd: { text: "desktop.ways.cell.filesNone", tone: "bad" },
+            rustdeskTunnel: { text: "desktop.ways.cell.filesPanel", tone: "good" },
+        },
+    },
+    {
         label: "desktop.ways.row.login",
         cells: {
             guacd: { text: "desktop.ways.cell.loginDesktop", tone: "neutral" },
