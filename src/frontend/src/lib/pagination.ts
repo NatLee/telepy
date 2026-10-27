@@ -6,7 +6,9 @@
  */
 
 /** 每頁筆數的選項。/ Page size choices. */
-export const PAGE_SIZES = [10, 25, 50, 100] as const;
+export const PAGE_SIZES: readonly number[] = [10, 25, 50, 100];
+/** 卡片格（1–4 欄）用的：每頁都排滿整列。/ For card grids (1–4 columns): every page fills whole rows. */
+export const CARD_PAGE_SIZES: readonly number[] = [12, 24, 48, 96];
 
 export function pageCount(total: number, size: number): number {
     return Math.max(1, Math.ceil(Math.max(0, total) / Math.max(1, size)));

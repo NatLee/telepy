@@ -11,23 +11,36 @@ import { useState } from "react";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { clampPage, pageCount, pageRange, PAGE_SIZES } from "@/lib/pagination";
 
-const SIZE_CHOICES = PAGE_SIZES.map(String);
-
 export interface PaginationState {
     page: number;
     setPage: (page: number) => void;
     size: number;
     setSize: (size: number) => void;
+    /** 可選的每頁筆數。/ The page size choices. */
+    sizes: readonly number[];
     count: number;
     total: number;
     from: number;
     to: number;
 }
 
-function state(page: number, total: number, size: number, setPage: (p: number) => void, setSize: (n: number) => void): PaginationState {
+interface PageOptions {
+    storageKey: string;
+    resetKey?: string;
+    /** 每頁筆數的選項（預設 10 / 25 / 50 / 100；第一個是預設值）。/ Page size choices (default 10 / 25 / 50 / 100; the first is the default). */
+    sizes?: readonly number[];
+}
+
+function state(page: number, total: number, size: number, sizes: readonly number[], setPage: (p: number) => void, setSize: (n: number) => void): PaginationState {
     const count = pageCount(total, size);
     const current = clampPage(page, count);
-    return { page: current, setPage, size, setSize, count, total, ...pageRange(current, size, total) };
+    return { page: current, setPage, size, setSize, sizes, count, total, ...pageRange(current, size, total) };
+}
+
+/** 記在 localStorage 的每頁筆數（不在選項裡就用第一個）。/ The stored page size (the first choice when unknown). */
+function useSize(storageKey: string, sizes: readonly number[]): [number, (n: number) => void] {
+    const [stored, setStored] = useStoredChoice(storageKey, sizes.map(String), String(sizes[0]));
+    return [Number(stored), (n: number) => setStored(String(n))];
 }
 
 /** 條件變了就回到初始值（在算繪時比較，不多一輪 effect）。/ Reset to the initial value when the key changes (compared during render). */
@@ -42,26 +55,25 @@ function useResettable<T>(initial: T, resetKey: string): [T, (v: T | ((prev: T) 
     return [value, setValue];
 }
 
-export function usePagination(total: number, { storageKey, resetKey = "", defaultSize = PAGE_SIZES[0] }: { storageKey: string; resetKey?: string; defaultSize?: number }): PaginationState {
-    const [storedSize, setStoredSize] = useStoredChoice(storageKey, SIZE_CHOICES, String(defaultSize));
+export function usePagination(total: number, { storageKey, resetKey = "", sizes = PAGE_SIZES }: PageOptions): PaginationState {
+    const [size, storeSize] = useSize(storageKey, sizes);
     const [page, setPage] = useResettable(1, resetKey);
-    return state(page, total, Number(storedSize), setPage, (n) => {
-        setStoredSize(String(n));
+    return state(page, total, size, sizes, setPage, (n) => {
+        storeSize(n);
         setPage(1);
     });
 }
 
 /** 每段各自的頁碼，每頁筆數共用。`pager(key, total)` 給那一段的分頁狀態。/ Per-section pages with a shared size. */
-export function useSectionPages({ storageKey, resetKey = "", defaultSize = PAGE_SIZES[0] }: { storageKey: string; resetKey?: string; defaultSize?: number }) {
-    const [storedSize, setStoredSize] = useStoredChoice(storageKey, SIZE_CHOICES, String(defaultSize));
+export function useSectionPages({ storageKey, resetKey = "", sizes = PAGE_SIZES }: PageOptions) {
+    const [size, storeSize] = useSize(storageKey, sizes);
     const [pages, setPages] = useResettable<Record<string, number>>({}, resetKey);
-    const size = Number(storedSize);
     const setSize = (n: number) => {
-        setStoredSize(String(n));
+        storeSize(n);
         setPages({});
     };
     return {
         size,
-        pager: (key: string, total: number) => state(pages[key] ?? 1, total, size, (p) => setPages((prev) => ({ ...prev, [key]: p })), setSize),
+        pager: (key: string, total: number) => state(pages[key] ?? 1, total, size, sizes, (p) => setPages((prev) => ({ ...prev, [key]: p })), setSize),
     };
 }

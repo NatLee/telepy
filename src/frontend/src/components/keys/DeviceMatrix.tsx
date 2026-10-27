@@ -25,7 +25,7 @@ import { TargetChips } from "./TargetChips";
 import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
 import { Pagination } from "@/components/ui/pagination";
 import { usePagination, useSectionPages } from "@/hooks/usePagination";
-import { pageSlice, PAGE_SIZES } from "@/lib/pagination";
+import { pageSlice } from "@/lib/pagination";
 import { GroupHeader, GroupHeaderRow, type GroupHeaderProps } from "@/components/tunnels/TunnelGroupSection";
 import { defaultCollapsed, hasGroupedDevice, matrixSections, type MatrixSection } from "@/lib/deviceMatrix";
 import { groupOf, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS } from "@/lib/groups";
@@ -263,7 +263,7 @@ export function DeviceMatrix({
     /** 一段展開時這頁的列與分頁狀態。/ An open section's rows on its page and its pager. */
     const sectionPage = (sec: MatrixSection<KeyDevice>) => {
         const pg = sectionPages.pager(sec.key, sec.items.length);
-        return { pg, open: !closedNow.has(sec.key), items: pageSlice(sec.items, pg.page, pg.size), paged: sec.items.length > PAGE_SIZES[0] };
+        return { pg, open: !closedNow.has(sec.key), items: pageSlice(sec.items, pg.page, pg.size), paged: sec.items.length > pg.sizes[0] };
     };
 
     if (devices.length === 0) {
