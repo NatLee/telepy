@@ -239,6 +239,7 @@ async fn build_view(state: &AppState, t: &Tunnel, snap: &Snapshot, accounts: &[S
         platform: platform.as_ref(),
         restrictions: &restrictions,
         sources: &sources,
+        disabled: &db::users::inactive_ids(&state.db).await?,
     }))
 }
 
@@ -291,6 +292,8 @@ async fn device_json(state: &AppState, user_id: i64, t: &Tunnel, eff: Effective)
             "key_type": parsed.as_ref().map(|p| p.label),
             "owner": { "id": e.user_id, "username": e.owner_username },
             "mine": e.user_id == user_id,
+            // 擁有者的帳號停用了：還在清單上，但已不在（或正在離開）裝置上。/ The owner is disabled: listed, off the device.
+            "owner_disabled": !e.owner_active,
             "added_by": names[&e.added_by_id],
             "created_at": db_to_iso(&e.created_at, tz),
             "accounts": direct_entry.and_then(|d| d.account_ids()),

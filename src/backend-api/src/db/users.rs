@@ -156,6 +156,12 @@ pub async fn set_password(db: &Db, id: i64, password_hash: &str) -> sqlx::Result
     Ok(())
 }
 
+/// 停用中的帳號 id。/ Ids of disabled accounts.
+pub async fn inactive_ids(db: &Db) -> sqlx::Result<std::collections::HashSet<i64>> {
+    let rows: Vec<(i64,)> = sqlx::query_as("SELECT id FROM auth_user WHERE is_active = 0").fetch_all(&db.read).await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: Option<bool>) -> sqlx::Result<()> {
     if let Some(a) = is_active {
         sqlx::query("UPDATE auth_user SET is_active = ? WHERE id = ?").bind(a).bind(id).execute(&db.write).await?;

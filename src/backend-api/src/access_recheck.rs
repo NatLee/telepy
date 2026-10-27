@@ -262,6 +262,50 @@ pub struct DisableImpact {
     pub api_tokens: usize,
     /// 暫停的已連接 app（OAuth 授權，同上）。/ Connected apps (OAuth grants) suspended, likewise.
     pub connected_apps: usize,
+    /// Telepy 替他裝在裝置上的金鑰（會被移除；離線的裝置等它回來）。/ Keys Telepy installed for them on devices.
+    pub device_keys: DeviceKeyImpact,
+}
+
+/// 停用帳號時要從裝置拿掉的金鑰：幾台裝置（其中幾台離線、上線後才移除）、幾個帳號。手動加的不算（Telepy 不碰）。
+/// The keys disabling takes off devices: how many devices (how many of them offline, cleaned when they reconnect)
+/// and login accounts. Lines added by hand are not counted (Telepy never touches them).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceKeyImpact {
+    pub devices: usize,
+    pub accounts: usize,
+    pub offline_devices: usize,
+}
+
+impl DeviceKeyImpact {
+    /// 純函式：(隧道, 帳號) 列 + 哪些隧道在線 → 數字。/ Pure: (tunnel, account) rows + which tunnels are online.
+    pub fn count(rows: &[(i64, String)], online: &HashSet<i64>) -> Self {
+        let devices: HashSet<i64> = rows.iter().map(|(t, _)| *t).collect();
+        let accounts: HashSet<(i64, &str)> = rows.iter().map(|(t, a)| (*t, a.as_str())).collect();
+        DeviceKeyImpact { devices: devices.len(), accounts: accounts.len(), offline_devices: devices.iter().filter(|t| !online.contains(t)).count() }
+    }
+}
+
+/// 這個人的金鑰被 Telepy 裝在哪些裝置上。/ Where Telepy installed this person's keys.
+async fn device_key_impact(state: &AppState, user_id: i64) -> sqlx::Result<DeviceKeyImpact> {
+    let rows = db::device_keys::installed_accounts_of_user(&state.db, user_id).await?;
+    let mut online = HashSet::new();
+    for t in rows.iter().map(|(t, _)| *t).collect::<HashSet<_>>() {
+        if let Some(tunnel) = db::tunnels::by_id(&state.db, t).await? {
+            if crate::device_keys::online(state, tunnel.reverse_port) {
+                online.insert(t);
+            }
+        }
+    }
+    Ok(DeviceKeyImpact::count(&rows, &online))
+}
+
+/// 帳號停用 / 重新啟用：馬上同步他的金鑰在的每台裝置（在線的幾秒內就清掉或裝回，離線的等 15 秒一輪的檢查）。
+/// An account was disabled or enabled again: sync every device holding (or listing) their keys right away.
+pub async fn kick_device_keys(state: &AppState, user_id: i64) -> sqlx::Result<()> {
+    let mut tunnels: HashSet<i64> = db::device_keys::effective_entries_for_user(&state.db, user_id).await?.into_iter().map(|e| e.tunnel_id).collect();
+    tunnels.extend(db::device_keys::installed_accounts_of_user(&state.db, user_id).await?.into_iter().map(|(t, _)| t));
+    state.device_keys.kick_many(tunnels);
+    Ok(())
 }
 
 impl DisableImpact {
@@ -272,6 +316,11 @@ impl DisableImpact {
             "agent_sessions": self.agent_sessions,
             "api_tokens": self.api_tokens,
             "connected_apps": self.connected_apps,
+            "device_keys": {
+                "devices": self.device_keys.devices,
+                "accounts": self.device_keys.accounts,
+                "offline_devices": self.device_keys.offline_devices,
+            },
         })
     }
 }
@@ -296,6 +345,7 @@ pub async fn disable_preview(state: &AppState, user_id: i64) -> sqlx::Result<Dis
         agent_sessions: agents,
         api_tokens,
         connected_apps,
+        device_keys: device_key_impact(state, user_id).await?,
     })
 }
 
@@ -310,7 +360,10 @@ pub async fn account_disabled(state: &AppState, user_id: i64) -> crate::error::A
     let web_sessions = crate::auth::sessions::revoke_all(state, user_id, None, "disabled").await?;
     let ended = recheck(state, None, Some(user_id), ENDED_BY).await;
     let (api_tokens, connected_apps) = suspended_counts(state, user_id).await?;
-    Ok(DisableImpact { web_sessions, live_sessions: ended.sessions, agent_sessions: ended.agent_sessions, api_tokens, connected_apps })
+    // 先數（同步會把紀錄清掉）再叫同步。/ Count first (the sync clears the rows), then kick it.
+    let device_keys = device_key_impact(state, user_id).await?;
+    kick_device_keys(state, user_id).await?;
+    Ok(DisableImpact { web_sessions, live_sessions: ended.sessions, agent_sessions: ended.agent_sessions, api_tokens, connected_apps, device_keys })
 }
 
 /// 存取剛變過：在背景馬上重新檢查（範圍內沒有任何 session 就什麼都不做）。
@@ -342,6 +395,14 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_key_impact_counts_devices_accounts_and_offline_ones() {
+        let rows = vec![(1, "pi".to_string()), (1, "root".to_string()), (2, "pi".to_string()), (3, "admin".to_string())];
+        let online: HashSet<i64> = [1, 3].into_iter().collect();
+        assert_eq!(DeviceKeyImpact::count(&rows, &online), DeviceKeyImpact { devices: 3, accounts: 4, offline_devices: 1 });
+        assert_eq!(DeviceKeyImpact::count(&[], &online), DeviceKeyImpact::default());
+    }
 
     fn ok() -> AccessNow {
         AccessNow {

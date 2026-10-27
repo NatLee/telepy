@@ -254,7 +254,7 @@ async fn disabling_an_account_signs_it_out_and_ends_everything_it_holds() {
     // 停用前的預估。/ The preview before disabling.
     let preview = app.get(&format!("/api/user/users/{}/disable-preview", bob.id), Some(&lab.admin_token)).await;
     assert_eq!(preview.status, StatusCode::OK, "{}", preview.text);
-    let expect = json!({"web_sessions": 1, "live_sessions": 2, "agent_sessions": 1, "api_tokens": 1, "connected_apps": 1});
+    let expect = json!({"web_sessions": 1, "live_sessions": 2, "agent_sessions": 1, "api_tokens": 1, "connected_apps": 1, "device_keys": {"devices": 0, "accounts": 0, "offline_devices": 0}});
     assert_eq!(preview.json, expect);
     assert_eq!(app.get(&format!("/api/user/users/{}/disable-preview", bob.id), Some(&alice.token)).await.status, StatusCode::FORBIDDEN, "admins only");
 

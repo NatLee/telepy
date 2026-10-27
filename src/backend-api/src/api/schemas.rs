@@ -1127,6 +1127,19 @@ pub struct DisableImpact {
     pub api_tokens: u64,
     /// 暫停的已連接 app。/ Connected apps suspended.
     pub connected_apps: u64,
+    /// Telepy 替他裝在裝置上的金鑰（移除；離線的裝置上線後才移除；手動加的不動）。/ Keys Telepy installed for them.
+    pub device_keys: DisableDeviceKeys,
+}
+
+/// 停用帳號時從裝置移除的金鑰。/ The keys disabling an account removes from devices.
+#[derive(ToSchema)]
+pub struct DisableDeviceKeys {
+    /// 有 Telepy 替他裝過金鑰的裝置數。/ Devices holding keys Telepy installed for them.
+    pub devices: u64,
+    /// （裝置, 帳號）組數。/ (device, login account) pairs.
+    pub accounts: u64,
+    /// 其中離線、上線後才移除的裝置數。/ Of those, devices offline now (cleaned when they reconnect).
+    pub offline_devices: u64,
 }
 
 #[derive(ToSchema)]
@@ -2275,6 +2288,8 @@ pub struct DeviceKeyEntry {
     pub key_type: Option<String>,
     pub owner: DeviceKeyOwner,
     pub mine: bool,
+    /// The owner's account is disabled: the entry stays on the list, but Telepy takes the key off the device (back on re-enable)
+    pub owner_disabled: bool,
     pub added_by: String,
     pub created_at: String,
     /// Login account ids this key is limited to on the direct entry (null = every account its owner may use)
@@ -2469,6 +2484,8 @@ pub struct DeviceKeyViewRow {
     pub direct: bool,
     /// For keys on the list: the key groups that bring it here
     pub groups: Vec<NamedRef>,
+    /// The key owner's account is disabled (`removing`: Telepy is taking it off; `manual`: added by hand, Telepy leaves it)
+    pub owner_disabled: bool,
 }
 
 #[derive(ToSchema)]

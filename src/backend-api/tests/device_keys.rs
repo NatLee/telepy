@@ -517,3 +517,107 @@ async fn bulk_removal_can_be_undone() {
     let r = lab.app.get(&path(dev.tunnel_id, "authorized-keys/removals"), Some(&bob.token)).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.text);
 }
+
+/// 等到條件成立（最多 `secs` 秒）。/ Wait until a condition holds (at most `secs` seconds).
+async fn eventually(what: &str, secs: u64, mut ok: impl FnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(secs);
+    while !ok() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for: {what}");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// 停用一個帳號：Telepy 替他裝的金鑰離開每台裝置（在線的馬上、離線的等它回來），手動加的那行留著，清單也留著；
+/// 重新啟用就裝回去。直接在清單上的與金鑰群組授予的一樣；停用前的預估數得出來。
+/// Disabling an account takes the keys Telepy installed for them off every device (online ones at once, offline
+/// ones when they reconnect); a line added by hand stays, the list stays, and re-enabling puts the keys back.
+/// Direct entries and key-group grants behave alike; the disable preview counts them.
+#[tokio::test]
+async fn a_disabled_accounts_keys_leave_the_devices() {
+    let Some(lab) = Lab::start().await else { return };
+    if sftp_server_bin().is_none() {
+        eprintln!("skipping: no sftp-server");
+        return;
+    }
+    // 背景同步（kick + 15 秒一輪）：正式環境 main.rs 起的那個。/ The background sync main.rs starts in production.
+    tokio::spawn(telepy_server::device_keys::run(lab.app.state.clone()));
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let bob_key = key_id(&lab, &bob).await;
+    // bob 的第二把金鑰：Telepy 認得，但是手動貼進 one 的檔案裡。/ Bob's second key, pasted into one's file by hand.
+    let bob2 = lab.keygen("bob-2");
+    let r = lab.app.post("/api/reverse/user/keys", Some(&bob.token), json!({"host_friendly_name": "bob-2", "key": bob2.public})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let one = lab.machine("one", &[("pi", &[&lab.service])], false).await;
+    let two = lab.machine("two", &[("pi", &[&lab.service])], false).await;
+    let home = one.account_home("pi");
+    two.account_home("pi");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/authorized_keys"), format!("{}\n", bob2.public)).unwrap();
+    let d1 = lab.device(&alice, "one", &one).await;
+    let d2 = lab.device(&alice, "two", &two).await;
+    let pi1 = lab.username(&alice, &d1, "pi").await;
+    let pi2 = lab.username(&alice, &d2, "pi").await;
+    lab.share(&alice, &d1, &bob, "view", &[pi1]).await;
+    lab.share(&alice, &d2, &bob, "view", &[pi2]).await;
+    // one：直接在清單上；two：經由 bob 的金鑰群組。/ one: listed directly; two: through bob's key group.
+    let r = lab.app.post(&path(d1.tunnel_id, "device-keys"), Some(&bob.token), json!({"user_key_ids": [bob_key]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let r = lab.app.post("/api/reverse/user/key-groups", Some(&bob.token), json!({"name": "Laptop", "key_ids": [bob_key]})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let group = r.json["group"]["id"].as_i64().unwrap();
+    let r = lab.app.post(&format!("/api/reverse/user/key-groups/{group}/grants"), Some(&bob.token), json!({"tunnel_id": d2.tunnel_id})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    for d in [&d1, &d2] {
+        let r = lab.app.post(&path(d.tunnel_id, "device-keys/sync"), Some(&alice.token), json!({})).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    }
+    let bare = bob.key.bare();
+    assert!(one.authorized_keys("pi").contains(&bare) && two.authorized_keys("pi").contains(&bare));
+
+    // two 離線；停用前的預估：兩台、兩個帳號、一台離線。/ two goes offline; the preview: two devices, one offline.
+    lab.disconnect_device(&d2).await;
+    let preview = lab.app.get(&format!("/api/user/users/{}/disable-preview", bob.id), Some(&lab.admin_token)).await;
+    assert_eq!(preview.json["device_keys"], json!({"devices": 2, "accounts": 2, "offline_devices": 1}), "{}", preview.text);
+
+    // 停用：在線的 one 幾秒內就拿掉，手動那行留著；離線的 two 還在。/ Disable: one is cleaned at once, two keeps it.
+    let r = lab.app.post(&format!("/api/user/users/{}", bob.id), Some(&lab.admin_token), json!({"is_active": false})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["disabled"]["device_keys"], json!({"devices": 2, "accounts": 2, "offline_devices": 1}));
+    eventually("one loses the key Telepy installed", 10, || !one.authorized_keys("pi").contains(&bare)).await;
+    assert!(one.authorized_keys("pi").contains(&bob2.bare()), "a line added by hand stays: {}", one.authorized_keys("pi"));
+    assert!(two.authorized_keys("pi").contains(&bare), "an offline device keeps it for now");
+    // 面板：清單還在（擁有者停用）、手動的那行標出來；記一筆事件。/ The panel and the event.
+    let v = lab.app.get(&path(d1.tunnel_id, "device-keys"), Some(&alice.token)).await.json;
+    let entry = v["entries"].as_array().unwrap().iter().find(|e| e["user_key_id"] == bob_key).unwrap_or_else(|| panic!("the entry stays: {v}")).clone();
+    assert_eq!((entry["owner_disabled"].as_bool(), entry["targets"].clone()), (Some(true), json!([])), "{entry}");
+    let rows = v["view"]["accounts"][0]["rows"].as_array().unwrap().clone();
+    let manual = rows.iter().find(|r| r["state"] == "manual").unwrap_or_else(|| panic!("{rows:?}"));
+    assert_eq!((manual["owner"].as_str(), manual["owner_disabled"].as_bool()), (Some("bob"), Some(true)));
+    assert!(rows.iter().all(|r| r["state"] != "removing" && r["state"] != "installed"), "{rows:?}");
+    let events = lab.app.get(&format!("/api/log/ssh/events?tunnel_id={}", d1.tunnel_id), Some(&alice.token)).await.json;
+    let ev = events.as_array().unwrap().iter().find(|e| e["event"] == "device_key_owner_disabled").unwrap_or_else(|| panic!("{events}")).clone();
+    assert!(ev["message"].as_str().unwrap().contains("bob's account is disabled"), "{ev}");
+    // 管理者用既有的移除鈕拿掉手動那行。/ A manager removes the hand-added line with the existing remove action.
+    let fp = manual["fingerprint"].as_str().unwrap().to_string();
+    let r = lab.app.post(&path(d1.tunnel_id, "authorized-keys/remove"), Some(&alice.token), json!({"username": "pi", "fingerprint": fp})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(!one.authorized_keys("pi").contains(&bob2.bare()));
+
+    // two 回來：下一輪（≤ 15 秒）拿掉。/ two comes back: the next tick removes it.
+    lab.reconnect_device(&d2).await;
+    eventually("two loses the key once it is back", 30, || !two.authorized_keys("pi").contains(&bare)).await;
+    let events = lab.app.get(&format!("/api/log/ssh/events?tunnel_id={}", d2.tunnel_id), Some(&alice.token)).await.json;
+    assert!(events.as_array().unwrap().iter().any(|e| e["event"] == "device_key_owner_disabled"), "{events}");
+    assert_eq!(lab.app.get(&format!("/api/user/users/{}/disable-preview", bob.id), Some(&lab.admin_token)).await.json["device_keys"]["devices"], 0);
+
+    // 重新啟用：兩台都裝回去（直接的與群組的）。/ Re-enable: both devices get the key back.
+    let r = lab.app.post(&format!("/api/user/users/{}", bob.id), Some(&lab.admin_token), json!({"is_active": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    eventually("one gets the key back", 10, || one.authorized_keys("pi").contains(&bare)).await;
+    eventually("two gets the key back", 10, || two.authorized_keys("pi").contains(&bare)).await;
+    let v = lab.app.get(&path(d1.tunnel_id, "device-keys"), Some(&alice.token)).await.json;
+    let entry = v["entries"].as_array().unwrap().iter().find(|e| e["user_key_id"] == bob_key).unwrap().clone();
+    assert_eq!(entry["owner_disabled"], false);
+    assert_eq!(lab.laptop_exec(&bob, &[(Hop::Tunnel(&d1), "pi")], "whereami").await.stdout, "pi@one");
+}

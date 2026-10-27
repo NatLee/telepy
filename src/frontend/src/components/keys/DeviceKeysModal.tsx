@@ -33,6 +33,7 @@ import {
     Trash2,
     Undo2,
     UserPen,
+    UserX,
     WifiOff,
     X,
 } from "lucide-react";
@@ -51,7 +52,7 @@ import { shortFingerprint } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
 import { oldestCheck, useDeviceKeys, type LastRemoval } from "@/hooks/useDeviceKeys";
 import type { DeviceKeys, KeyRemoval, RowState, ViewAccount, ViewRow } from "@/types/keys";
-import { isRemovable } from "@/lib/keyRows";
+import { isRemovable, ownerDisabledNote, splitUnplaced } from "@/lib/keyRows";
 import { accountsFromDevice, placeKey } from "@/lib/keyPlacement";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { KeyPlacementFlow } from "./KeyPlacementFlow";
@@ -96,8 +97,10 @@ function StateBadge({ row, online }: { row: ViewRow; online: boolean }) {
     const Icon = spec.icon;
     // 裝了但還沒在檔案裡看到：灰色勾。離線的「安裝中」寫成等裝置。/ Unverified installs are grey; offline pending says so.
     const unverified = row.state === "installed" && !row.verified;
-    const label = unverified ? t("keys.row.installedUnverified") : row.state === "pending" && !online ? t("keys.row.waiting") : t(spec.label);
-    const tip = unverified ? t("keys.row.installedUnverifiedTip") : row.state === "pending" && !online ? t("keys.row.waitingTip") : t(spec.tip);
+    // 擁有者停用、Telepy 正在拿掉：說是為什麼。/ Owner disabled and Telepy taking it off: say why.
+    const ownerOff = ownerDisabledNote(row) === "removing";
+    const label = unverified ? t("keys.row.installedUnverified") : ownerOff ? t("keys.row.ownerDisabledRemoving") : row.state === "pending" && !online ? t("keys.row.waiting") : t(spec.label);
+    const tip = unverified ? t("keys.row.installedUnverifiedTip") : ownerOff ? t(online ? "keys.row.ownerDisabledRemovingTip" : "keys.row.ownerDisabledOfflineTip") : row.state === "pending" && !online ? t("keys.row.waitingTip") : t(spec.tip);
     return (
         <TooltipProvider delayDuration={150}>
             <Tooltip>
@@ -330,6 +333,11 @@ function KeyRowView({
                             <Layers aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
                         </Chip>
                     ))}
+                    {ownerDisabledNote(row) === "manual" && (
+                        <Chip tone="warning" title={t("keys.row.ownerDisabledManualTip")}>
+                            <UserX aria-hidden /> {t("keys.row.ownerDisabledManual")}
+                        </Chip>
+                    )}
                     {row.state === "service" && row.legacy && <Chip tone="warning" title={t(d.view.keep_shared ? "keys.row.keptSharedTip" : "keys.row.legacySharedTip")}>{t("keys.row.legacyShared")}</Chip>}
                     {row.line_count > 1 && (
                         <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
@@ -473,7 +481,8 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
     const bulkSummary = useMemo(() => [...selection.groups].map(([user, fps]) => `${user} (${fps.length})`).join(", "), [selection.groups]);
 
     // 在清單上、卻沒有任何帳號能裝的（擁有者還沒給帳號）。/ On the list but in no account yet.
-    const unplaced = useMemo(() => (d ? d.entries.filter((e) => e.targets.length === 0) : []), [d]);
+    // 擁有者停用的另外列（灰掉）：清單留著，重新啟用就裝回去。/ Disabled owners' entries are listed apart, greyed.
+    const { suspended, unplaced } = useMemo(() => splitUnplaced(d?.entries ?? []), [d]);
 
     // 分頁：換一台裝置就回到預設那頁。/ Tabs: back to the default tab for every device.
     const [tab, setTab] = useState<{ tunnel: number | null; value: DeviceKeysTab | null }>({ tunnel: tunnelId, value: null });
@@ -624,6 +633,42 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                                     </>
                                 )}
                             </section>
+
+                            {suspended.length > 0 && !filter.filtering && (
+                                <section>
+                                    <SectionHeading title={t("keys.device.suspended")} description={t("keys.device.suspendedHint")} className="mb-2.5" />
+                                    <ul className="divide-y divide-border/70 rounded-xl bg-surface ring-1 ring-inset ring-border">
+                                        {suspended.map((e) => (
+                                            <li key={e.user_key_id} className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 text-muted-foreground">
+                                                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                                                    <Chip title={t("keys.device.suspendedTip", { owner: e.owner.username })}>
+                                                        <UserX aria-hidden /> {t("keys.device.suspendedChip")}
+                                                    </Chip>
+                                                    <span className="truncate text-sm">{e.name}</span>
+                                                    <Chip>{e.mine ? t("keys.device.you") : e.owner.username}</Chip>
+                                                    <span className="font-mono text-xs" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
+                                                    {e.groups.map((g) => (
+                                                        <Chip key={g.id} title={t("groups.viaGroup", { name: g.name })}>
+                                                            <Layers aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
+                                                        </Chip>
+                                                    ))}
+                                                </span>
+                                                {e.direct && d.can_manage && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="xs"
+                                                        className="text-destructive hover:bg-destructive/8 hover:text-destructive"
+                                                        disabled={dk.busy === `entry:${e.user_key_id}`}
+                                                        onClick={() => dk.removeEntry(e.user_key_id)}
+                                                    >
+                                                        <Trash2 /> {t("keys.row.removeFromList")}
+                                                    </Button>
+                                                )}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </section>
+                            )}
 
                             {unplaced.length > 0 && !filter.filtering && (
                                 <section>

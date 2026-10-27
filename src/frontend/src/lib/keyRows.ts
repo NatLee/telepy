@@ -3,7 +3,7 @@
  * Pure helpers for the device-key panel's rows: an authorized_keys file can hold hundreds of keys, so rows are
  * searched, bucketed (with counts), shown in pages and selected in bulk for removal.
  */
-import type { ViewAccount, ViewRow } from "@/types/keys";
+import type { DeviceKeyEntry, ViewAccount, ViewRow } from "@/types/keys";
 
 /** 全部 / 在清單上 / 不是 Telepy 放的 / 需要處理。/ All, on the list, not from Telepy, needs attention. */
 export type RowBucket = "all" | "list" | "other" | "attention";
@@ -15,6 +15,30 @@ export const ROWS_COLLAPSED = 10;
 /** 「再顯示」一次加幾列。/ Rows added per "show more". */
 export const ROWS_STEP = 50;
 
+/**
+ * 金鑰擁有者的帳號停用時，這一列要說什麼：`removing` = Telepy 裝的、正在從裝置拿掉；`manual` = 有人手動貼進檔案的，
+ * Telepy 不會動，管理者要自己按移除；其他 = 不用說。
+ * What a row says when its key owner's account is disabled: `removing` = Telepy installed it and is taking it off;
+ * `manual` = pasted into the file by hand, Telepy leaves it, a manager has to remove it; otherwise nothing.
+ */
+export type OwnerDisabledNote = "removing" | "manual" | null;
+
+export function ownerDisabledNote(r: Pick<ViewRow, "state" | "owner_disabled">): OwnerDisabledNote {
+    if (!r.owner_disabled) return null;
+    if (r.state === "removing") return "removing";
+    if (r.state === "manual") return "manual";
+    return null;
+}
+
+/**
+ * 清單上、但沒裝到任何帳號的：擁有者停用的（灰掉，重新啟用就回來）與其他（擁有者在這台還沒有帳號）分開。
+ * Listed keys in no account, split into those whose owner is disabled (greyed, back on re-enable) and the rest.
+ */
+export function splitUnplaced(entries: DeviceKeyEntry[]): { suspended: DeviceKeyEntry[]; unplaced: DeviceKeyEntry[] } {
+    const none = entries.filter((e) => e.targets.length === 0);
+    return { suspended: none.filter((e) => e.owner_disabled), unplaced: none.filter((e) => !e.owner_disabled) };
+}
+
 export function inBucket(r: ViewRow, bucket: RowBucket, online: boolean): boolean {
     switch (bucket) {
         case "all":
@@ -24,7 +48,7 @@ export function inBucket(r: ViewRow, bucket: RowBucket, online: boolean): boolea
         case "other":
             return r.state === "manual" || r.state === "unknown";
         case "attention":
-            return r.state === "error" || r.state === "removing" || r.state === "invalid" || (r.state === "pending" && online);
+            return r.state === "error" || r.state === "removing" || r.state === "invalid" || (r.state === "pending" && online) || ownerDisabledNote(r) === "manual";
     }
 }
 

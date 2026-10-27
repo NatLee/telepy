@@ -74,7 +74,8 @@ export function useUserManagement(enabled: boolean) {
                     // 停用了帳號：回報切掉了什麼。/ The account was disabled: report what was cut.
                     const d = parseImpact(disabled);
                     if (d) {
-                        showSuccess(t("settings.disable.done", { user: updated.username, browsers: d.web_sessions, sessions: d.live_sessions + d.agent_sessions, tokens: d.api_tokens, apps: d.connected_apps }));
+                        const keys = d.device_keys.devices > 0 ? ` ${t("settings.disable.doneKeys", { devices: d.device_keys.devices })}` : "";
+                        showSuccess(t("settings.disable.done", { user: updated.username, browsers: d.web_sessions, sessions: d.live_sessions + d.agent_sessions, tokens: d.api_tokens, apps: d.connected_apps }) + keys);
                         return true;
                     }
                 }

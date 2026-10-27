@@ -81,6 +81,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     token_call: { key: "logs.event.token_call", tone: "outline", category: "change" },
     host_key_pinned: { key: "logs.event.host_key_pinned", tone: "outline", category: "change" },
     service_key_migrated: { key: "logs.event.service_key_migrated", tone: "success", category: "change" },
+    device_key_owner_disabled: { key: "logs.event.device_key_owner_disabled", tone: "warning", category: "change" },
     host_key_accepted: { key: "logs.event.host_key_accepted", tone: "warning", category: "change" },
     host_key_forgotten: { key: "logs.event.host_key_forgotten", tone: "secondary", category: "change" },
     lan_scan: { key: "logs.event.lan_scan", tone: "outline", category: "change" },

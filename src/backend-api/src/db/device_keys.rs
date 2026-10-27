@@ -31,6 +31,9 @@ pub struct Entry {
     pub tunnel_group_name: Option<String>,
     /// 授予只裝到這些帳號名稱（JSON）；NULL = 全部。/ The grant's account names (JSON); NULL = all.
     pub account_names: Option<String>,
+    /// 金鑰擁有者的帳號還啟用著嗎：停用的不再裝到裝置上（Telepy 裝過的會被移除；清單留著，重新啟用就回來）。
+    /// Whether the key owner's account is active: a disabled owner's keys leave the device (the list stays).
+    pub owner_active: bool,
 }
 
 impl Entry {
@@ -107,7 +110,7 @@ pub struct SyncStatus {
 
 const ENTRY_SELECT: &str = "SELECT e.tunnel_id, e.user_key_id, e.user_id, a.username AS owner_username, k.host_friendly_name AS name, k.key, \
      e.added_by_id, e.created_at, k.expires_at, e.accounts, NULL AS via_group, NULL AS group_name, NULL AS via_tunnel_group, \
-     NULL AS tunnel_group_name, NULL AS account_names FROM telepy_device_key e \
+     NULL AS tunnel_group_name, NULL AS account_names, a.is_active AS owner_active FROM telepy_device_key e \
      JOIN authorized_keys_userauthorizedkeys k ON k.id = e.user_key_id JOIN auth_user a ON a.id = e.user_id";
 
 /// 經由金鑰群組授予的列（每次現算）：授予給通道的，加上授予給通道群組、而這條通道在**同一個人**的那組裡的。
@@ -124,7 +127,7 @@ const GROUP_ENTRY_SELECT: &str = "WITH g AS ( \
      ) \
      SELECT g.tunnel_id, m.user_key_id, kg.user_id, a.username AS owner_username, k.host_friendly_name AS name, k.key, \
      kg.user_id AS added_by_id, g.created_at, k.expires_at, NULL AS accounts, kg.id AS via_group, kg.name AS group_name, \
-     g.tunnel_group_id AS via_tunnel_group, g.tg_name AS tunnel_group_name, g.accounts AS account_names \
+     g.tunnel_group_id AS via_tunnel_group, g.tg_name AS tunnel_group_name, g.accounts AS account_names, a.is_active AS owner_active \
      FROM g JOIN telepy_key_group kg ON kg.id = g.key_group_id \
      JOIN telepy_key_group_member m ON m.group_id = kg.id \
      JOIN authorized_keys_userauthorizedkeys k ON k.id = m.user_key_id AND k.user_id = kg.user_id \
@@ -243,6 +246,11 @@ pub async fn installed_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<I
     .bind(tunnel_id)
     .fetch_all(&db.read)
     .await
+}
+
+/// 某人的金鑰被 Telepy 裝在哪：(隧道, 帳號) 各一列。/ Where Telepy installed someone's keys: one row per (tunnel, account).
+pub async fn installed_accounts_of_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, String)>> {
+    sqlx::query_as("SELECT DISTINCT tunnel_id, username FROM telepy_device_key_installed WHERE user_id = ? ORDER BY tunnel_id, username").bind(user_id).fetch_all(&db.read).await
 }
 
 pub async fn installed_insert(db: &Db, tunnel_id: i64, username: &str, key_bare: &str, fingerprint: &str, user_key_id: Option<i64>, user_id: Option<i64>) -> sqlx::Result<()> {
