@@ -424,6 +424,15 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_max_sessions": ["A valid integer is required."]}));
     let r = app.post("/api/site/settings", Some(&admin), json!({"remote_browser_geometry": ""})).await;
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
+    // registration domains: normalised on save, bad values named, blank = system default
+    let r = app.post("/api/site/settings", Some(&admin), json!({"valid_register_domains": " Gmail.com, @MyCorp.com;gmail.com "})).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.json["values"]["valid_register_domains"], "gmail.com,mycorp.com");
+    let r = app.post("/api/site/settings", Some(&admin), json!({"valid_register_domains": "gmail.com,*.mycorp.com"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json["valid_register_domains"][0].as_str().unwrap().contains("*.mycorp.com"));
+    let r = app.post("/api/site/settings", Some(&admin), json!({"valid_register_domains": ""})).await;
+    assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
     assert_eq!(keys.len(), 35);
