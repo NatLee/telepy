@@ -43,7 +43,41 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "desktop_clipboard_limit": limit,
         "terminal_detach_secs": s.terminal_detach_secs,
         "terminal_detach_max_secs": site.terminal_detach_max_secs,
+        "view_modes": view_modes_json(&s.view_modes),
     }))
+}
+
+/// 各頁的卡片 / 清單顯示最多記幾頁。/ How many pages' card / list choices are kept.
+pub const MAX_VIEW_MODES: usize = 20;
+pub const VIEW_MODES_RULE: &str = "Must be an object of page ids (lowercase letters, digits or '_', up to 32) to \"card\" or \"list\", at most 20.";
+
+/// 檢查並正規化 `view_modes`：物件、頁面 id 形狀、值只能 card / list；回傳排序過的 JSON。頁面清單在前端。
+/// Validates and normalises `view_modes`: an object of page ids to card / list, returned as sorted JSON. The list
+/// of pages lives in the frontend, so only the shape is checked here.
+pub fn parse_view_modes(v: &Value) -> Result<String, &'static str> {
+    let obj = v.as_object().ok_or(VIEW_MODES_RULE)?;
+    if obj.len() > MAX_VIEW_MODES {
+        return Err(VIEW_MODES_RULE);
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for (page, mode) in obj {
+        let ok_page = (1..=32).contains(&page.len()) && page.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        match mode.as_str() {
+            Some(m @ ("card" | "list")) if ok_page => {
+                out.insert(page.clone(), m.to_string());
+            }
+            _ => return Err(VIEW_MODES_RULE),
+        }
+    }
+    Ok(serde_json::to_string(&out).expect("a map of strings serialises"))
+}
+
+/// 存的 JSON → 物件（壞掉的就當空的）。/ Stored JSON → object (anything broken reads as empty).
+pub fn view_modes_json(stored: &str) -> Value {
+    match serde_json::from_str::<Value>(stored) {
+        Ok(v @ Value::Object(_)) => v,
+        _ => json!({}),
+    }
 }
 
 pub const CHOICE_ID_RULE: &str = "Use 1-32 lowercase letters, digits or '-'.";
@@ -146,6 +180,11 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             Some(Value::String(c)) if crate::desktop::Clipboard::parse(c).is_some() => Some(c.trim().to_string()),
             Some(_) => return Err(ApiError::field("desktop_clipboard", format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", ")))),
         },
+        // 各頁的卡片 / 清單顯示（整份取代）。/ Card / list view per page (replaces the whole map).
+        view_modes: match body.get("view_modes") {
+            None => None,
+            Some(v) => Some(parse_view_modes(v).map_err(|e| ApiError::field("view_modes", e))?),
+        },
         // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
         terminal_detach_secs: match body.get("terminal_detach_secs") {
             None => None,
@@ -232,4 +271,28 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
 #[allow(dead_code)]
 fn _status_unused() -> StatusCode {
     StatusCode::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_modes_are_normalised_and_checked() {
+        assert_eq!(parse_view_modes(&json!({"tunnels": "list", "key_groups": "card"})).unwrap(), r#"{"key_groups":"card","tunnels":"list"}"#);
+        assert_eq!(parse_view_modes(&json!({})).unwrap(), "{}");
+        assert!(parse_view_modes(&json!({"tunnels": "grid"})).is_err());
+        assert!(parse_view_modes(&json!({"Tunnels": "list"})).is_err());
+        assert!(parse_view_modes(&json!({"a-b": "list"})).is_err());
+        assert!(parse_view_modes(&json!(["tunnels"])).is_err());
+        let many: serde_json::Map<String, Value> = (0..21).map(|i| (format!("p{i}"), json!("card"))).collect();
+        assert!(parse_view_modes(&Value::Object(many)).is_err());
+    }
+
+    #[test]
+    fn stored_view_modes_read_back_safely() {
+        assert_eq!(view_modes_json(r#"{"tunnels":"list"}"#), json!({"tunnels": "list"}));
+        assert_eq!(view_modes_json("not json"), json!({}));
+        assert_eq!(view_modes_json("[]"), json!({}));
+    }
 }

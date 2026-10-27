@@ -401,6 +401,17 @@
 }
 
 @layer base {
+  /* 表單欄位用 metrics 校正過的粉圓（scripts/subset-huninn.py 的 FIELD_FAMILY）：原本宣告的下緣太淺，Chrome 把欄位裡的
+     字裁在宣告範圍內，g / j / p / q 的下半截被切掉、字也偏下。只套在欄位上，其他文字的排版不變；font-mono 等 class 照樣蓋過。
+     Form fields use huninn with corrected metrics (FIELD_FAMILY in scripts/subset-huninn.py): its declared descent is
+     too shallow and Chrome clips field text to it, cutting g / j / p / q and making the text sit low. Fields only, so
+     other text keeps its layout; classes such as font-mono still win. */
+  input,
+  textarea,
+  select {
+    font-family: "jf-openhuninn-field", var(--font-sans);
+  }
+
   * {
     @apply border-border outline-ring/50;
   }

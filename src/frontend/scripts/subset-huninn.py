@@ -31,6 +31,14 @@ SRC_FONT = ROOT / "src/fonts/jf-openhuninn-2.1.ttf"
 OUT_DIR = ROOT / "src/fonts/huninn"
 CSS_OUT = ROOT / "src/app/huninn.css"
 FAMILY = "jf-openhuninn"
+# 表單欄位用的同一批字檔：粉圓宣告的下緣（descent ≈ 0.13em）比字形實際的下緣（g / p 約 0.24em）淺，Chrome 會把
+# input / textarea / select 裡的文字裁在宣告的範圍內——下半截被切掉、字看起來偏下。這個 family 校正 metrics，
+# 由 globals.css 只套在表單欄位上，其他文字的排版不受影響。
+# The same files for form fields: huninn declares a descent (≈ 0.13em) shallower than its glyphs reach (g / p go to
+# about 0.24em), and Chrome clips text inside input / textarea / select to the declared box, cutting descenders and
+# making the text sit low. This family corrects the metrics; globals.css applies it to form fields only.
+FIELD_FAMILY = "jf-openhuninn-field"
+FIELD_OVERRIDES = ("  ascent-override: 92%;\n", "  descent-override: 26%;\n", "  line-gap-override: 0%;\n")
 
 CJK_CHUNK = 750  # 每塊約 130KB / roughly 130KB per slice
 MISC_CHUNK = 900
@@ -126,20 +134,26 @@ def main() -> None:
         "/* jf-openhuninn 2.1 (SIL OFL 1.1) — https://github.com/justfont/open-huninn-font */",
     ]
     total = 0
+    faces: list[tuple[str, str]] = []
     for name, cps, urange in chunks:
         size = write_subset(name, cps)
         total += size
         print(f"{name:8s} {len(cps):5d} chars {size / 1024:7.1f} KB")
-        lines.append(
-            "@font-face {\n"
-            f'  font-family: "{FAMILY}";\n'
-            "  font-style: normal;\n"
-            "  font-weight: 400;\n"
-            "  font-display: swap;\n"
-            f'  src: url("../fonts/huninn/{name}.woff2") format("woff2");\n'
-            f"  unicode-range: {urange};\n"
-            "}"
-        )
+        faces.append((name, urange))
+    # 兩個 family 各自保持同樣的順序（ui 最後）。/ Both families keep the same order (ui last).
+    for family, extra in ((FAMILY, ()), (FIELD_FAMILY, FIELD_OVERRIDES)):
+        for name, urange in faces:
+            lines.append(
+                "@font-face {\n"
+                f'  font-family: "{family}";\n'
+                "  font-style: normal;\n"
+                "  font-weight: 400;\n"
+                "  font-display: swap;\n"
+                f'  src: url("../fonts/huninn/{name}.woff2") format("woff2");\n'
+                f"  unicode-range: {urange};\n"
+                + "".join(extra)
+                + "}"
+            )
     CSS_OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"total    {sum(len(c[1]) for c in chunks):5d} chars {total / 1024:7.1f} KB -> {CSS_OUT.relative_to(ROOT)}")
 

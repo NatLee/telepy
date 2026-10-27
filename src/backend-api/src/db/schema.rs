@@ -979,6 +979,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("user_management_usersettings", "terminal_detach_secs", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "terminal_detach_max_secs", "integer NOT NULL DEFAULT 1800"),
     ("authorized_keys_reverseserverauthorizedkeys", "terminal_detach_policy", "varchar(8) NOT NULL DEFAULT 'user'"),
+    // 各頁的卡片 / 清單顯示（JSON：{"tunnels":"list","key_groups":"card"}；跟著帳號走）。/ Card / list view per page (JSON; follows the account).
+    ("user_management_usersettings", "view_modes", "text NOT NULL DEFAULT '{}'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

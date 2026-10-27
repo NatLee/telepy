@@ -29,6 +29,7 @@ import { TargetChips } from "./TargetChips";
 import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
 import { ExpiryPicker } from "@/components/keys/ExpiryPicker";
 import { KeyExpiryText } from "@/components/keys/KeyList";
+import { expiryState } from "@/lib/keyExpiry";
 import { expiryValue, localDate, type ExpiryPreset } from "@/lib/keyExpiry";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
@@ -329,7 +330,7 @@ function KeyDetailsBody({
                         </div>
                     )}
                     {keyChanged && !errors.key && <Callout tone="warning">{t("keys.keyChangedHint")}</Callout>}
-                    <Field id="key-details-expiry" label={t("keys.expiry.change")} error={errors.expires_at} hint={!errors.expires_at ? t("keys.expiry.changeHint") : undefined}>
+                    <Field id="key-details-expiry" label={t("keys.expiry.change")} error={errors.expires_at} hint={!errors.expires_at ? t(expiryState(keyItem.expires_at) === "expired" ? "keys.expiry.changeHintExpired" : "keys.expiry.changeHint") : undefined}>
                         <ExpiryPicker
                             id="key-details-expiry"
                             preset={expiryPreset ?? (keyItem.expires_at ? "custom" : "never")}

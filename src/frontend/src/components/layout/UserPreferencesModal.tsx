@@ -4,7 +4,7 @@
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
  * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
  * - 一般:帳號資訊(手機)、介面語言、桌面通知。
- * - 外觀:主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)。
+ * - 外觀:主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、各頁的卡片 / 列表(存在帳號上)。
  * - 終端機:預設字型 / 字級 / 配色(單一裝置的覆寫在終端機頁的「外觀」按鈕)、斷線後保留 shell。
  * - 遠端桌面:剪貼簿方向(存在帳號上,站台設定是上限)、畫質與聲音的預設(這台瀏覽器)。
  *   變更即時套用並寫入本機(cookie/localStorage),帳號層的值同步到後端 UserSettings(跨裝置)。
@@ -14,7 +14,7 @@
  * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
  * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
  * - General: account (phones), language, desktop notifications.
- * - Appearance: theme, display size (S/M/L + fine slider).
+ * - Appearance: theme, display size (S/M/L + fine slider), card / list per page (on the account).
  * - Terminal: default font / size / colour scheme (a device's own override lives behind the terminal page's
  *   Appearance button), keeping shells after a disconnect.
  * - Remote desktop: clipboard direction (on the account, capped by the site setting), quality and sound defaults
@@ -24,7 +24,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Gauge, Globe, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare, Volume2, VolumeX } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Gauge, Globe, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare, Volume2, VolumeX } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -47,6 +47,8 @@ import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
+import { useViewModes } from "@/hooks/useViewMode";
+import { VIEW_PAGES, viewModeOf } from "@/lib/viewModes";
 import { AUDIO_PREF_VALUES, CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, type AudioPref, type DesktopQuality } from "@/lib/desktop";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
@@ -88,6 +90,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
     const customSchemes = useCustomSchemes();
     const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
+    const [viewModes, setViewModeFor] = useViewModes();
     // 遠端桌面頁用的同一組 localStorage 值(這台瀏覽器),改了那邊也跟著動。/ The desktop page's own per-browser choices.
     const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
     const [audio, setAudio] = useStoredChoice<AudioPref>("telepy.desktopAudio", AUDIO_PREF_VALUES, "off");
@@ -253,6 +256,27 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                                 aria-valuetext={`${scale}%`}
                             />
                             <span className="w-14 shrink-0 rounded-lg bg-muted py-1 text-center font-mono text-sm tabular-nums">{scale}%</span>
+                        </div>
+                    </Section>
+
+                    {/* 各頁的卡片 / 列表（存在帳號上；頁面上的切換鈕也改這裡）。/ Card / list per page (on the account; the pages' switches change it too). */}
+                    <Section icon={<LayoutGrid />} title={t("prefs.views")} description={t("prefs.viewsDescription")}>
+                        <div className="space-y-2">
+                            {VIEW_PAGES.map((p) => (
+                                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+                                    <span className="text-sm text-foreground">{t(p.label)}</span>
+                                    <Segmented
+                                        size="sm"
+                                        value={viewModeOf(viewModes, p.id)}
+                                        onChange={(m) => setViewModeFor(p.id, m)}
+                                        aria-label={t(p.label)}
+                                        options={[
+                                            { value: "card", label: t("ui.cardView"), icon: <LayoutGrid size={14} /> },
+                                            { value: "list", label: t("ui.listView"), icon: <List size={14} /> },
+                                        ]}
+                                    />
+                                </div>
+                            ))}
                         </div>
                     </Section>
                 </div>

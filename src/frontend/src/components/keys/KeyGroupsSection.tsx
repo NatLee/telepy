@@ -1,13 +1,15 @@
 /**
- * 金鑰區的「金鑰群組」子頁內容：每組一張卡（裡面的金鑰、授予給哪裡、幾把 → 幾台），新增 / 編輯 / 刪除 / 授予，
+ * 金鑰區的「金鑰群組」子頁內容：每組一張卡（或清單的一列，卡片 / 清單跟著帳號走）（裡面的金鑰、授予給哪裡、幾把 → 幾台），新增 / 編輯 / 刪除 / 授予，
  * 以及 info 按鈕打開的「金鑰群組怎麼運作」——三句話加上即時的 `KeyGroupFlow`（還沒有群組時用例子）。
- * The keys area's "Key groups" sub-page: one card per group (its keys, where it is given, keys → devices), with
+ * The keys area's "Key groups" sub-page: one card per group (or a list row; card / list follows the account) (its keys, where it is given, keys → devices), with
  * create / edit / delete / grant, and the info button's "How key groups work": three lines plus the live
  * `KeyGroupFlow` (an example until there is a group).
  */
 import React, { useMemo, useState } from "react";
-import { CircleHelp, KeyRound, Layers, MoreHorizontal, Plus, Send, SquarePen, Trash2, X } from "lucide-react";
+import { CircleHelp, Info, KeyRound, Layers, MoreHorizontal, Plus, Send, SquarePen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ViewToggle } from "@/components/ui/ViewToggle";
+import { useViewMode } from "@/hooks/useViewMode";
 import { Modal } from "@/components/ui/Modal";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -28,6 +30,29 @@ type KeyGroupsApi = ReturnType<typeof useKeyGroups>;
 /** 卡片先顯示幾個金鑰籤、幾筆授予。/ Key chips and grants a card shows before folding the rest. */
 const CHIPS_SHOWN = 6;
 const GRANTS_SHOWN = 3;
+
+/** 群組的「⋯」選單（編輯 / 刪除），卡片與清單共用。/ A group's "⋯" menu (edit / delete), shared by cards and rows. */
+function GroupMenu({ name, onEdit, onDelete }: { name: string; onEdit: () => void; onDelete: () => void }) {
+    const { t } = useI18n();
+    return (
+        <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={t("groups.menuAria", { name })} className="data-[state=open]:bg-accent">
+                    <MoreHorizontal />
+                </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={onEdit}>
+                    <SquarePen /> {t("groups.edit")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onClick={onDelete}>
+                    <Trash2 /> {t("groups.delete")}
+                </DropdownMenuItem>
+            </DropdownMenuContent>
+        </DropdownMenu>
+    );
+}
 
 function KeyGroupCard({
     group,
@@ -61,22 +86,7 @@ function KeyGroupCard({
             <header className="flex items-center gap-2">
                 <Layers size={16} className="shrink-0 text-muted-foreground" aria-hidden />
                 <h3 className="min-w-0 flex-1 truncate text-base text-foreground" title={group.name}>{group.name}</h3>
-                <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" aria-label={t("groups.menuAria", { name: group.name })} className="data-[state=open]:bg-accent">
-                            <MoreHorizontal />
-                        </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-44">
-                        <DropdownMenuItem onClick={onEdit}>
-                            <SquarePen /> {t("groups.edit")}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onClick={onDelete}>
-                            <Trash2 /> {t("groups.delete")}
-                        </DropdownMenuItem>
-                    </DropdownMenuContent>
-                </DropdownMenu>
+                <GroupMenu name={group.name} onEdit={onEdit} onDelete={onDelete} />
             </header>
             <div className="flex flex-wrap gap-1.5">
                 {members.length === 0 ? (
@@ -140,6 +150,73 @@ function KeyGroupCard({
                 </Button>
             </footer>
         </article>
+    );
+}
+
+/**
+ * 清單檢視的一列：名稱、裡面的金鑰（前幾把 + 「還有 N 把」）、授予給哪裡（前兩筆 + 「還有 N 筆」，可直接收回）、
+ * 幾把 → 幾台、動作。容器夠寬（`@4xl`）時排成欄位，窄的時候疊成幾行。
+ * A row of the list view: name, its keys (the first few + "N more"), where it is given (the first two + "N more",
+ * revocable in place), keys → devices, actions. Columns from a wide container (`@4xl`), stacked lines below that.
+ */
+function KeyGroupRow({ group, keys, tunnelGroups, devices, onEdit, onDelete, onGrant, onRevoke }: Parameters<typeof KeyGroupCard>[0]) {
+    const { t } = useI18n();
+    const [allGrants, setAllGrants] = useState(false);
+    const members = keys.filter((k) => group.key_ids.includes(k.id));
+    const reached = keyGroupReach(group, tunnelGroups).filter((r) => devices.some((d) => d.tunnel_id === r.tunnelId)).length;
+    const names = members.map((k) => k.host_friendly_name);
+    const grants = allGrants || group.grants.length <= 3 ? group.grants : group.grants.slice(0, 2);
+    return (
+        <li className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1.5 px-3 py-2.5 @4xl:grid-cols-(--kg-cols) @4xl:items-center @4xl:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+                <Layers size={16} className="shrink-0 text-muted-foreground" aria-hidden />
+                <span className="truncate text-[0.9375rem] text-foreground" title={group.name}>{group.name}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 @4xl:order-last">
+                <Button variant="outline" size="sm" onClick={onGrant}>
+                    <Send /> <span className="hidden @md:inline">{t("groups.grant.add")}</span>
+                </Button>
+                <GroupMenu name={group.name} onEdit={onEdit} onDelete={onDelete} />
+            </div>
+            <p className="col-span-2 min-w-0 truncate text-xs text-muted-foreground @4xl:col-span-1" title={names.join(", ")}>
+                <KeyRound size={12} className="mr-1 inline align-[-0.125rem]" aria-hidden />
+                {members.length === 0 ? t("groups.key.noKeys") : names.slice(0, 3).join(", ")}
+                {members.length > 3 && ` ${t("groups.key.moreKeys", { count: members.length - 3 })}`}
+            </p>
+            <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-1.5 @4xl:col-span-1">
+                {group.grants.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">{t("groups.key.nowhere")}</span>
+                ) : (
+                    <>
+                        {grants.map((g) => {
+                            const target = g.tunnel_group?.name ?? g.tunnel?.name ?? "";
+                            return (
+                                <span key={g.id} className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md bg-surface py-0.5 pl-2 pr-0.5 ring-1 ring-inset ring-border">
+                                    <GrantTarget grant={g} tunnelGroups={tunnelGroups} />
+                                    {g.accounts !== null && <GrantAccounts accounts={g.accounts} />}
+                                    <Button
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        className="shrink-0 text-muted-foreground hover:text-destructive"
+                                        onClick={() => onRevoke(g)}
+                                        aria-label={t("groups.grant.remove", { group: group.name, target })}
+                                        title={t("groups.grant.remove", { group: group.name, target })}
+                                    >
+                                        <X />
+                                    </Button>
+                                </span>
+                            );
+                        })}
+                        {grants.length < group.grants.length && (
+                            <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={() => setAllGrants(true)}>
+                                {t("groups.key.moreGrants", { count: group.grants.length - grants.length })}
+                            </Button>
+                        )}
+                    </>
+                )}
+            </div>
+            <span className="col-span-2 text-xs text-muted-foreground @4xl:col-span-1">{t("groups.key.summary", { keys: members.length, devices: reached })}</span>
+        </li>
     );
 }
 
@@ -212,6 +289,12 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
     const [granting, setGranting] = useState<KeyGroup | null>(null);
     const [deleting, setDeleting] = useState<KeyGroup | null>(null);
     const [info, setInfo] = useState(false);
+    // 卡片 / 清單跟著帳號（偏好設定也能改）。/ Card / list follows the account (also in Preferences).
+    const [view, setView] = useViewMode("key_groups");
+    const revoke = async (g: KeyGroup, gr: KeyGroupGrant) => {
+        const target = gr.tunnel_group?.name ?? gr.tunnel?.name ?? "";
+        if ((await api.revoke(g.id, gr.id)).ok) showSuccess(t("groups.grant.removed", { group: g.name, target }));
+    };
 
     const save = async (name: string, ids: number[]): Promise<string | null> => {
         const g = editor?.group;
@@ -235,9 +318,10 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
             {/* 標題由金鑰區的分頁標出，這裡只放說明與動作。/ The sub-page tab names it; only the description and actions here. */}
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                 <p className="max-w-3xl text-sm text-muted-foreground">{t("groups.key.description")}</p>
-                <div className="flex shrink-0 items-center gap-2">
-                    <Button variant="ghost" onClick={() => setInfo(true)} className="text-muted-foreground hover:text-primary">
-                        <CircleHelp /> {t("groups.key.howAria")}
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    {api.groups.length > 0 && <ViewToggle value={view} onChange={setView} />}
+                    <Button variant="outline" onClick={() => setInfo(true)}>
+                        <Info /> {t("groups.key.howAria")}
                     </Button>
                     <Button variant="outline" onClick={() => setEditor({ group: null })}>
                         <Plus /> {t("groups.new")}
@@ -252,6 +336,35 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
                         <CircleHelp /> {t("groups.key.howAria")}
                     </Button>
                 </div>
+            ) : view === "list" ? (
+                <div
+                    className="@container overflow-hidden rounded-xl border border-border bg-card shadow-card"
+                    style={{ "--kg-cols": "minmax(0,1fr) minmax(0,1.4fr) minmax(0,1.8fr) minmax(0,0.9fr) auto" } as React.CSSProperties}
+                >
+                    {/* 欄位標題只在寬的時候。/ Column titles only when wide. */}
+                    <div className="hidden grid-cols-(--kg-cols) gap-x-3 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground @4xl:grid" aria-hidden>
+                        <span className="pl-6">{t("groups.name")}</span>
+                        <span>{t("groups.key.keys")}</span>
+                        <span>{t("groups.key.goesTo")}</span>
+                        <span>{t("groups.list.reach")}</span>
+                        <span />
+                    </div>
+                    <ul className="divide-y divide-border/70">
+                        {api.groups.map((g) => (
+                            <KeyGroupRow
+                                key={g.id}
+                                group={g}
+                                keys={keys}
+                                tunnelGroups={tunnelGroups}
+                                devices={devices}
+                                onEdit={() => setEditor({ group: g })}
+                                onDelete={() => setDeleting(g)}
+                                onGrant={() => setGranting(g)}
+                                onRevoke={(gr) => void revoke(g, gr)}
+                            />
+                        ))}
+                    </ul>
+                </div>
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {api.groups.map((g) => (
@@ -264,10 +377,7 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
                             onEdit={() => setEditor({ group: g })}
                             onDelete={() => setDeleting(g)}
                             onGrant={() => setGranting(g)}
-                            onRevoke={async (gr) => {
-                                const target = gr.tunnel_group?.name ?? gr.tunnel?.name ?? "";
-                                if ((await api.revoke(g.id, gr.id)).ok) showSuccess(t("groups.grant.removed", { group: g.name, target }));
-                            }}
+                            onRevoke={(gr) => void revoke(g, gr)}
                         />
                     ))}
                 </div>
