@@ -14,7 +14,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
-import { NavTabs } from "@/components/ui/nav-tabs";
+import { NavTabLabel, NavTabs } from "@/components/ui/nav-tabs";
 import { useTunnelDetailsModal, type TunnelFormErrors } from "@/hooks/useTunnelDetailsModal";
 import { useTunnelConnections } from "@/hooks/useTunnelConnections";
 import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections";
@@ -54,22 +54,6 @@ const FIELD_TAB: Record<keyof TunnelFormErrors, TunnelDetailsTab> = {
 };
 
 /** 分頁標籤旁的小點:紅 = 要修正,橘 = 還沒存。/ Dot beside a tab label: red = needs a fix, orange = unsaved. */
-function TabLabel({ label, mark }: { label: string; mark: "error" | "dirty" | null }) {
-    const { t } = useI18n();
-    return (
-        <span className="inline-flex items-center gap-1.5">
-            {label}
-            {mark && (
-                <span
-                    className={`size-1.5 shrink-0 rounded-full ${mark === "error" ? "bg-destructive" : "bg-primary"}`}
-                    role="img"
-                    aria-label={t(mark === "error" ? "tunnelDetails.tabHasError" : "tunnelDetails.tabUnsaved")}
-                />
-            )}
-        </span>
-    );
-}
-
 const ROLE_LABEL: Record<string, TranslationKey> = {
     owner: "keys.role.owner",
     admin: "keys.role.admin",
@@ -147,9 +131,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
 
     const basicsError = !!(errors.host_friendly_name || errors.description || errors.labels);
     const tabs = [
-        { value: "general" as const, label: <TabLabel label={t("tunnelDetails.tabGeneral")} mark={basicsError ? "error" : basicsDirty ? "dirty" : null} />, hint: t("tunnelDetails.tabGeneralHint"), icon: <Pencil /> },
+        { value: "general" as const, label: <NavTabLabel label={t("tunnelDetails.tabGeneral")} mark={basicsError ? "error" : basicsDirty ? "dirty" : null} />, hint: t("tunnelDetails.tabGeneralHint"), icon: <Pencil /> },
         ...(showDevice ? [{ value: "device" as const, label: t("tunnelDetails.tabDevice"), hint: t("tunnelDetails.tabDeviceHint"), icon: <Cpu /> }] : []),
-        { value: "identity" as const, label: <TabLabel label={t("tunnelDetails.tabIdentity")} mark={errors.key || hostKeyAlert ? "error" : keyChanged ? "dirty" : null} />, hint: t("tunnelDetails.tabIdentityHint"), icon: <KeyRound /> },
+        { value: "identity" as const, label: <NavTabLabel label={t("tunnelDetails.tabIdentity")} mark={errors.key || hostKeyAlert ? "error" : keyChanged ? "dirty" : null} />, hint: t("tunnelDetails.tabIdentityHint"), icon: <KeyRound /> },
         { value: "sessions" as const, label: t("tunnelDetails.tabSessions"), hint: t("tunnelDetails.tabSessionsHint"), icon: <UserCheck /> },
         { value: "connections" as const, label: t("tunnelDetails.tabConnections"), hint: t("tunnelDetails.tabConnectionsHint"), icon: <Activity /> },
     ];

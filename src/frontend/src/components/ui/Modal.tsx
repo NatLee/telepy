@@ -35,7 +35,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { DialogOverlay, DialogPortal } from "./dialog";
 
-export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl";
+export type ModalSize = "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl";
 export type ModalTone = "default" | "danger";
 
 interface ModalProps {
@@ -71,6 +71,7 @@ const SIZE_CLASS: Record<ModalSize, string> = {
     "2xl": "sm:max-w-[min(42rem,calc(100%-2rem))]",
     "3xl": "sm:max-w-[min(48rem,calc(100%-2rem))]",
     "4xl": "sm:max-w-[min(56rem,calc(100%-2rem))]",
+    "5xl": "sm:max-w-[min(64rem,calc(100%-2rem))]",
 };
 
 /**

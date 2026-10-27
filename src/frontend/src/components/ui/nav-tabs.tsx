@@ -6,6 +6,7 @@
  */
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n";
 
 export interface NavTab<T extends string> {
     value: T;
@@ -51,5 +52,22 @@ export function NavTabs<T extends string>({ tabs, value, onChange, className, ..
                 );
             })}
         </div>
+    );
+}
+
+/** 分頁標籤加一個點：有沒存的改動（品牌色）或要修正的欄位（紅）。/ A tab label with a dot for unsaved changes or a field to fix. */
+export function NavTabLabel({ label, mark }: { label: React.ReactNode; mark: "error" | "dirty" | null }) {
+    const { t } = useI18n();
+    return (
+        <span className="inline-flex items-center gap-1.5">
+            {label}
+            {mark && (
+                <span
+                    className={cn("size-1.5 shrink-0 rounded-full", mark === "error" ? "bg-destructive" : "bg-primary")}
+                    role="img"
+                    aria-label={t(mark === "error" ? "ui.tabHasError" : "ui.tabUnsaved")}
+                />
+            )}
+        </span>
     );
 }
