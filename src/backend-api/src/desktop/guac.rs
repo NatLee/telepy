@@ -290,9 +290,11 @@ impl Guacd {
     }
 
     /// 完整握手：`select` → `args` → `size` / `audio` / `video` / `image` [/ `timezone`] → `connect` → `ready`。
-    /// 回 guacd 的 connection id。`params` 依 guacd 要求的參數名取值，沒有的留空。
-    /// Full handshake; returns guacd's connection id. `params` is looked up by the argument names guacd asks for.
-    pub async fn handshake(&mut self, protocol: &str, size: Size, params: &HashMap<String, String>, timeout: Duration) -> Result<String, HandshakeError> {
+    /// 回 guacd 的 connection id。`params` 依 guacd 要求的參數名取值，沒有的留空。`audio` = 瀏覽器會播的音訊格式
+    /// （空 = 不要聲音）。
+    /// Full handshake; returns guacd's connection id. `params` is looked up by the argument names guacd asks for;
+    /// `audio` lists the audio formats the browser plays (empty = no sound).
+    pub async fn handshake(&mut self, protocol: &str, size: Size, audio: &[&str], params: &HashMap<String, String>, timeout: Duration) -> Result<String, HandshakeError> {
         let deadline = tokio::time::Instant::now() + timeout;
         let left = |deadline: tokio::time::Instant| deadline.saturating_duration_since(tokio::time::Instant::now());
         self.send(&["select", protocol]).await?;
@@ -303,7 +305,9 @@ impl Guacd {
         let names: Vec<String> = args.args().map(str::to_string).collect();
         let version = names.first().and_then(|n| parse_version(n));
         self.send(&["size", &size.width.to_string(), &size.height.to_string(), &size.dpi.to_string()]).await?;
-        self.send(&["audio"]).await?;
+        let mut audio_instruction: Vec<&str> = vec!["audio"];
+        audio_instruction.extend_from_slice(audio);
+        self.send(&audio_instruction).await?;
         self.send(&["video"]).await?;
         self.send(&["image", "image/png", "image/jpeg", "image/webp"]).await?;
         if version.map(|v| v >= (1, 1, 0)).unwrap_or(false) {

@@ -4,7 +4,9 @@
 //! - `punch_hole_request`（欄位 8）→ 當 hbbs：回 `relay_response`（uuid + 指向自己），然後陪著直到核心關掉它
 //! - `request_relay`（欄位 18）→ 當 hbbr：吃掉它，之後 WebSocket binary ⇄ BytesCodec 框直通裝置
 //!
-//! 內容一概不解析（帳密的雜湊交換、影像、輸入都在核心與裝置之間）。
+//! 內容幾乎不解析（帳密的雜湊交換、影像、聲音、輸入、檔案都在核心與裝置之間）；唯一看的是瀏覽器 → 裝置方向的
+//! 登入（[`codec::LoginGuard`]）：畫面 session 只准遙控、檔案 session 只准傳檔，不符就 4403。
+//! 檔案 session（畫面 session 的子 session）不另記 presence；畫面那條結束時一併收掉。
 //! 關閉碼：4404 session / 票證無效或過期、4403 無權限、4013 裝置斷線、4014 伺服器端結束（stop / 權限被收回）、
 //! 4400 壞框（超長或第一則不是 rendezvous 訊息）、4009 從即時 session 頁被結束。
 //! The browser's RustDesk core ↔ the device's Direct IP port; the first message picks the hbbs or hbbr role.
@@ -21,7 +23,7 @@ use crate::desktop::fmt_duration;
 use crate::desktop::stats::fmt_bytes;
 use crate::presence::{Entry, Kind};
 use crate::rustdesk::codec::{self, FrameError};
-use crate::rustdesk::Role;
+use crate::rustdesk::{Kind as SessionKind, Role};
 use crate::state::AppState;
 
 pub const CLOSE_NO_SESSION: u16 = 4404;
@@ -130,11 +132,19 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut channel = prepared.channel;
     session.connected.store(true, Ordering::SeqCst);
     let connected_at = Instant::now();
-    let mut presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::RustDesk, meta.ip));
+    // 檔案 session 是畫面那條的一部分：不另算 presence、不另發 webhook（畫面那條結束時一起收）。
+    // A files session is part of its screen session: no presence or webhook of its own.
+    let files = session.kind == SessionKind::Files;
+    let mut presence = (!files).then(|| state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::RustDesk, meta.ip)));
     let opened = session.describe();
     tracing::info!(session = %session.id, "rustdesk: {opened}");
-    state.gateway.event("rustdesk_open", None, None, Some(session.tunnel_id), format!("{opened} (session {})", short(&session.id))).await;
-    crate::session_audit::webhook_started(&state, session.tunnel_id, session.user_id, &session.user_name, "rustdesk", None).await;
+    let parent_note = session.parent.as_deref().map(|p| format!(", part of {}", short(p))).unwrap_or_default();
+    state.gateway.event("rustdesk_open", None, None, Some(session.tunnel_id), format!("{opened} (session {}{parent_note})", short(&session.id))).await;
+    if !files {
+        crate::session_audit::webhook_started(&state, session.tunnel_id, session.user_id, &session.user_name, "rustdesk", None).await;
+    }
+    let mut guard = codec::LoginGuard::new(session.kind.login());
+    let mut refused: Option<String> = None;
 
     let mut buf = vec![0u8; 64 * 1024];
     let mut pending: Vec<u8> = Vec::with_capacity(256 * 1024);
@@ -150,6 +160,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     if b.len() > codec::MAX_FRAME {
                         close_code = Some(CLOSE_BAD_FRAME);
                         break "protocol";
+                    }
+                    if let Err(why) = guard.check(&b) {
+                        tracing::warn!(session = %session.id, "rustdesk: refused {why}");
+                        refused = Some(why);
+                        close_code = Some(CLOSE_FORBIDDEN);
+                        break "refused";
                     }
                     to_device += b.len() as u64;
                     if channel.write_all(&codec::encode_frame(&b)).await.is_err() {
@@ -202,7 +218,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     }
                 }
             },
-            by = presence.ended() => {
+            by = async { match presence.as_mut() { Some(p) => p.ended().await, None => std::future::pending().await } } => {
                 ended_by = Some(by);
                 break "ended";
             }
@@ -217,7 +233,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             }
         }
     };
-    let message = format!("{opened} closed after {} ({reason}, session {}; {} to the browser, {} to the device)", fmt_duration(connected_at.elapsed()), short(&session.id), fmt_bytes(to_browser), fmt_bytes(to_device));
+    let mut message = format!("{opened} closed after {} ({reason}, session {}; {} to the browser, {} to the device)", fmt_duration(connected_at.elapsed()), short(&session.id), fmt_bytes(to_browser), fmt_bytes(to_device));
+    if let Some(why) = &refused {
+        message.push_str(&format!("; refused: {why}"));
+    }
     tracing::info!(session = %session.id, "rustdesk: {message}");
     state.gateway.event("rustdesk_close", None, None, Some(session.tunnel_id), message).await;
     match (ended_by, close_code) {
@@ -231,4 +250,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     drop(presence);
     let _ = tokio::time::timeout(Duration::from_secs(2), channel.shutdown()).await;
     state.rustdesk.remove(&session.id);
+    if !files {
+        state.rustdesk.end_children(&session.id, "screen session ended");
+    }
 }

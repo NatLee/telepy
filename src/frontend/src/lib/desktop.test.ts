@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CLIPBOARD_VALUES, clipboardAllowed, clipboardWithin, isClipboardPolicy, startFailure } from "./desktop.ts";
+import { CLIPBOARD_VALUES, clipboardAllowed, clipboardWithin, isClipboardPolicy, sessionFailure, soundAvailable, startFailure } from "./desktop.ts";
 
 test("the site limit caps the user's clipboard choice like the backend does", () => {
     assert.equal(clipboardWithin("both", "both"), "both");
@@ -22,4 +22,10 @@ test("a refused port explains Direct IP Access in RustDesk mode", () => {
     assert.equal(startFailure("target_unreachable", 502, vars).key, "desktop.err.targetUnreachable", "RDP / VNC wording by default");
     assert.deepEqual(startFailure("target_unreachable", 502, vars, "rustdesk").vars, { address: "127.0.0.1:21118" });
     assert.equal(startFailure("device_auth", 502, vars, "rustdesk").key, "desktop.err.deviceAuth", "other codes are the same in every mode");
+});
+
+test("a sign-out elsewhere (4010) and an ended session (4009) get their own explanation", () => {
+    assert.equal(sessionFailure(4010)?.key, "desktop.err.signedOut");
+    assert.equal(sessionFailure(4009)?.key, "desktop.err.stopped");
+    assert.deepEqual([soundAvailable("rdp"), soundAvailable("vnc"), soundAvailable("rustdesk")], [true, false, true]);
 });

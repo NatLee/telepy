@@ -24,6 +24,7 @@ import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificati
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import {
+    AUDIO_PREF_VALUES,
     CTRL_MODE_VALUES,
     ctrlAsCmd,
     DEFAULT_PORT,
@@ -33,6 +34,7 @@ import {
     pixelRatioFor,
     QUALITY_VALUES,
     startFailure,
+    type AudioPref,
     type CtrlAsCmdMode,
     type DesktopFailure,
     type DesktopMode,
@@ -117,6 +119,8 @@ export function useDesktopPage() {
     const [endedNormally, setEndedNormally] = useState(false);
     const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
     const [ctrlMode, setCtrlMode] = useStoredChoice<CtrlAsCmdMode>("telepy.desktopCtrlAsCmd", CTRL_MODE_VALUES, "auto");
+    // 聲音：RDP 是每次連線的選項，RustDesk 連線中也能切；預設關（吃頻寬）。/ Sound: per RDP start, live for RustDesk; off by default.
+    const [audioPref, setAudioPref] = useStoredChoice<AudioPref>("telepy.desktopAudio", AUDIO_PREF_VALUES, "off");
     // 剪貼簿方向：個人設定（跟著帳號走），站台設定是上限。還沒讀到就不帶，後端用存著的值。
     // The clipboard direction is a per-account setting capped by the site; omitted until loaded so the backend uses the saved one.
     const clipboardPref = useDesktopClipboard();
@@ -345,6 +349,7 @@ export function useDesktopPage() {
                     port: Number(form.port),
                     lan_host_id: host?.id ?? null,
                     quality,
+                    audio: form.protocol === "rdp" && audioPref === "on",
                     ...clipboardBody,
                     ...(credentialId
                         ? { credential_id: credentialId }
@@ -386,7 +391,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody]);
+    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody, audioPref]);
 
     // RustDesk 清單用：這個目標（隧道 + 主機 + 帳號 + 埠）這次開頁以來連上過。/ For the RustDesk checklist.
     const [rdReadyKey, setRdReadyKey] = useState<string | null>(null);
@@ -618,10 +623,11 @@ export function useDesktopPage() {
             quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
             customArea, selecting, isRustDesk, canProbe, probeState, rdReady: rdReadyKey === probeKey, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
             clipboard: clipboardPref,
+            audio: audioPref === "on",
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
-            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, detectScreens, setViewportId,
+            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, setAudio: (on: boolean) => setAudioPref(on ? "on" : "off"), detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },

@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 use common::lab::{free_port, Lab};
-use telepy_server::rustdesk::codec::{decode_frame, encode_frame, rendezvous_with_id, top_field, PUNCH_HOLE_REQUEST, RELAY_RESPONSE, REQUEST_RELAY};
+use telepy_server::rustdesk::codec::{decode_frame, encode_frame, login_request, peer_message, rendezvous_with_id, top_field, MSG_AUDIO_FRAME, MSG_FILE_ACTION, PUNCH_HOLE_REQUEST, RELAY_RESPONSE, REQUEST_RELAY};
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -243,4 +243,129 @@ async fn rustdesk_start_with_a_saved_password() {
         assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
         assert!(r.json["credential_id"][0].is_string(), "{}", r.text);
     }
+}
+
+/// 走一遍核心的兩個角色（hbbs → relay），回 relay 那條（已收掉裝置的第一則框）。/ Play both roles; returns the relay socket.
+async fn connect_core(lab: &Lab, start: &Value) -> Ws {
+    let mut id_ws = open_ws(lab, start).await;
+    id_ws.send(Message::Binary(rendezvous_with_id(PUNCH_HOLE_REQUEST, "telepy").into())).await.unwrap();
+    assert_eq!(top_field(&recv(&mut id_ws).await.unwrap()), Some(RELAY_RESPONSE));
+    let mut relay = open_ws(lab, start).await;
+    relay.send(Message::Binary(rendezvous_with_id(REQUEST_RELAY, "telepy").into())).await.unwrap();
+    assert_eq!(recv(&mut relay).await.unwrap(), b"\x4a\x05\x0a\x03abc".to_vec());
+    relay
+}
+
+/// 送一則、等裝置回音。/ Send one message and wait for the device's echo.
+async fn round_trip(relay: &mut Ws, msg: Vec<u8>) {
+    relay.send(Message::Binary(msg.clone().into())).await.unwrap();
+    let echoed = recv(relay).await.expect("echo");
+    assert_eq!(&echoed[5..], &msg[..]);
+}
+
+/// 「檔案」面板：畫面 session 連上後開一個傳檔子 session；中繼只准它登入成傳檔、畫面那條只准遙控；
+/// 檔案、聲音訊息原樣穿過；子 session 不佔名額、不算 presence，畫面那條結束就跟著結束；站台關掉就不能開。
+/// The Files panel's child session: the relay admits only a file-transfer login on it and only remote control on
+/// the screen session; file and audio messages pass; it takes no slot or presence and ends with its parent.
+#[tokio::test]
+async fn rustdesk_files_session_and_login_guard() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let (rd_port, received) = fake_rustdesk_device().await;
+    let id = dev.tunnel_id;
+    let start = || async { app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&alice.token), json!({"username": "ubuntu", "port": rd_port})).await };
+
+    let r = start().await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["file_transfer"], true, "the site allows file transfer by default");
+    let screen = r.json.clone();
+    let sid = screen["session_id"].as_str().unwrap().to_string();
+    // 還沒連上 → 409 not_connected。/ Not connected yet.
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::CONFLICT, Some("not_connected")), "{}", r.text);
+
+    let mut relay = connect_core(&lab, &screen).await;
+    round_trip(&mut relay, Vec::new()).await;
+    round_trip(&mut relay, login_request(None)).await;
+    // 裝置 → 瀏覽器的聲音（audio_frame）照樣到。/ The device's sound reaches the browser.
+    round_trip(&mut relay, peer_message(MSG_AUDIO_FRAME, b"opus-bytes")).await;
+
+    // 別人不能開它的檔案 session；不存在的 → 404。/ Someone else can't; an unknown session is a 404.
+    assert_eq!(app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&bob.token), json!({})).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(app.post("/api/reverse/server/rustdesk/nope/files", Some(&alice.token), json!({})).await.status, StatusCode::NOT_FOUND);
+
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["parent"], sid.as_str());
+    assert_eq!(r.json["target"]["port"], rd_port);
+    let files = r.json.clone();
+    let fid = files["session_id"].as_str().unwrap().to_string();
+    assert_eq!(app.state.rustdesk.count(), 1, "a files session takes no slot");
+    let mut frelay = connect_core(&lab, &files).await;
+    round_trip(&mut frelay, login_request(Some(7))).await;
+    round_trip(&mut frelay, peer_message(MSG_FILE_ACTION, b"read_dir /home")).await;
+    assert!(received.lock().unwrap().iter().any(|m| top_field(m) == Some(MSG_FILE_ACTION)));
+    let present = app.state.presence.for_tunnel(id);
+    assert_eq!(present.iter().filter(|e| e.kind.as_str() == "rustdesk").count(), 1, "{present:?}");
+    let ev = events(&lab, &alice.token, id).await;
+    assert!(ev.iter().any(|e| e["event"] == "rustdesk_open" && e["message"].as_str().unwrap().contains("RustDesk file transfer by alice")), "{ev:?}");
+
+    // 最多兩個：第二個可以和第一個並存，第三個收掉最舊的（4014）。/ Two may overlap; a third ends the oldest.
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    round_trip(&mut frelay, peer_message(MSG_FILE_ACTION, b"still mine")).await;
+    let unused = r.json["session_id"].as_str().unwrap().to_string();
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(recv(&mut frelay).await.err(), Some(4014));
+    assert!(app.state.rustdesk.get(&unused).is_some(), "the newer unclaimed one stays");
+    wait_for("old files session removed", || app.state.rustdesk.get(&fid).is_none()).await;
+    // 新的那條登入成遙控 → 4403，結束事件寫原因。/ The new one logging in as remote control is refused.
+    let files2 = r.json.clone();
+    let fid2 = files2["session_id"].as_str().unwrap().to_string();
+    let mut frelay2 = connect_core(&lab, &files2).await;
+    frelay2.send(Message::Binary(login_request(None).into())).await.unwrap();
+    assert_eq!(recv(&mut frelay2).await.err(), Some(4403));
+    wait_for("refused files session removed", || app.state.rustdesk.get(&fid2).is_none()).await;
+    let ev = events(&lab, &alice.token, id).await;
+    assert!(ev.iter().any(|e| e["event"] == "rustdesk_close" && e["message"].as_str().unwrap_or("").contains("refused: a remote control login on a file transfer session")), "{ev:?}");
+
+    // 畫面那條結束 → 它的檔案 session 也結束。/ The screen session ending ends its files session.
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    let files3 = r.json.clone();
+    let mut frelay3 = connect_core(&lab, &files3).await;
+    round_trip(&mut frelay3, login_request(Some(7))).await;
+    assert_eq!(app.post(&format!("/api/reverse/server/rustdesk/{sid}/stop"), Some(&alice.token), json!({})).await.status, StatusCode::OK);
+    assert_eq!(recv(&mut relay).await.err(), Some(4014));
+    assert_eq!(recv(&mut frelay3).await.err(), Some(4014));
+
+    // 畫面 session 登入成傳檔 → 4403（改過的前端不能繞過站台設定）。/ A file-transfer login on a screen session.
+    let r = start().await;
+    let mut sneaky = connect_core(&lab, &r.json).await;
+    sneaky.send(Message::Binary(login_request(Some(7)).into())).await.unwrap();
+    assert_eq!(recv(&mut sneaky).await.err(), Some(4403));
+
+    // 站台關掉傳檔 → start 回 false、files 503；已開的檔案 session 被收掉。/ The site switch.
+    let r = start().await;
+    let screen = r.json.clone();
+    let sid = screen["session_id"].as_str().unwrap().to_string();
+    let mut relay = connect_core(&lab, &screen).await;
+    round_trip(&mut relay, login_request(None)).await;
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    let mut frelay4 = connect_core(&lab, &r.json).await;
+    round_trip(&mut frelay4, login_request(Some(7))).await;
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"desktop_file_transfer": false})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(start().await.json["file_transfer"], false);
+    let r = app.post(&format!("/api/reverse/server/rustdesk/{sid}/files"), Some(&alice.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("file_transfer_disabled")), "{}", r.text);
+    assert_eq!(app.state.rustdesk.end_all_files(), 1);
+    assert_eq!(recv(&mut frelay4).await.err(), Some(4014));
+    // 畫面那條不受影響。/ The screen session carries on.
+    round_trip(&mut relay, peer_message(MSG_AUDIO_FRAME, b"still here")).await;
 }

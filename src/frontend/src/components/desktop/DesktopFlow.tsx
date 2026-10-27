@@ -15,6 +15,8 @@ import { useI18n } from "@/lib/i18n";
 import { FlowLink, FlowNode, FlowNow, FlowPath, FlowSteps } from "@/components/flow/PathFlow";
 import { spotStates, type ClipboardPolicy, type DesktopFailure, type DesktopMode, type DesktopPhase, type FlowSpot, type SpotState } from "@/lib/desktop";
 import { formatMs, laggingHop, type StreamStats } from "@/lib/desktopStats";
+import type { StreamRow } from "@/lib/desktopStreams";
+import { DesktopStreams } from "./DesktopStreams";
 import type { TranslationKey } from "@/locales/en";
 
 export interface FlowContext {
@@ -38,6 +40,8 @@ export interface FlowContext {
     stats?: StreamStats | null;
     /** RustDesk 在瀏覽器裡連（核心在這個分頁，Telepy 中繼）而不是用 app。/ RustDesk in this tab through Telepy's relay, not the app. */
     inBrowser?: boolean;
+    /** 這條連線上的資料流（畫面、輸入、剪貼簿、聲音、檔案）。/ The streams on this connection. */
+    streams?: StreamRow[];
 }
 
 /** 剪貼簿那一行說明：guacd（貼上按鈕、伺服器把關）或 RustDesk 核心（分頁有焦點時自動同步）。
@@ -142,6 +146,8 @@ export function DesktopFlow({ ctx }: { ctx: FlowContext }) {
                     state={s.target}
                 />
             </FlowPath>
+
+            {!rustdesk && ctx.streams && ctx.streams.length > 0 && <DesktopStreams rows={ctx.streams} connected={ctx.phase === "connected"} />}
 
             <FlowSteps steps={steps.map((st) => t(st.key, st.vars))} current={step} done={ctx.phase === "connected"} failed={ctx.phase === "failed"} />
 

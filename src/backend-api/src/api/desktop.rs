@@ -74,6 +74,15 @@ pub(crate) async fn clipboard_for(state: &AppState, user_id: i64, settings: &db:
     Ok((effective, Clipboard::parse(&settings.desktop_clipboard).unwrap_or(Clipboard::Both)))
 }
 
+/// `audio`：省略 / null = 不要聲音；其他型別回欄位錯誤。/ `audio`: omitted or null = no sound; anything but a boolean is a field error.
+fn parse_audio(body: &Value) -> Result<bool, ApiError> {
+    match body.get("audio") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(ApiError::field("audio", "Must be true or false.")),
+    }
+}
+
 fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
     let n = match body.get("port") {
         None | Some(Value::Null) => return Ok(protocol.default_port()),
@@ -106,6 +115,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
     let port = parse_port(&body, protocol)?;
     let quality = Quality::parse(&json_str(&body, "quality").unwrap_or_default()).ok_or_else(|| ApiError::field("quality", "Must be auto, speed or sharp."))?;
     let (clipboard, clipboard_limit) = clipboard_for(&state, user.id, &settings, &body).await?;
+    // 聲音：這次要不要（預設不要，吃頻寬）；只有 RDP 有，VNC 帶 true 也當 false。/ Sound: asked per start, RDP only.
+    let audio = parse_audio(&body)? && protocol == Protocol::Rdp;
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
@@ -134,12 +145,13 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         target,
         clipboard,
         quality,
+        audio,
         credentials,
         prepared,
         saved_label,
         web_session,
     });
-    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), "desktop: session created");
+    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), audio, "desktop: session created");
     Ok(Json(json!({
         "session_id": session.id,
         "ws_path": format!("/ws/desktop/{}/", session.id),
@@ -149,6 +161,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         "clipboard": clipboard.as_str(),
         "clipboard_limit": clipboard_limit.as_str(),
         "quality": quality.as_str(),
+        "audio": audio,
         "target": target_json(&session.target),
         "username": session.hop_username,
     })))
@@ -239,6 +252,14 @@ mod tests {
         assert!(parse_port(&json!({"port": 0}), Protocol::Rdp).is_err());
         assert!(parse_port(&json!({"port": "70000"}), Protocol::Rdp).is_err());
         assert!(parse_port(&json!({"port": true}), Protocol::Rdp).is_err());
+    }
+
+    #[test]
+    fn audio_is_a_boolean_that_defaults_to_off() {
+        assert!(!parse_audio(&json!({})).unwrap());
+        assert!(!parse_audio(&json!({"audio": null})).unwrap());
+        assert!(parse_audio(&json!({"audio": true})).unwrap());
+        assert!(parse_audio(&json!({"audio": "yes"})).is_err());
     }
 
     #[test]

@@ -1429,6 +1429,8 @@ pub struct DesktopStartRequest {
     /// site setting `desktop_clipboard`
     #[schema(example = "to_remote")]
     pub clipboard: Option<String>,
+    /// Play the remote's sound (RDP only; ignored for VNC). Default false: audio costs bandwidth
+    pub audio: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -1456,6 +1458,8 @@ pub struct DesktopSession {
     pub clipboard_limit: String,
     /// Quality preset in effect: auto | speed | sharp
     pub quality: String,
+    /// Remote sound in effect (RDP only; offered to guacd as audio/L8 + audio/L16, otherwise `disable-audio`)
+    pub audio: bool,
     pub target: DesktopTarget,
     /// The device account used for the hop
     pub username: String,
@@ -1510,6 +1514,24 @@ pub struct RustDeskSession {
     pub clipboard: String,
     /// The site's ceiling (`desktop_clipboard`)
     pub clipboard_limit: String,
+    /// The site allows file transfer (`desktop_file_transfer`): the page shows the Files panel
+    pub file_transfer: bool,
+}
+
+/// A file-transfer child of a connected in-browser RustDesk session (RustDesk transfers files on a second
+/// connection that logs in for file transfer). Same target and device account; the relay admits only a
+/// file-transfer login on it. It ends with its screen session and takes no desktop slot.
+#[derive(ToSchema)]
+pub struct RustDeskFilesSession {
+    pub session_id: String,
+    /// The screen session it belongs to
+    pub parent: String,
+    #[schema(example = "/ws/rustdesk/<session_id>/")]
+    pub ws_path: String,
+    pub ticket: String,
+    pub expires_in: u64,
+    pub target: DesktopTarget,
+    pub username: String,
 }
 
 /// A port on the target answered a TCP connection opened from the device (the same path a desktop session
