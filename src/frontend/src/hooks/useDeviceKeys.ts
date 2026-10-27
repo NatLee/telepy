@@ -197,6 +197,24 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
         [base, run, t]
     );
 
+    /**
+     * 把我的金鑰群組直接授予這台（或收回）；回應是群組清單，所以之後重抓這台的狀態。
+     * Grant one of my key groups to this device directly (or revoke it); the reply is the group list, so reload.
+     */
+    const toggleGroup = useCallback(
+        (groupId: number, on: boolean, grantId?: number) =>
+            tunnelId !== null &&
+            run(
+                `group:${groupId}`,
+                () =>
+                    on
+                        ? apiFetch(`/api/reverse/user/key-groups/${groupId}/grants`, { method: "POST", body: JSON.stringify({ tunnel_id: tunnelId, accounts: null }) })
+                        : apiFetch(`/api/reverse/user/key-groups/${groupId}/grants/${grantId}`, { method: "DELETE" }),
+                t("groups.saveFailed")
+            ),
+        [run, t, tunnelId]
+    );
+
     const loadRemovals = useCallback(async () => {
         if (!base) return;
         try {
@@ -311,5 +329,5 @@ export function useDeviceKeys(tunnelId: number | null, onChanged?: () => void) {
 
     const dismissRemoval = useCallback(() => setLastRemoval(null), []);
 
-    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, setAccounts, removeLine, removeLines, lastRemoval, dismissRemoval, removals, loadRemovals, restore };
+    return { data, loading, notFound, busy, syncing, load, sync, toggleMine, addAllMine, removeEntry, setAccounts, toggleGroup, removeLine, removeLines, lastRemoval, dismissRemoval, removals, loadRemovals, restore };
 }

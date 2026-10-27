@@ -47,6 +47,8 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
     db::tunnel_tags::set_pin(&state.db, uid, t.id, false).await?;
     // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
     db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
+    // 他的分組與他的金鑰群組對這條通道的授予也拿掉。/ Their grouping of it and their key groups' grants to it go too.
+    db::groups::forget_tunnel_for_user(&state.db, uid, t.id).await?;
     state.device_keys.kick(t.id);
     // 還在等的存取申請一併取消。/ Their pending access requests go too.
     db::access_requests::cancel_pending_of(&state.db, t.id, uid).await?;

@@ -2,6 +2,7 @@
  * SSH 金鑰與裝置金鑰清單的 API 型別（對應後端 `api/user_keys.rs`、`api/device_keys.rs`）。
  * API shapes for user keys and per-device key lists.
  */
+import type { KeyGroupSource, MyKeyGroupHere, NamedRef } from "./groups";
 
 export interface UserKey {
     id: number;
@@ -21,6 +22,8 @@ export interface UserKey {
     /** 到期時間；null = 不到期。到期後 Telepy 拒絕它、並從裝置移除。/ Expiry; null = never. Expired keys are refused and removed. */
     expires_at: string | null;
     expired: boolean;
+    /** 它在哪個金鑰群組；null = 未分組。/ Its key group; null = none. */
+    group_id?: number | null;
 }
 
 export type TunnelRole = "owner" | "admin" | "edit" | "view";
@@ -49,8 +52,13 @@ export interface KeyDevice {
     /** 我在這台能用的 OS 帳號（金鑰會裝進這些）。/ Accounts my keys go into here. */
     accounts: string[];
     account_list: DeviceAccount[];
-    /** `accounts`：這把金鑰只裝到這些帳號 id；null = 全部。/ `accounts`: chosen account ids; null = all. */
-    keys: { user_key_id: number; accounts: number[] | null; targets: KeyTarget[] }[];
+    /** 我把這台放在哪個通道群組。/ My tunnel group for this device. */
+    group_id?: number | null;
+    /**
+     * `accounts`：直接在清單上時只裝到這些帳號 id（null = 全部）；`direct` = 直接在清單上；`groups` = 經由哪些金鑰群組。
+     * `accounts`: the direct entry's chosen ids (null = all); `direct` = listed directly; `groups` = key group grants.
+     */
+    keys: { user_key_id: number; accounts: number[] | null; direct?: boolean; groups?: KeyGroupSource[]; targets: KeyTarget[] }[];
 }
 
 export interface DeviceKeyEntry {
@@ -64,6 +72,10 @@ export interface DeviceKeyEntry {
     created_at: string;
     /** 只裝到這些帳號（id）；null = 擁有者能用的每個帳號。/ Chosen account ids; null = every allowed account. */
     accounts: number[] | null;
+    /** 直接在清單上（能直接移出）；false = 只經由金鑰群組來。/ Listed directly; false = only through key groups. */
+    direct: boolean;
+    /** 經由哪些金鑰群組來。/ The key group grants that bring it here. */
+    groups: KeyGroupSource[];
     targets: KeyTarget[];
 }
 
@@ -99,7 +111,21 @@ export interface DeviceKeys {
     removals: DeviceKeyRemoval[];
     sync: { username: string; ok: boolean; error: string | null; synced_at: string }[];
     /** `accounts`：在清單上時，只裝到這些帳號 id；null = 全部。/ When listed: chosen account ids; null = all. */
-    my_keys: { id: number; name: string; fingerprint: string | null; key_type: string | null; in_list: boolean; expired?: boolean; accounts: number[] | null }[];
+    my_keys: {
+        id: number;
+        name: string;
+        fingerprint: string | null;
+        key_type: string | null;
+        in_list: boolean;
+        expired?: boolean;
+        accounts: number[] | null;
+        /** 它的金鑰群組。/ Its key group. */
+        group_id?: number | null;
+        /** 經由金鑰群組來到這台。/ Group grants that bring it to this device. */
+        via_groups?: KeyGroupSource[];
+    }[];
+    /** 我的金鑰群組與它們有沒有到這台。/ My key groups and whether each reaches this device. */
+    my_key_groups?: MyKeyGroupHere[];
     /** 每個帳號一張卡：清單與裝置上實際內容合在一起。/ Per-account merged view. */
     view: { accounts: ViewAccount[]; keep_shared?: boolean };
 }
@@ -131,6 +157,10 @@ export interface ViewRow {
     raw: string | null;
     /** 清單上的金鑰：只裝到這些帳號 id；null = 全部。/ Listed keys: chosen account ids; null = all. */
     accounts: number[] | null;
+    /** 清單上的金鑰：直接加的（能直接移出）。/ Listed keys: added directly (can be taken off directly). */
+    direct?: boolean;
+    /** 清單上的金鑰：經由哪些金鑰群組。/ Listed keys: the key groups that bring it here. */
+    groups?: NamedRef[];
 }
 
 export interface ViewAccount {

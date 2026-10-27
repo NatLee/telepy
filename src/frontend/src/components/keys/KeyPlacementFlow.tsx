@@ -137,3 +137,6 @@ export function KeyPlacementFlow({
         </div>
     );
 }
+
+/** 給其他流程圖（金鑰群組）共用的節點與直線。/ The node and link, shared with the key group flow. */
+export { Node as FlowNode, Link as FlowLink };

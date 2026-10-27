@@ -7,7 +7,7 @@
  */
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, KeyRound, Loader2, Plus, Search, Users } from "lucide-react";
+import { ChevronDown, FolderTree, KeyRound, Layers, Loader2, Plus, Search, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -183,6 +183,12 @@ export function MyKeysOnDevice({
                                         <span className="text-sm text-foreground">{k.name}</span>
                                         <span className="font-mono text-xs text-muted-foreground">{k.key_type ?? "?"}</span>
                                     </label>
+                                    {/* 經由金鑰群組也在這台（勾選框只管直接放的）。/ Also here through a key group (the tick is the direct entry). */}
+                                    {(k.via_groups ?? []).map((g) => (
+                                        <span key={g.id} className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[0.75rem] text-muted-foreground" title={t("groups.viaGroupTip", { name: g.name })}>
+                                            <Layers size={11} aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
+                                        </span>
+                                    ))}
                                     {picker && <AccountPicker k={k} accounts={d.account_ids} busy={keyBusy} onChange={(accounts) => onSetAccounts(k.id, accounts)} />}
                                 </span>
                             );
@@ -201,6 +207,56 @@ export function MyKeysOnDevice({
                     {terms.length > 0 && matching.length === 0 && <p className="text-sm text-muted-foreground">{t("keys.rows.noMatch")}</p>}
                 </div>
             )}
+        </section>
+    );
+}
+
+/**
+ * 面板的「你的金鑰群組」：勾選 = 把整組直接授予這台（之後組裡加的金鑰也會來）。已經經由我的通道群組授予的，
+ * 顯示「經由 X」且不能在這裡取消（到金鑰頁改）。沒有金鑰群組時不顯示。
+ * The panel's "your key groups": a tick grants the whole group to this device directly (keys added to it later
+ * follow). Groups already given through my tunnel group say so and are changed on the Keys page. Hidden without
+ * key groups.
+ */
+export function MyKeyGroupsOnDevice({ d, busy, onToggle }: { d: DeviceKeys; busy: string | null; onToggle: (groupId: number, on: boolean, grantId?: number) => void }) {
+    const { t } = useI18n();
+    const groups = d.my_key_groups ?? [];
+    if (groups.length === 0) return null;
+    return (
+        <section>
+            <SectionHeading title={t("groups.device.title")} description={t("groups.device.hint")} className="mb-2.5" />
+            <div className="flex flex-wrap gap-1.5">
+                {groups.map((g) => {
+                    const on = !!g.grant;
+                    const groupBusy = busy === `group:${g.id}`;
+                    return (
+                        <span key={g.id} className={cn("inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 ring-1 ring-inset ring-border transition-colors hover:bg-muted/50", (on || g.via_tunnel_group) && "bg-primary/6 ring-primary/35")}>
+                            <label className="inline-flex cursor-pointer items-center gap-2">
+                                {groupBusy ? (
+                                    <Loader2 size={16} className="animate-spin text-primary" aria-hidden />
+                                ) : (
+                                    <input
+                                        type="checkbox"
+                                        checked={on}
+                                        onChange={(e) => onToggle(g.id, e.target.checked, g.grant?.id)}
+                                        aria-label={t("groups.device.toggleAria", { name: g.name })}
+                                        className="size-4 accent-primary"
+                                    />
+                                )}
+                                <Layers size={14} className="text-muted-foreground" aria-hidden />
+                                <span className="text-sm text-foreground">{g.name}</span>
+                                <span className="text-xs text-muted-foreground">{t("groups.device.keyCount", { count: g.key_count })}</span>
+                            </label>
+                            {g.grant?.accounts && <span className="font-mono text-[0.75rem] text-warning">{t("groups.grant.only", { accounts: g.grant.accounts.join(", ") })}</span>}
+                            {g.via_tunnel_group && (
+                                <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[0.75rem] text-muted-foreground" title={t("groups.device.viaTunnelGroupTip", { name: g.via_tunnel_group.name })}>
+                                    <FolderTree size={11} aria-hidden /> {t("groups.device.viaTunnelGroup", { name: g.via_tunnel_group.name })}
+                                </span>
+                            )}
+                        </span>
+                    );
+                })}
+            </div>
         </section>
     );
 }

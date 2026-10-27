@@ -23,12 +23,38 @@ pub struct Entry {
     pub expires_at: Option<String>,
     /// 只裝到這些帳號（username id 的 JSON 陣列）；NULL = 擁有者能用的每個帳號。/ Chosen accounts (JSON ids); NULL = every allowed one.
     pub accounts: Option<String>,
+    /// 經由金鑰群組授予（不是直接在清單上）：哪個金鑰群組、叫什麼。/ Granted through a key group (not listed directly).
+    pub via_group: Option<i64>,
+    pub group_name: Option<String>,
+    /// 授予的對象是通道群組時：哪一組。/ When the grant targets a tunnel group: which one.
+    pub via_tunnel_group: Option<i64>,
+    pub tunnel_group_name: Option<String>,
+    /// 授予只裝到這些帳號名稱（JSON）；NULL = 全部。/ The grant's account names (JSON); NULL = all.
+    pub account_names: Option<String>,
 }
 
 impl Entry {
     /// 選定的帳號 id；None = 全部。壞掉的 JSON 當成全部。/ The chosen username ids; None = all (bad JSON counts as all).
     pub fn account_ids(&self) -> Option<Vec<i64>> {
         parse_accounts(self.accounts.as_deref())
+    }
+
+    /// 授予選定的帳號名稱；None = 全部。/ The grant's chosen account names; None = all.
+    pub fn grant_accounts(&self) -> Option<Vec<String>> {
+        super::groups::parse_names(self.account_names.as_deref())
+    }
+
+    /// 直接在清單上（不是經由群組）。/ Listed directly, not through a group.
+    pub fn is_direct(&self) -> bool {
+        self.via_group.is_none()
+    }
+
+    /// 這一列允不允許某個帳號（id 與名稱）。/ Whether this entry covers an account (by id and name).
+    pub fn covers(&self, id: i64, name: &str) -> bool {
+        if self.account_ids().is_some_and(|c| !c.contains(&id)) {
+            return false;
+        }
+        !self.grant_accounts().is_some_and(|c| !c.iter().any(|n| n == name))
     }
 }
 
@@ -80,15 +106,61 @@ pub struct SyncStatus {
 }
 
 const ENTRY_SELECT: &str = "SELECT e.tunnel_id, e.user_key_id, e.user_id, a.username AS owner_username, k.host_friendly_name AS name, k.key, \
-     e.added_by_id, e.created_at, k.expires_at, e.accounts FROM telepy_device_key e \
+     e.added_by_id, e.created_at, k.expires_at, e.accounts, NULL AS via_group, NULL AS group_name, NULL AS via_tunnel_group, \
+     NULL AS tunnel_group_name, NULL AS account_names FROM telepy_device_key e \
      JOIN authorized_keys_userauthorizedkeys k ON k.id = e.user_key_id JOIN auth_user a ON a.id = e.user_id";
 
+/// 經由金鑰群組授予的列（每次現算）：授予給通道的，加上授予給通道群組、而這條通道在**同一個人**的那組裡的。
+/// 金鑰必須屬於群組的主人。`{where}` 用 `g.tunnel_id` / `kg.user_id` 篩。
+/// Entries derived from key group grants (computed every time): grants to the tunnel itself, plus grants to a
+/// tunnel group that holds the tunnel for the **same person**. Keys must belong to the group's owner.
+const GROUP_ENTRY_SELECT: &str = "WITH g AS ( \
+       SELECT gr.key_group_id, gr.tunnel_id, gr.accounts, gr.created_at, NULL AS tunnel_group_id, NULL AS tg_name, NULL AS tg_user \
+         FROM telepy_key_group_grant gr WHERE gr.tunnel_id IS NOT NULL \
+       UNION ALL \
+       SELECT gr.key_group_id, m.tunnel_id, gr.accounts, gr.created_at, tg.id, tg.name, tg.user_id \
+         FROM telepy_key_group_grant gr JOIN telepy_tunnel_group tg ON tg.id = gr.tunnel_group_id \
+         JOIN telepy_tunnel_group_member m ON m.group_id = tg.id AND m.user_id = tg.user_id \
+     ) \
+     SELECT g.tunnel_id, m.user_key_id, kg.user_id, a.username AS owner_username, k.host_friendly_name AS name, k.key, \
+     kg.user_id AS added_by_id, g.created_at, k.expires_at, NULL AS accounts, kg.id AS via_group, kg.name AS group_name, \
+     g.tunnel_group_id AS via_tunnel_group, g.tg_name AS tunnel_group_name, g.accounts AS account_names \
+     FROM g JOIN telepy_key_group kg ON kg.id = g.key_group_id \
+     JOIN telepy_key_group_member m ON m.group_id = kg.id \
+     JOIN authorized_keys_userauthorizedkeys k ON k.id = m.user_key_id AND k.user_id = kg.user_id \
+     JOIN auth_user a ON a.id = kg.user_id \
+     WHERE (g.tg_user IS NULL OR g.tg_user = kg.user_id)";
+
+/// 直接在清單上的（不含群組授予的）。/ Entries listed directly (not the ones from group grants).
 pub async fn entries_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Entry>> {
     sqlx::query_as(&format!("{ENTRY_SELECT} WHERE e.tunnel_id = ? ORDER BY e.id")).bind(tunnel_id).fetch_all(&db.read).await
 }
 
 pub async fn entries_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Entry>> {
     sqlx::query_as(&format!("{ENTRY_SELECT} WHERE e.user_id = ? ORDER BY e.id")).bind(user_id).fetch_all(&db.read).await
+}
+
+/// 經由金鑰群組來到這台裝置的列。/ Entries reaching this device through key group grants.
+pub async fn group_entries_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Entry>> {
+    sqlx::query_as(&format!("{GROUP_ENTRY_SELECT} AND g.tunnel_id = ? ORDER BY kg.id, m.user_key_id")).bind(tunnel_id).fetch_all(&db.read).await
+}
+
+pub async fn group_entries_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Entry>> {
+    sqlx::query_as(&format!("{GROUP_ENTRY_SELECT} AND kg.user_id = ? ORDER BY g.tunnel_id, kg.id, m.user_key_id")).bind(user_id).fetch_all(&db.read).await
+}
+
+/// 這台裝置「應該有」的全部來源：直接在清單上的 + 群組授予的（同一把金鑰可能有好幾列）。
+/// Everything that puts keys on this device: direct entries plus group grants (a key may appear more than once).
+pub async fn effective_entries_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Entry>> {
+    let mut v = entries_for_tunnel(db, tunnel_id).await?;
+    v.extend(group_entries_for_tunnel(db, tunnel_id).await?);
+    Ok(v)
+}
+
+pub async fn effective_entries_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Entry>> {
+    let mut v = entries_for_user(db, user_id).await?;
+    v.extend(group_entries_for_user(db, user_id).await?);
+    Ok(v)
 }
 
 /// 加進清單；已存在回 false。`accounts` = 只裝到這些帳號（None = 全部）。/ Add to the list; false when it was already there.
@@ -133,20 +205,35 @@ pub async fn delete_entries_for_key(db: &Db, user_key_id: i64) -> sqlx::Result<(
     Ok(())
 }
 
-/// 用到這把金鑰的隧道（在清單上或已裝上）。
+/// 金鑰群組授予碰到的通道（直接授予的 ∪ 授予的通道群組裡的）。/ Tunnels reached by key group grants.
+const GRANTED_TUNNELS: &str = "SELECT tunnel_id FROM telepy_key_group_grant WHERE tunnel_id IS NOT NULL \
+     UNION SELECT m.tunnel_id FROM telepy_key_group_grant gr JOIN telepy_tunnel_group_member m ON m.group_id = gr.tunnel_group_id";
+
+/// 用到這把金鑰的隧道（在清單上、經群組授予、或已裝上）。
+/// Tunnels that use this key: listed, granted through its group, or installed.
 pub async fn tunnels_with_key(db: &Db, user_key_id: i64) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar(
+    let mut v: Vec<i64> = sqlx::query_scalar(
         "SELECT tunnel_id FROM telepy_device_key WHERE user_key_id = ? UNION SELECT tunnel_id FROM telepy_device_key_installed WHERE user_key_id = ?",
     )
     .bind(user_key_id)
     .bind(user_key_id)
     .fetch_all(&db.read)
-    .await
+    .await?;
+    if let Some(g) = super::groups::key_group_of_key(db, user_key_id).await? {
+        for t in super::groups::key_group_reach(db, g).await? {
+            if !v.contains(&t) {
+                v.push(t);
+            }
+        }
+    }
+    Ok(v)
 }
 
-/// 有清單或有已裝金鑰的隧道（同步迴圈要看的範圍）。
+/// 有清單、有群組授予或有已裝金鑰的隧道（同步迴圈要看的範圍）。/ Tunnels the sync loop looks at.
 pub async fn tunnels_with_state(db: &Db) -> sqlx::Result<Vec<i64>> {
-    sqlx::query_scalar("SELECT tunnel_id FROM telepy_device_key UNION SELECT tunnel_id FROM telepy_device_key_installed").fetch_all(&db.read).await
+    sqlx::query_scalar(&format!("SELECT tunnel_id FROM telepy_device_key UNION SELECT tunnel_id FROM telepy_device_key_installed UNION {GRANTED_TUNNELS}"))
+        .fetch_all(&db.read)
+        .await
 }
 
 pub async fn installed_for_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<Installed>> {

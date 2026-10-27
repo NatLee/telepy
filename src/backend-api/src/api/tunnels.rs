@@ -73,6 +73,7 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
     let using = state.presence.by_tunnel();
     let seen = db::tunnel_endpoints::last_seen_visible_to(&state.db, user_id).await?;
     let pins = db::tunnel_tags::pinned_by(&state.db, user_id).await?;
+    let my_groups = db::groups::tunnel_group_of(&state.db, user_id).await?;
     let my_expiries = db::sharing::my_expiries(&state.db, user_id).await?;
     let requests = db::access_requests::pending_counts(&state.db).await?;
     let labels = db::tunnel_tags::labels_visible_to(&state.db, user_id).await?;
@@ -99,6 +100,8 @@ async fn list_json(state: &AppState, user_id: i64, is_superuser: bool) -> ApiRes
             let health = crate::monitor::health(listening, failures, listening || seen.contains_key(&t.id));
             v["health"] = json!(health.as_str());
             v["pinned"] = json!(pins.contains(&t.id));
+            // 我把它放在哪個通道群組（每個人自己的）。/ My tunnel group for it (personal).
+            v["group_id"] = json!(my_groups.get(&t.id));
             // 被分享的人：我的存取到什麼時候（限時分享）。/ For sharees: when my access ends (timed shares).
             v["share_expires_at"] = json!(my_expiries.get(&t.id).map(|e| crate::util::db_to_iso_utc_z(e)));
             // owner / ADMIN：還在等我決定的存取申請。/ Owner / ADMIN: access requests waiting for a decision.
@@ -133,6 +136,7 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
     // 標籤與我的釘選也給單筆（詳細資訊視窗編輯標籤用）。/ Labels and my pin, for the details dialog.
     v["labels"] = json!(db::tunnel_tags::labels_of(&state.db, t.id).await?);
     v["pinned"] = json!(db::tunnel_tags::pinned_by(&state.db, user_id).await?.contains(&t.id));
+    v["group_id"] = json!(db::groups::tunnel_group_of(&state.db, user_id).await?.get(&t.id));
     // 這條隧道自己的服務金鑰（裝置要授權的那把）。/ The tunnel's own service key (the one the device authorizes).
     v["service_key"] = json!(crate::ssh::tunnel_keys::ensure(state, t.id).await?);
     Ok(v)

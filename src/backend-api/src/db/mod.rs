@@ -7,6 +7,7 @@ pub mod audit_chain;
 pub mod command_rules;
 pub mod credentials;
 pub mod device_keys;
+pub mod groups;
 pub mod host_keys;
 pub mod keys;
 pub mod lan;

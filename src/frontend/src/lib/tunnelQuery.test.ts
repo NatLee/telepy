@@ -93,6 +93,19 @@ test("labels (tag: alias) and pins", () => {
     assert.deepEqual(list.sort(pinnedFirst).map((x) => x.id), [2, 1]);
 });
 
+test("group matches my group's name, none = ungrouped, and free text finds it", () => {
+    const t = tunnel({});
+    const inGroup = (q: string, group: string | null) => matchTunnel(t, parseQuery(q), { health: "online", now: NOW, group });
+    assert.ok(inGroup("group:prod", "Prod"), "case-insensitive");
+    assert.ok(inGroup(`group:"home lab"`, "Home lab"), "quoted names with spaces");
+    assert.ok(!inGroup("group:prod", "Production"), "the whole name, not a prefix");
+    assert.ok(inGroup("group:none", null));
+    assert.ok(!inGroup("group:none", "Prod"));
+    assert.ok(inGroup("-group:none", "Prod"));
+    assert.ok(inGroup("prod", "Production"), "free text searches the group name too");
+    assert.deepEqual(parseQuery("group:").invalid, ["group:"]);
+});
+
 test("warn: device warnings", () => {
     const facts = (...kinds: string[]) => ({ ip: "1.2.3.4", live: true, connected_at: "2026-10-23T10:00:00Z", last_seen_at: null, facts: { warnings: kinds.map((kind) => ({ kind, detail: "" })) } });
     const full = tunnel({ endpoint: facts("disk", "reboot") });

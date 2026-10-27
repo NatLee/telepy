@@ -6,7 +6,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { HardDrive, Loader2, Plus, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
+import { HardDrive, Layers, Loader2, Plus, RefreshCw, Settings2, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -70,6 +70,10 @@ function DeviceHeading({ device }: { device: KeyDevice }) {
 function Cell({ device, keyItem, busy, onToggle }: { device: KeyDevice; keyItem: UserKey; busy: boolean; onToggle: (on: boolean) => void }) {
     const { t } = useI18n();
     const placed = device.keys.find((k) => k.user_key_id === keyItem.id);
+    // 勾選 = 直接在清單上；經由金鑰群組來的另外標出來（取消勾選不會拿掉它）。
+    // The tick = listed directly; keys that come through key groups are marked separately (unticking leaves them).
+    const direct = !!placed && placed.direct !== false;
+    const groups = placed?.groups ?? [];
     const id = `cell-${device.tunnel_id}-${keyItem.id}`;
     return (
         <div className="flex min-w-0 flex-col gap-1.5">
@@ -80,16 +84,31 @@ function Cell({ device, keyItem, busy, onToggle }: { device: KeyDevice; keyItem:
                     <input
                         id={id}
                         type="checkbox"
-                        checked={!!placed}
+                        checked={direct}
                         disabled={busy}
                         onChange={(e) => onToggle(e.target.checked)}
                         className="size-4 cursor-pointer rounded accent-primary"
                     />
                 )}
                 <span className="sr-only">{t("keys.matrix.toggleAria", { key: keyItem.host_friendly_name, device: device.host_friendly_name })}</span>
-                <span aria-hidden>{placed ? t("keys.matrix.inList") : t("keys.matrix.notInList")}</span>
+                <span aria-hidden>{direct ? t("keys.matrix.inList") : groups.length ? t("groups.matrix.viaGroup") : t("keys.matrix.notInList")}</span>
             </label>
-            {placed && <TargetChips targets={placed.targets} online={device.online} unchosen={unchosenAccounts(placed.accounts, device.account_list)} />}
+            {groups.length > 0 && (
+                <span className="flex flex-wrap gap-1">
+                    {groups.map((g) => (
+                        <span key={g.id} className="inline-flex max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[0.75rem] text-muted-foreground" title={t("groups.viaGroup", { name: g.name })}>
+                            <Layers size={11} aria-hidden /> <span className="truncate">{g.name}</span>
+                        </span>
+                    ))}
+                </span>
+            )}
+            {placed && (
+                <TargetChips
+                    targets={placed.targets}
+                    online={device.online}
+                    unchosen={direct && groups.length === 0 ? unchosenAccounts(placed.accounts, device.account_list) : device.accounts.filter((a) => !placed.targets.some((x) => x.username === a))}
+                />
+            )}
         </div>
     );
 }

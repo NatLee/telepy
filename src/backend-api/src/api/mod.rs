@@ -9,6 +9,7 @@ pub mod credentials;
 pub mod desktop;
 pub mod device_keys;
 pub mod doc;
+pub mod groups;
 pub mod host_keys;
 pub mod join;
 pub mod lan;

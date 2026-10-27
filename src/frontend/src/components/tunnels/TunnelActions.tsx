@@ -19,6 +19,7 @@ import {
     ChevronDown,
     Clapperboard,
     FileCode2,
+    FolderInput,
     Info,
     KeyRound,
     LockKeyholeOpen,
@@ -96,6 +97,7 @@ export function TunnelActions({
     onRequestAccess,
     onRecordings,
     onCommandRules,
+    onMoveToGroup,
 }: TunnelActionsProps) {
     const { t } = useI18n();
 
@@ -169,6 +171,15 @@ export function TunnelActions({
                         hint={t("tunnelActions.detailsHint")}
                         onSelect={() => onDetails(tunnel.id)}
                     />
+                    {/* 我自己的分組（不影響別人）。/ My own grouping (affects nobody else). */}
+                    {onMoveToGroup && (
+                        <ActionItem
+                            icon={FolderInput}
+                            label={t("tunnelActions.moveToGroup")}
+                            hint={t("tunnelActions.moveToGroupHint")}
+                            onSelect={() => onMoveToGroup(tunnel.id)}
+                        />
+                    )}
                     {/* 只有擁有者 / ADMIN 能管理目標 OS 帳號（與分享同一級）；其他人只看得到自己被允許的 */}
                     <ActionItem
                         icon={Users}

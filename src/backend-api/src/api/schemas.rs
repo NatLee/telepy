@@ -180,6 +180,9 @@ pub struct Tunnel {
     pub last_seen_at: Option<String>,
     /// 只有列表帶：我有沒有釘選（每個人自己的）。/ List / dashboard only: whether I pinned it (per user).
     pub pinned: Option<bool>,
+    /// 我把它放在哪個通道群組（每個人自己的；`/api/reverse/tunnel-groups`）；null = 未分組。
+    /// My tunnel group for it (personal; see `/api/reverse/tunnel-groups`); null = ungrouped.
+    pub group_id: Option<i64>,
     /// 只有列表帶：被分享給我、而且有期限時，我的存取到什麼時候（UTC）；否則 null。
     /// List / dashboard only: when my access ends, for a timed share with me; otherwise null.
     pub share_expires_at: Option<String>,
@@ -542,6 +545,8 @@ pub struct UserKey {
     /// 到期時間；null = 不到期。到期後 gateway 拒絕它、裝置清單把它移除。/ Expiry; null = never. Expired keys are refused and removed from devices.
     pub expires_at: Option<String>,
     pub expired: bool,
+    /// 它在哪個金鑰群組（`/api/reverse/user/key-groups`）；null = 未分組。/ Its key group; null = none.
+    pub group_id: Option<i64>,
 }
 
 #[derive(ToSchema)]
@@ -553,6 +558,8 @@ pub struct UserKeyWrite {
     /// RFC 3339 or `YYYY-MM-DD` (end of that day, UTC); null = never. Omitted = the site's `user_key_max_days` (0 = never).
     #[schema(example = "2026-12-31")]
     pub expires_at: Option<String>,
+    /// 放進這個金鑰群組（它授予的裝置都會裝上）。/ Put it in this key group (every device the group is granted to gets it).
+    pub group_id: Option<i64>,
 }
 
 #[derive(ToSchema)]
@@ -560,6 +567,8 @@ pub struct UserKeyPatch {
     pub description: Option<String>,
     /// 續期或改到期時間（null = 不到期，站台有上限時不允許）。/ Renew or change the expiry (null = never, refused under a site limit).
     pub expires_at: Option<String>,
+    /// 換金鑰群組（null = 拿出群組）；沒給 = 不動。/ Move it to a key group (null = none); absent = unchanged.
+    pub group_id: Option<i64>,
 }
 
 /// 分享到什麼時候：RFC 3339 或 `YYYY-MM-DD`（那天 UTC 結束），null = 一直有效。到期後 30 秒內自動取消分享。
@@ -2063,10 +2072,32 @@ pub struct DeviceKeyEntry {
     pub mine: bool,
     pub added_by: String,
     pub created_at: String,
-    /// Login account ids this key is limited to (null = every account its owner may use)
+    /// Login account ids this key is limited to on the direct entry (null = every account its owner may use)
     pub accounts: Option<Vec<i64>>,
-    /// One per OS account the key goes into (the owner's allowed accounts ∩ `accounts`)
+    /// The key is on the list directly (it can also come through key groups, see `groups`)
+    pub direct: bool,
+    /// Key group grants that bring the key here
+    pub groups: Vec<KeyGroupSource>,
+    /// One per OS account the key goes into (the owner's allowed accounts ∩ the chosen accounts of every source)
     pub targets: Vec<DeviceKeyTarget>,
+}
+
+/// A key group grant that puts a key on a device.
+#[derive(ToSchema)]
+pub struct KeyGroupSource {
+    /// Key group id
+    pub id: i64,
+    pub name: String,
+    /// When granted through a tunnel group: which one
+    pub tunnel_group: Option<NamedRef>,
+    /// Account names the grant is limited to (null = all)
+    pub accounts: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct NamedRef {
+    pub id: i64,
+    pub name: String,
 }
 
 #[derive(ToSchema)]
@@ -2105,6 +2136,37 @@ pub struct MyKeyChoice {
     pub in_list: bool,
     /// When on the list: login account ids it is limited to (null = all)
     pub accounts: Option<Vec<i64>>,
+    /// Its key group (null = none)
+    pub group_id: Option<i64>,
+    /// Key group grants that put it on this device
+    pub via_groups: Vec<KeyGroupSource>,
+}
+
+/// One of your key groups, as seen from a device.
+#[derive(ToSchema)]
+pub struct MyKeyGroupHere {
+    pub id: i64,
+    pub name: String,
+    pub key_count: i64,
+    /// The group is granted to this device directly
+    pub grant: Option<KeyGroupGrantHere>,
+    /// The group is granted to your tunnel group that holds this device
+    pub via_tunnel_group: Option<KeyGroupGrantVia>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupGrantHere {
+    pub id: i64,
+    pub accounts: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupGrantVia {
+    /// Tunnel group id
+    pub id: i64,
+    pub name: String,
+    pub grant_id: i64,
+    pub accounts: Option<Vec<String>>,
 }
 
 /// A login account with its id (for the per-key account choice).
@@ -2141,6 +2203,8 @@ pub struct DeviceKeys {
     pub removals: Vec<DeviceKeyRemoval>,
     pub sync: Vec<DeviceKeySync>,
     pub my_keys: Vec<MyKeyChoice>,
+    /// Your key groups and whether each reaches this device
+    pub my_key_groups: Vec<MyKeyGroupHere>,
 }
 
 #[derive(ToSchema)]
@@ -2194,8 +2258,12 @@ pub struct DeviceKeyViewRow {
     pub error: Option<String>,
     /// First 120 characters of an unreadable line
     pub raw: Option<String>,
-    /// For keys on the list: the login account ids the key is limited to (null = all)
+    /// For keys on the list: the login account ids the key is limited to (null = all; the union of every source)
     pub accounts: Option<Vec<i64>>,
+    /// For keys on the list: listed directly (can be taken off the list directly)
+    pub direct: bool,
+    /// For keys on the list: the key groups that bring it here
+    pub groups: Vec<NamedRef>,
 }
 
 #[derive(ToSchema)]
@@ -2311,8 +2379,12 @@ pub struct AuthorizedKeySkipped {
 #[derive(ToSchema)]
 pub struct KeyDeviceKey {
     pub user_key_id: i64,
-    /// Login account ids the key is limited to (null = all)
+    /// Login account ids the direct entry is limited to (null = all)
     pub accounts: Option<Vec<i64>>,
+    /// On the device's list directly
+    pub direct: bool,
+    /// Key group grants that bring it here
+    pub groups: Vec<KeyGroupSource>,
     pub targets: Vec<DeviceKeyTarget>,
 }
 
@@ -2323,6 +2395,8 @@ pub struct KeyDevice {
     pub host_friendly_name: String,
     pub online: bool,
     pub role: String,
+    /// My tunnel group for it (null = ungrouped)
+    pub group_id: Option<i64>,
     pub accounts: Vec<String>,
     /// The same accounts with ids
     pub account_list: Vec<DeviceAccount>,
@@ -2898,4 +2972,115 @@ pub struct WebhookTestResult {
 pub struct WebhookSecret {
     /// `whsec_…`（Standard Webhooks）。/ `whsec_…` (Standard Webhooks).
     pub secret: String,
+}
+
+// ---------------------------------------------------------------- groups
+
+/// 我的通道群組（照我排的順序）；改動回傳整份。/ My tunnel groups, in my order; every write answers the whole list.
+#[derive(ToSchema)]
+pub struct TunnelGroups {
+    pub groups: Vec<TunnelGroup>,
+    /// The group just created or changed (null for list / delete / reorder)
+    pub group: Option<TunnelGroup>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelGroup {
+    pub id: i64,
+    #[schema(example = "Production")]
+    pub name: String,
+    pub position: i64,
+    /// Tunnels in it that I can see
+    pub tunnel_ids: Vec<i64>,
+    pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelGroupWrite {
+    /// 1–48 characters, unique among your groups (ignoring case)
+    #[schema(example = "Production")]
+    pub name: String,
+    /// Tunnels to move into it (out of any other group)
+    pub tunnel_ids: Option<Vec<i64>>,
+}
+
+#[derive(ToSchema)]
+pub struct GroupRename {
+    pub name: String,
+}
+
+/// Group ids in the new order; groups not listed keep their order after them.
+#[derive(ToSchema)]
+pub struct GroupOrder {
+    pub ids: Vec<i64>,
+}
+
+/// The whole member list: listed tunnels move in, former members not listed become ungrouped.
+#[derive(ToSchema)]
+pub struct TunnelGroupMembers {
+    pub tunnel_ids: Vec<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct TunnelGroupChoice {
+    /// One of your tunnel groups, or null to take the tunnel out of its group
+    pub group_id: Option<i64>,
+}
+
+/// 我的金鑰群組（依名稱）；改動回傳整份。/ My key groups by name; every write answers the whole list.
+#[derive(ToSchema)]
+pub struct KeyGroups {
+    pub groups: Vec<KeyGroup>,
+    pub group: Option<KeyGroup>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroup {
+    pub id: i64,
+    #[schema(example = "Laptops")]
+    pub name: String,
+    pub key_ids: Vec<i64>,
+    pub grants: Vec<KeyGroupGrant>,
+    pub created_at: String,
+}
+
+/// A key group given to one tunnel or one of your tunnel groups (exactly one is set). Live: keys added to the
+/// group and tunnels added to the tunnel group are installed on the next sync, removed ones are taken off.
+#[derive(ToSchema)]
+pub struct KeyGroupGrant {
+    pub id: i64,
+    pub tunnel: Option<NamedRef>,
+    pub tunnel_group: Option<NamedRef>,
+    /// Account names the keys go into (null = every account you may use there)
+    pub accounts: Option<Vec<String>>,
+    pub created_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupWrite {
+    #[schema(example = "Laptops")]
+    pub name: String,
+    /// Your keys to move into it (out of any other group)
+    pub key_ids: Option<Vec<i64>>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupMembers {
+    pub key_ids: Vec<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupGrantWrite {
+    /// A tunnel you can see (or give `tunnel_group_id`)
+    pub tunnel_id: Option<i64>,
+    /// One of your tunnel groups (or give `tunnel_id`)
+    pub tunnel_group_id: Option<i64>,
+    /// Account names to limit it to; null / absent = every account you may use
+    #[schema(example = json!(["deploy"]))]
+    pub accounts: Option<Vec<String>>,
+}
+
+#[derive(ToSchema)]
+pub struct KeyGroupGrantAccounts {
+    pub accounts: Option<Vec<String>>,
 }

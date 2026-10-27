@@ -24,6 +24,7 @@ import {
     HardDrive,
     History,
     Info,
+    Layers,
     Loader2,
     Lock,
     Plus,
@@ -54,7 +55,7 @@ import { isRemovable } from "@/lib/keyRows";
 import { accountsFromDevice, placeKey } from "@/lib/keyPlacement";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { KeyPlacementFlow } from "./KeyPlacementFlow";
-import { MyKeysOnDevice } from "./MyKeysOnDevice";
+import { MyKeyGroupsOnDevice, MyKeysOnDevice } from "./MyKeysOnDevice";
 import { RowFilterBar, RowsMore, SelectAllRemovable, useRowFilter, useRowLimit, useRowSelection, type RowFilterState, type RowSelection } from "./KeyRowFilter";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "primary";
@@ -305,7 +306,8 @@ function KeyRowView({
     const { t } = useI18n();
     // 服務金鑰：標籤已寫「Telepy 服務」，標題說是這條通道的金鑰、還是舊的共用金鑰。/ Service rows: this tunnel's key or the legacy shared one.
     const title = row.state === "service" ? (row.legacy ? t("keys.row.sharedName") : t("keys.row.serviceName")) : row.name ?? row.comment ?? shortFingerprint(row.fingerprint ?? null);
-    const canRemoveFromList = row.on_list && row.user_key_id !== null && (row.mine || d.can_manage);
+    // 只經由金鑰群組來的列沒有可移除的清單項目（改群組或授予）。/ Rows that only come through key groups have no list entry to remove.
+    const canRemoveFromList = row.on_list && row.direct !== false && row.user_key_id !== null && (row.mine || d.can_manage);
     const canAddToList = !row.on_list && row.mine && row.user_key_id !== null && row.state === "manual";
     const canRemoveFromDevice = d.can_manage && (row.state === "manual" || row.state === "unknown") && !!row.fingerprint;
     const rowBusy = busy === `entry:${row.user_key_id}` || busy === `key:${row.user_key_id}` || busy === `line:${account}:${row.fingerprint}` || (busy === "bulk" && !!selection?.isSelected(account, row));
@@ -332,6 +334,11 @@ function KeyRowView({
                     <StateBadge row={row} online={d.tunnel.online} />
                     <span className="min-w-0 truncate text-sm text-foreground">{row.state === "invalid" ? t("keys.row.invalidLine", { line: row.line_no ?? "?" }) : title}</span>
                     {row.owner && row.state !== "service" && <Chip tone={row.mine ? "primary" : "neutral"}>{row.mine ? t("keys.device.you") : row.owner}</Chip>}
+                    {(row.groups ?? []).map((g) => (
+                        <Chip key={g.id} title={row.mine ? t("groups.viaGroupTip", { name: g.name }) : t("groups.viaGroupOther", { name: g.name, owner: row.owner ?? "" })}>
+                            <Layers aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
+                        </Chip>
+                    ))}
                     {row.state === "service" && row.legacy && <Chip tone="warning" title={t(d.view.keep_shared ? "keys.row.keptSharedTip" : "keys.row.legacySharedTip")}>{t("keys.row.legacyShared")}</Chip>}
                     {row.line_count > 1 && (
                         <Chip tone="warning" title={t("keys.rows.linesTip", { count: row.line_count })}>
@@ -532,6 +539,7 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                     {d.platform?.error && d.can_manage && !filter.filtering && <Callout tone="warning">{t("keys.device.platformError", { error: d.platform.error })}</Callout>}
                     {/* 你的金鑰（篩選帳號裡的列時收起來，讓結果在最上面）/ Your keys (hidden while filtering rows so matches come first) */}
                     {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onSetAccounts={dk.setAccounts} onNavigate={onClose} />}
+                    {!filter.filtering && <MyKeyGroupsOnDevice d={d} busy={dk.busy} onToggle={(id, on, grantId) => void dk.toggleGroup(id, on, grantId)} />}
 
                     {/* 每個帳號：清單 × 裝置上實際內容 / Each account: the list × what is on the device */}
                     <section className="space-y-3">
@@ -588,7 +596,12 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                                             <Chip tone={e.mine ? "primary" : "neutral"}>{e.mine ? t("keys.device.you") : e.owner.username}</Chip>
                                             <span className="font-mono text-xs text-muted-foreground" title={e.fingerprint ?? ""}>{shortFingerprint(e.fingerprint)}</span>
                                         </span>
-                                        {(e.mine || d.can_manage) && (
+                                        {e.groups.map((g) => (
+                                            <Chip key={g.id} title={t("groups.viaGroup", { name: g.name })}>
+                                                <Layers aria-hidden /> {t("groups.viaGroupShort", { name: g.name })}
+                                            </Chip>
+                                        ))}
+                                        {e.direct && (e.mine || d.can_manage) && (
                                             <Button
                                                 variant="ghost"
                                                 size="xs"

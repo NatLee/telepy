@@ -15,7 +15,7 @@ import type { KeyDevice, UserKey } from "@/types/keys";
 import { deviceKeyError } from "@/lib/deviceKeyErrors";
 
 /** 金鑰可改的欄位(PATCH 只送有改的)。/ Editable key fields (PATCH sends only what changed). */
-export type KeyPatch = Partial<{ host_friendly_name: string; key: string; description: string; expires_at: string | null }>;
+export type KeyPatch = Partial<{ host_friendly_name: string; key: string; description: string; expires_at: string | null; group_id: number | null }>;
 export type KeyPatchErrors = Partial<Record<keyof KeyPatch, string>>;
 
 export interface NewKey {
@@ -26,6 +26,8 @@ export interface NewKey {
     deviceIds: number[];
     /** undefined = 用站台預設。/ undefined = the site default. */
     expiresAt?: string;
+    /** 放進這個金鑰群組（它授予的裝置都會裝上）。/ Put it in this key group (it goes wherever the group is given). */
+    groupId?: number | null;
 }
 
 export function useKeysPage() {
@@ -114,7 +116,13 @@ export function useKeysPage() {
             try {
                 const res = await apiFetch("/api/reverse/user/keys", {
                     method: "POST",
-                    body: JSON.stringify({ key: k.key.trim(), host_friendly_name: k.name.trim(), description: k.description, ...(k.expiresAt ? { expires_at: k.expiresAt } : {}) }),
+                    body: JSON.stringify({
+                        key: k.key.trim(),
+                        host_friendly_name: k.name.trim(),
+                        description: k.description,
+                        ...(k.expiresAt ? { expires_at: k.expiresAt } : {}),
+                        ...(k.groupId ? { group_id: k.groupId } : {}),
+                    }),
                 });
                 const body = await readJson<UserKey>(res);
                 if (!res.ok || !body) {
@@ -174,7 +182,7 @@ export function useKeysPage() {
                 if (res.ok && body) {
                     setKeys((prev) => prev.map((k) => (k.id === key.id ? (body as unknown as UserKey) : k)));
                     showSuccess(t("keys.updated"));
-                    if (patch.key !== undefined || patch.expires_at !== undefined) void fetchDevices();
+                    if (patch.key !== undefined || patch.expires_at !== undefined || patch.group_id !== undefined) void fetchDevices();
                     return null;
                 }
                 const errors: KeyPatchErrors = {};
