@@ -47,6 +47,7 @@ import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
+import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -244,9 +245,9 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
     const { handleToggle, handleUpdate } = actions;
     const [editValues, setEditValues] = useState<Record<string, string>>({});
     // 後端的鍵是字母序；開關整個功能的那個排最前面。/ Keys arrive sorted; the switch that turns a feature on goes first.
-    // 登入頁的樣子有自己的面板（含預覽），不在一般清單裡。/ The sign-in look has its own panel (with a preview).
+    // 登入頁的樣子與允許的註冊網域各有自己的面板，不在一般清單裡。/ The sign-in look and the allowed registration domains have their own panels.
     const entries = Object.entries(settingsObj)
-        .filter(([k]) => SITE_TAB_KEYS[tab](k) && !SIGNIN_LOOK_KEYS.includes(k))
+        .filter(([k]) => SITE_TAB_KEYS[tab](k) && !SIGNIN_LOOK_KEYS.includes(k) && !REGISTER_DOMAIN_KEYS.includes(k))
         .sort(([a], [b]) => Number(!LEAD_KEYS.includes(a)) - Number(!LEAD_KEYS.includes(b)));
 
     // 站台設定的 label/說明優先用前端字典(隨介面語言),沒有對應 key 再退回後端 meta。
@@ -354,6 +355,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
                 </div>
             )}
 
+            {tab === "general" && !loading && <RegisterDomainsPanel values={settingsObj} onSave={handleUpdate} />}
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
         </div>
     );
