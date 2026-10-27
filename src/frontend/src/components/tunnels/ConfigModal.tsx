@@ -243,7 +243,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId }: ConfigModalProps) {
                                         )}
                                         <p className="text-xs text-muted-foreground">
                                             {tn("config.access.manual", { path: code("~/.ssh/authorized_keys") })}{" "}
-                                            <Link href={`/tunnels/keys?device=${tunnelId}`} prefetch={false} className="text-primary underline-offset-4 hover:underline">
+                                            <Link href={`/tunnels/keys/devices?device=${tunnelId}`} prefetch={false} className="text-primary underline-offset-4 hover:underline">
                                                 {t("config.access.manage")}
                                             </Link>
                                         </p>

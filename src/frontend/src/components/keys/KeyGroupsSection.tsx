@@ -1,7 +1,7 @@
 /**
- * 金鑰頁的「金鑰群組」段落：每組一張卡（裡面的金鑰、授予給哪裡、幾把 → 幾台），新增 / 編輯 / 刪除 / 授予，
+ * 金鑰區的「金鑰群組」子頁內容：每組一張卡（裡面的金鑰、授予給哪裡、幾把 → 幾台），新增 / 編輯 / 刪除 / 授予，
  * 以及 info 按鈕打開的「金鑰群組怎麼運作」——三句話加上即時的 `KeyGroupFlow`（還沒有群組時用例子）。
- * The keys page's "Key groups" section: one card per group (its keys, where it is given, keys → devices), with
+ * The keys area's "Key groups" sub-page: one card per group (its keys, where it is given, keys → devices), with
  * create / edit / delete / grant, and the info button's "How key groups work": three lines plus the live
  * `KeyGroupFlow` (an example until there is a group).
  */
@@ -231,21 +231,18 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
     const deletingReach = deleting ? keyGroupReach(deleting, tunnelGroups).length : 0;
 
     return (
-        <section aria-labelledby="keys-groups">
+        <section aria-label={t("groups.key.title")}>
+            {/* 標題由金鑰區的分頁標出，這裡只放說明與動作。/ The sub-page tab names it; only the description and actions here. */}
             <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                <div id="keys-groups">
-                    <h2 className="flex items-center gap-2 text-lg text-foreground">
-                        {t("groups.key.title")}
-                        {api.loaded && <span className="rounded-full bg-muted px-2 py-px font-mono text-xs text-muted-foreground">{api.groups.length}</span>}
-                        <Button variant="ghost" size="icon-sm" onClick={() => setInfo(true)} aria-label={t("groups.key.howAria")} title={t("groups.key.howAria")} className="text-muted-foreground hover:text-primary">
-                            <CircleHelp />
-                        </Button>
-                    </h2>
-                    <p className="mt-0.5 max-w-3xl text-sm text-muted-foreground">{t("groups.key.description")}</p>
+                <p className="max-w-3xl text-sm text-muted-foreground">{t("groups.key.description")}</p>
+                <div className="flex shrink-0 items-center gap-2">
+                    <Button variant="ghost" onClick={() => setInfo(true)} className="text-muted-foreground hover:text-primary">
+                        <CircleHelp /> {t("groups.key.howAria")}
+                    </Button>
+                    <Button variant="outline" onClick={() => setEditor({ group: null })}>
+                        <Plus /> {t("groups.new")}
+                    </Button>
                 </div>
-                <Button variant="outline" onClick={() => setEditor({ group: null })}>
-                    <Plus /> {t("groups.new")}
-                </Button>
             </div>
             {api.loaded && api.groups.length === 0 ? (
                 <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-input bg-card px-6 py-8 text-center">

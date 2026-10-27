@@ -27,7 +27,6 @@ import { Pagination } from "@/components/ui/pagination";
 import { usePagination, useSectionPages } from "@/hooks/usePagination";
 import { pageSlice, PAGE_SIZES } from "@/lib/pagination";
 import { GroupHeader, GroupHeaderRow, type GroupHeaderProps } from "@/components/tunnels/TunnelGroupSection";
-import { MATRIX_COLUMNS } from "@/lib/userKeyList";
 import { defaultCollapsed, hasGroupedDevice, matrixSections, type MatrixSection } from "@/lib/deviceMatrix";
 import { groupOf, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS } from "@/lib/groups";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
@@ -170,8 +169,8 @@ const isProblem = (d: KeyDevice) => d.keys.some((k) => needsAttention(k.targets,
 
 export function DeviceMatrix({
     devices,
-    keys: allKeys,
-    totalKeys,
+    keys,
+    toolbar,
     tunnelGroups = [],
     pending,
     syncing,
@@ -180,10 +179,10 @@ export function DeviceMatrix({
     onManage,
 }: {
     devices: KeyDevice[];
-    /** 要當欄位的金鑰（已依「我的金鑰」的篩選排好）。/ Keys to show as columns (filtered and sorted by "My keys"). */
+    /** 當欄位的金鑰（金鑰欄挑的）。/ The keys shown as columns (picked with the key-column picker). */
     keys: UserKey[];
-    /** 我全部的金鑰數（篩選時提示用）。/ How many keys I have in all. */
-    totalKeys?: number;
+    /** 篩選列右邊的控制項（金鑰欄）。/ Controls right of the filter bar (the key-column picker). */
+    toolbar?: React.ReactNode;
     /** 我的通道群組（有的話依群組分段）。/ My tunnel groups (rows are split into sections by them). */
     tunnelGroups?: TunnelGroup[];
     pending: Set<string>;
@@ -193,11 +192,6 @@ export function DeviceMatrix({
     onManage: (device: KeyDevice) => void;
 }) {
     const { t } = useI18n();
-    // 金鑰多時先只顯示幾欄（其餘在「我的金鑰」篩選，或全部展開）。/ Many keys: a few columns first.
-    const [allColumns, setAllColumns] = useState(false);
-    const capped = !allColumns && allKeys.length > MATRIX_COLUMNS + 1;
-    const keys = capped ? allKeys.slice(0, MATRIX_COLUMNS) : allKeys;
-    const total = totalKeys ?? allKeys.length;
     // 有裝置在群組裡、而且通道頁選的是「依群組」時分段。/ Sections once a device is in a group (unless the tunnels page shows one list).
     const [grouping] = useStoredChoice(TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, "groups");
     const grouped = grouping === "groups" && hasGroupedDevice(devices.map((d) => d.tunnel_id), tunnelGroups);
@@ -339,25 +333,12 @@ export function DeviceMatrix({
 
     return (
         <div ref={top} className="scroll-mt-20 space-y-3">
-            <DeviceFilterBar filter={filter} onLabel={t("keys.filter.withMine")} modes={["all", "on", "problems"]} />
-            {(keys.length < total || allColumns) && (
-                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <span>{t("keys.matrix.columns", { shown: keys.length, total })}</span>
-                    {keys.length < total && <span>{t("keys.matrix.columnsHint")}</span>}
-                    {capped ? (
-                        <Button variant="ghost" size="xs" className="text-primary hover:text-primary" onClick={() => setAllColumns(true)}>
-                            {t("keys.matrix.allColumns", { count: allKeys.length })}
-                        </Button>
-                    ) : (
-                        allColumns &&
-                        allKeys.length > MATRIX_COLUMNS + 1 && (
-                            <Button variant="ghost" size="xs" onClick={() => setAllColumns(false)}>
-                                {t("keys.matrix.fewerColumns")}
-                            </Button>
-                        )
-                    )}
-                </p>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1">
+                    <DeviceFilterBar filter={filter} onLabel={t("keys.filter.withMine")} modes={["all", "on", "problems"]} />
+                </div>
+                {toolbar}
+            </div>
             {/* 桌面：表格。`relative` 讓 sr-only 的欄位名留在捲動框裡（否則整頁會被撐寬）。
                 Desktop: table. `relative` keeps the sr-only column title inside the scroll box (it widened the page). */}
             {filter.filtered.length > 0 && (
