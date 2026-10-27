@@ -26,6 +26,7 @@ import { SshConfigInstall } from "./SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "./ConfigSteps";
 import { TransportInfoDialog } from "./TransportInfoDialog";
 import { AccountChips } from "./AccountChips";
+import { withoutPrefix } from "@/lib/aliasPrefix";
 import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
 import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, toggleAccount, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
@@ -304,6 +305,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         knownHosts={data.known_hosts}
                                         wsClient={wsClient}
                                         legacyAlias={data.server.legacy_alias}
+                                        aliasPrefix={{ value: data.alias_prefix ?? "", example: withoutPrefix(chosen[0]?.hosts[0]?.alias, data.alias_prefix ?? ""), onSave: bulk.savePrefix }}
                                         active={active}
                                         onActive={setActive}
                                         bulk

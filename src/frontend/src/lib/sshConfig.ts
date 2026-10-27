@@ -71,8 +71,11 @@ function aliasGroup(aliases: string[]): string {
  * The aliases go in once through `-v` and become a set in BEGIN — with hundreds of devices, macOS awk took seconds
  * on one huge `(a|b|…)` regex.
  */
-function stripAwk(aliases: string[]): string {
-    return `-v t='${aliases.join(" ")}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1} /^# >>> telepy [^ ]+ >>>$/&&($4 in K){if(s)printf "%s",b;s=1;c=$4;b=""} s{b=b $0 "\\n";if($0=="# <<< telepy " c " <<<"){s=0;b=""};next} 1;END{if(s)printf "%s",b}'`;
+function stripAwk(aliases: string[], exclude = false): string {
+    // exclude：`$telepy_skip` 裡的別名（別台 Telepy 的同名區塊）不拿掉。/ exclude: aliases in `$telepy_skip` stay.
+    const skip = exclude ? ` -v x="$telepy_skip"` : "";
+    const drop = exclude ? `;m=split(x,X," ");for(i=1;i<=m;i++)delete K[X[i]]` : "";
+    return `-v t='${aliases.join(" ")}'${skip} 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1${drop}} /^# >>> telepy [^ ]+ >>>$/&&($4 in K){if(s)printf "%s",b;s=1;c=$4;b=""} s{b=b $0 "\\n";if($0=="# <<< telepy " c " <<<"){s=0;b=""};next} 1;END{if(s)printf "%s",b}'`;
 }
 
 /**
@@ -116,6 +119,40 @@ export function adaptForShell(stanzas: ConfigStanza[], shell: ConfigShell): Conf
 function knownHostAliases(lines: string): string[] {
     return [...new Set(lines.split("\n").map((l) => l.trim().split(/\s+/)[0]).filter(Boolean))];
 }
+
+/**
+ * 同名偵測：要寫的裝置別名裡，有哪些已經是「別台 Telepy」的——同名的完整標記區塊，第一行 ProxyCommand（最後一個字）
+ * 或 ProxyJump 跳到別的伺服器別名；跳舊版共用別名時看那個共用伺服器區塊的 `HostKeyAlias` 是不是這台（沒有那個區塊 =
+ * 這台的）。印出這些別名（空白分隔），標記區塊之外手寫的同名 `Host` 另外在 stderr 提醒。兩遍：第一遍找共用伺服器區塊
+ * 的 HostKeyAlias。CLI 的 `sshcfg::foreign_aliases` / `shadowed_aliases` 是同一條規則。
+ * Same-name detection: which device aliases about to be written already belong to another Telepy server — a complete
+ * marked block of that name whose first ProxyCommand (last word) or ProxyJump goes through a different server alias;
+ * for the old shared alias the shared server block's `HostKeyAlias` decides (no such block = ours). Prints them
+ * space-separated; hand-written `Host` lines of these names outside Telepy's blocks get a note on stderr. Two passes:
+ * the first finds the shared block's HostKeyAlias. The CLI's `sshcfg::foreign_aliases` / `shadowed_aliases` match.
+ */
+function detectAwk(aliases: string[], me: string, legacy: string): string {
+    return `-v t='${aliases.join(" ")}' -v M='${me}' -v L='${legacy}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1;LO="# >>> telepy " L " >>>";LC="# <<< telepy " L " <<<"} NR==FNR{if($0==LO){l=1;c="";next} if(l&&$0==LC){l=0;if(lh=="")lh=c;next} if(l&&c==""&&tolower($1)=="hostkeyalias")c=$2;next} /^# >>> telepy [^ ]+ >>>$/{a=$4;ins=1;b=(a in K)&&a!=M&&a!=L;j="";next} ins&&$0=="# <<< telepy " a " <<<"{ins=0;if(b&&j!=""&&j!=M&&!(j==L&&(lh==""||lh==M))&&!(a in S)){S[a]=1;o=o a " "};b=0;next} ins{if(b&&j==""&&tolower($1)=="proxycommand")j=$NF;if(b&&j==""&&tolower($1)=="proxyjump")j=$2;next} tolower($1)=="host"{for(i=2;i<=NF;i++)if($i in K)H[$i]=1} END{for(h in H)if(!(h in S))printf "Telepy: ~/.ssh/config also has its own Host %s outside the Telepy blocks; ssh uses whichever comes first.\\n",h > "/dev/stderr";printf "%s",o}'`;
+}
+
+/** 從要加的區塊裡拿掉 `$telepy_skip` 裡的別名。/ Drops the blocks named in `$telepy_skip` from what gets appended. */
+const FILTER_AWK = `'BEGIN{n=split(x,A," ");for(i=1;i<=n;i++)X[A[i]]=1} /^# >>> telepy [^ ]+ >>>$/{s=($4 in X)} !s{print} /^# <<< telepy [^ ]+ <<<$/{s=0}'`;
+
+/** 同一套同名偵測的 PowerShell 版（對讀進來的 `$text`；結果在 `$skip` 與 `$keep`）。/ The same detection in PowerShell. */
+function detectPowershell(aliases: string[], me: string, legacy: string): string[] {
+    return [
+        `$names = @(${aliases.map((a) => `'${a}'`).join(", ")}); $me = '${me}'; $L = '${legacy}'`,
+        `$blocks = [regex]::Matches($text, '(?ms)^# >>> telepy (\\S+) >>>[^\\S\\n]*\\n((?:(?!^# >>> telepy ).)*?)^# <<< telepy \\1 <<<')`,
+        `$lh = ''; foreach ($b in $blocks) { if ($b.Groups[1].Value -eq $L -and $b.Groups[2].Value -match '(?m)^\\s*HostKeyAlias\\s+(\\S+)') { $lh = $Matches[1]; break } }`,
+        `$skip = @(); foreach ($b in $blocks) { $a = $b.Groups[1].Value; if ($names -notcontains $a -or $a -eq $me -or $a -eq $L -or $skip -contains $a) { continue }; if ($b.Groups[2].Value -match '(?m)^\\s*(?:ProxyCommand\\s.*\\s(\\S+)|ProxyJump\\s+(\\S+))\\s*$') { $j = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }; if ($j -ne $me -and -not ($j -eq $L -and ($lh -eq '' -or $lh -eq $me))) { $skip += $a } } }`,
+        `$keep = @($names | Where-Object { $skip -notcontains $_ })`,
+        `$outside = [regex]::Replace($text, '(?ms)^# >>> telepy (\\S+) >>>.*?^# <<< telepy \\1 <<<', '')`,
+        `foreach ($m in [regex]::Matches($outside, '(?m)^\\s*Host\\s+(.+?)\\s*$')) { foreach ($h in ($m.Groups[1].Value -split '\\s+')) { if ($keep -contains $h) { Write-Warning "Telepy: ~/.ssh/config also has its own Host $h outside the Telepy blocks; ssh uses whichever comes first." } } }`,
+    ];
+}
+
+/** 別台 Telepy 的同名裝置沒覆蓋時給的提示（指令裡的英文，網頁另有說明）。/ The note when same-name devices were kept. */
+const KEPT_NOTE = "another Telepy server already uses these names here. Set a name prefix for this server in the Telepy SSH config dialog, then run the new command.";
 
 /**
  * 舊版共用的伺服器區塊（`telepy-ssh-server`）怎麼清：第一個寫著 `HostKeyAlias <me>` 的完整標記區塊，而且檔案裡其他
@@ -162,6 +199,8 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
     const hostKeys = knownHosts?.trim() ? knownHosts.trim() + "\n" : "";
     const keyAliases = knownHostAliases(hostKeys);
     const prune = legacy && legacy.alias && legacy.alias !== legacy.me && aliases.includes(legacy.me) ? legacy : null;
+    // 知道這台的伺服器別名時才偵測同名（別台 Telepy 的同名裝置不覆蓋）。/ Same-name detection needs this server's alias.
+    const detect = legacy && aliases.includes(legacy.me) ? legacy : null;
     if (shell === "posix") {
         const kh = KNOWN_HOSTS_PATH;
         return [
@@ -175,9 +214,11 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
                 : []),
             "mkdir -p ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config \\",
             "  && cp ~/.ssh/config ~/.ssh/config.bak \\",
-            `  && awk ${stripAwk(aliases)} ~/.ssh/config.bak > ~/.ssh/config \\`,
-            `  && cat >> ~/.ssh/config <<'${HEREDOC}'`,
+            ...(detect ? [`  && telepy_skip=$(awk ${detectAwk(aliases, detect.me, detect.alias)} ~/.ssh/config.bak ~/.ssh/config.bak) \\`] : []),
+            `  && awk ${stripAwk(aliases, !!detect)} ~/.ssh/config.bak > ~/.ssh/config \\`,
+            detect ? `  && awk -v x="$telepy_skip" ${FILTER_AWK} >> ~/.ssh/config <<'${HEREDOC}'` : `  && cat >> ~/.ssh/config <<'${HEREDOC}'`,
             blocks + HEREDOC,
+            ...(detect ? [`[ -z "$telepy_skip" ] || echo "Telepy: did not overwrite $telepy_skip- ${KEPT_NOTE}" >&2`] : []),
             ...(prune ? [`awk ${pruneLegacyAwk(prune.alias, prune.me)} ~/.ssh/config ~/.ssh/config > ~/.ssh/config.new && cat ~/.ssh/config.new > ~/.ssh/config && rm -f ~/.ssh/config.new`] : []),
         ].join("\n") + "\n";
     }
@@ -195,12 +236,20 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
             ]
             : []),
         `$text = ''; if (Test-Path $cfg) { Copy-Item $cfg "$cfg.bak" -Force; $text = [IO.File]::ReadAllText($cfg) }`,
-        `$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`,
+        ...(detect
+            ? [
+                ...detectPowershell(aliases, detect.me, detect.alias),
+                `if ($keep.Count) { $g = '(' + (($keep | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')'; $text = [regex]::Replace($text, "(?ms)^# >>> telepy $g >>>[^\\S\\n]*\\n(?:(?!^# >>> telepy ).)*?^# <<< telepy \\1 <<<[^\\S\\n]*(\\n|\\z)", '') }`,
+            ]
+            : [`$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`]),
         "if ($text -and -not $text.EndsWith(\"`n\")) { $text += \"`n\" }",
-        "$text += @'",
+        "$new = @'",
         blocks + "'@ + \"`n\"",
+        ...(detect ? [`foreach ($a in $skip) { $e = [regex]::Escape($a); $new = [regex]::Replace($new, "(?ms)^# >>> telepy $e >>>\\r?\\n.*?^# <<< telepy $e <<<\\r?\\n?", '') }`] : []),
+        "$text += $new",
         ...(prune ? pruneLegacyPowershell(prune.alias, prune.me) : []),
         "[IO.File]::WriteAllText($cfg, $text)",
+        ...(detect ? [`if ($skip.Count) { Write-Warning "Telepy: did not overwrite $($skip -join ', ') - ${KEPT_NOTE}" }`] : []),
     ].join("\n") + "\n";
 }
 

@@ -132,6 +132,24 @@ async fn one_config_for_many_devices() {
     let r = lab.app.get("/tunnels/server/config", None).await;
     assert_eq!(r.status.as_u16(), 401);
 
+    // --- 名稱前綴（個人設定）：每個裝置別名都加，ssh 照樣連得到 / The name prefix goes on every device alias
+    let r = lab.app.post("/api/user/settings", Some(&alice.token), json!({ "ssh_alias_prefix": "work-" })).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    assert_eq!(r.json["ssh_alias_prefix"], "work-");
+    let r = lab.app.get("/tunnels/server/config", Some(&alice.token)).await;
+    assert_eq!(hosts_in(r.json["config"].as_str().unwrap()), [server.as_str(), "work-nas", "work-pi"], "{}", r.text);
+    assert_eq!(r.json["alias_prefix"], "work-");
+    let cfg = lab.write_ssh_config(&alice, "prefixed", r.json["config"].as_str().unwrap(), r.json["known_hosts"].as_str().unwrap());
+    assert_eq!(lab.ssh_with_config(&cfg, "work-pi", "whereami").await.stdout, "root@pi");
+    let single = lab.app.get(&format!("/tunnels/server/config/{}", dev_pi.tunnel_id), Some(&alice.token)).await;
+    assert_eq!(single.json["hosts"][0]["alias"], "work-pi");
+    for bad in ["work pi", "-x", "a/b"] {
+        let r = lab.app.post("/api/user/settings", Some(&alice.token), json!({ "ssh_alias_prefix": bad })).await;
+        assert_eq!(r.status.as_u16(), 400, "{bad}: {}", r.text);
+    }
+    let r = lab.app.post("/api/user/settings", Some(&alice.token), json!({ "ssh_alias_prefix": "" })).await;
+    assert_eq!(r.json["ssh_alias_prefix"], "");
+
     // bob 只看到自己的兩台 / bob sees only his own two
     let r = lab.app.get("/tunnels/server/config", Some(&bob.token)).await;
     assert_eq!(names(&r.json["tunnels"]), ["cam", "vault"]);

@@ -22,6 +22,7 @@ import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "@/components/sshconfig/ConfigSteps";
 import { TransportInfoDialog } from "@/components/sshconfig/TransportInfoDialog";
 import { AccountChips } from "@/components/sshconfig/AccountChips";
+import { withoutPrefix } from "@/lib/aliasPrefix";
 import { TunnelModalProps, type Tunnel } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
@@ -40,7 +41,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
     const { t, tn } = useI18n();
     const {
         state: { data, loading, targetUsers, selectedIds, serverStanza, deviceStanzas, deviceKeys, transport },
-        actions: { toggleUser, selectAllUsers, handleTransportChange }
+        actions: { toggleUser, selectAllUsers, handleTransportChange, savePrefix }
     } = useConfigModal(isOpen, tunnelId);
     // SSH over WebSocket：筆電先存小程式，伺服器區塊的 ProxyCommand 用它。/ The carrier the server stanza's ProxyCommand runs.
     const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
@@ -152,7 +153,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: Confi
 
                     <ol className="list-none">
                         <Step n={1} title={t("config.step.add")} hint={t("config.step.addHint")} last={hosts.length === 0}>
-                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} legacyAlias={data.server.legacy_alias} active={active} onActive={setActive} />
+                            <SshConfigInstall serverStanza={serverStanza} deviceStanzas={deviceStanzas} knownHosts={knownHosts} wsClient={wsClient} legacyAlias={data.server.legacy_alias} aliasPrefix={{ value: data.alias_prefix ?? "", example: withoutPrefix(hosts[0]?.alias, data.alias_prefix ?? ""), onSave: savePrefix }} active={active} onActive={setActive} />
                             {onBulk && (
                                 <p className="text-xs text-muted-foreground">
                                     {t("config.bulk.fromSingle")}{" "}

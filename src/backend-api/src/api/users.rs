@@ -45,6 +45,7 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "terminal_detach_secs": s.terminal_detach_secs,
         "terminal_detach_max_secs": site.terminal_detach_max_secs,
         "view_modes": view_modes_json(&s.view_modes),
+        "ssh_alias_prefix": s.ssh_alias_prefix,
     }))
 }
 
@@ -185,6 +186,19 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         view_modes: match body.get("view_modes") {
             None => None,
             Some(v) => Some(parse_view_modes(v).map_err(|e| ApiError::field("view_modes", e))?),
+        },
+        // ~/.ssh/config 的裝置別名前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
+        ssh_alias_prefix: match body.get("ssh_alias_prefix") {
+            None => None,
+            Some(Value::String(p)) => {
+                let p = p.trim();
+                if let Some(problem) = crate::scripts::alias_prefix_problem(p) {
+                    return Err(ApiError::field("ssh_alias_prefix", problem));
+                }
+                Some(p.to_string())
+            }
+            Some(Value::Null) => Some(String::new()),
+            Some(_) => return Err(ApiError::field("ssh_alias_prefix", "Must be a string.")),
         },
         // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
         terminal_detach_secs: match body.get("terminal_detach_secs") {

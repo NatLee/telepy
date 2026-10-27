@@ -40,6 +40,8 @@ pub struct UserSettings {
     pub terminal_detach_secs: i64,
     /// 各頁的卡片 / 清單顯示（JSON 物件，`api::users::parse_view_modes` 檢查過）。/ Card / list view per page (a JSON object).
     pub view_modes: String,
+    /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加，`scripts::alias_prefix_problem` 檢查過）。/ The device alias prefix.
+    pub ssh_alias_prefix: String,
 }
 
 /// 個人設定的部分更新：None = 不動。/ Partial settings update: None leaves the field alone.
@@ -58,6 +60,7 @@ pub struct SettingsPatch {
     pub terminal_detach_secs: Option<i64>,
     /// 整份取代（已正規化的 JSON）。/ Replaces the whole map (normalised JSON).
     pub view_modes: Option<String>,
+    pub ssh_alias_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -172,7 +175,7 @@ pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: 
 // ---------------------------------------------------------------- settings
 
 pub async fn settings_for(db: &Db, user_id: i64) -> sqlx::Result<Option<UserSettings>> {
-    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes FROM user_management_usersettings WHERE user_id = ?")
+    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix FROM user_management_usersettings WHERE user_id = ?")
         .bind(user_id)
         .fetch_optional(&db.read)
         .await
@@ -191,7 +194,7 @@ pub async fn settings_get_or_create(db: &Db, user_id: i64) -> sqlx::Result<UserS
 }
 
 pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sqlx::Result<UserSettings> {
-    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes } = patch;
+    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix } = patch;
     settings_get_or_create(db, user_id).await?;
     if let Some(lang) = language {
         sqlx::query("UPDATE user_management_usersettings SET language = ? WHERE user_id = ?")
@@ -266,6 +269,13 @@ pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sql
     if let Some(v) = view_modes {
         sqlx::query("UPDATE user_management_usersettings SET view_modes = ? WHERE user_id = ?")
             .bind(v)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(p) = ssh_alias_prefix {
+        sqlx::query("UPDATE user_management_usersettings SET ssh_alias_prefix = ? WHERE user_id = ?")
+            .bind(p)
             .bind(user_id)
             .execute(&db.write)
             .await?;
