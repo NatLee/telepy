@@ -1,0 +1,226 @@
+/*
+ * 低調登入頁（components/auth/DiscreetShell.tsx）的動畫：向日葵點陣上由中心往外的漣漪、兩條軌道、字母由下浮出、
+ * 底線畫出、輪播的句子。只動 transform / opacity（交給合成器），顏色全部取設計 token，深淺色都對。
+ * 減少動態：全域規則把動畫縮成一瞬間；輪播句子另外固定顯示第一句（否則會停在淡出的最後一格）。
+ * Animations of the discreet sign-in page: a ripple across a sunflower dot field, two orbits, letters rising, a rule
+ * drawn under the word and the rotating lines. Only transform / opacity animate (compositor work); colours come from
+ * the design tokens, so both themes work. Reduced motion: the global rule collapses animations; the rotating lines
+ * additionally pin the first line (they would otherwise stop on the faded-out last frame).
+ */
+
+.dsc-field {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+}
+
+.dsc-spin {
+    position: absolute;
+    left: 0;
+    top: 0;
+    animation: dsc-spin 320s linear infinite;
+}
+
+.dsc-dot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 3px;
+    height: 3px;
+    margin: -1.5px 0 0 -1.5px;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--foreground) 24%, transparent);
+    transform: translate(var(--x), var(--y));
+    opacity: var(--o);
+}
+
+/* 漣漪經過時亮成柿橘色。/ Lights up persimmon as the ripple passes. */
+.dsc-dot::after {
+    content: "";
+    position: absolute;
+    inset: -0.5px;
+    border-radius: inherit;
+    background: var(--primary);
+    opacity: 0;
+    animation: dsc-pulse 6.5s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+    animation-delay: var(--d);
+}
+
+@keyframes dsc-pulse {
+    0% {
+        opacity: 0;
+        transform: scale(0.6);
+    }
+    5% {
+        opacity: 1;
+        transform: scale(2);
+    }
+    22%,
+    100% {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+}
+
+/* 波前：一條細圓圈，速度跟點的延遲一樣（2.4 秒走完半徑）。/ The wavefront ring, as fast as the dots' delays. */
+.dsc-wave {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(var(--R) * 2);
+    height: calc(var(--R) * 2);
+    margin: calc(var(--R) * -1) 0 0 calc(var(--R) * -1);
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--primary) 60%, transparent);
+    opacity: 0;
+    transform: scale(0);
+    animation: dsc-wave 6.5s linear 0.33s infinite;
+}
+
+@keyframes dsc-wave {
+    0% {
+        opacity: 0.85;
+        transform: scale(0.01);
+    }
+    37% {
+        opacity: 0;
+        transform: scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: scale(1);
+    }
+}
+
+.dsc-orbit {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(var(--r) * 2);
+    height: calc(var(--r) * 2);
+    margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
+    border-radius: 9999px;
+    border: 1px solid color-mix(in oklch, var(--foreground) 10%, transparent);
+    animation: dsc-spin var(--period) linear infinite;
+    animation-direction: var(--dir, normal);
+}
+
+.dsc-orbit::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: var(--size, 7px);
+    height: var(--size, 7px);
+    border-radius: 9999px;
+    background: var(--c, var(--primary));
+    transform: translate(-50%, -50%);
+}
+
+@keyframes dsc-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* 字母由下往上浮出（每個字母自己一個遮罩）。/ Letters rise from under their own mask. */
+.dsc-char {
+    display: inline-block;
+    overflow: hidden;
+    padding: 0.06em 0.015em 0.22em;
+    margin-bottom: -0.22em;
+}
+
+.dsc-char > span {
+    display: inline-block;
+    transform: translateY(115%);
+    animation: dsc-rise 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+    animation-delay: calc(var(--i) * 75ms + 120ms);
+}
+
+@keyframes dsc-rise {
+    to {
+        transform: none;
+    }
+}
+
+.dsc-rule {
+    height: 2px;
+    width: 3.5rem;
+    border-radius: 1px;
+    background: var(--primary);
+    transform: scaleX(0);
+    transform-origin: center;
+    animation: dsc-draw 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.75s forwards;
+}
+
+/* 寬螢幕的字靠左，底線也從左邊畫起（lg = 64rem）。/ Left-aligned from lg, so the rule draws from the left. */
+@media (min-width: 64rem) {
+    .dsc-rule {
+        transform-origin: left center;
+    }
+}
+
+@keyframes dsc-draw {
+    to {
+        transform: scaleX(1);
+    }
+}
+
+/* 輪播句子：疊在同一格，各自錯開淡入淡出。/ Rotating lines stacked in one grid cell, staggered. */
+.dsc-lines {
+    display: grid;
+}
+
+.dsc-lines > * {
+    grid-area: 1 / 1;
+    opacity: 0;
+    animation: dsc-line var(--cycle) ease-in-out infinite;
+    animation-delay: calc(var(--i) * var(--step) + 0.9s);
+}
+
+@keyframes dsc-line {
+    0% {
+        opacity: 0;
+        transform: translateY(0.45em);
+    }
+    5%,
+    28% {
+        opacity: 1;
+        transform: none;
+    }
+    33%,
+    100% {
+        opacity: 0;
+        transform: translateY(-0.45em);
+    }
+}
+
+.dsc-still {
+    opacity: 0;
+    animation: dsc-fade 0.8s ease-out 0.9s forwards;
+}
+
+@keyframes dsc-fade {
+    to {
+        opacity: 1;
+    }
+}
+
+/* 還不知道要畫哪個樣子：空的底色，久了才出現一個小轉圈。/ Look not known yet: an empty surface, a spinner only if it drags on. */
+.dsc-pending {
+    opacity: 0;
+    animation: dsc-fade 0.3s ease-out 0.6s forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dsc-lines > * {
+        animation: none !important;
+    }
+    .dsc-lines > :first-child {
+        opacity: 1;
+    }
+}
