@@ -71,7 +71,7 @@ pub async fn by_id(db: &Db, id: i64) -> sqlx::Result<Option<WebSession>> {
 pub async fn rotate(db: &Db, id: i64, old_jti: &str, new_jti: &str, expires_at: &str, ip: Option<&str>, user_agent: Option<&str>) -> sqlx::Result<bool> {
     let now = now_db();
     let n = sqlx::query(
-        "UPDATE telepy_web_session SET jti = ?, prev_jti = ?, rotated_at = ?, last_used_at = ?, expires_at = ?, ip = ?, user_agent = ? \
+        "UPDATE telepy_web_session SET jti = ?, prev_jti = ?, rotated_at = ?, last_used_at = ?, expires_at = ?, ip = COALESCE(?, ip), user_agent = COALESCE(?, user_agent) \
          WHERE id = ? AND jti = ? AND revoked_at IS NULL",
     )
     .bind(new_jti)

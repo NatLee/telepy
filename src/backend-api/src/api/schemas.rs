@@ -442,6 +442,64 @@ pub struct IpGeo {
     pub source: Option<String>,
 }
 
+/// 來源 IP 判定鏈上的一段。/ One entry of the client-address chain.
+#[derive(ToSchema)]
+pub struct ClientIpHop {
+    #[schema(example = "172.19.0.1")]
+    pub ip: String,
+    /// public / private / loopback / link_local / shared_nat / reserved
+    pub scope: String,
+    /// forwarded_for（X-Forwarded-For 的一段）/ peer（連進後端的 socket 對端）
+    pub source: String,
+    /// ignored（選中那段左邊，客戶端能塞的）/ client（選中）/ proxy（跳過的可信代理）
+    pub role: String,
+}
+
+/// 帶位址的標頭（X-Real-IP、Forwarded、CF-Connecting-IP…）。/ A header that carries addresses.
+#[derive(ToSchema)]
+pub struct ClientIpHeader {
+    #[schema(example = "x-real-ip")]
+    pub name: String,
+    pub value: String,
+    pub addresses: Vec<ClientIpAddress>,
+}
+
+#[derive(ToSchema)]
+pub struct ClientIpAddress {
+    pub ip: String,
+    pub scope: String,
+}
+
+#[derive(ToSchema)]
+pub struct ClientIpSuggest {
+    pub trusted_proxy_hops: Option<i64>,
+    pub client_ip_header: Option<String>,
+}
+
+/// `GET /api/auth/client-ip-check`：Telepy 怎麼判定這個請求的來源 IP。/ How Telepy resolved this request's address.
+#[derive(ToSchema)]
+pub struct ClientIpCheck {
+    #[schema(example = "198.51.100.7")]
+    pub ip: Option<String>,
+    pub scope: Option<String>,
+    /// chain（X-Forwarded-For + socket 對端）/ header（`CLIENT_IP_HEADER`）
+    pub from: Option<String>,
+    pub geo: Option<IpGeo>,
+    pub trusted_proxy_hops: i64,
+    pub client_ip_header: Option<String>,
+    /// 左（離瀏覽器近）到右（離 Telepy 近），最後一段是 socket 對端。/ Left (browser side) to right; the last one is the socket peer.
+    pub chain: Vec<ClientIpHop>,
+    pub headers: Vec<ClientIpHeader>,
+    /// ok / hops_too_low / hops_too_high / use_header / header_private / all_private / unknown
+    #[schema(example = "all_private")]
+    pub verdict: String,
+    pub suggest: ClientIpSuggest,
+    /// 這個請求經過的代理比 `TRUSTED_PROXY_HOPS` 少。/ Fewer proxies than configured.
+    pub short_chain: bool,
+    /// 設了 `CLIENT_IP_HEADER` 但請求沒有它。/ The configured header was missing.
+    pub header_absent: bool,
+}
+
 /// 一次登入嘗試（成功或失敗）。/ One sign-in attempt.
 #[derive(ToSchema)]
 pub struct SignInEvent {

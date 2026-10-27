@@ -47,6 +47,7 @@ import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
+import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -355,6 +356,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
             )}
 
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
+            {tab === "signin" && <ClientIpCheckPanel />}
         </div>
     );
 }
