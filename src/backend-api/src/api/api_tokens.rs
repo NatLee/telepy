@@ -128,8 +128,8 @@ fn web_only(d: &Delegated) -> ApiResult<()> {
 }
 
 #[utoipa::path(get, path = "/api/auth/tokens", tag = "API Tokens", security(("bearer" = [])), responses((status = 200, description = "Your API tokens: live ones plus those revoked or expired in the last 30 days, newest first", body = Vec<super::schemas::ApiToken>)))]
-async fn list_mine(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
-    web_only(&d)?;
+async fn list_mine(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+    // token 也能讀（唯讀、只有自己的）：`telepy api tokens`。/ Tokens may read it too (own, read-only).
     Ok(Json(list_json(&state, me.id).await?))
 }
 
@@ -205,6 +205,8 @@ struct CallsQuery {
     token_id: Option<i64>,
     grant_id: Option<i64>,
     user_id: Option<i64>,
+    /// 用帳號名找人（給 `telepy api activity --user <name>`，token 打不到使用者清單）。/ A person by username.
+    username: Option<String>,
     status: Option<String>,
     method: Option<String>,
     limit: Option<i64>,
@@ -244,6 +246,7 @@ fn call_json(c: &db::api_calls::Call, visible: Option<&std::collections::HashSet
     ("token_id" = Option<i64>, Query, description = "Only the calls of one personal API token"),
     ("grant_id" = Option<i64>, Query, description = "Only the calls of one connected app (OAuth grant)"),
     ("user_id" = Option<i64>, Query, description = "Only one person's calls (needs scope=all)"),
+    ("username" = Option<String>, Query, description = "Only one person's calls, by username (needs scope=all; 400 when there is no such user)"),
     ("status" = Option<String>, Query, description = "ok (< 400), 4xx, 5xx or error (≥ 400)"),
     ("method" = Option<String>, Query, description = "GET, POST, PUT, PATCH, DELETE, or MCP (tool calls)"),
     ("limit" = Option<i64>, Query, description = "Rows, newest first (default 300, max 1000)"),
@@ -251,19 +254,24 @@ fn call_json(c: &db::api_calls::Call, visible: Option<&std::collections::HashSet
 ), responses(
     (status = 200, description = "Calls made with personal API tokens and connected apps' tokens (REST requests, reads included, and MCP tool calls of personal tokens), newest first. Route templates, never query strings", body = super::schemas::ApiCallPage),
     (status = 400, body = super::schemas::ErrorBody),
-    (status = 403, description = "admin_only, or called with a token (token_route)", body = super::schemas::ErrorBody),
+    (status = 403, description = "admin_only (scope=all without being an admin)", body = super::schemas::ErrorBody),
 ))]
 async fn calls(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<CallsQuery>) -> ApiResult<Json<Value>> {
-    web_only(&d)?;
+    // token 也能讀自己的（`telepy api activity`）；`scope=all` 照樣只給管理員。/ Tokens may read their own; `all` stays admin-only.
     let scope = super::ViewScope::parse(q.scope.as_deref(), me.is_superuser)?;
+    let by_name = match q.username.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        None => None,
+        Some(name) => Some(db::users::by_username(&state.db, name).await?.ok_or_else(|| ApiError::bad_request(format!("no user called {name}")))?.id),
+    };
+    let wanted = by_name.or(q.user_id);
     let user_id = match scope {
         super::ViewScope::Mine => {
-            if q.user_id.is_some_and(|u| u != me.id) {
+            if wanted.is_some_and(|u| u != me.id) {
                 return Err(ApiError::bad_request("user_id needs scope=all"));
             }
             Some(me.id)
         }
-        super::ViewScope::All => q.user_id,
+        super::ViewScope::All => wanted,
     };
     let status = match q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         None => None,
@@ -281,7 +289,11 @@ async fn calls(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegat
     let rows = db::api_calls::list(&state.db, &filter).await?;
     let visible: Option<std::collections::HashSet<i64>> = match scope {
         super::ViewScope::All => None,
-        super::ViewScope::Mine => Some(db::tunnels::visible_to(&state.db, me.id).await?.iter().map(|t| t.id).collect()),
+        super::ViewScope::Mine => {
+            // 限定隧道的 token：只給它那幾條的名稱。/ A tunnel-limited token only gets the names of its own tunnels.
+            let limit = d.0.as_ref().and_then(|p| p.tunnel_ids.clone());
+            Some(db::tunnels::visible_to(&state.db, me.id).await?.iter().map(|t| t.id).filter(|id| limit.as_ref().is_none_or(|l| l.contains(id))).collect())
+        }
     };
     let has_more = rows.len() as i64 == filter.limit;
     Ok(Json(json!({

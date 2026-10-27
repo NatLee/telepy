@@ -140,6 +140,13 @@ telepy browse go "$ID" http://192.168.1.1/logs
 telepy browse ls
 telepy browse close "$ID"
 
+telepy api tokens                          # your tokens: scopes, expiry, last use, calls 24 h / 7 d, errors
+telepy api activity                        # the last 50 calls made with your tokens and connected apps
+telepy api activity --api-token ci --status 4xx --since 2h
+telepy api activity --method DELETE --limit 200 --json
+telepy api activity --follow               # like tail -f: new calls every 2 s, Ctrl+C stops
+telepy api activity --all --user bob       # admins: everyone's, or one person's
+
 telepy doctor                              # server, sign-in, scopes, expiry, ssh / scp / sftp
 ```
 
@@ -189,7 +196,16 @@ the error. Refused requests (`token_route`, `token_scope`, `404` outside the tok
 
 - **API → Activity** shows your own calls, day by day, filtered by token (a token's **Calls** button jumps there),
   status (OK / 4xx / 5xx), method and search. Admins see everyone's on **Admin → All API activity** (filter by person;
-  the Manage-user dialog links there). `GET /api/auth/tokens/calls?scope=mine|all&token_id=&user_id=&status=&method=&limit=&before=`.
+  the Manage-user dialog links there). `GET /api/auth/tokens/calls?scope=mine|all&token_id=&user_id=&username=&status=&method=&limit=&before=`.
+- **`telepy api activity`** prints the same list in the terminal (newest first: time in your local zone, token or app,
+  method, route, tunnel, status, duration, IP). Filters: `--api-token <name|id|prefix>` (the global `--token` is the
+  sign-in override, so the filter has its own name), `--status ok|4xx|5xx|error`, `--method GET…|MCP`,
+  `--since 30m|2h|7d|<RFC 3339>`, `--limit N` (default 50, at most 1000; older pages are fetched with `before`).
+  `--all` / `--user <name|id>` is the admin view (anyone else gets "Only admins can see other people's API
+  activity"). `--follow` prints the recent calls oldest first, then each new one as it arrives (every 2 s; with
+  `--json` one object per line); its own polling of the log is left out. `telepy api tokens` is the token list with
+  the same per-token summary. Tokens and the CLI's browser sign-in may read these two endpoints (`GET /api/auth/tokens`,
+  `GET /api/auth/tokens/calls`) without any extra scope; creating and revoking tokens stays in the web app.
 - **Your tokens** shows calls in the last 24 h / 7 days, errors and the total for each token (`call_count` keeps
   counting after the log rows age out).
 - Writes are batched in the background (a full queue drops calls and counts them; requests never wait). Rows are kept

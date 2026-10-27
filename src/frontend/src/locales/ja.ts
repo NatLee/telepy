@@ -5216,6 +5216,7 @@ export const ja: Record<TranslationKey, string> = {
     "apiPage.calls.loadMore": "さらに古いものを読み込む",
     "apiPage.calls.end": "保持されているのはここまでです（90 日）。",
     "apiPage.calls.footnote": "書き込みはログにも token_call イベントとして表示されます。接続済みアプリの MCP 呼び出しは AI アクティビティページにあります。",
+    "apiPage.calls.cliHint": "ターミナルで同じ一覧を見る：{cmd}（--follow を付けると新しい呼び出しを順に表示します）。",
     "tokens.callSummary": "24 時間で {day} 回 · 7 日で {week} 回 · 合計 {total} 回",
     "tokens.callErrors": "7 日間で {count} 件のエラー",
     "tokens.showCalls": "呼び出し",

@@ -5216,6 +5216,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "apiPage.calls.loadMore": "載入更早的",
     "apiPage.calls.end": "保留的就是這些（90 天）。",
     "apiPage.calls.footnote": "寫入動作也會以 token_call 事件出現在日誌裡。已連接 app 的 MCP 呼叫在 AI 活動頁。",
+    "apiPage.calls.cliHint": "在終端機看同一份清單：{cmd}（加 --follow 可即時看新的呼叫）。",
     "tokens.callSummary": "24 小時 {day} 次 · 7 天 {week} 次 · 共 {total} 次",
     "tokens.callErrors": "7 天內 {count} 次錯誤",
     "tokens.showCalls": "呼叫紀錄",
