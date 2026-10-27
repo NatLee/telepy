@@ -21,6 +21,7 @@ import { pageSlice } from "@/lib/pagination";
 import { kindCounts } from "@/lib/topology";
 import type { MatrixSection } from "@/lib/deviceMatrix";
 import { Badge } from "@/components/ui/badge";
+import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -197,6 +198,13 @@ function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
                         <span>·</span>
                         <span>{t("network.hostCount", { count: tn.hosts.length })}</span>
                     </p>
+                    {/* 裝置自己的位址：內網（網卡）與外網，點一下複製。/ The device's own addresses: LAN and public, click to copy. */}
+                    {tn.endpoint && (
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            <TunnelLanChip endpoint={tn.endpoint} />
+                            <TunnelEndpointChip endpoint={tn.endpoint} />
+                        </div>
+                    )}
                 </div>
                 {permission && tn.permission !== "owner" && (
                     <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
@@ -250,6 +258,7 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
     const permission = PERMISSION_LABEL[tn.permission];
     const running = scanRunning(tn.scan);
     const pct = running ? scanPercent(tn.scan!) : null;
+    const lanIp = tn.endpoint?.lan?.[0]?.ip;
     return (
         <button
             type="button"
@@ -268,6 +277,12 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
                 <span className="block truncate text-xs text-muted-foreground">
                     {online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}
                     {permission && tn.permission !== "owner" && ` · ${t(permission)}`}
+                    {lanIp && (
+                        <>
+                            {" · "}
+                            <span className="font-mono" title={`${t("tunnels.lanTag")} ${lanIp}`}>{lanIp}</span>
+                        </>
+                    )}
                 </span>
             </span>
             {running ? (

@@ -180,8 +180,16 @@ async fn lan_discovery_through_the_device() {
     assert_eq!(t["default_username"], "ubuntu");
     let addrs: Vec<&str> = t["hosts"].as_array().unwrap().iter().map(|h| h["address"].as_str().unwrap()).collect();
     assert_eq!(addrs, vec!["127.0.0.1", "nas.local"]);
+    // 裝置自己的位址：跟隧道列表的 `endpoint` 一樣，能登入裝置的人才有。/ The device's own addresses, gated like the list's `endpoint`.
+    assert_eq!(t["endpoint"]["live"], true, "{t}");
+    assert!(t["endpoint"]["ip"].is_string() && t["endpoint"]["lan"].is_array(), "{t}");
     let r = app.get("/api/reverse/lan/topology", Some(&bob.token)).await;
     assert_eq!((r.json["tunnels"][0]["permission"].as_str(), r.json["tunnels"][0]["can_scan"].as_bool()), (Some("view"), Some(false)));
+    assert!(r.json["tunnels"][0]["endpoint"].is_object(), "{}", r.text);
+    let carol = lab.user("carol").await;
+    lab.share(&alice, &dev, &carol, "view", &[]).await;
+    let r = app.get("/api/reverse/lan/topology", Some(&carol.token)).await;
+    assert!(r.json["tunnels"][0]["endpoint"].is_null(), "{}", r.text);
 
     // MCP：lan_hosts（tunnels:read）、lan_scan（network:scan）。/ MCP tools and their scopes.
     let read_only = mcp_token(app, &alice.token, "tunnels:read").await;

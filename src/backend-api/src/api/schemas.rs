@@ -2115,6 +2115,8 @@ pub struct LanTopologyTunnel {
     /// Device accounts the user may use (the first hop of a jump)
     pub usernames: Vec<String>,
     pub default_username: Option<String>,
+    /// The device's own addresses (public IP, LAN interfaces, hostname), as on the tunnel list; null for viewers without an allowed account
+    pub endpoint: Option<TunnelEndpoint>,
     pub scan: Option<LanScanStatus>,
     pub hosts: Vec<LanHost>,
 }

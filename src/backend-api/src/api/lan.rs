@@ -13,6 +13,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 
+use super::serialize::endpoint_json;
 use super::AppJson;
 use crate::auth::AuthUser;
 use crate::db::{self, lan::LanHost, tunnels::Tunnel, users::User};
@@ -270,6 +271,8 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
     let listen = state.status.listen_ports();
     let latency = state.status.latency().unwrap_or_default();
     let scans_enabled = db::settings::get_solo(&state.db).await?.lan_scan_enabled;
+    let last = db::tunnel_endpoints::visible_to(&state.db, user.id).await?;
+    let live = state.status.endpoints();
     let mut out = Vec::with_capacity(tunnels.len());
     for t in &tunnels {
         let Some(eff) = permissions::effective(user.id, t.user_id, mine.get(&t.id).map(String::as_str)) else { continue };
@@ -277,6 +280,13 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
         let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
         let default_username = t.default_username_id.and_then(|d| allowed.iter().find(|u| u.id == d)).map(|u| u.username.clone()).or_else(|| (allowed.len() == 1).then(|| allowed[0].username.clone()));
         let hosts = db::lan::hosts_for_tunnel(&state.db, t.id).await?;
+        // 裝置自己的位址（內網網卡、公網 IP），跟隧道列表同一個 `endpoint`、同一道門檻。
+        // The device's own addresses (LAN interfaces, public IP): the tunnel list's `endpoint`, same gate.
+        let endpoint = if permissions::can_see_endpoint(Some(eff), !allowed.is_empty(), user.is_superuser) {
+            endpoint_json(port.and_then(|p| live.get(&p)), last.get(&t.id), &state.geoip)
+        } else {
+            Value::Null
+        };
         out.push(json!({
             "id": t.id,
             "name": t.host_friendly_name,
@@ -288,6 +298,7 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
             "can_edit": eff.satisfies(Permission::Edit),
             "usernames": allowed.iter().map(|u| u.username.clone()).collect::<Vec<_>>(),
             "default_username": default_username,
+            "endpoint": endpoint,
             "scan": state.lan_scans.get(t.id),
             "hosts": hosts.iter().map(|h| host_json(h, tz, &state.oui)).collect::<Vec<_>>(),
         }));
