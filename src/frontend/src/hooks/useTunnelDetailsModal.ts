@@ -129,6 +129,8 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     }, [details, form]);
     const dirty = Object.keys(patch).length > 0 || labelsChanged;
     const keyChanged = patch.key !== undefined;
+    // 名稱 / 描述 / 標籤有改（「基本資料」分頁上的點）。/ Name, description or labels changed (the Basics tab's dot).
+    const basicsDirty = labelsChanged || Object.keys(patch).some((k) => k !== "key");
 
     // 即時檢查(後端會再檢查一次):別名必填、公鑰格式 / 強度。/ Live checks; the backend re-validates.
     const liveErrors: TunnelFormErrors = {};
@@ -141,8 +143,9 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     else if (labelCheck.tooMany) liveErrors.labels = t("tunnelDetails.labelsTooMany");
     const valid = Object.keys(liveErrors).length === 0;
 
-    const save = async () => {
-        if (!tunnelId || !dirty || !valid) return;
+    /** 存檔；後端擋下的欄位錯誤也回傳，讓對話框跳到那一頁。/ Save; returns the backend's field errors so the dialog can jump to their tab. */
+    const save = async (): Promise<TunnelFormErrors | null> => {
+        if (!tunnelId || !dirty || !valid) return null;
         setIsSaving(true);
         try {
             if (labelsChanged) {
@@ -150,15 +153,19 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 const lb = await readJson<Record<string, unknown>>(lr);
                 if (!lr.ok) {
                     const v = lb?.labels;
-                    if (Array.isArray(v) && v[0]) setErrors({ labels: String(v[0]) });
-                    else showError(responseError(lr, lb, t("tunnelDetails.updateFailed")));
-                    return;
+                    if (Array.isArray(v) && v[0]) {
+                        const labelErrors = { labels: String(v[0]) };
+                        setErrors(labelErrors);
+                        return labelErrors;
+                    }
+                    showError(responseError(lr, lb, t("tunnelDetails.updateFailed")));
+                    return null;
                 }
                 if (Object.keys(patch).length === 0) {
                     showSuccess(t("tunnelDetails.updated"));
                     onUpdate();
                     onClose();
-                    return;
+                    return null;
                 }
             }
             const res = await apiFetch(`/api/reverse/server/keys/${tunnelId}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -167,7 +174,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 showSuccess(t("tunnelDetails.updated"));
                 onUpdate();
                 onClose();
-                return;
+                return null;
             }
             // 欄位錯誤 {field: [msg]}:重複的別名 / 公鑰翻成好懂的句子,其餘照後端文字顯示。
             // Field errors {field: [msg]}: duplicates get a friendly sentence, anything else is shown verbatim.
@@ -180,17 +187,22 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                     ? t(field === "key" ? "tunnelDetails.keyTaken" : "tunnelDetails.nameTaken")
                     : msg;
             }
-            if (Object.keys(fieldErrors).length) setErrors(fieldErrors);
-            else showError(responseError(res, body, t("tunnelDetails.updateFailed")));
+            if (Object.keys(fieldErrors).length) {
+                setErrors(fieldErrors);
+                return fieldErrors;
+            }
+            showError(responseError(res, body, t("tunnelDetails.updateFailed")));
+            return null;
         } catch (e) {
             showError(e instanceof Error ? e.message : t("tunnelDetails.updateFailed"));
+            return null;
         } finally {
             setIsSaving(false);
         }
     };
 
     return {
-        state: { details, loading, form, labelsText, labels: labelCheck.labels, errors: { ...liveErrors, ...errors }, canEdit, dirty, keyChanged, valid, isSaving },
+        state: { details, loading, form, labelsText, labels: labelCheck.labels, errors: { ...liveErrors, ...errors }, canEdit, dirty, basicsDirty, keyChanged, valid, isSaving },
         actions: { setField, setLabelsText, save },
     };
 }

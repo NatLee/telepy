@@ -122,6 +122,7 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
         .await
         .map_err(|e| if is_unique_violation(&e) { duplicate(username.as_deref().unwrap_or_default()) } else { ApiError::from(e) })?;
     state.device_keys.kick(tunnel.id);
+    crate::terminal_detach::kick(&state, Some(tunnel.id), None);
     Ok(Json(username_json(&updated, state.config.tz_offset_minutes)))
 }
 
@@ -143,5 +144,6 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     let details = format!("Usernames updated for tunnel '{}'", tunnel.host_friendly_name);
     notify::tunnel_users(&state, &tunnel, "TUNNEL-USERNAMES-UPDATED", &details).await?;
     state.device_keys.kick(tunnel.id);
+    crate::terminal_detach::kick(&state, Some(tunnel.id), None);
     Ok(StatusCode::NO_CONTENT)
 }

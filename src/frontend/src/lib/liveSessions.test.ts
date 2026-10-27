@@ -25,3 +25,13 @@ test("groups per tunnel, sorted by name then start", () => {
     assert.deepEqual(g.map((x) => x.name), ["homelab", "office-pi"]);
     assert.deepEqual(g[1].sessions.map((x) => x.id), [3, 1]);
 });
+
+test("SESSION-ENDED wording: feature, lost access, or who", async () => {
+    const { endedNotice } = await import("./liveSessions.ts");
+    assert.deepEqual(endedNotice({ feature: "terminal", by: "admin" }), { kind: "feature", feature: "terminal", detached: false });
+    assert.deepEqual(endedNotice({ feature: "network", detached: true }), { kind: "feature", feature: "network", detached: true }, "a kept shell says so");
+    assert.deepEqual(endedNotice({ reason: "access_removed", by: "Telepy (access changed)", detached: true }), { kind: "lost", reason: "accessRemoved", detached: true });
+    assert.deepEqual(endedNotice({ reason: "detach_off" }), { kind: "lost", reason: "detachOff", detached: false });
+    assert.deepEqual(endedNotice({ reason: "something_new", by: "Telepy" }), { kind: "by", by: "Telepy" }, "an unknown reason falls back to who");
+    assert.deepEqual(endedNotice({ by: "carol" }), { kind: "by", by: "carol" });
+});

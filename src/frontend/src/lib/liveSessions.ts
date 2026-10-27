@@ -34,3 +34,29 @@ export function groupByTunnel(list: LiveSession[]): TunnelGroup[] {
     for (const g of out) g.sessions.sort((a, b) => a.since.localeCompare(b.since));
     return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * `SESSION-ENDED` 該怎麼說（純函式）：功能被關掉（`feature`，斷線保留中的 shell 另外說）、存取變了
+ * （`reason`，後端 `terminal_detach::Lost`）、或某人從即時 session 頁結束。
+ * How to word a `SESSION-ENDED`: a feature turned off (`feature`; a detached shell gets its own sentence), access
+ * changed (`reason`, the backend's `terminal_detach::Lost`), or someone ended it from the Live sessions page.
+ */
+export type EndedNotice =
+    | { kind: "feature"; feature: string; detached: boolean }
+    | { kind: "lost"; reason: "accessRemoved" | "loginRemoved" | "accountDisabled" | "detachOff"; detached: boolean }
+    | { kind: "by"; by: string };
+
+const LOST: Record<string, Extract<EndedNotice, { kind: "lost" }>["reason"]> = {
+    access_removed: "accessRemoved",
+    login_removed: "loginRemoved",
+    account_disabled: "accountDisabled",
+    detach_off: "detachOff",
+};
+
+export function endedNotice(msg: Record<string, unknown>): EndedNotice {
+    const detached = msg.detached === true;
+    if (typeof msg.feature === "string") return { kind: "feature", feature: msg.feature, detached };
+    const lost = typeof msg.reason === "string" ? LOST[msg.reason] : undefined;
+    if (lost) return { kind: "lost", reason: lost, detached };
+    return { kind: "by", by: String(msg.by ?? "") };
+}

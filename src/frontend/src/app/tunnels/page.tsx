@@ -158,7 +158,7 @@ export default function TunnelsPage() {
     });
 
     const actions: TunnelActionHandlers = {
-        onDetails: (tunnelId) => setDetailsModal({ isOpen: true, tunnelId }),
+        onDetails: (tunnelId, tab) => setDetailsModal({ isOpen: true, tunnelId, tab }),
         onConfig: (tunnelId) => setConfigModal({ isOpen: true, tunnelId }),
         onScript: (tunnelId) => setScriptModal({ isOpen: true, tunnelId, sshPort: 22 }),
         onLogs: (tunnelId) => router.push(`/tunnels/logs?tunnel=${tunnelId}`),

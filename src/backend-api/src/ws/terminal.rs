@@ -665,8 +665,14 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
                 finish(&state, shell, Some(format!("ended after {grace} s detached"))).await;
                 return;
             }
+            // 即時 session 頁、功能被關掉、權限被拿掉（`terminal_detach::recheck`）都走這裡。
+            // The live sessions page, a feature turned off, access removed (`terminal_detach::recheck`) all land here.
             by = shell.presence.ended() => {
-                finish(&state, shell, Some(format!("ended by {by} while detached"))).await;
+                let note = match shell.presence.why() {
+                    Some(why) => format!("ended by {by} while detached: {why}"),
+                    None => format!("ended by {by} while detached"),
+                };
+                finish(&state, shell, Some(note)).await;
                 return;
             }
             _ = signout.ended() => {
@@ -782,7 +788,10 @@ async fn attached(state: &AppState, socket: &mut WebSocket, shell: &mut Shell, s
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = shell.presence.ended() => {
                 close_with(socket, CLOSE_ENDED, &by).await;
-                return Exit::End(Some(format!("ended by {by}")));
+                return Exit::End(Some(match shell.presence.why() {
+                    Some(why) => format!("ended by {by}: {why}"),
+                    None => format!("ended by {by}"),
+                }));
             }
             // 這個瀏覽器的登入被撤銷了：shell 跟著結束，不保留。/ This browser's sign-in was revoked: the shell ends too.
             reason = signout.ended() => {

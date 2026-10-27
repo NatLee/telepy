@@ -21,13 +21,16 @@ import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { ConfigRouteMap, type ConfigPart } from "@/components/sshconfig/ConfigRouteMap";
 import { SshConfigInstall } from "@/components/sshconfig/SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "@/components/sshconfig/ConfigSteps";
-import { TunnelModalProps, TargetUser } from "@/types/tunnel";
+import { TransportInfoDialog } from "@/components/sshconfig/TransportInfoDialog";
+import { TunnelModalProps, TargetUser, type Tunnel } from "@/types/tunnel";
 import type { TargetStatus } from "@/types/keys";
 import { useConfigModal } from "@/hooks/useConfigModal";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 
 type ConfigModalProps = TunnelModalProps & {
+    /** 通道頁清單裡的這條（看它的通道現在走哪種方式）。/ This tunnel from the list (how its tunnel came in). */
+    tunnel?: Tunnel | null;
     /** 有就顯示「一次設定多台」。/ When given, offers "set up several devices at once". */
     onBulk?: () => void;
 };
@@ -59,7 +62,7 @@ function AccountPicker({ users, value, onChange }: { users: TargetUser[]; value:
     );
 }
 
-export function ConfigModal({ isOpen, onClose, tunnelId, onBulk }: ConfigModalProps) {
+export function ConfigModal({ isOpen, onClose, tunnelId, onBulk, tunnel }: ConfigModalProps) {
     const { t, tn } = useI18n();
     const {
         state: { data, loading, targetUsers, selectedUserId, serverStanza, deviceStanzas, deviceKeys, transport },
@@ -68,6 +71,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk }: ConfigModalPr
     // SSH over WebSocket：筆電先存小程式，伺服器區塊的 ProxyCommand 用它。/ The carrier the server stanza's ProxyCommand runs.
     const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
     const [active, setActive] = useState<ConfigPart | null>(null);
+    const [transportInfo, setTransportInfo] = useState(false);
     // Telepy 的主機金鑰（伺服器區塊釘住它）。/ Telepy's host key, pinned by the server stanza.
     const knownHosts = data?.known_hosts ?? null;
 
@@ -123,7 +127,7 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk }: ConfigModalPr
             toolbar={
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                     {targetUsers.length > 1 && <AccountPicker users={targetUsers} value={selectedUserId} onChange={handleUserChange} />}
-                    <ToolbarField label={t("config.transportLabel")}>
+                    <ToolbarField label={t("config.transportLabel")} info={{ label: t("config.ti.open"), onClick: () => setTransportInfo(true) }}>
                         <Segmented
                             size="sm"
                             fullWidth
@@ -250,6 +254,16 @@ export function ConfigModal({ isOpen, onClose, tunnelId, onBulk }: ConfigModalPr
                     </ol>
                 </div>
             )}
+            <TransportInfoDialog
+                isOpen={transportInfo}
+                onClose={() => setTransportInfo(false)}
+                choice={transport}
+                onChoose={handleTransportChange}
+                server={data?.server ? { host: data.server.host, port: String(data.server.port) } : null}
+                wsUrl={data?.ws_url ?? null}
+                devices={[{ online: online ?? tunnel?.endpoint?.live ?? null, transport: tunnel?.endpoint?.live ? tunnel.endpoint.transport : null }]}
+                deviceName={deviceName}
+            />
         </Modal>
     );
 }
