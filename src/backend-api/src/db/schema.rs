@@ -798,6 +798,27 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("subject_kind", "subject_id", "feature")
         )"#,
     ),
+    // Rust 自有：委派 token（個人 API token / OAuth app）打的每一個 REST 請求與 PAT 的 MCP tool call（不含 query string）。
+    // Every REST request made with a delegated token and every MCP tool call made with a personal token (no query strings).
+    (
+        "telepy_api_call",
+        r#"CREATE TABLE "telepy_api_call" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "user_id" integer NOT NULL,
+            "token_id" integer NULL,
+            "grant_id" integer NULL,
+            "client_name" varchar(200) NOT NULL,
+            "kind" varchar(8) NOT NULL,
+            "method" varchar(10) NOT NULL,
+            "route" varchar(300) NOT NULL,
+            "tunnel_id" integer NULL,
+            "status" integer NOT NULL,
+            "duration_ms" integer NOT NULL,
+            "ip" varchar(64) NULL,
+            "error" varchar(300) NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -809,6 +830,9 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_at" ON "telepy_api_call" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
@@ -986,6 +1010,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),
     ("telepy_key_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_key_group", "labels", "text NOT NULL DEFAULT '[]'"),
+    // 個人 API token 被呼叫了幾次（呼叫紀錄只留 90 天，這個一直累加）。/ Calls made with a token (the log keeps 90 days; this keeps counting).
+    ("telepy_api_token", "call_count", "integer NOT NULL DEFAULT 0"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

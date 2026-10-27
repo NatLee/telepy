@@ -48,7 +48,7 @@ async fn cli_against_the_server() {
     assert!(r.status.is_success(), "{}", r.text);
     let expires = (std::time::SystemTime::now() + std::time::Duration::from_secs(86_400)).duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let expires = chrono_like(expires);
-    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "cli test", "scopes": ["tunnels:read", "ssh:exec", "ssh:files"], "expires_at": expires})).await;
+    let r = lab.app.post("/api/auth/tokens", Some(&alice.token), json!({"name": "cli test", "scopes": ["tunnels:read", "ssh:exec", "ssh:files", "tunnels:manage"], "expires_at": expires})).await;
     assert_eq!(r.status.as_u16(), 201, "{}", r.text);
     let secret = r.json["secret"].as_str().unwrap().to_string();
     let token_id = r.json["token"]["id"].as_i64().unwrap();
@@ -104,6 +104,17 @@ async fn cli_against_the_server() {
     assert!(o.stdout.contains("via-ssh"), "{}", o.stdout);
     let conf = std::fs::read_to_string(h.join("ssh").join("box.conf")).unwrap();
     assert!(conf.contains("StrictHostKeyChecking yes") && conf.contains("ProxyCommand ssh -F"), "{conf}");
+
+    // lan：手動加一台、列出、用標籤刪掉。/ lan: add one by hand, list, remove it by label.
+    let o = telepy(h, &["lan", "add", "box", "192.168.50.9", "--label", "nas", "--user", "pi"]).await;
+    assert_eq!(o.code, 0, "lan add: {}", o.stderr);
+    let o = telepy(h, &["lan", "ls", "box", "--json"]).await;
+    let hosts: Value = serde_json::from_str(&o.stdout).unwrap_or_else(|_| panic!("lan ls: {} {}", o.stdout, o.stderr));
+    assert_eq!((hosts[0]["address"].as_str(), hosts[0]["label"].as_str(), hosts[0]["username"].as_str()), (Some("192.168.50.9"), Some("nas"), Some("pi")), "{hosts}");
+    assert!(telepy(h, &["lan", "ls", "box"]).await.stdout.contains("192.168.50.9"));
+    let o = telepy(h, &["lan", "rm", "box", "nas"]).await;
+    assert_eq!(o.code, 0, "lan rm: {}", o.stderr);
+    assert_eq!(telepy(h, &["lan", "ls", "box", "--json"]).await.stdout.trim(), "[]");
 
     // doctor 通過；撤銷 token 之後一切都失效。/ doctor passes; after a revoke everything fails.
     let o = telepy(h, &["doctor"]).await;

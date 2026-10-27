@@ -71,6 +71,8 @@ test("pages that belong to a feature", () => {
     assert.equal(featureForPath("/tunnels/sessions"), null);
     assert.equal(featureForPath("/tunnels/create"), "tunnels.create");
     assert.equal(featureForPath("/tunnels/webhooks"), "webhooks.personal");
+    assert.equal(featureForPath("/tunnels/api"), "api.tokens");
+    assert.equal(featureForPath("/tunnels/admin/api-activity"), null, "the admin page is admin-gated, not feature-gated");
     assert.equal(featureForPath("/tunnels"), null);
     assert.equal(featureForPath("/tunnels/terminals"), null, "prefix match on whole segments");
     assert.equal(featureForPath(null), null);

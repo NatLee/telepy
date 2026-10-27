@@ -5,7 +5,11 @@ on one device or on every device with a label, copy files, see and end live sess
 run toolbox snippets. Scripts and CI use the same commands with a **personal API token** instead of a browser sign-in.
 
 Source: `src/cli/` (a crate of its own; the server build does not depend on it). Backend: `auth/api_tokens.rs`,
-`api/api_tokens.rs`, `db/api_tokens.rs`, the REST exec routes in `api/ai.rs`.
+`api/api_tokens.rs`, `db/api_tokens.rs`, `db/api_calls.rs` + `api_calls.rs` (the call log), the REST exec routes in
+`api/ai.rs`, the scripted-browser routes in `api/browser.rs`.
+
+Tokens are managed on the **API** page (`/tunnels/api`, sidebar "API"): your tokens, every endpoint a token can call
+(with copy-ready `curl` and the matching `telepy` command), and the **Activity** log of what your tokens did.
 
 ## Three ways in, three keys
 
@@ -22,13 +26,15 @@ Source: `src/cli/` (a crate of its own; the server build does not depend on it).
  an MCP app ─────────────────── keeps working
 ```
 
-The same picture, live, is behind **Preferences → API tokens → How it works** (click a token to see its own scopes
-and tunnels on the token lane).
+The same picture, live, is at the top of the **API** page ("Three ways into Telepy", with a "What if I…" switch:
+revoking a token, disconnecting an app or signing out each cuts only its own lane), and per token behind **Your
+tokens → How it works**.
 
 - A token **is you**: your tunnels, the accounts you may use on them, the feature switches an admin set for you and
   command rules all apply. It never gets more than you have.
 - It can't sign in to the web, change your password or two-step settings, or create more tokens: only the REST routes
-  listed in `auth::api_tokens::rest_route` are open to it, each needing one scope.
+  in the allow-list `auth::api_tokens::ROUTES` are open to it, each needing one scope. The API page's **What a token
+  can call** tab is built from that same table (`GET /api/auth/tokens/routes`), so it can't disagree with the server.
 - Tunnels that ask you to confirm it's you (**step-up**) refuse tokens, exactly like MCP agents.
 - Every token expires (at most a year). Revoking takes effect at once.
 - Admins can turn the **API tokens** feature off (Site settings → Access): existing tokens then stop working.
@@ -41,8 +47,10 @@ and tunnels on the token lane).
 | `ssh:exec` | open exec sessions and run commands (command rules apply), read recordings and snippets | `exec`, `run`, `recordings`, `snippets` |
 | `ssh:files` | every SFTP operation | `cp` |
 | `network:scan` | LAN scans (MCP `lan_scan`, the scan REST route) | — |
-| `browser:use` | the MCP browser tools | — |
-| `tunnels:manage` | create / change / delete / share tunnels, labels, end sessions (tokens only) | `sessions end` |
+| `browser:use` | scripted browsers through a device: the MCP browser tools and `/api/browser/sessions*` | `browse` |
+| `tunnels:manage` | create / change / delete / share tunnels, labels, LAN hosts, end sessions (tokens only) | `sessions end`, `lan add` / `rm` |
+
+`tunnels:read` also lists the LAN hosts behind a device (`telepy lan ls`, `GET /api/reverse/lan/topology`).
 
 `ssh` / `scp` / `sftp` only need `tunnels:read`: they fetch the ssh config and then your system OpenSSH logs in
 with **your personal SSH key** through the gateway, as the web's SSH config dialog does.
@@ -77,7 +85,7 @@ release (it runs on those tags only).
 ```sh
 telepy login https://telepy.example.com                 # browser: OAuth + PKCE, loopback callback
 telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files network:scan"
-telepy login https://telepy.example.com --token tpt_…   # a personal API token (Preferences → API tokens)
+telepy login https://telepy.example.com --token tpt_…   # a personal API token (the API page → Your tokens)
 telepy whoami
 telepy logout
 ```
@@ -119,6 +127,19 @@ telepy recordings play 17 --speed 2        # with its timing, pauses capped at 2
 telepy snippets ls --tunnel box
 telepy run "restart service" box --var svc=nginx
 
+telepy lan ls box                          # the LAN hosts Telepy knows behind a device
+telepy lan add box 192.168.1.20 --label nas --user pi --port 22
+telepy lan rm box nas                      # by id, address or label
+
+ID=$(telepy browse box http://192.168.1.1/)   # a browser on the device's network (browser:use); prints its id
+telepy browse text "$ID" --selector main
+telepy browse shot "$ID" -o router.png
+telepy browse click "$ID" --text "Status"
+telepy browse type "$ID" "#q" "uptime" --enter
+telepy browse go "$ID" http://192.168.1.1/logs
+telepy browse ls
+telepy browse close "$ID"
+
 telepy doctor                              # server, sign-in, scopes, expiry, ssh / scp / sftp
 ```
 
@@ -130,6 +151,13 @@ with `-F`. Your own `~/.ssh/config` is untouched unless you run `telepy config i
 `POST /api/ai/sessions/{id}/exec`, then closes it): the same reaper, command rules and audit as MCP agents. The
 calls appear on the **AI activity** page under the token's name, and REST writes made with a token leave a
 `token_call` entry in the tunnel's Logs.
+
+`browse` drives a **scripted browser**: a real Chromium that browses as if it sat on the device, so it sees the
+device's LAN, its localhost and its public IP — a router's admin page, an intranet dashboard, a site that only allows
+that IP or region. One action at a time, each bounded to 30 s; each browser is a full Chromium counted against your
+per-person session limit (`ai_max_sessions_per_user`), so it suits scripted checks, screenshots and small scraping
+jobs, not a high-volume crawler. Browsers close themselves when idle; every action is in the AI activity log (typed
+text by its length unless `--show`), and step-up tunnels refuse them.
 
 Exit codes: a single target exits with the remote command's code; several targets exit 1 when any failed; errors
 from Telepy exit 1 with the server's message.
@@ -146,3 +174,25 @@ curl -H "Authorization: Bearer $TELEPY_TOKEN" https://telepy.example.com/api/rev
 
 On `/mcp` a token works like an OAuth app token (same tools, scopes and tunnel limit) as long as the **MCP apps**
 feature is on for you.
+
+The **What a token can call** tab gives a `curl` for every endpoint with the base URL filled in and the secret as
+`$TELEPY_TOKEN` (export it once; the page never shows a real secret again). Path variables are shell variables too
+(`$TUNNEL_ID`, `$ID`, `$HOST_ID`).
+
+## The call log
+
+Every REST request made with a personal API token or an OAuth app's token (the CLI's browser sign-in) is logged —
+reads included — and so is every MCP tool call made with a personal token (connected apps' MCP calls are already in
+the AI activity log). A row is: when, who, which token / app, method + **route template** (never the query string),
+tunnel, status, duration, IP; MCP rows are `MCP <tool>` with 200 or 400 (the tool returned an error) and the start of
+the error. Refused requests (`token_route`, `token_scope`, `404` outside the token's tunnels) are logged too.
+
+- **API → Activity** shows your own calls, day by day, filtered by token (a token's **Calls** button jumps there),
+  status (OK / 4xx / 5xx), method and search. Admins see everyone's on **Admin → All API activity** (filter by person;
+  the Manage-user dialog links there). `GET /api/auth/tokens/calls?scope=mine|all&token_id=&user_id=&status=&method=&limit=&before=`.
+- **Your tokens** shows calls in the last 24 h / 7 days, errors and the total for each token (`call_count` keeps
+  counting after the log rows age out).
+- Writes are batched in the background (a full queue drops calls and counts them; requests never wait). Rows are kept
+  90 days and 200,000 rows at most, and go with a deleted user. The log is not hash-chained (it is high-volume and
+  per-user deletion would break a chain); writes made with a token still leave a chained `token_call` gateway event
+  in the tunnel's Logs.

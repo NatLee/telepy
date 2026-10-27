@@ -6,7 +6,7 @@ use axum::http::request::Parts;
 use axum::http::StatusCode;
 use serde_json::json;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use super::api_tokens;
 use super::jwt::TokenType;
@@ -98,17 +98,41 @@ impl FromRequestParts<AppState> for Delegated {
     }
 }
 
-/// 委派 token 打的 REST 寫入要記一筆 gateway 事件（誰透過哪把 token 做了什麼）：中介層先放一個空格子，
-/// extractor 認出 token 時填進去，回應出來後中介層讀它寫事件。/ A slot the middleware puts in each request; the
-/// extractor fills it for a delegated token, and the middleware writes the gateway event after the response.
+/// 委派 token 打的 REST 請求：中介層先放一個空格子，extractor 認出 token 時填進去（誰、哪把、隧道、IP），回應出來後
+/// 中介層讀它寫呼叫紀錄（每個請求）與 gateway 事件（通過檢查的寫入）。/ A slot the middleware puts in each request; the
+/// extractor fills it for a delegated token (who, which credential, tunnel, IP), and the middleware writes the call log
+/// (every request) and, for writes that passed the checks, a gateway event after the response.
 #[derive(Clone, Default)]
-pub struct TokenCallSlot(pub Arc<OnceLock<TokenCall>>);
+pub struct TokenCallSlot(pub Arc<Mutex<Option<TokenCall>>>);
+
+impl TokenCallSlot {
+    pub fn get(&self) -> Option<TokenCall> {
+        self.0.lock().ok().and_then(|g| g.clone())
+    }
+    fn set(&self, call: TokenCall) {
+        if let Ok(mut g) = self.0.lock() {
+            *g = Some(call);
+        }
+    }
+    fn mark_passed(&self) {
+        if let Ok(mut g) = self.0.lock() {
+            if let Some(c) = g.as_mut() {
+                c.passed = true;
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TokenCall {
+    pub user_id: i64,
     pub username: String,
+    pub credential: Credential,
     pub client_name: String,
     pub tunnel_id: Option<i64>,
+    pub ip: Option<String>,
+    /// 路由、scope、隧道、功能都檢查過了（handler 會跑）。/ Route, scope, tunnel and feature checks passed.
+    pub passed: bool,
 }
 
 fn token_error(status: StatusCode, code: &str, msg: String) -> ApiError {
@@ -125,7 +149,17 @@ async fn delegated(parts: &mut Parts, state: &AppState, token: &str) -> Result<U
     }
     let method = parts.method.as_str().to_string();
     let path = parts.uri.path().to_string();
-    let Some(route) = api_tokens::rest_route(&method, &path) else {
+    let route = api_tokens::rest_route(&method, &path);
+    // 先填呼叫紀錄的格子（被拒絕的請求也要記）；隧道只記 token 限制內的。/ Fill the call-log slot first (refusals are logged too).
+    let slot = parts.extensions.get::<TokenCallSlot>().cloned();
+    if let Some(slot) = &slot {
+        let tunnel_id = match route.map(|r| r.tunnel) {
+            Some(api_tokens::TunnelRef::Path(id)) if p.tunnel_allowed(id) => Some(id),
+            _ => None,
+        };
+        slot.set(TokenCall { user_id: p.user.id, username: p.user.username.clone(), credential: p.credential, client_name: p.client_name.clone(), tunnel_id, ip: p.ip.clone(), passed: false });
+    }
+    let Some(route) = route else {
         return Err(token_error(StatusCode::FORBIDDEN, "token_route", format!("{method} {path} is not available to API tokens or connected apps. Use the Telepy web app for it.")));
     };
     if let Some(scope) = route.scope {
@@ -135,23 +169,22 @@ async fn delegated(parts: &mut Parts, state: &AppState, token: &str) -> Result<U
             return Err(e);
         }
     }
-    let tunnel_id = match route.tunnel {
+    match route.tunnel {
         api_tokens::TunnelRef::Path(id) => {
             if !p.tunnel_allowed(id) {
                 return Err(ApiError::drf_not_found());
             }
-            Some(id)
         }
         api_tokens::TunnelRef::Unrestricted if p.tunnel_ids.is_some() => {
             return Err(token_error(StatusCode::FORBIDDEN, "token_tunnels", "This token is limited to some tunnels, so it can't do this. Use a token without a tunnel limit.".into()));
         }
-        _ => None,
-    };
+        _ => {}
+    }
     if let Some(f) = crate::features::for_route(&method, &path) {
         crate::features::check(state, &p.user, f).await?;
     }
-    if let Some(slot) = parts.extensions.get::<TokenCallSlot>() {
-        let _ = slot.0.set(TokenCall { username: p.user.username.clone(), client_name: p.client_name.clone(), tunnel_id });
+    if let Some(slot) = &slot {
+        slot.mark_passed();
     }
     // step-up 只屬於網頁上確認過的那個瀏覽器：token 帶來的一律不算（跟 MCP 一樣，敏感隧道拒絕 token）。
     // A step-up belongs to the browser that confirmed it: never honoured with a token (step-up tunnels refuse tokens, as MCP does).

@@ -67,6 +67,7 @@ const PAGE_FEATURES: readonly [string, FeatureId][] = [
     ["/tunnels/commands", "command_rules.manage"],
     ["/tunnels/webhooks", "webhooks.personal"],
     ["/tunnels/mcp", "mcp.connect"],
+    ["/tunnels/api", "api.tokens"],
 ];
 
 export function featureForPath(pathname: string | null | undefined): FeatureId | null {

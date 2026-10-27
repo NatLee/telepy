@@ -24,7 +24,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Gauge, Globe, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare, Volume2, VolumeX } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -58,15 +58,14 @@ import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
 import { hasFeature } from "@/lib/features";
 import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
-import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
-export type PrefsTab = "general" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps" | "tokens";
+export type PrefsTab = "general" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps";
 
-/** 從別的頁打開偏好設定的某個分頁（例：MCP 頁 →「API token」）。/ Open Preferences at a tab from another page. */
+/** 從別的頁打開偏好設定的某個分頁。/ Open Preferences at a tab from another page. */
 export const OPEN_PREFS_EVENT = "telepy:open-prefs";
 
 export function openPreferences(tab: PrefsTab) {
@@ -116,8 +115,6 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
         // 存好的登入只給遠端桌面用；那個功能被關掉就不顯示。/ Saved logins only serve remote desktops; hidden when that is off.
         ...(hasFeature(user, "remote_desktop") ? [{ value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> }] : []),
         { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
-        // 個人 API token（CLI / 腳本 / CI）；功能被關掉就不顯示。/ Personal API tokens; hidden when the feature is off.
-        ...(hasFeature(user, "api.tokens") ? [{ value: "tokens" as const, label: t("prefs.tabTokens"), hint: t("prefs.tabTokensHint"), icon: <KeySquare /> }] : []),
     ];
 
     // 選到的分頁被藏起來(功能剛被關掉)就回「一般」。/ Fall back to General when the chosen tab is hidden.
@@ -357,8 +354,6 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
             {tab === "logins" && <SavedLogins onNavigate={onClose} />}
 
-            {tab === "tokens" && <ApiTokens />}
-
             {tab === "apps" && (
                 <div className="space-y-6">
                     {/* 已連接的應用程式 / Connected apps (MCP / AI clients) */}
@@ -380,6 +375,24 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </span>
                         <ArrowRight size={15} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                     </Link>
+                    {/* 個人 API token 在 API 頁（從這裡搬走了）。/ Personal API tokens live on the API page now. */}
+                    {hasFeature(user, "api.tokens") && (
+                        <Link
+                            href="/tunnels/api"
+                            prefetch={false}
+                            onClick={onClose}
+                            className="group flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 transition-colors hover:border-foreground/25 hover:bg-muted/50"
+                        >
+                            <span className="grid size-9 shrink-0 place-items-center rounded-md border border-border bg-card text-foreground/70">
+                                <Braces size={16} />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                                <span className="block text-sm text-foreground">{t("prefs.apiPageTitle")}</span>
+                                <span className="block text-xs text-muted-foreground">{t("prefs.apiPageDescription")}</span>
+                            </span>
+                            <ArrowRight size={15} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                        </Link>
+                    )}
                 </div>
             )}
         </Modal>
