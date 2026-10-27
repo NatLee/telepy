@@ -11,7 +11,9 @@
  * - 鍵盤：焦點放在隱藏的 textarea（輸入法才能組字），按鍵走 `input_key`（legacy 鍵名），組好的字走 `input_string`。
  * - 游標：`cursor_data`（RGBA）→ data URL → CSS cursor，`cursor_id` 切換。
  * - 聲音：核心自己解（WebCodecs Opus → AudioContext）。關掉 = 這台的 `disable-audio`（登入時就請裝置別送，不是只靜音）；
- *   連線中切換走 `option:toggle`，核心會送 option 給裝置並靜音 / 取消靜音。
+ *   連線中切換走 `option:toggle`，核心會送 option 給裝置並靜音 / 取消靜音。掛著的期間 lib/soundTap 的
+ *   `installRustDeskTap` 包住 AudioContext / AudioDecoder：核心拿到頁面在點擊裡解鎖過的共用 context（不然它在 WebSocket
+ *   訊息裡才建，Safari 會擋），每塊解出來的聲音量峰值，`onSound` 回報給 lib/desktopSound。
  * - 剪貼簿：start 回的方向（使用者的選擇套上站台上限）在這裡套用——off = 這台的 `disable-clipboard`，
  *   to_remote = 本機照送、遠端複製的不收。資料流是 RustDesk 的（端對端或 Direct IP），後端管不到。
  * In-browser RustDesk: the vendored core decodes in this page, Telepy relays. See `lib/rustdesk.ts`.
@@ -22,6 +24,8 @@ import { getWsOrigin } from "@/lib/wsCommon";
 import { useI18n } from "@/lib/i18n";
 import type { DesktopFailure } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
+import { EMPTY_SNAPSHOT, type SoundSnapshot } from "@/lib/desktopSound";
+import { installRustDeskTap, sameSnapshot, SoundTap } from "@/lib/soundTap";
 import { useDesktopZoom } from "@/hooks/useDesktopZoom";
 import { ZoomControl } from "@/components/desktop/ZoomControl";
 import {
@@ -50,6 +54,8 @@ export interface RustDeskViewerHandle {
     /** RustDesk 自己的畫質檔。/ RustDesk's own quality profile. */
     setQuality: (quality: RustDeskQuality) => void;
     focus: () => void;
+    /** 在點擊裡呼叫：讓被自動播放限制擋住的聲音動起來。/ From a click: let sound the browser held back play. */
+    resumeSound: () => void;
 }
 
 export type RustDeskQuality = "best" | "balanced" | "low";
@@ -65,6 +71,8 @@ interface Props {
     onRemoteClipboard: (text: string) => void;
     /** 要不要遠端的聲音（連線中也能切換）。/ Whether to receive the remote's sound (switchable while connected). */
     audio: boolean;
+    /** 聲音的狀況變了。/ The sound's situation changed. */
+    onSound?: (snapshot: SoundSnapshot) => void;
 }
 
 type Globals = Partial<RustDeskCore> & {
@@ -75,7 +83,7 @@ type Globals = Partial<RustDeskCore> & {
     onInitFinished?: (() => void) | null;
 };
 
-export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, audio }, ref) {
+export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, audio, onSound }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -87,13 +95,14 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
     const sizeRef = useRef({ width: 0, height: 0 });
     const infoRef = useRef<RustDeskPeerInfo | null>(null);
     const endedRef = useRef(false);
-    const callbacks = useRef({ onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard });
+    const callbacks = useRef({ onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, onSound });
+    const soundRef = useRef(new SoundTap());
     const passwordRef = useRef(password);
     // 核心目前的 disable-audio 狀態（連線時設好；之後跟著 `audio` 切換）。/ The core's disable-audio state.
     const audioRef = useRef(audio);
     const appliedAudioRef = useRef<boolean | null>(null);
     useLayoutEffect(() => {
-        callbacks.current = { onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard };
+        callbacks.current = { onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, onSound };
     });
     const [focused, setFocused] = useState(false);
     const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => true);
@@ -115,6 +124,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         switchDisplay: (index: number) => call("switch_display", { value: index }),
         setQuality: (quality: RustDeskQuality) => call("image_quality", quality),
         focus: () => sinkRef.current?.focus(),
+        resumeSound: () => soundRef.current.resume(),
     }), []);
 
     useEffect(() => {
@@ -337,6 +347,18 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         const onFocus = () => setFocused(true);
         const onBlur = () => setFocused(false);
         sink.addEventListener("keydown", onKeyDown);
+        // 聲音的聽診器：核心建 AudioContext / AudioDecoder 時經過這裡。/ The sound tap the core's audio passes through.
+        const tap = soundRef.current;
+        tap.reset();
+        const untap = installRustDeskTap(tap);
+        let lastSnapshot: SoundSnapshot = EMPTY_SNAPSHOT;
+        const soundTimer = setInterval(() => {
+            const snap = tap.snapshot();
+            if (!sameSnapshot(snap, lastSnapshot)) {
+                lastSnapshot = snap;
+                callbacks.current.onSound?.(snap);
+            }
+        }, 500);
         sink.addEventListener("keyup", onKeyUp);
         sink.addEventListener("compositionend", onComposition);
         sink.addEventListener("input", onInput);
@@ -372,6 +394,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
 
         return () => {
             disposed = true;
+            clearInterval(soundTimer);
             rescaleRef.current = null;
             observer.disconnect();
             canvas.removeEventListener("mousemove", onMouseMove);
@@ -398,6 +421,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
             coreRef.current = null;
             infoRef.current = null;
             appliedAudioRef.current = null;
+            untap();
         };
     }, [start]);
 

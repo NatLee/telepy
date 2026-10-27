@@ -52,6 +52,7 @@ import type { LanHost, TopologyTunnel } from "@/types/lan";
 import { useSavedLogins } from "@/hooks/useSavedLogins";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
+import { primeAudio } from "@/lib/soundTap";
 
 export interface DesktopForm {
     account: string;
@@ -139,7 +140,9 @@ export function useDesktopPage() {
     // 網頁內 RustDesk 的 session（和 guacd 的 `session` 互斥）與對方回報的資訊（螢幕清單、目前螢幕）。
     // The in-browser RustDesk session (never alongside a guacd one) and what the peer reported (its displays).
     const [rdSession, setRdSession] = useState<RustDeskStart | null>(null);
-    const [rdInfo, setRdInfo] = useState<RustDeskPeerInfo | null>(null);
+    const [rdInfo, setRdInfoState] = useState<RustDeskPeerInfo | null>(null);
+    // 最後一次連到的 RustDesk 是什麼平台（session 結束後還記得，給準備清單的「Mac 的聲音」）。/ Remembered after the session ends.
+    const [rdPlatform, setRdPlatform] = useState<{ key: string; platform: string } | null>(null);
     const rdSessionRef = useRef<RustDeskStart | null>(null);
     rdSessionRef.current = rdSession;
     // 交給 RustDesk 核心的密碼：手打的，或 start 回應裡解開的存檔；session 結束就清掉。
@@ -260,6 +263,9 @@ export function useDesktopPage() {
 
     const connect = useCallback(async () => {
         if (!tunnel) return;
+        // 自動播放限制：AudioContext 要在這一下點擊裡（第一個 await 之前）建好並 resume，之後 WebSocket 裡才來的聲音
+        // 才放得出來（Safari 尤其嚴格）。/ Autoplay: create and resume the AudioContext inside this click, before any await.
+        if (audioPref === "on" && form.protocol !== "vnc") primeAudio();
         setFailure(null);
         setEndedNormally(false);
         setPhase("starting");
@@ -310,7 +316,7 @@ export function useDesktopPage() {
                 setScale(null);
                 setScreens(NO_SCREENS);
                 setSelecting(false);
-                setRdInfo(null);
+                setRdInfoState(null);
                 setRdSession(data);
                 setPhase("connecting");
             } catch {
@@ -411,7 +417,7 @@ export function useDesktopPage() {
     const onEnded = useCallback((f: DesktopFailure | null) => {
         setSession(null);
         setRdSession(null);
-        setRdInfo(null);
+        setRdInfoState(null);
         setRdPassword("");
         setConnectedAt(null);
         setStats(null);
@@ -443,7 +449,7 @@ export function useDesktopPage() {
         if (r && !connectedRef.current) postStop(r.session_id, true);
         setSession(null);
         setRdSession(null);
-        setRdInfo(null);
+        setRdInfoState(null);
         setRdPassword("");
         setConnectedAt(null);
         setStats(null);
@@ -534,6 +540,10 @@ export function useDesktopPage() {
     // RustDesk：從裝置探測 Direct IP 埠。目標 / 帳號 / 埠一變就歸零。/ RustDesk: probe the port from the device.
     const probeKey = `${tunnel?.id ?? ""}|${host?.id ?? ""}|${form.account}|${form.port}`;
     const probeKeyRef = useRef(probeKey);
+    const setRdInfo = useCallback((info: RustDeskPeerInfo | null) => {
+        setRdInfoState(info);
+        if (info?.platform) setRdPlatform({ key: probeKeyRef.current, platform: info.platform });
+    }, []);
     useEffect(() => {
         if (probeKeyRef.current !== probeKey) {
             probeKeyRef.current = probeKey;
@@ -624,10 +634,15 @@ export function useDesktopPage() {
             customArea, selecting, isRustDesk, canProbe, probeState, rdReady: rdReadyKey === probeKey, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
             clipboard: clipboardPref,
             audio: audioPref === "on",
+            rdPlatform: rdPlatform && rdPlatform.key === probeKey ? rdPlatform.platform : null,
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
-            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, setAudio: (on: boolean) => setAudioPref(on ? "on" : "off"), detectScreens, setViewportId,
+            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, setAudio: (on: boolean) => {
+                // 打開聲音也是一下點擊：順便解鎖 AudioContext。/ Turning sound on is a click too: unlock the context.
+                if (on) primeAudio();
+                setAudioPref(on ? "on" : "off");
+            }, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,
             dismissFailure: () => { setFailure(null); setPhase("idle"); },

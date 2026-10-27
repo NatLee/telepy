@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { allReady, nextStep, setupStatus, tunnelProblem } from "./rustdeskSetup.ts";
+import { allReady, nextStep, setupStatus, tunnelProblem, visibleSteps } from "./rustdeskSetup.ts";
 
 test("nothing known yet: the first step is next and nothing is marked", () => {
     const s = setupStatus({ probe: "idle", connected: false });
-    assert.deepEqual(s, { directIp: "unknown", password: "unknown", permissions: "unknown", service: "advice" });
+    assert.deepEqual(s, { directIp: "unknown", password: "unknown", permissions: "unknown", sound: "advice", service: "advice" });
     assert.equal(nextStep(s), "directIp");
     assert.equal(allReady(s), false);
 });
@@ -46,4 +46,13 @@ test("tunnel problems are told apart from RustDesk problems", () => {
     assert.equal(tunnelProblem({ probe: "ok" }), false);
     const s = setupStatus({ probe: "failed", probeFailure: "desktop.err.deviceOffline", connected: false });
     assert.equal(s.directIp, "unknown", "an offline device says nothing about RustDesk");
+});
+
+test("the Mac sound advice shows only for a Mac with sound on and never holds back ready", () => {
+    assert.deepEqual(visibleSteps(false), ["directIp", "password", "permissions", "service"]);
+    assert.deepEqual(visibleSteps(true), ["directIp", "password", "permissions", "sound", "service"]);
+    const s = setupStatus({ probe: "ok", connected: true });
+    assert.equal(s.sound, "advice");
+    assert.ok(allReady(s));
+    assert.equal(nextStep(s), "service", "advice steps are never spotlighted before the service reminder");
 });
