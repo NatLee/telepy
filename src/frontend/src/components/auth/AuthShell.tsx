@@ -38,23 +38,31 @@ export function AuthShell({ aside, wide = false, children }: { aside: React.Reac
                             <BrandMark collapsed className="sm:hidden" />
                             <BrandMark className="hidden sm:flex" />
                         </span>
-                        {/* 未登入也能切語言與主題（cookie / localStorage；登入後由 UserSettingsSync 同步到帳號）。
-                            Language and theme work before sign-in and sync to the account afterwards. */}
-                        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-1">
-                            <div className="w-[8.5rem]">
-                                <LanguageSwitcher />
-                            </div>
-                            <span className="h-5 w-px bg-border max-[359px]:hidden" aria-hidden />
-                            <div className="w-[6.5rem] max-[359px]:hidden">
-                                <ThemeSwitcher />
-                            </div>
-                        </div>
+                        <AuthPrefs />
                     </header>
 
                     <div className="relative flex flex-1 items-center justify-center px-4 pb-16 pt-4 sm:px-6">
                         <div className={cn("w-full animate-fade-in-up", wide ? "max-w-lg" : "max-w-sm")}>{children}</div>
                     </div>
                 </main>
+            </div>
+        </div>
+    );
+}
+
+/**
+ * 未登入也能切語言與主題（cookie / localStorage；登入後由 UserSettingsSync 同步到帳號）。一般與低調登入頁共用。
+ * Language and theme work before sign-in and sync to the account afterwards. Shared by both sign-in looks.
+ */
+export function AuthPrefs() {
+    return (
+        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-1">
+            <div className="w-[8.5rem]">
+                <LanguageSwitcher />
+            </div>
+            <span className="h-5 w-px bg-border max-[359px]:hidden" aria-hidden />
+            <div className="w-[6.5rem] max-[359px]:hidden">
+                <ThemeSwitcher />
             </div>
         </div>
     );

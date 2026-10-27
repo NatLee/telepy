@@ -19,8 +19,8 @@ test("placement = allowed ∩ chosen, with the ceiling winning", () => {
         p.map((x) => [x.account.username, x.state]),
         [
             ["ubuntu", "placed"],
+            ["deploy", "unchosen"],
             ["root", "notAllowed"],
-            ["nat", "unchosen"],
         ]
     );
     // null 選擇 = 全選；"all" = 擁有者本人。/ A null choice = every allowed account; "all" = the owner.
@@ -32,9 +32,15 @@ test("placement = allowed ∩ chosen, with the ceiling winning", () => {
 test("summary counts states and distinct files (the admin file is shared)", () => {
     const s = summarizePlacement(placeKey(EXAMPLE_ACCOUNTS, "all", null));
     assert.deepEqual([s.placed, s.unchosen, s.notAllowed], [3, 0, 0]);
-    assert.deepEqual(s.files, [`ubuntu:${USER_FILE}`, `root:${USER_FILE}`, ADMIN_FILE]);
-    const two = summarizePlacement(placeKey([...EXAMPLE_ACCOUNTS, { id: 4, username: "ops", file: ADMIN_FILE, windowsAdmin: true }], "all", null));
-    assert.equal(two.files.length, 3, "two admins share one file");
+    assert.deepEqual(s.files, [`ubuntu:${USER_FILE}`, `deploy:${USER_FILE}`, `root:${USER_FILE}`]);
+    const admins = [
+        ...EXAMPLE_ACCOUNTS,
+        { id: 4, username: "nat", file: ADMIN_FILE, windowsAdmin: true },
+        { id: 5, username: "ops", file: ADMIN_FILE, windowsAdmin: true },
+    ];
+    const two = summarizePlacement(placeKey(admins, "all", null));
+    assert.equal(two.files.length, 4, "two admins share one file");
+    assert.equal(two.files[3], ADMIN_FILE);
 });
 
 test("device data → diagram accounts, allowed accounts missing from the view are filled in", () => {
