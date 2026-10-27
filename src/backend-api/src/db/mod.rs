@@ -5,6 +5,7 @@ pub mod access_requests;
 pub mod ai_audit;
 pub mod audit_chain;
 pub mod command_rules;
+pub mod snippets;
 pub mod credentials;
 pub mod device_keys;
 pub mod groups;
