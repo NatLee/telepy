@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Pagination } from "@/components/ui/pagination";
 import { TargetUsersInfoDialog } from "@/components/tunnels/TargetUsersInfoDialog";
 import { usePagination } from "@/hooks/usePagination";
@@ -78,14 +79,30 @@ export function ManageUsersModal({ isOpen, onClose, tunnelId, readOnly = false }
                                 <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("manageUsers.search")} aria-label={t("manageUsers.search")} className="h-8 pl-8" />
                             </div>
                             {buckets.length > 1 && (
-                                <Segmented
-                                    size="sm"
-                                    fullWidth
-                                    aria-label={t("manageUsers.filterAria")}
-                                    value={bucket}
-                                    onChange={setFilter}
-                                    options={buckets.map((b) => ({ value: b, label: `${t(`manageUsers.filter.${b}`)} (${counts[b]})` }))}
-                                />
+                                <>
+                                    {/* 手機上是一行的下拉選單（四個按鈕在放大顯示時各折成好幾行）；桌面是切換按鈕。
+                                        Phones get a one-line select (four buttons wrap into tall blocks at large sizes); desktop the buttons. */}
+                                    <NativeSelect
+                                        className="h-8 text-sm sm:hidden"
+                                        aria-label={t("manageUsers.filterAria")}
+                                        value={bucket}
+                                        onChange={(e) => setFilter(e.target.value as AccountFilter)}
+                                    >
+                                        {buckets.map((b) => (
+                                            <option key={b} value={b}>{`${t(`manageUsers.filter.${b}`)} (${counts[b]})`}</option>
+                                        ))}
+                                    </NativeSelect>
+                                    <div className="max-sm:hidden">
+                                        <Segmented
+                                            size="sm"
+                                            fullWidth
+                                            aria-label={t("manageUsers.filterAria")}
+                                            value={bucket}
+                                            onChange={setFilter}
+                                            options={buckets.map((b) => ({ value: b, label: `${t(`manageUsers.filter.${b}`)} (${counts[b]})` }))}
+                                        />
+                                    </div>
+                                </>
                             )}
                         </div>
                     ) : undefined
