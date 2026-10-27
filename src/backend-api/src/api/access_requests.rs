@@ -371,6 +371,7 @@ pub async fn revert_once(state: &AppState) -> ApiResult<usize> {
     for ((tunnel_id, user_id), (accounts, permission)) in ended {
         let Some(t) = db::tunnels::by_id(&state.db, tunnel_id).await? else { continue };
         state.device_keys.kick(t.id);
+        crate::terminal_detach::kick(state, Some(t.id), Some(user_id));
         let asked = what(&accounts, permission.as_deref());
         state.hub.notify_user(
             user_id,

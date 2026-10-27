@@ -215,6 +215,10 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
         None => None,
     };
     db::users::set_flags(&state.db, id, is_active, is_superuser).await?;
+    // 停用帳號：他開著的網頁終端機（含斷線保留中的）跟著結束。/ A disabled account's open web terminals end.
+    if is_active == Some(false) {
+        crate::terminal_detach::kick(&state, None, Some(id));
+    }
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
         db::users::settings_update(&state.db, id, SettingsPatch { language: Some(lang), ..SettingsPatch::default() }).await?;

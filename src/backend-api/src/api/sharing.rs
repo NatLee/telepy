@@ -47,6 +47,8 @@ pub async fn end_share(state: &AppState, t: &Tunnel, sharing: &db::sharing::Shar
     db::tunnel_tags::set_pin(&state.db, uid, t.id, false).await?;
     // 分享撤銷：他的金鑰離開這台裝置的清單，並從裝置上移除。/ Their keys leave this device.
     db::device_keys::delete_entries_of_user(&state.db, t.id, uid).await?;
+    // 他在這台裝置上開著的網頁終端機（含斷線保留中的）跟著結束。/ Their open web terminals there (detached too) end.
+    crate::terminal_detach::kick(state, Some(t.id), Some(uid));
     // 他的分組與他的金鑰群組對這條通道的授予也拿掉。/ Their grouping of it and their key groups' grants to it go too.
     db::groups::forget_tunnel_for_user(&state.db, uid, t.id).await?;
     state.device_keys.kick(t.id);
@@ -231,6 +233,7 @@ async fn update_permission(State(state): State<AppState>, AuthUser(me): AuthUser
     }
     // ADMIN ↔ 其他等級會改變可用的 OS 帳號。/ The level changes which accounts their keys go into.
     state.device_keys.kick(t.id);
+    crate::terminal_detach::kick(&state, Some(t.id), Some(uid));
     let target_name = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_default();
     let display = perm.display();
     state.hub.notify_user(
@@ -320,6 +323,7 @@ async fn update_allowed_usernames(State(state): State<AppState>, AuthUser(me): A
     };
     db::sharing::replace_allowed_usernames(&state.db, sharing.id, t.id, &ids).await?;
     state.device_keys.kick(t.id);
+    crate::terminal_detach::kick(&state, Some(t.id), Some(uid));
     state.hub.notify_users(
         [me.id, uid],
         &json!({ "action": "TUNNEL-USERNAMES-UPDATED", "details": "Allowed target usernames updated", "tunnel_id": t.id }),

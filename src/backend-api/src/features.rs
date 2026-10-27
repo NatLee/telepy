@@ -127,6 +127,16 @@ impl Feature {
         }
     }
 
+    /// 一個進行中的 session 需要的全部功能：區網主機的終端機（`lan`）另外要「區網探索」，跟開啟時的檢查一樣。
+    /// Every feature a live session needs: a LAN-host terminal (`lan`) also needs `network`, like the check at open.
+    pub fn needed_by(kind: presence::Kind, lan: bool) -> Vec<Feature> {
+        let mut v: Vec<Feature> = Self::for_presence(kind).into_iter().collect();
+        if lan && kind == presence::Kind::Terminal {
+            v.push(Feature::Network);
+        }
+        v
+    }
+
     /// 一個進行中的 session 需要的功能（被拒絕時把它結束）。/ The feature a live session needs.
     pub fn for_presence(kind: presence::Kind) -> Option<Feature> {
         match kind {
@@ -386,20 +396,26 @@ pub async fn end_denied_sessions(state: &AppState, by: &str) -> usize {
     let Ok(policy) = state.features.policy().await else { return 0 };
     let mut users: HashMap<i64, Option<User>> = HashMap::new();
     let mut ended = 0;
+    // 網頁終端機的 shell（連著或斷線保留中）都有一筆「使用中」；區網主機的那些另外要 network。
+    // Every web terminal shell, attached or detached, has a presence entry; LAN-host ones also need `network`.
+    let lan: std::collections::HashSet<u64> = state.shells.list().into_iter().filter(|s| s.lan_host.is_some()).map(|s| s.presence_id).collect();
     for entry in state.presence.all() {
-        let Some(f) = Feature::for_presence(entry.kind) else { continue };
+        let needs = Feature::needed_by(entry.kind, lan.contains(&entry.id));
+        if needs.is_empty() {
+            continue;
+        }
         if let std::collections::hash_map::Entry::Vacant(slot) = users.entry(entry.user_id) {
             slot.insert(db::users::by_id(&state.db, entry.user_id).await.ok().flatten());
         }
         let Some(Some(user)) = users.get(&entry.user_id) else { continue };
-        if policy.allowed(user, f) {
-            continue;
-        }
-        if crate::api::sessions::end_entry(state, &entry, by).await {
+        let Some(f) = needs.into_iter().find(|f| !policy.allowed(user, *f)) else { continue };
+        let why = format!("{} was turned off for this account", f.label());
+        if crate::api::sessions::end_entry(state, &entry, by, Some(&why)).await {
             ended += 1;
             state.hub.notify_user(
                 entry.user_id,
                 &json!({ "action": "SESSION-ENDED", "tunnel_id": entry.tunnel_id, "kind": entry.kind.as_str(), "by": by, "feature": f.id(),
+                         "detached": entry.detached.is_some(),
                          "details": format!("{} was turned off for your account, so your {} session ended", f.label(), entry.kind.as_str()) }),
             );
         }
@@ -562,5 +578,10 @@ mod tests {
         assert_eq!(Feature::for_presence(presence::Kind::RustDesk), Some(Feature::RemoteDesktop));
         assert_eq!(Feature::for_presence(presence::Kind::Ssh), Some(Feature::KeysPersonal));
         assert_eq!(Feature::for_presence(presence::Kind::Watch), Some(Feature::Terminal));
+        // 區網主機的終端機要兩個都有（開啟時也這樣檢查）。/ A LAN-host terminal needs both, like at open.
+        assert_eq!(Feature::needed_by(presence::Kind::Terminal, false), vec![Feature::Terminal]);
+        assert_eq!(Feature::needed_by(presence::Kind::Terminal, true), vec![Feature::Terminal, Feature::Network]);
+        assert_eq!(Feature::needed_by(presence::Kind::Watch, true), vec![Feature::Terminal], "watching only needs terminal");
+        assert_eq!(Feature::needed_by(presence::Kind::Files, true), vec![Feature::Files]);
     }
 }
