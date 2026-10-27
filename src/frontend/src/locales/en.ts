@@ -1565,7 +1565,7 @@ export const en = {
     "desktop.ways.title": "Two ways to connect",
     "desktop.ways.description": "Both paths side by side: what each needs, who draws the picture and which parts are encrypted.",
     "desktop.ways.current": "You are here",
-    "desktop.ways.draws": "Draws the picture",
+    "desktop.ways.draws": "Renders here",
     "desktop.ways.tableCaption": "Comparison",
     "desktop.ways.legend": "Legend",
     "desktop.ways.legend.wss": "Secure WebSocket",

@@ -1555,7 +1555,7 @@ export const ja: Record<TranslationKey, string> = {
     "desktop.ways.title": "2 つの接続方法",
     "desktop.ways.description": "2 つの経路を並べて比較：それぞれに必要なもの、画面を描く場所、暗号化される区間。",
     "desktop.ways.current": "現在の選択",
-    "desktop.ways.draws": "ここで画面を描画",
+    "desktop.ways.draws": "ここで描画",
     "desktop.ways.tableCaption": "比較",
     "desktop.ways.legend": "凡例",
     "desktop.ways.legend.wss": "暗号化された WebSocket",
