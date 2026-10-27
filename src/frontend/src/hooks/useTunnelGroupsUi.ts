@@ -9,8 +9,8 @@ import { apiFetch, readJson } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { useTunnelGroups } from "@/hooks/useTunnelGroups";
-import { moveId } from "@/lib/groups";
-import type { GroupsReply, KeyGroup, TunnelGroup } from "@/types/groups";
+import { groupPatch, moveId } from "@/lib/groups";
+import type { GroupMeta, GroupsReply, KeyGroup, TunnelGroup } from "@/types/groups";
 import type { Tunnel } from "@/types/tunnel";
 
 const COLLAPSED_KEY = "telepy.tunnelGroupsCollapsed";
@@ -56,14 +56,15 @@ export function useTunnelGroupsUi(tunnels: Tunnel[], isOnline: (t: Tunnel) => bo
     const onlineOf = useCallback((g: TunnelGroup) => tunnels.filter((tn) => g.tunnel_ids.includes(tn.id) && isOnline(tn)).length, [tunnels, isOnline]);
 
     const submitEditor = useCallback(
-        async (name: string, ids: number[]): Promise<string | null> => {
+        async (name: string, meta: GroupMeta, ids: number[]): Promise<string | null> => {
             const g = editor?.group;
             if (!g) {
-                const r = await data.create(name, ids);
+                const r = await data.create(name, ids, meta);
                 return r.ok ? null : (r.nameError ?? "");
             }
-            if (name !== g.name) {
-                const r = await data.rename(g.id, name);
+            const patch = groupPatch(g, name, meta);
+            if (patch) {
+                const r = await data.update(g.id, patch);
                 if (!r.ok) return r.nameError ?? "";
             }
             const same = ids.length === g.tunnel_ids.length && ids.every((id) => g.tunnel_ids.includes(id));

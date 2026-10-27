@@ -4,7 +4,7 @@ import { defaultCollapsed, foldsToSummary, hasGroupedDevice, matrixSections, UNG
 import type { TunnelGroup } from "../types/groups.ts";
 import type { KeyTarget } from "../types/keys.ts";
 
-const g = (id: number, name: string, position: number, tunnel_ids: number[]): TunnelGroup => ({ id, name, position, tunnel_ids, created_at: "" });
+const g = (id: number, name: string, position: number, tunnel_ids: number[]): TunnelGroup => ({ id, name, description: "", labels: [], position, tunnel_ids, created_at: "" });
 const groups = [g(2, "Home", 1, [3, 4]), g(1, "Prod", 0, [1, 2]), g(3, "Empty", 2, [])];
 const devices = [1, 2, 3, 4, 5, 6].map((tunnel_id) => ({ tunnel_id }));
 const idOf = (d: { tunnel_id: number }) => d.tunnel_id;

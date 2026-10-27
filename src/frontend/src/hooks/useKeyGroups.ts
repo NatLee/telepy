@@ -1,7 +1,7 @@
 /**
- * 我的金鑰群組：讀取、建立、改名、刪除、整組金鑰、授予（給一條通道或一個通道群組，可只給某些帳號）、改 / 收回授予。
+ * 我的金鑰群組：讀取、建立、改名稱 / 說明 / 標籤、刪除、整組金鑰、授予（給一條通道或一個通道群組，可只給某些帳號）、改 / 收回授予。
  * 改動會讓 Telepy 把金鑰裝上 / 移除，所以每次成功後呼叫 `onChanged`（金鑰頁重抓裝置矩陣）。
- * My key groups: load, create, rename, delete, replace keys, grant (to a tunnel or a tunnel group, optionally to
+ * My key groups: load, create, edit (name / description / labels), delete, replace keys, grant (to a tunnel or a tunnel group, optionally to
  * some accounts only), change or revoke a grant. Writes move keys on devices, so `onChanged` runs after each.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -9,7 +9,7 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { fieldMessage, type GroupWrite } from "@/hooks/useTunnelGroups";
-import type { GroupsReply, KeyGroup } from "@/types/groups";
+import type { GroupMeta, GroupsReply, KeyGroup } from "@/types/groups";
 
 /** 授予的對象。/ What to grant to. */
 export type GrantTarget = { tunnel_id: number } | { tunnel_group_id: number };
@@ -60,13 +60,14 @@ export function useKeyGroups(onChanged?: () => void) {
     );
 
     const base = "/api/reverse/user/key-groups";
-    const create = useCallback((name: string, keyIds: number[] = []) => write(base, "POST", { name, key_ids: keyIds }), [write]);
-    const rename = useCallback((id: number, name: string) => write(`${base}/${id}`, "PATCH", { name }), [write]);
+    const create = useCallback((name: string, keyIds: number[] = [], meta?: GroupMeta) => write(base, "POST", { name, key_ids: keyIds, ...meta }), [write]);
+    /** 只送有改的欄位。/ Sends only the fields that changed. */
+    const update = useCallback((id: number, patch: Partial<GroupMeta> & { name?: string }) => write(`${base}/${id}`, "PATCH", patch), [write]);
     const remove = useCallback((id: number) => write(`${base}/${id}`, "DELETE"), [write]);
     const setKeys = useCallback((id: number, keyIds: number[]) => write(`${base}/${id}/keys`, "PUT", { key_ids: keyIds }), [write]);
     const grant = useCallback((id: number, target: GrantTarget, accounts: string[] | null) => write(`${base}/${id}/grants`, "POST", { ...target, accounts }), [write]);
     const updateGrant = useCallback((id: number, grantId: number, accounts: string[] | null) => write(`${base}/${id}/grants/${grantId}`, "PATCH", { accounts }), [write]);
     const revoke = useCallback((id: number, grantId: number) => write(`${base}/${id}/grants/${grantId}`, "DELETE"), [write]);
 
-    return { groups, loaded, load, create, rename, remove, setKeys, grant, updateGrant, revoke };
+    return { groups, loaded, load, create, update, remove, setKeys, grant, updateGrant, revoke };
 }

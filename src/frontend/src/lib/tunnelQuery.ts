@@ -12,7 +12,7 @@
  *   lastseen:>3h | lastseen:<1d | lastseen:never    最後上線多久以前（m/h/d/w）；連著的算「現在」
  *   ip:203.0.113                                    裝置公網 IP 的前綴
  *   user:alice                                      現在正在用這條隧道的人（看得到細節時）
- *   label:prod | tag:prod                           標籤（tag 是別名）
+ *   label:prod | tag:prod                           標籤（tag 是別名）；也比對它所在通道群組的標籤
  *   pinned:yes|no                                   我有沒有釘選
  *   group:prod | group:none                         我把它放在哪個通道群組（名稱不分大小寫；none = 未分組）
  *   warn:disk|memory|load|reboot|any                裝置的警示（磁碟快滿、記憶體不足、負載高、要重開機）
@@ -46,6 +46,8 @@ export interface MatchContext {
     now: number;
     /** 我把它放進的通道群組名稱；null / 沒給 = 未分組。/ My tunnel group's name; null / absent = ungrouped. */
     group?: string | null;
+    /** 那個群組的標籤（群組的標籤套用到組裡每條通道）。/ That group's labels (they apply to every tunnel in it). */
+    groupLabels?: string[];
 }
 
 const STATUS = new Set(["online", "degraded", "offline", "never", "up", "down"]);
@@ -163,7 +165,7 @@ function matchOne(f: QueryFilter, v: string, t: Tunnel, ctx: MatchContext): bool
         case "user":
             return (t.presence?.sessions ?? []).some((s) => s.user.toLowerCase().includes(v));
         case "label":
-            return (t.labels ?? []).includes(v);
+            return (t.labels ?? []).includes(v) || (ctx.groupLabels ?? []).includes(v);
         case "pinned":
             return (v === "yes") === !!t.pinned;
         case "group":
@@ -184,6 +186,7 @@ function matchText(term: string, t: Tunnel, ctx: MatchContext): boolean {
         t.endpoint?.ip ?? "",
         ...(t.presence?.sessions ?? []).map((s) => s.user),
         ...(t.labels ?? []),
+        ...(ctx.groupLabels ?? []),
     ];
     return hay.some((h) => h.toLowerCase().includes(term));
 }

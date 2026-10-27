@@ -11,11 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { MemberPicker, type MemberItem } from "@/components/groups/MemberPicker";
+import { GroupMetaFields, useGroupMetaForm } from "@/components/groups/GroupMetaFields";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { useI18n } from "@/lib/i18n";
 import { groupNameProblem, groupOf, MAX_GROUP_NAME, normalizeGroupName, type GroupNameProblem } from "@/lib/groups";
 import type { TranslationKey } from "@/locales/en";
-import type { TunnelGroup } from "@/types/groups";
+import type { GroupMeta, TunnelGroup } from "@/types/groups";
 import type { Tunnel, TunnelHealth } from "@/types/tunnel";
 
 export const NAME_PROBLEM: Record<Exclude<GroupNameProblem, null>, TranslationKey> = {
@@ -42,7 +43,7 @@ export function TunnelGroupEditor({
     initialTunnelIds?: number[];
     onClose: () => void;
     /** 回傳名稱欄位的錯誤（null = 成功）。/ Returns the name field's error (null = saved). */
-    onSubmit: (name: string, tunnelIds: number[]) => Promise<string | null>;
+    onSubmit: (name: string, meta: GroupMeta, tunnelIds: number[]) => Promise<string | null>;
 }) {
     const { t } = useI18n();
     const [name, setName] = useState(group?.name ?? "");
@@ -52,6 +53,7 @@ export function TunnelGroupEditor({
     const [submitted, setSubmitted] = useState(false);
     const [serverError, setServerError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const meta = useGroupMetaForm(group);
     const of = useMemo(() => groupOf(groups), [groups]);
     const names = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
 
@@ -79,9 +81,9 @@ export function TunnelGroupEditor({
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitted(true);
-        if (problem) return;
+        if (problem || !meta.valid) return;
         setSaving(true);
-        const err = await onSubmit(normalizeGroupName(name), ids);
+        const err = await onSubmit(normalizeGroupName(name), meta.value, ids);
         setSaving(false);
         if (err) setServerError(err);
         else onClose();
@@ -98,7 +100,7 @@ export function TunnelGroupEditor({
             footer={
                 <>
                     <Button variant="outline" onClick={onClose} disabled={saving}>{t("common.cancel")}</Button>
-                    <Button type="submit" form="tunnel-group-form" disabled={saving || (submitted && !!problem)}>
+                    <Button type="submit" form="tunnel-group-form" disabled={saving || (submitted && !!problem) || !meta.valid}>
                         {saving && <Loader2 className="animate-spin" />} {t("common.save")}
                     </Button>
                 </>
@@ -118,6 +120,7 @@ export function TunnelGroupEditor({
                         placeholder={t("groups.namePlaceholder")}
                     />
                 </Field>
+                <GroupMetaFields form={meta} idPrefix="tunnel-group" descriptionPlaceholder={t("groups.tunnel.descriptionPlaceholder")} />
                 <MemberPicker items={items} selected={ids} onChange={setIds} current={group?.id ?? null} title={t("groups.tunnel.tunnels")} hint={t("groups.tunnel.moveHint")} />
             </form>
         </Modal>

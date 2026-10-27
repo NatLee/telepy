@@ -27,12 +27,17 @@ pub const MAX_NAME_CHARS: usize = 48;
 pub const MAX_GRANTS: usize = 200;
 /// 授予時最多指定幾個帳號名稱。/ Account names per grant.
 pub const MAX_GRANT_ACCOUNTS: usize = 32;
+/// 群組說明最長幾個字元。/ Longest group description, in characters.
+pub const MAX_DESCRIPTION_CHARS: usize = 500;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct TunnelGroup {
     pub id: i64,
     pub user_id: i64,
     pub name: String,
+    pub description: String,
+    /// JSON 字串陣列。/ JSON array of labels.
+    pub labels: String,
     pub position: i64,
     pub created_at: String,
 }
@@ -42,7 +47,39 @@ pub struct KeyGroup {
     pub id: i64,
     pub user_id: i64,
     pub name: String,
+    pub description: String,
+    /// JSON 字串陣列。/ JSON array of labels.
+    pub labels: String,
     pub created_at: String,
+}
+
+/// 群組的說明與標籤（建立與修改共用）。/ A group's description and labels (create and update).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Meta {
+    pub description: String,
+    pub labels: Vec<String>,
+}
+
+/// `labels` 欄位 → 標籤；壞掉的 JSON 當成沒有。/ The `labels` column → labels (bad JSON = none).
+pub fn parse_labels(json: &str) -> Vec<String> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
+fn labels_json(labels: &[String]) -> String {
+    serde_json::to_string(labels).unwrap_or_else(|_| "[]".into())
+}
+
+/// 群組說明：去頭尾空白，最多 500 字；換行與 tab 可以，其他控制字元不行。/ A group description: trimmed, up to 500
+/// characters; newlines and tabs are fine, other control characters are not.
+pub fn normalize_description(raw: &str) -> Result<String, String> {
+    let d = raw.trim().replace("\r\n", "\n");
+    if d.chars().count() > MAX_DESCRIPTION_CHARS {
+        return Err(format!("Use at most {MAX_DESCRIPTION_CHARS} characters."));
+    }
+    if d.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+        return Err("The description contains a control character.".into());
+    }
+    Ok(d)
 }
 
 /// 一筆授予，連同對象的名稱。/ One grant with the target's name.
@@ -124,7 +161,7 @@ fn names_json(accounts: Option<&[String]>) -> Option<String> {
 
 // ---------------------------------------------------------------- tunnel groups
 
-const TG_COLS: &str = "id, user_id, name, position, created_at";
+const TG_COLS: &str = "id, user_id, name, description, labels, position, created_at";
 
 pub async fn tunnel_groups(db: &Db, user_id: i64) -> sqlx::Result<Vec<TunnelGroup>> {
     sqlx::query_as(&format!("SELECT {TG_COLS} FROM telepy_tunnel_group WHERE user_id = ? ORDER BY position, id")).bind(user_id).fetch_all(&db.read).await
@@ -154,13 +191,15 @@ pub async fn key_group_name_taken(db: &Db, user_id: i64, name: &str, except: Opt
 }
 
 /// 新群組排在最後。/ A new group goes last.
-pub async fn create_tunnel_group(db: &Db, user_id: i64, name: &str) -> sqlx::Result<TunnelGroup> {
+pub async fn create_tunnel_group(db: &Db, user_id: i64, name: &str, meta: &Meta) -> sqlx::Result<TunnelGroup> {
     let r = sqlx::query(
-        "INSERT INTO telepy_tunnel_group (user_id, name, position, created_at) \
-         VALUES (?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM telepy_tunnel_group WHERE user_id = ?), ?)",
+        "INSERT INTO telepy_tunnel_group (user_id, name, description, labels, position, created_at) \
+         VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM telepy_tunnel_group WHERE user_id = ?), ?)",
     )
     .bind(user_id)
     .bind(name)
+    .bind(&meta.description)
+    .bind(labels_json(&meta.labels))
     .bind(user_id)
     .bind(now_db())
     .execute(&db.write)
@@ -169,8 +208,15 @@ pub async fn create_tunnel_group(db: &Db, user_id: i64, name: &str) -> sqlx::Res
     sqlx::query_as(&format!("SELECT {TG_COLS} FROM telepy_tunnel_group WHERE id = ?")).bind(id).fetch_one(&db.write).await
 }
 
-pub async fn rename_tunnel_group(db: &Db, id: i64, name: &str) -> sqlx::Result<()> {
-    sqlx::query("UPDATE telepy_tunnel_group SET name = ? WHERE id = ?").bind(name).bind(id).execute(&db.write).await?;
+/// 改名稱、說明、標籤（三個一起寫；呼叫的人先把沒改的填成原本的值）。/ Write name, description and labels.
+pub async fn update_tunnel_group(db: &Db, id: i64, name: &str, meta: &Meta) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_tunnel_group SET name = ?, description = ?, labels = ? WHERE id = ?")
+        .bind(name)
+        .bind(&meta.description)
+        .bind(labels_json(&meta.labels))
+        .bind(id)
+        .execute(&db.write)
+        .await?;
     Ok(())
 }
 
@@ -264,7 +310,7 @@ pub async fn replace_tunnel_group_members(db: &Db, user_id: i64, group_id: i64, 
 
 // ---------------------------------------------------------------- key groups
 
-const KG_COLS: &str = "id, user_id, name, created_at";
+const KG_COLS: &str = "id, user_id, name, description, labels, created_at";
 
 /// 依名稱排（不分大小寫）。/ Ordered by name, ignoring case.
 pub async fn key_groups(db: &Db, user_id: i64) -> sqlx::Result<Vec<KeyGroup>> {
@@ -275,13 +321,27 @@ pub async fn key_group(db: &Db, user_id: i64, id: i64) -> sqlx::Result<Option<Ke
     sqlx::query_as(&format!("SELECT {KG_COLS} FROM telepy_key_group WHERE user_id = ? AND id = ?")).bind(user_id).bind(id).fetch_optional(&db.read).await
 }
 
-pub async fn create_key_group(db: &Db, user_id: i64, name: &str) -> sqlx::Result<KeyGroup> {
-    let r = sqlx::query("INSERT INTO telepy_key_group (user_id, name, created_at) VALUES (?, ?, ?)").bind(user_id).bind(name).bind(now_db()).execute(&db.write).await?;
+pub async fn create_key_group(db: &Db, user_id: i64, name: &str, meta: &Meta) -> sqlx::Result<KeyGroup> {
+    let r = sqlx::query("INSERT INTO telepy_key_group (user_id, name, description, labels, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(user_id)
+        .bind(name)
+        .bind(&meta.description)
+        .bind(labels_json(&meta.labels))
+        .bind(now_db())
+        .execute(&db.write)
+        .await?;
     sqlx::query_as(&format!("SELECT {KG_COLS} FROM telepy_key_group WHERE id = ?")).bind(r.last_insert_rowid()).fetch_one(&db.write).await
 }
 
-pub async fn rename_key_group(db: &Db, id: i64, name: &str) -> sqlx::Result<()> {
-    sqlx::query("UPDATE telepy_key_group SET name = ? WHERE id = ?").bind(name).bind(id).execute(&db.write).await?;
+/// 改名稱、說明、標籤。/ Write name, description and labels.
+pub async fn update_key_group(db: &Db, id: i64, name: &str, meta: &Meta) -> sqlx::Result<()> {
+    sqlx::query("UPDATE telepy_key_group SET name = ?, description = ?, labels = ? WHERE id = ?")
+        .bind(name)
+        .bind(&meta.description)
+        .bind(labels_json(&meta.labels))
+        .bind(id)
+        .execute(&db.write)
+        .await?;
     Ok(())
 }
 
@@ -492,6 +552,22 @@ mod tests {
         assert!(normalize_accounts(Some(&s(&["a\nb"]))).is_err());
         let many: Vec<String> = (0..=MAX_GRANT_ACCOUNTS).map(|i| format!("u{i}")).collect();
         assert!(normalize_accounts(Some(&many)).is_err());
+    }
+
+    #[test]
+    fn descriptions_are_trimmed_and_checked() {
+        assert_eq!(normalize_description("  web servers\r\nin Tokyo  ").unwrap(), "web servers\nin Tokyo");
+        assert_eq!(normalize_description("").unwrap(), "");
+        assert!(normalize_description("tab\there").is_ok());
+        assert!(normalize_description("bell\u{7}").is_err());
+        assert!(normalize_description(&"字".repeat(MAX_DESCRIPTION_CHARS)).is_ok());
+        assert!(normalize_description(&"x".repeat(MAX_DESCRIPTION_CHARS + 1)).is_err());
+    }
+
+    #[test]
+    fn bad_label_json_counts_as_none() {
+        assert_eq!(parse_labels("nope"), Vec::<String>::new());
+        assert_eq!(parse_labels(r#"["env=prod","web"]"#), vec!["env=prod".to_string(), "web".to_string()]);
     }
 
     #[test]

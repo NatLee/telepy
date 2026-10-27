@@ -8,6 +8,7 @@ import { ArrowDown, ArrowUp, Folder, FolderTree, Plus, SquarePen, Trash2 } from 
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
+import { TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { useI18n } from "@/lib/i18n";
 import { moveId } from "@/lib/groups";
 import type { TunnelGroup } from "@/types/groups";
@@ -63,6 +64,8 @@ export function TunnelGroupsDialog({
                                 <Folder size={16} className="shrink-0 text-muted-foreground" aria-hidden />
                                 <div className="min-w-0 flex-1">
                                     <p className="truncate text-sm text-foreground" title={g.name}>{g.name}</p>
+                                    {g.description && <p className="line-clamp-2 whitespace-pre-line text-xs text-foreground/75" title={g.description}>{g.description}</p>}
+                                    <TunnelLabels labels={g.labels} className="my-0.5" />
                                     <p className="text-xs text-muted-foreground">
                                         {t("groups.tunnel.count", { count: g.tunnel_ids.length })}
                                         {g.tunnel_ids.length > 0 && <> · {t("groups.tunnel.online", { count: onlineCount(g) })}</>}
