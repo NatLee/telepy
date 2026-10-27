@@ -37,6 +37,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::snippets::router())
         .merge(api::webhooks::router())
         .merge(api::users::router())
+        .merge(api::access::router())
         .merge(api::site_settings::router())
         .merge(api::logs::router())
         .merge(api::sftp::router())

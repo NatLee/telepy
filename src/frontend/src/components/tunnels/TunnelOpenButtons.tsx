@@ -20,15 +20,19 @@ import type { TranslationKey } from "@/locales/en";
 import { getTerminalPageUrl, type TerminalMainView } from "@/lib/tunnelUrls";
 import { Tunnel } from "@/types/tunnel";
 import { requestStepUp, stepUpToken } from "@/lib/stepUp";
+import { useFeatures } from "@/hooks/useFeatures";
+import type { FeatureId } from "@/lib/features";
 
-type OpenAction = { view: TerminalMainView | "desktop"; icon: LucideIcon; label: TranslationKey; hint: TranslationKey };
+type OpenAction = { view: TerminalMainView | "desktop"; icon: LucideIcon; label: TranslationKey; hint: TranslationKey; feature: FeatureId };
 const OPEN_ACTIONS: OpenAction[] = [
-    { view: "terminal", icon: TerminalSquare, label: "common.terminal", hint: "tunnelActions.terminalHint" },
-    { view: "files", icon: FolderOpen, label: "common.files", hint: "tunnelActions.filesHint" },
-    { view: "browser", icon: MonitorPlay, label: "common.browser", hint: "tunnelActions.browserHint" },
+    { view: "terminal", icon: TerminalSquare, label: "common.terminal", hint: "tunnelActions.terminalHint", feature: "terminal" },
+    { view: "files", icon: FolderOpen, label: "common.files", hint: "tunnelActions.filesHint", feature: "files" },
+    { view: "browser", icon: MonitorPlay, label: "common.browser", hint: "tunnelActions.browserHint", feature: "remote_browser" },
     // 遠端桌面頁（RDP / VNC / RustDesk）：裝置預選好。/ The remote desktop page with this device preselected.
-    { view: "desktop", icon: ScreenShare, label: "common.desktop", hint: "tunnelActions.desktopHint" },
+    { view: "desktop", icon: ScreenShare, label: "common.desktop", hint: "tunnelActions.desktopHint", feature: "remote_desktop" },
 ];
+/** 按鈕數 → 方塊排法（四顆的照舊；少了就平均分）。/ Tile columns per button count. */
+const TILE_COLS: Record<number, string> = { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3", 4: "grid-cols-2 @[19rem]:grid-cols-4" };
 
 /** 每顆按鈕去哪：三個主畫面進終端機頁，桌面進遠端桌面頁。/ Where each action goes. */
 function actionHref(tunnel: Tunnel, view: OpenAction["view"]): string {
@@ -46,6 +50,9 @@ interface TunnelOpenButtonsProps {
 export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = "tiles" }: TunnelOpenButtonsProps) {
     const { t } = useI18n();
     const router = useRouter();
+    // 管理員替這個人關掉的功能不顯示（API 也會拒絕）。/ Features turned off for this person are not shown.
+    const { has } = useFeatures();
+    const actions = OPEN_ACTIONS.filter((a) => has(a.feature));
     // 敏感隧道：先確認是你再進去（免得一進去就被擋）；按著修飾鍵開新分頁就照常，交給那一頁處理。
     // Sensitive tunnel: confirm it's you before navigating (instead of failing on arrival); modified clicks pass through.
     const gate = (href: string) => (e: React.MouseEvent) => {
@@ -58,10 +65,12 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
     const offlineHint = degraded ? ` — ${t("tunnels.degradedHint")}` : online ? "" : ` — ${t("tunnelActions.offlineHint")}`;
     online = online && !degraded;
 
+    if (actions.length === 0) return null;
+
     if (variant === "compact") {
         return (
             <div className="inline-flex items-center rounded-md border border-border bg-surface p-0.5">
-                {OPEN_ACTIONS.map(({ view, icon: Icon, label, hint }) => (
+                {actions.map(({ view, icon: Icon, label, hint }) => (
                     <Link
                         key={view}
                         href={actionHref(tunnel, view)}
@@ -88,8 +97,8 @@ export function TunnelOpenButtons({ tunnel, online, degraded = false, variant = 
         // 標籤不會被拆成一字一行。/ Four across needs 19rem (Japanese labels); narrower cards (or a larger display
         // size) fall back to 2×2 so a label never breaks into one character per line.
         <div className="@container">
-        <div className="grid grid-cols-2 gap-2 @[19rem]:grid-cols-4">
-            {OPEN_ACTIONS.map(({ view, icon: Icon, label, hint }) => {
+        <div className={cn("grid gap-2", TILE_COLS[actions.length])}>
+            {actions.map(({ view, icon: Icon, label, hint }) => {
                 const primary = view === "terminal";
                 return (
                     <Link

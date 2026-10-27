@@ -28,6 +28,9 @@ export interface UserProfile {
     /** 管理員要求、但這個帳號還沒設定的因素；非空時只能先完成設定（components/auth/EnrollmentGate）。
      *  Second factors the admin requires that this account still lacks; while non-empty the app shows the enrollment gate. */
     mfa_missing?: RequiredFactor[];
+    /** 這個人能用的功能 id（管理員 = 全部；lib/features.ts）。沒有 = 舊後端，當作全部可以。
+     *  Feature ids this person may use (all for admins; lib/features.ts). Missing = older backend, treat as all. */
+    features?: string[];
 }
 
 export type RequiredFactor = "totp" | "passkey";

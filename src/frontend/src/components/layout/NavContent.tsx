@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,8 @@ interface NavLink {
     key: TranslationKey;
     href: string;
     icon: React.ReactNode;
+    /** 這個頁面屬於哪個功能；管理員替這個人關掉了就不顯示。/ The feature this page belongs to; hidden when turned off. */
+    feature?: FeatureId;
     /** 子頁：在這區裡時展開在下面（側欄收合時不顯示，頁面上有分頁）。/ Sub-pages, shown below while inside the area (not when collapsed; the page has tabs). */
     children?: { key: TranslationKey; href: string }[];
 }
@@ -32,13 +35,13 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
         key: "nav.sectionWorkspace",
         links: [
             { key: "nav.tunnels", href: "/tunnels", icon: <Network size={18} /> },
-            { key: "nav.terminal", href: "/tunnels/terminal", icon: <TerminalSquare size={18} /> },
+            { key: "nav.terminal", href: "/tunnels/terminal", icon: <TerminalSquare size={18} />, feature: "terminal" },
             { key: "nav.cheatsheet", href: "/tunnels/cheatsheet", icon: <SquareTerminal size={18} /> },
-            { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} /> },
-            { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} /> },
+            { key: "nav.network", href: "/tunnels/network", icon: <Waypoints size={18} />, feature: "network" },
+            { key: "nav.desktop", href: "/tunnels/desktop", icon: <ScreenShare size={18} />, feature: "remote_desktop" },
             { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
-            { key: "nav.recordings", href: "/tunnels/recordings", icon: <Clapperboard size={18} /> },
-            { key: "nav.commands", href: "/tunnels/commands", icon: <ShieldCheck size={18} /> },
+            { key: "nav.recordings", href: "/tunnels/recordings", icon: <Clapperboard size={18} />, feature: "recordings.manage" },
+            { key: "nav.commands", href: "/tunnels/commands", icon: <ShieldCheck size={18} />, feature: "command_rules.manage" },
             {
                 key: "nav.keys",
                 href: "/tunnels/keys",
@@ -50,7 +53,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
                 ],
             },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
-            { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} /> },
+            { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} />, feature: "webhooks.personal" },
         ],
     },
     {
@@ -58,7 +61,7 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
         // AI tools (MCP): connection setup + connected apps, and the sessions / audit log.
         key: "nav.sectionAi",
         links: [
-            { key: "nav.mcp", href: "/tunnels/mcp", icon: <Plug size={18} /> },
+            { key: "nav.mcp", href: "/tunnels/mcp", icon: <Plug size={18} />, feature: "mcp.connect" },
             { key: "nav.activity", href: "/tunnels/activity", icon: <Bot size={18} /> },
         ],
     },
@@ -126,7 +129,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 {navSections.map((section) => (
                     <React.Fragment key={section.key}>
                         <SectionLabel collapsed={collapsed}>{t(section.key)}</SectionLabel>
-                        {section.links.map((link) => {
+                        {section.links.filter((link) => !link.feature || hasFeature(user, link.feature)).map((link) => {
                             const active = isNavActive(pathname, link.href);
                             // 等我核准的指令數。/ Commands waiting for my approval.
                             const badge = link.href === "/tunnels/commands" && approvals.pending.length > 0 ? approvals.pending.length : null;

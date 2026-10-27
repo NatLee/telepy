@@ -262,6 +262,7 @@ export async function apiFetch(
     if (response.status === 403 && typeof window !== "undefined") {
         const body = (await response.clone().json().catch(() => null)) as { code?: string } | null;
         if (body?.code === "mfa_enrollment_required") window.dispatchEvent(new CustomEvent("api:mfa-enrollment-required"));
+        if (body?.code === "feature_disabled") window.dispatchEvent(new CustomEvent("api:feature-disabled"));
         if (body?.code === "step_up_required" && !stepUpRetried && (await requestStepUp())) {
             return apiFetch(endpoint, options, true, refreshRetried);
         }

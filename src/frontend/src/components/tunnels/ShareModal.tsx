@@ -16,6 +16,8 @@ import { ShareModalEditTargetUsersModal } from "@/components/tunnels/ShareModalE
 import { AccessRequestsPanel } from "@/components/tunnels/AccessRequests";
 import { TunnelModalProps } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import { useFeatures } from "@/hooks/useFeatures";
+import { Callout } from "@/components/ui/callout";
 
 interface ShareModalProps extends TunnelModalProps {
     readOnly?: boolean;
@@ -23,7 +25,9 @@ interface ShareModalProps extends TunnelModalProps {
 
 export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: ShareModalProps) {
     const { t } = useI18n();
-    const { state, actions } = useShareModal(tunnelId, isOpen);
+    // 「分享隧道」被管理員關掉：只看得到、取消得了現有的分享。/ Sharing turned off: existing shares can be seen and removed only.
+    const canShare = useFeatures().has("tunnels.share");
+    const { state, actions } = useShareModal(tunnelId, isOpen, canShare && !readOnly);
     const {
         sharedUsers,
         availableUsers,
@@ -51,7 +55,8 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                     {/* 等待決定的存取申請（owner / ADMIN；沒有就不顯示）。/ Pending access requests (owner / ADMIN; hidden when none). */}
                     <AccessRequestsPanel tunnelId={tunnelId} enabled={isOpen} onDecided={refresh} />
 
-                    {!readOnly && (
+                    {!readOnly && !canShare && <Callout tone="warning">{t("access.shareOff")}</Callout>}
+                    {!readOnly && canShare && (
                         <ShareModalShareForm
                             selectedUser={selectedUser}
                             setSelectedUser={setSelectedUser}
@@ -71,6 +76,7 @@ export function ShareModal({ isOpen, onClose, tunnelId, readOnly = false }: Shar
                         loading={loading}
                         sharedUsers={sharedUsers as SharedUserRow[]}
                         readOnly={readOnly}
+                        locked={!canShare}
                         tunnelUsernames={tunnelUsernames}
                         onEditTargetUsers={(payload) =>
                             setEditTargetUsersModal({

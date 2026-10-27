@@ -20,11 +20,22 @@ pub struct McpPrincipal {
     pub tunnel_ids: Option<Vec<i64>>,
     /// 這次 MCP 請求的來源 IP（AI app 的出口）；由 `/mcp` 中介層填。/ Client IP of this MCP request.
     pub ip: Option<String>,
+    /// 管理員替這個人關掉的功能（tool 照 scope 對應的功能拒絕）。/ Features turned off for this person.
+    pub denied: Vec<crate::features::Feature>,
 }
 
 impl McpPrincipal {
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
+    }
+    /// 這個功能被關掉了嗎（跟 web 同一道門：`ssh:exec` ↔ 終端機、`ssh:files` ↔ 檔案…）。
+    /// Whether a feature is turned off for this person (the same gate as the web).
+    pub fn feature_denied(&self, f: crate::features::Feature) -> bool {
+        self.denied.contains(&f)
+    }
+    /// scope 有給、而且它對應的功能沒被關掉。/ The scope is granted and its feature is not turned off.
+    pub fn may_use(&self, scope: &str) -> bool {
+        self.has_scope(scope) && !crate::features::Feature::for_scope(scope).is_some_and(|f| self.feature_denied(f))
     }
     /// grant 的隧道限制（權限另外照 web 規則檢查）。/ The grant's tunnel restriction (permissions are checked separately).
     pub fn tunnel_allowed(&self, tunnel_id: i64) -> bool {
@@ -67,6 +78,13 @@ pub async fn resolve(state: &AppState, token: &str) -> Result<McpPrincipal, McpA
     if !crate::api::mfa::enrollment_missing(state, user.id).await.map(|m| m.is_empty()).unwrap_or(false) {
         return Err(McpAuthError::Invalid);
     }
+    // 功能權限：「MCP app」被關掉 = 這個人的 app 全部不能用（跟撤銷一樣）；其他功能在各個 tool 擋。
+    // Feature permissions: MCP apps turned off = every app of this person is refused like a revoked one.
+    let policy = state.features.policy().await.map_err(|_| McpAuthError::Invalid)?;
+    if !policy.allowed(&user, crate::features::Feature::McpConnect) {
+        return Err(McpAuthError::Invalid);
+    }
+    let denied = crate::features::Feature::ALL.into_iter().filter(|f| !policy.allowed(&user, *f)).collect();
     let client_name = db::oauth::client_by_id(&state.db, &grant.client_id).await.ok().flatten().map(|c| c.client_name).unwrap_or_default();
     let stale_before = db_time(now - chrono::Duration::seconds(TOUCH_INTERVAL_SECS));
     if grant.last_used_at.as_deref().map(|t| t < stale_before.as_str()).unwrap_or(true) {
@@ -86,5 +104,6 @@ pub async fn resolve(state: &AppState, token: &str) -> Result<McpPrincipal, McpA
         client_name,
         scopes,
         ip: None,
+        denied,
     })
 }

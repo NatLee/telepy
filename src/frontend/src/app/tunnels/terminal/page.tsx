@@ -14,6 +14,7 @@ import { Terminal as TerminalIcon, X, Server, Wrench } from "lucide-react";
 import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent, type SideTab } from "@/components/tunnels/TerminalContent";
 import { ToolboxPanel } from "@/components/toolbox/ToolboxPanel";
+import { useFeatures } from "@/hooks/useFeatures";
 import { Modal } from "@/components/ui/Modal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ToolboxTarget } from "@/lib/snippets";
@@ -111,7 +112,9 @@ function TerminalSession({ serverId }: { serverId: string }) {
     // Toolbox: on desktop the side panel's second tab (sharing the files panel), on phones a bottom sheet that closes
     // after sending so the output is visible.
     const isDesktop = useMediaQuery("(min-width: 768px)");
-    const [sideTab, setSideTab] = useState<SideTab>(searchParams.get("toolbox") ? "toolbox" : "files");
+    // 「工具箱」被管理員關掉就沒有這個面板（終端機頁本身已經要「網頁終端機」）。/ No toolbox when an admin turned it off.
+    const canToolbox = useFeatures().has("toolbox");
+    const [sideTab, setSideTab] = useState<SideTab>(searchParams.get("toolbox") && canToolbox ? "toolbox" : "files");
     const [toolboxSheet, setToolboxSheet] = useState(false);
     const toolboxOpen = isDesktop ? showFiles && sideTab === "toolbox" : toolboxSheet;
     const toggleToolbox = useCallback(() => {
@@ -128,13 +131,13 @@ function TerminalSession({ serverId }: { serverId: string }) {
     // ?toolbox=1（隧道選單的「工具箱」）：量到斷點後打開一次。/ ?toolbox=1 opens it once the breakpoint is known.
     const toolboxParamDone = useRef(false);
     useEffect(() => {
-        if (toolboxParamDone.current || isDesktop === undefined || !searchParams.get("toolbox")) return;
+        if (toolboxParamDone.current || isDesktop === undefined || !searchParams.get("toolbox") || !canToolbox) return;
         toolboxParamDone.current = true;
         if (isDesktop) {
             setSideTab("toolbox");
             setShowFiles(true);
         } else setToolboxSheet(true);
-    }, [isDesktop, searchParams, setShowFiles]);
+    }, [isDesktop, searchParams, setShowFiles, canToolbox]);
     // 工具箱讀最新的提示（面板收起來之後也讀得到）。/ The toolbox reads the latest banner, even after its panel closes.
     const bannerRef = useRef(commandBanner);
     useEffect(() => { bannerRef.current = commandBanner; }, [commandBanner]);
@@ -237,7 +240,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     switchHref={switchHref}
                     sideTab={sideTab}
                     onSideTab={setSideTab}
-                    onToolbox={toggleToolbox}
+                    onToolbox={canToolbox ? toggleToolbox : undefined}
                     toolboxOpen={toolboxOpen}
                 />
 
@@ -275,7 +278,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     palette={appearance.resolved.scheme.theme}
                     sideTab={sideTab}
                     onSideTab={setSideTab}
-                    toolbox={isDesktop ? toolboxPanel : null}
+                    toolbox={isDesktop && canToolbox ? toolboxPanel : null}
                     commandBanner={(commandBanner || reconnecting) && (
                         <div className="space-y-2">
                             {/* 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */}

@@ -81,6 +81,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             return;
         }
     };
+    if let Err(code) = auth::require_feature(&state, &user, crate::features::Feature::RemoteBrowser).await {
+        close_with(&mut socket, code, crate::features::Feature::RemoteBrowser.id()).await;
+        return;
+    }
     let Some(session) = state.remote_browser.get(&session_id) else {
         tracing::warn!(session_id, "remote-browser(vnc): unknown session");
         close(&mut socket, 4404).await;

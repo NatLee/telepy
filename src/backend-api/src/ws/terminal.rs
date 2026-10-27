@@ -359,6 +359,18 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     };
     tracing::info!(user = %user.username, "Terminal user authenticated");
+    // 功能權限先、隧道權限後；區網主機的終端機另外要「區網探索」。/ Feature gate first; a LAN-host terminal also needs `network`.
+    let mut needed = vec![crate::features::Feature::Terminal];
+    if auth::id_field(&msg, "lan_host_id").is_some() {
+        needed.push(crate::features::Feature::Network);
+    }
+    for f in needed {
+        if let Err(code) = auth::require_feature(&state, &user, f).await {
+            tracing::warn!(user = %user.username, feature = f.id(), "Terminal refused: feature turned off");
+            close_with(&mut socket, code, f.id()).await;
+            return;
+        }
+    }
     let reverse_port = match resolve_access(&state, user.id, &server_id, &username, msg.get("step_up").and_then(|v| v.as_str())).await {
         Ok(p) => p,
         Err(code) => {

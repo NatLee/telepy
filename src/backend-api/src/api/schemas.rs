@@ -142,6 +142,9 @@ pub struct UserProfile {
     /// While non-empty, every other REST route answers 403 `mfa_enrollment_required`.
     #[schema(example = json!(["totp"]))]
     pub mfa_missing: Vec<String>,
+    /// Feature ids this person may use (all of them for administrators); the rest answer 403 `feature_disabled`.
+    #[schema(example = json!(["tunnels.create", "terminal", "files"]))]
+    pub features: Vec<String>,
 }
 
 // ---------------------------------------------------------------- tunnels
@@ -3006,6 +3009,88 @@ pub struct WebhookTestResult {
 pub struct WebhookSecret {
     /// `whsec_…`（Standard Webhooks）。/ `whsec_…` (Standard Webhooks).
     pub secret: String,
+}
+
+// ---------------------------------------------------------------- feature permissions (access)
+
+#[derive(ToSchema)]
+pub struct AccessFeature {
+    #[schema(example = "terminal")]
+    pub id: String,
+    /// Built-in value when nothing is set (true for every feature)
+    pub default: bool,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "Effective value of one feature and where it comes from: superuser | user | group (with group_id) | everyone | default")]
+pub struct AccessResolved {
+    pub allowed: bool,
+    #[schema(example = "group")]
+    pub from: String,
+    pub group_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    /// User ids
+    pub members: Vec<i64>,
+    /// feature id → true (allow) / false (deny); missing = inherit
+    #[schema(example = json!({"terminal": false}))]
+    pub grants: std::collections::HashMap<String, bool>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessUser {
+    pub id: i64,
+    pub username: String,
+    pub email: String,
+    pub is_superuser: bool,
+    pub is_active: bool,
+    /// Group ids
+    pub groups: Vec<i64>,
+    /// The user's own settings (the leaf that overrides their groups); missing = inherit
+    pub grants: std::collections::HashMap<String, bool>,
+    /// feature id → effective value
+    pub effective: std::collections::HashMap<String, AccessResolved>,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "Feature permissions. Resolution: administrators have everything; else the user's own setting; else their groups (a deny in any group wins, else an allow); else everyone; else the default")]
+pub struct AccessPolicy {
+    pub features: Vec<AccessFeature>,
+    /// feature id → allow / deny for everyone; missing = the default
+    pub everyone: std::collections::HashMap<String, bool>,
+    pub groups: Vec<AccessGroup>,
+    pub users: Vec<AccessUser>,
+    /// Only on POST /api/access/groups: the new group's id
+    pub created_id: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessGroupWrite {
+    /// 1–64 characters, unique (case-insensitive); required on create
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Replaces the member list (user ids)
+    pub members: Option<Vec<i64>>,
+}
+
+#[derive(ToSchema)]
+pub struct AccessGrantWrite {
+    /// everyone | group | user
+    #[schema(example = "group")]
+    pub subject: String,
+    /// Group or user id (not for everyone)
+    pub id: Option<i64>,
+    #[schema(example = "terminal")]
+    pub feature: String,
+    /// allow | deny | inherit (removes the setting)
+    #[schema(example = "deny")]
+    pub value: String,
 }
 
 // ---------------------------------------------------------------- toolbox (command snippets)

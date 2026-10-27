@@ -38,6 +38,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
+import { useFeatures } from "@/hooks/useFeatures";
 
 interface TunnelActionsProps extends TunnelActionHandlers {
     tunnel: Tunnel;
@@ -102,6 +103,8 @@ export function TunnelActions({
     onMoveToGroup,
 }: TunnelActionsProps) {
     const { t } = useI18n();
+    // 管理員替這個人關掉的功能不放進選單（API 也會拒絕）。/ Features turned off for this person stay out of the menu.
+    const { has } = useFeatures();
 
     return (
         <DropdownMenu>
@@ -125,7 +128,7 @@ export function TunnelActions({
                         hint={t("tunnelActions.portForwardingHint")}
                         onSelect={() => onCommands(tunnel.id)}
                     />
-                    {onToolbox && (
+                    {onToolbox && has("toolbox") && has("terminal") && (
                         <ActionItem
                             icon={Wrench}
                             label={t("toolbox.menu")}
@@ -145,18 +148,22 @@ export function TunnelActions({
                         hint={t("tunnelActions.deviceKeysHint")}
                         onSelect={() => onKeys(tunnel.id)}
                     />
-                    <ActionItem
-                        icon={Waypoints}
-                        label={t("tunnelActions.network")}
-                        hint={t("tunnelActions.networkHint")}
-                        onSelect={() => onNetwork(tunnel.id)}
-                    />
-                    <ActionItem
-                        icon={ScreenShare}
-                        label={t("tunnelActions.desktop")}
-                        hint={t("tunnelActions.desktopHint")}
-                        onSelect={() => onDesktop(tunnel.id)}
-                    />
+                    {has("network") && (
+                        <ActionItem
+                            icon={Waypoints}
+                            label={t("tunnelActions.network")}
+                            hint={t("tunnelActions.networkHint")}
+                            onSelect={() => onNetwork(tunnel.id)}
+                        />
+                    )}
+                    {has("remote_desktop") && (
+                        <ActionItem
+                            icon={ScreenShare}
+                            label={t("tunnelActions.desktop")}
+                            hint={t("tunnelActions.desktopHint")}
+                            onSelect={() => onDesktop(tunnel.id)}
+                        />
+                    )}
                 </DropdownMenuGroup>
 
                 {tunnel.is_owner && (
@@ -220,7 +227,7 @@ export function TunnelActions({
                         hint={t("tunnelActions.logsHint")}
                         onSelect={() => onLogs(tunnel.id)}
                     />
-                    {tunnel.record_sessions && (
+                    {tunnel.record_sessions && has("recordings.manage") && (
                         <ActionItem
                             icon={Clapperboard}
                             label={t("recordings.menu")}
@@ -228,7 +235,7 @@ export function TunnelActions({
                             onSelect={() => onRecordings?.(tunnel.id)}
                         />
                     )}
-                    {onCommandRules && (
+                    {onCommandRules && has("command_rules.manage") && (
                         <ActionItem
                             icon={ShieldCheck}
                             label={t("commands.menu")}

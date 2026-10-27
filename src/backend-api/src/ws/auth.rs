@@ -3,7 +3,8 @@
 //!   4000 第一則不是 auth 訊息或缺 token、4001 token 無效/過期/逾時未認證、
 //!   4007 管理員要求兩步驟、這個帳號還沒設好（只有 notifications 不受限）；
 //!   4008 敏感隧道要 step-up、auth 訊息沒帶有效的 `step_up`（terminal / 檔案管理，見 `crate::step_up`）；
-//!   4010 這個登入（瀏覽器）被登出了（使用者從別的裝置、管理員），關閉原因 = 撤銷原因（[`SessionWatch`]）。
+//!   4010 這個登入（瀏覽器）被登出了（使用者從別的裝置、管理員），關閉原因 = 撤銷原因（[`SessionWatch`]）；
+//!   4012 管理員替這個人關掉了這個功能（終端機、檔案、遠端瀏覽器…；關閉原因 = 功能 id，見 `crate::features`）。
 //! First-message JWT auth shared by every WebSocket endpoint; same close codes as the Django base class.
 
 use std::time::Duration;
@@ -23,6 +24,21 @@ pub const WS_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 pub const CLOSE_MFA_ENROLLMENT_REQUIRED: u16 = 4007;
 /// 這個瀏覽器的登入被撤銷了；關閉原因 = user / admin / logout / reuse。/ This browser's sign-in was revoked; reason = why.
 pub const CLOSE_SIGNED_OUT: u16 = 4010;
+/// 這個功能被管理員關掉了（關閉原因 = 功能 id）。/ The feature is turned off for this person (reason = feature id).
+pub const CLOSE_FEATURE_DISABLED: u16 = 4012;
+
+/// socket 版的功能檢查：不能用 → `Err(4012)`；查不到（DB 錯誤）也拒絕。
+/// The socket form of the feature check: `Err(4012)` when not allowed (also on a lookup error).
+pub async fn require_feature(state: &AppState, user: &User, f: crate::features::Feature) -> Result<(), u16> {
+    match state.features.allowed(user, f).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(CLOSE_FEATURE_DISABLED),
+        Err(e) => {
+            tracing::warn!(error = %e, "websocket: cannot check feature permissions");
+            Err(CLOSE_FEATURE_DISABLED)
+        }
+    }
+}
 
 /// 等這個 WebSocket 所屬的登入 session 被撤銷（`Hub::session_ended`）。沒有 sid 的 token（測試、升級前）永遠不結束。
 /// Waits for the socket's sign-in session to be revoked. Tokens without a sid never end this way.
