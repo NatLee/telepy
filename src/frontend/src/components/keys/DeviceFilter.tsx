@@ -1,15 +1,19 @@
 /**
- * 裝置很多時的共用篩選：搜尋（裝置名稱 / 帳號）＋「在清單上 / 需要處理 / 全部」（附數量）＋超過一定數量先收起來。
- * 金鑰詳情的「裝置」、新增金鑰的「同時裝到」與裝置矩陣都用它；裝置少時整排控制項不出現。
- * Shared filtering for long device lists: search (device name / account), "on the list / needs attention /
- * all" with counts, and collapsing past a limit. Used by key details, the add dialog and the device matrix;
- * the controls only appear once there are enough devices.
+ * 裝置很多時的共用篩選：搜尋（裝置名稱 / 帳號）＋「在清單上 / 需要處理 / 全部」（附數量）＋分頁（每頁筆數記在
+ * `telepy.deviceListPageSize`；以前是「全部顯示」，一展開視窗就很長）。金鑰詳情的「裝置」、新增金鑰的「同時裝到」、
+ * 金鑰群組的「授予給」與裝置矩陣都用它（矩陣自己分頁）；裝置少時整排控制項不出現。
+ * Shared filtering for long device lists: search (device name / account), "on the list / needs attention / all"
+ * with counts, and pages (page size in `telepy.deviceListPageSize`; it used to be "show all", which made the dialog
+ * long). Used by key details, the add dialog, the key-group grant dialog and the device matrix (which pages
+ * itself); the controls only appear once there are enough devices.
  */
 import React, { useMemo, useState } from "react";
-import { ChevronDown, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
+import { Pagination } from "@/components/ui/pagination";
+import { usePagination } from "@/hooks/usePagination";
+import { pageSlice } from "@/lib/pagination";
 import { useI18n } from "@/lib/i18n";
 import type { KeyDevice, KeyTarget } from "@/types/keys";
 
@@ -17,8 +21,6 @@ export type DeviceFilterMode = "all" | "on" | "problems";
 
 /** 這麼多台以上才顯示搜尋 / 篩選。/ Show the controls from this many devices on. */
 export const FILTER_FROM = 7;
-/** 沒搜尋時先顯示幾台。/ Rows shown before "show all". */
-export const COLLAPSE_AT = 8;
 
 /** 一把金鑰在一台裝置上需要處理（失敗，或裝置在線卻還沒裝上）。/ A key needs attention on a device. */
 export function needsAttention(targets: KeyTarget[] | undefined, online: boolean): boolean {
@@ -32,14 +34,13 @@ export function useDeviceFilter<T>(
         isOn?: (item: T) => boolean;
         isProblem?: (item: T) => boolean;
         initial?: DeviceFilterMode;
-        /** false = 不先收起來（裝置矩陣分段時，每段自己收合）。/ false = never cut the list (the matrix's sections collapse instead). */
+        /** false = 不分頁（裝置矩陣自己分頁）。/ false = no pages (the device matrix pages itself). */
         collapse?: boolean;
     }
 ) {
     const { device, isOn, isProblem } = opts;
     const [query, setQuery] = useState("");
     const [mode, setMode] = useState<DeviceFilterMode>(opts.initial ?? "all");
-    const [expanded, setExpanded] = useState(false);
 
     const counts = useMemo(
         () => ({
@@ -63,8 +64,9 @@ export function useDeviceFilter<T>(
         });
     }, [items, query, effective, isOn, isProblem, device]);
 
-    const collapsible = opts.collapse !== false && !query && !expanded && filtered.length > COLLAPSE_AT;
-    const visible = collapsible ? filtered.slice(0, COLLAPSE_AT) : filtered;
+    const paged = opts.collapse !== false;
+    const pager = usePagination(filtered.length, { storageKey: "telepy.deviceListPageSize", resetKey: `${query}|${effective}` });
+    const visible = paged ? pageSlice(filtered, pager.page, pager.size) : filtered;
     return {
         query,
         setQuery,
@@ -73,8 +75,8 @@ export function useDeviceFilter<T>(
         counts,
         filtered,
         visible,
-        hidden: filtered.length - visible.length,
-        expand: () => setExpanded(true),
+        /** 分頁狀態（不分頁時 null）。/ The pager (null without pages). */
+        pager: paged ? pager : null,
         showControls: items.length >= FILTER_FROM,
     };
 }
@@ -117,16 +119,11 @@ export function DeviceFilterBar({ filter, onLabel, modes = ["on", "problems", "a
     );
 }
 
-/** 「顯示全部 N 台」與「沒有符合的裝置」。/ The "show all" button and the no-match line. */
+/** 分頁列與「沒有符合的裝置」。/ The pager and the no-match line. */
 export function DeviceFilterFooter({ filter }: { filter: DeviceFilterState }) {
     const { t } = useI18n();
     if (filter.filtered.length === 0 && filter.counts.all > 0) {
         return <p className="py-3 text-center text-sm text-muted-foreground">{t("keys.filter.noMatch")}</p>;
     }
-    if (filter.hidden <= 0) return null;
-    return (
-        <Button type="button" variant="ghost" size="sm" className="w-full text-primary hover:text-primary" onClick={filter.expand}>
-            <ChevronDown /> {t("keys.filter.showAll", { count: filter.filtered.length })}
-        </Button>
-    );
+    return filter.pager ? <Pagination pager={filter.pager} /> : null;
 }
