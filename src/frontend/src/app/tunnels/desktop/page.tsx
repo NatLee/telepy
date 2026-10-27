@@ -56,7 +56,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -94,15 +94,8 @@ const PRESET_KEY: Record<NonNullable<ScreenChoice["preset"]>, TranslationKey> = 
     third3: "desktop.screen.preset.third3",
 };
 
-const QUALITY_HINT: Record<DesktopQuality, TranslationKey> = {
-    auto: "desktop.quality.hint.auto",
-    speed: "desktop.quality.hint.speed",
-    sharp: "desktop.quality.hint.sharp",
-};
-
 const MODE_LABEL: Record<DesktopMode, string> = { rdp: "RDP", vnc: "VNC", rustdesk: "RustDesk" };
 
-const QUALITY_LABEL: Record<DesktopQuality, TranslationKey> = { auto: "desktop.quality.auto", speed: "desktop.quality.speed", sharp: "desktop.quality.sharp" };
 /** Telepy 的畫質預設 → RustDesk 自己的畫質檔。/ Telepy's quality presets as RustDesk's own profiles. */
 const RD_QUALITY: Record<DesktopQuality, RustDeskQuality> = { auto: "balanced", speed: "low", sharp: "best" };
 

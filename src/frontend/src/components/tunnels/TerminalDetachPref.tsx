@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * 偏好設定 → 一般 → 「斷線後保留 shell」：選多久（超過站台上限的選項關掉），旁邊的 info 按鈕打開時間軸圖。
- * Preferences → General → "Keep shells after a disconnect": pick the time (choices above the site's ceiling are
+ * 偏好設定 → 終端機 → 「斷線後保留 shell」：選多久（超過站台上限的選項關掉），旁邊的 info 按鈕打開時間軸圖。
+ * Preferences → Terminal → "Keep shells after a disconnect": pick the time (choices above the site's ceiling are
  * disabled); the info button opens the timeline diagram.
  */
 import React, { useState } from "react";
