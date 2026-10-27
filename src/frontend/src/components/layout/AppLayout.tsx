@@ -13,6 +13,8 @@ import { NewSignInNotice } from "@/components/layout/NewSignInNotice";
 import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
+import { FeatureOffNotice } from "@/components/access/FeatureOffNotice";
+import { featureForPath, hasFeature } from "@/lib/features";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -51,6 +53,9 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     );
     const pathname = usePathname();
     const isTerminalPage = pathname?.startsWith("/tunnels/terminal");
+    // 這一頁屬於管理員替這個人關掉的功能 → 說明代替頁面（API 本來就會拒絕）。/ A page of a feature turned off → a notice instead.
+    const pageFeature = featureForPath(pathname);
+    const featureOff = pageFeature && user && !hasFeature(user, pageFeature) ? pageFeature : null;
 
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {
@@ -94,8 +99,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 <Sidebar />
                 <div className="relative flex flex-col flex-1 w-full min-w-0">
                     <Header />
-                    <main className={`flex-1 w-full ${isTerminalPage ? 'p-0 flex flex-col' : 'mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8 py-6 sm:py-8'}`}>
-                        {children}
+                    <main className={`flex-1 w-full ${isTerminalPage && !featureOff ? 'p-0 flex flex-col' : 'mx-auto max-w-[1600px] px-4 sm:px-6 lg:px-8 py-6 sm:py-8'}`}>
+                        {featureOff ? <FeatureOffNotice feature={featureOff} /> : children}
                     </main>
                 </div>
             </div>

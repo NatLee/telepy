@@ -91,6 +91,11 @@ impl FromRequestParts<AppState> for AuthUser {
                 ));
             }
         }
+        // 功能權限：這條路由屬於管理員替這個人關掉的功能 → 403 feature_disabled（`crate::features`）。
+        // Feature permissions: a route of a feature turned off for this person is a 403 feature_disabled.
+        if let Some(f) = crate::features::for_route(parts.method.as_str(), parts.uri.path()) {
+            crate::features::check(state, &user, f).await?;
+        }
         Ok(AuthUser(user))
     }
 }

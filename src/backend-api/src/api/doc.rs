@@ -53,6 +53,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "SFTP", description = "File manager REST endpoints"),
         (name = "Remote Browser", description = "KasmVNC proxy browser sessions"),
         (name = "User Management", description = "Personal settings and user administration"),
+        (name = "Access", description = "Feature permissions (admins): groups and which Telepy features each person may use. Separate from tunnel sharing, which decides which tunnels they reach"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),
         (name = "Logs", description = "SSH gateway events"),
         (name = "Device join", description = "One-command device join: the web mints a short-lived ticket; the device's install script registers itself, installs the reverse tunnel and waits for a verified login"),

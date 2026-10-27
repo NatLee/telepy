@@ -747,6 +747,38 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("key_id", "stage")
         )"#,
     ),
+    // Rust 自有：功能權限的群組（誰可以用哪些 Telepy 功能；跟隧道分享無關）。
+    // Feature-permission groups (who may use which Telepy features; unrelated to tunnel sharing).
+    (
+        "telepy_user_group",
+        r#"CREATE TABLE "telepy_user_group" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "name" varchar(64) NOT NULL UNIQUE,
+            "description" varchar(256) NOT NULL DEFAULT '',
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
+    (
+        "telepy_user_group_member",
+        r#"CREATE TABLE "telepy_user_group_member" (
+            "group_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            PRIMARY KEY ("group_id", "user_id")
+        )"#,
+    ),
+    // 一列 = 某個對象（user / group / everyone）對某個功能的允許或拒絕；沒有列 = 沿用上一層。
+    // One row = allow or deny of one feature for a subject (user / group / everyone); no row = inherit.
+    (
+        "telepy_feature_grant",
+        r#"CREATE TABLE "telepy_feature_grant" (
+            "subject_kind" varchar(8) NOT NULL,
+            "subject_id" integer NOT NULL,
+            "feature" varchar(32) NOT NULL,
+            "allowed" bool NOT NULL,
+            "updated_at" datetime NOT NULL,
+            PRIMARY KEY ("subject_kind", "subject_id", "feature")
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -758,6 +790,7 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,

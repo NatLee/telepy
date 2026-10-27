@@ -34,6 +34,7 @@ import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
 import { useI18n } from "@/lib/i18n";
+import { useFeatures } from "@/hooks/useFeatures";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import { Pagination } from "@/components/ui/pagination";
@@ -45,6 +46,8 @@ const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowra
 
 export default function TunnelsPage() {
     const { t } = useI18n();
+    // 「建立隧道」被管理員關掉就不放按鈕。/ No create buttons when creating tunnels is turned off.
+    const canCreate = useFeatures().has("tunnels.create");
     const router = useRouter();
     const {
         tunnels,
@@ -226,12 +229,14 @@ export default function TunnelsPage() {
                             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
                             {t("common.refresh")}
                         </Button>
-                        <Button asChild>
-                            <Link href="/tunnels/create" prefetch={false}>
-                                <Plus size={16} />
-                                {t("tunnels.create")}
-                            </Link>
-                        </Button>
+                        {canCreate && (
+                            <Button asChild>
+                                <Link href="/tunnels/create" prefetch={false}>
+                                    <Plus size={16} />
+                                    {t("tunnels.create")}
+                                </Link>
+                            </Button>
+                        )}
                     </>
                 }
             />
@@ -247,15 +252,17 @@ export default function TunnelsPage() {
                         <Network size={22} />
                     </div>
                     <h3 className="text-lg text-foreground tracking-tight">{t("tunnels.emptyTitle")}</h3>
-                    <p className="mt-2 text-sm text-muted-foreground max-w-sm">{t("tunnels.emptyBody")}</p>
-                    <div className="mt-6">
-                        <Button asChild>
-                            <Link href="/tunnels/create" prefetch={false}>
-                                <Plus size={16} />
-                                {t("tunnels.new")}
-                            </Link>
-                        </Button>
-                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground max-w-sm">{canCreate ? t("tunnels.emptyBody") : t("access.emptyNoCreate")}</p>
+                    {canCreate && (
+                        <div className="mt-6">
+                            <Button asChild>
+                                <Link href="/tunnels/create" prefetch={false}>
+                                    <Plus size={16} />
+                                    {t("tunnels.new")}
+                                </Link>
+                            </Button>
+                        </div>
+                    )}
                 </div>
             ) : (
                 <>

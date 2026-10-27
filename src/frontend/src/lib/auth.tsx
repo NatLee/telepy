@@ -75,9 +75,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const token = localStorage.getItem("accessToken");
             if (token) fetchUserProfileState(token);
         };
+        // 403 feature_disabled：管理員剛關掉某個功能 → 重抓 profile，導覽 / 選單跟著藏起來（10 秒內最多一次）。
+        // 403 feature_disabled: an admin just turned a feature off → refetch the profile so the nav follows (≤ once per 10 s).
+        let lastFeatureRefresh = 0;
+        const handleFeatureDisabled = () => {
+            if (Date.now() - lastFeatureRefresh < 10_000) return;
+            lastFeatureRefresh = Date.now();
+            handleEnrollmentRequired();
+        };
         window.addEventListener("api:unauthorized", handleUnauthorized);
         window.addEventListener("api:mfa-enrollment-required", handleEnrollmentRequired);
+        window.addEventListener("api:feature-disabled", handleFeatureDisabled);
         return () => {
+            window.removeEventListener("api:feature-disabled", handleFeatureDisabled);
             window.removeEventListener("api:unauthorized", handleUnauthorized);
             window.removeEventListener("api:mfa-enrollment-required", handleEnrollmentRequired);
         };

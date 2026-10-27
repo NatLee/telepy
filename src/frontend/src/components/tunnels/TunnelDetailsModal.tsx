@@ -15,6 +15,7 @@ import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections
 import { DeviceHostKeySection } from "@/components/tunnels/DeviceHostKeySection";
 import { StepUpSetting } from "@/components/tunnels/StepUpSetting";
 import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
+import { useFeatures } from "@/hooks/useFeatures";
 import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
@@ -68,6 +69,7 @@ function KeyPreview({ value }: { value: string }) {
 
 export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: TunnelDetailsModalProps) {
     const { t } = useI18n();
+    const { has } = useFeatures();
     const {
         state: { details, loading, form, labelsText, labels, errors, canEdit, dirty, keyChanged, valid, isSaving },
         actions: { setField, setLabelsText, save },
@@ -160,7 +162,7 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
                     <StepUpSetting tunnelId={details.id} required={!!details.require_step_up} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
 
                     {/* 錄下網頁終端機（owner / ADMIN 可改）。/ Record web terminals (owner / ADMIN). */}
-                    <RecordingSetting tunnelId={details.id} enabled={!!details.record_sessions} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
+                    {has("recordings.manage") && <RecordingSetting tunnelId={details.id} enabled={!!details.record_sessions} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />}
 
                     {/* 斷線後保留網頁終端機的 shell（owner / ADMIN 可改）。/ Keep web terminal shells after a drop (owner / ADMIN). */}
                     <TerminalDetachSetting tunnelId={details.id} policy={details.terminal_detach_policy} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />

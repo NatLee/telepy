@@ -317,6 +317,19 @@ fn missing_scope(scope: &str) -> CallToolResult {
     fail(format!("This app was not granted the `{scope}` permission. Ask the user to reconnect it in Telepy and approve `{scope}`."))
 }
 
+/// 管理員替這個人關掉了某個功能：跟 web 一樣拒絕（`crate::features`）。/ The feature is turned off for this person.
+fn feature_off(f: crate::features::Feature) -> CallToolResult {
+    fail(format!("{} The tool needs it, so it can't run for this user.", crate::features::disabled_message(f)))
+}
+
+/// tool 需要 `scope`：沒給 → 缺 scope；給了但對應的功能被關掉 → 功能關閉。/ Why a tool needing `scope` is refused, if it is.
+fn refused(p: &McpPrincipal, scope: &str) -> Option<CallToolResult> {
+    if !p.has_scope(scope) {
+        return Some(missing_scope(scope));
+    }
+    crate::features::Feature::for_scope(scope).filter(|f| p.feature_denied(*f)).map(feature_off)
+}
+
 /// 一次 tool call 的稽核欄位。/ Audit fields of one tool call.
 #[derive(Default)]
 struct Audit<'a> {
@@ -414,8 +427,8 @@ impl TelepyMcp {
     async fn browser_action(&self, parts: &axum::http::request::Parts, tool: &str, id: &str, action: Value, detail: String) -> Result<Result<(Arc<AiBrowser>, Value), CallToolResult>, ErrorData> {
         let p = principal(parts)?;
         let started = Instant::now();
-        if !p.has_scope("browser:use") {
-            return Ok(Err(missing_scope("browser:use")));
+        if let Some(r) = refused(&p, "browser:use") {
+            return Ok(Err(r));
         }
         let b = match self.browser(&p, id) {
             Ok(b) => b,
@@ -487,8 +500,8 @@ impl TelepyMcp {
     async fn list_tunnels(&self, Extension(parts): Extension<axum::http::request::Parts>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("tunnels:read") {
-            return Ok(missing_scope("tunnels:read"));
+        if let Some(r) = refused(&p, "tunnels:read") {
+            return Ok(r);
         }
         let db = &self.state.db;
         let result: Result<Vec<Value>, sqlx::Error> = async {
@@ -536,8 +549,8 @@ impl TelepyMcp {
     async fn tunnel_status(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("tunnels:read") {
-            return Ok(missing_scope("tunnels:read"));
+        if let Some(r) = refused(&p, "tunnels:read") {
+            return Ok(r);
         }
         let db = &self.state.db;
         let tunnel = match db::tunnels::by_id(db, args.tunnel_id).await {
@@ -578,8 +591,12 @@ impl TelepyMcp {
     async fn lan_hosts(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<TunnelArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("tunnels:read") {
-            return Ok(missing_scope("tunnels:read"));
+        if let Some(r) = refused(&p, "tunnels:read") {
+            return Ok(r);
+        }
+        // web 的區網頁要「區網探索」，這裡一樣。/ Like the web's Network page.
+        if p.feature_denied(crate::features::Feature::Network) {
+            return Ok(feature_off(crate::features::Feature::Network));
         }
         let db = &self.state.db;
         let tunnel = match db::tunnels::by_id(db, args.tunnel_id).await {
@@ -596,8 +613,8 @@ impl TelepyMcp {
     async fn lan_scan(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<LanScanArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("network:scan") {
-            return Ok(missing_scope("network:scan"));
+        if let Some(r) = refused(&p, "network:scan") {
+            return Ok(r);
         }
         let db = &self.state.db;
         let not_found = || fail(format!("Tunnel {} not found. Call list_tunnels to see the tunnels you can use.", args.tunnel_id));
@@ -635,6 +652,11 @@ impl TelepyMcp {
         if !p.has_scope("ssh:exec") && !p.has_scope("ssh:files") {
             return Ok(fail("This app was granted neither `ssh:exec` nor `ssh:files`. Ask the user to reconnect it in Telepy and approve one of them."));
         }
+        // 兩個 scope 對應的功能（終端機 / 檔案）都被關掉了就不開。/ Both features behind the scopes turned off: refuse.
+        if !p.may_use("ssh:exec") && !p.may_use("ssh:files") {
+            let f = if p.has_scope("ssh:exec") { crate::features::Feature::Terminal } else { crate::features::Feature::Files };
+            return Ok(feature_off(f));
+        }
         let tunnel_id = args.tunnel_id;
         let detail = Some(format!("username: {}", args.username.as_deref().unwrap_or("(default)")));
         let req = OpenRequest { tunnel_id, username: args.username, idle_timeout_s: args.idle_timeout_s, max_lifetime_s: args.max_lifetime_s };
@@ -656,8 +678,8 @@ impl TelepyMcp {
     async fn ssh_exec(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ExecArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:exec") {
-            return Ok(missing_scope("ssh:exec"));
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
         }
         let s = match self.session(&p, &args.session_id) {
             Ok(s) => s,
@@ -762,8 +784,8 @@ impl TelepyMcp {
     async fn sftp_list(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ListArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:files") {
-            return Ok(missing_scope("ssh:files"));
+        if let Some(r) = refused(&p, "ssh:files") {
+            return Ok(r);
         }
         let s = match self.session(&p, &args.session_id) {
             Ok(s) => s,
@@ -800,8 +822,8 @@ impl TelepyMcp {
     async fn sftp_read(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ReadArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:files") {
-            return Ok(missing_scope("ssh:files"));
+        if let Some(r) = refused(&p, "ssh:files") {
+            return Ok(r);
         }
         let s = match self.session(&p, &args.session_id) {
             Ok(s) => s,
@@ -838,8 +860,8 @@ impl TelepyMcp {
     async fn sftp_write(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<WriteArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:files") {
-            return Ok(missing_scope("ssh:files"));
+        if let Some(r) = refused(&p, "ssh:files") {
+            return Ok(r);
         }
         let s = match self.session(&p, &args.session_id) {
             Ok(s) => s,
@@ -872,8 +894,8 @@ impl TelepyMcp {
     async fn shell_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellOpenArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:exec") {
-            return Ok(missing_scope("ssh:exec"));
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
         }
         let s = match self.session(&p, &args.session_id) {
             Ok(s) => s,
@@ -903,8 +925,8 @@ impl TelepyMcp {
     async fn shell_send(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellSendArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:exec") {
-            return Ok(missing_scope("ssh:exec"));
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
         }
         let (s, sh) = match self.shell(&p, &args.shell_id) {
             Ok(v) => v,
@@ -963,8 +985,8 @@ impl TelepyMcp {
     async fn shell_read(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellReadArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:exec") {
-            return Ok(missing_scope("ssh:exec"));
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
         }
         let (s, sh) = match self.shell(&p, &args.shell_id) {
             Ok(v) => v,
@@ -999,8 +1021,8 @@ impl TelepyMcp {
     async fn shell_resize(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ShellResizeArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("ssh:exec") {
-            return Ok(missing_scope("ssh:exec"));
+        if let Some(r) = refused(&p, "ssh:exec") {
+            return Ok(r);
         }
         let (s, sh) = match self.shell(&p, &args.shell_id) {
             Ok(v) => v,
@@ -1033,8 +1055,8 @@ impl TelepyMcp {
     async fn browser_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserOpenArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let started = Instant::now();
-        if !p.has_scope("browser:use") {
-            return Ok(missing_scope("browser:use"));
+        if let Some(r) = refused(&p, "browser:use") {
+            return Ok(r);
         }
         let url = match args.url.as_deref().map(ai::browser::normalize_url).transpose() {
             Ok(u) => u,

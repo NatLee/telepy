@@ -18,7 +18,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -39,6 +39,7 @@ import { en } from "@/locales/en";
 import type { TranslationKey } from "@/locales/en";
 import { SignInHistory } from "@/components/layout/SignInHistory";
 import { SignInDevices } from "@/components/layout/SignInDevices";
+import { AccessTab } from "@/components/access/AccessTab";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -123,7 +124,7 @@ function DurationField({ seconds, label, onSave }: { seconds: number; label: str
 const LEAD_KEYS = ["notify_user_webhooks"];
 
 type SiteTabId = "general" | "signin" | "browser" | "desktop" | "ai" | "notify" | "commands";
-type TabId = SiteTabId | "users";
+type TabId = SiteTabId | "users" | "access";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
     general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_") && !k.startsWith("terminal_") && !k.startsWith("signin_") && !k.startsWith("mfa_"),
@@ -137,7 +138,7 @@ const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
     commands: (k) => k.startsWith("command_") || k.startsWith("terminal_"),
 };
 
-const TAB_IDS: TabId[] = ["general", "signin", "browser", "desktop", "ai", "notify", "commands", "users"];
+const TAB_IDS: TabId[] = ["general", "signin", "browser", "desktop", "ai", "notify", "commands", "users", "access"];
 
 export default function SettingsPage() {
     // useSearchParams 需要 Suspense 邊界,否則靜態產生會整頁退回 client render。
@@ -194,7 +195,10 @@ function AdminSettings() {
         { value: "notify", label: t("settings.groupNotify"), icon: <Bell size={15} /> },
         { value: "commands", label: t("settings.groupCommands"), icon: <SquareTerminal size={15} /> },
         { value: "users", label: t("settings.tabUsers"), icon: <UsersIcon size={15} /> },
+        // 誰可以用哪些功能（群組 + 使用者；跟隧道分享無關）。/ Who may use which features (groups + users; not sharing).
+        { value: "access", label: t("settings.tabAccess"), icon: <KeySquare size={15} /> },
     ];
+    const accessUser = Number(searchParams.get("user")) || null;
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -209,7 +213,7 @@ function AdminSettings() {
                 <Segmented kind="tabs" options={tabs} value={tab} onChange={setTab} />
             </div>
 
-            {tab === "users" ? <UsersTab /> : <SiteSettingsTab tab={tab} settings={settings} />}
+            {tab === "users" ? <UsersTab /> : tab === "access" ? <AccessTab key={accessUser ?? 0} initialUser={accessUser} /> : <SiteSettingsTab tab={tab} settings={settings} />}
         </div>
     );
 }
@@ -600,6 +604,17 @@ function UserEditModal({
                             {t("security.adminReset")}
                         </Button>
                     )}
+                </div>
+
+                {/* 功能權限（存取分頁；跟隧道分享無關）。/ Feature permissions (the Access tab; not tunnel sharing). */}
+                <div className="flex items-start justify-between gap-4">
+                    <div>
+                        <p className="text-sm text-foreground">{t("access.manageTitle")}</p>
+                        <p className="text-sm text-muted-foreground">{user.is_superuser ? t("access.adminAlways") : t("access.manageHint", { user: user.username })}</p>
+                    </div>
+                    <Button asChild type="button" size="sm" variant="outline" className="shrink-0">
+                        <Link href={`/tunnels/settings?tab=access&user=${user.id}`} onClick={onClose}>{t("access.manageOpen")}</Link>
+                    </Button>
                 </div>
 
                 {/* 登入中的瀏覽器（可登出）/ Signed-in browsers (sign out) */}

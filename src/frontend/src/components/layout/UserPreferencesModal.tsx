@@ -49,6 +49,7 @@ import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/comp
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
 import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
+import { hasFeature } from "@/lib/features";
 import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
@@ -85,7 +86,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const tabs = [
         { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
         { value: "security" as const, label: t("prefs.tabSecurity"), hint: t("prefs.tabSecurityHint"), icon: <ShieldCheck /> },
-        { value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> },
+        // 存好的登入只給遠端桌面用；那個功能被關掉就不顯示。/ Saved logins only serve remote desktops; hidden when that is off.
+        ...(hasFeature(user, "remote_desktop") ? [{ value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> }] : []),
         { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
     ];
 

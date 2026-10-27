@@ -7,6 +7,8 @@
 import { useToast } from "@/components/ui/Toast";
 import { PRESENCE_KINDS } from "@/components/tunnels/TunnelPresence";
 import { useI18n } from "@/lib/i18n";
+import { featureKey } from "@/lib/features";
+import type { TranslationKey } from "@/locales/en";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
 
@@ -16,6 +18,12 @@ export function SessionEndedNotice() {
     useNotificationHandlers({
         [NOTIFICATION_ACTIONS.SESSION_ENDED]: (msg) => {
             const kind = PRESENCE_KINDS[String(msg.kind ?? "")];
+            const kindLabel = kind ? t(kind.label) : String(msg.kind ?? "");
+            // 管理員把這個功能關掉了（`feature` = 功能 id）。/ An admin turned the feature off (`feature` = its id).
+            if (typeof msg.feature === "string") {
+                showToast(t("access.sessionEndedToast", { feature: t(`access.f.${featureKey(msg.feature)}` as TranslationKey), kind: kindLabel }), "warning");
+                return;
+            }
             showToast(t("sessions.endedToast", { by: String(msg.by ?? ""), kind: kind ? t(kind.label) : String(msg.kind ?? "") }), "warning");
         },
     });

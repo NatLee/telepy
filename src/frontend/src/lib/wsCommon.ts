@@ -30,7 +30,9 @@ export const STABLE_CONNECTION_MS = 10000;
 // 4009 = 有人從即時 session 頁結束了它，不要自己連回去。/ 4009 = ended from the live sessions page; don't reconnect.
 // 4010 = 這個瀏覽器的登入被登出了（別的裝置、管理員）；原因在 close reason。/ 4010 = this browser was signed out; reason = why.
 export const SIGNED_OUT_CLOSE_CODE = 4010;
-export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006, 4009, SIGNED_OUT_CLOSE_CODE]);
+// 4012 = 管理員替這個人關掉了這個功能（close reason = 功能 id）。/ 4012 = the feature is turned off for this person.
+export const FEATURE_DISABLED_CLOSE_CODE = 4012;
+export const NON_RETRYABLE_CLOSE_CODES = new Set([4000, 4001, 4002, 4003, 4004, 4006, 4009, SIGNED_OUT_CLOSE_CODE, FEATURE_DISABLED_CLOSE_CODE]);
 
 /** full-jitter 指數退避：delay ∈ [0, min(ceiling, base * 2^attempt)] */
 export function backoffDelay(attempt: number): number {

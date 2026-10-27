@@ -455,6 +455,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             } else if (code === 4010) {
                 // 這個瀏覽器被登出了（整個網頁接著會回登入頁）。/ This browser was signed out (the app returns to sign-in).
                 s.term.write(`\r\n\x1b[33m${t("security.signedOutXterm")}\x1b[0m\r\n`);
+            } else if (code === 4012) {
+                // 管理員替這個人關掉了終端機（或區網探索）。/ An admin turned the terminal (or LAN discovery) off for this person.
+                s.term.write(`\r\n\x1b[33m${t("access.featureOffXterm")}\x1b[0m\r\n`);
             } else if (code === 4009) {
                 // 有人從即時 session 頁結束了它（原因 = 是誰）。/ Ended from the live sessions page (reason = who).
                 s.term.write(`\r\n\x1b[33m${t("sessions.endedXterm", { by: event.reason || "?" })}\x1b[0m\r\n`);

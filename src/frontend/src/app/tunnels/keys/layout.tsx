@@ -16,6 +16,8 @@ import { Segmented } from "@/components/ui/segmented";
 import { KeyListExplainer } from "@/components/keys/KeyListExplainer";
 import { KeysAreaProvider, useKeysArea } from "@/components/keys/KeysArea";
 import { useI18n } from "@/lib/i18n";
+import { useFeatures } from "@/hooks/useFeatures";
+import { Callout } from "@/components/ui/callout";
 import { expiryState } from "@/lib/keyExpiry";
 
 const EXPLAINER_KEY = "telepy.keysExplainer";
@@ -66,6 +68,9 @@ function KeysShell({ children }: { children: React.ReactNode }) {
     // 「我的金鑰」分頁上的小點：有已到期或 7 天內到期的金鑰。/ A dot on "Your keys" when a key expired or expires within a week.
     const expiring = page.keys.some((k) => ["soon", "expired"].includes(expiryState(k.expires_at)));
     const tab = tabOf(pathname);
+    // 「個人 SSH 金鑰」被管理員關掉：看得到、刪得掉現有的，不能新增（筆電經 gateway 也連不上）。
+    // Personal keys turned off: existing keys can be seen and deleted, not added (laptop SSH is refused too).
+    const keysOn = useFeatures().has("keys.personal");
 
     return (
         <div className="animate-fade-in-up space-y-6">
@@ -84,13 +89,17 @@ function KeysShell({ children }: { children: React.ReactNode }) {
                             <RefreshCw size={16} className={page.loading ? "animate-spin" : ""} />
                             {t("common.refresh")}
                         </Button>
-                        <Button onClick={() => setAddOpen(true)}>
-                            <Plus size={16} />
-                            {t("keys.addKey")}
-                        </Button>
+                        {keysOn && (
+                            <Button onClick={() => setAddOpen(true)}>
+                                <Plus size={16} />
+                                {t("keys.addKey")}
+                            </Button>
+                        )}
                     </>
                 }
             />
+
+            {!keysOn && <Callout tone="warning">{t("access.keysOff")}</Callout>}
 
             {explainer && <KeyListExplainer onHide={() => showExplainer(false)} />}
 

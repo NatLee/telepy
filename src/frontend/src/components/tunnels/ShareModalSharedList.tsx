@@ -29,6 +29,8 @@ export interface ShareModalSharedListProps {
     loading: boolean;
     sharedUsers: SharedUserRow[];
     readOnly: boolean;
+    /** 「分享隧道」功能被關掉：不能改權限 / 帳號 / 期限，但還是可以取消分享。/ Sharing turned off: no edits, unsharing still works. */
+    locked?: boolean;
     tunnelUsernames: ReverseServerUsername[];
     onEditTargetUsers: (payload: { userId: number; username: string; allowedIds: number[] }) => void;
     onUpdatePermission: (userId: number, value: string) => void;
@@ -40,6 +42,7 @@ export function ShareModalSharedList({
     loading,
     sharedUsers,
     readOnly,
+    locked = false,
     tunnelUsernames,
     onEditTargetUsers,
     onUpdatePermission,
@@ -68,7 +71,7 @@ export function ShareModalSharedList({
             <ul className="divide-y divide-border/70 overflow-hidden rounded-xl ring-1 ring-inset ring-border/80">
                 {sharedUsers.map((sharedUser) => {
                     const allowedCount = sharedUser.allowed_target_usernames?.length ?? 0;
-                    const canEditTargets = !readOnly && tunnelUsernames.length > 0;
+                    const canEditTargets = !readOnly && !locked && tunnelUsernames.length > 0;
                     return (
                         <li key={sharedUser.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3 transition-colors hover:bg-surface">
                             <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -79,7 +82,7 @@ export function ShareModalSharedList({
                                     <span className="max-w-full truncate text-sm text-foreground">{sharedUser.username}</span>
                                     <ShareExpiryControl
                                         expiresAt={sharedUser.expires_at}
-                                        editable={!readOnly}
+                                        editable={!readOnly && !locked}
                                         onChange={(value) => onUpdateExpiry(sharedUser.id, value)}
                                     />
                                     <TemporaryGrantText
@@ -111,7 +114,7 @@ export function ShareModalSharedList({
                                 <Select
                                     value={sharedUser.permission_type || (sharedUser.can_admin_tunnel ? "admin" : sharedUser.can_edit_tunnel ? "edit" : "view")}
                                     onValueChange={(val) => onUpdatePermission(sharedUser.id, val)}
-                                    disabled={readOnly}
+                                    disabled={readOnly || locked}
                                 >
                                     <SelectTrigger size="sm" className="w-[104px] text-xs" aria-label={t("share.thPermission")}>
                                         <SelectValue />

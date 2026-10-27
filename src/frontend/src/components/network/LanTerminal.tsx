@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Wrench } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { ToolboxPanel } from "@/components/toolbox/ToolboxPanel";
+import { useFeatures } from "@/hooks/useFeatures";
 import { useI18n } from "@/lib/i18n";
 import type { ToolboxTarget } from "@/lib/snippets";
 import "xterm/css/xterm.css";
@@ -262,6 +263,11 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
                     onStatus(key, "closed");
                     return;
                 }
+                if (ev.code === 4012) {
+                    write(`\r\n\x1b[33m${translate("access.featureOffXterm")}\x1b[0m\r\n`);
+                    onStatus(key, "closed");
+                    return;
+                }
                 if (ev.code === 4009) {
                     write(`\r\n\x1b[33m${translate("sessions.endedXterm", { by: ev.reason || "?" })}\x1b[0m\r\n`);
                     onStatus(key, "closed");
@@ -321,6 +327,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     // 工具箱：送進這個區網終端機（同一條 pty_input，指令規則照樣檢查）。/ The toolbox types into this LAN terminal.
     const { t } = useI18n();
     const [toolboxOpen, setToolboxOpen] = useState(false);
+    const canToolbox = useFeatures().has("toolbox");
     const bannerRef = useRef(banner);
     useEffect(() => { bannerRef.current = banner; }, [banner]);
     const toolboxTarget: ToolboxTarget = useMemo(() => ({
@@ -348,7 +355,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     return (
         <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
             <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ background: resolved.scheme.theme.background }} />
-            <button
+            {canToolbox && <button
                 type="button"
                 onClick={() => setToolboxOpen(true)}
                 title={t("toolbox.show")}
@@ -356,7 +363,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
                 className="absolute bottom-2 right-3 z-10 grid size-8 place-items-center rounded-md border border-border bg-card/90 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
             >
                 <Wrench size={15} />
-            </button>
+            </button>}
             <Modal isOpen={toolboxOpen} onClose={() => setToolboxOpen(false)} title={t("toolbox.title")} icon={<Wrench />} size="lg" bodyClassName="px-2 py-2 sm:px-3">
                 <ToolboxPanel target={toolboxTarget} tunnelName={session.tunnelName} onSent={afterSend} embedded />
             </Modal>
