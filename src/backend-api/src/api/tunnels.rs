@@ -34,6 +34,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(pin, unpin))
         .routes(routes!(set_labels))
         .routes(routes!(connections))
+        .routes(routes!(probe_now))
 }
 
 /// `{port: bool}`；取樣不可用回 `{}`。/ Port map, `{}` when the sample is unavailable.
@@ -239,7 +240,23 @@ async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson
 #[utoipa::path(get, path = "/api/reverse/server/keys/{id}", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, body = super::schemas::Tunnel), (status = 404, body = super::schemas::ErrorBody)))]
 async fn retrieve(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
     let t = visible_tunnel(&state, user.id, id).await?;
-    Ok(Json(single_json(&state, user.id, &t).await?))
+    let mut v = single_json(&state, user.id, &t).await?;
+    // 裝置的位址與基本狀況（詳細資訊視窗的「裝置」段落）；看得到的人同列表。/ Addresses and facts, same viewers as the list.
+    v["endpoint"] = endpoint_for(&state, user.id, user.is_superuser, &t).await?;
+    Ok(Json(v))
+}
+
+/// 一條隧道的 `endpoint`（同列表，只給 [`permissions::can_see_endpoint`] 允許的人，否則 null）。
+/// One tunnel's `endpoint`, as on the list; null for viewers `can_see_endpoint` refuses.
+async fn endpoint_for(state: &AppState, user_id: i64, is_superuser: bool, t: &Tunnel) -> ApiResult<Value> {
+    let eff = permissions::effective_for(&state.db, user_id, t).await?;
+    let with_accounts = db::sharing::tunnels_with_allowed_usernames(&state.db, user_id).await?.contains(&t.id);
+    if !permissions::can_see_endpoint(eff, with_accounts, is_superuser) {
+        return Ok(Value::Null);
+    }
+    let last = db::tunnel_endpoints::of_tunnel(&state.db, t.id).await?;
+    let live = u16::try_from(t.reverse_port).ok().and_then(|p| state.status.endpoints().get(&p).cloned());
+    Ok(endpoint_json(live.as_ref(), last.as_ref(), &state.geoip))
 }
 
 async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, partial: bool) -> ApiResult<Json<Value>> {
@@ -587,4 +604,33 @@ async fn connections(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
         "hourly": summary.hourly,
         "sessions": sessions,
     })))
+}
+
+// ---------------------------------------------------------------- device facts
+
+fn probe_error(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
+    ApiError::new(status, json!({ "error": msg.into(), "code": code }))
+}
+
+/// 「立即重新整理」裝置的位址與基本狀況：跟每天那次同一個唯讀腳本，走連線池。owner / ADMIN；每條隧道每分鐘一次。
+/// Refresh the device's addresses and facts now: the daily read-only script over the pooled connection.
+/// Owner / ADMIN; once a minute per tunnel.
+#[utoipa::path(post, path = "/api/reverse/server/{id}/probe", tag = "Reverse Server Keys", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id")), responses((status = 200, description = "The fresh endpoint (probe_error set when the device could not be asked)", body = super::schemas::TunnelEndpoint), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody), (status = 409, description = "code = device_offline", body = super::schemas::ProbeError), (status = 429, description = "code = too_soon; retry_after = seconds", body = super::schemas::ProbeError)))]
+async fn probe_now(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    let t = visible_tunnel(&state, user.id, id).await?;
+    if !permissions::check_access(&state.db, user.id, &t, Permission::Admin).await? {
+        return Err(ApiError::detail(StatusCode::FORBIDDEN, "Only the owner or an ADMIN sharee can refresh the device facts."));
+    }
+    let port = u16::try_from(t.reverse_port).map_err(|_| ApiError::internal("bad reverse port"))?;
+    let Some(live) = state.status.endpoints().get(&port).cloned() else {
+        return Err(probe_error(StatusCode::CONFLICT, "device_offline", format!("The device '{}' is offline.", t.host_friendly_name)));
+    };
+    if let Err(wait) = state.device_info.begin_refresh(t.id, std::time::Instant::now()) {
+        let mut e = probe_error(StatusCode::TOO_MANY_REQUESTS, "too_soon", format!("Refreshed less than a minute ago; try again in {wait} s."));
+        e.body["retry_after"] = json!(wait);
+        return Err(e);
+    }
+    let peer_public = live.ip.parse::<std::net::IpAddr>().is_ok_and(|ip| crate::geoip::scope(ip) == crate::geoip::Scope::Public);
+    crate::device_info::refresh(&state, &t, port, peer_public).await;
+    Ok(Json(endpoint_for(&state, user.id, user.is_superuser, &t).await?))
 }

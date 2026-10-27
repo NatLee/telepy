@@ -59,7 +59,7 @@ MCP client ── POST /mcp ─────────────────�
 | 工具 | 說明 |
 | --- | --- |
 | `list_tunnels` | 看得到的隧道：id、名稱、是否在線、延遲、我的權限、可用的目標 username、這個 app 開著的 session |
-| `tunnel_status(tunnel_id)` | 在線 / 健康狀態（online / degraded = 隧道在但裝置 sshd 沒回應 / offline）/ 延遲 / 最近 10 筆 gateway 事件 |
+| `tunnel_status(tunnel_id)` | 在線 / 健康狀態（online / degraded = 隧道在但裝置 sshd 沒回應 / offline）/ 延遲 / 24 小時在線率 / 裝置的基本狀況 `facts`（OS、kernel、開機秒數、CPU、記憶體 / 根磁碟 KB、負載、ssh 版本、要不要重開機；只給能登入裝置的人）與 `warnings` / 最近 10 筆 gateway 事件 |
 | `ssh_session_open(tunnel_id, username?, idle_timeout_s?, max_lifetime_s?)` | 開 session，回 `session_id`；username 省略時用隧道的預設（只有一個時自動選） |
 | `ssh_exec(session_id, command, timeout_s?, max_output_bytes?)` | 跑指令（無 TTY）：`exit_code`、`stdout`、`stderr`、`timed_out`、`truncated` |
 | `ssh_session_list` | 這個 app 開著的 session 與剩餘時間 |

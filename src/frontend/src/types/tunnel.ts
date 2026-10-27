@@ -105,6 +105,39 @@ export interface TunnelEndpoint {
     hostname?: string | null;
     probed_at?: string | null;
     probe_error?: string | null;
+    /** 裝置的基本狀況（跟位址同一個每天一次的唯讀腳本）。/ Device facts from the same daily read-only script. */
+    facts?: DeviceFacts | null;
+    facts_at?: string | null;
+}
+
+/** 磁碟 / 記憶體 / 負載 / 重開機。/ Disk, memory, load or a pending reboot. */
+export type DeviceWarningKind = "disk" | "memory" | "load" | "reboot";
+
+export interface DeviceWarning {
+    kind: DeviceWarningKind | string;
+    /** 英文一句話（後端產生）。/ One English sentence from the backend. */
+    detail: string;
+}
+
+/** 每一項都可能是 null（裝置上沒有那個指令）。/ Any field may be null (the command is missing on the device). */
+export interface DeviceFacts {
+    os?: string | null;
+    kernel?: string | null;
+    arch?: string | null;
+    /** 讀的當下開機幾秒（對照 facts_at）。/ Seconds since boot at `facts_at`. */
+    uptime_s?: number | null;
+    cpu_model?: string | null;
+    cpus?: number | null;
+    mem_total_kb?: number | null;
+    mem_avail_kb?: number | null;
+    disk_total_kb?: number | null;
+    disk_avail_kb?: number | null;
+    /** 1 / 5 / 15 分鐘負載（Windows 沒有）。/ 1 / 5 / 15-minute load (none on Windows). */
+    load?: [number, number, number] | null;
+    ssh?: string | null;
+    /** 只有 Debian 家族知道。/ Debian family only. */
+    reboot_required?: boolean | null;
+    warnings?: DeviceWarning[];
 }
 
 export interface ReverseServerUsername {

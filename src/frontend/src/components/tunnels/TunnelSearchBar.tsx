@@ -33,6 +33,7 @@ const EXAMPLES: { term: string; key: TranslationKey }[] = [
     { term: "label:prod", key: "tunnels.q.label" },
     { term: "pinned:yes", key: "tunnels.q.pinned" },
     { term: "group:prod", key: "tunnels.q.group" },
+    { term: "warn:any", key: "tunnels.q.warn" },
     { term: "-status:never", key: "tunnels.q.negate" },
 ];
 

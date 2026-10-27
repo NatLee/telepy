@@ -271,7 +271,9 @@ const TABLES: &[(&str, &str)] = &[
             "lan" text NULL,
             "hostname" varchar(255) NULL,
             "probed_at" datetime NULL,
-            "probe_error" text NULL
+            "probe_error" text NULL,
+            "facts" text NULL,
+            "facts_at" datetime NULL
         )"#,
     ),
     // Rust 自有：隧道連線紀錄（一個 forward 一列），給連線紀錄與在線率。/ Connection history, one row per forward.
@@ -794,6 +796,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_tunnel_endpoint", "hostname", "varchar(255) NULL"),
     ("telepy_tunnel_endpoint", "probed_at", "datetime NULL"),
     ("telepy_tunnel_endpoint", "probe_error", "text NULL"),
+    // 裝置的基本狀況（`device_facts`，JSON）與時間。/ Device facts (JSON) and when they were read.
+    ("telepy_tunnel_endpoint", "facts", "text NULL"),
+    ("telepy_tunnel_endpoint", "facts_at", "datetime NULL"),
     ("telepy_ai_audit_event", "ip", "varchar(64) NULL"),
     // 稽核雜湊鏈（升級前的列為 NULL）。/ Audit hash chain (NULL on rows written before the upgrade).
     ("telepy_gateway_event", "prev_hash", "varchar(64) NULL"),

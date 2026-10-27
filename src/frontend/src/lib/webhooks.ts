@@ -15,6 +15,7 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "tunnel.ip_changed": { label: "webhooks.ev.tunnelIpChanged", hint: "webhooks.ev.tunnelIpChangedHint" },
     "tunnel.host_key_changed": { label: "webhooks.ev.tunnelHostKeyChanged", hint: "webhooks.ev.tunnelHostKeyChangedHint" },
     "device.claim_attempt": { label: "webhooks.ev.deviceClaimAttempt", hint: "webhooks.ev.deviceClaimAttemptHint" },
+    "tunnel.device_warning": { label: "webhooks.ev.tunnelDeviceWarning", hint: "webhooks.ev.tunnelDeviceWarningHint" },
     "share.received": { label: "webhooks.ev.shareReceived", hint: "webhooks.ev.shareReceivedHint" },
     "share.ended": { label: "webhooks.ev.shareEnded", hint: "webhooks.ev.shareEndedHint" },
     "access.requested": { label: "webhooks.ev.accessRequested", hint: "webhooks.ev.accessRequestedHint" },
@@ -129,7 +130,7 @@ export const PRESET_KEY: Record<PresetId, TranslationKey> = {
     all: "webhooks.preset.all",
 };
 const PRESET_EVENTS: Record<Exclude<PresetId, "all">, string[]> = {
-    status: ["tunnel.offline", "tunnel.online", "tunnel.degraded", "tunnel.recovered"],
+    status: ["tunnel.offline", "tunnel.online", "tunnel.degraded", "tunnel.recovered", "tunnel.device_warning"],
     security: ["tunnel.ip_changed", "tunnel.host_key_changed", "device.claim_attempt", "account.sign_in", "account.sign_in_new_device", "account.sign_in_failed", "key.expiring", "key.expired", "user.created"],
     approvals: ["access.requested", "command.approval_requested"],
 };

@@ -9,15 +9,21 @@
 //! at most daily while connected — through a read-only script run with the service key. The public IP comes from
 //! Telepy's own `/api/whoami` first; when that answer is not public (a proxy or Docker in front of Telepy hides
 //! client addresses, or the device shares Telepy's NAT), the device asks the site's `device_ip_lookup_url`.
+//! 同一個腳本也讀裝置的基本狀況（`device_facts`：OS、開機多久、記憶體、磁碟、負載…），不另外登入；
+//! owner / ADMIN 的「立即重新整理」走連線池跑同一個腳本（每條隧道每分鐘一次）。
+//! The same script also reads the device facts (`device_facts`); "Refresh now" (owner / ADMIN, once a minute per
+//! tunnel) runs it over the pooled connection.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
 use crate::config::Config;
 use crate::db;
+use crate::device_facts::{self, Facts};
 use crate::geoip::{scope, Scope};
 use crate::lan::{parse_networks, Network};
 use crate::ssh::device;
@@ -31,6 +37,45 @@ const REFRESH_AFTER_HOURS: i64 = 24;
 const EXEC_TIMEOUT: Duration = Duration::from_secs(20);
 const EXEC_OUTPUT: usize = 64 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+/// 同一條隧道同一種警示，24 小時內只發一次。/ One alert per tunnel and warning kind per 24 h.
+pub const WARN_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// 「立即重新整理」每條隧道每分鐘一次。/ "Refresh now": once a minute per tunnel.
+pub const REFRESH_EVERY: Duration = Duration::from_secs(60);
+/// 腳本多久跑一次（給畫面算「下次」）。/ How often the script runs (the UI shows when the next run is due).
+pub const REFRESH_AFTER_SECS: i64 = REFRESH_AFTER_HOURS * 3600;
+
+/// 記憶體裡的節流：警示去重複、「立即重新整理」的頻率限制。/ In-memory throttles: alert de-dup and the refresh rate limit.
+#[derive(Default)]
+pub struct DeviceInfoState {
+    warned: Mutex<HashMap<(i64, String), Instant>>,
+    refreshed: Mutex<HashMap<i64, Instant>>,
+}
+
+impl DeviceInfoState {
+    /// 這條隧道的這種警示該發了嗎（發了就記下時間）。/ Is this alert due (and mark it sent)?
+    pub fn should_warn(&self, tunnel_id: i64, kind: &str, now: Instant) -> bool {
+        let mut warned = self.warned.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (tunnel_id, kind.to_string());
+        if warned.get(&key).is_some_and(|t| now.saturating_duration_since(*t) < WARN_EVERY) {
+            return false;
+        }
+        warned.insert(key, now);
+        true
+    }
+
+    /// 開始一次「立即重新整理」；太頻繁時回還要等幾秒。/ Start a refresh, or how many seconds to wait.
+    pub fn begin_refresh(&self, tunnel_id: i64, now: Instant) -> Result<(), u64> {
+        let mut refreshed = self.refreshed.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = refreshed.get(&tunnel_id) {
+            let since = now.saturating_duration_since(*t);
+            if since < REFRESH_EVERY {
+                return Err((REFRESH_EVERY - since).as_secs().max(1));
+            }
+        }
+        refreshed.insert(tunnel_id, now);
+        Ok(())
+    }
+}
 
 /// 公網 IP 來源：裝置經 Telepy 的 `/api/whoami` 回報。/ Public IP reported by the device through Telepy's `/api/whoami`.
 pub const SOURCE_DEVICE: &str = "device";
@@ -49,11 +94,18 @@ pub struct DeviceInfo {
     /// `/api/whoami` 回了一個非公網位址（只記 log，用來看出 Telepy 前面的代理把來源換掉了）。
     /// A non-public whoami answer, logged only: it shows that something in front of Telepy rewrites client addresses.
     pub whoami_saw: Option<IpAddr>,
+    /// 裝置的基本狀況（OS、記憶體、磁碟…）。/ Device facts (OS, memory, disk…).
+    pub facts: Facts,
 }
 
 impl DeviceInfo {
     fn is_empty(&self) -> bool {
-        self.hostname.is_none() && self.lan.is_empty() && self.public_ip.is_none() && self.whoami_saw.is_none()
+        self.hostname.is_none() && self.lan.is_empty() && self.public_ip.is_none() && self.whoami_saw.is_none() && self.facts.is_empty()
+    }
+
+    /// 存進 DB 的 `facts` 欄位（什麼都沒讀到是 None）。/ The `facts` column value.
+    pub fn facts_json(&self) -> Option<String> {
+        (!self.facts.is_empty()).then(|| serde_json::to_string(&self.facts).unwrap_or_default())
     }
 
     /// 存進 DB 的 `lan` 欄位。/ The `lan` column value.
@@ -103,7 +155,8 @@ fn windows_fetch(urls: &[String]) -> String {
     format!("foreach ($i in 1) {{ {tries} }}")
 }
 
-/// POSIX 腳本（包在 `sh -c` 裡，不管登入 shell 是 bash / zsh / fish）。/ The POSIX script, wrapped in `sh -c`.
+/// POSIX 腳本（包在 `sh -c` 裡，不管登入 shell 是 bash / zsh / fish）：hostname / 網卡 / whoami / 基本狀況四段。
+/// The POSIX script, wrapped in `sh -c`: hostname, interfaces, whoami and the device facts.
 pub fn posix_command(urls: &[String]) -> String {
     let mut script = format!(
         "hostname 2>/dev/null; echo {MARK}; ip -o -4 addr show scope global 2>/dev/null || ifconfig 2>/dev/null || /sbin/ifconfig 2>/dev/null; echo {MARK};"
@@ -112,14 +165,17 @@ pub fn posix_command(urls: &[String]) -> String {
         script.push(' ');
         script.push_str(&posix_fetch(urls));
     }
+    script.push_str(&format!("\necho {MARK}\n"));
+    script.push_str(device_facts::POSIX_SCRIPT);
     format!("sh -c {}", crate::tunnel_service::sh_quote(&script))
 }
 
-/// Windows（OpenSSH 預設 shell 是 cmd.exe）：同樣三段，用 PowerShell。/ The same three sections in PowerShell.
+/// Windows（OpenSSH 預設 shell 是 cmd.exe）：同樣四段，用 PowerShell。/ The same four sections in PowerShell.
 pub fn windows_command(urls: &[String]) -> String {
     let fetch = windows_fetch(urls);
+    let facts = device_facts::WINDOWS_SCRIPT;
     format!(
-        "powershell -NoProfile -NonInteractive -Command \"hostname; '{MARK}'; Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object {{ $_.InterfaceAlias + '|' + $_.IPAddress + '/' + $_.PrefixLength }}; '{MARK}'; {fetch}\""
+        "powershell -NoProfile -NonInteractive -Command \"hostname; '{MARK}'; Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object {{ $_.InterfaceAlias + '|' + $_.IPAddress + '/' + $_.PrefixLength }}; '{MARK}'; {fetch}; '{MARK}'; {facts}\""
     )
 }
 
@@ -153,6 +209,7 @@ pub fn parse_output(out: &str) -> DeviceInfo {
     let host = parts.next().unwrap_or_default();
     let ifaces = parts.next().unwrap_or_default();
     let whoami = parts.next().unwrap_or_default();
+    let facts = device_facts::parse_facts(parts.next().unwrap_or_default());
     let hostname = host.lines().map(str::trim).find(|l| !l.is_empty()).filter(|h| valid_hostname(h)).map(str::to_string);
     let answer = first_ip(whoami);
     let public_ip = answer.filter(|ip| scope(*ip) == Scope::Public);
@@ -162,6 +219,7 @@ pub fn parse_output(out: &str) -> DeviceInfo {
         public_ip,
         public_source: public_ip.map(|_| SOURCE_DEVICE),
         whoami_saw: answer.filter(|_| public_ip.is_none()),
+        facts,
     }
 }
 
@@ -183,9 +241,30 @@ fn physical_first(lan: Vec<Network>) -> Vec<Network> {
     out
 }
 
-/// 登入裝置問一次（裝置的預設帳號，沒有就第一個）。`ask_public` = gateway 看不到公網來源時才問 whoami。
-/// Log in once and ask; `ask_public` only when the gateway's peer is not a public address.
-pub async fn probe(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: bool) -> Result<DeviceInfo, String> {
+/// 用哪條連線跑：自己登入一次（每天那次）或連線池（立即重新整理）。/ Own login (the daily probe) or the pool (refresh now).
+enum Via<'a> {
+    Own(&'a device::DeviceConn),
+    Pool { state: &'a AppState, port: i64, username: &'a str },
+}
+
+impl Via<'_> {
+    async fn run(&self, cmd: &str) -> String {
+        match self {
+            Via::Own(conn) => run_cmd(conn, cmd).await,
+            Via::Pool { state, port, username } => match state.pool.session_channel(state, *port, username).await {
+                Ok((lease, ch)) => {
+                    let out = crate::ssh::exec::run_on(ch, cmd, EXEC_TIMEOUT, EXEC_OUTPUT).await.map(|r| r.stdout.text).unwrap_or_default();
+                    drop(lease);
+                    out
+                }
+                Err(_) => String::new(),
+            },
+        }
+    }
+}
+
+/// 用哪個帳號登入：裝置的預設帳號，沒有就第一個。/ The login account: the tunnel's default, else the first.
+async fn login_account(state: &AppState, tunnel: &db::tunnels::Tunnel) -> Result<String, String> {
     let username = match tunnel.default_username_id {
         Some(id) => db::tunnels::username_by_id(&state.db, id).await.ok().flatten().map(|u| u.username),
         None => None,
@@ -200,12 +279,32 @@ pub async fn probe(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: b
             .map(|u| u.username)
             .ok_or("the tunnel has no login account")?,
     };
+    Ok(username)
+}
+
+/// 登入裝置問一次（裝置的預設帳號，沒有就第一個）。`ask_public` = gateway 看不到公網來源時才問 whoami。
+/// Log in once and ask; `ask_public` only when the gateway's peer is not a public address.
+pub async fn probe(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: bool) -> Result<DeviceInfo, String> {
+    let username = login_account(state, tunnel).await?;
     let conn = device::connect(state, &username, tunnel.reverse_port).await.map_err(|e| format!("cannot log in as {username}: {e:#}"))?;
+    ask(state, tunnel, &Via::Own(&conn), ask_public).await
+}
+
+/// 同一個腳本，走連線池（終端機 / 檔案管理共用的那條登入）。/ The same script over the pooled connection.
+pub async fn probe_pooled(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: bool) -> Result<DeviceInfo, String> {
+    let username = login_account(state, tunnel).await?;
+    let lease = state.pool.acquire(state, tunnel.reverse_port, &username).await.map_err(|e| format!("cannot log in as {username}: {e:#}"))?;
+    let out = ask(state, tunnel, &Via::Pool { state, port: tunnel.reverse_port, username: &username }, ask_public).await;
+    drop(lease);
+    out
+}
+
+async fn ask(state: &AppState, tunnel: &db::tunnels::Tunnel, via: &Via<'_>, ask_public: bool) -> Result<DeviceInfo, String> {
     let urls = if ask_public { whoami_urls(&state.config) } else { Vec::new() };
-    let mut info = parse_output(&run_cmd(&conn, &posix_command(&urls)).await);
+    let mut info = parse_output(&via.run(&posix_command(&urls)).await);
     let mut windows = false;
     if info.is_empty() {
-        info = parse_output(&run_cmd(&conn, &windows_command(&urls)).await);
+        info = parse_output(&via.run(&windows_command(&urls)).await);
         windows = true;
     }
     if info.is_empty() {
@@ -221,7 +320,7 @@ pub async fn probe(state: &AppState, tunnel: &db::tunnels::Tunnel, ask_public: b
     if ask_public && info.public_ip.is_none() {
         if let Some(url) = lookup_url(state).await {
             let cmd = if windows { windows_lookup_command(&url) } else { posix_lookup_command(&url) };
-            info.public_ip = parse_lookup(&run_cmd(&conn, &cmd).await);
+            info.public_ip = parse_lookup(&via.run(&cmd).await);
             info.public_source = info.public_ip.map(|_| SOURCE_LOOKUP);
         }
     }
@@ -243,15 +342,30 @@ async fn run_cmd(conn: &device::DeviceConn, cmd: &str) -> String {
 pub async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_public: bool) {
     let Ok(Some(tunnel)) = db::tunnels::by_id(&state.db, tunnel_id).await else { return };
     let result = tokio::time::timeout(PROBE_TIMEOUT, probe(state, &tunnel, !peer_public)).await.unwrap_or_else(|_| Err("timed out".into()));
+    store(state, &tunnel, port, peer_public, result).await;
+}
+
+/// 「立即重新整理」：同一個腳本走連線池，存起來，回傳錯誤（如果有）。/ "Refresh now" over the pool; returns the error, if any.
+pub async fn refresh(state: &AppState, tunnel: &db::tunnels::Tunnel, port: u16, peer_public: bool) -> Option<String> {
+    let result = tokio::time::timeout(PROBE_TIMEOUT, probe_pooled(state, tunnel, !peer_public)).await.unwrap_or_else(|_| Err("timed out".into()));
+    let error = result.as_ref().err().cloned();
+    store(state, tunnel, port, peer_public, result).await;
+    error
+}
+
+async fn store(state: &AppState, tunnel: &db::tunnels::Tunnel, port: u16, peer_public: bool, result: Result<DeviceInfo, String>) {
+    let tunnel_id = tunnel.id;
     let at = now_db();
     match result {
         Ok(info) => {
             let lan = info.lan_json();
-            if let Err(e) = db::tunnel_endpoints::record_probe(&state.db, tunnel_id, info.hostname.as_deref(), lan.as_deref(), None, &at).await {
+            let facts = info.facts_json();
+            if let Err(e) = db::tunnel_endpoints::record_probe(&state.db, tunnel_id, info.hostname.as_deref(), lan.as_deref(), facts.as_deref(), None, &at).await {
                 tracing::warn!(tunnel_id, error = %e, "device info: cannot store");
                 return;
             }
-            tracing::info!(tunnel_id, hostname = ?info.hostname, lan = info.lan.len(), public = ?info.public_ip, "device info refreshed");
+            tracing::info!(tunnel_id, hostname = ?info.hostname, lan = info.lan.len(), public = ?info.public_ip, warnings = info.facts.warnings.len(), "device info refreshed");
+            announce(state, tunnel, port, &info.facts).await;
             if let (Some(ip), false) = (info.public_ip, peer_public) {
                 let ip = ip.to_string();
                 let source = info.public_source.unwrap_or(SOURCE_DEVICE);
@@ -262,9 +376,68 @@ pub async fn probe_and_store(state: &AppState, tunnel_id: i64, port: u16, peer_p
         }
         Err(e) => {
             tracing::info!(tunnel_id, error = %e, "device info: probe failed");
-            let _ = db::tunnel_endpoints::record_probe(&state.db, tunnel_id, None, None, Some(&e), &at).await;
+            let _ = db::tunnel_endpoints::record_probe(&state.db, tunnel_id, None, None, None, Some(&e), &at).await;
+            facts_updated(state, tunnel).await;
         }
     }
+}
+
+/// 開著的詳細資訊視窗重抓。/ Open details dialogs refetch.
+async fn facts_updated(state: &AppState, tunnel: &db::tunnels::Tunnel) {
+    if let Ok(audience) = crate::api::notify::tunnel_audience(state, tunnel).await {
+        state.hub.notify_users(audience, &json!({ "action": "DEVICE-FACTS-UPDATED", "tunnel_id": tunnel.id }));
+    }
+}
+
+/// 存好之後：通知重抓；新的警示（每條隧道每種 24 小時一次）寫進 Logs、通知 owner / ADMIN、發 webhook。
+/// After storing: tell viewers to refetch; new warnings (once per tunnel and kind per 24 h) go to the Logs, the owner /
+/// ADMIN sharees and their webhooks.
+pub async fn announce(state: &AppState, tunnel: &db::tunnels::Tunnel, port: u16, facts: &Facts) {
+    facts_updated(state, tunnel).await;
+    let now = Instant::now();
+    let fresh: Vec<&device_facts::Warning> = facts.warnings.iter().filter(|w| state.device_info.should_warn(tunnel.id, &w.kind, now)).collect();
+    if fresh.is_empty() {
+        return;
+    }
+    let mut managers = vec![tunnel.user_id];
+    managers.extend(db::sharing::admin_sharee_ids(&state.db, tunnel.id).await.unwrap_or_default());
+    for w in &fresh {
+        let message = format!("Device of tunnel {} needs attention: {}", tunnel.host_friendly_name, w.detail);
+        state.gateway.event("device_warning", None, Some(port), Some(tunnel.id), message).await;
+        state.webhooks.emit(
+            crate::webhooks::Event::new(crate::webhooks::Kind::DeviceWarning)
+                .tunnel(tunnel)
+                .to(managers.clone(), None)
+                .data(warning_data(facts, w)),
+        );
+    }
+    state.hub.notify_users(
+        managers,
+        &json!({
+            "action": "DEVICE-WARNING",
+            "tunnel_id": tunnel.id,
+            "tunnel_name": tunnel.host_friendly_name,
+            "warnings": fresh.iter().map(|w| w.kind.as_str()).collect::<Vec<_>>(),
+            "details": fresh.iter().map(|w| w.detail.as_str()).collect::<Vec<_>>().join("; "),
+        }),
+    );
+}
+
+/// webhook 句子要的數字（先排好版）。/ Pre-formatted numbers for the webhook sentence.
+pub fn warning_data(f: &Facts, w: &device_facts::Warning) -> serde_json::Value {
+    let (avail, total) = match w.kind.as_str() {
+        "disk" => (f.disk_avail_kb, f.disk_total_kb),
+        "memory" => (f.mem_avail_kb, f.mem_total_kb),
+        _ => (None, None),
+    };
+    json!({
+        "warning": w.kind,
+        "detail": w.detail,
+        "avail": avail.map(device_facts::fmt_kb),
+        "total": total.map(device_facts::fmt_kb),
+        "load1": f.load.map(|l| format!("{:.2}", l[0])),
+        "cpus": f.cpus,
+    })
 }
 
 /// 常駐：每 30 秒看哪些連著的隧道該問了（依序問，一次一台）。/ Resident loop: probe due, connected tunnels one at a time.
@@ -378,6 +551,37 @@ en1: flags=8863<UP> mtu 1500\n\tinet 192.168.0.205 netmask 0xffffff00 broadcast 
         let win = windows_lookup_command("https://api.ipify.org");
         assert!(win.starts_with("powershell -NoProfile -NonInteractive -Command \"foreach ($i in 1) { try { (Invoke-RestMethod"), "{win}");
         assert!(win.contains("-Uri 'https://api.ipify.org'"), "{win}");
+    }
+
+    #[test]
+    fn the_fourth_section_holds_the_facts() {
+        let out = "pi\n@@telepy@@\n@@telepy@@\n\n@@telepy@@\nnow=1\nkernel=Linux 6.6.51\narch=aarch64\ndisk_total_kb=30000000\ndisk_avail_kb=20000000\n";
+        let info = parse_output(out);
+        assert_eq!(info.hostname.as_deref(), Some("pi"));
+        assert_eq!(info.public_ip, None, "the facts are not a whoami answer");
+        assert_eq!(info.facts.kernel.as_deref(), Some("Linux 6.6.51"));
+        assert!(info.facts_json().unwrap().contains("\"arch\":\"aarch64\""));
+        // 只有基本狀況也算有回答。/ Facts alone count as an answer.
+        assert!(!parse_output("@@telepy@@\n@@telepy@@\n@@telepy@@\nkernel=Linux 6.6\n").is_empty());
+        assert_eq!(parse_output("pi\n@@telepy@@\n@@telepy@@\n").facts_json(), None);
+        let posix = posix_command(&[]);
+        assert!(posix.contains("df -Pk /") && posix.contains("/proc/meminfo"), "{posix}");
+        assert!(windows_command(&[]).contains("Win32_OperatingSystem"));
+    }
+
+    #[test]
+    fn alerts_and_refreshes_are_throttled() {
+        let s = DeviceInfoState::default();
+        let t0 = Instant::now();
+        assert!(s.should_warn(1, "disk", t0));
+        assert!(!s.should_warn(1, "disk", t0 + Duration::from_secs(3600)), "once per 24 h");
+        assert!(s.should_warn(1, "reboot", t0), "per kind");
+        assert!(s.should_warn(2, "disk", t0), "per tunnel");
+        assert!(s.should_warn(1, "disk", t0 + WARN_EVERY));
+        assert_eq!(s.begin_refresh(1, t0), Ok(()));
+        assert_eq!(s.begin_refresh(1, t0 + Duration::from_secs(15)), Err(45));
+        assert_eq!(s.begin_refresh(2, t0), Ok(()));
+        assert_eq!(s.begin_refresh(1, t0 + REFRESH_EVERY), Ok(()));
     }
 
     #[test]

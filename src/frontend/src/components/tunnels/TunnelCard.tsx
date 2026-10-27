@@ -14,6 +14,7 @@ import { HEALTH_TILE, TunnelAccessBadges, TunnelLastSeen, TunnelStatusPill } fro
 import { liveHealth } from "@/lib/tunnelHealth";
 import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { HostKeyAlert } from "@/components/tunnels/HostKeyAlert";
+import { DeviceWarningChip } from "@/components/tunnels/DeviceFacts";
 import { TunnelPresenceButton } from "@/components/tunnels/TunnelPresence";
 import { PinButton, TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,7 @@ export function TunnelCard({ tunnel, isActive, latencyMs, sharedCount, ...action
                         <TunnelEndpointChip endpoint={tunnel.endpoint} />
                         <TunnelLanChip endpoint={tunnel.endpoint} />
                         <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id)} />
+                        <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id)} />
                         <TunnelAccessBadges tunnel={tunnel} sharedCount={sharedCount} onRequests={() => actions.onShare(tunnel.id)} onShare={() => actions.onShare(tunnel.id)} />
                         <TunnelPresenceButton presence={tunnel.presence} tunnelId={tunnel.id} />
                         <TunnelLabels labels={tunnel.labels} onLabel={actions.onLabel} />

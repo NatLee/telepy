@@ -11,6 +11,7 @@ import { useI18n } from "@/lib/i18n";
 import { keyProblem } from "@/lib/sshKeys";
 import { parseLabels, sameLabels } from "@/lib/tunnelLabels";
 import type { TranslationKey } from "@/locales/en";
+import type { TunnelEndpoint } from "@/types/tunnel";
 
 export interface TunnelDetails {
     id: number;
@@ -29,6 +30,8 @@ export interface TunnelDetails {
     require_step_up?: boolean;
     /** 網頁終端機會錄影。/ Web terminal sessions are recorded. */
     record_sessions?: boolean;
+    /** 裝置的位址與基本狀況（能登入裝置的人才有，否則 null）。/ Addresses and facts (null when hidden). */
+    endpoint?: TunnelEndpoint | null;
 }
 
 export type TunnelForm = { host_friendly_name: string; key: string; description: string };

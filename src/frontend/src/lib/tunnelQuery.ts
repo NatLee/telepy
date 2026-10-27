@@ -15,12 +15,14 @@
  *   label:prod | tag:prod                           標籤（tag 是別名）
  *   pinned:yes|no                                   我有沒有釘選
  *   group:prod | group:none                         我把它放在哪個通道群組（名稱不分大小寫；none = 未分組）
+ *   warn:disk|memory|load|reboot|any                裝置的警示（磁碟快滿、記憶體不足、負載高、要重開機）
  *
  * 純函式、不依賴 React，`tunnelQuery.test.ts` 有測試。/ Pure functions; tested in tunnelQuery.test.ts.
  */
 import type { Tunnel, TunnelHealth } from "../types/tunnel";
+import { warningKinds } from "./deviceFacts.ts";
 
-export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned", "group"] as const;
+export const QUERY_KEYS = ["status", "shared", "port", "lastseen", "ip", "user", "label", "pinned", "warn", "group"] as const;
 export type QueryKey = (typeof QUERY_KEYS)[number];
 
 export interface QueryFilter {
@@ -48,6 +50,7 @@ export interface MatchContext {
 
 const STATUS = new Set(["online", "degraded", "offline", "never", "up", "down"]);
 const SHARED = new Set(["in", "out", "no"]);
+const WARN = new Set(["disk", "memory", "load", "reboot", "any"]);
 const UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 
 /** 空白切詞，雙引號裡的空白保留。/ Split on whitespace, keeping quoted phrases together. */
@@ -77,6 +80,8 @@ function validValue(key: QueryKey, v: string): boolean {
             return v.length > 0;
         case "pinned":
             return v === "yes" || v === "no";
+        case "warn":
+            return WARN.has(v);
     }
 }
 
@@ -163,6 +168,10 @@ function matchOne(f: QueryFilter, v: string, t: Tunnel, ctx: MatchContext): bool
             return (v === "yes") === !!t.pinned;
         case "group":
             return v === "none" ? !ctx.group : (ctx.group ?? "").toLowerCase() === v;
+        case "warn": {
+            const kinds: string[] = warningKinds(t.endpoint);
+            return v === "any" ? kinds.length > 0 : kinds.includes(v);
+        }
     }
 }
 

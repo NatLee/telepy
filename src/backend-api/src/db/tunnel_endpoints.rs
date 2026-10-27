@@ -30,6 +30,9 @@ pub struct LastEndpoint {
     /// 最後一次登入裝置查位址的時間與錯誤。/ When the device was last asked for its addresses, and the error.
     pub probed_at: Option<String>,
     pub probe_error: Option<String>,
+    /// 裝置的基本狀況（`device_facts::Facts` 的 JSON）與讀到的時間。/ Device facts (JSON) and when they were read.
+    pub facts: Option<String>,
+    pub facts_at: Option<String>,
 }
 
 /// 裝置的公網 IP 跟上次不同。/ The device's public address differs from last time.
@@ -43,6 +46,7 @@ pub struct IpChange {
 
 const E: &str = "telepy_tunnel_endpoint";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
+const COLUMNS: &str = "tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at, public_ip, public_source, lan, hostname, probed_at, probe_error, facts, facts_at";
 
 /// forward 註冊好時：這個 port 的隧道現在從 `ip`（gateway 看到的 TCP 來源）連進來，`at` = 連上的時間。
 /// 公網 IP 與換 IP 的判斷在 [`update_public_ip`]（gateway 看到的可能是代理 / Docker 的內部位址）。
@@ -91,11 +95,19 @@ pub async fn update_public_ip(db: &Db, tunnel_id: i64, ip: &str, source: &str, a
     }))
 }
 
-/// 登入裝置查到的位址（hostname、內網網卡 JSON）與錯誤。/ What the device reported, or why asking failed.
-pub async fn record_probe(db: &Db, tunnel_id: i64, hostname: Option<&str>, lan: Option<&str>, error: Option<&str>, at: &str) -> sqlx::Result<()> {
-    sqlx::query(&format!("UPDATE {E} SET hostname = COALESCE(?, hostname), lan = COALESCE(?, lan), probe_error = ?, probed_at = ? WHERE tunnel_id = ?"))
+/// 登入裝置查到的位址（hostname、內網網卡 JSON）、基本狀況（facts JSON）與錯誤；沒拿到的欄位保留舊值。
+/// What the device reported (hostname, LAN JSON, facts JSON), or why asking failed; missing values keep the old ones.
+pub async fn record_probe(db: &Db, tunnel_id: i64, hostname: Option<&str>, lan: Option<&str>, facts: Option<&str>, error: Option<&str>, at: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!(
+        "UPDATE {E} SET hostname = COALESCE(?, hostname), lan = COALESCE(?, lan), \
+         facts_at = CASE WHEN ? IS NOT NULL THEN ? ELSE facts_at END, facts = COALESCE(?, facts), \
+         probe_error = ?, probed_at = ? WHERE tunnel_id = ?"
+    ))
         .bind(hostname)
         .bind(lan)
+        .bind(facts)
+        .bind(at)
+        .bind(facts)
         .bind(error)
         .bind(at)
         .bind(tunnel_id)
@@ -150,7 +162,7 @@ pub async fn last_seen_visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap
 /// 使用者看得到的隧道（owned ∪ shared）的最後已知來源，以 tunnel id 為鍵。
 pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, LastEndpoint>> {
     let rows: Vec<LastEndpoint> = sqlx::query_as(&format!(
-        "SELECT tunnel_id, ip, connected_at, last_seen_at, previous_ip, changed_at, public_ip, public_source, lan, hostname, probed_at, probe_error FROM {E} \
+        "SELECT {COLUMNS} FROM {E} \
          WHERE tunnel_id IN (SELECT id FROM {T} WHERE user_id = ? UNION SELECT tunnel_id FROM tunnels_tunnelsharing WHERE shared_with_id = ?)"
     ))
     .bind(user_id)
@@ -158,4 +170,9 @@ pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<HashMap<i64, Last
     .fetch_all(&db.read)
     .await?;
     Ok(rows.into_iter().map(|r| (r.tunnel_id, r)).collect())
+}
+
+/// 一條隧道的最後紀錄（單筆 retrieve、立即重新整理、MCP 用）。/ One tunnel's row.
+pub async fn of_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<Option<LastEndpoint>> {
+    sqlx::query_as(&format!("SELECT {COLUMNS} FROM {E} WHERE tunnel_id = ?")).bind(tunnel_id).fetch_optional(&db.read).await
 }

@@ -17,6 +17,8 @@ pub enum Kind {
     TunnelIpChanged,
     TunnelHostKeyChanged,
     DeviceClaimAttempt,
+    /// 裝置的磁碟 / 記憶體 / 負載 / 重開機警示（`device_facts`）。/ Disk / memory / load / reboot warnings.
+    DeviceWarning,
     ShareReceived,
     ShareEnded,
     AccessRequested,
@@ -47,6 +49,7 @@ pub const ALL: &[Kind] = &[
     Kind::TunnelIpChanged,
     Kind::TunnelHostKeyChanged,
     Kind::DeviceClaimAttempt,
+    Kind::DeviceWarning,
     Kind::ShareReceived,
     Kind::ShareEnded,
     Kind::AccessRequested,
@@ -146,6 +149,7 @@ impl Kind {
             Kind::TunnelIpChanged => "tunnel.ip_changed",
             Kind::TunnelHostKeyChanged => "tunnel.host_key_changed",
             Kind::DeviceClaimAttempt => "device.claim_attempt",
+            Kind::DeviceWarning => "tunnel.device_warning",
             Kind::ShareReceived => "share.received",
             Kind::ShareEnded => "share.ended",
             Kind::AccessRequested => "access.requested",
@@ -174,7 +178,7 @@ impl Kind {
     pub fn group(self) -> Group {
         match self {
             Kind::TunnelOffline | Kind::TunnelOnline | Kind::TunnelDegraded | Kind::TunnelRecovered => Group::Status,
-            Kind::TunnelIpChanged | Kind::TunnelHostKeyChanged | Kind::DeviceClaimAttempt => Group::Device,
+            Kind::TunnelIpChanged | Kind::TunnelHostKeyChanged | Kind::DeviceClaimAttempt | Kind::DeviceWarning => Group::Device,
             Kind::ShareReceived | Kind::ShareEnded | Kind::AccessRequested | Kind::AccessDecided => Group::Sharing,
             Kind::CommandApprovalRequested | Kind::CommandApprovalDecided | Kind::CommandBlocked => Group::Commands,
             Kind::SessionStarted | Kind::McpSessionOpened | Kind::McpSessionClosed => Group::Sessions,
@@ -187,7 +191,7 @@ impl Kind {
     pub fn audience(self) -> Audience {
         match self {
             Kind::TunnelOffline | Kind::TunnelOnline | Kind::TunnelDegraded | Kind::TunnelRecovered | Kind::TunnelHostKeyChanged => Audience::Tunnel,
-            Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::CommandApprovalRequested => Audience::Managers,
+            Kind::TunnelIpChanged | Kind::DeviceClaimAttempt | Kind::DeviceWarning | Kind::CommandApprovalRequested => Audience::Managers,
             Kind::AccessRequested | Kind::CommandBlocked | Kind::SessionStarted => Audience::ManagersOthers,
             Kind::ShareEnded => Audience::ShareParties,
             Kind::ShareReceived | Kind::AccessDecided | Kind::CommandApprovalDecided | Kind::AccountSignIn | Kind::AccountSignInNewDevice | Kind::AccountSignInFailed | Kind::KeyExpiring | Kind::KeyExpired => Audience::You,
@@ -212,6 +216,7 @@ impl Kind {
                 | Kind::TunnelIpChanged
                 | Kind::TunnelHostKeyChanged
                 | Kind::DeviceClaimAttempt
+                | Kind::DeviceWarning
                 | Kind::AccountSignInFailed
                 | Kind::UserCreated
         )
@@ -232,6 +237,7 @@ impl Kind {
             | Kind::TunnelDegraded
             | Kind::TunnelHostKeyChanged
             | Kind::DeviceClaimAttempt
+            | Kind::DeviceWarning
             | Kind::CommandBlocked
             | Kind::AccountSignInFailed
             | Kind::AccountSignInNewDevice
@@ -252,6 +258,7 @@ impl Kind {
             Kind::TunnelIpChanged => "New device IP address",
             Kind::TunnelHostKeyChanged => "Device host key changed",
             Kind::DeviceClaimAttempt => "Device claimed by another account",
+            Kind::DeviceWarning => "Device needs attention",
             Kind::ShareReceived => "Tunnel shared with you",
             Kind::ShareEnded => "Share ended",
             Kind::AccessRequested => "Access requested",

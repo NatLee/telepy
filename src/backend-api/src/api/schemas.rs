@@ -166,8 +166,8 @@ pub struct Tunnel {
     pub updated_at: String,
     pub user: i64,
     pub default_username: Option<i64>,
-    /// 只有列表（`/keys`、`/dashboard`）帶：裝置的公網 IP。看不到（只看狀態的 sharee）或從沒連過時是 null。
-    /// List / dashboard only: the device's public IP; null when hidden (status-only sharee) or never connected.
+    /// 列表（`/keys`、`/dashboard`）與單筆 retrieve 帶：裝置的位址與基本狀況。看不到（只看狀態的 sharee）或從沒連過時是 null。
+    /// List, dashboard and single retrieve: the device's addresses and facts; null when hidden (status-only sharee) or never connected.
     pub endpoint: Option<TunnelEndpoint>,
     /// 只有列表帶：誰正在用。/ List / dashboard only: who is using the tunnel right now.
     pub presence: Option<TunnelPresence>,
@@ -313,6 +313,55 @@ pub struct TunnelEndpoint {
     /// 最後一次問裝置的時間與錯誤。/ When the device was last asked, and why it failed.
     pub probed_at: Option<String>,
     pub probe_error: Option<String>,
+    /// 裝置的基本狀況（跟位址同一個每天一次的唯讀腳本；沒讀過是 null）。/ Device facts from the same daily script; null if never read.
+    pub facts: Option<DeviceFacts>,
+    pub facts_at: Option<String>,
+}
+
+/// 裝置的基本狀況；每一項都可能是 null（那台裝置沒有那個指令）。/ Device facts; any field may be null (command missing).
+#[derive(ToSchema)]
+pub struct DeviceFacts {
+    #[schema(example = "Debian GNU/Linux 12 (bookworm)")]
+    pub os: Option<String>,
+    #[schema(example = "Linux 6.1.0-26-amd64")]
+    pub kernel: Option<String>,
+    #[schema(example = "x86_64")]
+    pub arch: Option<String>,
+    /// 問的當下開機幾秒。/ Seconds since boot when asked (`facts_at`).
+    pub uptime_s: Option<u64>,
+    pub cpu_model: Option<String>,
+    pub cpus: Option<u32>,
+    pub mem_total_kb: Option<u64>,
+    pub mem_avail_kb: Option<u64>,
+    /// 根目錄（Windows：C:）。/ Root file system (Windows: C:).
+    pub disk_total_kb: Option<u64>,
+    pub disk_avail_kb: Option<u64>,
+    /// 1 / 5 / 15 分鐘負載（Windows 沒有）。/ 1 / 5 / 15-minute load (none on Windows).
+    pub load: Option<Vec<f64>>,
+    #[schema(example = "OpenSSH_9.2p1 Debian-2+deb12u3, OpenSSL 3.0.14 4 Jun 2024")]
+    pub ssh: Option<String>,
+    /// 只有 Debian 家族知道。/ Debian family only.
+    pub reboot_required: Option<bool>,
+    pub warnings: Vec<DeviceWarning>,
+}
+
+/// 磁碟剩不到 10 % 或 2 GB、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數兩倍、等著重開機。
+/// Disk < 10 % or < 2 GB free, memory < 10 % available, load1 > 2 × CPUs, reboot pending.
+#[derive(ToSchema)]
+pub struct DeviceWarning {
+    #[schema(example = "disk")]
+    pub kind: String,
+    #[schema(example = "root disk: 1.2 GB free of 32 GB (3%)")]
+    pub detail: String,
+}
+
+#[derive(ToSchema)]
+pub struct ProbeError {
+    pub error: String,
+    #[schema(example = "device_offline")]
+    pub code: String,
+    /// 429：還要等幾秒。/ 429: seconds to wait.
+    pub retry_after: Option<u64>,
 }
 
 #[derive(ToSchema)]

@@ -37,6 +37,7 @@
 | `tunnel.ip_changed` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
 | `tunnel.host_key_changed` | 裝置身分 | owner 與所有被分享者 | ✓ |
 | `device.claim_attempt` | 裝置身分 | owner 與 ADMIN 被分享者 | ✓ |
+| `tunnel.device_warning` | 裝置身分 | owner 與 ADMIN 被分享者（根磁碟剩不到 10 % 或 2 GB、可用記憶體不到 10 %、1 分鐘負載超過 CPU 數兩倍、等著重開機；每條通道每種一天最多一次，data 有 `warning` / `detail` / `avail` / `total` / `load1` / `cpus`） | ✓ |
 | `share.received` | 分享與存取 | 被分享的人 | |
 | `share.ended` | 分享與存取 | 分享的雙方，不含動手的人 | |
 | `access.requested` | 分享與存取 | owner 與 ADMIN，不含申請人 | |
