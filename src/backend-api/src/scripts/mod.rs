@@ -291,17 +291,37 @@ pub fn server_alias(server_domain: &str, reverse_server_ssh_port: &str) -> Strin
     sanitize_host_alias(&gateway_alias(server_domain, reverse_server_ssh_port))
 }
 
-/// 一台裝置的 Host 別名：一個帳號 = 裝置名稱；多個帳號 = `<名稱>-<帳號>`。`used` 裡已有的（多台一起產生時，
+/// 裝置別名前綴的上限（個人設定 `ssh_alias_prefix`）。/ The longest device alias prefix (personal setting).
+pub const MAX_ALIAS_PREFIX: usize = 24;
+
+/// 裝置別名前綴（個人設定，例如 `work-` → `ssh work-pi`）：空 = 不加；只能用 Host 別名的字元、最多 24 個。
+/// 同一台筆電裝了兩台 Telepy、裝置又同名時，給其中一台一個前綴就不會撞。回錯誤訊息或 None。
+/// The device alias prefix (personal setting, e.g. `work-` → `ssh work-pi`): empty = none; alias characters only,
+/// at most 24. Gives one of two Telepy servers on the same laptop distinct device names. Returns the problem, if any.
+pub fn alias_prefix_problem(prefix: &str) -> Option<&'static str> {
+    if prefix.chars().count() > MAX_ALIAS_PREFIX {
+        return Some("At most 24 characters.");
+    }
+    if !prefix.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return Some("Use letters, digits, '.', '_' or '-' only.");
+    }
+    if prefix.starts_with('-') {
+        return Some("Must not start with '-'.");
+    }
+    None
+}
+
+/// 一台裝置的 Host 別名：`prefix` + 一個帳號 = 裝置名稱；多個帳號 = `<名稱>-<帳號>`。`used` 裡已有的（多台一起產生時，
 /// 名稱經過清理後撞名，或撞到伺服器別名）加上 `-2`、`-3`…，並記進 `used`。
 /// A device's Host aliases: one account = the device name; several = `<name>-<account>`. An alias already in `used`
 /// (two devices whose cleaned names collide in a bulk config, or the server alias) gets `-2`, `-3`, …; every alias
 /// returned is added to `used`.
-pub fn device_aliases(tunnel_name: &str, usernames: &[&str], used: &mut HashSet<String>) -> Vec<String> {
+pub fn device_aliases(prefix: &str, tunnel_name: &str, usernames: &[&str], used: &mut HashSet<String>) -> Vec<String> {
     let multi = usernames.len() > 1;
     usernames
         .iter()
         .map(|u| {
-            let base = sanitize_host_alias(&if multi { format!("{tunnel_name}-{u}") } else { tunnel_name.to_string() });
+            let base = sanitize_host_alias(&if multi { format!("{prefix}{tunnel_name}-{u}") } else { format!("{prefix}{tunnel_name}") });
             let alias = if used.contains(&base) { (2..).map(|n| format!("{base}-{n}")).find(|a| !used.contains(a)).unwrap() } else { base };
             used.insert(alias.clone());
             alias
@@ -410,15 +430,21 @@ mod tests {
     #[test]
     fn device_aliases_follow_the_account_count_and_never_repeat() {
         let mut used = HashSet::from([server_alias("telepy.test", "24242")]);
-        assert_eq!(device_aliases("pi", &["root"], &mut used), ["pi"]);
-        assert_eq!(device_aliases("nas", &["root", "admin"], &mut used), ["nas-root", "nas-admin"]);
+        assert_eq!(device_aliases("", "pi", &["root"], &mut used), ["pi"]);
+        assert_eq!(device_aliases("", "nas", &["root", "admin"], &mut used), ["nas-root", "nas-admin"]);
+        // 前綴：每個別名都加，撞名規則照舊。/ A prefix goes on every alias; collisions are handled as before.
+        assert_eq!(device_aliases("work-", "nas", &["root", "admin"], &mut used), ["work-nas-root", "work-nas-admin"]);
+        assert_eq!(device_aliases("work.", "pi", &["root"], &mut used), ["work.pi"]);
         // 清理後撞名、撞到別台的「名稱-帳號」或伺服器別名 → 加編號。/ Collisions get a number.
-        assert_eq!(device_aliases("pi!", &["root"], &mut used), ["pi-2"]);
-        assert_eq!(device_aliases("nas-root", &["x"], &mut used), ["nas-root-2"]);
-        assert_eq!(device_aliases("telepy-telepy.test-24242", &["x"], &mut used), ["telepy-telepy.test-24242-2"]);
+        assert_eq!(device_aliases("", "pi!", &["root"], &mut used), ["pi-2"]);
+        assert_eq!(device_aliases("", "nas-root", &["x"], &mut used), ["nas-root-2"]);
+        assert_eq!(device_aliases("", "telepy-telepy.test-24242", &["x"], &mut used), ["telepy-telepy.test-24242-2"]);
         // 單台（空的 used）跟以前一樣。/ The single config (empty set) is unchanged.
-        assert_eq!(device_aliases("my pi", &["a", "b"], &mut HashSet::new()), ["my-pi-a", "my-pi-b"]);
-        assert!(device_aliases("pi", &[], &mut HashSet::new()).is_empty());
+        assert_eq!(device_aliases("", "my pi", &["a", "b"], &mut HashSet::new()), ["my-pi-a", "my-pi-b"]);
+        assert!(device_aliases("", "pi", &[], &mut HashSet::new()).is_empty());
+        assert_eq!(alias_prefix_problem(""), None);
+        assert_eq!(alias_prefix_problem("work-"), None);
+        assert!(alias_prefix_problem("work pi").is_some() && alias_prefix_problem("-x").is_some() && alias_prefix_problem(&"a".repeat(25)).is_some());
     }
 
     #[test]

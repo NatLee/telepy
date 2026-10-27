@@ -89,6 +89,116 @@ pub fn strip_blocks(existing: &str, aliases: &[String]) -> String {
     out
 }
 
+/// 完整的標記區塊：(別名, 內容行)。沒有結尾標記的不算。/ Complete marked blocks: (alias, body lines); unterminated ones are skipped.
+fn marked(existing: &str) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    for raw in existing.lines() {
+        let line = raw.trim_end_matches('\r');
+        if let Some(alias) = line.strip_prefix("# >>> telepy ").and_then(|r| r.strip_suffix(" >>>")) {
+            cur = Some((alias.to_string(), Vec::new()));
+            continue;
+        }
+        if let Some((alias, body)) = cur.as_mut() {
+            if line == close_marker(alias) {
+                out.push(cur.take().unwrap());
+            } else {
+                body.push(line.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// 區塊經哪個伺服器別名跳過去（`ProxyCommand … <別名>` 的最後一個字，或 `ProxyJump`）。/ The server alias a block jumps through.
+fn jump_target(body: &[String]) -> Option<String> {
+    body.iter().find_map(|l| {
+        let mut w = l.split_whitespace();
+        match w.next() {
+            Some(k) if k.eq_ignore_ascii_case("ProxyCommand") => l.split_whitespace().last().map(str::to_string),
+            Some(k) if k.eq_ignore_ascii_case("ProxyJump") => w.next().map(str::to_string),
+            _ => None,
+        }
+    })
+}
+
+/// 要寫的別名裡，已被別台 Telepy 用掉的：同名的完整標記區塊跳到別的伺服器別名（跳舊版共用別名時，看那個共用伺服器區塊的
+/// `HostKeyAlias` 是不是這台；沒有那個區塊就當成這台的）。這些不覆蓋，留給使用者改前綴。網頁的安裝指令照同一條規則。
+/// Aliases about to be written that another Telepy server already uses: a complete marked block of that name jumps
+/// through a different server alias (for the old shared alias, the shared server block's `HostKeyAlias` decides; no
+/// such block = ours). Those are never overwritten — the user sets a prefix instead. The web's commands do the same.
+pub fn foreign_aliases(existing: &str, aliases: &[String], me: &str, legacy: &str) -> Vec<String> {
+    let blocks = marked(existing);
+    let legacy_key = blocks.iter().find(|(a, _)| a == legacy).and_then(|(_, body)| {
+        body.iter().find_map(|l| {
+            let mut w = l.split_whitespace();
+            w.next().filter(|k| k.eq_ignore_ascii_case("HostKeyAlias")).and_then(|_| w.next()).map(str::to_string)
+        })
+    });
+    aliases
+        .iter()
+        .filter(|a| a.as_str() != me && a.as_str() != legacy)
+        .filter(|a| {
+            blocks.iter().filter(|(b, _)| b == *a).any(|(_, body)| match jump_target(body) {
+                None => false,
+                Some(j) if j == me => false,
+                Some(j) if j == legacy => legacy_key.as_deref().is_some_and(|k| k != me),
+                Some(_) => true,
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// 標記區塊之外手寫的同名 `Host`（ssh 用先出現的那個，所以新的可能被蓋掉）。/ Hand-written `Host` lines outside
+/// Telepy's blocks with one of these names (ssh uses whichever comes first).
+pub fn shadowed_aliases(existing: &str, aliases: &[String]) -> Vec<String> {
+    let mut inside: Option<String> = None;
+    let mut out: Vec<String> = Vec::new();
+    for raw in existing.lines() {
+        let line = raw.trim_end_matches('\r');
+        if let Some(a) = line.strip_prefix("# >>> telepy ").and_then(|r| r.strip_suffix(" >>>")) {
+            inside = Some(a.to_string());
+            continue;
+        }
+        if inside.as_deref().is_some_and(|a| line == close_marker(a)) {
+            inside = None;
+            continue;
+        }
+        if inside.is_some() {
+            continue;
+        }
+        let mut w = line.split_whitespace();
+        if w.next().is_some_and(|k| k.eq_ignore_ascii_case("Host")) {
+            for h in w {
+                if aliases.iter().any(|a| a == h) && !out.iter().any(|o| o == h) {
+                    out.push(h.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 安裝的結果：新檔、沒寫的（別台 Telepy 的同名區塊）、被手寫 Host 蓋住的。/ The install result.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Installed {
+    pub text: String,
+    pub kept: Vec<String>,
+    pub shadowed: Vec<String>,
+}
+
+/// 安裝，但不覆蓋別台 Telepy 的同名裝置（見 [`foreign_aliases`]），並清掉安全可清的舊共用伺服器區塊。
+/// Install without overwriting another Telepy server's devices of the same name ([`foreign_aliases`]), then drop the
+/// old shared server block when that is safe ([`prune_legacy`]).
+pub fn install_checked(existing: &str, stanzas: &[Stanza], me: &str, legacy: &str) -> Installed {
+    let aliases: Vec<String> = stanzas.iter().map(|s| s.alias.clone()).collect();
+    let kept = foreign_aliases(existing, &aliases, me, legacy);
+    let write: Vec<Stanza> = stanzas.iter().filter(|s| !kept.contains(&s.alias)).cloned().collect();
+    let shadowed = shadowed_aliases(existing, &write.iter().map(|s| s.alias.clone()).collect::<Vec<_>>());
+    Installed { text: prune_legacy(&install(existing, &write), legacy, me), kept, shadowed }
+}
+
 /// 安裝進 `~/.ssh/config`：舊的同名區塊拿掉、新的接在後面。/ Install into `~/.ssh/config`.
 pub fn install(existing: &str, stanzas: &[Stanza]) -> String {
     let aliases: Vec<String> = stanzas.iter().map(|s| s.alias.clone()).collect();
@@ -246,6 +356,28 @@ mod tests {
         assert_eq!(prune_legacy(&format!("# was telepy-ssh-server\n{legacy}"), "telepy-ssh-server", "telepy-t-1"), "# was telepy-ssh-server\n");
         // 舊版伺服器（別名還是共用的）→ 不動 / An old server (alias still the shared one) → untouched
         assert_eq!(prune_legacy(legacy, "telepy-ssh-server", "telepy-ssh-server"), legacy);
+    }
+
+    #[test]
+    fn another_servers_device_of_the_same_name_is_kept() {
+        let me = "telepy-a-1";
+        let dev = |alias: &str, via: &str| Stanza { alias: alias.into(), options: vec![("ProxyCommand".into(), format!("ssh -W %h:%p {via}"))] };
+        let server = Stanza { alias: me.into(), options: vec![("HostKeyAlias".into(), me.into())] };
+        let other = marked_blocks(&[dev("pi", "telepy-b-2"), dev("cam", me)]);
+        let out = install_checked(&other, &[server.clone(), dev("pi", me), dev("cam", me), dev("nas", me)], me, "telepy-ssh-server");
+        assert_eq!(out.kept, ["pi"], "the other server's pi stays");
+        assert!(out.text.contains("ssh -W %h:%p telepy-b-2") && out.text.matches("Host pi\n").count() == 1, "{}", out.text);
+        assert_eq!(out.text.matches("Host cam\n").count(), 1, "our own cam is replaced, not duplicated");
+        assert!(out.text.contains("Host nas\n"));
+        // 舊版共用別名：共用伺服器區塊是別台的 → 別台的；是這台的或沒有 → 這台的。/ The old shared alias.
+        let legacy_srv = |key: &str| format!("# >>> telepy telepy-ssh-server >>>\nHost telepy-ssh-server\n    HostKeyAlias {key}\n# <<< telepy telepy-ssh-server <<<\n");
+        let old_pi = marked_blocks(&[dev("pi", "telepy-ssh-server")]);
+        assert_eq!(foreign_aliases(&(legacy_srv("telepy-b-2") + &old_pi), &["pi".into()], me, "telepy-ssh-server"), ["pi"]);
+        assert!(foreign_aliases(&(legacy_srv(me) + &old_pi), &["pi".into()], me, "telepy-ssh-server").is_empty());
+        assert!(foreign_aliases(&old_pi, &["pi".into()], me, "telepy-ssh-server").is_empty());
+        // 手寫的同名 Host → 提醒（不擋）/ A hand-written Host of the same name → a warning only
+        let out = install_checked("Host nas nas.local\n    User me\n", &[server, dev("nas", me)], me, "telepy-ssh-server");
+        assert_eq!((out.kept.len(), out.shadowed.as_slice()), (0, ["nas".to_string()].as_slice()));
     }
 
     #[test]

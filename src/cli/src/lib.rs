@@ -769,13 +769,21 @@ fn config(api: &Api, a: ConfigArgs) -> Result<()> {
     if !existing.is_empty() {
         std::fs::write(target.with_extension("bak"), &existing)?;
     }
-    std::fs::write(&target, sshcfg::prune_legacy(&sshcfg::install(&existing, &stanzas), &legacy, &server))?;
+    let done = sshcfg::install_checked(&existing, &stanzas, &server, &legacy);
+    std::fs::write(&target, &done.text)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
     }
-    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != server).collect();
+    // 別台 Telepy 已經用了同名的裝置：留著它、這裡不寫，請使用者設前綴。/ Another Telepy server's device of the same name.
+    if !done.kept.is_empty() {
+        eprintln!("Kept {}: another Telepy server already uses these names in {}. Set a name prefix for this server (web: SSH config dialog, or ssh_alias_prefix in your settings) and run this again.", done.kept.join(", "), target.display());
+    }
+    if !done.shadowed.is_empty() {
+        eprintln!("Note: {} also has its own `Host {}` outside Telepy's blocks; ssh uses whichever comes first.", target.display(), done.shadowed.join(" "));
+    }
+    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != server && !done.kept.iter().any(|k| k == a)).collect();
     eprintln!("Wrote {} host(s) to {}: {}. Connect with: ssh {}", aliases.len(), target.display(), aliases.join(", "), aliases.first().unwrap_or(&""));
     Ok(())
 }

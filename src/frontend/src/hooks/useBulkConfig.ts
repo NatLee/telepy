@@ -5,6 +5,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
 import { keysToAdd, pickParam, splitBulkConfig, type BulkAccounts, type BulkConfigData } from "@/lib/bulkSshConfig";
+import { saveAliasPrefix } from "@/lib/aliasPrefix";
 import type { KeyDevice, UserKey } from "@/types/keys";
 
 const ACCOUNTS_KEY = "telepy.sshConfigAccounts";
@@ -39,7 +40,15 @@ export function useBulkConfig() {
     // 逐台挑的帳號（只放改過的那幾台；其餘照上面的模式）。/ Per-device accounts (only the changed ones; others follow the mode).
     const [picks, setPicks] = useState<Record<number, number[]>>({});
     const pick = pickParam(picks);
-    const key = `${accounts}|${transport}|${pick}`;
+    // 存了新前綴就加一，逼它重抓（別名都變了）。/ Bumped after a new prefix is saved, to refetch (every alias changed).
+    const [reload, setReload] = useState(0);
+    const key = `${accounts}|${transport}|${pick}|${reload}`;
+
+    const savePrefix = async (prefix: string) => {
+        const err = await saveAliasPrefix(prefix, t("config.prefix.saveFailed"));
+        if (!err) setReload((n) => n + 1);
+        return err;
+    };
 
     const setDeviceAccounts = (tunnelId: number, ids: number[]) => setPicks((prev) => ({ ...prev, [tunnelId]: ids }));
 
@@ -138,5 +147,5 @@ export function useBulkConfig() {
         [myKeys, deviceMap, loadDevices, showError, showSuccess, t]
     );
 
-    return { data, split, loading, accounts, setAccounts, transport, setTransport, picks, setDeviceAccounts, deviceMap, devicesLoaded: devices !== null, myKeys, adding, addMyKeys };
+    return { data, split, loading, accounts, setAccounts, transport, setTransport, picks, setDeviceAccounts, savePrefix, deviceMap, devicesLoaded: devices !== null, myKeys, adding, addMyKeys };
 }

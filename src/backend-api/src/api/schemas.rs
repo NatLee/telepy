@@ -745,6 +745,8 @@ pub struct ConfigResponse {
     pub hosts: Vec<ConfigHost>,
     /// 隧道的預設帳號（你能用時），否則 null。/ The tunnel's default account when you may use it, else null.
     pub default_username_id: Option<i64>,
+    /// 你的裝置別名前綴（個人設定 `ssh_alias_prefix`，空 = 不加）。/ Your device alias prefix (empty = none).
+    pub alias_prefix: String,
     #[schema(example = 10022)]
     pub reverse_port: i64,
     /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`, one per gateway host key); empty when the gateway has no host keys
@@ -770,6 +772,8 @@ pub struct BulkConfigResponse {
     /// default = 每台一個 Host（隧道預設帳號）；all = 每個帳號一個。/ default = one Host per device; all = one per account.
     #[schema(example = "default")]
     pub accounts: String,
+    /// 你的裝置別名前綴（個人設定 `ssh_alias_prefix`，空 = 不加）。/ Your device alias prefix (empty = none).
+    pub alias_prefix: String,
     /// 寫進 config 的裝置，依名稱排序。/ The devices in `config`, sorted by name.
     pub tunnels: Vec<BulkConfigTunnel>,
     /// 看得到但沒有可用帳號的裝置。/ Devices you can see but have no login account on.
@@ -961,6 +965,9 @@ pub struct UserSettings {
     /// Card or list view per page; pages missing here use their default
     #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: serde_json::Value,
+    /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
+    #[schema(example = "work-")]
+    pub ssh_alias_prefix: String,
 }
 
 #[derive(ToSchema)]
@@ -990,6 +997,8 @@ pub struct UserSettingsPatch {
     /// Replaces the whole map: page id (lowercase letters, digits, `_`; up to 32) → `card` | `list`, at most 20
     #[schema(value_type = Option<Object>, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: Option<serde_json::Value>,
+    /// 裝置別名前綴：英數字、`.`、`_`、`-`，最多 24 個，不以 `-` 開頭；空字串 = 不加。/ Device alias prefix; empty = none.
+    pub ssh_alias_prefix: Option<String>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default
