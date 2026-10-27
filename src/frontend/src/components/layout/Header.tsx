@@ -7,7 +7,7 @@ import { ChevronRight, Menu } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetHeader, SheetDescription } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { WebSocketStatusBadge } from "@/components/ui/WebSocketStatusBadge";
-import { NavContent, navLinks, isNavActive } from "./NavContent";
+import { NavContent, navLinks, isNavActive, activeChild } from "./NavContent";
 import { BrandMark } from "./BrandMark";
 import { useI18n } from "@/lib/i18n";
 
@@ -18,6 +18,8 @@ export function Header() {
 
     // Get current page name for header title
     const currentLink = navLinks.find(link => isNavActive(pathname, link.href));
+    // 有子頁的區（SSH 金鑰）：麵包屑多一層。/ Areas with sub-pages (SSH keys) get one more crumb.
+    const currentChild = currentLink ? activeChild(currentLink, pathname) : undefined;
     // 不在導覽列裡的頁面:設定(管理員區)、建立通道。/ Pages outside navLinks: settings (admin section), the create wizard.
     const currentPage = currentLink
         ? t(currentLink.key)
@@ -54,7 +56,15 @@ export function Header() {
             <nav aria-label="breadcrumb" className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
                 <span className="hidden text-muted-foreground sm:inline">Telepy</span>
                 <ChevronRight size={14} className="hidden shrink-0 text-muted-foreground/50 sm:block" aria-hidden />
-                <span className="truncate text-foreground" aria-current="page">{currentPage}</span>
+                {currentChild ? (
+                    <>
+                        <Link href={currentLink!.href} prefetch={false} className="hidden shrink-0 text-muted-foreground hover:text-foreground sm:inline">{currentPage}</Link>
+                        <ChevronRight size={14} className="hidden shrink-0 text-muted-foreground/50 sm:block" aria-hidden />
+                        <span className="truncate text-foreground" aria-current="page">{t(currentChild.key)}</span>
+                    </>
+                ) : (
+                    <span className="truncate text-foreground" aria-current="page">{currentPage}</span>
+                )}
             </nav>
 
             {/* 通知 WebSocket 狀態：全站共用一條連線，放在標題列每頁都看得到。

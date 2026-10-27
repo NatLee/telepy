@@ -20,6 +20,8 @@ interface NavLink {
     key: TranslationKey;
     href: string;
     icon: React.ReactNode;
+    /** 子頁：在這區裡時展開在下面（側欄收合時不顯示，頁面上有分頁）。/ Sub-pages, shown below while inside the area (not when collapsed; the page has tabs). */
+    children?: { key: TranslationKey; href: string }[];
 }
 
 // 導覽連結以翻譯 key 定義,依區段分組;Header 用攤平後的 navLinks 反查目前頁面標題。
@@ -37,7 +39,16 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
             { key: "nav.sessions", href: "/tunnels/sessions", icon: <Activity size={18} /> },
             { key: "nav.recordings", href: "/tunnels/recordings", icon: <Clapperboard size={18} /> },
             { key: "nav.commands", href: "/tunnels/commands", icon: <ShieldCheck size={18} /> },
-            { key: "nav.keys", href: "/tunnels/keys", icon: <Key size={18} /> },
+            {
+                key: "nav.keys",
+                href: "/tunnels/keys",
+                icon: <Key size={18} />,
+                children: [
+                    { key: "keys.mine", href: "/tunnels/keys" },
+                    { key: "groups.key.title", href: "/tunnels/keys/groups" },
+                    { key: "keys.devices", href: "/tunnels/keys/devices" },
+                ],
+            },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
             { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} /> },
         ],
@@ -60,6 +71,11 @@ export function isNavActive(pathname: string, href: string) {
     return pathname === href || (href !== "/tunnels" && pathname.startsWith(href));
 }
 
+/** 目前的子頁：和父頁同網址的那個只比對自己。/ The current sub-page; the one sharing the parent's URL matches exactly. */
+export function activeChild(link: NavLink, pathname: string) {
+    return link.children?.find((c) => (c.href === link.href ? pathname === c.href : isNavActive(pathname, c.href)));
+}
+
 interface NavContentProps {
     onNavigate?: () => void;
     className?: string; // Used to style the bottom user section
@@ -68,13 +84,16 @@ interface NavContentProps {
 }
 
 /** 目前頁面是淡灰底 + 主色圖示(不浮起、沒有陰影),其餘是安靜的灰字。/ The current page is a flat tinted row with a primary icon — no raised pill. */
-function navItemClass(active: boolean, collapsed: boolean) {
+function navItemClass(active: boolean, collapsed: boolean, parentOfCurrent = false) {
     return cn(
         "group relative flex items-center gap-3 py-1.5 rounded-md text-sm transition-[color,background-color] duration-150",
         collapsed ? "justify-center px-2" : "px-3",
-        active
-            ? "bg-sidebar-accent text-foreground [&>svg]:text-primary"
-            : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+        // 子頁展開時底色只給子項，父項只留深色字。/ With sub-pages open only the sub-item gets the fill; the parent keeps dark text.
+        parentOfCurrent
+            ? "text-foreground hover:bg-sidebar-accent [&_svg]:text-primary"
+            : active
+              ? "bg-sidebar-accent text-foreground [&>svg]:text-primary"
+              : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
     );
 }
 
@@ -111,7 +130,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             const active = isNavActive(pathname, link.href);
                             // 等我核准的指令數。/ Commands waiting for my approval.
                             const badge = link.href === "/tunnels/commands" && approvals.pending.length > 0 ? approvals.pending.length : null;
-                            return (
+                            const linkEl = (
                                 <Link
                                     key={link.key}
                                     href={link.href}
@@ -124,8 +143,8 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                                     prefetch={false}
                                     onClick={onNavigate}
                                     title={collapsed ? t(link.key) : undefined}
-                                    aria-current={active ? "page" : undefined}
-                                    className={navItemClass(active, collapsed)}
+                                    aria-current={active && !(link.children && !collapsed) ? "page" : undefined}
+                                    className={navItemClass(active, collapsed, active && !collapsed && !!link.children)}
                                 >
                                     <span className="relative inline-flex">
                                         {link.icon}
@@ -139,6 +158,36 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                                     )}
                                 </Link>
                             );
+                            // 在這區裡時，子頁以一條細線掛在父項下面。/ Inside the area, sub-pages hang below the parent on a hairline.
+                            const current = active && !collapsed ? activeChild(link, pathname) : undefined;
+                            const item = current !== undefined || (active && !collapsed && link.children) ? (
+                                <React.Fragment key={link.key}>
+                                    {linkEl}
+                                    <div className="ml-[1.3rem] space-y-0.5 border-l border-sidebar-border py-0.5 pl-2">
+                                        {link.children!.map((c) => {
+                                            const on = c === current;
+                                            return (
+                                                <Link
+                                                    key={c.href}
+                                                    href={c.href}
+                                                    prefetch={false}
+                                                    onClick={onNavigate}
+                                                    aria-current={on ? "page" : undefined}
+                                                    className={cn(
+                                                        "flex items-center rounded-md px-2.5 py-1 text-sm transition-colors",
+                                                        on ? "bg-sidebar-accent text-foreground" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                                                    )}
+                                                >
+                                                    {t(c.key)}
+                                                </Link>
+                                            );
+                                        })}
+                                    </div>
+                                </React.Fragment>
+                            ) : (
+                                linkEl
+                            );
+                            return item;
                         })}
                     </React.Fragment>
                 ))}

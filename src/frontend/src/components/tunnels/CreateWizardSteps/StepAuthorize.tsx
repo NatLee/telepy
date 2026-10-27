@@ -170,7 +170,7 @@ export function StepAuthorize({ wizard }: { wizard: CreateTunnelWizard }) {
                     <Callout tone="info" icon={<Laptop size={17} className="mt-0.5 shrink-0" aria-hidden />}>
                         {t("wizard.authorize.userKeysAuto", { n: k.userKeys.length })}{" "}
                         {wizard.created && (
-                            <Link href={`/tunnels/keys?device=${wizard.created.id}`} target="_blank" prefetch={false} className="inline-flex items-center gap-0.5 text-primary hover:underline">
+                            <Link href={`/tunnels/keys/devices?device=${wizard.created.id}`} target="_blank" prefetch={false} className="inline-flex items-center gap-0.5 text-primary hover:underline">
                                 {t("wizard.authorize.manageKeys")} <ExternalLink size={11} aria-hidden />
                             </Link>
                         )}
