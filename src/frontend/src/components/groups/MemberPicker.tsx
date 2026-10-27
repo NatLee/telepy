@@ -11,6 +11,7 @@ import React, { useMemo, useState } from "react";
 import { CheckSquare, Search, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip } from "@/components/ui/section";
 import { Pagination } from "@/components/ui/pagination";
@@ -68,9 +69,16 @@ export function MemberPicker({
     const rows = pageSlice(view.shown, pager.page, pager.size);
     const allShownOn = view.shown.length > 0 && view.shown.every((i) => sel.has(i.id));
     const chosen = selected.map((id) => byId.get(id)).filter((i): i is MemberItem => !!i);
+    const buckets: { value: PickerBucket; label: string }[] = [
+        { value: "all", label: `${t("groups.picker.all")} (${view.counts.all})` },
+        { value: "selected", label: `${t("groups.picker.selected")} (${view.counts.selected})` },
+        { value: "free", label: `${t("groups.picker.free")} (${view.counts.free})` },
+    ];
 
     return (
-        <fieldset className="space-y-2.5">
+        // min-w-0：fieldset 預設至少和最寬的子元素一樣寬（分類那排），手機上會把整個對話框撐破。
+        // min-w-0: a fieldset is otherwise at least as wide as its widest child (the bucket row), which broke phones.
+        <fieldset className="min-w-0 space-y-2.5">
             <legend className="flex flex-wrap items-baseline gap-x-2 text-sm text-foreground">
                 {title}
                 <span className="text-xs text-muted-foreground">{t("groups.selectedCount", { count: chosen.length })}</span>
@@ -111,17 +119,13 @@ export function MemberPicker({
                         <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
                         <Input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("groups.search")} aria-label={t("groups.search")} className="h-8 pl-8" />
                     </div>
-                    <Segmented
-                        size="sm"
-                        value={bucket}
-                        onChange={setBucket}
-                        aria-label={t("groups.picker.bucketAria")}
-                        options={[
-                            { value: "all", label: `${t("groups.picker.all")} (${view.counts.all})` },
-                            { value: "selected", label: `${t("groups.picker.selected")} (${view.counts.selected})` },
-                            { value: "free", label: `${t("groups.picker.free")} (${view.counts.free})` },
-                        ]}
-                    />
+                    {/* 手機放不下一排：下拉選單；寬一點時整排、字太長就換行。/ Phones: a select; wider: one row whose labels wrap. */}
+                    <NativeSelect value={bucket} onChange={(e) => setBucket(e.target.value as PickerBucket)} aria-label={t("groups.picker.bucketAria")} className="h-8 w-auto max-w-full sm:hidden">
+                        {buckets.map((b) => (
+                            <option key={b.value} value={b.value}>{b.label}</option>
+                        ))}
+                    </NativeSelect>
+                    <Segmented size="sm" fullWidth className="hidden w-full sm:grid" value={bucket} onChange={setBucket} aria-label={t("groups.picker.bucketAria")} options={buckets} />
                 </div>
             )}
 
@@ -156,8 +160,11 @@ export function MemberPicker({
                                             className="size-4 shrink-0 accent-primary"
                                         />
                                         {i.icon}
-                                        <span className="min-w-0 flex-1 truncate text-sm text-foreground">{i.label}</span>
-                                        {elsewhere && <Chip className="max-w-[40%] truncate">{t("groups.inGroup", { name: elsewhere })}</Chip>}
+                                        {/* 「在 X」放不下就換到下一行，名稱不被擠成「…」。/ The "in X" chip wraps below rather than squeezing the name. */}
+                                        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                                            <span className="min-w-0 max-w-full truncate text-sm text-foreground">{i.label}</span>
+                                            {elsewhere && <Chip className="max-w-full truncate">{t("groups.inGroup", { name: elsewhere })}</Chip>}
+                                        </span>
                                         {i.meta}
                                     </label>
                                 </li>

@@ -4367,4 +4367,7 @@ export const ja: Record<TranslationKey, string> = {
     "access.info.b.linkLogin": "ログイン",
     "access.info.bothTitle": "両方の門を通る必要があります",
     "access.info.bothGates": "{user} がデバイスで「{feature}」を使うには、上の線が「オン」で、下の線でそのトンネルと許可されたアカウントが与えられている必要があります。Telepy はまず機能を確認するため、機能がオフなら共有されたトンネルでも拒否されます。",
+    "groups.searchGroups": "グループを検索",
+    "groups.tunnel.fromShown": "この {count} 本でグループを作成",
+    "groups.tunnel.fromShownHint": "検索結果のすべてのトンネル（全ページ）でグループを作成",
 };

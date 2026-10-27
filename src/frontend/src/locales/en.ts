@@ -4385,6 +4385,9 @@ export const en = {
     "access.info.b.linkLogin": "log in",
     "access.info.bothTitle": "Both gates apply",
     "access.info.bothGates": "For {user} to use {feature} on a device, the top lane must say On and the bottom lane must give them that tunnel with an allowed account. Telepy checks the feature first, so a turned-off feature is refused even on tunnels shared with them.",
+    "groups.searchGroups": "Search groups",
+    "groups.tunnel.fromShown": "Group these {count}",
+    "groups.tunnel.fromShownHint": "Create a group from every tunnel the search shows (all pages)",
 } as const;
 
 export type TranslationKey = keyof typeof en;
