@@ -754,6 +754,18 @@ export const zhTW: Record<TranslationKey, string> = {
     "tunnelDetails.labelsTooMany": "一條通道最多 12 個標籤。",
     "tunnelDetails.updated": "通道已更新",
     "tunnelDetails.updateFailed": "更新通道失敗",
+    "tunnelDetails.tabGeneral": "基本資料",
+    "tunnelDetails.tabGeneralHint": "名稱、描述、標籤",
+    "tunnelDetails.tabDevice": "裝置",
+    "tunnelDetails.tabDeviceHint": "系統、記憶體、磁碟",
+    "tunnelDetails.tabIdentity": "金鑰與身分",
+    "tunnelDetails.tabIdentityHint": "裝置公鑰與主機金鑰",
+    "tunnelDetails.tabSessions": "工作階段",
+    "tunnelDetails.tabSessionsHint": "確認、錄影、斷線保留",
+    "tunnelDetails.tabConnections": "連線紀錄",
+    "tunnelDetails.tabConnectionsHint": "上線率與歷史",
+    "tunnelDetails.tabUnsaved": "有改動還沒儲存",
+    "tunnelDetails.tabHasError": "需要修正",
 
     // ── 建立精靈 / Create wizard ───────────────────────────────────
     "wizard.title": "建立通道",

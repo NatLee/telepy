@@ -760,6 +760,18 @@ export const en = {
     "tunnelDetails.labelsTooMany": "A tunnel can have at most 12 labels.",
     "tunnelDetails.updated": "Tunnel updated",
     "tunnelDetails.updateFailed": "Failed to update the tunnel",
+    "tunnelDetails.tabGeneral": "Basics",
+    "tunnelDetails.tabGeneralHint": "Name, description, labels",
+    "tunnelDetails.tabDevice": "Device",
+    "tunnelDetails.tabDeviceHint": "System, memory, disk",
+    "tunnelDetails.tabIdentity": "Keys & identity",
+    "tunnelDetails.tabIdentityHint": "Device key and host key",
+    "tunnelDetails.tabSessions": "Sessions",
+    "tunnelDetails.tabSessionsHint": "Confirmation, recording, kept shells",
+    "tunnelDetails.tabConnections": "Connections",
+    "tunnelDetails.tabConnectionsHint": "Uptime and history",
+    "tunnelDetails.tabUnsaved": "Unsaved changes",
+    "tunnelDetails.tabHasError": "Needs a fix",
 
     // ── 建立精靈 / Create wizard ───────────────────────────────────
     "wizard.title": "Create a Tunnel",

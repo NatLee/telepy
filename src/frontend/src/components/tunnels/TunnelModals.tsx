@@ -62,8 +62,9 @@ export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel, on
             />
             <TunnelDetailsModal
                 isOpen={detailsModal.isOpen}
-                onClose={() => setDetailsModal({ isOpen: false, tunnelId: null })}
+                onClose={() => setDetailsModal({ isOpen: false, tunnelId: null, tab: detailsModal.tab })}
                 tunnelId={detailsModal.tunnelId}
+                initialTab={detailsModal.tab}
                 onUpdate={fetchData}
             />
             <ShareModal

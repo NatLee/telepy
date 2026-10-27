@@ -69,8 +69,8 @@ export function TunnelTableRow({ tunnel, isActive, latencyMs, sharedCount, ...ac
                     <span className="rounded-sm bg-muted px-1.5 py-px font-mono text-xs text-foreground/80">:{tunnel.reverse_port}</span>
                     <TunnelEndpointChip endpoint={tunnel.endpoint} />
                     <TunnelLanChip endpoint={tunnel.endpoint} />
-                    <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id)} />
-                    <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id)} />
+                    <HostKeyAlert changed={tunnel.host_key_changed} claimed={tunnel.device_claimed} onOpen={() => actions.onDetails(tunnel.id, "identity")} />
+                    <DeviceWarningChip endpoint={tunnel.endpoint} onOpen={() => actions.onDetails(tunnel.id, "device")} />
                 </div>
             </td>
             <td className="px-4 py-3 whitespace-nowrap">
