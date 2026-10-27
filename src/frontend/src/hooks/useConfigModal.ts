@@ -6,6 +6,7 @@ import { useI18n } from "@/lib/i18n";
 import { useDeviceKeys } from "@/hooks/useDeviceKeys";
 import { parseStanzas } from "@/lib/sshConfig";
 import { firstAccount, toggleAccount } from "@/lib/bulkSshConfig";
+import { saveAliasPrefix } from "@/lib/aliasPrefix";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 
 /**
@@ -79,6 +80,13 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
     const toggleUser = (id: number) => choose(toggleAccount(selectedIds, id, order));
     const selectAllUsers = () => choose(order);
 
+    /** 存前綴，成功就用新的別名重抓。/ Save the prefix and refetch with the new aliases. */
+    const savePrefix = async (prefix: string) => {
+        const err = await saveAliasPrefix(prefix, t("config.prefix.saveFailed"));
+        if (!err) await fetchConfig(selectedIds.length ? selectedIds : null, transport);
+        return err;
+    };
+
     const handleTransportChange = (value: "ssh" | "websocket") => {
         setTransport(value);
         fetchConfig(selectedIds.length ? selectedIds : null, value);
@@ -106,6 +114,7 @@ export function useConfigModal(isOpen: boolean, tunnelId: number | null) {
             toggleUser,
             selectAllUsers,
             handleTransportChange,
+            savePrefix,
         }
     };
 }

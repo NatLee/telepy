@@ -991,3 +991,103 @@ async fn agent_browsers_are_remote_browser_sessions() {
     assert_eq!(app.delete(&format!("/api/oauth/grants/{grant2}"), Some(&s.web)).await.status, StatusCode::NO_CONTENT);
     assert!(app.state.ai.browsers.get(&bid2).is_none());
 }
+
+/// REST 版的瀏覽器動作（`/api/browser/*`）：個人 API token（`browser:use`）與網頁登入都能用；跟 MCP 同一套上限、稽核、
+/// 「誰在用」；session 只屬於開它的憑證；敏感隧道拒絕；token 的 MCP tool call 也進呼叫紀錄。
+/// The REST browser actions with a personal token and with a web sign-in: same limit, audit and presence as MCP;
+/// a browser belongs to its credential; step-up tunnels are refused; a token's MCP tool calls reach the call log.
+#[tokio::test]
+async fn browser_rest_api_with_tokens_and_web() {
+    let Some(s) = setup().await else { return };
+    let app = &s.app;
+    let tok = |scopes: Value| {
+        let web = s.web.clone();
+        async move {
+            let r = app.post("/api/auth/tokens", Some(&web), json!({"name": "scraper", "scopes": scopes, "expires_at": (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339()})).await;
+            assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+            r.json["secret"].as_str().unwrap().to_string()
+        }
+    };
+    let read_only = tok(json!(["tunnels:read"])).await;
+    let r = app.post("/api/browser/sessions", Some(&read_only), json!({"tunnel_id": s.tunnel_id})).await;
+    assert_eq!((r.status, r.json["code"].as_str(), r.json["scope"].as_str()), (StatusCode::FORBIDDEN, Some("token_scope"), Some("browser:use")), "{}", r.text);
+
+    let token = tok(json!(["tunnels:read", "browser:use"])).await;
+    let r = app.post("/api/browser/sessions", Some(&token), json!({"tunnel_id": s.tunnel_id, "url": "file:///etc/passwd"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert!(r.json["url"].is_array(), "{}", r.text);
+    let r = app.post("/api/browser/sessions", Some(&token), json!({"tunnel_id": s.tunnel_id, "url": "example.com"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let id = r.json["id"].as_str().unwrap().to_string();
+    assert_eq!(r.json["page"]["url"], "https://example.com/");
+
+    let r = app.post(&format!("/api/browser/sessions/{id}/navigate"), Some(&token), json!({"url": "http://192.168.1.1/"})).await;
+    assert_eq!((r.status, r.json["url"].as_str()), (StatusCode::OK, Some("http://192.168.1.1/")), "{}", r.text);
+    let r = app.get(&format!("/api/browser/sessions/{id}/text?selector=main"), Some(&token)).await;
+    assert_eq!((r.status, r.json["text"].as_str()), (StatusCode::OK, Some("Hello from behind the device")), "{}", r.text);
+    let r = app.get(&format!("/api/browser/sessions/{id}/screenshot"), Some(&token)).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers.get("content-type").unwrap(), "image/png");
+    assert!(r.text.contains("PNG fake"));
+    let r = app.post(&format!("/api/browser/sessions/{id}/click"), Some(&token), json!({"selector": "#missing"})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("browser_action_failed")), "{}", r.text);
+    let r = app.post(&format!("/api/browser/sessions/{id}/click"), Some(&token), json!({"text": "Save"})).await;
+    assert_eq!(r.json["url"], "https://example.com/saved", "{}", r.text);
+    let r = app.post(&format!("/api/browser/sessions/{id}/type"), Some(&token), json!({"selector": "#pw", "text": "hunter2", "press_enter": true})).await;
+    assert_eq!(r.json["typed"], 7, "{}", r.text);
+    assert_eq!(app.get("/api/browser/sessions", Some(&token)).await.json.as_array().unwrap().len(), 1);
+    // 「誰在用」：kind browser、client = token 的名稱。/ Presence: kind browser, client = the token's name.
+    let live = app.get("/api/sessions", Some(&s.web)).await;
+    let row = live.json["sessions"].as_array().unwrap().iter().find(|x| x["kind"] == "browser").unwrap().clone();
+    assert_eq!(row["client"], "API token \"scraper\"", "{row}");
+
+    // 網頁登入也能開；兩邊互相看不到對方的瀏覽器。/ A web sign-in can open one too; neither sees the other's.
+    let r = app.post("/api/browser/sessions", Some(&s.web), json!({"tunnel_id": s.tunnel_id})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let web_id = r.json["id"].as_str().unwrap().to_string();
+    assert_eq!(app.get(&format!("/api/browser/sessions/{web_id}/text"), Some(&token)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get(&format!("/api/browser/sessions/{id}/text"), Some(&s.web)).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(app.get("/api/browser/sessions", Some(&s.web)).await.json.as_array().unwrap().len(), 1);
+
+    // 上限（跟 SSH session 共用）。/ The per-person limit, shared with SSH sessions.
+    app.post("/api/site/settings", Some(&s.web), json!({"ai_max_sessions_per_user": 2})).await;
+    let r = app.post("/api/browser/sessions", Some(&token), json!({"tunnel_id": s.tunnel_id})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("browser_open_failed")), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().contains("limit is 2"), "{}", r.text);
+    app.post("/api/site/settings", Some(&s.web), json!({"ai_max_sessions_per_user": 3})).await;
+
+    assert_eq!(app.request(Method::DELETE, &format!("/api/browser/sessions/{web_id}"), Some(&s.web), None).await.status, StatusCode::NO_CONTENT);
+    assert_eq!(app.request(Method::DELETE, &format!("/api/browser/sessions/{id}"), Some(&token), None).await.status, StatusCode::NO_CONTENT);
+    let r = app.get(&format!("/api/browser/sessions/{id}/text"), Some(&token)).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::NOT_FOUND, Some("browser_closed")));
+
+    // 敏感隧道拒絕。/ Step-up tunnels are refused.
+    sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET require_step_up = 1 WHERE id = ?").bind(s.tunnel_id).execute(&app.state.db.write).await.unwrap();
+    let r = app.post("/api/browser/sessions", Some(&token), json!({"tunnel_id": s.tunnel_id})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("step_up_refused")), "{}", r.text);
+    sqlx::query("UPDATE authorized_keys_reverseserverauthorizedkeys SET require_step_up = 0 WHERE id = ?").bind(s.tunnel_id).execute(&app.state.db.write).await.unwrap();
+
+    // 稽核：跟 MCP 同一張表。/ Audited in the same table as MCP.
+    let rows = app.get("/api/ai/activity", Some(&s.web)).await.json;
+    let tools: Vec<(String, String)> = rows.as_array().unwrap().iter().map(|e| (e["tool"].as_str().unwrap().to_string(), e["client_name"].as_str().unwrap().to_string())).collect();
+    for t in ["browser_open", "browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type", "browser_close"] {
+        assert!(tools.iter().any(|(tool, c)| tool == t && c == "API token \"scraper\""), "{t}: {tools:?}");
+    }
+    assert!(tools.iter().any(|(tool, c)| tool == "browser_open" && c == "Telepy web sign-in"), "{tools:?}");
+    let typed = rows.as_array().unwrap().iter().find(|e| e["tool"] == "browser_type").unwrap()["detail"].as_str().unwrap().to_string();
+    assert!(typed.contains("7 characters") && !typed.contains("hunter2"), "{typed}");
+
+    // 個人 token 的 MCP tool call 也進呼叫紀錄（成功 200、tool 錯誤 400）。/ A token's MCP tool calls are logged too.
+    let (err, _) = call(app, &token, "list_tunnels", json!({})).await;
+    assert!(!err);
+    let (err, _) = call(app, &token, "browser_navigate", json!({"browser_id": "aib_nope", "url": "https://example.com"})).await;
+    assert!(err);
+    app.state.api_calls.flush().await;
+    let log = app.get("/api/auth/tokens/calls?limit=1000", Some(&s.web)).await;
+    let calls: Vec<(String, String, i64)> = log.json["calls"].as_array().unwrap().iter().map(|c| (c["method"].as_str().unwrap().to_string(), c["route"].as_str().unwrap().to_string(), c["status"].as_i64().unwrap())).collect();
+    assert!(calls.contains(&("POST".into(), "/api/browser/sessions/{id}/navigate".into(), 200)), "{calls:?}");
+    assert!(calls.contains(&("GET".into(), "/api/browser/sessions/{id}/screenshot".into(), 200)), "{calls:?}");
+    assert!(calls.contains(&("MCP".into(), "list_tunnels".into(), 200)), "{calls:?}");
+    assert!(calls.contains(&("MCP".into(), "browser_navigate".into(), 400)), "{calls:?}");
+    assert!(!calls.iter().any(|(m, r, _)| m == "POST" && r == "/api/browser/sessions" && log.json["calls"].as_array().unwrap().iter().any(|c| c["client_name"] == "Telepy web sign-in")), "web calls are not logged");
+}

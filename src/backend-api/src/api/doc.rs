@@ -52,6 +52,8 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "Script", description = "Connection scripts and ssh config for a tunnel"),
         (name = "SFTP", description = "File manager REST endpoints"),
         (name = "Remote Browser", description = "KasmVNC proxy browser sessions"),
+        (name = "Browser Automation", description = "Scripted browsers (the REST form of the MCP browser tools): open a Chromium that browses through a device, then navigate, read text, take screenshots, click and type, one action at a time"),
+        (name = "API Tokens", description = "Personal API tokens: create / revoke (web sign-ins only), their call log and the catalogue of endpoints a token can call"),
         (name = "User Management", description = "Personal settings and user administration"),
         (name = "Access", description = "Feature permissions (admins): groups and which Telepy features each person may use. Separate from tunnel sharing, which decides which tunnels they reach"),
         (name = "Site Settings", description = "Site-wide settings (admins)"),

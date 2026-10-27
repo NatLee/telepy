@@ -16,7 +16,6 @@ import { AgentReachDialog } from "@/components/mcp/AgentReachDialog";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
-import { openPreferences } from "@/components/layout/UserPreferencesModal";
 import { hasFeature } from "@/lib/features";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip, SectionHeading } from "@/components/ui/section";
@@ -120,9 +119,11 @@ export default function McpPage() {
                     {hasFeature(user, "api.tokens") && (
                         <Panel icon={<KeySquare />} title={t("mcp.tokensTitle")} description={t("mcp.tokensBody")}>
                             <CodeBlock language="json" value={JSON.stringify({ mcpServers: { telepy: { url, headers: { Authorization: "Bearer tpt_…" } } } }, null, 2)} />
-                            <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => openPreferences("tokens")}>
-                                {t("mcp.tokensOpen")}
-                                <ArrowRight />
+                            <Button variant="outline" size="sm" className="mt-3" asChild>
+                                <Link href="/tunnels/api" prefetch={false}>
+                                    {t("mcp.tokensOpen")}
+                                    <ArrowRight />
+                                </Link>
                             </Button>
                         </Panel>
                     )}

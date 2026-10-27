@@ -23,9 +23,13 @@ import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { ConfigRouteMap, type ConfigPart } from "./ConfigRouteMap";
 import { SshConfigInstall } from "./SshConfigInstall";
-import { CheckRow, Step, ToolbarField } from "./ConfigSteps";
+import { CheckRow, StepPanel, ToolbarField } from "./ConfigSteps";
+import { StepFooter, StepTabs, type StepTab } from "@/components/ui/step-tabs";
+import type { StepState } from "@/lib/stepTabs";
+import { allDone, configDoneKey, markKeys, readConfigDone, writeConfigDone, type ConfigDone } from "@/lib/configDone";
 import { TransportInfoDialog } from "./TransportInfoDialog";
 import { AccountChips } from "./AccountChips";
+import { withoutPrefix } from "@/lib/aliasPrefix";
 import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
 import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, toggleAccount, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
@@ -33,6 +37,8 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { TunnelGroup } from "@/types/groups";
 import type { Tunnel, TunnelHealth } from "@/types/tunnel";
+
+type BulkStep = "pick" | "add" | "access" | "connect";
 
 /** 這麼多台以上才有搜尋。/ Search from this many devices on. */
 const SEARCH_FROM = 7;
@@ -121,21 +127,35 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
     const wsClient = data?.transport === "websocket" && data.ws_client_url ? { url: data.ws_client_url, path: data.ws_client_path, wsUrl: data.ws_url } : null;
 
-    const accessStatus = !bulk.devicesLoaded || chosen.length === 0 ? null
-        : accessDone ? <Chip tone="success"><Check />{t("config.access.ready")}</Chip>
-        : <Chip tone="warning">{t("config.bulk.accessCount", { ready: counts.ready, count: chosen.length })}</Chip>;
+    // 「我已經加好了」：每台 × 帳號一筆，跟單台的對話框、指令速查共用。/ "I've added it", per device × account, shared.
+    const [configDone, setConfigDone] = useState<ConfigDone>(readConfigDone);
+    const doneKeys = chosen.flatMap((r) => r.hosts.map((h) => configDoneKey(r.id, h.username)));
+    const addDone = allDone(configDone, doneKeys);
+    const markAdded = (done: boolean) => setConfigDone((prev) => {
+        const next = markKeys(prev, doneKeys, done);
+        writeConfigDone(next);
+        return next;
+    });
+    const keysLoaded = bulk.devicesLoaded && bulk.myKeys !== null;
+    const accessState: StepState = !keysLoaded || chosen.length === 0 ? "todo" : accessDone ? "done" : keyCount === 0 ? "attention" : counts.installing > 0 && counts.error === 0 && counts.missing === 0 ? "working" : "attention";
+    const connectState: StepState = chosen.length > 0 && addDone && accessDone ? "done" : "todo";
+    const steps: StepTab<BulkStep>[] = [
+        { value: "pick", label: t("config.bulk.step.pick"), state: chosen.length > 0 ? "done" : "todo", status: chosen.length > 0 ? t("config.bulk.selected", { count: chosen.length, total: rows.length }) : t("config.steps.pickTodo") },
+        { value: "add", label: t("config.step.add"), state: addDone ? "done" : "todo", status: addDone ? t("config.steps.addDone") : t("config.steps.addTodo") },
+        {
+            value: "access",
+            label: t("config.step.access"),
+            state: accessState,
+            status: !keysLoaded ? t("config.access.loading") : keyCount === 0 ? t("config.steps.noKey") : t("config.bulk.accessCount", { ready: counts.ready, count: chosen.length }),
+        },
+        { value: "connect", label: t("config.step.connect"), state: connectState, status: connectState === "done" ? t("config.steps.connectReady") : t("config.steps.connectTodo") },
+    ];
+    // 一律從挑裝置開始（預設的勾選只是猜的）；對話框每次打開都重新掛載。/ Always start at picking (the default
+    // selection is only a guess); the dialog remounts on every open.
+    const [current, setStep] = useState<BulkStep>("pick");
 
-    return (
-        <Modal
-            isOpen
-            onClose={onClose}
-            title={t("config.bulk.title")}
-            description={tn("config.bulk.subtitle", { cmd: code(t("config.bulk.cmdExample")) })}
-            icon={<FileCode2 />}
-            size="4xl"
-            isLoading={bulk.loading && !data}
-            toolbar={
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+    // 原本在固定工具列的兩個切換，各放到它影響的那一步。/ The two switches live in the step each one affects.
+    const hostsField = (
                     <ToolbarField label={t("config.bulk.accountsLabel")}>
                         <Segmented
                             size="sm"
@@ -149,6 +169,8 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                             ]}
                         />
                     </ToolbarField>
+    );
+    const transportField = (
                     <ToolbarField label={t("config.transportLabel")} info={{ label: t("config.ti.open"), onClick: () => setTransportInfo(true) }}>
                         <Segmented
                             size="sm"
@@ -162,36 +184,73 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                             ]}
                         />
                     </ToolbarField>
-                </div>
-            }
+    );
+    const routeMap = data && (
+        <div className="space-y-2.5">
+            <ConfigRouteMap
+                server={{ host: data.server.host, port: String(data.server.port) }}
+                hosts={[]}
+                deviceName=""
+                reversePort={null}
+                online={null}
+                active={active}
+                onActive={setActive}
+                many={{ count: chosen.length, online: chosen.filter((r) => isUp(r.id)).length }}
+            />
+            <p className="text-center text-sm leading-relaxed text-muted-foreground">{t("config.bulk.mapCaption")}</p>
+        </div>
+    );
+    const addMark = addDone ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-success/10 px-3 py-2.5 text-success ring-1 ring-inset ring-success/30">
+            <Check size={16} aria-hidden />
+            <span className="min-w-0 flex-1 text-foreground">{t("config.steps.addDoneBody")}</span>
+            <Button type="button" variant="ghost" size="sm" onClick={() => markAdded(false)}>{t("sheet.setup.configUnmark")}</Button>
+        </div>
+    ) : (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-surface px-3 py-2.5 ring-1 ring-inset ring-border/70">
+            <span className="min-w-0 flex-1 text-muted-foreground">{t("config.steps.addAsk")}</span>
+            <Button type="button" size="sm" onClick={() => { markAdded(true); setStep("access"); }}>
+                <Check size={15} />
+                {t("sheet.setup.configMark")}
+            </Button>
+        </div>
+    );
+
+    const accessStatus = !bulk.devicesLoaded || chosen.length === 0 ? null
+        : accessDone ? <Chip tone="success"><Check />{t("config.access.ready")}</Chip>
+        : <Chip tone="warning">{t("config.bulk.accessCount", { ready: counts.ready, count: chosen.length })}</Chip>;
+
+    return (
+        <Modal
+            isOpen
+            onClose={onClose}
+            title={t("config.bulk.title")}
+            description={tn("config.bulk.subtitle", { cmd: code(t("config.bulk.cmdExample")) })}
+            icon={<FileCode2 />}
+            size="5xl"
+            isLoading={bulk.loading && !data}
+            nav={rows.length > 0 ? <StepTabs aria-label={t("ui.steps.aria")} tabs={steps} value={current} onChange={setStep} /> : undefined}
+            fixedHeight
+            footer={rows.length > 0 ? <StepFooter tabs={steps} value={current} onChange={setStep} final={<Button type="button" onClick={onClose}>{t("common.close")}</Button>} /> : undefined}
         >
             {data && (
                 <div className="space-y-6">
-                    <div className="space-y-2.5">
-                        <ConfigRouteMap
-                            server={{ host: data.server.host, port: String(data.server.port) }}
-                            hosts={[]}
-                            deviceName=""
-                            reversePort={null}
-                            online={null}
-                            active={active}
-                            onActive={setActive}
-                            many={{ count: chosen.length, online: chosen.filter((r) => isUp(r.id)).length }}
-                        />
-                        <p className="text-center text-sm leading-relaxed text-muted-foreground">{t("config.bulk.mapCaption")}</p>
-                    </div>
 
                     {rows.length === 0 ? (
-                        <Callout tone="warning">{t("config.bulk.none")}</Callout>
+                        <>
+                            {routeMap}
+                            <Callout tone="warning">{t("config.bulk.none")}</Callout>
+                        </>
                     ) : (
-                        <ol className="list-none">
-                            <Step
-                                n={1}
-                                done={chosen.length > 0}
+                        <>
+                            <StepPanel
+                                hidden={current !== "pick"}
                                 title={t("config.bulk.step.pick")}
                                 hint={t("config.bulk.pickHint")}
                                 status={<span className="text-xs text-muted-foreground">{t("config.bulk.selected", { count: chosen.length, total: rows.length })}</span>}
                             >
+                                {hostsField}
+                                {routeMap}
                                 <div className="flex flex-wrap items-center gap-2">
                                     <Button type="button" variant="outline" size="sm" onClick={() => setSelected(new Set(order))}>
                                         {t("config.bulk.pickAll", { count: rows.length })}
@@ -292,9 +351,10 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         {t("config.bulk.skipped", { count: data.skipped.length, names: names(data.skipped.map((s) => s.name), t) })}
                                     </p>
                                 )}
-                            </Step>
+                            </StepPanel>
 
-                            <Step n={2} title={t("config.step.add")} hint={t("config.step.addHint")}>
+                            <StepPanel hidden={current !== "add"} title={t("config.step.add")} hint={t("config.step.addHint")}>
+                                {transportField}
                                 {chosen.length === 0 ? (
                                     <Callout tone="info">{t("config.bulk.pickFirst")}</Callout>
                                 ) : (
@@ -304,14 +364,16 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         knownHosts={data.known_hosts}
                                         wsClient={wsClient}
                                         legacyAlias={data.server.legacy_alias}
+                                        aliasPrefix={{ value: data.alias_prefix ?? "", example: withoutPrefix(chosen[0]?.hosts[0]?.alias, data.alias_prefix ?? ""), onSave: bulk.savePrefix }}
                                         active={active}
                                         onActive={setActive}
                                         bulk
                                     />
                                 )}
-                            </Step>
+                                {chosen.length > 0 && addMark}
+                            </StepPanel>
 
-                            <Step n={3} done={accessDone} title={t("config.step.access")} status={accessStatus}>
+                            <StepPanel hidden={current !== "access"} title={t("config.step.access")} status={accessStatus}>
                                 {!bulk.devicesLoaded || bulk.myKeys === null ? (
                                     <p className="flex items-center gap-2 text-muted-foreground">
                                         <Loader2 size={14} className="animate-spin" aria-hidden />
@@ -361,9 +423,10 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         </p>
                                     </>
                                 )}
-                            </Step>
+                            </StepPanel>
 
-                            <Step n={4} last title={t("config.step.connect")}>
+                            <StepPanel hidden={current !== "connect"} title={t("config.step.connect")}>
+                                {connectState !== "done" && <Callout tone="info">{t("config.steps.connectFirst")}</Callout>}
                                 <p className="text-muted-foreground">{t("config.connect.body")}</p>
                                 {aliases.length > 0 && (
                                     <div className="space-y-2">
@@ -371,8 +434,8 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                     </div>
                                 )}
                                 {aliases.length > 3 && <p className="text-xs text-muted-foreground">{t("config.bulk.connectMore", { count: aliases.length - 3 })}</p>}
-                            </Step>
-                        </ol>
+                            </StepPanel>
+                        </>
                     )}
                 </div>
             )}

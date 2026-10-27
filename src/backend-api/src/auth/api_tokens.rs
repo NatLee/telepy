@@ -96,62 +96,152 @@ pub struct TokenRoute {
     pub tunnel: TunnelRef,
 }
 
+/// 白名單的一列：方法（`GET|POST`，`*` = 任何）、路徑樣式（每段：字面、`a|b` 擇一、`{t}` = 隧道 id（整數）、`*` = 任一段）、
+/// 需要的 scope（`None` = 任何 token）、隧道從哪裡來。表格化讓 [`routes_catalogue`] 與「每列都對得到 OpenAPI 路徑」的測試
+/// 能逐列檢查。/ One allow-list row: methods (`*` = any), a path pattern (per segment: a literal, `a|b`, `{t}` = the
+/// tunnel id (an integer) or `*` = any segment), the scope (`None` = any token) and where the tunnel comes from. Kept as a
+/// table so the catalogue and the "every row matches an OpenAPI path" test can walk it.
+#[derive(Debug, Clone, Copy)]
+pub struct RouteRule {
+    pub methods: &'static str,
+    pub pattern: &'static str,
+    pub scope: Option<&'static str>,
+    pub tunnel: TunnelFrom,
+}
+
+/// [`TunnelRef`] 的「種類」（表格用，沒有 id）。/ The kind of [`TunnelRef`], without the id (for the table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TunnelFrom {
+    None,
+    Path,
+    Handler,
+    Unrestricted,
+}
+
+impl TunnelFrom {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TunnelFrom::None => "none",
+            TunnelFrom::Path => "path",
+            TunnelFrom::Handler => "handler",
+            TunnelFrom::Unrestricted => "unrestricted",
+        }
+    }
+}
+
+const READ: &str = "tunnels:read";
+const EXEC: &str = "ssh:exec";
+const FILES: &str = "ssh:files";
+const SCAN: &str = "network:scan";
+const BROWSER: &str = "browser:use";
+
+const fn rule(methods: &'static str, pattern: &'static str, scope: &'static str, tunnel: TunnelFrom) -> RouteRule {
+    RouteRule { methods, pattern, scope: Some(scope), tunnel }
+}
+
+/// token 能打的 REST 路由（白名單，第一個符合的算數）。沒列到 = 不開放給 token。
+/// The REST routes a token may call (an allow-list; the first matching row wins). Anything else is closed to tokens.
+pub const ROUTES: &[RouteRule] = {
+    use TunnelFrom::*;
+    &[
+        RouteRule { methods: "GET", pattern: "/api/auth/user/profile", scope: Option::None, tunnel: None },
+        // 讀：隧道、狀態、連線紀錄、帳號、ssh config、群組、區網主機、裝置身分。/ Reads.
+        rule("GET", "/api/reverse/server/dashboard", READ, None),
+        rule("GET", "/api/reverse/server/keys", READ, None),
+        rule("GET", "/api/reverse/server/status/ports|latency", READ, None),
+        rule("GET", "/api/reverse/server/keys/{t}", READ, Path),
+        rule("GET", "/api/reverse/server/{t}/connections|usernames|host-key", READ, Path),
+        rule("GET", "/api/reverse/server/{t}/lan/hosts", READ, Path),
+        rule("GET", "/api/reverse/lan/topology", READ, None),
+        rule("GET", "/tunnels/server/config/{t}", READ, Path),
+        rule("GET", "/api/reverse/tunnel-groups", READ, None),
+        rule("GET", "/api/sessions", READ, None),
+        // 在裝置上跑指令：REST 版的 MCP session；錄影 = 終端機輸出，所以也算這個。/ Exec sessions; recordings are terminal output.
+        rule("GET|POST", "/api/ai/sessions", EXEC, Handler),
+        rule("DELETE", "/api/ai/sessions/*", EXEC, Handler),
+        rule("POST", "/api/ai/sessions/*/exec", EXEC, Handler),
+        rule("GET", "/api/snippets", EXEC, None),
+        rule("GET", "/api/recordings", EXEC, Handler),
+        rule("GET", "/api/recordings/*/cast", EXEC, Handler),
+        // 檔案：SFTP 的每個操作。/ Files: every SFTP operation.
+        rule("*", "/api/sftp/*/{t}/*", FILES, Path),
+        rule("GET|POST", "/api/reverse/server/{t}/lan/scan", SCAN, Path),
+        // 瀏覽器：REST 版的 MCP browser_*（session 只屬於開它的那把，隧道在開的時候檢查）。/ Scripted browsers.
+        rule("GET|POST", "/api/browser/sessions", BROWSER, Handler),
+        rule("DELETE", "/api/browser/sessions/*", BROWSER, Handler),
+        rule("POST", "/api/browser/sessions/*/navigate|click|type", BROWSER, Handler),
+        rule("GET", "/api/browser/sessions/*/text|screenshot", BROWSER, Handler),
+        // 管理：建立 / 改 / 刪隧道、分享、標籤、帳號、區網主機、加入裝置、結束 session。/ Management writes.
+        rule("POST", "/api/reverse/server/keys", MANAGE, Unrestricted),
+        rule("PATCH|PUT|DELETE", "/api/reverse/server/keys/{t}", MANAGE, Path),
+        rule("GET", "/api/reverse/server/{t}/delete-check", MANAGE, Path),
+        rule("PUT", "/api/reverse/server/{t}/labels", MANAGE, Path),
+        rule("PUT|DELETE", "/api/reverse/server/{t}/pin", MANAGE, Path),
+        rule("PATCH", "/api/reverse/server/{t}/default-username", MANAGE, Path),
+        rule("POST", "/api/reverse/server/{t}/lan/hosts", MANAGE, Path),
+        rule("PATCH|DELETE", "/api/reverse/server/{t}/lan/hosts/*", MANAGE, Path),
+        rule("POST", "/tunnels/share/{t}", MANAGE, Path),
+        rule("PATCH", "/tunnels/share/{t}/*/expiry|allowed-usernames", MANAGE, Path),
+        rule("PATCH", "/tunnels/update-permission/{t}/*", MANAGE, Path),
+        rule("DELETE", "/tunnels/unshare/{t}/*", MANAGE, Path),
+        rule("GET", "/tunnels/shared-users|available-users/{t}", MANAGE, Path),
+        rule("GET|POST", "/api/reverse/server/usernames", MANAGE, Unrestricted),
+        rule("PATCH|PUT|DELETE", "/api/reverse/server/usernames/*", MANAGE, Unrestricted),
+        rule("POST", "/api/reverse/join", MANAGE, Unrestricted),
+        rule("GET|DELETE", "/api/reverse/join/*", MANAGE, Unrestricted),
+        rule("DELETE", "/api/sessions/*", MANAGE, Unrestricted),
+    ]
+};
+
+impl RouteRule {
+    fn allows_method(&self, method: &str) -> bool {
+        self.methods == "*" || self.methods.split('|').any(|m| m == method)
+    }
+
+    /// 路徑符合嗎；符合時回 `{t}` 那段的隧道 id（沒有就 None）。/ Whether the path matches; with the `{t}` tunnel id.
+    fn match_path(&self, path: &str) -> Option<Option<i64>> {
+        let want: Vec<&str> = self.pattern.trim_matches('/').split('/').collect();
+        let got: Vec<&str> = path.trim_matches('/').split('/').collect();
+        if want.len() != got.len() {
+            return Option::None;
+        }
+        let mut tunnel = Option::None;
+        for (w, g) in want.iter().zip(&got) {
+            match *w {
+                "*" => {}
+                "{t}" => tunnel = Some(g.parse::<i64>().ok()?),
+                alts => {
+                    if !alts.split('|').any(|a| a == *g) {
+                        return Option::None;
+                    }
+                }
+            }
+        }
+        Some(tunnel)
+    }
+}
+
+/// 這個請求符合哪一列（第一個）。/ The first allow-list row matching a request.
+pub fn matching_rule(method: &str, path: &str) -> Option<(&'static RouteRule, Option<i64>)> {
+    ROUTES.iter().find_map(|r| if r.allows_method(method) { r.match_path(path).map(|t| (r, t)) } else { Option::None })
+}
+
 /// token 能打的 REST 路由（白名單）。沒列到 = 不開放給 token。/ The REST routes a token may call (an allow-list).
 pub fn rest_route(method: &str, path: &str) -> Option<TokenRoute> {
-    let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-    let id = |s: &str| s.parse::<i64>().ok();
-    let r = |scope: &'static str, tunnel: TunnelRef| Some(TokenRoute { scope: Some(scope), tunnel });
-    const READ: &str = "tunnels:read";
-    const EXEC: &str = "ssh:exec";
-    const FILES: &str = "ssh:files";
-    const SCAN: &str = "network:scan";
-    use TunnelRef::*;
-    match (method, segs.as_slice()) {
-        ("GET", ["api", "auth", "user", "profile"]) => Some(TokenRoute { scope: Option::None, tunnel: None }),
+    let (r, id) = matching_rule(method, path)?;
+    let tunnel = match r.tunnel {
+        TunnelFrom::None => TunnelRef::None,
+        TunnelFrom::Path => TunnelRef::Path(id?),
+        TunnelFrom::Handler => TunnelRef::Handler,
+        TunnelFrom::Unrestricted => TunnelRef::Unrestricted,
+    };
+    Some(TokenRoute { scope: r.scope, tunnel })
+}
 
-        // 讀：隧道、狀態、連線紀錄、帳號、ssh config、群組、區網主機、裝置身分。/ Reads.
-        ("GET", ["api", "reverse", "server", "dashboard"]) => r(READ, None),
-        ("GET", ["api", "reverse", "server", "keys"]) => r(READ, None),
-        ("GET", ["api", "reverse", "server", "status", "ports" | "latency"]) => r(READ, None),
-        ("GET", ["api", "reverse", "server", "keys", t]) => r(READ, Path(id(t)?)),
-        ("GET", ["api", "reverse", "server", t, "connections" | "usernames" | "host-key"]) => r(READ, Path(id(t)?)),
-        ("GET", ["api", "reverse", "server", t, "lan", "hosts"]) => r(READ, Path(id(t)?)),
-        ("GET", ["tunnels", "server", "config", t]) => r(READ, Path(id(t)?)),
-        ("GET", ["api", "reverse", "tunnel-groups"]) => r(READ, None),
-        ("GET", ["api", "sessions"]) => r(READ, None),
-
-        // 在裝置上跑指令：REST 版的 MCP session；錄影 = 終端機輸出，所以也算這個。/ Exec sessions; recordings are terminal output.
-        ("GET" | "POST", ["api", "ai", "sessions"]) => r(EXEC, Handler),
-        ("DELETE", ["api", "ai", "sessions", _]) => r(EXEC, Handler),
-        ("POST", ["api", "ai", "sessions", _, "exec"]) => r(EXEC, Handler),
-        ("GET", ["api", "snippets"]) => r(EXEC, None),
-        ("GET", ["api", "recordings"]) => r(EXEC, Handler),
-        ("GET", ["api", "recordings", _, "cast"]) => r(EXEC, Handler),
-
-        // 檔案：SFTP 的每個操作。/ Files: every SFTP operation.
-        (_, ["api", "sftp", _, t, _]) => r(FILES, Path(id(t)?)),
-
-        ("GET" | "POST", ["api", "reverse", "server", t, "lan", "scan"]) => r(SCAN, Path(id(t)?)),
-
-        // 管理：建立 / 改 / 刪隧道、分享、標籤、帳號、加入裝置、結束 session。/ Management writes.
-        ("POST", ["api", "reverse", "server", "keys"]) => r(MANAGE, Unrestricted),
-        ("PATCH" | "PUT" | "DELETE", ["api", "reverse", "server", "keys", t]) => r(MANAGE, Path(id(t)?)),
-        ("GET", ["api", "reverse", "server", t, "delete-check"]) => r(MANAGE, Path(id(t)?)),
-        ("PUT", ["api", "reverse", "server", t, "labels"]) => r(MANAGE, Path(id(t)?)),
-        ("PUT" | "DELETE", ["api", "reverse", "server", t, "pin"]) => r(MANAGE, Path(id(t)?)),
-        ("PATCH", ["api", "reverse", "server", t, "default-username"]) => r(MANAGE, Path(id(t)?)),
-        ("POST", ["tunnels", "share", t]) => r(MANAGE, Path(id(t)?)),
-        ("PATCH", ["tunnels", "share", t, _, "expiry" | "allowed-usernames"]) => r(MANAGE, Path(id(t)?)),
-        ("PATCH", ["tunnels", "update-permission", t, _]) => r(MANAGE, Path(id(t)?)),
-        ("DELETE", ["tunnels", "unshare", t, _]) => r(MANAGE, Path(id(t)?)),
-        ("GET", ["tunnels", "shared-users" | "available-users", t]) => r(MANAGE, Path(id(t)?)),
-        ("GET" | "POST", ["api", "reverse", "server", "usernames"]) => r(MANAGE, Unrestricted),
-        ("PATCH" | "PUT" | "DELETE", ["api", "reverse", "server", "usernames", _]) => r(MANAGE, Unrestricted),
-        ("POST", ["api", "reverse", "join"]) => r(MANAGE, Unrestricted),
-        ("GET" | "DELETE", ["api", "reverse", "join", _]) => r(MANAGE, Unrestricted),
-        ("DELETE", ["api", "sessions", _]) => r(MANAGE, Unrestricted),
-        _ => Option::None,
-    }
+/// OpenAPI 路徑樣板 → 一個符合它的具體路徑（每個 `{參數}` 換成 `1`），拿來問 [`rest_route`] / `features::for_route`。
+/// An OpenAPI path template → a concrete path for it (every `{param}` becomes `1`), to ask the matchers.
+pub fn sample_path(template: &str) -> String {
+    template.split('/').map(|seg| if seg.starts_with('{') && seg.ends_with('}') { "1" } else { seg }).collect::<Vec<_>>().join("/")
 }
 
 // ---------------------------------------------------------------- lookup
@@ -246,6 +336,17 @@ mod tests {
             ("GET", "/api/sftp/download/4/root", rule("ssh:files", Path(4))),
             ("POST", "/api/sftp/upload/4/root", rule("ssh:files", Path(4))),
             ("POST", "/api/reverse/server/4/lan/scan", rule("network:scan", Path(4))),
+            ("GET", "/api/reverse/lan/topology", rule("tunnels:read", None)),
+            ("POST", "/api/reverse/server/4/lan/hosts", rule("tunnels:manage", Path(4))),
+            ("PATCH", "/api/reverse/server/4/lan/hosts/9", rule("tunnels:manage", Path(4))),
+            ("DELETE", "/api/reverse/server/4/lan/hosts/9", rule("tunnels:manage", Path(4))),
+            ("GET", "/api/reverse/server/4/lan/hosts", rule("tunnels:read", Path(4))),
+            ("POST", "/api/browser/sessions", rule("browser:use", Handler)),
+            ("GET", "/api/browser/sessions", rule("browser:use", Handler)),
+            ("POST", "/api/browser/sessions/aib_x/navigate", rule("browser:use", Handler)),
+            ("GET", "/api/browser/sessions/aib_x/screenshot", rule("browser:use", Handler)),
+            ("DELETE", "/api/browser/sessions/aib_x", rule("browser:use", Handler)),
+            ("GET", "/api/browser/sessions/aib_x/navigate", Option::None),
             ("POST", "/api/reverse/server/keys", rule("tunnels:manage", Unrestricted)),
             ("DELETE", "/api/reverse/server/keys/4", rule("tunnels:manage", Path(4))),
             ("POST", "/tunnels/share/4", rule("tunnels:manage", Path(4))),
@@ -265,5 +366,33 @@ mod tests {
         for (m, p, want) in cases {
             assert_eq!(rest_route(m, p), *want, "{m} {p}");
         }
+    }
+
+    /// 白名單的每一列（每個方法 × 每個擇一的字面）都要對得到一個真的 OpenAPI 操作：路由改名或刪掉時，白名單不能留著死列。
+    /// Every allow-list row (each method × each literal alternative) must match a real OpenAPI operation, so a renamed
+    /// or removed route can't leave a dead row behind.
+    #[test]
+    fn every_allow_list_row_matches_an_openapi_operation() {
+        let ops = crate::api::api_tokens::operations();
+        let mut missing = Vec::new();
+        for r in ROUTES {
+            // 把 `a|b` 展開成每一種組合。/ Expand `a|b` into every combination.
+            let mut paths = vec![String::new()];
+            for seg in r.pattern.trim_matches('/').split('/') {
+                let alts: Vec<&str> = if seg == "{t}" || seg == "*" { vec![seg] } else { seg.split('|').collect() };
+                paths = paths.iter().flat_map(|p| alts.iter().map(move |a| format!("{p}/{a}"))).collect();
+            }
+            let methods: Vec<&str> = if r.methods == "*" { vec!["*"] } else { r.methods.split('|').collect() };
+            for m in &methods {
+                for concrete in &paths {
+                    let one = RouteRule { methods: m, pattern: Box::leak(concrete.clone().into_boxed_str()), ..*r };
+                    let hit = ops.iter().any(|(om, tpl)| (m == &"*" || om == m) && one.match_path(&sample_path(tpl)).is_some());
+                    if !hit {
+                        missing.push(format!("{m} {concrete}"));
+                    }
+                }
+            }
+        }
+        assert!(missing.is_empty(), "allow-list rows without an OpenAPI operation: {missing:#?}");
     }
 }

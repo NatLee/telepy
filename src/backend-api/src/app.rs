@@ -43,6 +43,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::logs::router())
         .merge(api::sftp::router())
         .merge(api::remote_browser::router())
+        .merge(api::browser::router())
         .merge(api::desktop::router())
         .merge(api::rustdesk::router())
         .merge(api::credentials::router())
@@ -95,19 +96,39 @@ pub fn build(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// 委派 token（個人 API token / OAuth app）打的 REST 寫入：回應後記一筆 `token_call` gateway 事件，Logs 頁上看得到
-/// 「誰透過哪把 token 做了什麼」（handler 自己的事件照常寫）。`/api/ai/` 有自己的稽核，不重複記。
-/// REST writes made with a delegated token get a `token_call` gateway event after the response (who, through which
-/// token, what); the handlers' own events are written as usual. `/api/ai/` has its own audit trail.
+/// 委派 token（個人 API token / OAuth app）打的 REST 請求：每一個都進呼叫紀錄（`api_calls`，路由樣板、狀態、耗時；
+/// 背景批次寫入）；通過檢查的寫入另外記一筆 `token_call` gateway 事件，Logs 頁上看得到「誰透過哪把 token 做了什麼」
+/// （handler 自己的事件照常寫）。`/api/ai/` 有自己的稽核，不寫 gateway 事件。
+/// Every REST request made with a delegated token goes into the call log (route template, status, duration; written
+/// in the background); writes that passed the checks also get a `token_call` gateway event. `/api/ai/` has its own
+/// audit trail, so no gateway event there.
 async fn token_calls(axum::extract::State(state): axum::extract::State<AppState>, mut req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
     let slot = crate::auth::extractor::TokenCallSlot::default();
     req.extensions_mut().insert(slot.clone());
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let template = req.extensions().get::<axum::extract::MatchedPath>().map(|m| m.as_str().to_string());
+    let started = std::time::Instant::now();
     let resp = next.run(req).await;
-    if let Some(call) = slot.0.get() {
-        if !matches!(method, axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS) && !path.starts_with("/api/ai/") {
-            let status = resp.status().as_u16();
+    if let Some(call) = slot.get() {
+        let status = resp.status().as_u16();
+        let route = template.unwrap_or_else(|| path.clone());
+        state.api_calls.record(crate::api_calls::NewCall {
+            at: crate::util::now_db(),
+            user_id: call.user_id,
+            token_id: call.credential.token_id(),
+            grant_id: call.credential.grant_id(),
+            client_name: call.client_name.clone(),
+            kind: "rest",
+            method: method.to_string(),
+            route,
+            tunnel_id: call.tunnel_id,
+            status: i64::from(status),
+            duration_ms: started.elapsed().as_millis() as i64,
+            ip: call.ip.clone(),
+            error: None,
+        });
+        if call.passed && !matches!(method, axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS) && !path.starts_with("/api/ai/") {
             let msg = format!("{} via {}: {method} {path} → {status}", call.username, call.client_name);
             state.gateway.event("token_call", None, None, call.tunnel_id, msg).await;
         }

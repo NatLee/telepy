@@ -80,6 +80,10 @@ pub enum Cmd {
     Snippets(SnippetsArgs),
     /// Run a toolbox snippet on a device
     Run(RunArgs),
+    /// A scripted browser that browses through a device: `browse <tunnel> [url]` opens one, then text / shot / click / type / go / close
+    Browse(BrowseArgs),
+    /// The LAN hosts behind a device: ls / add / rm
+    Lan(LanArgs),
     /// Check the server, the sign-in, its scopes and the local ssh
     Doctor,
 }
@@ -308,6 +312,101 @@ pub struct RunArgs {
     pub timeout: u64,
 }
 
+#[derive(Args, Debug)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct BrowseArgs {
+    #[command(subcommand)]
+    pub action: Option<BrowseAction>,
+    /// <tunnel>[@account] to open a browser through (same as `browse open`)
+    pub target: Option<String>,
+    /// First page to load (http / https)
+    pub url: Option<String>,
+    /// Machine-readable output
+    #[arg(long, global = true)]
+    pub json: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BrowseAction {
+    /// Open a browser through a device and print its id
+    Open {
+        /// <tunnel>[@account]
+        target: String,
+        url: Option<String>,
+    },
+    /// The browsers this sign-in has open
+    Ls,
+    /// Go to a URL
+    Go { id: String, url: String },
+    /// Print the page's text (of one element with --selector)
+    Text {
+        id: String,
+        #[arg(long)]
+        selector: Option<String>,
+    },
+    /// Save a PNG screenshot
+    Shot {
+        id: String,
+        /// Output file (default: <id>.png)
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+    },
+    /// Click an element by CSS selector, or by its visible text with --text
+    Click {
+        id: String,
+        selector: Option<String>,
+        #[arg(long)]
+        text: Option<String>,
+    },
+    /// Type into a field (logged by length only unless --show)
+    Type {
+        id: String,
+        selector: String,
+        text: String,
+        /// Press Enter afterwards (submits most forms)
+        #[arg(long)]
+        enter: bool,
+        /// Let the audit log show the text (it only records the length otherwise)
+        #[arg(long)]
+        show: bool,
+    },
+    /// Close a browser
+    Close { id: String },
+}
+
+#[derive(Args, Debug)]
+pub struct LanArgs {
+    #[command(subcommand)]
+    pub action: LanAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LanAction {
+    /// List the LAN hosts Telepy knows behind a device
+    Ls {
+        /// Tunnel name or id
+        tunnel: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a host by hand
+    Add {
+        tunnel: String,
+        /// Private IPv4 address
+        address: String,
+        #[arg(long)]
+        label: Option<String>,
+        /// Login for the jump host terminal
+        #[arg(long)]
+        user: Option<String>,
+        /// SSH port (default 22)
+        #[arg(long)]
+        port: Option<u16>,
+    },
+    /// Remove a host (by id, address or label); a later scan finds it again if it is still there
+    Rm { tunnel: String, host: String },
+}
+
 // ---------------------------------------------------------------- entry
 
 /// 跑一次指令列；回 process 的結束碼。/ Run one command line; returns the exit code.
@@ -334,6 +433,8 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Cmd::Recordings(a) => recordings(&api, a),
                 Cmd::Snippets(a) => snippet_list(&api, a).map(|_| 0),
                 Cmd::Run(a) => run_snippet(&api, &a),
+                Cmd::Browse(a) => browse(&api, a).map(|_| 0),
+                Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Login(_) | Cmd::Logout | Cmd::Doctor => unreachable!(),
             }
         }
@@ -769,13 +870,21 @@ fn config(api: &Api, a: ConfigArgs) -> Result<()> {
     if !existing.is_empty() {
         std::fs::write(target.with_extension("bak"), &existing)?;
     }
-    std::fs::write(&target, sshcfg::prune_legacy(&sshcfg::install(&existing, &stanzas), &legacy, &server))?;
+    let done = sshcfg::install_checked(&existing, &stanzas, &server, &legacy);
+    std::fs::write(&target, &done.text)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
     }
-    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != server).collect();
+    // 別台 Telepy 已經用了同名的裝置：留著它、這裡不寫，請使用者設前綴。/ Another Telepy server's device of the same name.
+    if !done.kept.is_empty() {
+        eprintln!("Kept {}: another Telepy server already uses these names in {}. Set a name prefix for this server (web: SSH config dialog, or ssh_alias_prefix in your settings) and run this again.", done.kept.join(", "), target.display());
+    }
+    if !done.shadowed.is_empty() {
+        eprintln!("Note: {} also has its own `Host {}` outside Telepy's blocks; ssh uses whichever comes first.", target.display(), done.shadowed.join(" "));
+    }
+    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != server && !done.kept.iter().any(|k| k == a)).collect();
     eprintln!("Wrote {} host(s) to {}: {}. Connect with: ssh {}", aliases.len(), target.display(), aliases.join(", "), aliases.first().unwrap_or(&""));
     Ok(())
 }
@@ -1213,6 +1322,177 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     Ok(if bad > 0 { 1 } else { 0 })
 }
 
+// ---------------------------------------------------------------- browse
+
+fn page_line(v: &Value) -> String {
+    let title = s(v, "title");
+    let url = s(v, "url");
+    if title.is_empty() { url.to_string() } else { format!("{title} — {url}") }
+}
+
+fn browse(api: &Api, a: BrowseArgs) -> Result<()> {
+    let as_json = a.json;
+    let action = match (a.action, a.target) {
+        (Some(action), _) => action,
+        (None, Some(target)) => BrowseAction::Open { target, url: a.url },
+        (None, None) => BrowseAction::Ls,
+    };
+    let path = |id: &str, rest: &str| format!("/api/browser/sessions/{id}{rest}");
+    let out = match action {
+        BrowseAction::Open { target, url } => {
+            let d = dashboard(api)?;
+            let (t, acct) = resolve(&d.tunnels, &target)?;
+            let body = json!({ "tunnel_id": t["id"], "username": acct, "url": url });
+            let v = api.json_timeout(Method::POST, "/api/browser/sessions", Some(&body), Some(Duration::from_secs(90)))?;
+            if !as_json {
+                println!("{}", s(&v, "id"));
+                if let Some(page) = v.get("page").filter(|p| p.is_object()) {
+                    eprintln!("Opened through {}: {}", name_of(&t), page_line(page));
+                } else {
+                    eprintln!("Opened through {}. Next: telepy browse go {} <url>", name_of(&t), s(&v, "id"));
+                }
+                if let Some(e) = v.get("navigate_error").and_then(Value::as_str) {
+                    eprintln!("The first page did not load: {e}");
+                }
+                return Ok(());
+            }
+            v
+        }
+        BrowseAction::Ls => {
+            let v = api.get("/api/browser/sessions")?;
+            if !as_json {
+                let list = v.as_array().cloned().unwrap_or_default();
+                if list.is_empty() {
+                    eprintln!("No open browsers.");
+                    return Ok(());
+                }
+                let n = now();
+                let rows: Vec<Vec<String>> = list.iter().map(|b| vec![s(b, "id").to_string(), s(&b["tunnel"], "name").to_string(), s(b, "username").to_string(), b["actions"].to_string(), table::ago(b["last_used_at"].as_str(), n)]).collect();
+                print!("{}", table::render(&["ID", "TUNNEL", "ACCOUNT", "ACTIONS", "LAST USED"], &rows));
+                return Ok(());
+            }
+            v
+        }
+        BrowseAction::Go { id, url } => api.json_timeout(Method::POST, &path(&id, "/navigate"), Some(&json!({ "url": url })), Some(Duration::from_secs(60)))?,
+        BrowseAction::Text { id, selector } => {
+            let q = selector.map(|sel| format!("?selector={}", url_escape(&sel))).unwrap_or_default();
+            let v = api.json_timeout(Method::GET, &path(&id, &format!("/text{q}")), None, Some(Duration::from_secs(60)))?;
+            if !as_json {
+                eprintln!("{}", page_line(&v));
+                println!("{}", s(&v, "text"));
+                if v["truncated"] == true {
+                    eprintln!("(cut at 100,000 characters)");
+                }
+                return Ok(());
+            }
+            v
+        }
+        BrowseAction::Shot { id, output } => {
+            let res = api.send(Method::GET, &path(&id, "/screenshot"), None, Some(Duration::from_secs(60)))?;
+            if res.status().as_u16() >= 400 {
+                api::read(res)?;
+                unreachable!("read() returns the error");
+            }
+            let page = res.headers().get("x-telepy-page-url").and_then(|v| v.to_str().ok()).map(str::to_string);
+            let bytes = res.bytes().context("read the screenshot")?;
+            let file = output.unwrap_or_else(|| PathBuf::from(format!("{id}.png")));
+            std::fs::write(&file, &bytes).with_context(|| format!("write {}", file.display()))?;
+            let v = json!({ "file": file.display().to_string(), "bytes": bytes.len(), "url": page });
+            if !as_json {
+                println!("{}", file.display());
+                return Ok(());
+            }
+            v
+        }
+        BrowseAction::Click { id, selector, text } => {
+            if selector.is_none() && text.is_none() {
+                bail!("Give a CSS selector, or --text with the visible text to click.");
+            }
+            api.json_timeout(Method::POST, &path(&id, "/click"), Some(&json!({ "selector": selector, "text": text })), Some(Duration::from_secs(60)))?
+        }
+        BrowseAction::Type { id, selector, text, enter, show } => {
+            let body = json!({ "selector": selector, "text": text, "press_enter": enter, "sensitive": !show });
+            api.json_timeout(Method::POST, &path(&id, "/type"), Some(&body), Some(Duration::from_secs(60)))?
+        }
+        BrowseAction::Close { id } => {
+            api.json(Method::DELETE, &path(&id, ""), None)?;
+            if !as_json {
+                eprintln!("Closed {id}.");
+                return Ok(());
+            }
+            json!({ "id": id, "closed": true })
+        }
+    };
+    if as_json {
+        return print_json(&out);
+    }
+    if let Some(c) = out.get("clicked").and_then(Value::as_str) {
+        eprintln!("Clicked {c}.");
+    }
+    println!("{}", page_line(&out));
+    Ok(())
+}
+
+/// query string 用的百分比編碼（只留 unreserved）。/ Percent-encoding for a query value (unreserved kept).
+pub fn url_escape(raw: &str) -> String {
+    raw.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+// ---------------------------------------------------------------- lan
+
+/// `<id | 位址 | 標籤>` → 主機。/ A host by id, address or label.
+fn find_host<'a>(hosts: &'a [Value], raw: &str) -> Option<&'a Value> {
+    hosts
+        .iter()
+        .find(|h| h["id"].as_i64().map(|i| i.to_string()).as_deref() == Some(raw))
+        .or_else(|| hosts.iter().find(|h| s(h, "address") == raw))
+        .or_else(|| hosts.iter().find(|h| s(h, "label").eq_ignore_ascii_case(raw)))
+}
+
+fn lan(api: &Api, a: LanArgs) -> Result<()> {
+    let d = dashboard(api)?;
+    let tunnel_of = |raw: &str| find_tunnel(&d.tunnels, raw).cloned().ok_or_else(|| anyhow!("No tunnel called '{raw}'."));
+    match a.action {
+        LanAction::Ls { tunnel, json: as_json } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            if as_json {
+                return print_json(&Value::Array(hosts));
+            }
+            if hosts.is_empty() {
+                eprintln!("No LAN hosts on {} yet. Scan in the web app (Network page) or add one: telepy lan add {} <address>", name_of(&t), name_of(&t));
+                return Ok(());
+            }
+            let rows: Vec<Vec<String>> = hosts
+                .iter()
+                .map(|h| {
+                    let ports = h["open_ports"].as_array().map(|p| p.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")).unwrap_or_default();
+                    let name = [s(h, "label"), s(h, "hostname")].into_iter().find(|x| !x.is_empty()).unwrap_or("").to_string();
+                    vec![h["id"].to_string(), s(h, "address").to_string(), name, s(h, "username").to_string(), ports, s(h, "source").to_string()]
+                })
+                .collect();
+            print!("{}", table::render(&["ID", "ADDRESS", "NAME", "LOGIN", "OPEN PORTS", "SOURCE"], &rows));
+        }
+        LanAction::Add { tunnel, address, label, user, port } => {
+            let t = tunnel_of(&tunnel)?;
+            let body = json!({ "address": address, "label": label, "username": user, "ssh_port": port });
+            let h = api.json(Method::POST, &format!("/api/reverse/server/{}/lan/hosts", t["id"]), Some(&body))?;
+            println!("{}", h["id"]);
+            eprintln!("Added {} behind {}.", s(&h, "address"), name_of(&t));
+        }
+        LanAction::Rm { tunnel, host } => {
+            let t = tunnel_of(&tunnel)?;
+            let v = api.get(&format!("/api/reverse/server/{}/lan/hosts", t["id"]))?;
+            let hosts = v["hosts"].as_array().cloned().unwrap_or_default();
+            let h = find_host(&hosts, &host).ok_or_else(|| anyhow!("No host '{host}' behind {}.", name_of(&t)))?;
+            api.json(Method::DELETE, &format!("/api/reverse/server/{}/lan/hosts/{}", t["id"], h["id"]), None)?;
+            eprintln!("Removed {} from {}.", s(h, "address"), name_of(&t));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1246,5 +1526,24 @@ mod tests {
         }
         let c = Cli::try_parse_from(["telepy", "exec", "--label", "env=prod", "--", "uptime"]).unwrap();
         assert!(matches!(c.command, Cmd::Exec(ref e) if e.label == ["env=prod"]));
+        // `browse <tunnel> [url]` 或子命令。/ `browse <tunnel> [url]` or a subcommand.
+        let c = Cli::try_parse_from(["telepy", "browse", "box@pi", "http://192.168.1.1"]).unwrap();
+        assert!(matches!(c.command, Cmd::Browse(ref b) if b.action.is_none() && b.target.as_deref() == Some("box@pi") && b.url.as_deref() == Some("http://192.168.1.1")));
+        let c = Cli::try_parse_from(["telepy", "browse", "shot", "aib_1", "-o", "x.png"]).unwrap();
+        assert!(matches!(c.command, Cmd::Browse(BrowseArgs { action: Some(BrowseAction::Shot { ref id, .. }), .. }) if id == "aib_1"));
+        let c = Cli::try_parse_from(["telepy", "browse", "type", "aib_1", "#q", "weather", "--enter"]).unwrap();
+        assert!(matches!(c.command, Cmd::Browse(BrowseArgs { action: Some(BrowseAction::Type { enter: true, show: false, .. }), .. })));
+        let c = Cli::try_parse_from(["telepy", "lan", "add", "box", "192.168.1.9", "--label", "nas", "--port", "2222"]).unwrap();
+        assert!(matches!(c.command, Cmd::Lan(LanArgs { action: LanAction::Add { port: Some(2222), .. } })));
+    }
+
+    #[test]
+    fn hosts_by_id_address_or_label_and_escaping() {
+        let hosts = vec![json!({"id": 4, "address": "192.168.1.4", "label": "NAS"}), json!({"id": 7, "address": "192.168.1.7", "label": null})];
+        assert_eq!(find_host(&hosts, "7").unwrap()["id"], 7);
+        assert_eq!(find_host(&hosts, "192.168.1.4").unwrap()["id"], 4);
+        assert_eq!(find_host(&hosts, "nas").unwrap()["id"], 4);
+        assert!(find_host(&hosts, "printer").is_none());
+        assert_eq!(url_escape("div.main > a"), "div.main%20%3E%20a");
     }
 }

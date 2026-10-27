@@ -798,6 +798,27 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("subject_kind", "subject_id", "feature")
         )"#,
     ),
+    // Rust 自有：委派 token（個人 API token / OAuth app）打的每一個 REST 請求與 PAT 的 MCP tool call（不含 query string）。
+    // Every REST request made with a delegated token and every MCP tool call made with a personal token (no query strings).
+    (
+        "telepy_api_call",
+        r#"CREATE TABLE "telepy_api_call" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "at" datetime NOT NULL,
+            "user_id" integer NOT NULL,
+            "token_id" integer NULL,
+            "grant_id" integer NULL,
+            "client_name" varchar(200) NOT NULL,
+            "kind" varchar(8) NOT NULL,
+            "method" varchar(10) NOT NULL,
+            "route" varchar(300) NOT NULL,
+            "tunnel_id" integer NULL,
+            "status" integer NOT NULL,
+            "duration_ms" integer NOT NULL,
+            "ip" varchar(64) NULL,
+            "error" varchar(300) NULL
+        )"#,
+    ),
     // Rust 自有：已套用的一次性 data migration。/ One-off data migrations already applied.
     (
         "telepy_data_migration",
@@ -809,6 +830,9 @@ const TABLES: &[(&str, &str)] = &[
 ];
 
 const INDEXES: &[&str] = &[
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_at" ON "telepy_api_call" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
@@ -981,11 +1005,15 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_reverseserverauthorizedkeys", "terminal_detach_policy", "varchar(8) NOT NULL DEFAULT 'user'"),
     // 各頁的卡片 / 清單顯示（JSON：{"tunnels":"list","key_groups":"card"}；跟著帳號走）。/ Card / list view per page (JSON; follows the account).
     ("user_management_usersettings", "view_modes", "text NOT NULL DEFAULT '{}'"),
+    // ~/.ssh/config 裡裝置別名的前綴（空 = 不加）：同一台筆電有兩台 Telepy、裝置同名時用。/ The device alias prefix in ~/.ssh/config.
+    ("user_management_usersettings", "ssh_alias_prefix", "varchar(24) NOT NULL DEFAULT ''"),
     // 通道群組 / 金鑰群組的說明與標籤（標籤 = JSON 字串陣列，規則同通道標籤）。/ Group description and labels (JSON array).
     ("telepy_tunnel_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),
     ("telepy_key_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_key_group", "labels", "text NOT NULL DEFAULT '[]'"),
+    // 個人 API token 被呼叫了幾次（呼叫紀錄只留 90 天，這個一直累加）。/ Calls made with a token (the log keeps 90 days; this keeps counting).
+    ("telepy_api_token", "call_count", "integer NOT NULL DEFAULT 0"),
     // 登入頁的樣子（standard = 產品介紹；discreet = 只寫 Telepy 的低調畫面）與低調畫面上的一句話（空白 = 內建的句子）。
     // How the sign-in pages look (standard = product highlights; discreet = a plain "Telepy" page) and the discreet page's line (blank = built-in).
     ("site_settings_sitesettings", "signin_page_style", "varchar(16) NOT NULL DEFAULT 'standard'"),

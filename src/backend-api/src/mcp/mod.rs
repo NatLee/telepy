@@ -97,14 +97,78 @@ async fn require_token(State(state): State<AppState>, mut req: Request, next: Ne
         Ok(mut p) => {
             let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
             p.ip = ClientMeta::from_headers(req.headers(), peer, &state.config).ip;
-            if let mcp_auth::Credential::Token(id) = p.credential {
+            let token_id = p.credential.token_id();
+            if let Some(id) = token_id {
                 state.api_tokens.note_use(&state.db, id, p.ip.as_deref()).await;
             }
+            let Some(token_id) = token_id else {
+                req.extensions_mut().insert(p);
+                return next.run(req).await;
+            };
+            // 個人 API token 的 tool call 進呼叫紀錄（OAuth app 的已經在 AI 稽核裡）：讀 body 認出 tools/call，回應出來後看 isError。
+            // A personal token's tool calls go into the call log (OAuth apps' are in the AI audit already).
+            let (parts, body) = req.into_parts();
+            let Ok(bytes) = axum::body::to_bytes(body, MAX_LOGGED_BODY).await else {
+                return (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response();
+            };
+            let call = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| tool_call(&v));
+            let mut req = Request::from_parts(parts, axum::body::Body::from(bytes));
+            let (user_id, client_name, ip) = (p.user.id, p.client_name.clone(), p.ip.clone());
+            let tunnel_id = call.as_ref().and_then(|(_, t)| *t).filter(|t| p.tunnel_allowed(*t));
             req.extensions_mut().insert(p);
-            next.run(req).await
+            let started = Instant::now();
+            let resp = next.run(req).await;
+            let Some((tool, _)) = call else { return resp };
+            let (parts, body) = resp.into_parts();
+            let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap_or_default();
+            let outcome = serde_json::from_slice::<Value>(&bytes).ok().map(|v| tool_error(&v)).unwrap_or(None);
+            let status = if !parts.status.is_success() { i64::from(parts.status.as_u16()) } else if outcome.is_some() { 400 } else { 200 };
+            state.api_calls.record(crate::api_calls::NewCall {
+                at: crate::util::now_db(),
+                user_id,
+                token_id: Some(token_id),
+                grant_id: None,
+                client_name,
+                kind: "mcp",
+                method: "MCP".into(),
+                route: tool,
+                tunnel_id,
+                status,
+                duration_ms: started.elapsed().as_millis() as i64,
+                ip,
+                error: outcome,
+            });
+            Response::from_parts(parts, axum::body::Body::from(bytes))
         }
         Err(e) => unauthorized(&issuer, e),
     }
+}
+
+/// 為了記 tool call 而讀進記憶體的請求 body 上限（sftp_write 的內容也在 body 裡）。/ Request bodies read to log a tool call.
+const MAX_LOGGED_BODY: usize = 64 * 1024 * 1024;
+
+/// JSON-RPC `tools/call` → (tool 名稱, 參數裡的 tunnel_id)。其他方法（initialize、tools/list…）不記。
+/// A JSON-RPC `tools/call` → (tool name, its tunnel_id argument). Other methods are not logged.
+pub fn tool_call(v: &Value) -> Option<(String, Option<i64>)> {
+    if v.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return None;
+    }
+    let params = v.get("params")?;
+    let name = params.get("name").and_then(Value::as_str)?.chars().take(100).collect();
+    Some((name, params.get("arguments").and_then(|a| a.get("tunnel_id")).and_then(Value::as_i64)))
+}
+
+/// 回應是錯誤嗎：JSON-RPC error 或 tool 的 `isError`；回錯誤開頭（≤ 200 字）。/ The error of a response, if any.
+pub fn tool_error(v: &Value) -> Option<String> {
+    let clip = |s: &str| s.chars().take(200).collect::<String>();
+    if let Some(e) = v.get("error") {
+        return Some(clip(e.get("message").and_then(Value::as_str).unwrap_or("JSON-RPC error")));
+    }
+    let r = v.get("result")?;
+    if r.get("isError").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    Some(clip(r.pointer("/content/0/text").and_then(Value::as_str).unwrap_or("tool error")))
 }
 
 // ---------------------------------------------------------------- tool parameters
@@ -506,41 +570,15 @@ impl TelepyMcp {
 
     /// 這個 app 開的瀏覽器；被關掉的說明原因（例如「被誰結束」）。/ A browser of this app; a closed one says why.
     fn browser(&self, p: &McpPrincipal, id: &str) -> Result<Arc<AiBrowser>, String> {
-        match self.state.ai.browsers.get(id) {
-            Some(b) if b.user_id == p.user.id && b.credential == p.credential => Ok(b),
-            _ => Err(match self.state.ai.browsers.closed_reason(id) {
-                Some(why) => format!("The browser '{id}' was closed ({why}). Open a new one with browser_open if you still need it."),
-                None => format!("Unknown or closed browser_id '{id}'. Browsers close when idle, at their maximum lifetime or when the device goes offline; open a new one with browser_open."),
-            }),
-        }
-    }
-
-    async fn audit_browser(&self, p: &McpPrincipal, tool: &str, started: Instant, b: &AiBrowser, detail: Option<String>, error: Option<String>) {
-        ai::audit(
-            &self.state,
-            db::ai_audit::NewEvent {
-                user_id: p.user.id,
-                grant_id: p.credential.grant_id(),
-                client_name: &p.client_name,
-                tool,
-                tunnel_id: Some(b.tunnel_id),
-                session_id: Some(&b.id),
-                target_username: Some(&b.target_username),
-                detail: detail.as_deref(),
-                ok: error.is_none(),
-                duration_ms: Some(started.elapsed().as_millis() as i64),
-                error: error.as_deref(),
-                ip: p.ip.as_deref(),
-                ..Default::default()
-            },
-        )
-        .await;
+        ai::browser::lookup(&self.state, p, id).map_err(|closed| match closed {
+            Some(why) => format!("The browser '{id}' was closed ({why}). Open a new one with browser_open if you still need it."),
+            None => format!("Unknown or closed browser_id '{id}'. Browsers close when idle, at their maximum lifetime or when the device goes offline; open a new one with browser_open."),
+        })
     }
 
     /// 一個瀏覽器動作：查 scope、找瀏覽器、跑、寫稽核。/ One browser action: scope, lookup, run, audit.
     async fn browser_action(&self, parts: &axum::http::request::Parts, tool: &str, id: &str, action: Value, detail: String) -> Result<Result<(Arc<AiBrowser>, Value), CallToolResult>, ErrorData> {
         let p = principal(parts)?;
-        let started = Instant::now();
         if let Some(r) = refused(&p, "browser:use") {
             return Ok(Err(r));
         }
@@ -548,15 +586,9 @@ impl TelepyMcp {
             Ok(b) => b,
             Err(e) => return Ok(Err(fail(e))),
         };
-        match b.action(&self.state, action).await {
-            Ok(v) => {
-                self.audit_browser(&p, tool, started, &b, Some(detail), None).await;
-                Ok(Ok((b, v)))
-            }
-            Err(e) => {
-                self.audit_browser(&p, tool, started, &b, Some(detail), Some(e.clone())).await;
-                Ok(Err(fail(format!("The browser action failed: {e}"))))
-            }
+        match ai::browser::run_action(&self.state, &p, tool, &b, action, detail).await {
+            Ok(v) => Ok(Ok((b, v))),
+            Err(e) => Ok(Err(fail(format!("The browser action failed: {e}")))),
         }
     }
 
@@ -1084,7 +1116,6 @@ impl TelepyMcp {
     #[tool(description = "Open a real Chromium browser that reaches the web through a tunnel's device, as if it ran there: it sees the device's LAN, its localhost and its public IP. Returns a browser_id. The browser closes itself when idle or at its maximum lifetime (it counts against the same per-user limit as SSH sessions); close it with browser_close when you are done. The tunnel owner is notified.", annotations(title = "Open browser", read_only_hint = false, destructive_hint = false, open_world_hint = true))]
     async fn browser_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<BrowserOpenArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
-        let started = Instant::now();
         if let Some(r) = refused(&p, "browser:use") {
             return Ok(r);
         }
@@ -1092,24 +1123,15 @@ impl TelepyMcp {
             Ok(u) => u,
             Err(e) => return Ok(fail(e)),
         };
-        let detail = format!("username: {}{}", args.username.as_deref().unwrap_or("(default)"), url.as_deref().map(|u| format!("; url: {u}")).unwrap_or_default());
         let req = ai::browser::OpenBrowserRequest { tunnel_id: args.tunnel_id, username: args.username, idle_timeout_s: args.idle_timeout_s, max_lifetime_s: args.max_lifetime_s };
-        let b = match ai::browser::open(&self.state, &p, req).await {
-            Ok(b) => b,
-            Err(e) => {
-                self.audit(&p, "browser_open", started, Audit { tunnel_id: Some(args.tunnel_id), detail: Some(detail), error: Some(e.clone()), ..Default::default() }).await;
-                return Ok(fail(e));
-            }
+        let (b, page, error) = match ai::browser::open_at(&self.state, &p, req, url).await {
+            Ok(r) => r,
+            Err(e) => return Ok(fail(e)),
         };
         let mut body = ai::browser::browser_json(&b, self.state.config.tz_offset_minutes);
-        let mut error = None;
-        if let Some(u) = &url {
-            match b.action(&self.state, json!({ "action": "navigate", "url": u })).await {
-                Ok(v) => body["page"] = json!({ "url": v.get("url"), "title": v.get("title") }),
-                Err(e) => error = Some(e),
-            }
+        if let Some(page) = page {
+            body["page"] = page;
         }
-        self.audit_browser(&p, "browser_open", started, &b, Some(detail), error.clone()).await;
         if let Some(e) = error {
             body["navigate_error"] = json!(e);
         }
@@ -1177,9 +1199,8 @@ impl TelepyMcp {
             return Ok(fail("selector is empty"));
         }
         let n = args.text.chars().count();
-        let shown = if args.sensitive.unwrap_or(true) { format!("{n} characters") } else { format!("\"{}\"", args.text) };
         let enter = args.press_enter.unwrap_or(false);
-        let detail = format!("selector: {}; {shown}{}", args.selector, if enter { " + Enter" } else { "" });
+        let detail = ai::browser::type_detail(&args.selector, &args.text, enter, args.sensitive.unwrap_or(true));
         let action = json!({ "action": "type", "selector": args.selector, "text": args.text, "press_enter": enter });
         match self.browser_action(&parts, "browser_type", &args.browser_id, action, detail).await? {
             Ok((b, v)) => Ok(CallToolResult::structured(json!({ "browser_id": b.id, "typed": n, "url": v.get("url"), "title": v.get("title") }))),
@@ -1206,5 +1227,23 @@ impl ServerHandler for TelepyMcp {
         let mut info = Implementation::new("telepy", env!("CARGO_PKG_VERSION"));
         info.title = Some("Telepy".to_string());
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(info).with_instructions(INSTRUCTIONS)
+    }
+}
+
+#[cfg(test)]
+mod call_log_tests {
+    use super::{tool_call, tool_error};
+    use serde_json::json;
+
+    #[test]
+    fn tool_calls_are_recognised_and_errors_read() {
+        let c = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "browser_open", "arguments": {"tunnel_id": 4}}});
+        assert_eq!(tool_call(&c), Some(("browser_open".to_string(), Some(4))));
+        assert_eq!(tool_call(&json!({"method": "tools/call", "params": {"name": "list_tunnels"}})), Some(("list_tunnels".to_string(), None)));
+        assert_eq!(tool_call(&json!({"method": "tools/list"})), None);
+        assert_eq!(tool_call(&json!([c])), None, "batches are not logged");
+        assert_eq!(tool_error(&json!({"result": {"content": [{"type": "text", "text": "fine"}]}})), None);
+        assert_eq!(tool_error(&json!({"result": {"isError": true, "content": [{"type": "text", "text": "Tunnel 9 not found."}]}})).as_deref(), Some("Tunnel 9 not found."));
+        assert_eq!(tool_error(&json!({"error": {"code": -32602, "message": "bad params"}})).as_deref(), Some("bad params"));
     }
 }

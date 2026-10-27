@@ -20,6 +20,12 @@ MCP 端點是 `https://<你的主機>/mcp`（Streamable HTTP）。正式環境�
 
 不需要手動產生 token：第一次呼叫時客戶端拿到 401，自動走完下面的 OAuth 流程。
 
+沒有瀏覽器的 agent / CI 可以改用**個人 API token**（`tpt_…`，在網頁左側 **API** 頁建立）當 Bearer：
+`{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp", "headers": {"Authorization": "Bearer tpt_…"}}}}`。
+token 在 `/mcp` 上的工具、scope、隧道限制跟 OAuth app 一樣（還要「MCP app」功能開著）；它的每個 tool call 除了 AI 稽核，
+也記在 API 頁的「活動」（`MCP <tool>`，200 / tool 回錯誤時 400）。同一組動作也有 REST 版：`/api/ai/sessions*`（指令）與
+`/api/browser/sessions*`（遠端瀏覽器，見下），`telepy exec` / `telepy browse` 就是用它們。
+
 網頁左側 **AI → MCP**（`/tunnels/mcp`）顯示實際要填的端點網址（取自 discovery 的 `resource`，所以會反映
 `PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的應用程式。
 
@@ -119,6 +125,12 @@ username，與 web terminal 相同）。
 - 開 / 關寫 `browser_open` / `browser_close` gateway 事件（隧道的 Logs），通知沿用 `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
   （多 `kind: "browser"`，webhook `mcp.session_*` 的 data 也有 `kind`）。
 - 稽核：網址、selector；`browser_type` 的文字預設只記長度（`sensitive: false` 才記內容）；截圖本身不存。
+- **REST 版**（`api/browser.rs`，給腳本與 `telepy browse`）：`POST /api/browser/sessions {tunnel_id, username?, url?}` → `{id, …}`、
+  `POST …/{id}/navigate {url}`、`GET …/{id}/text?selector=`、`GET …/{id}/screenshot`（image/png）、`POST …/{id}/click {selector | text}`、
+  `POST …/{id}/type {selector, text, press_enter?, sensitive?}`、`DELETE …/{id}`、`GET /api/browser/sessions`。共用 `ai::browser`
+  （`open_at` / `lookup` / `run_action`），所以上限、presence、即時 session、reaper、稽核跟 MCP 一樣；個人 API token / OAuth app 的
+  token 要 `browser:use`，網頁登入也能打（client 名稱「Telepy web sign-in」）；一個瀏覽器只屬於開它的那把憑證；step-up 隧道回 403
+  `step_up_refused`。
 
 ## Session 生命週期
 

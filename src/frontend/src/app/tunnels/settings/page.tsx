@@ -687,7 +687,20 @@ function UserEditModal({
             {/* 這個人核可過的 OAuth 應用程式（可看詳細、可撤銷）/ The OAuth apps they approved (details, revoke) */}
             {tab === "apps" && <ConnectedApps userId={user.id} />}
 
-            {tab === "tokens" && <ApiTokens userId={user.id} />}
+            {tab === "tokens" && (
+                <div className="space-y-4">
+                    <ApiTokens userId={user.id} />
+                    {/* 這個人的 token 呼叫紀錄在管理區的 API 活動。/ Their token calls are in the admin section's API activity. */}
+                    <Link
+                        href={`/tunnels/admin/api-activity?user=${user.id}`}
+                        prefetch={false}
+                        onClick={onClose}
+                        className="inline-flex items-center gap-1 text-sm text-foreground underline underline-offset-2"
+                    >
+                        {t("settings.userTokensCalls")} <ArrowRight size={13} className="opacity-60" />
+                    </Link>
+                </div>
+            )}
 
             {/* 這個人的 app 與 token 呼叫過的工具 / Tool calls by their apps and tokens */}
             {tab === "activity" && <UserActivity userId={user.id} onNavigate={onClose} />}

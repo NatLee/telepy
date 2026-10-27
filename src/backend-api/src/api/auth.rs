@@ -151,7 +151,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser, d: cra
         Some(p) => {
             let expires_at = match p.credential {
                 crate::auth::mcp::Credential::Token(id) => db::api_tokens::by_id(&state.db, id).await?.map(|t| db_to_iso_utc_z(&t.expires_at)),
-                crate::auth::mcp::Credential::Grant(_) => None,
+                crate::auth::mcp::Credential::Grant(_) | crate::auth::mcp::Credential::Web(_) => None,
             };
             json!({
                 "kind": if p.credential.token_id().is_some() { "api_token" } else { "oauth_app" },

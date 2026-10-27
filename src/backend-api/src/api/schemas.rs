@@ -759,6 +759,8 @@ pub struct ConfigResponse {
     pub hosts: Vec<ConfigHost>,
     /// 隧道的預設帳號（你能用時），否則 null。/ The tunnel's default account when you may use it, else null.
     pub default_username_id: Option<i64>,
+    /// 你的裝置別名前綴（個人設定 `ssh_alias_prefix`，空 = 不加）。/ Your device alias prefix (empty = none).
+    pub alias_prefix: String,
     #[schema(example = 10022)]
     pub reverse_port: i64,
     /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`, one per gateway host key); empty when the gateway has no host keys
@@ -784,6 +786,8 @@ pub struct BulkConfigResponse {
     /// default = 每台一個 Host（隧道預設帳號）；all = 每個帳號一個。/ default = one Host per device; all = one per account.
     #[schema(example = "default")]
     pub accounts: String,
+    /// 你的裝置別名前綴（個人設定 `ssh_alias_prefix`，空 = 不加）。/ Your device alias prefix (empty = none).
+    pub alias_prefix: String,
     /// 寫進 config 的裝置，依名稱排序。/ The devices in `config`, sorted by name.
     pub tunnels: Vec<BulkConfigTunnel>,
     /// 看得到但沒有可用帳號的裝置。/ Devices you can see but have no login account on.
@@ -975,6 +979,9 @@ pub struct UserSettings {
     /// Card or list view per page; pages missing here use their default
     #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: serde_json::Value,
+    /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
+    #[schema(example = "work-")]
+    pub ssh_alias_prefix: String,
 }
 
 #[derive(ToSchema)]
@@ -1004,6 +1011,8 @@ pub struct UserSettingsPatch {
     /// Replaces the whole map: page id (lowercase letters, digits, `_`; up to 32) → `card` | `list`, at most 20
     #[schema(value_type = Option<Object>, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: Option<serde_json::Value>,
+    /// 裝置別名前綴：英數字、`.`、`_`、`-`，最多 24 個，不以 `-` 開頭；空字串 = 不加。/ Device alias prefix; empty = none.
+    pub ssh_alias_prefix: Option<String>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default
@@ -3547,6 +3556,11 @@ pub struct ApiToken {
     pub active: bool,
     /// Exec sessions it has open right now
     pub sessions: i64,
+    /// Scripted browsers it has open right now
+    pub browsers: i64,
+    /// Calls made with it since it was created (the call log itself keeps 90 days)
+    pub call_count: i64,
+    pub calls: ApiCallSummary,
 }
 
 #[derive(ToSchema)]
@@ -3568,4 +3582,190 @@ pub struct ApiTokenCreated {
     pub token: ApiToken,
     /// The secret (`tpt_…`); shown only in this response
     pub secret: String,
+}
+
+// ---------------------------------------------------------------- browser automation (REST form of the MCP browser tools)
+
+#[derive(ToSchema)]
+pub struct ApiBrowserTunnel {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowser {
+    #[schema(example = "aib_3f2a…")]
+    pub id: String,
+    /// Same as `id` (the MCP tools' name for it)
+    pub browser_id: String,
+    pub tunnel: ApiBrowserTunnel,
+    /// Device account the browser's SOCKS proxy logs in as
+    pub username: String,
+    pub created_at: String,
+    pub last_used_at: String,
+    /// End of the maximum lifetime (it closes earlier when idle)
+    pub expires_at: String,
+    pub idle_timeout_s: i64,
+    pub max_lifetime_s: i64,
+    pub actions: i64,
+    /// Only on open with a url: the page that loaded
+    pub page: Option<ApiBrowserPage>,
+    /// Only on open with a url that did not load
+    pub navigate_error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserOpen {
+    pub tunnel_id: i64,
+    /// Device account; omit for the tunnel's default
+    pub username: Option<String>,
+    /// http / https (https:// is added when no scheme is given)
+    #[schema(example = "http://192.168.1.1/")]
+    pub url: Option<String>,
+    pub idle_timeout_s: Option<i64>,
+    pub max_lifetime_s: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserNavigate {
+    #[schema(example = "http://192.168.1.1/status")]
+    pub url: String,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserPage {
+    pub id: Option<String>,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    /// click: what was clicked
+    pub clicked: Option<String>,
+    /// type: how many characters were typed
+    pub typed: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserLink {
+    pub text: String,
+    pub href: String,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserText {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub text: String,
+    /// The text was cut at 100,000 characters
+    pub truncated: bool,
+    pub links: Vec<ApiBrowserLink>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserClick {
+    /// CSS selector
+    pub selector: Option<String>,
+    /// Or the visible text of a link, button or label
+    pub text: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiBrowserType {
+    pub selector: String,
+    pub text: String,
+    pub press_enter: Option<bool>,
+    /// Default true: the audit row only records the length
+    pub sensitive: Option<bool>,
+}
+
+// ---------------------------------------------------------------- API token call log + endpoint catalogue
+
+#[derive(ToSchema)]
+pub struct ApiCallToken {
+    pub id: i64,
+    pub name: Option<String>,
+    pub prefix: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiCallUser {
+    pub id: i64,
+    pub username: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiCallTunnel {
+    pub id: i64,
+    /// null when the tunnel is gone or you can't see it
+    pub name: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiCall {
+    pub id: i64,
+    pub at: String,
+    pub user: ApiCallUser,
+    /// The personal API token; null for a connected app
+    pub token: Option<ApiCallToken>,
+    /// The connected app (OAuth grant); null for a personal token
+    pub grant_id: Option<i64>,
+    #[schema(example = "API token \"ci\"")]
+    pub client_name: String,
+    /// rest | mcp
+    pub kind: String,
+    /// HTTP method, or MCP for a tool call
+    pub method: String,
+    /// The route template (e.g. /api/reverse/server/{id}/lan/hosts) or the MCP tool name; never a query string
+    pub route: String,
+    pub tunnel: Option<ApiCallTunnel>,
+    /// HTTP status; MCP tool calls: 200, or 400 when the tool returned an error
+    pub status: i64,
+    pub duration_ms: i64,
+    pub ip: Option<String>,
+    /// MCP tool calls: the start of the error the tool returned
+    pub error: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiCallPage {
+    pub calls: Vec<ApiCall>,
+    pub limit: i64,
+    /// A full page came back: pass the last id as `before` (or a larger limit) for older rows
+    pub has_more: bool,
+    /// Admins: calls dropped since startup because the write queue was full; null for others
+    pub dropped: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiCallSummary {
+    pub calls_24h: i64,
+    pub calls_7d: i64,
+    /// Calls with a status of 400 or more in the last 7 days
+    pub errors_7d: i64,
+    pub last_call_at: Option<String>,
+    pub last_status: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiRoute {
+    pub method: String,
+    #[schema(example = "/api/reverse/server/{id}/lan/hosts")]
+    pub path: String,
+    pub tag: String,
+    pub summary: String,
+    /// An API token may call it
+    pub token: bool,
+    /// The scope it needs; null = any token (or not reachable)
+    pub scope: Option<String>,
+    /// path (the id in the path is checked against the token's tunnels), handler (the handler checks), unrestricted (only tokens without a tunnel limit), none; null when not reachable
+    pub tunnel: Option<String>,
+    /// The feature permission that gates it, if any
+    pub feature: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiRouteCatalogue {
+    /// PUBLIC_URL, else the origin this request came to
+    pub base_url: String,
+    pub scopes: Vec<String>,
+    pub routes: Vec<ApiRoute>,
 }
