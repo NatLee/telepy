@@ -6,39 +6,31 @@
  * status and body on the right; plus one check row.
  */
 import React from "react";
-import { Check, Info } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Info } from "lucide-react";
 
-export function Step({ n, done = false, title, status, hint, last = false, children }: {
-    n: number;
-    done?: boolean;
+/**
+ * 步驟分頁裡一頁的標題：名稱 + 狀態（右邊）+ 一行說明，下面是內容。/ One step tab's header: name, status on the right,
+ * a hint line, then the content.
+ */
+export function StepPanel({ title, status, hint, hidden = false, children }: {
     title: React.ReactNode;
     status?: React.ReactNode;
     hint?: React.ReactNode;
-    last?: boolean;
+    /** 不是目前這一步：留在畫面裡（狀態不重來），只是藏起來。/ Not the current step: kept mounted, just hidden. */
+    hidden?: boolean;
     children: React.ReactNode;
 }) {
     return (
-        <li className="relative grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3">
-            <span
-                className={cn(
-                    "grid size-7 place-items-center rounded-full text-xs",
-                    done ? "bg-success text-success-foreground" : "bg-muted text-foreground ring-1 ring-inset ring-border"
-                )}
-                aria-hidden
-            >
-                {done ? <Check size={15} strokeWidth={3} /> : n}
-            </span>
-            {!last && <span className="absolute bottom-1 left-[0.8125rem] top-9 w-px bg-border" aria-hidden />}
-            <div className={cn("min-w-0", !last && "pb-7")}>
+        <section role="tabpanel" hidden={hidden} className="space-y-4">
+            <div>
                 <div className="flex min-h-7 flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <h3 className="text-base text-foreground">{title}</h3>
+                    <h3 className="text-lg text-foreground">{title}</h3>
                     {status}
                 </div>
-                {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
-                <div className="mt-3 space-y-3 text-sm">{children}</div>
+                {hint && <p className="mt-0.5 text-sm text-muted-foreground">{hint}</p>}
             </div>
-        </li>
+            <div className="space-y-3 text-sm">{children}</div>
+        </section>
     );
 }
 
@@ -48,7 +40,7 @@ export function CheckRow({ icon, children, right }: { icon: React.ReactNode; chi
         <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2.5">
             <span className="shrink-0 text-muted-foreground [&>svg]:size-4" aria-hidden>{icon}</span>
             <span className="min-w-0 flex-1 text-foreground">{children}</span>
-            <span className="shrink-0">{right}</span>
+            <span className="max-w-full shrink-0">{right}</span>
         </li>
     );
 }
