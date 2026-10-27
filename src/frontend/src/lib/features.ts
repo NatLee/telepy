@@ -21,6 +21,7 @@ export type FeatureId =
     | "command_rules.manage"
     | "webhooks.personal"
     | "mcp.connect"
+    | "api.tokens"
     | "api.docs";
 
 /** i18n key 的字尾（`access.f.<k>` / `access.f.<k>Hint`）。順序 = 矩陣的列順序（跟後端一樣）。
@@ -39,6 +40,7 @@ export const FEATURES: readonly { id: FeatureId; key: string }[] = [
     { id: "command_rules.manage", key: "commandRules" },
     { id: "webhooks.personal", key: "webhooks" },
     { id: "mcp.connect", key: "mcp" },
+    { id: "api.tokens", key: "apiTokens" },
     { id: "api.docs", key: "apiDocs" },
 ];
 

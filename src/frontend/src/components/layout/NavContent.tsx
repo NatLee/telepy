@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare } from "lucide-react";
@@ -13,7 +13,7 @@ import type { TranslationKey } from "@/locales/en";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { ScaleSwitcher } from "./ScaleSwitcher";
 import { ThemeSwitcher } from "./ThemeSwitcher";
-import { UserPreferencesModal } from "./UserPreferencesModal";
+import { OPEN_PREFS_EVENT, UserPreferencesModal, type PrefsTab } from "./UserPreferencesModal";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
@@ -115,6 +115,16 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
     const { t } = useI18n();
     const approvals = useCommandApprovals();
     const [prefsOpen, setPrefsOpen] = useState(false);
+    const [prefsTab, setPrefsTab] = useState<PrefsTab | undefined>(undefined);
+    // 別的頁要求打開某個分頁（`openPreferences`）。/ Another page asked for a tab (`openPreferences`).
+    useEffect(() => {
+        const open = (e: Event) => {
+            setPrefsTab((e as CustomEvent<PrefsTab>).detail);
+            setPrefsOpen(true);
+        };
+        window.addEventListener(OPEN_PREFS_EVENT, open);
+        return () => window.removeEventListener(OPEN_PREFS_EVENT, open);
+    }, []);
 
     const handleLogout = () => {
         onNavigate?.();
@@ -301,7 +311,14 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 )}
             </div>
 
-            <UserPreferencesModal isOpen={prefsOpen} onClose={() => setPrefsOpen(false)} />
+            <UserPreferencesModal
+                isOpen={prefsOpen}
+                initialTab={prefsTab}
+                onClose={() => {
+                    setPrefsOpen(false);
+                    setPrefsTab(undefined);
+                }}
+            />
         </>
     );
 }

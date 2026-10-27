@@ -20,7 +20,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -51,12 +51,20 @@ import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
 import { hasFeature } from "@/lib/features";
 import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
+import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
-type PrefsTab = "general" | "security" | "logins" | "apps";
+export type PrefsTab = "general" | "security" | "logins" | "apps" | "tokens";
+
+/** 從別的頁打開偏好設定的某個分頁（例：MCP 頁 →「API token」）。/ Open Preferences at a tab from another page. */
+export const OPEN_PREFS_EVENT = "telepy:open-prefs";
+
+export function openPreferences(tab: PrefsTab) {
+    window.dispatchEvent(new CustomEvent(OPEN_PREFS_EVENT, { detail: tab }));
+}
 
 const SCALE_LABEL: Record<UiScalePreset, TranslationKey> = {
     small: "prefs.uiScaleSmall",
@@ -64,7 +72,7 @@ const SCALE_LABEL: Record<UiScalePreset, TranslationKey> = {
     large: "prefs.uiScaleLarge",
 };
 
-export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: boolean; onClose: () => void; initialTab?: PrefsTab }) {
     const { user } = useAuth();
     const { t, language, setLanguage } = useI18n();
     // THEME_EVENT / UI_SCALE_EVENT 同步:sidebar 的切換器改了,這裡的選取狀態也會跟著動(反之亦然)。
@@ -76,6 +84,10 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
     const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
     const [tab, setTab] = useState<PrefsTab>("general");
+    // 從別的頁指定分頁打開。/ Opened at a given tab from another page.
+    React.useEffect(() => {
+        if (isOpen && initialTab) setTab(initialTab);
+    }, [isOpen, initialTab]);
     const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
     const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
     const changeDesktopNotify = async (value: "on" | "off") => {
@@ -89,6 +101,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
         // 存好的登入只給遠端桌面用；那個功能被關掉就不顯示。/ Saved logins only serve remote desktops; hidden when that is off.
         ...(hasFeature(user, "remote_desktop") ? [{ value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> }] : []),
         { value: "apps" as const, label: t("prefs.tabApps"), hint: t("prefs.tabAppsHint"), icon: <Bot /> },
+        // 個人 API token（CLI / 腳本 / CI）；功能被關掉就不顯示。/ Personal API tokens; hidden when the feature is off.
+        ...(hasFeature(user, "api.tokens") ? [{ value: "tokens" as const, label: t("prefs.tabTokens"), hint: t("prefs.tabTokensHint"), icon: <KeySquare /> }] : []),
     ];
 
     const initial = user?.username?.slice(0, 1);
@@ -265,6 +279,8 @@ export function UserPreferencesModal({ isOpen, onClose }: { isOpen: boolean; onC
             )}
 
             {tab === "logins" && <SavedLogins onNavigate={onClose} />}
+
+            {tab === "tokens" && <ApiTokens />}
 
             {tab === "apps" && (
                 <div className="space-y-6">

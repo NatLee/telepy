@@ -155,6 +155,8 @@ pub struct Requester {
     /// agent 的 app 名稱。/ The agent's app name.
     pub client: Option<String>,
     pub grant_id: Option<i64>,
+    /// 個人 API token（agent 用 token 時）。/ The personal API token, when the agent used one.
+    pub token_id: Option<i64>,
     pub session_ref: Option<String>,
 }
 
@@ -228,6 +230,7 @@ fn new_event<'a>(r: &'a Requester, command: &'a str, rule: &'a Rule, approver_id
         source: r.source.as_str(),
         client: r.client.as_deref(),
         grant_id: r.grant_id,
+        token_id: r.token_id,
         session_ref: r.session_ref.as_deref(),
         account: &r.account,
         lan_host: r.lan_host.as_deref(),
@@ -514,9 +517,10 @@ pub enum AgentApproval {
 pub async fn agent_approval(state: &AppState, r: &Requester, command: &str, rule: &Rule) -> anyhow::Result<AgentApproval> {
     let command = clip(command);
     let since = db_time(Utc::now() - chrono::Duration::seconds(APPROVAL_REUSE_SECS));
-    let existing = match r.grant_id {
-        Some(g) => db::command_rules::reusable_agent_request(&state.db, r.user_id, g, r.tunnel_id, &r.account, &command, &since).await?,
-        None => None,
+    let existing = if r.grant_id.is_some() || r.token_id.is_some() {
+        db::command_rules::reusable_agent_request(&state.db, r.user_id, r.grant_id, r.token_id, r.tunnel_id, &r.account, &command, &since).await?
+    } else {
+        None
     };
     let (id, rx) = match existing {
         Some(e) if e.status == "approved" => {

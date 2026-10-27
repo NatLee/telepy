@@ -309,13 +309,17 @@ async fn code_exchange_refresh_rotation_and_revocation() {
     let refresh = r.json["refresh_token"].as_str().unwrap().to_string();
     assert!(refresh.starts_with("tpr_"));
 
-    // MCP 端的驗證接受它，REST API 不接受。/ The MCP check accepts it; the REST API does not.
+    // MCP 端的驗證接受它；REST 只開白名單裡的路由（`telepy` CLI 的瀏覽器登入），而且照 scope。
+    // The MCP check accepts it; REST takes it only on the token allow-list (the `telepy` CLI's browser sign-in), by scope.
     let p = mcp::resolve(&app.state, &access).await.unwrap();
     assert_eq!(p.user.id, me);
     assert!(p.has_scope("ssh:exec") && !p.has_scope("ssh:files"));
     assert!(p.tunnel_allowed(tunnel.id) && !p.tunnel_allowed(tunnel.id + 1));
     assert_eq!(p.client_name, "Claude Code");
-    assert_eq!(app.get("/api/auth/user/profile", Some(&access)).await.status, StatusCode::UNAUTHORIZED);
+    let prof = app.get("/api/auth/user/profile", Some(&access)).await;
+    assert_eq!(prof.json["credential"]["kind"], "oauth_app", "{}", prof.text);
+    assert_eq!(app.get("/api/site/settings", Some(&access)).await.json["code"], "token_route");
+    assert_eq!(app.get(&format!("/api/sftp/list/{}/root", tunnel.id), Some(&access)).await.json["code"], "token_scope", "ssh:files was not granted");
     assert_eq!(mcp::resolve(&app.state, &web).await.unwrap_err(), McpAuthError::Invalid, "web tokens are not MCP tokens");
 
     // refresh：輪替；舊的失效；可縮小 scope、不可擴大。/ Rotation; the old token dies; narrowing only.

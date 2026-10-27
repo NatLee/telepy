@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use super::notify;
 use super::serialize::{endpoint_json, presence_json, tunnel_json};
 use super::AppJson;
+use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::{NewTunnel, Tunnel, TunnelPatch}};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
@@ -143,17 +144,22 @@ async fn single_json(state: &AppState, user_id: i64, t: &Tunnel) -> ApiResult<Va
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/dashboard", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, description = "Tunnels visible to the user plus live port status and latency", body = super::schemas::Dashboard)))]
-async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+async fn dashboard(State(state): State<AppState>, AuthUser(user): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
     Ok(Json(json!({
-        "tunnels": list_json(&state, user.id, user.is_superuser).await?,
+        "tunnels": restrict(list_json(&state, user.id, user.is_superuser).await?, &d),
         "ports": ports_json(&state).await?,
         "latency": latency_json(&state),
     })))
 }
 
 #[utoipa::path(get, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), responses((status = 200, body = Vec<super::schemas::Tunnel>)))]
-async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
-    Ok(Json(Value::Array(list_json(&state, user.id, user.is_superuser).await?)))
+async fn list(State(state): State<AppState>, AuthUser(user): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
+    Ok(Json(Value::Array(restrict(list_json(&state, user.id, user.is_superuser).await?, &d))))
+}
+
+/// 有隧道限制的 token 只看得到它那幾條。/ A token limited to some tunnels sees only those.
+fn restrict(items: Vec<Value>, d: &Delegated) -> Vec<Value> {
+    items.into_iter().filter(|t| t.get("id").and_then(Value::as_i64).is_some_and(|id| d.allows(id))).collect()
 }
 
 /// ViewSet.get_object()：只在「我看得到」的集合內找，否則 404。
@@ -441,6 +447,9 @@ async fn destroy(State(state): State<AppState>, AuthUser(user): AuthUser, Path(i
     // webhook 的限定清單裡也拿掉。/ Out of every webhook's tunnel list too.
     db::webhooks::forget_tunnel(&state.db, id).await?;
     state.webhooks.invalidate();
+    // 個人 API token 的隧道清單裡也拿掉。/ Out of every API token's tunnel list too.
+    db::api_tokens::detach_tunnel(&state.db, id).await?;
+    state.api_tokens.invalidate();
     crate::ssh::tunnel_keys::forget(&state, id).await;
     // 釘選的 host key 跟著隧道刪了：這台機器從此沒有主人，快取與被拒的認領也清掉。
     // The pinned host keys went with the tunnel (the machine is unowned now); drop the cache and any refused claim.

@@ -3,6 +3,7 @@ pub mod google;
 pub mod jwt;
 pub mod mcp;
 pub mod password;
+pub mod api_tokens;
 pub mod devices;
 pub mod sessions;
 

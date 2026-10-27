@@ -2,7 +2,11 @@
 //! - `GET /api/ai/sessions`：我的 session ∪ 在我擁有的隧道上的 session（管理員：全部）
 //! - `DELETE /api/ai/sessions/{id}`：session 的使用者、隧道擁有者或管理員可以關
 //! - `GET /api/ai/activity`：管理員全部；其他人 = 自己的 ∪ 自己擁有的隧道上的
-//! Web endpoints for AI sessions (list / close) and the MCP audit trail.
+//! - `POST /api/ai/sessions`、`POST /api/ai/sessions/{id}/exec`：MCP 的 `ssh_session_open` / `ssh_exec` 的 REST 版，
+//!   只收個人 API token / OAuth app 的 token（`telepy exec`），同樣的 reaper、指令規則與稽核
+//!
+//! Web endpoints for AI sessions (list / close) and the MCP audit trail, plus REST equivalents of `ssh_session_open`
+//! and `ssh_exec` for API tokens and OAuth app tokens (the `telepy exec` CLI): same reaper, command rules and audit.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -11,6 +15,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::ai::{self, AiSession, CloseReason};
+use crate::auth::extractor::Delegated;
+use crate::auth::mcp::McpPrincipal;
 use crate::auth::AuthUser;
 use crate::db::{self, users::User};
 use crate::error::{ApiError, ApiResult};
@@ -20,8 +26,9 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .routes(routes!(list_sessions))
+        .routes(routes!(list_sessions, open_session))
         .routes(routes!(close_session))
+        .routes(routes!(exec))
         .routes(routes!(activity))
 }
 
@@ -35,7 +42,8 @@ pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
         "id": s.id,
         "user": { "id": s.user_id, "username": s.user_name },
         "client_name": s.client_name,
-        "grant_id": s.grant_id,
+        "grant_id": s.credential.grant_id(),
+        "token_id": s.credential.token_id(),
         "tunnel": { "id": s.tunnel_id, "name": s.tunnel_name },
         "username": s.target_username,
         "created_at": db_to_iso(&s.created_at(), tz),
@@ -49,15 +57,61 @@ pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
 }
 
 #[utoipa::path(get, path = "/api/ai/sessions", tag = "AI", security(("bearer" = [])), responses((status = 200, description = "Open AI sessions: yours plus those on tunnels you own (admins: all), oldest first", body = Vec<super::schemas::AiSession>)))]
-async fn list_sessions(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+async fn list_sessions(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
     let tz = state.config.tz_offset_minutes;
-    Ok(Json(Value::Array(state.ai.list().iter().filter(|s| can_manage(&me, s)).map(|s| session_json(s, tz)).collect())))
+    Ok(Json(Value::Array(state.ai.list().iter().filter(|s| can_manage(&me, s) && d.allows(s.tunnel_id)).map(|s| session_json(s, tz)).collect())))
+}
+
+/// REST 版的 session 只給委派 token（session 要記是哪把 token / 哪個 app 開的）。/ Delegated tokens only.
+fn principal(d: &Delegated) -> ApiResult<std::sync::Arc<McpPrincipal>> {
+    d.0.clone().ok_or_else(|| ApiError::new(StatusCode::FORBIDDEN, json!({ "error": "Sessions are opened with an API token or a connected app; the web app uses the terminal instead.", "code": "token_required" })))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct OpenBody {
+    tunnel_id: i64,
+    username: Option<String>,
+    idle_timeout_s: Option<u64>,
+    max_lifetime_s: Option<u64>,
+}
+
+#[utoipa::path(post, path = "/api/ai/sessions", tag = "AI", security(("bearer" = [])), request_body = super::schemas::AiSessionOpen, responses(
+    (status = 201, description = "Opened (the REST form of the MCP tool ssh_session_open; API tokens and connected apps only)", body = super::schemas::AiSession),
+    (status = 400, description = "The tunnel, account, limit or device problem, as text", body = super::schemas::ErrorBody),
+    (status = 403, description = "token_required (a web sign-in), token_scope, feature_disabled", body = super::schemas::ErrorBody),
+))]
+async fn open_session(State(state): State<AppState>, AuthUser(_me): AuthUser, d: Delegated, super::AppJson(body): super::AppJson<OpenBody>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let p = principal(&d)?;
+    let args = crate::mcp::OpenArgs { tunnel_id: body.tunnel_id, username: body.username, idle_timeout_s: body.idle_timeout_s, max_lifetime_s: body.max_lifetime_s };
+    let s = crate::mcp::open_session(&state, &p, args).await.map_err(ApiError::bad_request)?;
+    Ok((StatusCode::CREATED, Json(session_json(&s, state.config.tz_offset_minutes))))
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ExecBody {
+    command: String,
+    timeout_s: Option<u64>,
+    max_output_bytes: Option<usize>,
+}
+
+#[utoipa::path(post, path = "/api/ai/sessions/{id}/exec", tag = "AI", security(("bearer" = [])), params(("id" = String, Path, description = "Session id (ais_…)")), request_body = super::schemas::AiExecRequest, responses(
+    (status = 200, description = "The command ran (exit_code / stdout / stderr; the REST form of ssh_exec). Command rules apply: a blocked or still-waiting command is a 400", body = super::schemas::AiExecResult),
+    (status = 400, body = super::schemas::ErrorBody),
+    (status = 404, description = "Not a session this token opened", body = super::schemas::ErrorBody),
+))]
+async fn exec(State(state): State<AppState>, AuthUser(_me): AuthUser, d: Delegated, Path(id): Path<String>, super::AppJson(body): super::AppJson<ExecBody>) -> ApiResult<Json<Value>> {
+    let p = principal(&d)?;
+    let s = state.ai.get(&id).filter(|s| s.user_id == p.user.id && s.credential == p.credential).ok_or_else(ApiError::drf_not_found)?;
+    let out = crate::mcp::exec_in_session(&state, &p, &s, &body.command, body.timeout_s, body.max_output_bytes).await.map_err(ApiError::bad_request)?;
+    Ok(Json(out))
 }
 
 #[utoipa::path(delete, path = "/api/ai/sessions/{id}", tag = "AI", security(("bearer" = [])), params(("id" = String, Path, description = "Session id (ais_…)")), responses((status = 204, description = "Closed; the agent's next call with this session_id fails"), (status = 404, body = super::schemas::ErrorBody)))]
-async fn close_session(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<String>) -> ApiResult<StatusCode> {
+async fn close_session(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Path(id): Path<String>) -> ApiResult<StatusCode> {
     match state.ai.get(&id) {
-        Some(s) if can_manage(&me, &s) => {
+        Some(s) if can_manage(&me, &s) && d.allows(s.tunnel_id) => {
             ai::close(&state, &s.id, CloseReason::ClosedByUser).await;
             Ok(StatusCode::NO_CONTENT)
         }

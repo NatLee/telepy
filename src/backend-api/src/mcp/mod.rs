@@ -97,6 +97,9 @@ async fn require_token(State(state): State<AppState>, mut req: Request, next: Ne
         Ok(mut p) => {
             let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
             p.ip = ClientMeta::from_headers(req.headers(), peer, &state.config).ip;
+            if let mcp_auth::Credential::Token(id) = p.credential {
+                state.api_tokens.note_use(&state.db, id, p.ip.as_deref()).await;
+            }
             req.extensions_mut().insert(p);
             next.run(req).await
         }
@@ -332,13 +335,144 @@ fn refused(p: &McpPrincipal, scope: &str) -> Option<CallToolResult> {
 
 /// 一次 tool call 的稽核欄位。/ Audit fields of one tool call.
 #[derive(Default)]
-struct Audit<'a> {
-    tunnel_id: Option<i64>,
-    session: Option<&'a AiSession>,
-    detail: Option<String>,
-    exit_code: Option<i64>,
-    bytes_out: Option<i64>,
-    error: Option<String>,
+pub(crate) struct Audit<'a> {
+    pub tunnel_id: Option<i64>,
+    pub session: Option<&'a AiSession>,
+    pub detail: Option<String>,
+    pub exit_code: Option<i64>,
+    pub bytes_out: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// 寫一筆 tool call 稽核（MCP 與 REST 版的 session 共用）。/ Audit one call (shared by MCP and the REST sessions).
+pub(crate) async fn audit_call(state: &AppState, p: &McpPrincipal, tool: &str, started: Instant, a: Audit<'_>) {
+    let tunnel_id = a.tunnel_id.or(a.session.map(|s| s.tunnel_id));
+    ai::audit(
+        state,
+        db::ai_audit::NewEvent {
+            user_id: p.user.id,
+            grant_id: p.credential.grant_id(),
+            client_name: &p.client_name,
+            tool,
+            tunnel_id,
+            session_id: a.session.map(|s| s.id.as_str()),
+            target_username: a.session.map(|s| s.target_username.as_str()),
+            detail: a.detail.as_deref(),
+            ok: a.error.is_none(),
+            exit_code: a.exit_code,
+            duration_ms: Some(started.elapsed().as_millis() as i64),
+            bytes_out: a.bytes_out,
+            error: a.error.as_deref(),
+            ip: p.ip.as_deref(),
+        },
+    )
+    .await;
+}
+
+/// 開 session（scope / 功能檢查 + `ai::open` + 稽核）；MCP 的 `ssh_session_open` 與 `POST /api/ai/sessions` 共用。
+/// Open a session (scope and feature checks, `ai::open`, audit); shared by `ssh_session_open` and the REST route.
+pub(crate) async fn open_session(state: &AppState, p: &McpPrincipal, args: OpenArgs) -> Result<Arc<AiSession>, String> {
+    let started = Instant::now();
+    if !p.has_scope("ssh:exec") && !p.has_scope("ssh:files") {
+        return Err("This app was granted neither `ssh:exec` nor `ssh:files`. Ask the user to reconnect it in Telepy and approve one of them.".into());
+    }
+    if !p.may_use("ssh:exec") && !p.may_use("ssh:files") {
+        let f = if p.has_scope("ssh:exec") { crate::features::Feature::Terminal } else { crate::features::Feature::Files };
+        return Err(format!("{} The tool needs it, so it can't run for this user.", crate::features::disabled_message(f)));
+    }
+    let tunnel_id = args.tunnel_id;
+    let detail = Some(format!("username: {}", args.username.as_deref().unwrap_or("(default)")));
+    let req = OpenRequest { tunnel_id, username: args.username, idle_timeout_s: args.idle_timeout_s, max_lifetime_s: args.max_lifetime_s };
+    match ai::open(state, p, req).await {
+        Ok(s) => {
+            audit_call(state, p, "ssh_session_open", started, Audit { session: Some(&s), detail, ..Default::default() }).await;
+            Ok(s)
+        }
+        Err(e) => {
+            audit_call(state, p, "ssh_session_open", started, Audit { tunnel_id: Some(tunnel_id), detail, error: Some(e.clone()), ..Default::default() }).await;
+            Err(e)
+        }
+    }
+}
+
+/// 在 session 上跑一個指令：指令規則（擋下 / 等核准）、執行、稽核。MCP 的 `ssh_exec` 與 `POST /api/ai/sessions/{id}/exec` 共用；
+/// 錯誤字串直接給呼叫端看。/ Run one command in a session: command rules, exec, audit. Shared by `ssh_exec` and the REST
+/// route; errors are shown to the caller as-is.
+pub(crate) async fn exec_in_session(state: &AppState, p: &McpPrincipal, s: &Arc<AiSession>, command: &str, timeout_s: Option<u64>, max_output_bytes: Option<usize>) -> Result<Value, String> {
+    let started = Instant::now();
+    if command.trim().is_empty() {
+        return Err("command is empty".into());
+    }
+    // 指令規則：擋下，或等 owner / ADMIN 核准。/ Command rules: refused, or held until the owner or an ADMIN approves.
+    let requester = Requester {
+        tunnel_id: s.tunnel_id,
+        user_id: p.user.id,
+        username: p.user.username.clone(),
+        source: Source::Agent,
+        account: s.target_username.clone(),
+        lan_host: None,
+        client: Some(p.client_name.clone()),
+        grant_id: p.credential.grant_id(),
+        token_id: p.credential.token_id(),
+        session_ref: Some(s.id.clone()),
+    };
+    if let Some(rule) = command_rules::check(state, &requester, &[command.to_string()]).await {
+        let why = if rule.note.is_empty() { String::new() } else { format!(" The rule says: {}", rule.note) };
+        let refused = |msg: String| Audit { session: Some(s), detail: Some(command.to_string()), error: Some(msg), ..Default::default() };
+        match rule.action {
+            // `check` 只回擋下 / 要核准（允許 = None）。/ `check` only returns block / approve (allow = None).
+            Action::Allow => {}
+            Action::Block => {
+                command_rules::record_block(state, &requester, command, &rule).await;
+                audit_call(state, p, "ssh_exec", started, refused(format!("blocked by the rule `{}`", rule.pattern))).await;
+                return Err(format!("Telepy's command rules don't allow this command (rule `{}`).{why} Don't try to get around the rule; ask the user if it really has to run.", rule.pattern));
+            }
+            Action::Approve => match command_rules::agent_approval(state, &requester, command, &rule).await {
+                Ok(AgentApproval::Approved { .. }) => {}
+                Ok(AgentApproval::Denied { id, message }) => {
+                    audit_call(state, p, "ssh_exec", started, refused(format!("approval request #{id}: {message}"))).await;
+                    return Err(format!("{message} (rule `{}`, request #{id}). Don't run it another way.", rule.pattern));
+                }
+                Ok(AgentApproval::Waiting { id }) => {
+                    audit_call(state, p, "ssh_exec", started, refused(format!("waiting for approval (request #{id})"))).await;
+                    return Err(format!(
+                        "This command needs the tunnel owner's approval (rule `{}`).{why} Request #{id} is waiting in Telepy. Tell the user, and once they approve it run ssh_exec again with exactly the same command; an approval is good for one run within 10 minutes.",
+                        rule.pattern
+                    ));
+                }
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    audit_call(state, p, "ssh_exec", started, refused(msg.clone())).await;
+                    return Err(format!("This command needs approval, but the request could not be filed: {msg}"));
+                }
+            },
+        }
+    }
+    let timeout = Duration::from_secs(timeout_s.unwrap_or(ai::DEFAULT_COMMAND_TIMEOUT.as_secs()).max(1)).min(ai::MAX_COMMAND_TIMEOUT);
+    let max_output = max_output_bytes.unwrap_or(ai::DEFAULT_MAX_OUTPUT).clamp(1024, ai::MAX_OUTPUT);
+    match ai::exec(s, command, timeout, max_output).await {
+        Ok(r) => {
+            let bytes = (r.stdout.bytes + r.stderr.bytes) as i64;
+            let error = r.timed_out.then(|| format!("timed out after {} s", timeout.as_secs()));
+            audit_call(state, p, "ssh_exec", started, Audit { session: Some(s), detail: Some(command.to_string()), exit_code: r.exit_code.map(i64::from), bytes_out: Some(bytes), error, ..Default::default() }).await;
+            Ok(json!({
+                "exit_code": r.exit_code,
+                "signal": r.signal,
+                "timed_out": r.timed_out,
+                "duration_ms": r.duration.as_millis() as u64,
+                "stdout": r.stdout.text,
+                "stderr": r.stderr.text,
+                "stdout_bytes": r.stdout.bytes,
+                "stderr_bytes": r.stderr.bytes,
+                "truncated": r.stdout.truncated || r.stderr.truncated,
+            }))
+        }
+        Err(e) => {
+            let msg = format!("{e:#}");
+            audit_call(state, p, "ssh_exec", started, Audit { session: Some(s), detail: Some(command.to_string()), error: Some(msg.clone()), ..Default::default() }).await;
+            Err(format!("Command failed to run: {msg}"))
+        }
+    }
 }
 
 impl TelepyMcp {
@@ -347,33 +481,13 @@ impl TelepyMcp {
     }
 
     async fn audit(&self, p: &McpPrincipal, tool: &str, started: Instant, a: Audit<'_>) {
-        let tunnel_id = a.tunnel_id.or(a.session.map(|s| s.tunnel_id));
-        ai::audit(
-            &self.state,
-            db::ai_audit::NewEvent {
-                user_id: p.user.id,
-                grant_id: Some(p.grant_id),
-                client_name: &p.client_name,
-                tool,
-                tunnel_id,
-                session_id: a.session.map(|s| s.id.as_str()),
-                target_username: a.session.map(|s| s.target_username.as_str()),
-                detail: a.detail.as_deref(),
-                ok: a.error.is_none(),
-                exit_code: a.exit_code,
-                duration_ms: Some(started.elapsed().as_millis() as i64),
-                bytes_out: a.bytes_out,
-                error: a.error.as_deref(),
-                ip: p.ip.as_deref(),
-            },
-        )
-        .await;
+        audit_call(&self.state, p, tool, started, a).await;
     }
 
     /// 只能用「同一個使用者、同一個 app」開的 session。/ Sessions are scoped to the user and the app (grant).
     fn session(&self, p: &McpPrincipal, id: &str) -> Result<Arc<AiSession>, String> {
         match self.state.ai.get(id) {
-            Some(s) if s.user_id == p.user.id && s.grant_id == p.grant_id => Ok(s),
+            Some(s) if s.user_id == p.user.id && s.credential == p.credential => Ok(s),
             _ => Err(format!("Unknown or expired session_id '{id}'. Sessions close when idle, at their maximum lifetime, or when the device goes offline; open a new one with ssh_session_open.")),
         }
     }
@@ -381,7 +495,7 @@ impl TelepyMcp {
     /// 這個 app 的 shell（找出它所在的 session）。/ A shell of this app, with its session.
     fn shell(&self, p: &McpPrincipal, id: &str) -> Result<(Arc<AiSession>, Arc<AiShell>), String> {
         for s in self.state.ai.list() {
-            if s.user_id == p.user.id && s.grant_id == p.grant_id {
+            if s.user_id == p.user.id && s.credential == p.credential {
                 if let Some(sh) = s.shell(id) {
                     return Ok((s, sh));
                 }
@@ -393,7 +507,7 @@ impl TelepyMcp {
     /// 這個 app 開的瀏覽器；被關掉的說明原因（例如「被誰結束」）。/ A browser of this app; a closed one says why.
     fn browser(&self, p: &McpPrincipal, id: &str) -> Result<Arc<AiBrowser>, String> {
         match self.state.ai.browsers.get(id) {
-            Some(b) if b.user_id == p.user.id && b.grant_id == p.grant_id => Ok(b),
+            Some(b) if b.user_id == p.user.id && b.credential == p.credential => Ok(b),
             _ => Err(match self.state.ai.browsers.closed_reason(id) {
                 Some(why) => format!("The browser '{id}' was closed ({why}). Open a new one with browser_open if you still need it."),
                 None => format!("Unknown or closed browser_id '{id}'. Browsers close when idle, at their maximum lifetime or when the device goes offline; open a new one with browser_open."),
@@ -406,7 +520,7 @@ impl TelepyMcp {
             &self.state,
             db::ai_audit::NewEvent {
                 user_id: p.user.id,
-                grant_id: Some(p.grant_id),
+                grant_id: p.credential.grant_id(),
                 client_name: &p.client_name,
                 tool,
                 tunnel_id: Some(b.tunnel_id),
@@ -527,7 +641,7 @@ impl TelepyMcp {
                     "permission": eff.map(|e| e.label()),
                     "usernames": allowed.iter().map(|u| u.username.clone()).collect::<Vec<_>>(),
                     "default_username": default,
-                    "open_sessions": sessions.iter().filter(|s| s.tunnel_id == t.id && s.grant_id == p.grant_id).map(|s| s.id.clone()).collect::<Vec<_>>(),
+                    "open_sessions": sessions.iter().filter(|s| s.tunnel_id == t.id && s.credential == p.credential).map(|s| s.id.clone()).collect::<Vec<_>>(),
                 }));
             }
             Ok(out)
@@ -648,36 +762,19 @@ impl TelepyMcp {
     #[tool(description = "Open an SSH session to a tunnel's device as one of its usernames. Returns a session_id for ssh_exec and sftp_*. The session closes itself when idle or at its maximum lifetime; close it with ssh_session_close when you are done.", annotations(title = "Open SSH session", read_only_hint = false, destructive_hint = false, open_world_hint = false))]
     async fn ssh_session_open(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<OpenArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
-        let started = Instant::now();
-        if !p.has_scope("ssh:exec") && !p.has_scope("ssh:files") {
-            return Ok(fail("This app was granted neither `ssh:exec` nor `ssh:files`. Ask the user to reconnect it in Telepy and approve one of them."));
-        }
-        // 兩個 scope 對應的功能（終端機 / 檔案）都被關掉了就不開。/ Both features behind the scopes turned off: refuse.
-        if !p.may_use("ssh:exec") && !p.may_use("ssh:files") {
-            let f = if p.has_scope("ssh:exec") { crate::features::Feature::Terminal } else { crate::features::Feature::Files };
-            return Ok(feature_off(f));
-        }
-        let tunnel_id = args.tunnel_id;
-        let detail = Some(format!("username: {}", args.username.as_deref().unwrap_or("(default)")));
-        let req = OpenRequest { tunnel_id, username: args.username, idle_timeout_s: args.idle_timeout_s, max_lifetime_s: args.max_lifetime_s };
-        match ai::open(&self.state, &p, req).await {
+        match open_session(&self.state, &p, args).await {
             Ok(s) => {
-                self.audit(&p, "ssh_session_open", started, Audit { session: Some(&s), detail, ..Default::default() }).await;
                 let mut body = Self::session_json(&s, self.state.config.tz_offset_minutes);
                 body["hint"] = json!("Run commands with ssh_exec and close the session with ssh_session_close when you are done.");
                 Ok(CallToolResult::structured(body))
             }
-            Err(e) => {
-                self.audit(&p, "ssh_session_open", started, Audit { tunnel_id: Some(tunnel_id), detail, error: Some(e.clone()), ..Default::default() }).await;
-                Ok(fail(e))
-            }
+            Err(e) => Ok(fail(e)),
         }
     }
 
     #[tool(description = "Run a shell command in an open session (no TTY). Returns exit_code, stdout, stderr and whether the output was truncated or the command timed out (it is killed after timeout_s). Command rules set in Telepy may refuse a command, or hold it until the tunnel owner approves it (the call then waits up to 45 seconds; if it is still waiting, run exactly the same command again after the user approves).", annotations(title = "Run command", read_only_hint = false, destructive_hint = true, open_world_hint = true))]
     async fn ssh_exec(&self, Extension(parts): Extension<axum::http::request::Parts>, Parameters(args): Parameters<ExecArgs>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
-        let started = Instant::now();
         if let Some(r) = refused(&p, "ssh:exec") {
             return Ok(r);
         }
@@ -685,77 +782,9 @@ impl TelepyMcp {
             Ok(s) => s,
             Err(e) => return Ok(fail(e)),
         };
-        if args.command.trim().is_empty() {
-            return Ok(fail("command is empty"));
-        }
-        // 指令規則：擋下，或等 owner / ADMIN 核准。/ Command rules: refused, or held until the owner or an ADMIN approves.
-        let requester = Requester {
-            tunnel_id: s.tunnel_id,
-            user_id: p.user.id,
-            username: p.user.username.clone(),
-            source: Source::Agent,
-            account: s.target_username.clone(),
-            lan_host: None,
-            client: Some(p.client_name.clone()),
-            grant_id: Some(p.grant_id),
-            session_ref: Some(s.id.clone()),
-        };
-        if let Some(rule) = command_rules::check(&self.state, &requester, std::slice::from_ref(&args.command)).await {
-            let why = if rule.note.is_empty() { String::new() } else { format!(" The rule says: {}", rule.note) };
-            let refused = |msg: String| Audit { session: Some(&s), detail: Some(args.command.clone()), error: Some(msg), ..Default::default() };
-            match rule.action {
-                // `check` 只回擋下 / 要核准（允許 = None）。/ `check` only returns block / approve (allow = None).
-                Action::Allow => {}
-                Action::Block => {
-                    command_rules::record_block(&self.state, &requester, &args.command, &rule).await;
-                    self.audit(&p, "ssh_exec", started, refused(format!("blocked by the rule `{}`", rule.pattern))).await;
-                    return Ok(fail(format!("Telepy's command rules don't allow this command (rule `{}`).{why} Don't try to get around the rule; ask the user if it really has to run.", rule.pattern)));
-                }
-                Action::Approve => match command_rules::agent_approval(&self.state, &requester, &args.command, &rule).await {
-                    Ok(AgentApproval::Approved { .. }) => {}
-                    Ok(AgentApproval::Denied { id, message }) => {
-                        self.audit(&p, "ssh_exec", started, refused(format!("approval request #{id}: {message}"))).await;
-                        return Ok(fail(format!("{message} (rule `{}`, request #{id}). Don't run it another way.", rule.pattern)));
-                    }
-                    Ok(AgentApproval::Waiting { id }) => {
-                        self.audit(&p, "ssh_exec", started, refused(format!("waiting for approval (request #{id})"))).await;
-                        return Ok(fail(format!(
-                            "This command needs the tunnel owner's approval (rule `{}`).{why} Request #{id} is waiting in Telepy. Tell the user, and once they approve it run ssh_exec again with exactly the same command; an approval is good for one run within 10 minutes.",
-                            rule.pattern
-                        )));
-                    }
-                    Err(e) => {
-                        let msg = format!("{e:#}");
-                        self.audit(&p, "ssh_exec", started, refused(msg.clone())).await;
-                        return Ok(fail(format!("This command needs approval, but the request could not be filed: {msg}")));
-                    }
-                },
-            }
-        }
-        let timeout = Duration::from_secs(args.timeout_s.unwrap_or(ai::DEFAULT_COMMAND_TIMEOUT.as_secs()).max(1)).min(ai::MAX_COMMAND_TIMEOUT);
-        let max_output = args.max_output_bytes.unwrap_or(ai::DEFAULT_MAX_OUTPUT).clamp(1024, ai::MAX_OUTPUT);
-        match ai::exec(&s, &args.command, timeout, max_output).await {
-            Ok(r) => {
-                let bytes = (r.stdout.bytes + r.stderr.bytes) as i64;
-                let error = r.timed_out.then(|| format!("timed out after {} s", timeout.as_secs()));
-                self.audit(&p, "ssh_exec", started, Audit { session: Some(&s), detail: Some(args.command.clone()), exit_code: r.exit_code.map(i64::from), bytes_out: Some(bytes), error, ..Default::default() }).await;
-                Ok(CallToolResult::structured(json!({
-                    "exit_code": r.exit_code,
-                    "signal": r.signal,
-                    "timed_out": r.timed_out,
-                    "duration_ms": r.duration.as_millis() as u64,
-                    "stdout": r.stdout.text,
-                    "stderr": r.stderr.text,
-                    "stdout_bytes": r.stdout.bytes,
-                    "stderr_bytes": r.stderr.bytes,
-                    "truncated": r.stdout.truncated || r.stderr.truncated,
-                })))
-            }
-            Err(e) => {
-                let msg = format!("{e:#}");
-                self.audit(&p, "ssh_exec", started, Audit { session: Some(&s), detail: Some(args.command.clone()), error: Some(msg.clone()), ..Default::default() }).await;
-                Ok(fail(format!("Command failed to run: {msg}")))
-            }
+        match exec_in_session(&self.state, &p, &s, &args.command, args.timeout_s, args.max_output_bytes).await {
+            Ok(v) => Ok(CallToolResult::structured(v)),
+            Err(e) => Ok(fail(e)),
         }
     }
 
@@ -775,8 +804,8 @@ impl TelepyMcp {
     async fn ssh_session_list(&self, Extension(parts): Extension<axum::http::request::Parts>) -> Result<CallToolResult, ErrorData> {
         let p = principal(&parts)?;
         let tz = self.state.config.tz_offset_minutes;
-        let sessions: Vec<Value> = self.state.ai.list().iter().filter(|s| s.user_id == p.user.id && s.grant_id == p.grant_id).map(|s| Self::session_json(s, tz)).collect();
-        let browsers: Vec<Value> = self.state.ai.browsers.list().iter().filter(|b| b.user_id == p.user.id && b.grant_id == p.grant_id).map(|b| ai::browser::browser_json(b, tz)).collect();
+        let sessions: Vec<Value> = self.state.ai.list().iter().filter(|s| s.user_id == p.user.id && s.credential == p.credential).map(|s| Self::session_json(s, tz)).collect();
+        let browsers: Vec<Value> = self.state.ai.browsers.list().iter().filter(|b| b.user_id == p.user.id && b.credential == p.credential).map(|b| ai::browser::browser_json(b, tz)).collect();
         Ok(CallToolResult::structured(json!({ "sessions": sessions, "browsers": browsers })))
     }
 
@@ -951,7 +980,8 @@ impl TelepyMcp {
             account: s.target_username.clone(),
             lan_host: None,
             client: Some(p.client_name.clone()),
-            grant_id: Some(p.grant_id),
+            grant_id: p.credential.grant_id(),
+            token_id: p.credential.token_id(),
             session_ref: Some(s.id.clone()),
         };
         s.touch();

@@ -158,6 +158,8 @@ pub struct NewEvent<'a> {
     pub source: &'a str,
     pub client: Option<&'a str>,
     pub grant_id: Option<i64>,
+    /// 個人 API token（agent 用 token 時）。/ The personal API token, when the agent used one.
+    pub token_id: Option<i64>,
     pub session_ref: Option<&'a str>,
     pub account: &'a str,
     pub lan_host: Option<&'a str>,
@@ -174,8 +176,8 @@ pub struct NewEvent<'a> {
 
 pub async fn create_event(db: &Db, e: &NewEvent<'_>) -> sqlx::Result<EventRow> {
     let id = sqlx::query(&format!(
-        "INSERT INTO {E} (tunnel_id, user_id, username, source, client, grant_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, approver_ids, status, created_at, expires_at, reason) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')"
+        "INSERT INTO {E} (tunnel_id, user_id, username, source, client, grant_id, token_id, session_ref, account, lan_host, command, rule_id, rule_pattern, rule_kind, rule_scope, rule_note, approver_ids, status, created_at, expires_at, reason) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '')"
     ))
     .bind(e.tunnel_id)
     .bind(e.user_id)
@@ -183,6 +185,7 @@ pub async fn create_event(db: &Db, e: &NewEvent<'_>) -> sqlx::Result<EventRow> {
     .bind(e.source)
     .bind(e.client)
     .bind(e.grant_id)
+    .bind(e.token_id)
     .bind(e.session_ref)
     .bind(e.account)
     .bind(e.lan_host)
@@ -247,13 +250,15 @@ pub async fn mark_used(db: &Db, id: i64) -> sqlx::Result<bool> {
 /// agent 再呼叫同一個指令：找同一個 app、同一條隧道與帳號還在等或剛核准（`since` 之後）還沒用掉的那筆。
 /// An agent repeating a command: the pending, or approved-since-`since` and unused, request of the same app,
 /// tunnel and account.
-pub async fn reusable_agent_request(db: &Db, user_id: i64, grant_id: i64, tunnel_id: i64, account: &str, command: &str, since: &str) -> sqlx::Result<Option<EventRow>> {
+#[allow(clippy::too_many_arguments)]
+pub async fn reusable_agent_request(db: &Db, user_id: i64, grant_id: Option<i64>, token_id: Option<i64>, tunnel_id: i64, account: &str, command: &str, since: &str) -> sqlx::Result<Option<EventRow>> {
     sqlx::query_as(&format!(
-        "SELECT {E_COLS} FROM {E} WHERE user_id = ? AND grant_id = ? AND tunnel_id = ? AND account = ? AND command = ? AND source = 'agent' \
+        "SELECT {E_COLS} FROM {E} WHERE user_id = ? AND grant_id IS ? AND token_id IS ? AND tunnel_id = ? AND account = ? AND command = ? AND source = 'agent' \
          AND (status = 'pending' OR (status = 'approved' AND used_at IS NULL AND decided_at >= ?)) ORDER BY id DESC LIMIT 1"
     ))
     .bind(user_id)
     .bind(grant_id)
+    .bind(token_id)
     .bind(tunnel_id)
     .bind(account)
     .bind(command)

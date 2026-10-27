@@ -1,0 +1,1251 @@
+//! `telepy`：Telepy 的命令列。給「在終端機裡」的那些事：看隧道（`ls` / `status`）、直接 `ssh` / `scp` / `sftp` 進裝置
+//! （寫好 ssh config 與 Telepy 的 known_hosts 再交給系統的 OpenSSH）、在一台或一群裝置上跑指令（`exec`，經後端，
+//! 指令規則與稽核照舊）、搬檔案（`cp`）、看 / 結束 session、播錄影、跑工具箱片段，以及 `doctor`。
+//! 登入用瀏覽器的 OAuth（PKCE、loopback）或個人 API token（`--token tpt_…`、`TELEPY_TOKEN`，給 CI）。
+//! `telepy`, Telepy's command line: list tunnels (`ls` / `status`), `ssh` / `scp` / `sftp` straight into devices
+//! (the generated ssh config and Telepy's known_hosts, then the system OpenSSH), run commands on one device or a
+//! group (`exec`, through the backend: command rules and audit apply), copy files (`cp`), see / end sessions, play
+//! recordings, run toolbox snippets, and `doctor`. Sign in with the browser (OAuth + PKCE, loopback) or a personal
+//! API token (`--token tpt_…`, `TELEPY_TOKEN` for CI).
+
+pub mod api;
+pub mod cast;
+pub mod creds;
+pub mod oauth;
+pub mod snippets;
+pub mod sshcfg;
+pub mod table;
+pub mod target;
+
+use std::collections::HashMap;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use clap::{Args, Parser, Subcommand};
+use reqwest::Method;
+use serde_json::{json, Value};
+
+use api::Api;
+use creds::Kind;
+
+/// OAuth 登入預設要的 scope（不含 `network:scan` / `browser:use`；要就用 `--scope`）。
+/// Scopes the browser sign-in asks for by default.
+pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files";
+
+#[derive(Parser, Debug)]
+#[command(name = "telepy", version, about = "Telepy from the command line: tunnels, SSH, commands, files, sessions and recordings.")]
+pub struct Cli {
+    /// Telepy server URL (default: the one you signed in to)
+    #[arg(long, global = true, env = "TELEPY_URL")]
+    pub server: Option<String>,
+    /// Personal API token (tpt_…) instead of the stored sign-in; handy in CI
+    #[arg(long, global = true, env = "TELEPY_TOKEN", hide_env_values = true)]
+    pub token: Option<String>,
+    #[command(subcommand)]
+    pub command: Cmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Cmd {
+    /// Sign in: the browser (OAuth) or a personal API token
+    Login(LoginArgs),
+    /// Forget the stored sign-in (and revoke it on the server when it was a browser sign-in)
+    Logout,
+    /// Who you are signed in as, and with what
+    Whoami(JsonFlag),
+    /// List tunnels with health, latency, accounts and labels
+    Ls(LsArgs),
+    /// One tunnel in detail: health, uptime, device facts and warnings
+    Status(StatusArgs),
+    /// SSH into a device through its tunnel (system ssh with Telepy's generated config)
+    Ssh(SshArgs),
+    /// Copy files with scp; write a remote side as <tunnel>[@account]:<path>
+    Scp(ScpArgs),
+    /// Open sftp to a device
+    Sftp(SftpArgs),
+    /// Install Telepy's ssh config blocks into ~/.ssh/config (like the web's SSH config dialog)
+    Config(ConfigArgs),
+    /// Run a command on one or many devices through Telepy (command rules apply)
+    Exec(ExecArgs),
+    /// Copy a file to or from a device over SFTP; write the remote side as <tunnel>[@account]:<path>
+    Cp(CpArgs),
+    /// Live sessions on your tunnels; `sessions end <id>` ends one
+    Sessions(SessionsArgs),
+    /// Terminal recordings: list or play one in this terminal
+    Recordings(RecordingsArgs),
+    /// Your toolbox snippets
+    Snippets(SnippetsArgs),
+    /// Run a toolbox snippet on a device
+    Run(RunArgs),
+    /// Check the server, the sign-in, its scopes and the local ssh
+    Doctor,
+}
+
+#[derive(Args, Debug)]
+pub struct JsonFlag {
+    /// Machine-readable output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct LoginArgs {
+    /// Telepy server URL, e.g. https://telepy.example.com
+    pub url: String,
+    /// Sign in with a personal API token (Preferences → API tokens) instead of the browser
+    #[arg(long = "with-token", alias = "api-token")]
+    pub with_token: Option<String>,
+    /// Scopes for the browser sign-in (space-separated)
+    #[arg(long, default_value = DEFAULT_SCOPE)]
+    pub scope: String,
+    /// Print the sign-in URL instead of opening a browser
+    #[arg(long)]
+    pub no_browser: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct LsArgs {
+    /// Only tunnels with this label (k or k=v; repeat to require several)
+    #[arg(long)]
+    pub label: Vec<String>,
+    /// Only tunnels in this group of yours
+    #[arg(long)]
+    pub group: Option<String>,
+    /// Only tunnels that are online
+    #[arg(long)]
+    pub online: bool,
+    /// Machine-readable output
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StatusArgs {
+    /// Tunnel name or id
+    pub tunnel: String,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct SshOpts {
+    /// Private key for both hops (adds IdentityFile + IdentitiesOnly)
+    #[arg(short = 'i', long)]
+    pub identity: Option<PathBuf>,
+    /// Extra option for ssh, e.g. --ssh-opt "-L 8080:localhost:80" (repeatable)
+    #[arg(long = "ssh-opt", allow_hyphen_values = true)]
+    pub ssh_opt: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SshArgs {
+    /// <tunnel>[@account] (account@tunnel works too)
+    pub target: String,
+    #[command(flatten)]
+    pub opts: SshOpts,
+    /// Forward a local port: -L 8080:localhost:80
+    #[arg(short = 'L')]
+    pub local: Vec<String>,
+    /// Dynamic SOCKS proxy: -D 1080
+    #[arg(short = 'D')]
+    pub dynamic: Option<String>,
+    /// Command to run instead of a shell (after --)
+    #[arg(last = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ScpArgs {
+    /// Copy directories recursively
+    #[arg(short = 'r')]
+    pub recursive: bool,
+    #[command(flatten)]
+    pub opts: SshOpts,
+    /// Sources and destination; the remote one as <tunnel>[@account]:<path>
+    #[arg(required = true, num_args = 2..)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct SftpArgs {
+    pub target: String,
+    #[command(flatten)]
+    pub opts: SshOpts,
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: ConfigAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Add (or refresh) the blocks for these tunnels in ~/.ssh/config
+    Install {
+        /// Tunnels (names or ids); omit with --all
+        tunnels: Vec<String>,
+        /// Every tunnel you can use
+        #[arg(long)]
+        all: bool,
+        /// Print the blocks instead of writing them
+        #[arg(long)]
+        print: bool,
+        /// Write to this file instead of ~/.ssh/config
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ExecArgs {
+    /// Targets: <tunnel>[@account] (several allowed)
+    pub targets: Vec<String>,
+    /// Every tunnel with this label (k or k=v)
+    #[arg(long)]
+    pub label: Vec<String>,
+    /// Every tunnel in this group of yours
+    #[arg(long)]
+    pub group: Option<String>,
+    /// Account on the device for --label / --group targets (default: each tunnel's default)
+    #[arg(long, short = 'u')]
+    pub user: Option<String>,
+    /// Seconds before the command is killed (max 600)
+    #[arg(long, default_value_t = 60)]
+    pub timeout: u64,
+    /// Keep waiting while a command rule holds the command for approval (up to 10 minutes)
+    #[arg(long)]
+    pub wait_approval: bool,
+    /// Machine-readable output (one object per target)
+    #[arg(long)]
+    pub json: bool,
+    /// The command (after --)
+    #[arg(last = true, required = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct CpArgs {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Args, Debug)]
+pub struct SessionsArgs {
+    #[command(subcommand)]
+    pub action: Option<SessionsAction>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SessionsAction {
+    /// End one live session (they can reconnect; this is not a revoke)
+    End { id: u64 },
+}
+
+#[derive(Args, Debug)]
+pub struct RecordingsArgs {
+    #[command(subcommand)]
+    pub action: RecordingsAction,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RecordingsAction {
+    /// List recordings (newest first)
+    Ls {
+        /// Only this tunnel
+        #[arg(long)]
+        tunnel: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Play a recording in this terminal, with its timing
+    Play {
+        id: i64,
+        /// Playback speed
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Longest pause in seconds (0 = keep every pause)
+        #[arg(long, default_value_t = 2.0)]
+        idle_limit: f64,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct SnippetsArgs {
+    #[command(subcommand)]
+    pub action: Option<SnippetsAction>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SnippetsAction {
+    /// List snippets (yours, the site's, and a tunnel's with --tunnel)
+    Ls {
+        #[arg(long)]
+        tunnel: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct RunArgs {
+    /// Snippet name or id
+    pub snippet: String,
+    /// <tunnel>[@account]
+    pub target: String,
+    /// Variable value: --var name=value (repeatable)
+    #[arg(long = "var")]
+    pub vars: Vec<String>,
+    /// Skip the confirmation snippets marked "ask first" need
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+    #[arg(long, default_value_t = 60)]
+    pub timeout: u64,
+}
+
+// ---------------------------------------------------------------- entry
+
+/// 跑一次指令列；回 process 的結束碼。/ Run one command line; returns the exit code.
+pub fn run(cli: Cli) -> Result<i32> {
+    let server = cli.server.as_deref();
+    let token = cli.token.as_deref();
+    match cli.command {
+        Cmd::Login(a) => login(a, token).map(|_| 0),
+        Cmd::Logout => logout().map(|_| 0),
+        Cmd::Doctor => doctor(server, token),
+        cmd => {
+            let api = Api::open(server, token)?;
+            match cmd {
+                Cmd::Whoami(a) => whoami(&api, a.json).map(|_| 0),
+                Cmd::Ls(a) => ls(&api, &a).map(|_| 0),
+                Cmd::Status(a) => status(&api, &a).map(|_| 0),
+                Cmd::Ssh(a) => ssh(&api, &a),
+                Cmd::Scp(a) => scp(&api, &a),
+                Cmd::Sftp(a) => sftp(&api, &a),
+                Cmd::Config(a) => config(&api, a).map(|_| 0),
+                Cmd::Exec(a) => exec(&api, &a),
+                Cmd::Cp(a) => cp(&api, &a).map(|_| 0),
+                Cmd::Sessions(a) => sessions(&api, &a).map(|_| 0),
+                Cmd::Recordings(a) => recordings(&api, a),
+                Cmd::Snippets(a) => snippet_list(&api, a).map(|_| 0),
+                Cmd::Run(a) => run_snippet(&api, &a),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor => unreachable!(),
+            }
+        }
+    }
+}
+
+fn print_json(v: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(v)?);
+    Ok(())
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn s<'a>(v: &'a Value, k: &str) -> &'a str {
+    v.get(k).and_then(Value::as_str).unwrap_or("")
+}
+
+// ---------------------------------------------------------------- login
+
+fn login(a: LoginArgs, global_token: Option<&str>) -> Result<()> {
+    let server = creds::normalize_server(&a.url);
+    // `telepy login <url> --token tpt_…`（全域的 --token / TELEPY_TOKEN）或 `--with-token`。/ Either spelling.
+    let token = a.with_token.or_else(|| global_token.map(str::to_string)).filter(|t| !t.is_empty());
+    let (kind, secret, client_id) = match token {
+        Some(t) => {
+            if !t.starts_with("tpt_") {
+                bail!("That does not look like a Telepy API token (they start with tpt_).");
+            }
+            (Kind::Token, creds::Secret { access: t, refresh: None, expires_at: None }, None)
+        }
+        None => {
+            let l = oauth::login(&server, &a.scope, a.no_browser)?;
+            (Kind::Oauth, l.secret, Some(l.client_id))
+        }
+    };
+    let probe = Api::with_token(&server, &secret.access)?;
+    let me = probe.get("/api/auth/user/profile").context("check the sign-in")?;
+    let store = creds::save_secret(&server, &secret)?;
+    creds::save_profile(&api::profile_of(kind, &server, client_id, Some(s(&me, "username").to_string()), store))?;
+    eprintln!("Signed in to {server} as {} (credentials in the {}).", s(&me, "username"), if store == "keyring" { "system keyring" } else { "config file" });
+    Ok(())
+}
+
+fn logout() -> Result<()> {
+    let Some(p) = creds::load_profile() else {
+        eprintln!("Not signed in.");
+        return Ok(());
+    };
+    if p.kind == Kind::Oauth {
+        if let (Some(sec), Some(cid)) = (creds::load_secret(&p.server), p.client_id.as_deref()) {
+            if let Some(r) = sec.refresh.as_deref() {
+                // 盡力撤銷（伺服器連不上也照樣忘掉本機的）。/ Best effort; local state is forgotten anyway.
+                let _ = api::http_client()?.post(format!("{}/api/oauth/revoke", p.server)).form(&[("token", r), ("client_id", cid)]).send();
+            }
+        }
+    }
+    creds::forget(&p.server)?;
+    eprintln!("Signed out of {}.", p.server);
+    if p.kind == Kind::Token {
+        eprintln!("The API token itself still works until you revoke it in Telepy (Preferences → API tokens).");
+    }
+    Ok(())
+}
+
+fn whoami(api: &Api, as_json: bool) -> Result<()> {
+    let me = api.get("/api/auth/user/profile")?;
+    if as_json {
+        return print_json(&json!({ "server": api.server, "user": me }));
+    }
+    println!("{} on {}", s(&me, "username"), api.server);
+    if let Some(c) = me.get("credential").filter(|c| c.is_object()) {
+        let scopes: Vec<&str> = c["scopes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        println!("  via {} · {}", s(c, "name"), scopes.join(" "));
+        let tunnels = c["tunnel_ids"].as_array().map(|a| format!("{} tunnel(s)", a.len())).unwrap_or_else(|| "every tunnel".into());
+        println!("  tunnels: {tunnels}");
+        if let Some(e) = c["expires_at"].as_str() {
+            println!("  expires: {e}");
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- tunnels
+
+struct Dashboard {
+    tunnels: Vec<Value>,
+    latency: Value,
+}
+
+fn dashboard(api: &Api) -> Result<Dashboard> {
+    let d = api.get("/api/reverse/server/dashboard")?;
+    Ok(Dashboard { tunnels: d["tunnels"].as_array().cloned().unwrap_or_default(), latency: d["latency"].clone() })
+}
+
+fn name_of(t: &Value) -> &str {
+    s(t, "host_friendly_name")
+}
+
+fn find_tunnel<'a>(tunnels: &'a [Value], name: &str) -> Option<&'a Value> {
+    tunnels.iter().find(|t| name_of(t) == name).or_else(|| name.parse::<i64>().ok().and_then(|id| tunnels.iter().find(|t| t["id"].as_i64() == Some(id))))
+}
+
+/// `<tunnel>[@account]`（或 `account@tunnel`）→ 隧道 + 帳號。/ A target → the tunnel and the account.
+fn resolve(tunnels: &[Value], raw: &str) -> Result<(Value, Option<String>)> {
+    for c in target::candidates(raw) {
+        if let Some(t) = find_tunnel(tunnels, &c.tunnel) {
+            return Ok((t.clone(), c.account));
+        }
+    }
+    let names: Vec<&str> = tunnels.iter().map(name_of).collect();
+    bail!("No tunnel called '{raw}'. You can use: {}", if names.is_empty() { "(none)".to_string() } else { names.join(", ") })
+}
+
+/// 這條隧道上要用哪個帳號（給了就照給的、否則預設、否則唯一的那個）。/ Which device account to use.
+fn account(api: &Api, tunnel: &Value, wanted: Option<&str>) -> Result<(i64, String)> {
+    let id = tunnel["id"].as_i64().unwrap_or_default();
+    let v = api.get(&format!("/api/reverse/server/{id}/usernames"))?;
+    let list: Vec<(i64, String)> = v["usernames"].as_array().map(|a| a.iter().map(|u| (u["id"].as_i64().unwrap_or_default(), s(u, "username").to_string())).collect()).unwrap_or_default();
+    let names = || list.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join(", ");
+    if list.is_empty() {
+        bail!("You have no accounts on '{}'. Ask its owner to allow one.", name_of(tunnel));
+    }
+    if let Some(w) = wanted {
+        return list.iter().find(|(_, n)| n == w).cloned().ok_or_else(|| anyhow!("'{w}' is not an account you can use on '{}'. Allowed: {}", name_of(tunnel), names()));
+    }
+    if let Some(d) = v["default_username_id"].as_i64() {
+        if let Some(hit) = list.iter().find(|(i, _)| *i == d) {
+            return Ok(hit.clone());
+        }
+    }
+    if list.len() == 1 {
+        return Ok(list[0].clone());
+    }
+    bail!("'{}' has several accounts; pick one with {}@<account>: {}", name_of(tunnel), name_of(tunnel), names())
+}
+
+fn label_list(t: &Value) -> Vec<String> {
+    t["labels"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+}
+
+fn group_ids(api: &Api, group: &str) -> Result<Option<i64>> {
+    let v = api.get("/api/reverse/tunnel-groups")?;
+    let groups = v["groups"].as_array().cloned().unwrap_or_default();
+    let hit = groups.iter().find(|g| s(g, "name").eq_ignore_ascii_case(group) || g["id"].as_i64().map(|i| i.to_string()) == Some(group.to_string()));
+    match hit {
+        Some(g) => Ok(g["id"].as_i64()),
+        None => bail!("No tunnel group called '{group}'. Yours: {}", groups.iter().map(|g| s(g, "name")).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+fn group_names(api: &Api) -> HashMap<i64, String> {
+    api.get("/api/reverse/tunnel-groups")
+        .ok()
+        .and_then(|v| v["groups"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|g| Some((g["id"].as_i64()?, s(g, "name").to_string())))
+        .collect()
+}
+
+fn latency_of(d: &Dashboard, t: &Value) -> Option<f64> {
+    d.latency.get(t["reverse_port"].as_i64().unwrap_or_default().to_string()).and_then(Value::as_f64)
+}
+
+fn filter_tunnels(api: &Api, d: &Dashboard, labels: &[String], group: Option<&str>, online: bool) -> Result<Vec<Value>> {
+    let gid = match group {
+        Some(g) => group_ids(api, g)?,
+        None => None,
+    };
+    Ok(d.tunnels
+        .iter()
+        .filter(|t| labels.iter().all(|l| target::label_matches(&label_list(t), l)))
+        .filter(|t| gid.is_none() || t["group_id"].as_i64() == gid)
+        .filter(|t| !online || matches!(s(t, "health"), "online" | "degraded"))
+        .cloned()
+        .collect())
+}
+
+/// 每條隧道我能用的帳號（並行查）。/ The accounts I may use on each tunnel, fetched in parallel.
+fn accounts_of(api: &Api, tunnels: &[Value]) -> Vec<Vec<String>> {
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = tunnels
+            .iter()
+            .map(|t| {
+                let id = t["id"].as_i64().unwrap_or_default();
+                scope.spawn(move || {
+                    api.get(&format!("/api/reverse/server/{id}/usernames"))
+                        .ok()
+                        .and_then(|v| v["usernames"].as_array().map(|a| a.iter().map(|u| s(u, "username").to_string()).collect()))
+                        .unwrap_or_default()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+    })
+}
+
+fn ls(api: &Api, a: &LsArgs) -> Result<()> {
+    let d = dashboard(api)?;
+    let list = filter_tunnels(api, &d, &a.label, a.group.as_deref(), a.online)?;
+    let accounts = accounts_of(api, &list);
+    let groups = group_names(api);
+    if a.json {
+        let out: Vec<Value> = list
+            .iter()
+            .zip(&accounts)
+            .map(|(t, acc)| {
+                json!({
+                    "id": t["id"], "name": name_of(t), "health": t["health"], "latency_ms": latency_of(&d, t),
+                    "accounts": acc, "labels": t["labels"], "group": t["group_id"].as_i64().and_then(|g| groups.get(&g)),
+                    "last_seen_at": t["last_seen_at"], "permission": t["user_permission"], "pinned": t["pinned"],
+                })
+            })
+            .collect();
+        return print_json(&Value::Array(out));
+    }
+    if list.is_empty() {
+        eprintln!("No tunnels{}.", if a.label.is_empty() && a.group.is_none() && !a.online { "" } else { " match" });
+        return Ok(());
+    }
+    let n = now();
+    let rows: Vec<Vec<String>> = list
+        .iter()
+        .zip(&accounts)
+        .map(|(t, acc)| {
+            vec![
+                name_of(t).to_string(),
+                s(t, "health").to_string(),
+                table::ms(latency_of(&d, t)),
+                if acc.is_empty() { "-".into() } else { acc.join(",") },
+                label_list(t).join(" "),
+                t["group_id"].as_i64().and_then(|g| groups.get(&g).cloned()).unwrap_or_default(),
+                if s(t, "health") == "online" || s(t, "health") == "degraded" { "now".into() } else { table::ago(t["last_seen_at"].as_str(), n) },
+            ]
+        })
+        .collect();
+    print!("{}", table::render(&["NAME", "HEALTH", "LATENCY", "ACCOUNTS", "LABELS", "GROUP", "SEEN"], &rows));
+    Ok(())
+}
+
+fn status(api: &Api, a: &StatusArgs) -> Result<()> {
+    let d = dashboard(api)?;
+    let (t, _) = resolve(&d.tunnels, &a.tunnel)?;
+    let id = t["id"].as_i64().unwrap_or_default();
+    let conn = api.get(&format!("/api/reverse/server/{id}/connections")).unwrap_or(Value::Null);
+    let acc = accounts_of(api, std::slice::from_ref(&t)).pop().unwrap_or_default();
+    let facts = t["endpoint"]["facts"].clone();
+    if a.json {
+        return print_json(&json!({ "tunnel": t, "latency_ms": latency_of(&d, &t), "accounts": acc, "connections": conn, "facts": facts }));
+    }
+    let line = |k: &str, v: String| println!("{k:<12} {v}");
+    line("name", name_of(&t).into());
+    line("health", s(&t, "health").into());
+    line("latency", table::ms(latency_of(&d, &t)));
+    line("accounts", if acc.is_empty() { "-".into() } else { acc.join(", ") });
+    line("labels", label_list(&t).join(" "));
+    line("permission", s(&t, "user_permission").into());
+    if let Some(ip) = t["endpoint"]["public_ip"].as_str().or(t["endpoint"]["ip"].as_str()) {
+        line("address", ip.into());
+    }
+    if let Some(h) = t["endpoint"]["hostname"].as_str() {
+        line("hostname", h.into());
+    }
+    let pct = |v: &Value| v.as_f64().map(|x| format!("{:.1}%", x * 100.0)).unwrap_or_else(|| "-".into());
+    if conn.is_object() {
+        line("uptime 24h", pct(&conn["uptime"]["h24"]));
+        line("uptime 7d", pct(&conn["uptime"]["d7"]));
+    }
+    if facts.is_object() {
+        for k in ["os", "kernel", "uptime", "load", "disk", "memory"] {
+            if let Some(v) = facts.get(k).filter(|v| !v.is_null()) {
+                line(k, v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()));
+            }
+        }
+        for w in facts["warnings"].as_array().cloned().unwrap_or_default() {
+            println!("warning      {}", w.as_str().map(str::to_string).or_else(|| w.get("message").and_then(Value::as_str).map(str::to_string)).unwrap_or_else(|| w.to_string()));
+        }
+    }
+    if t["require_step_up"].as_bool() == Some(true) {
+        println!("note         this tunnel asks to confirm it's you; tokens can't open sessions on it");
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- ssh / scp / sftp / config
+
+fn ssh_dir() -> PathBuf {
+    std::env::var_os("TELEPY_SSH_DIR").map(PathBuf::from).unwrap_or_else(|| creds::home_dir().join(".ssh").join("telepy"))
+}
+
+fn server_slug(server: &str) -> String {
+    server.split("://").nth(1).unwrap_or(server).chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect()
+}
+
+/// 寫好這條隧道 + 帳號的 `ssh -F` 檔，回 (檔案, 別名)。/ Write the `ssh -F` file for a tunnel + account.
+fn prepare_ssh(api: &Api, raw: &str, opts: &SshOpts) -> Result<(PathBuf, String)> {
+    let d = dashboard(api)?;
+    let (t, wanted) = resolve(&d.tunnels, raw)?;
+    let (uid, _) = account(api, &t, wanted.as_deref())?;
+    let id = t["id"].as_i64().unwrap_or_default();
+    let cfg = api.get(&format!("/tunnels/server/config/{id}?username_id={uid}"))?;
+    let stanzas = sshcfg::parse_stanzas(s(&cfg, "config"));
+    let alias = sshcfg::device_alias(&stanzas).ok_or_else(|| anyhow!("the server sent no device stanza"))?.to_string();
+    let dir = ssh_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let kh = dir.join(format!("known_hosts-{}", server_slug(&api.server)));
+    std::fs::write(&kh, s(&cfg, "known_hosts"))?;
+    let file = dir.join(format!("{}.conf", alias));
+    let identity = opts.identity.as_ref().map(|p| sshcfg::config_path(p));
+    let text = sshcfg::standalone(&stanzas, &sshcfg::config_path(&file), &sshcfg::config_path(&kh), identity.as_deref());
+    std::fs::write(&file, text)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok((file, alias))
+}
+
+fn extra_opts(opts: &SshOpts) -> Vec<String> {
+    opts.ssh_opt.iter().flat_map(|o| o.split_whitespace().map(str::to_string).collect::<Vec<_>>()).collect()
+}
+
+/// 交給 OpenSSH：Unix 直接換成那個 process，Windows 等它結束。/ Hand over to OpenSSH (exec on Unix, wait on Windows).
+fn hand_over(mut cmd: Command) -> Result<i32> {
+    #[cfg(unix)]
+    {
+        if std::env::var_os("TELEPY_NO_EXEC").is_none() {
+            use std::os::unix::process::CommandExt;
+            let err = cmd.exec();
+            bail!("cannot run {:?}: {err} (is OpenSSH installed?)", cmd.get_program());
+        }
+    }
+    let status = cmd.status().with_context(|| format!("cannot run {:?} (is OpenSSH installed?)", cmd.get_program()))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+fn ssh(api: &Api, a: &SshArgs) -> Result<i32> {
+    let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
+    let mut cmd = Command::new("ssh");
+    cmd.arg("-F").arg(&file);
+    for l in &a.local {
+        cmd.arg("-L").arg(l);
+    }
+    if let Some(dd) = &a.dynamic {
+        cmd.arg("-D").arg(dd);
+    }
+    cmd.args(extra_opts(&a.opts)).arg(&alias).args(&a.command);
+    hand_over(cmd)
+}
+
+fn scp(api: &Api, a: &ScpArgs) -> Result<i32> {
+    let remote: Vec<(usize, String, String)> = a.paths.iter().enumerate().filter_map(|(i, p)| target::parse_remote(p).map(|(t, path)| (i, t, path))).collect();
+    let Some((_, tgt, _)) = remote.first() else { bail!("Write the remote side as <tunnel>[@account]:<path>.") };
+    if remote.iter().any(|(_, t, _)| t != tgt) {
+        bail!("All remote paths must be on the same tunnel and account.");
+    }
+    let (file, alias) = prepare_ssh(api, tgt, &a.opts)?;
+    let mut cmd = Command::new("scp");
+    cmd.arg("-F").arg(&file).args(extra_opts(&a.opts));
+    if a.recursive {
+        cmd.arg("-r");
+    }
+    for (i, p) in a.paths.iter().enumerate() {
+        match remote.iter().find(|(j, _, _)| *j == i) {
+            Some((_, _, path)) => cmd.arg(format!("{alias}:{path}")),
+            None => cmd.arg(p),
+        };
+    }
+    hand_over(cmd)
+}
+
+fn sftp(api: &Api, a: &SftpArgs) -> Result<i32> {
+    let (file, alias) = prepare_ssh(api, &a.target, &a.opts)?;
+    let mut cmd = Command::new("sftp");
+    cmd.arg("-F").arg(&file).args(extra_opts(&a.opts)).arg(&alias);
+    hand_over(cmd)
+}
+
+fn config(api: &Api, a: ConfigArgs) -> Result<()> {
+    let ConfigAction::Install { tunnels, all, print, file } = a.action;
+    let d = dashboard(api)?;
+    let picked: Vec<Value> = if all {
+        d.tunnels.clone()
+    } else if tunnels.is_empty() {
+        bail!("Name the tunnels to install, or pass --all.");
+    } else {
+        tunnels.iter().map(|n| resolve(&d.tunnels, n).map(|(t, _)| t)).collect::<Result<_>>()?
+    };
+    let mut stanzas: Vec<sshcfg::Stanza> = Vec::new();
+    let mut known: Vec<String> = Vec::new();
+    for t in &picked {
+        let id = t["id"].as_i64().unwrap_or_default();
+        let cfg = api.get(&format!("/tunnels/server/config/{id}"))?;
+        for st in sshcfg::parse_stanzas(s(&cfg, "config")) {
+            if !stanzas.iter().any(|x| x.alias == st.alias) {
+                stanzas.push(st);
+            }
+        }
+        for l in s(&cfg, "known_hosts").lines().filter(|l| !l.trim().is_empty()) {
+            if !known.iter().any(|k| k == l) {
+                known.push(l.to_string());
+            }
+        }
+    }
+    if stanzas.iter().all(|s| s.alias == "telepy-ssh-server") {
+        bail!("None of these tunnels has an account you can use.");
+    }
+    if print {
+        print!("{}", sshcfg::marked_blocks(&stanzas));
+        return Ok(());
+    }
+    let ssh_home = creds::home_dir().join(".ssh");
+    let target = file.unwrap_or_else(|| ssh_home.join("config"));
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    // 生成的 config 指到 ~/.ssh/telepy_known_hosts：先存它（合併，不覆蓋別的伺服器的行）。
+    // The generated config points at ~/.ssh/telepy_known_hosts: save it first (merged with other servers' lines).
+    if !known.is_empty() {
+        let kh = target.parent().unwrap_or(&ssh_home).join("telepy_known_hosts");
+        let mut lines: Vec<String> = std::fs::read_to_string(&kh).unwrap_or_default().lines().map(str::to_string).collect();
+        for k in known {
+            if !lines.contains(&k) {
+                lines.push(k);
+            }
+        }
+        std::fs::write(&kh, lines.join("\n") + "\n")?;
+    }
+    let existing = std::fs::read_to_string(&target).unwrap_or_default();
+    if !existing.is_empty() {
+        std::fs::write(target.with_extension("bak"), &existing)?;
+    }
+    std::fs::write(&target, sshcfg::install(&existing, &stanzas))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let aliases: Vec<&str> = stanzas.iter().map(|s| s.alias.as_str()).filter(|a| *a != "telepy-ssh-server").collect();
+    eprintln!("Wrote {} host(s) to {}: {}. Connect with: ssh {}", aliases.len(), target.display(), aliases.join(", "), aliases.first().unwrap_or(&""));
+    Ok(())
+}
+
+// ---------------------------------------------------------------- exec
+
+#[derive(Debug, Clone)]
+struct Job {
+    tunnel: Value,
+    account: Option<String>,
+}
+
+#[derive(Debug)]
+struct Outcome {
+    name: String,
+    account: String,
+    result: Result<Value, String>,
+}
+
+/// 指令列的參數接成一行（一個參數就照原樣，像 ssh）。/ Join the command words into one line, as ssh does.
+pub fn command_line(words: &[String]) -> String {
+    words.join(" ")
+}
+
+/// 在一條隧道上開 session、跑、關。/ Open a session on one tunnel, run, close.
+fn run_on(api: &Api, job: &Job, command: &str, timeout: u64, wait: bool) -> Outcome {
+    let name = name_of(&job.tunnel).to_string();
+    let id = job.tunnel["id"].as_i64().unwrap_or_default();
+    let fail = |account: String, e: anyhow::Error| Outcome { name: name.clone(), account, result: Err(format!("{e:#}")) };
+    let account = match account(api, &job.tunnel, job.account.as_deref()) {
+        Ok((_, a)) => a,
+        Err(e) => return fail(job.account.clone().unwrap_or_default(), e),
+    };
+    let session = match api.json(Method::POST, "/api/ai/sessions", Some(&json!({ "tunnel_id": id, "username": account }))) {
+        Ok(v) => v,
+        Err(e) => return fail(account, e),
+    };
+    let sid = s(&session, "id").to_string();
+    let body = json!({ "command": command, "timeout_s": timeout.min(600) });
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let result = loop {
+        match api.json_timeout(Method::POST, &format!("/api/ai/sessions/{sid}/exec"), Some(&body), Some(Duration::from_secs(timeout.min(600) + 120))) {
+            Ok(v) => break Ok(v),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                // 指令規則要核准：`--wait-approval` 時每 10 秒再問一次（核准一次只能跑一次、10 分鐘內）。
+                // Held for approval: with --wait-approval ask again every 10 s (an approval is good for one run within 10 minutes).
+                if wait && msg.contains("is waiting in Telepy") && std::time::Instant::now() < deadline {
+                    eprintln!("[{name}] waiting for approval…");
+                    std::thread::sleep(Duration::from_secs(10));
+                    continue;
+                }
+                break Err(msg);
+            }
+        }
+    };
+    let _ = api.json(Method::DELETE, &format!("/api/ai/sessions/{sid}"), None);
+    Outcome { name, account, result }
+}
+
+fn exec_jobs(api: &Api, targets: &[String], labels: &[String], group: Option<&str>, user: Option<&str>) -> Result<Vec<Job>> {
+    let d = dashboard(api)?;
+    let mut jobs: Vec<Job> = Vec::new();
+    for raw in targets {
+        let (t, acc) = resolve(&d.tunnels, raw)?;
+        jobs.push(Job { tunnel: t, account: acc.or_else(|| user.map(str::to_string)) });
+    }
+    if !labels.is_empty() || group.is_some() {
+        let more = filter_tunnels(api, &d, labels, group, false)?;
+        if more.is_empty() {
+            bail!("No tunnels match those labels / that group.");
+        }
+        for t in more {
+            if !jobs.iter().any(|j| j.tunnel["id"] == t["id"]) {
+                jobs.push(Job { tunnel: t, account: user.map(str::to_string) });
+            }
+        }
+    }
+    if jobs.is_empty() {
+        bail!("Name a tunnel, or pick tunnels with --label / --group.");
+    }
+    Ok(jobs)
+}
+
+fn exec(api: &Api, a: &ExecArgs) -> Result<i32> {
+    let jobs = exec_jobs(api, &a.targets, &a.label, a.group.as_deref(), a.user.as_deref())?;
+    let command = command_line(&a.command);
+    run_jobs(api, &jobs, &command, a.timeout, a.wait_approval, a.json)
+}
+
+/// 每個目標一個 thread；一個目標就照原樣印輸出，多個就每行加 `名稱 | ` 前綴。結束碼：一個目標 = 它的、多個 = 有任何失敗就 1。
+/// One thread per target; a single target prints its output as is, several get a `name | ` prefix per line.
+fn run_jobs(api: &Api, jobs: &[Job], command: &str, timeout: u64, wait: bool, as_json: bool) -> Result<i32> {
+    let single = jobs.len() == 1;
+    let stdout = std::sync::Mutex::new(());
+    let outcomes: Vec<Outcome> = std::thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .map(|job| {
+                let stdout = &stdout;
+                scope.spawn(move || {
+                    let o = run_on(api, job, command, timeout, wait);
+                    if !as_json {
+                        let _g = stdout.lock().unwrap();
+                        print_outcome(&o, single);
+                    }
+                    o
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().expect("exec thread")).collect()
+    });
+    let code_of = |o: &Outcome| match &o.result {
+        Ok(v) => v["exit_code"].as_i64().unwrap_or(if v["timed_out"].as_bool() == Some(true) { 124 } else { 1 }) as i32,
+        Err(_) => 255,
+    };
+    if as_json {
+        let out: Vec<Value> = outcomes
+            .iter()
+            .map(|o| match &o.result {
+                Ok(v) => json!({ "tunnel": o.name, "account": o.account, "ok": code_of(o) == 0, "result": v }),
+                Err(e) => json!({ "tunnel": o.name, "account": o.account, "ok": false, "error": e }),
+            })
+            .collect();
+        print_json(&Value::Array(out))?;
+    }
+    if single {
+        return Ok(code_of(&outcomes[0]));
+    }
+    let failed = outcomes.iter().filter(|o| code_of(o) != 0).count();
+    if !as_json {
+        eprintln!("{} ok, {failed} failed", outcomes.len() - failed);
+    }
+    Ok(if failed > 0 { 1 } else { 0 })
+}
+
+fn print_outcome(o: &Outcome, single: bool) {
+    let prefix = if single { String::new() } else { format!("{} | ", o.name) };
+    let emit = |text: &str, err: bool| {
+        if text.is_empty() {
+            return;
+        }
+        if single {
+            if err {
+                eprint!("{text}");
+            } else {
+                print!("{text}");
+            }
+            return;
+        }
+        for line in text.lines() {
+            if err {
+                eprintln!("{prefix}{line}");
+            } else {
+                println!("{prefix}{line}");
+            }
+        }
+    };
+    match &o.result {
+        Ok(v) => {
+            emit(s(v, "stdout"), false);
+            emit(s(v, "stderr"), true);
+            if v["truncated"].as_bool() == Some(true) {
+                eprintln!("{prefix}(output truncated; the start and the end are kept)");
+            }
+            if v["timed_out"].as_bool() == Some(true) {
+                eprintln!("{prefix}(timed out and killed)");
+            }
+            if !single {
+                let code = v["exit_code"].as_i64().map(|c| c.to_string()).unwrap_or_else(|| "-".into());
+                eprintln!("{prefix}exit {code}");
+            }
+        }
+        Err(e) => eprintln!("{prefix}error: {e}"),
+    }
+    let _ = std::io::stdout().flush();
+}
+
+// ---------------------------------------------------------------- cp
+
+fn cp(api: &Api, a: &CpArgs) -> Result<()> {
+    let from = target::parse_remote(&a.from);
+    let to = target::parse_remote(&a.to);
+    let d = dashboard(api)?;
+    match (from, to) {
+        (Some((tgt, path)), None) => {
+            let (t, acc) = resolve(&d.tunnels, &tgt)?;
+            let (_, user) = account(api, &t, acc.as_deref())?;
+            let id = t["id"].as_i64().unwrap_or_default();
+            let url = format!("/api/sftp/download/{id}/{}?path={}", urlencoding::encode(&user), urlencoding::encode(&path));
+            let res = api.send(Method::GET, &url, None, Some(Duration::from_secs(3600)))?;
+            if res.status().as_u16() >= 400 {
+                return Err(api::read(res).unwrap_err());
+            }
+            let zip = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|c| c.contains("zip"));
+            let base = Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "download".into());
+            let mut dest = PathBuf::from(&a.to);
+            if dest.is_dir() {
+                dest = dest.join(if zip { format!("{base}.zip") } else { base });
+            }
+            let bytes = res.bytes()?;
+            std::fs::write(&dest, &bytes).with_context(|| format!("write {}", dest.display()))?;
+            eprintln!("{} → {} ({} bytes{})", a.from, dest.display(), bytes.len(), if zip { ", zipped directory" } else { "" });
+        }
+        (None, Some((tgt, path))) => {
+            let (t, acc) = resolve(&d.tunnels, &tgt)?;
+            let (_, user) = account(api, &t, acc.as_deref())?;
+            let id = t["id"].as_i64().unwrap_or_default();
+            let src = Path::new(&a.from);
+            if src.is_dir() {
+                bail!("{} is a directory; telepy cp copies files (use `telepy scp -r` for directories).", src.display());
+            }
+            let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "upload".into());
+            let part = reqwest::blocking::multipart::Part::file(src).with_context(|| format!("read {}", src.display()))?.file_name(name);
+            let form = reqwest::blocking::multipart::Form::new().part("file", part);
+            let url = format!("/api/sftp/upload/{id}/{}?destination_path={}", urlencoding::encode(&user), urlencoding::encode(if path.is_empty() { "." } else { &path }));
+            let res = api.request(Method::POST, &url)?.timeout(Duration::from_secs(3600)).multipart(form).send()?;
+            let v = api::read(res)?;
+            eprintln!("{} → {} {}", a.from, tgt, v.get("path").and_then(Value::as_str).unwrap_or(&path));
+        }
+        (Some(_), Some(_)) => bail!("Copy between a device and this computer; device-to-device isn't supported."),
+        (None, None) => bail!("Write the device side as <tunnel>[@account]:<path>."),
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------- sessions / recordings / snippets
+
+fn sessions(api: &Api, a: &SessionsArgs) -> Result<()> {
+    if let Some(SessionsAction::End { id }) = a.action {
+        api.json(Method::DELETE, &format!("/api/sessions/{id}"), None)?;
+        eprintln!("Ended session {id}.");
+        return Ok(());
+    }
+    let v = api.get("/api/sessions")?;
+    let list = v["sessions"].as_array().cloned().unwrap_or_default();
+    if a.json {
+        return print_json(&Value::Array(list));
+    }
+    if list.is_empty() {
+        eprintln!("No live sessions.");
+        return Ok(());
+    }
+    let n = now();
+    let rows: Vec<Vec<String>> = list
+        .iter()
+        .map(|e| {
+            vec![
+                e["id"].to_string(),
+                s(&e["tunnel"], "name").to_string(),
+                s(&e["user"], "username").to_string(),
+                s(e, "kind").to_string(),
+                s(e, "ip").to_string(),
+                table::ago(e["since"].as_str(), n),
+                s(e, "client").to_string(),
+            ]
+        })
+        .collect();
+    print!("{}", table::render(&["ID", "TUNNEL", "USER", "KIND", "IP", "SINCE", "CLIENT"], &rows));
+    Ok(())
+}
+
+fn recordings(api: &Api, a: RecordingsArgs) -> Result<i32> {
+    match a.action {
+        RecordingsAction::Ls { tunnel, json: as_json } => {
+            let mut path = "/api/recordings".to_string();
+            if let Some(tn) = tunnel {
+                let d = dashboard(api)?;
+                let (t, _) = resolve(&d.tunnels, &tn)?;
+                path = format!("{path}?tunnel_id={}", t["id"]);
+            }
+            let v = api.get(&path)?;
+            let list = v["recordings"].as_array().cloned().unwrap_or_default();
+            if as_json {
+                print_json(&Value::Array(list))?;
+                return Ok(0);
+            }
+            if list.is_empty() {
+                eprintln!("No recordings.");
+                return Ok(0);
+            }
+            let n = now();
+            let rows: Vec<Vec<String>> = list
+                .iter()
+                .map(|r| {
+                    let secs = r["duration_ms"].as_i64().unwrap_or(0) / 1000;
+                    vec![
+                        r["id"].to_string(),
+                        s(&r["tunnel"], "name").to_string(),
+                        s(&r["user"], "username").to_string(),
+                        s(r, "os_user").to_string(),
+                        table::ago(r["started_at"].as_str(), n),
+                        if r["live"].as_bool() == Some(true) { "recording".into() } else { format!("{}m{:02}s", secs / 60, secs % 60) },
+                    ]
+                })
+                .collect();
+            print!("{}", table::render(&["ID", "TUNNEL", "USER", "ACCOUNT", "STARTED", "LENGTH"], &rows));
+            Ok(0)
+        }
+        RecordingsAction::Play { id, speed, idle_limit } => {
+            let res = api.send(Method::GET, &format!("/api/recordings/{id}/cast"), None, None)?;
+            if res.status().as_u16() >= 400 {
+                return Err(api::read(res).unwrap_err());
+            }
+            let c = cast::parse(&res.text()?).map_err(|e| anyhow!(e))?;
+            if std::io::stdout().is_terminal() {
+                eprintln!("Playing recording {id} ({}x{}); Ctrl+C stops.", c.width, c.height);
+            }
+            let mut out = std::io::stdout();
+            for ((_, data), wait) in c.events.iter().zip(cast::schedule(&c.events, speed, idle_limit)) {
+                if wait > 0.0 {
+                    std::thread::sleep(Duration::from_secs_f64(wait));
+                }
+                out.write_all(data.as_bytes())?;
+                out.flush()?;
+            }
+            Ok(0)
+        }
+    }
+}
+
+fn snippet_list(api: &Api, a: SnippetsArgs) -> Result<()> {
+    let (tunnel, as_json) = match a.action {
+        Some(SnippetsAction::Ls { tunnel, json }) => (tunnel, json),
+        None => (None, false),
+    };
+    let v = snippets_for(api, tunnel.as_deref())?;
+    if as_json {
+        return print_json(&Value::Array(v));
+    }
+    if v.is_empty() {
+        eprintln!("No snippets.");
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = v.iter().map(|x| vec![x["id"].to_string(), s(x, "scope").into(), s(x, "name").into(), s(x, "command").replace('\n', " ⏎ ")]).collect();
+    print!("{}", table::render(&["ID", "SCOPE", "NAME", "COMMAND"], &rows));
+    Ok(())
+}
+
+fn snippets_for(api: &Api, tunnel: Option<&str>) -> Result<Vec<Value>> {
+    let mut path = "/api/snippets".to_string();
+    if let Some(tn) = tunnel {
+        let d = dashboard(api)?;
+        let (t, _) = resolve(&d.tunnels, tn)?;
+        path = format!("{path}?tunnel_id={}", t["id"]);
+    }
+    Ok(api.get(&path)?["snippets"].as_array().cloned().unwrap_or_default())
+}
+
+fn run_snippet(api: &Api, a: &RunArgs) -> Result<i32> {
+    let d = dashboard(api)?;
+    let (t, acc) = resolve(&d.tunnels, &a.target)?;
+    let list = snippets_for(api, Some(&t["id"].to_string()))?;
+    let snip = list
+        .iter()
+        .find(|x| s(x, "name") == a.snippet || x["id"].as_i64().map(|i| i.to_string()) == Some(a.snippet.clone()))
+        .ok_or_else(|| anyhow!("No snippet called '{}'. See `telepy snippets ls --tunnel {}`.", a.snippet, name_of(&t)))?;
+    let mut vars: HashMap<String, String> = HashMap::new();
+    for v in snip["variables"].as_array().cloned().unwrap_or_default() {
+        if !s(&v, "default").is_empty() {
+            vars.insert(s(&v, "name").to_string(), s(&v, "default").to_string());
+        }
+    }
+    for kv in &a.vars {
+        let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("Write variables as --var name=value."))?;
+        vars.insert(k.to_string(), v.to_string());
+    }
+    let missing: Vec<&str> = snip["variables"].as_array().map(|a| a.iter().map(|v| s(v, "name")).filter(|n| !vars.contains_key(*n)).collect()).unwrap_or_default();
+    if !missing.is_empty() {
+        bail!("This snippet needs: {}. Pass them with --var name=value.", missing.join(", "));
+    }
+    let command = snippets::substitute(s(snip, "command"), &vars);
+    if snip["confirm"].as_bool() == Some(true) && !a.yes {
+        eprint!("Run on {}?\n  {command}\n[y/N] ", name_of(&t));
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            eprintln!("Not run.");
+            return Ok(1);
+        }
+    }
+    let _ = api.json(Method::POST, &format!("/api/snippets/{}/used", snip["id"]), None);
+    run_jobs(api, &[Job { tunnel: t, account: acc }], &command, a.timeout, false, false)
+}
+
+// ---------------------------------------------------------------- doctor
+
+fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
+    let mut bad = 0;
+    let mut check = |ok: bool, what: &str, detail: String| {
+        println!("{} {what}{}", if ok { "✓" } else { "✗" }, if detail.is_empty() { String::new() } else { format!(": {detail}") });
+        if !ok {
+            bad += 1;
+        }
+    };
+    let profile = creds::load_profile();
+    let server_url = server.map(creds::normalize_server).or_else(|| profile.as_ref().map(|p| p.server.clone()));
+    match &server_url {
+        None => check(false, "server", "not signed in; run `telepy login <url>`".into()),
+        Some(url) => {
+            let reachable = api::http_client().ok().and_then(|c| c.get(format!("{url}/api/auth/setup-status")).timeout(Duration::from_secs(10)).send().ok()).map(|r| r.status().is_success()).unwrap_or(false);
+            check(reachable, "server", url.clone());
+            match Api::open(server, token) {
+                Err(e) => check(false, "sign-in", format!("{e:#}")),
+                Ok(api) => match api.get("/api/auth/user/profile") {
+                    Err(e) => check(false, "sign-in", format!("{e:#}")),
+                    Ok(me) => {
+                        let how = if token.is_some() { "token from the environment".to_string() } else { profile.as_ref().map(|p| format!("{:?} in the {}", p.kind, p.store.clone().unwrap_or_default())).unwrap_or_default() };
+                        check(true, "sign-in", format!("{} ({how})", s(&me, "username")));
+                        if let Some(c) = me.get("credential").filter(|c| c.is_object()) {
+                            let scopes: Vec<&str> = c["scopes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                            check(!scopes.is_empty(), "scopes", scopes.join(" "));
+                            for (need, what) in [("tunnels:read", "ls / status / ssh"), ("ssh:exec", "exec / run / recordings"), ("ssh:files", "cp")] {
+                                if !scopes.contains(&need) {
+                                    println!("  (without {need}: {what} won't work)");
+                                }
+                            }
+                            if let Some(e) = c["expires_at"].as_str() {
+                                let left = table::parse_iso(e).map(|t| (t - now()) / 86_400).unwrap_or(0);
+                                check(left > 0, "expiry", format!("{e} ({left} day(s) left)"));
+                            }
+                        }
+                    }
+                },
+            }
+        }
+    }
+    for bin in ["ssh", "scp", "sftp"] {
+        let found = Command::new(bin).arg("-V").output().is_ok();
+        check(found, bin, if found { "found".into() } else { format!("not found on PATH (needed for `telepy {bin}`)") });
+    }
+    let dir = ssh_dir();
+    let writable = std::fs::create_dir_all(&dir).is_ok();
+    check(writable, "ssh config dir", dir.display().to_string());
+    Ok(if bad > 0 { 1 } else { 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_names_ids_and_both_account_orders() {
+        let tunnels = vec![json!({"id": 3, "host_friendly_name": "box"}), json!({"id": 9, "host_friendly_name": "nas"})];
+        assert_eq!(resolve(&tunnels, "box").unwrap().0["id"], 3);
+        assert_eq!(resolve(&tunnels, "9").unwrap().0["id"], 9);
+        let (t, a) = resolve(&tunnels, "box@pi").unwrap();
+        assert_eq!((t["id"].as_i64(), a.as_deref()), (Some(3), Some("pi")));
+        let (t, a) = resolve(&tunnels, "pi@nas").unwrap();
+        assert_eq!((t["id"].as_i64(), a.as_deref()), (Some(9), Some("pi")));
+        assert!(resolve(&tunnels, "nope").unwrap_err().to_string().contains("box, nas"));
+    }
+
+    #[test]
+    fn command_lines_and_slugs() {
+        assert_eq!(command_line(&["uname".into(), "-a".into()]), "uname -a");
+        assert_eq!(server_slug("https://t.example:8443"), "t.example_8443");
+    }
+
+    #[test]
+    fn clap_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+        let c = Cli::try_parse_from(["telepy", "exec", "box@pi", "--", "uname", "-a"]).unwrap();
+        match c.command {
+            Cmd::Exec(e) => assert_eq!((e.targets, e.command), (vec!["box@pi".to_string()], vec!["uname".to_string(), "-a".to_string()])),
+            other => panic!("{other:?}"),
+        }
+        let c = Cli::try_parse_from(["telepy", "exec", "--label", "env=prod", "--", "uptime"]).unwrap();
+        assert!(matches!(c.command, Cmd::Exec(ref e) if e.label == ["env=prod"]));
+    }
+}

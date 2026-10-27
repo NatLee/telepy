@@ -11,6 +11,7 @@ use axum::Json;
 use serde_json::{json, Value};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
 use crate::db::{self, tunnels::Tunnel, users::User};
 use crate::error::{ApiError, ApiResult};
@@ -81,7 +82,7 @@ fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64,
 
 /// 現在的 session（依開始時間）。/ Live sessions, oldest first.
 #[utoipa::path(get, path = "/api/sessions", tag = "Sessions", security(("bearer" = [])), responses((status = 200, body = super::schemas::LiveSessions)))]
-async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
+async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
     let managed = managed(&state, &me).await?;
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::new();
@@ -90,7 +91,7 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     // 「看」要能用終端機。/ Watching needs the terminal feature.
     let can_watch = state.features.allowed(&me, crate::features::Feature::Terminal).await.unwrap_or(false);
     for e in all {
-        if !may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)) {
+        if !may_end(e.user_id, me.id, managed.contains_key(&e.tunnel_id)) || !d.allows(e.tunnel_id) {
             continue;
         }
         if !names.contains_key(&e.tunnel_id) {

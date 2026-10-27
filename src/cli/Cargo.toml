@@ -1,0 +1,53 @@
+[package]
+name = "telepy-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "telepy: command-line client for Telepy (tunnels, SSH, exec, files, sessions, recordings)"
+license = "AGPL-3.0-only"
+
+# 跟伺服器分開的 crate：伺服器的 Docker build 只看 src/backend-api，這裡改什麼都不影響它。
+# A crate of its own: the server's Docker build only sees src/backend-api, so nothing here affects it.
+
+[[bin]]
+name = "telepy"
+path = "src/main.rs"
+
+[lib]
+name = "telepy_cli"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2"
+urlencoding = "2"
+
+# 憑證存在系統的金鑰圈（macOS Keychain、Windows 認證管理員）；Linux 用 0600 的檔案（無頭伺服器 / CI 常沒有 Secret Service）。
+# Credentials go to the OS keyring on macOS / Windows; Linux uses a 0600 file (headless boxes and CI rarely run a Secret Service).
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+[dev-dependencies]
+# 整合測試：在測試裡起真的伺服器（同一個 lab：gateway + 假裝置 sshd），再跑編好的 `telepy`。
+# Integration test: the real server (the same SSH lab) in-process, then the built `telepy` binary against it.
+telepy-server = { path = "../backend-api" }
+axum = { version = "0.8", features = ["ws", "multipart", "macros"] }
+futures = "0.3"
+http-body-util = "0.1"
+russh = "0.64"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

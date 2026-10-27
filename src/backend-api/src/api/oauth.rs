@@ -771,7 +771,7 @@ async fn grant_details(State(state): State<AppState>, AuthUser(user): AuthUser, 
         "public": client.is_public(),
         "registered_at": db_to_iso(&client.created_at, tz),
     });
-    out["sessions"] = Value::Array(state.ai.list().iter().filter(|s| s.grant_id == grant.id).map(|s| super::ai::session_json(s, tz)).collect());
+    out["sessions"] = Value::Array(state.ai.list().iter().filter(|s| s.credential == crate::auth::mcp::Credential::Grant(grant.id)).map(|s| super::ai::session_json(s, tz)).collect());
     out["stats"] = json!({ "calls": calls, "failed": failed, "last_call_at": last_call.as_deref().map(|t| db_to_iso(t, tz)) });
     out["activity"] = Value::Array(recent.iter().map(|e| super::ai::activity_json(e, tz)).collect());
     Ok(Json(out))

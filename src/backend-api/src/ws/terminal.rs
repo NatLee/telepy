@@ -1003,6 +1003,7 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
         lan_host: lan_label,
         client: None,
         grant_id: None,
+        token_id: None,
         session_ref: Some(presence.id().to_string()),
     };
     let id = crate::util::random_alnum(24);

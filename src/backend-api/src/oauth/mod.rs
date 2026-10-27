@@ -227,6 +227,12 @@ pub async fn run_cleanup(db: crate::db::Db) {
             Ok(n) => tracing::info!(rows = n, "OAuth cleanup"),
             Err(e) => tracing::warn!(error = %e, "OAuth cleanup failed"),
         }
+        // 個人 API token：撤銷 / 到期超過 30 天的。/ Personal API tokens dead for over 30 days.
+        match crate::db::api_tokens::cleanup(&db).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(rows = n, "API token cleanup"),
+            Err(e) => tracing::warn!(error = %e, "API token cleanup failed"),
+        }
     }
 }
 

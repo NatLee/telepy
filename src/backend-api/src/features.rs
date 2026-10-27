@@ -42,11 +42,12 @@ pub enum Feature {
     CommandRulesManage,
     WebhooksPersonal,
     McpConnect,
+    ApiTokens,
     ApiDocs,
 }
 
 impl Feature {
-    pub const ALL: [Feature; 14] = [
+    pub const ALL: [Feature; 15] = [
         Feature::TunnelsCreate,
         Feature::TunnelsShare,
         Feature::Terminal,
@@ -60,6 +61,7 @@ impl Feature {
         Feature::CommandRulesManage,
         Feature::WebhooksPersonal,
         Feature::McpConnect,
+        Feature::ApiTokens,
         Feature::ApiDocs,
     ];
 
@@ -78,6 +80,7 @@ impl Feature {
             Feature::CommandRulesManage => "command_rules.manage",
             Feature::WebhooksPersonal => "webhooks.personal",
             Feature::McpConnect => "mcp.connect",
+            Feature::ApiTokens => "api.tokens",
             Feature::ApiDocs => "api.docs",
         }
     }
@@ -103,6 +106,7 @@ impl Feature {
             Feature::CommandRulesManage => "Command rules",
             Feature::WebhooksPersonal => "Personal webhooks",
             Feature::McpConnect => "MCP apps",
+            Feature::ApiTokens => "API tokens",
             Feature::ApiDocs => "API docs",
         }
     }
@@ -188,6 +192,11 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
         (_, ["api", "webhooks", ..]) => WebhooksPersonal,
 
         (_, ["api", "oauth", "authorize"]) => McpConnect,
+        // 建立個人 API token（列出、撤銷不擋：收回權限永遠可以做）。/ Creating API tokens (listing / revoking stay open).
+        ("POST", ["api", "auth", "tokens"]) => ApiTokens,
+        // REST 版的 agent session：跑指令 = 終端機。/ REST exec sessions: running commands = the terminal.
+        ("POST", ["api", "ai", "sessions"]) => Terminal,
+        ("POST", ["api", "ai", "sessions", _, "exec"]) => Terminal,
 
         ("GET", ["api", "openapi.json"]) => ApiDocs,
         _ => return None,
@@ -528,6 +537,12 @@ mod tests {
             ("GET", "/api/oauth/authorize", Some(McpConnect)),
             ("POST", "/api/oauth/authorize", Some(McpConnect)),
             ("GET", "/api/oauth/grants", None),
+            ("POST", "/api/auth/tokens", Some(ApiTokens)),
+            ("GET", "/api/auth/tokens", None),
+            ("DELETE", "/api/auth/tokens/3", None),
+            ("POST", "/api/ai/sessions", Some(Terminal)),
+            ("POST", "/api/ai/sessions/ais_1/exec", Some(Terminal)),
+            ("DELETE", "/api/ai/sessions/ais_1", None),
             ("GET", "/api/openapi.json", Some(ApiDocs)),
             ("GET", "/api/auth/user/profile", None),
             ("GET", "/api/reverse/server/dashboard", None),
