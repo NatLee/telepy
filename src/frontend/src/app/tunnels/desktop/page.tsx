@@ -17,6 +17,7 @@ import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, FolderOp
 import { Switch } from "@/components/ui/switch";
 import { RustDeskFiles } from "@/components/desktop/RustDeskFiles";
 import { hasAudioDecoder, streamRows } from "@/lib/desktopStreams";
+import { IDLE_ACTIVITY, type FileActivity } from "@/lib/rustdeskFileOps";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -134,6 +135,8 @@ function DesktopPageInner() {
     const [audioPlaying, setAudioPlaying] = useState(false);
     const [filesFor, setFilesFor] = useState<string | null>(null);
     const [filesOpenNow, setFilesOpenNow] = useState(false);
+    // 「檔案」面板裡各種動作的狀態（資料流圖用）。/ The Files panel's actions, for the streams diagram.
+    const [fileActivity, setFileActivity] = useState<FileActivity>(IDLE_ACTIVITY);
     const [now, setNow] = useState(() => Date.now());
     // 偵測到的螢幕配置。重算的時機：螢幕清單或畫面大小變了、選單打開時、偵測完兩秒後
     // （macOS 的排列靠畫面裡的黑色區域判斷，要等畫面畫出來）。計算讀 canvas，所以在事件 / 計時器裡做，不在 render 裡。
@@ -205,8 +208,8 @@ function DesktopPageInner() {
         clipboardLimited,
         savedLogin: !!state.savedLogin,
         stats,
-        streams: streamRows({ mode: form.protocol, clipboard, clipboardLimit: session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit, sound: soundOn, muted, soundDecoder: decoder, fileTransfer, filesOpen: filesOpen && filesOpenNow }),
-    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, session, rdSession, state.clipboard.limit, soundOn, muted, decoder, fileTransfer, filesOpen, filesOpenNow]);
+        streams: streamRows({ mode: form.protocol, clipboard, clipboardLimit: session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit, sound: soundOn, muted, soundDecoder: decoder, fileTransfer, filesOpen: filesOpen && filesOpenNow, fileActivity }),
+    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, session, rdSession, state.clipboard.limit, soundOn, muted, decoder, fileTransfer, filesOpen, filesOpenNow, fileActivity]);
 
     const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -534,7 +537,7 @@ function DesktopPageInner() {
                     </div>
                     {filesOpen && (
                         <div className="h-96 shrink-0 border-t border-border lg:h-auto lg:w-80 lg:border-l lg:border-t-0">
-                            <RustDeskFiles parent={rdSession} password={rdPassword} onClose={() => setFilesFor(null)} onStateChange={setFilesOpenNow} />
+                            <RustDeskFiles parent={rdSession} password={rdPassword} onClose={() => setFilesFor(null)} onStateChange={setFilesOpenNow} onActivity={setFileActivity} deviceName={tunnel?.name} />
                         </div>
                     )}
                     </div>

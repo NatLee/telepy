@@ -123,6 +123,15 @@ export function crumbsFor(path: string, windows: boolean): Crumb[] {
 // ---- transfers --------------------------------------------------------------
 
 export type JobKind = "download" | "upload";
+/** 整個資料夾下載成 zip 的進度：先數、（太大時）問、下載、收尾。/ A whole-folder zip download's progress. */
+export interface FolderJob {
+    phase: "listing" | "confirm" | "running" | "finishing";
+    files: number;
+    bytes: number;
+    /** 正在寫第幾個檔案（1 起算）與名稱。/ The file being written (1-based) and its name. */
+    current: number;
+    currentName: string;
+}
 export type JobState = "running" | "confirm" | "done" | "failed" | "cancelled";
 
 export interface Job {
@@ -138,6 +147,8 @@ export interface Job {
     error: string | null;
     /** 等使用者決定要不要覆蓋（上傳到已存在的檔案）。/ Waiting for an overwrite decision. */
     confirm?: { fileNum: number; identical: boolean };
+    /** 整個資料夾（zip）。/ A whole folder as a zip. */
+    folder?: FolderJob;
 }
 
 export type JobEvent =
