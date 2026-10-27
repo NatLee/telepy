@@ -7,6 +7,7 @@
  * shells. Closing a tab (× / close all) ends its shell explicitly.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 
 export const MAX_LAN_TERMINALS = 6;
 const DOCK_KEY = "telepy.lanDock";
@@ -26,6 +27,8 @@ export interface LanTerminalSession {
     login: string;
     /** 裝置那一跳的帳號。/ The device hop's account. */
     deviceUser: string;
+    /** 區網那一跳怎麼登入。/ How the LAN hop logs in. */
+    auth: LanAuth;
     status: LanTerminalStatus;
     /** 每次重連 +1，讓終端機元件重開連線（全新 shell）。/ Bumped on reconnect so the terminal reopens (a fresh shell). */
     attempt: number;
@@ -49,7 +52,7 @@ function loadDock(): LanTerminalSession[] {
         return v
             .filter((s) => s && typeof s.key === "number" && typeof s.tunnelId === "number" && typeof s.hostId === "number" && typeof s.shellId === "string")
             .slice(0, MAX_LAN_TERMINALS)
-            .map((s) => ({ ...s, status: "connecting" as const, attempt: 0 }));
+            .map((s) => ({ ...s, auth: s.auth ?? TELEPY_AUTH, status: "connecting" as const, attempt: 0 }));
     } catch {
         return [];
     }
@@ -107,8 +110,8 @@ export function useLanTerminals() {
     const duplicate = useCallback((key: number): boolean => {
         const src = sessions.find((s) => s.key === key);
         if (!src) return false;
-        const { tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser } = src;
-        return open({ tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser });
+        const { tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser, auth } = src;
+        return open({ tunnelId, tunnelName, reversePort, hostId, hostName, login, deviceUser, auth });
     }, [sessions, open]);
 
     const close = useCallback((key: number) => {

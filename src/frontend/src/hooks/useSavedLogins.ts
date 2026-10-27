@@ -1,20 +1,23 @@
 "use client";
 
 /**
- * 憑證庫（遠端桌面的登入）：列出自己存的（可依桌面篩選）、新增、刪除。密碼只送出、從不取回 —— 例外是 RustDesk：
- * `…/rustdesk/start` 帶 `credential_id` 時後端解開後交給瀏覽器裡的核心（挑戰回應在瀏覽器做）。
- * The credential vault: list your saved desktop logins (optionally for one desktop), add, delete.
- * Passwords are only ever sent, never read back.
+ * 憑證庫（遠端桌面的登入，以及區網主機 SSH 那一跳的登入）：列出自己存的（可依目標篩選）、新增、刪除。密碼 / 私鑰只送出、
+ * 從不取回 —— 例外是 RustDesk：`…/rustdesk/start` 帶 `credential_id` 時後端解開後交給瀏覽器裡的核心（挑戰回應在瀏覽器做）。
+ * The credential vault: your saved desktop logins and LAN-host ssh logins (optionally for one target), add, delete.
+ * Passwords and keys are only ever sent, never read back.
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import type { DesktopMode } from "@/lib/desktop";
 
+/** 憑證的協定：桌面的三種，或區網主機的 ssh。/ A saved login's protocol: the three desktop ones, or ssh for a LAN host. */
+export type SavedProtocol = DesktopMode | "ssh";
+
 export interface SavedLogin {
     id: number;
     label: string;
-    /** rdp / vnc（guacd）或 rustdesk（瀏覽器裡的核心）。/ rdp / vnc (guacd) or rustdesk (the in-browser core). */
-    protocol: DesktopMode;
+    /** rdp / vnc（guacd）、rustdesk（瀏覽器裡的核心）或 ssh（區網主機那一跳）。/ rdp / vnc (guacd), rustdesk (the in-browser core) or ssh (the LAN hop). */
+    protocol: SavedProtocol;
     tunnel_id: number;
     tunnel_name: string | null;
     lan_host_id: number | null;
@@ -23,6 +26,8 @@ export interface SavedLogin {
     login: string;
     domain: string;
     has_password: boolean;
+    /** ssh：存了私鑰。/ ssh: a private key is stored. */
+    has_key?: boolean;
     created_at: string;
     last_used_at: string | null;
 }
@@ -30,18 +35,20 @@ export interface SavedLogin {
 export interface SavedLoginFilter {
     tunnelId: number;
     hostId: number | null;
-    protocol: DesktopMode;
+    protocol: SavedProtocol;
 }
 
 export interface NewSavedLogin {
     label: string;
-    protocol: DesktopMode;
+    protocol: SavedProtocol;
     tunnel_id: number;
     lan_host_id: number | null;
     port: number | null;
     login: string;
     domain: string;
     password: string;
+    /** ssh：未加密的私鑰（OpenSSH / PEM）。/ ssh: an unencrypted private key. */
+    private_key?: string;
 }
 
 /** 任一處新增／刪除後通知其他 hook 重新載入（偏好設定刪了，桌面頁的選單也要跟著更新）。

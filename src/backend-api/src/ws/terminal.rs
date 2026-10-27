@@ -31,7 +31,7 @@ use crate::db::{self, users::User};
 use crate::permissions::{self, Permission};
 use crate::presence::{Entry, Kind, PresenceGuard};
 use crate::session_audit::{ConsoleKind, ConsoleSession};
-use crate::ssh::process::{lan_terminal_args, spawn_in_pty, valid_login, PtyChild};
+use crate::ssh::process::{lan_terminal_args, prepare_lan_auth, spawn_in_pty, valid_login, LanAuth, LanAuthFiles, PtyChild};
 use crate::ssh::terminal::{Output, PtySession, WindowSize};
 use crate::state::AppState;
 use crate::terminal_detach::{self, Backlog, Refusal, ShellKey, Takeover};
@@ -199,6 +199,8 @@ pub struct Shell {
     id: String,
     user_id: i64,
     pty: Pty,
+    /// 區網那一跳的金鑰 / 密碼檔（暫存目錄），shell 結束才刪。/ The LAN hop's key / password temp files, removed when the shell ends.
+    _lan_auth: Option<LanAuthFiles>,
     guard: TerminalGuard,
     hold: Option<Hold>,
     decoder: Utf8Decoder,
@@ -657,6 +659,8 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
     let mut lan_audit: Option<String> = None;
     // 錄影用的區網主機標示（`login@address`）。/ The LAN host label for the recording.
     let mut lan_label: Option<String> = None;
+    // 區網那一跳的金鑰 / 密碼檔：shell 結束才刪。/ The hop's key / password files, kept until the shell ends.
+    let mut lan_auth_files: Option<LanAuthFiles> = None;
     // 區網主機（經裝置跳過去）：主機要屬於這條隧道，帳號要是安全字元。/ A LAN host behind the device.
     let pty = match lan_raw {
         None => {
@@ -690,7 +694,26 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
                 tracing::error!(user = %user.username, lan_host = host.id, "LAN terminal without a valid login name");
                 return Err(4003);
             };
-            lan_audit = Some(format!("Web terminal by {} to {}@{}:{} through {}@device", user.username, login, host.address, host.ssh_port, username));
+            // 怎麼登入那台機器：Telepy 的金鑰（預設）、直接問密碼、或憑證庫的 ssh 登入（要是自己的、綁這台主機的；不行 = 4010）。
+            // How to log in there: Telepy's keys (default), a password prompt, or a saved ssh login (own, bound to this host; else 4010).
+            let (lan_auth, auth_note) = match msg.get("lan_auth").and_then(|v| v.as_str()).unwrap_or("telepy") {
+                "prompt" => (LanAuth::Prompt, "password prompt".to_string()),
+                "credential" => {
+                    let cid = auth::id_field(msg, "lan_credential_id").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+                    match crate::api::credentials::unseal_for(state, user.id, cid, tunnel_id, Some(host.id), "ssh").await {
+                        Ok((row, plain)) => {
+                            let secret = crate::api::credentials::SshSecret::parse(&plain);
+                            (LanAuth::Credential { private_key: secret.private_key, password: secret.password }, format!("saved login '{}'", row.label))
+                        }
+                        Err(e) => {
+                            tracing::warn!(user = %user.username, lan_host = host.id, credential = cid, error = ?e, "LAN terminal: saved login unusable");
+                            return Err(4010);
+                        }
+                    }
+                }
+                _ => (LanAuth::Telepy, "Telepy's key".to_string()),
+            };
+            lan_audit = Some(format!("Web terminal by {} to {}@{}:{} through {}@device with {}", user.username, login, host.address, host.ssh_port, username, auth_note));
             lan_label = Some(format!("{login}@{}", host.address));
             if device_offline(state, reverse_port) {
                 return Err(4005);
@@ -708,7 +731,26 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
                     return Err(4005);
                 }
             };
-            match spawn_in_pty(&state.config.ssh_binary, &lan_terminal_args(&login, &host.address, local_port)) {
+            // 這條隧道自己的服務金鑰（OpenSSH 格式）給 Telepy 模式用。/ The tunnel's own key (OpenSSH text) for the Telepy mode.
+            let tunnel_key = match lan_auth {
+                LanAuth::Telepy => crate::ssh::tunnel_keys::private(state, tunnel_id).await.and_then(|k| k.to_openssh(russh::keys::ssh_key::LineEnding::LF).ok()).map(|z| z.to_string()),
+                _ => None,
+            };
+            let files = match prepare_lan_auth(&lan_auth, tunnel_key.as_deref(), Some(state.config.ssh_identity.as_path())) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!(error = %e, "Error preparing the LAN hop's credentials");
+                    return Err(4005);
+                }
+            };
+            let mut args = lan_terminal_args(&login, &host.address, local_port);
+            // 認證參數放在目的地（最後一個參數）前面。/ Auth options go before the destination (the last argument).
+            let dest = args.pop().unwrap_or_default();
+            args.extend(files.args.iter().cloned());
+            args.push(dest);
+            let spawned = spawn_in_pty(&state.config.ssh_binary, &args, &files.envs);
+            lan_auth_files = Some(files);
+            match spawned {
                 Ok(p) => Pty::Process(p),
                 Err(e) => {
                     tracing::error!(error = %e, "Error starting SSH connection");
@@ -756,6 +798,7 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
         id,
         user_id: user.id,
         pty,
+        _lan_auth: lan_auth_files,
         // 指令規則：輸出餵進畫面模型，Enter 先比對規則。/ Command rules: output feeds a screen model, Enter is checked first.
         guard: TerminalGuard::new(24, 80),
         hold: None,

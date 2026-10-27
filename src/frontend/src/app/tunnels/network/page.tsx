@@ -71,7 +71,7 @@ function NetworkInner() {
         requestAnimationFrame(() => panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     };
     const onOpenTerminal = (req: OpenTerminalRequest) =>
-        terms.open({ tunnelId: req.tunnel.id, tunnelName: req.tunnel.name, reversePort: req.tunnel.reverse_port, hostId: req.host.id, hostName: hostName(req.host), login: req.login, deviceUser: req.deviceUser });
+        terms.open({ tunnelId: req.tunnel.id, tunnelName: req.tunnel.name, reversePort: req.tunnel.reverse_port, hostId: req.host.id, hostName: hostName(req.host), login: req.login, deviceUser: req.deviceUser, auth: req.auth });
     // 開著終端機時，頁面底部與右側面板都要留出 dock 的高度（dock 浮在內容上方；放大時是整個視窗的覆蓋層，不用留）。
     // With terminals open the page bottom and the sticky panel leave room for the floating dock (not when maximised: that is an overlay).
     const dockOffset = terms.sessions.length && terms.size !== "max" ? `calc(${DOCK_BAR} + ${DOCK_HEIGHT[terms.size]} + ${DOCK_GAP} + 0.5rem)` : "0px";

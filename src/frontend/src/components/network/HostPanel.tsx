@@ -18,6 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Segmented } from "@/components/ui/segmented";
 import { LanCommands } from "@/components/network/LanCommands";
 import { sessionLabel } from "@/components/network/TerminalDock";
+import { LanAuthSelect } from "@/components/tunnels/LanAuthField";
+import { TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { desktopPorts } from "@/lib/desktop";
@@ -43,6 +45,8 @@ export interface OpenTerminalRequest {
     host: LanHost;
     login: string;
     deviceUser: string;
+    /** 那一跳怎麼登入。/ How the hop logs in. */
+    auth: LanAuth;
 }
 
 interface Props {
@@ -62,6 +66,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
     const { t, locale } = useI18n();
     const [tab, setTab] = useState<Tab>("terminal");
     const [login, setLogin] = useState(host.username ?? "");
+    const [auth, setAuth] = useState<LanAuth>(TELEPY_AUTH);
     const [deviceUser, setDeviceUser] = useState<string | null>(tunnel.default_username ?? tunnel.usernames[0] ?? null);
     // 載入結果帶著它是哪個帳號的，換帳號時舊的就不顯示。/ The loaded target remembers its account.
     const [loaded, setLoaded] = useState<{ user: string | null; target: ConnectTarget } | null>(null);
@@ -89,7 +94,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
 
     const openTerminal = () => {
         if (!deviceUser) return;
-        const ok = onOpenTerminal({ tunnel, host, login: cleanLogin, deviceUser });
+        const ok = onOpenTerminal({ tunnel, host, login: cleanLogin, deviceUser, auth });
         setLimitHit(!ok);
     };
 
@@ -166,6 +171,10 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                         {host.last_seen && !hasSsh(host) && <Callout tone="warning">{t("network.noSshSeen", { port: host.ssh_port })}</Callout>}
                         {noDeviceUser && <Callout tone="warning">{t("network.noDeviceUser")}</Callout>}
                         {loginFields}
+                        <div className="space-y-1.5">
+                            <Label htmlFor="lan-auth">{t("lanAuth.label")}</Label>
+                            <LanAuthSelect id="lan-auth" tunnelId={tunnel.id} hostId={host.id} hostName={name} login={cleanLogin} value={auth} onChange={setAuth} />
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                             <Button onClick={openTerminal} disabled={!online || !loginOk || noDeviceUser} title={!online ? t("network.deviceOffline") : undefined}>
                                 <Terminal size={16} /> {t("network.openTerminal")}
@@ -178,7 +187,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                             {!online && <span className="text-sm text-muted-foreground">{t("network.deviceOffline")}</span>}
                         </div>
                         {limitHit && <Callout tone="warning">{t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}</Callout>}
-                        <p className="text-xs text-muted-foreground">{t("network.terminalHint")}</p>
+                        <p className="text-xs text-muted-foreground">{t("network.terminalHintFloat")}</p>
                         {mine.length > 0 && (
                             <div className="space-y-1.5">
                                 <p className="text-sm text-foreground">{t("network.openSessions")}</p>

@@ -34,6 +34,7 @@ import {
 } from "@/lib/terminalDetach";
 import { endKeptShell } from "@/lib/terminalShellSocket";
 import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
+import { lanAuthFrame, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
@@ -56,6 +57,8 @@ export interface TerminalLanTarget {
     hostId: string;
     /** 覆寫主機記錄的預設帳號。/ Overrides the host's default login. */
     username?: string | null;
+    /** 那一跳怎麼登入（預設 Telepy 的金鑰）。/ How that hop logs in (default: Telepy's key). */
+    auth?: LanAuth;
 }
 
 /** 區網主機資訊（顯示用）。/ LAN host details for display. */
@@ -122,6 +125,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
     const lanHostId = lan?.hostId ?? null;
     const lanUsername = lan?.username ?? null;
+    const lanAuth = lan?.auth ?? TELEPY_AUTH;
+    const lanAuthKey = `${lanAuth.kind}:${lanAuth.kind === "credential" ? lanAuth.id : ""}`;
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
     const xtermRef = useRef<any>(null);
@@ -318,7 +323,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 // 敏感隧道的 step-up（這個分頁有才帶）。/ This tab's step-up token for sensitive tunnels.
                 step_up: stepUpToken() ?? undefined,
                 // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
-                ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
+                ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}), ...lanAuthFrame(lanAuth) } : {}),
                 // 接回保留的 shell：帶看過的位置，只補沒看到的。/ Resume the kept shell from what this xterm has seen.
                 ...(s.shellId ? { resume: s.shellId, ...(s.offset !== null ? { offset: s.offset } : {}) } : {}),
             }));
@@ -412,6 +417,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             } else if (lanHostId && code === 4003) {
                 setPermissionDenied(t("terminal.lanLoginInvalidCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.lanLoginInvalidXterm")}\x1b[0m\r\n`);
+            } else if (lanHostId && code === 4010) {
+                setPermissionDenied(t("terminal.savedLoginCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.savedLoginXterm")}\x1b[0m\r\n`);
             } else if (code === 4004) {
                 setPermissionDenied(t("terminal.permissionDeniedCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.permissionDeniedXterm")}\x1b[0m\r\n`);
@@ -472,7 +480,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 s.term.write(`\r\n\x1b[31m${t("terminal.disconnectedCodeXterm", { code })}\x1b[0m\r\n`);
             }
         };
-    }, [serverId, lanHostId, lanUsername, updateTab, fitAndResize, t]);
+    // lanAuthKey 代表 lanAuth 的內容（物件每次 render 可能是新的）。/ lanAuthKey stands in for lanAuth's content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [serverId, lanHostId, lanUsername, lanAuthKey, updateTab, fitAndResize, t]);
 
     /** shell frame：記住 id / 位置 / 保留時間；接回成功就收起提示列。/ Remember the id, position and grace; a resume clears the banner. */
     function onShellFrame(s: Session, f: ShellFrame) {
