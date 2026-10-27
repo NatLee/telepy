@@ -160,6 +160,7 @@ function NetworkInner() {
                 onCloseAll={terms.closeAll}
                 onReconnect={terms.reconnect}
                 onStatus={terms.setStatus}
+                onShell={terms.setShell}
                 setSize={terms.setSize}
             />
             <ScanDialog tunnel={scanTunnel} onClose={() => setScanFor(null)} startScan={actions.startScan} />

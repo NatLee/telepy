@@ -14,6 +14,10 @@ import { Terminal as TerminalIcon, X, Server } from "lucide-react";
 import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
 import { TerminalContent } from "@/components/tunnels/TerminalContent";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { ReconnectBanner } from "@/components/tunnels/ReconnectBanner";
+import { ReconnectWhy } from "@/components/tunnels/ReconnectWhy";
+import { useTerminalDetach } from "@/hooks/useTerminalDetach";
+import { detachLayers } from "@/lib/terminalDetach";
 import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
 import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
 import { TerminalConnectPage } from "@/components/tunnels/TerminalConnectPanel";
@@ -76,7 +80,11 @@ function TerminalSession({ serverId }: { serverId: string }) {
         recorded,
         appearance,
         commandBanner,
+        reconnecting,
+        detachPolicy,
     } = state;
+    const detachPref = useTerminalDetach();
+    const [whyOpen, setWhyOpen] = useState(false);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     // 作用中分頁的階段 → 路徑圖。/ The active tab's phase → the path diagram.
@@ -93,7 +101,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
         recorded,
     };
     const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}`;
-    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner } = actions;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow } = actions;
 
     // Set initial tab from URL param (mount only)
     useEffect(() => {
@@ -194,10 +202,25 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     serviceKeys={serviceKeys}
                     onReconnect={reconnect}
                     palette={appearance.resolved.scheme.theme}
-                    commandBanner={commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                    commandBanner={(commandBanner || reconnecting) && (
+                        <div className="space-y-2">
+                            {/* 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */}
+                            {reconnecting && (
+                                <ReconnectBanner state={reconnecting} onWhy={() => setWhyOpen(true)} onRetry={reconnectNow} />
+                            )}
+                            {commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                        </div>
+                    )}
                 />
             </div>
 
+            <ReconnectWhy
+                isOpen={whyOpen}
+                onClose={() => setWhyOpen(false)}
+                reconnecting={reconnecting}
+                ended={activeTab?.status === "closed"}
+                layers={detachLayers(detachPref.choice, detachPref.limit, detachPolicy)}
+            />
             <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
             <TerminalInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={flowCtx} />
         </div>

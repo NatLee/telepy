@@ -42,6 +42,11 @@ function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
                         <span>{label}</span>
                         {s.client && <span className="text-muted-foreground">· {s.client}</span>}
                         {!!s.shells && <Chip>{t("sessions.shells", { count: s.shells })}</Chip>}
+                        {s.detached && (
+                            <Chip tone="warning" title={new Date(s.detached.ends_at).toLocaleString(locale)}>
+                                {t("sessions.detached", { time: formatRelativeTime(s.detached.ends_at, locale) })}
+                            </Chip>
+                        )}
                         {s.mine && <Chip>{t("sessions.you")}</Chip>}
                     </p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">

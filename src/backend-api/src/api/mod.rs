@@ -18,6 +18,7 @@ pub mod mfa;
 pub mod notify;
 pub mod oauth;
 pub mod recordings;
+pub mod terminal_detach;
 pub mod remote_browser;
 pub mod reverse_keys;
 pub mod rustdesk;

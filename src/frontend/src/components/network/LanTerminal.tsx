@@ -19,7 +19,12 @@ import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import type { TranslationKey } from "@/locales/en";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
-import type { LanTerminalSession, LanTerminalStatus } from "@/hooks/useLanTerminals";
+import { lanShellEnders, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
+import { canResume, detachLayers, isDropCode, parseShellFrame, reconnectDelay, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE, type DetachGrace } from "@/lib/terminalDetach";
+import { endKeptShell } from "@/lib/terminalShellSocket";
+import { ReconnectBanner, type ReconnectState } from "@/components/tunnels/ReconnectBanner";
+import { ReconnectWhy } from "@/components/tunnels/ReconnectWhy";
+import { useTerminalDetach } from "@/hooks/useTerminalDetach";
 
 /** 關閉碼 → 寫進終端機的說明。/ Close code → the line written into the terminal. */
 const CLOSE_MESSAGES: Record<number, TranslationKey> = {
@@ -34,15 +39,23 @@ interface Props {
     session: LanTerminalSession;
     visible: boolean;
     onStatus: (key: number, status: LanTerminalStatus) => void;
+    onShell?: (key: number, shellId: string | null) => void;
 }
 
-export function LanTerminal({ session, visible, onStatus }: Props) {
+export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     const hostRef = useRef<HTMLDivElement | null>(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const termRef = useRef<{ term: any; fit: any } | null>(null);
     const wsRef = useRef<WebSocket | null>(null);
     /** 指令規則的提示列。/ The command-rule banner. */
     const [banner, setBanner] = useState<HoldBanner | null>(null);
+    /** 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */
+    const [reconnect, setReconnect] = useState<ReconnectState | null>(null);
+    const retryNow = useRef<() => void>(() => {});
+    const detachPref = useTerminalDetach();
+    const [whyOpen, setWhyOpen] = useState(false);
+    /** 接回時伺服器說的保留時間是誰決定的（說明圖用）。/ Who decided the grace, for the explainer. */
+    const [decidedBy, setDecidedBy] = useState<string | null>(null);
     const { key, tunnelId, hostId, login, deviceUser, attempt } = session;
     const { resolved, ready: appearanceReady } = useTerminalAppearance(String(tunnelId));
     // xterm 是 async 建的,要讀建立當下最新的外觀。/ The xterm is created asynchronously; read the latest look.
@@ -102,14 +115,42 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
         };
     }, [sendResize, appearanceReady]);
 
-    // 連線（attempt 變了就重連）。/ (Re)connect whenever `attempt` changes.
+    // 連線（attempt 變了就重連，全新 shell）。斷線時 shell 還留著就帶 resume 接回（lib/terminalDetach）。
+    // (Re)connect whenever `attempt` changes (a fresh shell). A drop with the shell kept resumes it (lib/terminalDetach).
+    const initialShell = useRef(session.shellId ?? null);
     useEffect(() => {
         let closedByUs = false;
         let authRetried = false;
         let ping: ReturnType<typeof setInterval> | null = null;
         let waitTerm: ReturnType<typeof setInterval> | null = null;
+        let retry: ReturnType<typeof setTimeout> | null = null;
+        // 重新整理後的第一次連線接回存著的 shell；之後的 attempt 是全新的。/ Only the first connect re-attaches a stored shell.
+        let shellId: string | null = attempt === 0 ? initialShell.current : null;
+        let offset: number | null = null;
+        let grace: DetachGrace | null = null;
+        let droppedAt: number | null = null;
+        let tries = 0;
+        const auth = { server_id: String(tunnelId), username: deviceUser, lan_host_id: String(hostId), ...(login ? { lan_username: login } : {}) };
 
         const write = (line: string) => termRef.current?.term.write(line);
+        const forget = () => {
+            shellId = null;
+            offset = null;
+            grace = null;
+            droppedAt = null;
+            setReconnect(null);
+            onShell?.(key, null);
+        };
+        // 關分頁：明確結束這個 shell。/ Closing the tab ends the shell explicitly.
+        lanShellEnders.set(key, () => {
+            const ws = wsRef.current;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try { ws.send(JSON.stringify({ action: "end" })); } catch { /* noop */ }
+            } else if (shellId) {
+                endKeptShell(auth, shellId);
+            }
+            shellId = null;
+        });
         const connect = () => {
             const ws = new WebSocket(`${getWsOrigin()}/ws/terminal/`);
             ws.binaryType = "arraybuffer";
@@ -118,13 +159,11 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                 ws.send(JSON.stringify({
                     type: "auth",
                     token: localStorage.getItem("accessToken"),
-                    server_id: String(tunnelId),
-                    username: deviceUser,
-                    lan_host_id: String(hostId),
-                    ...(login ? { lan_username: login } : {}),
+                    ...auth,
                     step_up: stepUpToken() ?? undefined,
+                    ...(shellId ? { resume: shellId, ...(offset !== null ? { offset } : {}) } : {}),
                 }));
-                write(`\x1b[90m${translate("terminal.connectingToServer")}\x1b[0m\r\n`);
+                if (!shellId) write(`\x1b[90m${translate("terminal.connectingToServer")}\x1b[0m\r\n`);
                 onStatus(key, "connected");
                 sendResize();
                 ping = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ action: "ping" })), 5000);
@@ -132,12 +171,28 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
             ws.onmessage = (ev) => {
                 if (typeof ev.data === "string") {
                     authRetried = false;
+                    if (offset !== null) offset += ev.data.length;
                     write(ev.data);
                     return;
                 }
-                // 二進位 frame：pong 或指令規則通知。/ Binary frames: pongs or command-rule notices.
+                // 二進位 frame：pong、指令規則通知或 shell frame。/ Binary frames: pongs, command notices or the shell frame.
                 const frame = parseTerminalFrame(ev.data as ArrayBuffer);
                 if (frame && frame !== "pong") setBanner((prev) => nextBanner(prev, frame));
+                else if (!frame) {
+                    const sh = parseShellFrame(new TextDecoder().decode(ev.data as ArrayBuffer));
+                    if (!sh) return;
+                    if (sh.reset) {
+                        try { termRef.current?.term.reset(); } catch { /* noop */ }
+                    }
+                    shellId = sh.id;
+                    offset = sh.offset;
+                    grace = sh.detach;
+                    setDecidedBy(sh.detach.by);
+                    droppedAt = null;
+                    tries = 0;
+                    setReconnect(null);
+                    onShell?.(key, sh.detach.secs > 0 ? sh.id : null);
+                }
             };
             ws.onclose = (ev) => {
                 if (ping) clearInterval(ping);
@@ -145,6 +200,36 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                 setBanner((prev) => (prev?.state === "pending" ? null : prev));
                 if (wsRef.current === ws) wsRef.current = null;
                 if (closedByUs) return;
+                // 斷線、shell 還留著：重新連線中，退避後接回。/ A drop with the shell kept: reconnect after a backoff.
+                const now = Date.now();
+                if (shellId && canResume(ev.code, grace, droppedAt ?? now, now)) {
+                    droppedAt ??= now;
+                    if (grace) setReconnect({ droppedAt, grace });
+                    onStatus(key, "connecting");
+                    retry = setTimeout(() => {
+                        retry = null;
+                        if (!closedByUs) connect();
+                    }, reconnectDelay(tries++));
+                    return;
+                }
+                if (ev.code === SHELL_GONE_CLOSE_CODE) {
+                    forget();
+                    write(`\r\n\x1b[33m${translate("detach.goneXterm")}\x1b[0m\r\n`);
+                    connect();
+                    return;
+                }
+                const wasReconnecting = droppedAt !== null;
+                if (ev.code !== 4001 && ev.code !== STEP_UP_CLOSE_CODE) forget();
+                if (ev.code === SHELL_TAKEN_CLOSE_CODE) {
+                    write(`\r\n\x1b[33m${translate("detach.takenXterm")}\x1b[0m\r\n`);
+                    onStatus(key, "closed");
+                    return;
+                }
+                if (wasReconnecting && isDropCode(ev.code)) {
+                    write(`\r\n\x1b[31m${translate("detach.expiredXterm")}\x1b[0m\r\n`);
+                    onStatus(key, "closed");
+                    return;
+                }
                 if (ev.code === 4001 && !authRetried) {
                     authRetried = true;
                     refreshAccessToken().then((ok) => {
@@ -182,6 +267,13 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
                 onStatus(key, "closed");
             };
         };
+        retryNow.current = () => {
+            if (droppedAt === null || !retry) return;
+            clearTimeout(retry);
+            retry = null;
+            tries = 0;
+            connect();
+        };
 
         // 等 xterm 建好再連（第一次掛載時是非同步的）。/ Wait for the xterm before connecting.
         if (termRef.current) connect();
@@ -195,13 +287,16 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
 
         return () => {
             closedByUs = true;
+            lanShellEnders.delete(key);
+            retryNow.current = () => {};
             if (waitTerm) clearInterval(waitTerm);
             if (ping) clearInterval(ping);
-            // 關掉 WS = 後端結束那個 shell。/ Closing the socket ends the shell on the server.
+            if (retry) clearTimeout(retry);
+            // 卸載（關分頁之外：離開頁面）不算結束：shell 照保留時間留著。/ Unmounting (leaving the page) is not an end.
             try { wsRef.current?.close(); } catch { /* noop */ }
             wsRef.current = null;
         };
-    }, [attempt, key, tunnelId, hostId, login, deviceUser, onStatus, sendResize]);
+    }, [attempt, key, tunnelId, hostId, login, deviceUser, onStatus, onShell, sendResize]);
 
     // 顯示時 fit + 聚焦（桌機）。/ Refit (and focus on desktop) when shown.
     useEffect(() => {
@@ -222,13 +317,23 @@ export function LanTerminal({ session, visible, onStatus }: Props) {
     return (
         <div className="absolute inset-0" style={{ display: visible ? "block" : "none" }}>
             <div ref={hostRef} className="absolute inset-0 p-1.5" style={{ background: resolved.scheme.theme.background }} />
-            {banner && (
+            {(banner || reconnect) && (
                 <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex justify-end">
-                    <div className="pointer-events-auto w-full max-w-md">
-                        <CommandHoldBanner banner={banner} onWithdraw={withdraw} onDismiss={dismiss} />
+                    <div className="pointer-events-auto w-full max-w-md space-y-2">
+                        {reconnect && (
+                            <ReconnectBanner state={reconnect} onWhy={() => setWhyOpen(true)} onRetry={() => retryNow.current()} />
+                        )}
+                        {banner && <CommandHoldBanner banner={banner} onWithdraw={withdraw} onDismiss={dismiss} />}
                     </div>
                 </div>
             )}
+            <ReconnectWhy
+                isOpen={whyOpen}
+                onClose={() => setWhyOpen(false)}
+                reconnecting={reconnect}
+                ended={session.status === "closed"}
+                layers={detachLayers(detachPref.choice, detachPref.limit, decidedBy === "tunnel" ? "never" : null)}
+            />
         </div>
     );
 }

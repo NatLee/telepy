@@ -213,6 +213,7 @@ pub struct MachineOpts {
     /// 並記在 [`Machine::commands`]。指令規則要讀畫面上的那一行，所以需要回顯。
     /// A tty-like shell: a `$ ` prompt, keystrokes echoed (backspace and Ctrl+C too), and Enter "runs" the line:
     /// prints `ran:<line>` and records it in [`Machine::commands`]. Command rules read the echoed line.
+    /// `later` answers 0.8 s late (a command still running when the browser drops).
     pub echo_shell: bool,
     /// 假裝是 Windows：`uname -s` 失敗（9009），`Get-LocalGroupMember` 的 PowerShell 探測印出 `<home>/ProgramData`
     /// 與 `windows_admins`；像 Win32-OpenSSH 一樣，`windows_admins` 裡的帳號**只看**共用的
@@ -357,10 +358,13 @@ impl server::Handler for SshdHandler {
                         break;
                     }
                     let mut out = String::new();
+                    // `later`：過一下才回（模擬還在跑的指令，斷線保留的測試用）。/ `later` answers after a pause (a running command).
+                    let mut pause = false;
                     for c in String::from_utf8_lossy(&buf[..n]).chars() {
                         match c {
                             '\r' | '\n' => {
                                 let cmd = std::mem::take(&mut line).trim().to_string();
+                                pause |= cmd == "later";
                                 out.push_str("\r\n");
                                 if cmd == "exit" {
                                     let _ = s.write_all(out.as_bytes()).await;
@@ -387,6 +391,9 @@ impl server::Handler for SshdHandler {
                             }
                             _ => {}
                         }
+                    }
+                    if pause {
+                        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                     }
                     if s.write_all(out.as_bytes()).await.is_err() {
                         break;
@@ -667,6 +674,10 @@ pub struct Terminal {
     pub seen: String,
     /// 收到的指令規則通知（binary JSON frame）。/ Command-rule notices received (binary JSON frames).
     pub notices: Vec<Value>,
+    /// 最近一個 `{type:"shell"}` frame（shell 代號、保留時間、補送起點）。/ The latest shell frame.
+    pub shell: Option<Value>,
+    /// 看過的輸出位置（UTF-16 單位，跟瀏覽器一樣算）：接回時帶 `offset`。/ Output position seen (UTF-16 units), for `offset`.
+    pub offset: u64,
 }
 
 impl Terminal {
@@ -692,7 +703,7 @@ impl Terminal {
         loop {
             match tokio::time::timeout_at(deadline, self.ws.next()).await {
                 Ok(Some(Ok(Message::Close(f)))) => return f.map(|f| u16::from(f.code)),
-                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
                 Ok(Some(Ok(_))) => {}
                 Ok(Some(Err(_))) | Ok(None) => return None,
                 Err(_) => panic!("terminal was not closed by the server; output so far: {:?}", self.seen),
@@ -707,7 +718,7 @@ impl Terminal {
         loop {
             match tokio::time::timeout_at(deadline, self.ws.next()).await {
                 Err(_) => return,
-                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
                 Ok(Some(Ok(Message::Close(_)))) | Ok(Some(Err(_))) | Ok(None) => panic!("an idle but live terminal was closed by the server"),
                 Ok(Some(Ok(_))) => {}
             }
@@ -721,20 +732,53 @@ impl Terminal {
         loop {
             match tokio::time::timeout_at(deadline, self.ws.next()).await {
                 Ok(Some(Ok(Message::Binary(b)))) => return &b[..] == b"pong",
-                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
                 Ok(Some(Ok(_))) => {}
                 _ => return false,
             }
         }
     }
 
-    /// 收一則 binary frame：pong 以外的是指令規則通知。/ A binary frame: anything but a pong is a command notice.
+    /// 收一則 binary frame：pong、shell frame，其餘是指令規則通知。/ A binary frame: a pong, the shell frame, or a command notice.
     fn binary(&mut self, b: &[u8]) {
         if b != b"pong" {
             if let Ok(v) = serde_json::from_slice::<Value>(b) {
-                self.notices.push(v);
+                if v["type"] == "shell" {
+                    self.offset = v["offset"].as_u64().unwrap_or(0);
+                    self.shell = Some(v);
+                } else {
+                    self.notices.push(v);
+                }
             }
         }
+    }
+
+    /// 一則 PTY 輸出。/ One PTY output frame.
+    fn text(&mut self, t: &str) {
+        self.seen.push_str(t);
+        self.offset += t.encode_utf16().count() as u64;
+    }
+
+    /// 這個 shell 的代號（auth 之後第一個 frame）。/ This shell's id (the first frame after auth).
+    pub fn shell_id(&self) -> String {
+        self.shell.as_ref().and_then(|s| s["id"].as_str()).expect("no shell frame").to_string()
+    }
+
+    /// 保留時間與決定它的那一層。/ The grace time and the layer that decided it.
+    pub fn detach(&self) -> (u64, String) {
+        let d = &self.shell.as_ref().expect("no shell frame")["detach"];
+        (d["secs"].as_u64().unwrap(), d["by"].as_str().unwrap().to_string())
+    }
+
+    /// 明確結束（關分頁）：送 `{action:"end"}`，伺服器立刻收掉 shell。/ An explicit end, the way closing a tab does.
+    pub async fn end(mut self) {
+        let _ = self.ws.send(Message::Text(json!({"action": "end"}).to_string().into())).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), async { while let Some(Ok(m)) = self.ws.next().await { if matches!(m, Message::Close(_)) { break; } } }).await;
+    }
+
+    /// 像網路斷掉：不送 Close，直接丟掉 TCP 連線。/ Like a dropped network: no close frame, the TCP connection just goes.
+    pub fn drop_connection(self) {
+        drop(self);
     }
 
     /// 等一則 `state` 的指令規則通知（10 秒逾時），取走並回傳它。/ Wait for a command notice with this `state` and take it.
@@ -745,7 +789,7 @@ impl Terminal {
                 return self.notices.remove(i);
             }
             match tokio::time::timeout_at(deadline, self.ws.next()).await {
-                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
                 Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
                 Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
                 Ok(other) => panic!("terminal ended before a {state:?} notice: {other:?}; output so far: {:?}", self.seen),
@@ -760,7 +804,7 @@ impl Terminal {
         while !self.seen.contains(needle) {
             let frame = tokio::time::timeout_at(deadline, self.ws.next()).await;
             match frame {
-                Ok(Some(Ok(Message::Text(t)))) => self.seen.push_str(&t),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
                 Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
                 // 伺服器心跳的 Ping（tungstenite 讀的時候自動回 Pong）。/ Server heartbeat pings, answered on read.
                 Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
@@ -1219,8 +1263,17 @@ impl Lab {
         ws.send(Message::Text(auth.to_string().into())).await.unwrap();
         match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("no terminal frame") {
             Some(Ok(Message::Close(Some(f)))) => Err(u16::from(f.code)),
-            Some(Ok(Message::Text(t))) => Ok(Terminal { ws, seen: t.to_string(), notices: Vec::new() }),
-            Some(Ok(_)) => Ok(Terminal { ws, seen: String::new(), notices: Vec::new() }),
+            Some(Ok(Message::Text(t))) => {
+                let mut term = Terminal { ws, seen: String::new(), notices: Vec::new(), shell: None, offset: 0 };
+                term.text(&t);
+                Ok(term)
+            }
+            Some(Ok(Message::Binary(b))) => {
+                let mut term = Terminal { ws, seen: String::new(), notices: Vec::new(), shell: None, offset: 0 };
+                term.binary(&b);
+                Ok(term)
+            }
+            Some(Ok(_)) => Ok(Terminal { ws, seen: String::new(), notices: Vec::new(), shell: None, offset: 0 }),
             other => panic!("terminal socket ended: {other:?}"),
         }
     }

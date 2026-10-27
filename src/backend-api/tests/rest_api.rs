@@ -335,10 +335,18 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800}));
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both"}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800}));
+    // 網頁終端機斷線保留：只收固定選項。/ Terminal detach grace: only the fixed choices.
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_detach_secs": 42})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json["terminal_detach_secs"][0], "Must be one of: 0, 60, 300, 900, 1800, 3600.");
+    let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_detach_secs": 900})).await;
+    assert_eq!(r.json["terminal_detach_secs"], 900, "{}", r.text);
+    let r = app.post("/api/site/settings", Some(&admin), json!({"terminal_detach_max_secs": 90000})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
     // 粗體畫法 / 連字的值。/ Bold style and ligature values.
     let r = app.post("/api/user/settings", Some(&admin), json!({"terminal_bold": "heavy"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
@@ -404,7 +412,8 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json, json!({"remote_browser_geometry": ["This field may not be blank."]}));
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 30);
+    assert_eq!(keys.len(), 31);
+    assert_eq!(r.json["values"]["terminal_detach_max_secs"], 1800, "a detached web terminal is kept at most 30 minutes by default");
     assert_eq!(r.json["values"]["command_approval_timeout"], 300, "approvals wait five minutes by default");
     assert_eq!(r.json["values"]["signin_lifetime"], 2_592_000, "a sign-in lasts 30 days without a visit by default");
     assert_eq!(r.json["values"]["signin_access_lifetime"], 3600, "access tokens are renewed hourly by default");

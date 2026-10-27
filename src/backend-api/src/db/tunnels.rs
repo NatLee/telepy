@@ -20,6 +20,9 @@ pub struct Tunnel {
     pub require_step_up: bool,
     /// 網頁終端機要錄影（見 `crate::recording`）。/ Web terminal sessions are recorded (see `crate::recording`).
     pub record_sessions: bool,
+    /// 網頁終端機斷線時：`user` = 照使用者的選擇保留 shell、`never` = 一律立刻結束（見 `crate::terminal_detach`）。
+    /// When a web terminal's socket drops: `user` = keep the shell per the user's choice, `never` = always end it at once.
+    pub terminal_detach_policy: String,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -44,7 +47,7 @@ pub struct UsernameWithCreator {
     pub created_by: String,
 }
 
-const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up, record_sessions";
+const T_COLS: &str = "id, user_id, host_friendly_name, key, reverse_port, description, default_username_id, created_at, updated_at, require_step_up, record_sessions, terminal_detach_policy";
 const T: &str = "authorized_keys_reverseserverauthorizedkeys";
 const U_COLS: &str = "id, user_id, reverse_server_id, username, created_at, updated_at";
 const U: &str = "authorized_keys_reverseserverusernames";
@@ -128,6 +131,12 @@ pub struct NewTunnel<'a> {
 /// 開 / 關錄影。/ Turn recording on or off.
 pub async fn set_record_sessions(db: &Db, id: i64, on: bool) -> sqlx::Result<()> {
     sqlx::query(&format!("UPDATE {T} SET record_sessions = ?, updated_at = ? WHERE id = ?")).bind(on).bind(now_db()).bind(id).execute(&db.write).await?;
+    Ok(())
+}
+
+/// 設定斷線保留政策（`user` / `never`）。/ Set the detach policy (`user` / `never`).
+pub async fn set_terminal_detach_policy(db: &Db, id: i64, policy: &str) -> sqlx::Result<()> {
+    sqlx::query(&format!("UPDATE {T} SET terminal_detach_policy = ?, updated_at = ? WHERE id = ?")).bind(policy).bind(now_db()).bind(id).execute(&db.write).await?;
     Ok(())
 }
 
