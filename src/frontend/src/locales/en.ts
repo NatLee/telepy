@@ -5329,6 +5329,7 @@ export const en = {
     "apiPage.calls.loadMore": "Load older",
     "apiPage.calls.end": "That's everything kept (90 days).",
     "apiPage.calls.footnote": "Writes also appear in Logs as token_call events. MCP calls of connected apps are on the AI activity page.",
+    "apiPage.calls.cliHint": "Same list in the terminal: {cmd} (add --follow to watch new calls arrive).",
     "tokens.callSummary": "{day} calls in 24 h · {week} in 7 days · {total} in all",
     "tokens.callErrors": "{count} errors in 7 days",
     "tokens.showCalls": "Calls",

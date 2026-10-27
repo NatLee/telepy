@@ -84,7 +84,7 @@ async fn tokens_scopes_restriction_expiry_and_revocation() {
     let dash = app.get("/api/reverse/server/dashboard", Some(&read)).await;
     assert_eq!(dash.status, StatusCode::OK, "{}", dash.text);
     assert_eq!(dash.json["tunnels"].as_array().unwrap().len(), 2);
-    for (m, p) in [(Method::POST, "/api/auth/tokens"), (Method::GET, "/api/auth/tokens"), (Method::GET, "/api/site/settings"), (Method::POST, "/api/user/settings")] {
+    for (m, p) in [(Method::POST, "/api/auth/tokens"), (Method::GET, "/api/auth/tokens/routes"), (Method::GET, "/api/site/settings"), (Method::POST, "/api/user/settings")] {
         let r = app.request(m.clone(), p, Some(&read), Some(json!({}))).await;
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{m} {p}: {}", r.text);
         assert_eq!(r.json["code"], "token_route", "{m} {p}");

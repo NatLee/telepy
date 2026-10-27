@@ -128,6 +128,8 @@ export function curlFor(r: Pick<ApiRoute, "method" | "path" | "tunnel">, base: s
 /** 有對應的 `telepy` 指令就回它。/ The `telepy` CLI equivalent, when there is one. */
 const CLI: Record<string, string> = {
     "GET /api/auth/user/profile": "telepy whoami",
+    "GET /api/auth/tokens": "telepy api tokens",
+    "GET /api/auth/tokens/calls": "telepy api activity",
     "GET /api/reverse/server/dashboard": "telepy ls",
     "GET /api/reverse/server/keys": "telepy ls --json",
     "GET /api/reverse/server/keys/{id}": "telepy status <tunnel>",
