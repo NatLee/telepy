@@ -427,3 +427,221 @@ async fn a_lan_terminal_is_kept_too() {
     t.expect("ran:xy").await;
     assert_eq!(nas.commands(), vec!["xy".to_string()]);
 }
+
+// ---------------------------------------------------------------- 失去存取 = 斷線保留中的 shell 也結束 / lost access ends kept shells
+
+/// 等 `terminal_close` 事件裡出現這句（看得到 Logs 的人的 token）。/ Wait for a `terminal_close` event containing `needle`.
+async fn close_event(lab: &Lab, token: &str, tunnel_id: i64, needle: &str) -> serde_json::Value {
+    for _ in 0..50 {
+        let found = events(lab, token, tunnel_id).await.into_iter().find(|e| e["event"] == "terminal_close" && e["message"].as_str().is_some_and(|m| m.contains(needle)));
+        if let Some(e) = found {
+            return e;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no terminal_close event with {needle:?}: {:?}", events(lab, token, tunnel_id).await);
+}
+
+async fn grant(lab: &Lab, subject: &str, id: Option<i64>, feature: &str, value: &str) {
+    let r = lab.app.put("/api/access/grants", Some(&lab.admin_token), json!({"subject": subject, "id": id, "feature": feature, "value": value})).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+}
+
+/// 等裝置那端的 session channel 數變成 `n`（shell 真的收掉了）。/ Wait until the device sees `n` session channels.
+async fn wait_device_sessions(m: &common::lab::Machine, n: usize) {
+    for _ in 0..100 {
+        if m.open_sessions() == n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the device still has {} session channels, expected {n}", m.open_sessions());
+}
+
+/// 管理員把終端機關掉（個人的拒絕，或群組的拒絕）：斷線保留中的 shell 立刻結束——裝置上的 shell 收掉、
+/// `terminal_close` 寫原因、之後（功能再打開）接回 = 4015；跟連著的 shell 一樣。
+/// Turning the terminal off (a personal deny, or a group deny) ends a detached shell at once: the device's shell
+/// closes, `terminal_close` says why, and a later resume (feature back on) gets 4015 — like an attached shell.
+#[tokio::test]
+async fn turning_the_terminal_off_ends_detached_shells() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    set_detach(&lab, &alice, 300).await;
+
+    // 個人的拒絕。/ A personal deny.
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    let id = t.shell_id();
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    assert!(boxm.open_sessions() >= 1, "the detached shell is still open on the device");
+    grant(&lab, "user", Some(alice.id), "terminal", "deny").await;
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    wait_device_sessions(&boxm, 0).await;
+    let close = close_event(&lab, &alice.token, dev.tunnel_id, "while detached").await;
+    assert!(close["message"].as_str().unwrap().contains("Web terminal was turned off for this account"), "{close}");
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4012), "still off");
+    grant(&lab, "user", Some(alice.id), "terminal", "inherit").await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015), "the shell is gone");
+
+    // 群組的拒絕：一樣。/ A group deny does the same.
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    let id = t.shell_id();
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    let r = lab.app.post("/api/access/groups", Some(&lab.admin_token), json!({"name": "Night shift", "members": [alice.id]})).await;
+    assert_eq!(r.status, axum::http::StatusCode::CREATED, "{}", r.text);
+    let gid = r.json["created_id"].as_i64().unwrap();
+    grant(&lab, "group", Some(gid), "terminal", "deny").await;
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    wait_device_sessions(&boxm, 0).await;
+    grant(&lab, "group", Some(gid), "terminal", "inherit").await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+}
+
+/// 區網主機的終端機要「終端機」+「區網探索」：關掉 network 只結束區網那個 shell（斷線中的也算），裝置本身的留著。
+/// A LAN-host terminal needs terminal + network: turning network off ends only the LAN shell (detached too).
+#[tokio::test]
+async fn turning_network_off_ends_detached_lan_shells_only() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let nas = lab.machine("nas", &[("backup", &[&lab.service])], false).await;
+    let edge = lab.machine("edge", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "edge", &edge).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let nas_id = lab.lan_host(&alice, &dev, "127.0.0.1", nas.port, Some("backup")).await;
+    set_detach(&lab, &alice, 300).await;
+
+    let mut lan = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.expect("LAN terminal");
+    lan.expect("login:backup@nas").await;
+    let lan_id = lan.shell_id();
+    lan.drop_connection();
+    let mut own = lab.terminal(&alice, &dev, "ubuntu").await.expect("device terminal");
+    own.expect("login:ubuntu@edge").await;
+    wait_presence(&lab, dev.tunnel_id, "one detached, one attached", |p| p.len() == 2 && p.iter().filter(|e| e.detached.is_some()).count() == 1).await;
+
+    grant(&lab, "user", Some(alice.id), "network", "deny").await;
+    wait_presence(&lab, dev.tunnel_id, "only the device shell", |p| p.len() == 1 && p[0].detached.is_none()).await;
+    wait_device_sessions(&nas, 0).await;
+    close_event(&lab, &alice.token, dev.tunnel_id, "LAN discovery was turned off").await;
+    own.input("still-here\r").await;
+    own.expect("still-here").await;
+    grant(&lab, "user", Some(alice.id), "network", "inherit").await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "resume": lan_id})).await.err(), Some(4015));
+}
+
+/// 隧道改成 `never`：這條隧道上已經在斷線保留的 shell 立刻結束；連著的照舊（斷線時才照政策）。
+/// Switching a tunnel to `never` ends the shells already detached there; attached ones carry on.
+#[tokio::test]
+async fn a_never_policy_ends_shells_already_detached() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    set_detach(&lab, &alice, 300).await;
+
+    let mut kept = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    kept.expect("login:ubuntu@box").await;
+    let id = kept.shell_id();
+    kept.drop_connection();
+    let mut live = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    live.expect("login:ubuntu@box").await;
+    wait_presence(&lab, dev.tunnel_id, "one detached", |p| p.len() == 2 && p.iter().any(|e| e.detached.is_some())).await;
+
+    let r = lab.app.put(&format!("/api/reverse/server/{}/terminal-detach", dev.tunnel_id), Some(&alice.token), json!({"policy": "never"})).await;
+    assert_eq!(r.json["policy"], "never", "{}", r.text);
+    wait_presence(&lab, dev.tunnel_id, "only the attached one", |p| p.len() == 1 && p[0].detached.is_none()).await;
+    wait_device_sessions(&boxm, 1).await;
+    close_event(&lab, &alice.token, dev.tunnel_id, "this tunnel no longer keeps disconnected shells").await;
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4015));
+    live.input("ok-live\r").await;
+    live.expect("ok-live").await;
+}
+
+/// 取消分享 / 允許的帳號被拿掉 / 帳號被停用：他的 shell（連著的 4009、斷線保留中的）都結束。
+/// Unsharing, removing the allowed account, or disabling the account ends their shells: attached (4009) and detached.
+#[tokio::test]
+async fn losing_access_ends_attached_and_detached_shells() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service]), ("root", &[&lab.service])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    let root = lab.username(&alice, &dev, "root").await;
+    set_detach(&lab, &bob, 300).await;
+    let path = format!("/tunnels/share/{}/{}/allowed-usernames", dev.tunnel_id, bob.id);
+
+    // 1. 取消分享：連著的收到 4009（原因說存取變了），斷線保留中的也收掉。/ Unshare: 4009 for the attached, the detached ends.
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let mut kept = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal");
+    kept.expect("login:ubuntu@box").await;
+    let id = kept.shell_id();
+    kept.drop_connection();
+    let mut live = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal");
+    live.expect("login:ubuntu@box").await;
+    wait_presence(&lab, dev.tunnel_id, "two of bob's", |p| p.len() == 2).await;
+    let r = lab.app.delete(&format!("/tunnels/unshare/{}/{}", dev.tunnel_id, bob.id), Some(&alice.token)).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    let (code, reason) = live.wait_closed_reason().await.expect("closed");
+    assert_eq!((code, reason.as_str()), (4009, telepy_server::terminal_detach::ENDED_BY));
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    wait_device_sessions(&boxm, 0).await;
+    close_event(&lab, &alice.token, dev.tunnel_id, "while detached: access to the tunnel was removed").await;
+    close_event(&lab, &alice.token, dev.tunnel_id, ": access to the tunnel was removed").await;
+    assert_eq!(lab.terminal_with(&bob, &dev, "ubuntu", json!({"resume": id})).await.err(), Some(4004), "no access any more");
+
+    // 2. 允許清單拿掉 ubuntu：ubuntu 的 shell 結束，root 的留著。/ ubuntu leaves the allow-list: only that shell ends.
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu, root]).await;
+    let mut kept = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal");
+    kept.expect("login:ubuntu@box").await;
+    kept.drop_connection();
+    let mut as_root = lab.terminal(&bob, &dev, "root").await.expect("terminal");
+    as_root.expect("login:root@box").await;
+    wait_presence(&lab, dev.tunnel_id, "two of bob's", |p| p.len() == 2).await;
+    let r = lab.app.patch(&path, Some(&alice.token), json!({"allowed_target_username_ids": [root]})).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    wait_presence(&lab, dev.tunnel_id, "only root's", |p| p.len() == 1 && p[0].detached.is_none()).await;
+    close_event(&lab, &alice.token, dev.tunnel_id, "the login account is no longer allowed").await;
+    as_root.input("ok-root\r").await;
+    as_root.expect("ok-root").await;
+
+    // 3. 停用帳號：剩下的也結束（斷線保留中的一樣）。/ Disabling the account ends the rest, detached ones too.
+    as_root.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    let r = lab.app.post(&format!("/api/user/users/{}", bob.id), Some(&lab.admin_token), json!({"is_active": false})).await;
+    assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    wait_device_sessions(&boxm, 0).await;
+    close_event(&lab, &alice.token, dev.tunnel_id, "the account was disabled").await;
+}
+
+/// 這個瀏覽器的登入被撤銷（4010 那條路）：socket 已經不在的斷線保留 shell 也跟著結束。
+/// This browser's sign-in is revoked (the 4010 path): a detached shell, whose socket is gone, ends too.
+#[tokio::test]
+async fn signing_out_ends_a_detached_shell() {
+    let Some(lab) = Lab::start().await else { return };
+    let plain = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], false).await;
+    let dev = lab.device(&plain, "box", &boxm).await;
+    lab.username(&plain, &dev, "ubuntu").await;
+    set_detach(&lab, &plain, 300).await;
+    // 一個真的登入（token 帶 sid）。/ A real sign-in (the token carries its sid).
+    let state = &lab.app.state;
+    let pair = telepy_server::auth::sessions::issue(state, plain.id, &Default::default(), "password", None).await.unwrap();
+    let alice = common::lab::LabUser { id: plain.id, username: plain.username.clone(), token: pair["access_token"].as_str().unwrap().to_string(), key: plain.key.clone() };
+
+    let mut t = lab.terminal(&alice, &dev, "ubuntu").await.expect("terminal");
+    t.expect("login:ubuntu@box").await;
+    t.drop_connection();
+    wait_presence(&lab, dev.tunnel_id, "detached", |p| p.len() == 1 && p[0].detached.is_some()).await;
+    assert_eq!(telepy_server::auth::sessions::revoke_all(state, plain.id, None, "user").await.unwrap(), 1);
+    wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
+    wait_device_sessions(&boxm, 0).await;
+    close_event(&lab, &plain.token, dev.tunnel_id, "signed out while detached").await;
+}

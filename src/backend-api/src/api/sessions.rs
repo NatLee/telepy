@@ -116,7 +116,7 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
     if !may_end(entry.user_id, me.id, managed.contains_key(&entry.tunnel_id)) {
         return Err(not_found());
     }
-    if !end_entry(&state, &entry, &me.username).await {
+    if !end_entry(&state, &entry, &me.username, None).await {
         return Err(not_found());
     }
     let tunnel = db::tunnels::by_id(&state.db, entry.tunnel_id).await?;
@@ -142,7 +142,8 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
 /// 功能權限被關掉時（`features::end_denied_sessions`）也走這裡。
 /// Ends one live session (an MCP agent session, an agent browser, or one with a socket loop); false when it is gone.
 /// Also used when a feature is turned off (`features::end_denied_sessions`).
-pub async fn end_entry(state: &AppState, entry: &crate::presence::Entry, by: &str) -> bool {
+/// `why`：附在結束事件上的原因（網頁終端機寫進 `terminal_close`）。/ `why`: the reason for the close event.
+pub async fn end_entry(state: &AppState, entry: &crate::presence::Entry, by: &str, why: Option<&str>) -> bool {
     let id = entry.id;
     if entry.kind == Kind::Ai {
         let Some(ai) = state.ai.list().into_iter().find(|s| s.presence_id() == id) else { return false };
@@ -150,7 +151,12 @@ pub async fn end_entry(state: &AppState, entry: &crate::presence::Entry, by: &st
     } else if let Some(b) = state.ai.browsers.list().into_iter().find(|b| b.presence_id() == id) {
         // agent 開的遠端瀏覽器：沒有 WebSocket 迴圈在等，直接收掉並記下是誰。/ An agent browser has no socket loop: close it here.
         crate::ai::browser::close(state, &b.id, crate::ai::CloseReason::ClosedByUser, Some(by)).await;
-    } else if state.presence.end(id, by).is_none() {
+    } else if match why {
+        Some(why) => state.presence.end_because(id, by, why),
+        None => state.presence.end(id, by),
+    }
+    .is_none()
+    {
         return false;
     }
     true

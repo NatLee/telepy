@@ -84,8 +84,16 @@ impl Entry {
 #[derive(Default)]
 pub struct Presence {
     next: AtomicU64,
-    map: DashMap<u64, (Entry, watch::Sender<Option<String>>)>,
+    map: DashMap<u64, (Entry, watch::Sender<Option<Ended>>)>,
     dirty: Mutex<HashSet<i64>>,
+}
+
+/// 誰結束的，以及（有的話）為什麼（例如「終端機功能被關掉了」），寫進結束事件。
+/// Who ended it and, when given, why (e.g. "Terminal was turned off for this account"); goes into the close event.
+#[derive(Debug, Clone)]
+struct Ended {
+    by: String,
+    why: Option<String>,
 }
 
 /// 連線期間持有；drop = 離開。/ Held for the connection's lifetime; dropping it leaves.
@@ -93,7 +101,7 @@ pub struct PresenceGuard {
     presence: Arc<Presence>,
     id: u64,
     tunnel_id: i64,
-    ended: watch::Receiver<Option<String>>,
+    ended: watch::Receiver<Option<Ended>>,
 }
 
 impl PresenceGuard {
@@ -105,7 +113,7 @@ impl PresenceGuard {
     /// Resolves with who ended this session; pends forever otherwise. Put it in the connection loop's `select!`.
     pub async fn ended(&mut self) -> String {
         // 讀鎖要在 await 之前放掉（不然 future 不是 Send）。/ Drop the read guard before any further await.
-        let by = self.ended.wait_for(Option::is_some).await.ok().map(|v| v.clone().unwrap_or_default());
+        let by = self.ended.wait_for(Option::is_some).await.ok().and_then(|v| v.as_ref().map(|e| e.by.clone()));
         match by {
             Some(by) => by,
             None => std::future::pending().await,
@@ -114,6 +122,12 @@ impl PresenceGuard {
 }
 
 impl PresenceGuard {
+    /// 被結束時附的原因（[`Presence::end_because`]）；在 [`ended`](Self::ended) 回來之後讀。
+    /// Why it was ended ([`Presence::end_because`]); read after [`ended`](Self::ended) resolved.
+    pub fn why(&self) -> Option<String> {
+        self.ended.borrow().as_ref().and_then(|e| e.why.clone())
+    }
+
     /// 標成斷線保留中（Some((since, ends_at))）或接回來了（None）。/ Mark as detached (since, ends at) or attached again.
     pub fn set_detached(&self, detached: Option<(String, String)>) {
         if let Some(mut slot) = self.presence.map.get_mut(&self.id) {
@@ -144,8 +158,18 @@ impl Presence {
     /// 結束一筆（`by` = 誰結束的）；連線自己收掉並 drop guard。找不到回 None。
     /// End one session (`by` = who ended it); the connection tears itself down. None when unknown.
     pub fn end(&self, id: u64, by: &str) -> Option<Entry> {
+        self.signal(id, by, None)
+    }
+
+    /// 同 [`end`](Self::end)，再附上為什麼（功能被關掉、權限被拿掉…），連線把它寫進結束事件。
+    /// Same as [`end`](Self::end), with why (a feature turned off, access removed…) for the close event.
+    pub fn end_because(&self, id: u64, by: &str, why: &str) -> Option<Entry> {
+        self.signal(id, by, Some(why.to_string()))
+    }
+
+    fn signal(&self, id: u64, by: &str, why: Option<String>) -> Option<Entry> {
         let slot = self.map.get(&id)?;
-        slot.1.send_replace(Some(by.to_string()));
+        slot.1.send_replace(Some(Ended { by: by.to_string(), why }));
         Some(slot.0.clone())
     }
 
@@ -231,7 +255,14 @@ mod tests {
         let ended = p.end(a.id(), "carol").unwrap();
         assert_eq!(ended.user_id, 10);
         assert_eq!(a.ended().await, "carol");
+        assert_eq!(a.why(), None);
         assert!(p.end(999, "carol").is_none());
+        // 附原因的結束。/ An end with a reason.
+        let mut c = p.join(Entry::new(1, 12, "dave", Kind::Terminal, None));
+        p.end_because(c.id(), "admin", "Terminal was turned off for this account").unwrap();
+        assert_eq!(c.ended().await, "admin");
+        assert_eq!(c.why().as_deref(), Some("Terminal was turned off for this account"));
+        drop(c);
         // 沒被結束的一直等。/ An entry nobody ended keeps waiting.
         let mut b = b;
         assert!(tokio::time::timeout(std::time::Duration::from_millis(20), b.ended()).await.is_err());

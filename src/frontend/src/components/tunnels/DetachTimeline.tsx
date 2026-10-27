@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * 網頁終端機斷線保留的時間軸圖：連著 ─ 斷線 ─ 保留 N 秒（shell 照跑、輸出存起來）─ 接回（繼續）| 時間到（結束），
+ * 網頁終端機斷線保留的時間軸圖：連著 ─ 斷線 ─ 保留 N 秒（shell 照跑、輸出存起來）─ 接回（繼續）| 時間到（結束）| 存取被拿掉（結束），
  * 加上「是哪一層決定這個時間」（你的選擇 / 站台上限 / 這台裝置的政策）。偏好設定的 info 按鈕與終端機重連提示列的
  * 「為什麼？」都打開這個對話框。直線與直角、平面樣式，寬容器橫排、窄容器直排（PathFlow 積木）。
- * The detach timeline: connected ─ drop ─ kept for N s (still running, output saved) ─ reattach | time's up, plus which
+ * The detach timeline: connected ─ drop ─ kept for N s (still running, output saved) ─ reattach | time's up | your
+ * access is removed, plus which
  * layer decided the time. Opened from the Preferences info button and the reconnect banner's "Why?" link.
  */
 import React from "react";
-import { Hourglass, Info, Plug, RotateCcw, Square } from "lucide-react";
+import { Hourglass, Info, Plug, RotateCcw, ShieldOff, Square } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/button";
 import { Chip, Section } from "@/components/ui/section";
@@ -96,6 +97,9 @@ export function DetachTimeline({ phase, grace, left }: { phase: DetachPhase; gra
                 <li className="flex min-w-0 flex-col gap-2 border-l-2 border-border pl-3 @3xl:flex-1 @3xl:basis-0">
                     <Outcome icon={RotateCcw} title={t("detach.node.resume")} sub={t("detach.node.resumeSub")} state={steps.resume} t={t} />
                     <Outcome icon={Square} title={keeps ? t("detach.node.end") : t("detach.node.endAtOnce")} sub={keeps ? t("detach.node.endSub") : t("detach.node.endAtOnceSub")} state={steps.end} t={t} />
+                    {/* 保留中也會被收掉：存取被拿掉（取消分享、帳號 / 功能被拿掉、停用、隧道改成立刻結束）。 */}
+                    {/* A kept shell also ends when your access is removed. */}
+                    <Outcome icon={ShieldOff} title={t("detach.node.revoked")} sub={t("detach.node.revokedSub")} state={keeps ? "waiting" : "skipped"} t={t} />
                 </li>
             </FlowPath>
         </div>
