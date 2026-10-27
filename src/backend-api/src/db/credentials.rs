@@ -1,7 +1,9 @@
-//! 憑證庫的資料表（`telepy_credential`）：每列是一個使用者為「某條隧道上的某個桌面」存的登入。
-//! 綁定 = (隧道, 區網主機或裝置本身, 協定)；密碼只存密文（`vault`）。隧道 / 區網主機刪除時一併刪。
-//! Saved desktop logins: one row per user and target (tunnel, LAN host or the device, protocol); the password
-//! is stored sealed only. Deleted with the tunnel or the LAN host.
+//! 憑證庫的資料表（`telepy_credential`）：每列是一個使用者為「某條隧道上的某個桌面（或區網主機的 SSH）」存的登入。
+//! 綁定 = (隧道, 區網主機或裝置本身, 協定)；密碼 / 私鑰只存密文（`vault`），`secret_kinds` 記密文裡有什麼
+//! （`password`、`key`；空 = 舊列，只有密碼）。隧道 / 區網主機刪除時一併刪。
+//! Saved logins: one row per user and target (tunnel, LAN host or the device, protocol — rdp / vnc / rustdesk, or
+//! `ssh` for the LAN hop); the password / private key is stored sealed only and `secret_kinds` says what the
+//! secret holds (`password`, `key`; empty = an older row with a password). Deleted with the tunnel or the LAN host.
 
 use sqlx::FromRow;
 
@@ -21,12 +23,14 @@ pub struct Credential {
     pub domain: String,
     /// 密文（`v1:…`）。/ Sealed secret.
     pub secret: String,
+    /// 密文裡有什麼：`password` / `key` / `password,key`（空 = 只有密碼）。/ What the secret holds.
+    pub secret_kinds: String,
     pub created_at: String,
     pub updated_at: String,
     pub last_used_at: Option<String>,
 }
 
-const COLS: &str = "id, user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at, last_used_at";
+const COLS: &str = "id, user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, secret_kinds, created_at, updated_at, last_used_at";
 
 pub async fn for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<Credential>> {
     sqlx::query_as(&format!("SELECT {COLS} FROM telepy_credential WHERE user_id = ? ORDER BY tunnel_id, lan_host_id, label"))
@@ -48,6 +52,7 @@ pub struct NewCredential<'a> {
     pub port: Option<i64>,
     pub login: &'a str,
     pub domain: &'a str,
+    pub secret_kinds: &'a str,
 }
 
 /// 插入一列並在同一個 transaction 裡寫入密文（AAD 要用到新列的 id）。/ Insert, then seal with the new id's AAD.
@@ -55,8 +60,8 @@ pub async fn create(db: &Db, new: NewCredential<'_>, seal: impl FnOnce(i64) -> S
     let now = now_db();
     let mut tx = db.write.begin().await?;
     let id = sqlx::query(
-        "INSERT INTO telepy_credential (user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+        "INSERT INTO telepy_credential (user_id, label, protocol, tunnel_id, lan_host_id, port, login, domain, secret, secret_kinds, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)",
     )
     .bind(new.user_id)
     .bind(new.label)
@@ -66,6 +71,7 @@ pub async fn create(db: &Db, new: NewCredential<'_>, seal: impl FnOnce(i64) -> S
     .bind(new.port)
     .bind(new.login)
     .bind(new.domain)
+    .bind(new.secret_kinds)
     .bind(&now)
     .bind(&now)
     .execute(&mut *tx)
@@ -82,8 +88,9 @@ pub struct CredentialPatch<'a> {
     pub port: Option<Option<i64>>,
     pub login: Option<&'a str>,
     pub domain: Option<&'a str>,
-    /// 新的密文（換密碼時）。/ New sealed secret, when the password changes.
+    /// 新的密文（換密碼 / 私鑰時）。/ New sealed secret, when the password or key changes.
     pub secret: Option<String>,
+    pub secret_kinds: Option<String>,
 }
 
 pub async fn update(db: &Db, id: i64, p: CredentialPatch<'_>) -> sqlx::Result<()> {
@@ -102,6 +109,9 @@ pub async fn update(db: &Db, id: i64, p: CredentialPatch<'_>) -> sqlx::Result<()
     }
     if let Some(v) = p.secret {
         sqlx::query("UPDATE telepy_credential SET secret = ? WHERE id = ?").bind(v).bind(id).execute(&mut *tx).await?;
+    }
+    if let Some(v) = p.secret_kinds {
+        sqlx::query("UPDATE telepy_credential SET secret_kinds = ? WHERE id = ?").bind(v).bind(id).execute(&mut *tx).await?;
     }
     sqlx::query("UPDATE telepy_credential SET updated_at = ? WHERE id = ?").bind(now_db()).bind(id).execute(&mut *tx).await?;
     tx.commit().await

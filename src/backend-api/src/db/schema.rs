@@ -673,6 +673,7 @@ const TABLES: &[(&str, &str)] = &[
             "login" varchar(256) NOT NULL,
             "domain" varchar(256) NOT NULL,
             "secret" text NOT NULL,
+            "secret_kinds" varchar(32) NOT NULL DEFAULT '',
             "created_at" datetime NOT NULL,
             "updated_at" datetime NOT NULL,
             "last_used_at" datetime NULL
@@ -928,6 +929,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "recording_retention_days", "integer NOT NULL DEFAULT 30"),
     // 這條隧道的網頁終端機要錄影。/ Record this tunnel's web terminal sessions.
     ("authorized_keys_reverseserverauthorizedkeys", "record_sessions", "bool NOT NULL DEFAULT 0"),
+    // 密文裡有什麼（`password` / `key` / `password,key`；空 = 舊列，只有密碼）。/ What the sealed secret holds.
+    ("telepy_credential", "secret_kinds", "varchar(32) NOT NULL DEFAULT ''"),
     ("site_settings_sitesettings", "command_approval_timeout", "integer NOT NULL DEFAULT 300"),
     // 網頁登入效期（秒）：沒有任何造訪多久後要重新登入（每次續期往後推，預設 30 天）、access token 多久換一次（預設 1 小時）。
     // Web sign-in lifetimes (seconds): how long a sign-in lasts without a visit (sliding, 30 days) and how often the access token is renewed (1 hour).

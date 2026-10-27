@@ -102,6 +102,26 @@ impl LineTracker {
         lines.join("\n")
     }
 
+    /// 重畫現在畫面的跳脫序列（看別人終端機的第一個畫面）：先清空，再畫內容、游標與輸入模式。
+    /// Escape sequences that redraw the current screen (a watcher's first frame): clear, then contents, cursor, modes.
+    pub fn screen_formatted(&self) -> String {
+        format!("\x1b[m\x1b[H\x1b[2J{}", self.parser.screen().state_formatted())
+    }
+
+    /// 在新的一行重畫游標所在那一列（提示行插進來之後，提示字元和打到一半的字照樣在游標前面）；全螢幕程式裡 None。
+    /// Redraw the cursor's row on a fresh line (after a notice line was inserted, the prompt and the half-typed text
+    /// are still before the cursor); None inside a full-screen program.
+    pub fn redraw_cursor_row(&self) -> Option<String> {
+        let screen = self.parser.screen();
+        if screen.alternate_screen() {
+            return None;
+        }
+        let (row, col) = screen.cursor_position();
+        let line = screen.rows_formatted(0, screen.size().1.get()).nth(usize::from(row)).unwrap_or_default();
+        let back = if col > 0 { format!("\x1b[{col}C") } else { String::new() };
+        Some(format!("\x1b[2K{line}\x1b[m\r{back}{}", screen.attributes_formatted()))
+    }
+
     /// 游標位置 (row, col)。/ The cursor position.
     pub fn cursor(&self) -> (u16, u16) {
         self.parser.screen().cursor_position()
@@ -356,6 +376,23 @@ mod tests {
         assert!(!t.started());
         t.output(b"\x1b[?1049l");
         assert!(!t.full_screen());
+    }
+
+    #[test]
+    fn formatted_screen_and_row_redraw() {
+        let mut t = LineTracker::new(4, 20);
+        t.output(b"hello\r\n$ ls -l");
+        let f = t.screen_formatted();
+        assert!(f.starts_with("\x1b[m\x1b[H\x1b[2J"), "clears first");
+        // 另一個 vt100 吃進去，畫面一樣。/ Fed to another vt100, the screen is the same.
+        let mut other = LineTracker::new(4, 20);
+        other.output(f.as_bytes());
+        assert_eq!(other.screen_text(), t.screen_text());
+        assert_eq!(other.cursor(), t.cursor());
+        let r = t.redraw_cursor_row().unwrap();
+        assert!(r.contains("$ ls -l") && r.contains("\r\x1b[7C"), "{r:?}");
+        t.output(b"\x1b[?1049h");
+        assert!(t.redraw_cursor_row().is_none(), "not inside vim / less");
     }
 
     #[test]

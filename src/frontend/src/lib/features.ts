@@ -58,6 +58,7 @@ export function hasFeature(profile: { is_superuser?: boolean; features?: string[
 const PAGE_FEATURES: readonly [string, FeatureId][] = [
     ["/tunnels/create", "tunnels.create"],
     ["/tunnels/terminal", "terminal"],
+    ["/tunnels/sessions/watch", "terminal"],
     ["/tunnels/network", "network"],
     ["/tunnels/desktop", "remote_desktop"],
     ["/tunnels/recordings", "recordings.manage"],

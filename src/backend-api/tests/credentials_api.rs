@@ -56,7 +56,7 @@ async fn saved_logins_are_private_and_never_return_the_password() {
     // 欄位驗證。/ Validation.
     for body in [
         json!({"protocol": "rdp", "tunnel_id": pc, "password": "p"}),
-        json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "password": "p"}),
+        json!({"label": "x", "protocol": "telnet", "tunnel_id": pc, "password": "p"}),
         json!({"label": "x", "protocol": "rdp", "tunnel_id": pc}),
         json!({"label": "x", "protocol": "rdp", "tunnel_id": pc, "password": "p", "port": 0}),
     ] {
@@ -109,7 +109,71 @@ async fn rustdesk_passwords_can_be_saved_too() {
     assert_eq!(r.json.as_array().unwrap().len(), 1);
     let r = app.get(&format!("/api/credentials?tunnel_id={pc}&protocol=vnc"), Some(&alice)).await;
     assert_eq!(r.json.as_array().unwrap().len(), 0, "a RustDesk login is not a VNC login");
-    let r = app.post("/api/credentials", Some(&alice), json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "password": "p"})).await;
+    let r = app.post("/api/credentials", Some(&alice), json!({"label": "x", "protocol": "telnet", "tunnel_id": pc, "password": "p"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert!(r.json["protocol"][0].as_str().unwrap().contains("rustdesk"), "{}", r.text);
+}
+
+/// `ssh` 憑證（區網主機那一跳）：密碼和 / 或未加密的私鑰，密文是 JSON；壞的、有密語的金鑰會被拒。
+/// `ssh` logins for the LAN hop: a password and / or an unencrypted private key, sealed as JSON; garbage and passphrase keys are refused.
+#[tokio::test]
+async fn ssh_logins_hold_a_password_or_a_private_key() {
+    use russh::keys::ssh_key::LineEnding;
+    use russh::keys::{Algorithm, PrivateKey};
+    let app = common::spawn().await;
+    let (alice, _bob) = app.admin_and_user("alice", "bob").await;
+    let pc = tunnel(&app, &alice, "pc", KEY_A).await;
+    let r = app.post(&format!("/api/reverse/server/{pc}/lan/hosts"), Some(&alice), json!({"address": "192.168.1.60", "label": "nas"})).await;
+    let host = r.json["id"].as_i64().unwrap();
+    let key = PrivateKey::random(&mut rand10::rng(), Algorithm::Ed25519).unwrap();
+    let pem = key.to_openssh(LineEnding::LF).unwrap().to_string();
+
+    // 只有金鑰。/ Key only.
+    let r = app.post("/api/credentials", Some(&alice), json!({"label": "nas key", "protocol": "ssh", "tunnel_id": pc, "lan_host_id": host, "login": "backup", "private_key": pem})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    assert_eq!(r.json["has_key"], true);
+    assert_eq!(r.json["has_password"], false);
+    assert!(!r.text.contains("PRIVATE KEY"), "{}", r.text);
+    let id = r.json["id"].as_i64().unwrap();
+    let kinds: String = sqlx::query_scalar("SELECT secret_kinds FROM telepy_credential WHERE id = ?").bind(id).fetch_one(&app.state.db.read).await.unwrap();
+    assert_eq!(kinds, "key");
+    // 解開 = JSON，金鑰正規化成 OpenSSH 格式。/ Unsealed = JSON with the key normalised to OpenSSH format.
+    let (_, plain) = telepy_server::api::credentials::unseal_for(&app.state, alice_id(&app).await, id, pc, Some(host), "ssh").await.unwrap();
+    let secret = telepy_server::api::credentials::SshSecret::parse(&plain);
+    assert!(secret.private_key.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+    assert_eq!(secret.password, "");
+
+    // 加上密碼：金鑰留著。/ Add a password: the key stays.
+    let r = app.patch(&format!("/api/credentials/{id}"), Some(&alice), json!({"password": "nas-pw"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["has_key"], true);
+    assert_eq!(r.json["has_password"], true);
+    let (_, plain) = telepy_server::api::credentials::unseal_for(&app.state, alice_id(&app).await, id, pc, Some(host), "ssh").await.unwrap();
+    let secret = telepy_server::api::credentials::SshSecret::parse(&plain);
+    assert_eq!(secret.password, "nas-pw");
+    assert!(!secret.private_key.is_empty());
+    // 拿掉金鑰：只剩密碼。/ Remove the key: the password remains.
+    let r = app.patch(&format!("/api/credentials/{id}"), Some(&alice), json!({"private_key": ""})).await;
+    assert_eq!(r.json["has_key"], false, "{}", r.text);
+    assert_eq!(r.json["has_password"], true);
+    // 兩個都拿掉不行。/ Both gone is refused.
+    let r = app.patch(&format!("/api/credentials/{id}"), Some(&alice), json!({"password": ""})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+
+    // 壞的金鑰、有密語的金鑰、什麼都沒有。/ Garbage, a passphrase key, nothing at all.
+    let encrypted = key.encrypt(&mut rand10::rng(), "pass").unwrap().to_openssh(LineEnding::LF).unwrap().to_string();
+    for body in [
+        json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "lan_host_id": host, "private_key": "not a key"}),
+        json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "lan_host_id": host, "private_key": encrypted}),
+        json!({"label": "x", "protocol": "ssh", "tunnel_id": pc, "lan_host_id": host, "login": "a"}),
+    ] {
+        let r = app.post("/api/credentials", Some(&alice), body.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body} → {}", r.text);
+    }
+    // 桌面的 start 不收 ssh 的憑證。/ A desktop start does not take an ssh login.
+    assert!(telepy_server::api::credentials::unseal_for(&app.state, alice_id(&app).await, id, pc, Some(host), "rdp").await.is_err());
+}
+
+async fn alice_id(app: &common::TestApp) -> i64 {
+    sqlx::query_scalar("SELECT id FROM auth_user WHERE username = 'alice'").fetch_one(&app.state.db.read).await.unwrap()
 }

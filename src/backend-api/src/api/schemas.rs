@@ -1368,6 +1368,8 @@ pub struct SavedCredential {
     pub domain: String,
     /// The password itself is never returned
     pub has_password: bool,
+    /// `ssh` rows only: a private key is stored (never returned)
+    pub has_key: bool,
     pub created_at: String,
     pub last_used_at: Option<String>,
 }
@@ -1375,14 +1377,17 @@ pub struct SavedCredential {
 #[derive(ToSchema)]
 pub struct SavedCredentialCreate {
     pub label: String,
-    /// `rdp`, `vnc` or `rustdesk`
+    /// `rdp`, `vnc`, `rustdesk`, or `ssh` (a LAN host's SSH login for the web terminal's hop)
     pub protocol: String,
     pub tunnel_id: i64,
     pub lan_host_id: Option<i64>,
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
-    pub password: String,
+    /// Required for rdp / vnc / rustdesk; for `ssh` a password and / or `private_key`
+    pub password: Option<String>,
+    /// `ssh` only: an unencrypted private key (OpenSSH or PEM); keys with a passphrase are refused
+    pub private_key: Option<String>,
 }
 
 #[derive(ToSchema)]
@@ -1391,8 +1396,10 @@ pub struct SavedCredentialUpdate {
     pub port: Option<u16>,
     pub login: Option<String>,
     pub domain: Option<String>,
-    /// Leave out to keep the current password
+    /// Leave out to keep the current password (`ssh`: an empty string removes it)
     pub password: Option<String>,
+    /// `ssh` only: replace the private key (an empty string removes it)
+    pub private_key: Option<String>,
 }
 
 // ---------------------------------------------------------------- Remote desktop (RDP / VNC over guacd)
@@ -2686,7 +2693,7 @@ pub struct LiveSession {
     pub id: u64,
     pub tunnel: LiveSessionTunnel,
     pub user: UserRef,
-    /// terminal / files / browser / desktop / ssh / ai
+    /// terminal / files / browser / desktop / rustdesk / ssh / ai / watch
     #[schema(example = "terminal")]
     pub kind: String,
     pub ip: Option<String>,
@@ -2699,6 +2706,19 @@ pub struct LiveSession {
     /// kind = terminal: the shell is kept after its browser dropped, until `ends_at`
     pub detached: Option<DetachedShell>,
     pub mine: bool,
+    /// kind = terminal on a tunnel you manage, not yours: the shell to watch at `/ws/terminal-watch/{shell_id}/`
+    pub shell_id: Option<String>,
+    /// kind = terminal: who is watching it right now
+    pub watched_by: Vec<String>,
+    /// kind = watch: whose shell this session watches
+    pub watching: Option<WatchingShell>,
+}
+
+/// 看的是誰的哪個 shell。/ Whose shell a watch session watches.
+#[derive(ToSchema)]
+pub struct WatchingShell {
+    pub user: UserRef,
+    pub shell_id: String,
 }
 
 /// 自己的、自己擁有或 ADMIN 的隧道上的（管理員看全部）。/ Yours plus everyone's on tunnels you own or ADMIN (all for admins).

@@ -21,8 +21,8 @@ export interface TerminalFlowContext {
     deviceName: string;
     /** 裝置上的帳號（區網主機時是跳板那一跳）。/ The device account (the jump hop for a LAN host). */
     account: string;
-    /** null = shell 開在裝置上。/ null = the shell runs on the device itself. */
-    lanHost: { name: string; address: string; port: number; login: string } | null;
+    /** null = shell 開在裝置上。`auth` = 那一跳怎麼登入，`savedLabel` = 用的存檔名稱。/ null = the shell runs on the device itself. */
+    lanHost: { name: string; address: string; port: number; login: string; auth?: "telepy" | "prompt" | "credential"; savedLabel?: string | null } | null;
     /** 你 ↔ Telepy（WebSocket ping）。/ Browser ↔ Telepy. */
     youToServerMs?: number | null;
     /** Telepy ↔ 裝置（monitor 量的隧道延遲）。/ Telepy ↔ device (the monitor's tunnel RTT). */
@@ -44,7 +44,11 @@ export function TerminalFlow({ ctx }: { ctx: TerminalFlowContext }) {
         ? [
             { key: "terminal.flow.step1", vars: { account, device: ctx.deviceName } },
             { key: "terminal.flow.step2", vars: { device: ctx.deviceName } },
-            { key: "terminal.flow.step3Lan", vars: { target, login: lan.login || "?" } },
+            lan.auth === "prompt"
+                ? { key: "terminal.flow.step3LanPrompt", vars: { target, login: lan.login || "?" } }
+                : lan.auth === "credential"
+                    ? { key: "terminal.flow.step3LanSaved", vars: { target, login: lan.login || "?", label: lan.savedLabel || "?" } }
+                    : { key: "terminal.flow.step3Lan", vars: { target, login: lan.login || "?" } },
             { key: "terminal.flow.step4Lan" },
         ]
         : [

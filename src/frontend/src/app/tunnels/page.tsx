@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Plus, Network, Info, RefreshCw, SearchX, FolderTree, FileCode2 } from "lucide-react";
+import { Plus, Network, Info, RefreshCw, SearchX, FolderTree, FolderPlus, FileCode2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Tooltip,
@@ -292,6 +292,19 @@ export default function TunnelsPage() {
                                     <FolderTree size={15} />
                                     {t("groups.tunnel.manage")}
                                 </Button>
+                                {/* 先用搜尋 / 篩選挑出一批（所有頁，不只這一頁），再一次建成群組。/ Filter first, then group every result (all pages). */}
+                                {filtering && visible.length > 0 && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-9 text-primary hover:text-primary"
+                                        onClick={() => groupsUi.openNew(visible.map((tn) => tn.id))}
+                                        title={t("groups.tunnel.fromShownHint")}
+                                    >
+                                        <FolderPlus size={15} />
+                                        {t("groups.tunnel.fromShown", { count: visible.length })}
+                                    </Button>
+                                )}
                                 {groupsUi.groups.length > 0 && (
                                     <Segmented
                                         size="sm"

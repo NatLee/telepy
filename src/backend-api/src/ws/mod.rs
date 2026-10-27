@@ -9,6 +9,7 @@ pub mod notifications;
 pub mod remote_browser;
 pub mod rustdesk;
 pub mod terminal;
+pub mod terminal_watch;
 pub mod tunnel_connection;
 
 use std::time::Duration;
@@ -39,6 +40,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/ws/notifications/", get(notifications_upgrade))
         .route("/ws/terminal/", get(terminal_upgrade))
+        .route("/ws/terminal-watch/{shell_id}/", get(terminal_watch_upgrade))
         .route("/ws/filemanager/", get(filemanager_upgrade))
         .route("/ws/tunnel_connection/{tunnel_id}/", get(tunnel_connection_upgrade))
         .route("/ws/remote-browser/{session_id}/", get(remote_browser_upgrade))
@@ -80,6 +82,11 @@ async fn notifications_upgrade(State(state): State<AppState>, ws: WebSocketUpgra
 
 async fn terminal_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
     prepare(ws).on_upgrade(move |socket| terminal::handle(state, socket, meta))
+}
+
+/// 看別人的網頁終端機（`crate::terminal_watch`）。/ Watching someone's web terminal.
+async fn terminal_watch_upgrade(State(state): State<AppState>, Path(shell_id): Path<String>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {
+    prepare(ws).on_upgrade(move |socket| terminal_watch::handle(state, socket, shell_id, meta))
 }
 
 async fn filemanager_upgrade(State(state): State<AppState>, meta: ClientMeta, ws: WebSocketUpgrade) -> Response {

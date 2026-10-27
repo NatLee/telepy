@@ -33,7 +33,9 @@ import {
     updateShells, withShell, withoutShell, type DetachGrace, type ShellFrame,
 } from "@/lib/terminalDetach";
 import { endKeptShell } from "@/lib/terminalShellSocket";
+import { parseWatchersFrame, type WatchersFrame } from "@/lib/terminalWatch";
 import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
+import { lanAuthFrame, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
 const KEYBOARD_MODE_KEY = "telepy.keyboardMode";
@@ -56,6 +58,8 @@ export interface TerminalLanTarget {
     hostId: string;
     /** 覆寫主機記錄的預設帳號。/ Overrides the host's default login. */
     username?: string | null;
+    /** 那一跳怎麼登入（預設 Telepy 的金鑰）。/ How that hop logs in (default: Telepy's key). */
+    auth?: LanAuth;
 }
 
 /** 區網主機資訊（顯示用）。/ LAN host details for display. */
@@ -95,6 +99,8 @@ type Session = {
     disposed: boolean;
     /** 指令規則的提示列（每個分頁各自的）。/ This tab's command-rule banner. */
     commandBanner: HoldBanner | null;
+    /** 誰在看這個分頁的 shell（`watchers` frame）。/ Who watches this tab's shell. */
+    watchers: WatchersFrame | null;
     /** 後端的 shell 代號（shell frame 給的；要接回時帶 `resume`）。/ The server's shell id (sent as `resume`). */
     shellId: string | null;
     /** 看過的輸出位置（UTF-16）；null = 這個 xterm 什麼都沒有（重新整理後）。/ Output seen; null = a fresh xterm. */
@@ -122,6 +128,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
     const lanHostId = lan?.hostId ?? null;
     const lanUsername = lan?.username ?? null;
+    const lanAuth = lan?.auth ?? TELEPY_AUTH;
+    const lanAuthKey = `${lanAuth.kind}:${lanAuth.kind === "credential" ? lanAuth.id : ""}`;
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
     const xtermRef = useRef<any>(null);
@@ -149,6 +157,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     /** 作用中分頁的指令規則提示列。/ The active tab's command-rule banner. */
     const [commandBanner, setCommandBanner] = useState<HoldBanner | null>(null);
+    /** 作用中分頁有誰在看。/ Who watches the active tab. */
+    const [watchers, setWatchers] = useState<WatchersFrame | null>(null);
     /** 作用中分頁正在接回保留的 shell。/ The active tab is reconnecting to its kept shell. */
     const [reconnecting, setReconnecting] = useState<TerminalReconnect | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
@@ -278,6 +288,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         wsRef.current = target.ws;
         setLatencyMs(target.lastLatency);
         setCommandBanner(target.commandBanner);
+        setWatchers(target.watchers);
         setReconnecting(target.droppedAt !== null && target.grace ? { droppedAt: target.droppedAt, grace: target.grace } : null);
         // 等 display 生效後再量尺寸；手機不自動聚焦（避免切分頁就彈出原生鍵盤）。
         // Measure after the display change lands; skip autofocus on mobile (no surprise keyboard).
@@ -318,7 +329,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 // 敏感隧道的 step-up（這個分頁有才帶）。/ This tab's step-up token for sensitive tunnels.
                 step_up: stepUpToken() ?? undefined,
                 // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
-                ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
+                ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}), ...lanAuthFrame(lanAuth) } : {}),
                 // 接回保留的 shell：帶看過的位置，只補沒看到的。/ Resume the kept shell from what this xterm has seen.
                 ...(s.shellId ? { resume: s.shellId, ...(s.offset !== null ? { offset: s.offset } : {}) } : {}),
             }));
@@ -345,8 +356,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                     s.commandBanner = nextBanner(s.commandBanner, frame);
                     if (activeIdRef.current === s.id) setCommandBanner(s.commandBanner);
                 } else {
-                    const shell = parseShellFrame(new TextDecoder().decode(event.data as ArrayBuffer));
+                    const text = new TextDecoder().decode(event.data as ArrayBuffer);
+                    const shell = parseShellFrame(text);
                     if (shell) onShellFrame(s, shell);
+                    const w = shell ? null : parseWatchersFrame(text);
+                    if (w) {
+                        s.watchers = w;
+                        if (activeIdRef.current === s.id) setWatchers(w);
+                    }
                 }
                 return;
             }
@@ -364,7 +381,10 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             if (s.ws === ws) s.ws = null;
             // 連線斷了：伺服器已撤回等核准的指令。/ Disconnected: the server already withdrew a pending command.
             if (s.commandBanner?.state === "pending") s.commandBanner = null;
+            // 接回時伺服器會再送一次。/ The server sends it again on reattach.
+            s.watchers = null;
             if (activeIdRef.current === s.id) {
+                setWatchers(null);
                 setLatencyMs(null);
                 setCommandBanner(s.commandBanner);
                 if (wsRef.current === ws) wsRef.current = null;
@@ -412,6 +432,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             } else if (lanHostId && code === 4003) {
                 setPermissionDenied(t("terminal.lanLoginInvalidCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.lanLoginInvalidXterm")}\x1b[0m\r\n`);
+            } else if (lanHostId && code === 4010) {
+                setPermissionDenied(t("terminal.savedLoginCard"));
+                s.term.write(`\r\n\x1b[31m${t("terminal.savedLoginXterm")}\x1b[0m\r\n`);
             } else if (code === 4004) {
                 setPermissionDenied(t("terminal.permissionDeniedCard"));
                 s.term.write(`\r\n\x1b[31m${t("terminal.permissionDeniedXterm")}\x1b[0m\r\n`);
@@ -472,7 +495,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 s.term.write(`\r\n\x1b[31m${t("terminal.disconnectedCodeXterm", { code })}\x1b[0m\r\n`);
             }
         };
-    }, [serverId, lanHostId, lanUsername, updateTab, fitAndResize, t]);
+    // lanAuthKey 代表 lanAuth 的內容（物件每次 render 可能是新的）。/ lanAuthKey stands in for lanAuth's content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [serverId, lanHostId, lanUsername, lanAuthKey, updateTab, fitAndResize, t]);
 
     /** shell frame：記住 id / 位置 / 保留時間；接回成功就收起提示列。/ Remember the id, position and grace; a resume clears the banner. */
     function onShellFrame(s: Session, f: ShellFrame) {
@@ -537,6 +562,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             authRetried: false,
             disposed: false,
             commandBanner: null,
+            watchers: null,
             // 重新整理後接回：這個 xterm 什麼都還沒有，所以不帶 offset（伺服器清畫面重畫）。
             // Re-attaching after a reload: this xterm has nothing yet, so no offset (the server redraws).
             shellId: resumeId,
@@ -930,6 +956,15 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
         if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "command_cancel" }));
     }, []);
+    /** 回應看的人「想打字」、或收回控制權（作用中分頁）。/ Answer a watcher's request to type, or take control back. */
+    const answerWatch = useCallback((watcher: number, allow: boolean) => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "watch_answer", watcher, allow }));
+    }, []);
+    const revokeWatch = useCallback(() => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "watch_revoke" }));
+    }, []);
     const dismissCommandBanner = useCallback(() => {
         const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
         if (s) s.commandBanner = null;
@@ -962,6 +997,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             recorded,
             appearance,
             commandBanner,
+            watchers,
             reconnecting,
             detachPolicy,
         },
@@ -976,6 +1012,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             selectTab,
             withdrawCommand,
             dismissCommandBanner,
+            answerWatch,
+            revokeWatch,
             reconnectNow,
         },
     };

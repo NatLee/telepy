@@ -19,6 +19,8 @@ import { Modal } from "@/components/ui/Modal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ToolboxTarget } from "@/lib/snippets";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { WatchersChip, WatchRequestBanner } from "@/components/watch/WatchersBar";
+import { pendingRequests, controller } from "@/lib/terminalWatch";
 import { ReconnectBanner } from "@/components/tunnels/ReconnectBanner";
 import { ReconnectWhy } from "@/components/tunnels/ReconnectWhy";
 import { useTerminalDetach } from "@/hooks/useTerminalDetach";
@@ -28,6 +30,8 @@ import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
 import { TerminalConnectPage } from "@/components/tunnels/TerminalConnectPanel";
 import type { TerminalFlowContext } from "@/components/tunnels/TerminalFlow";
 import { terminalPhase } from "@/lib/terminalFlow";
+import { lanAuthFromValue, lanAuthParam } from "@/lib/lanAuth";
+import { useSavedLogins } from "@/hooks/useSavedLogins";
 import { StatusCard } from "@/components/ui/StatusCard";
 import "xterm/css/xterm.css";
 
@@ -54,10 +58,17 @@ function TerminalSession({ serverId }: { serverId: string }) {
     // 區網主機（經裝置跳過去）。/ Optional LAN host reached through the device.
     const lanHostId = searchParams.get("lanHost");
     const lanUser = searchParams.get("lanUser");
+    // 區網那一跳怎麼登入（網址帶的；物件只建一次，免得 hook 以為目標變了）。/ How the hop logs in (from the URL; one stable object).
+    const lanAuthRaw = searchParams.get("lanAuth");
+    const lanAuth = useMemo(() => lanAuthFromValue(lanAuthRaw), [lanAuthRaw]);
     const router = useRouter();
     const { accessToken } = useAuth();
 
-    const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanHostId ? { hostId: lanHostId, username: lanUser } : null);
+    const lanTarget = useMemo(() => (lanHostId ? { hostId: lanHostId, username: lanUser, auth: lanAuth } : null), [lanHostId, lanUser, lanAuth]);
+    const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanTarget);
+    // 存的登入的名稱（info 路徑圖要說「用哪一組」）。/ The saved login's name for the info diagram.
+    const savedLogins = useSavedLogins(lanHostId && lanAuth.kind === "credential" ? { tunnelId: Number(serverId), hostId: Number(lanHostId), protocol: "ssh" } : null, lanAuth.kind === "credential");
+    const savedLabel = lanAuth.kind === "credential" ? savedLogins.list.find((c) => c.id === lanAuth.id)?.label ?? null : null;
 
     // 「伺服器→裝置」的 kernel RTT：訂閱該隧道的 tunnel_connection socket（首屏帶入 + 每 ~5s 更新）。
     const { status: connStatus } = useTunnelConnectionWebSocket(serverId);
@@ -100,13 +111,14 @@ function TerminalSession({ serverId }: { serverId: string }) {
         failure,
         deviceName: tunnelName ?? (serverId || "").slice(0, 8),
         account: username ?? "",
-        lanHost: lanHostId ? { name: lanHost ? (lanHost.label || lanHost.address) : t("terminal.lanHostFallback"), address: lanHost?.address ?? "?", port: lanHost?.ssh_port ?? 22, login: lanUser || lanHost?.username || "" } : null,
+        lanHost: lanHostId ? { name: lanHost ? (lanHost.label || lanHost.address) : t("terminal.lanHostFallback"), address: lanHost?.address ?? "?", port: lanHost?.ssh_port ?? 22, login: lanUser || lanHost?.username || "", auth: lanAuth.kind, savedLabel } : null,
         youToServerMs: latencyMs,
         serverToDeviceMs,
         recorded,
     };
-    const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}`;
-    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow } = actions;
+    const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}${lanHostId && lanAuthParam(lanAuth) ? `&lanAuth=${lanAuthParam(lanAuth)}` : ""}`;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow, answerWatch, revokeWatch } = actions;
+    const watchers = state.watchers;
 
     // 工具箱：桌機 = 側欄的第二個分頁（跟檔案共用一塊），手機 = 底部面板（送出後自動收起，看得到結果）。
     // Toolbox: on desktop the side panel's second tab (sharing the files panel), on phones a bottom sheet that closes
@@ -242,6 +254,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     onSideTab={setSideTab}
                     onToolbox={canToolbox ? toggleToolbox : undefined}
                     toolboxOpen={toolboxOpen}
+                    watchers={<WatchersChip frame={watchers} onRevoke={revokeWatch} />}
                 />
 
                 <TerminalContent
@@ -279,13 +292,15 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     sideTab={sideTab}
                     onSideTab={setSideTab}
                     toolbox={isDesktop && canToolbox ? toolboxPanel : null}
-                    commandBanner={(commandBanner || reconnecting) && (
+                    commandBanner={(commandBanner || reconnecting || pendingRequests(watchers).length > 0 || controller(watchers)) && (
                         <div className="space-y-2">
                             {/* 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */}
                             {reconnecting && (
                                 <ReconnectBanner state={reconnecting} onWhy={() => setWhyOpen(true)} onRetry={reconnectNow} />
                             )}
                             {commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                            {/* 看的人想打字 / 正在一起打字。/ A watcher asks to type, or is typing along. */}
+                            <WatchRequestBanner frame={watchers} onAnswer={answerWatch} onRevoke={revokeWatch} />
                         </div>
                     )}
                 />

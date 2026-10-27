@@ -798,6 +798,43 @@ impl Terminal {
         }
     }
 
+    /// 送一則 JSON（看別人終端機的 `control`、被看的人的 `watch_answer` …）。/ Send one JSON message.
+    pub async fn send_json(&mut self, v: Value) {
+        self.ws.send(Message::Text(v.to_string().into())).await.unwrap();
+    }
+
+    /// 等一則符合條件的 binary JSON frame（10 秒逾時），取走並回傳它。/ Wait for a binary JSON frame that matches, and take it.
+    pub async fn expect_frame(&mut self, what: &str, ok: impl Fn(&Value) -> bool) -> Value {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(i) = self.notices.iter().position(&ok) {
+                return self.notices.remove(i);
+            }
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
+                Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
+                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+                Ok(other) => panic!("socket ended before {what}: {other:?}; frames {:?}", self.notices),
+                Err(_) => panic!("timed out waiting for {what}; frames {:?}; output so far: {:?}", self.notices, self.seen),
+            }
+        }
+    }
+
+    /// 等伺服器關閉，回 (關閉碼, 原因)。/ Wait for the server to close; returns (code, reason).
+    pub async fn wait_closed_reason(&mut self) -> Option<(u16, String)> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match tokio::time::timeout_at(deadline, self.ws.next()).await {
+                Ok(Some(Ok(Message::Close(f)))) => return f.map(|f| (u16::from(f.code), f.reason.to_string())),
+                Ok(Some(Ok(Message::Text(t)))) => self.text(&t),
+                Ok(Some(Ok(Message::Binary(b)))) => self.binary(&b),
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(_))) | Ok(None) => return None,
+                Err(_) => panic!("socket was not closed by the server; output so far: {:?}", self.seen),
+            }
+        }
+    }
+
     /// 讀 PTY 輸出直到出現 `needle`（10 秒逾時）。
     pub async fn expect(&mut self, needle: &str) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -1282,6 +1319,29 @@ impl Lab {
             }
             Some(Ok(_)) => Ok(Terminal { ws, seen: String::new(), notices: Vec::new(), shell: None, offset: 0 }),
             other => panic!("terminal socket ended: {other:?}"),
+        }
+    }
+}
+
+impl Lab {
+    /// 看別人的網頁終端機（`/ws/terminal-watch/{shell}/`）；第一個 frame 是 `{type:"watch"}`（放在 `notices`）。
+    /// Watch someone's web terminal; the first frame (`{type:"watch"}`) lands in `notices`.
+    pub async fn watch(&self, user: &LabUser, shell_id: &str) -> Result<Terminal, u16> {
+        let base = self.ws_base().await;
+        let (mut ws, _) = connect_async(format!("{base}/ws/terminal-watch/{shell_id}/")).await.unwrap();
+        ws.send(Message::Text(json!({"type": "auth", "token": user.token}).to_string().into())).await.unwrap();
+        let mut term = Terminal { ws, seen: String::new(), notices: Vec::new(), shell: None, offset: 0 };
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), term.ws.next()).await.expect("no watch frame") {
+                Some(Ok(Message::Close(Some(f)))) => return Err(u16::from(f.code)),
+                Some(Ok(Message::Binary(b))) => {
+                    term.binary(&b);
+                    return Ok(term);
+                }
+                Some(Ok(Message::Text(t))) => term.text(&t),
+                Some(Ok(_)) => {}
+                other => panic!("watch socket ended: {other:?}"),
+            }
         }
     }
 }

@@ -21,6 +21,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { BrowserNode, DeviceNode, NodeField, TelepyNode } from "@/components/flow/ConnectNodes";
 import { RequestAccessDialog } from "@/components/tunnels/AccessRequests";
+import { LanAuthSelect } from "@/components/tunnels/LanAuthField";
 import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
 import type { TerminalFlowContext } from "@/components/tunnels/TerminalFlow";
 import { useTerminalConnect } from "@/hooks/useTerminalConnect";
@@ -33,7 +34,7 @@ const CARD = "rounded-xl border border-border bg-card shadow-card";
 export function TerminalConnectPage() {
     const { t } = useI18n();
     const { state, actions } = useTerminalConnect();
-    const { tunnels, loading, failed, tunnel, host, online, rtt, account, login, loginOk, canOpen } = state;
+    const { tunnels, loading, failed, tunnel, host, online, rtt, account, login, loginOk, canOpen, auth } = state;
     const [infoOpen, setInfoOpen] = useState(false);
     const [requestOpen, setRequestOpen] = useState(false);
     const noAccounts = !!tunnel && tunnel.usernames.length === 0;
@@ -44,7 +45,7 @@ export function TerminalConnectPage() {
         failure: null,
         deviceName: tunnel?.name ?? t("connect.device"),
         account,
-        lanHost: host ? { name: hostName(host), address: host.address, port: host.ssh_port, login: login.trim() } : null,
+        lanHost: host ? { name: hostName(host), address: host.address, port: host.ssh_port, login: login.trim(), auth: auth.kind } : null,
         serverToDeviceMs: rtt,
     };
 
@@ -130,6 +131,12 @@ export function TerminalConnectPage() {
                                         <NodeField id="term-login" label={t("connect.login")} hint={loginOk ? undefined : t("network.loginHint")}>
                                             <Input id="term-login" value={login} onChange={(e) => actions.setLogin(e.target.value)} placeholder="admin" autoComplete="off" autoCapitalize="off" spellCheck={false} className="font-mono" aria-invalid={!loginOk} />
                                         </NodeField>
+                                    )}
+                                    {host && tunnel && (
+                                        <div className="sm:col-span-2 @3xl:col-span-1">
+                                            <label htmlFor="term-auth" className="mb-1 block text-xs text-muted-foreground">{t("lanAuth.label")}</label>
+                                            <LanAuthSelect id="term-auth" tunnelId={tunnel.id} hostId={host.id} hostName={hostName(host)} login={login.trim()} value={auth} onChange={actions.setAuth} />
+                                        </div>
                                     )}
                                 </div>
                             }

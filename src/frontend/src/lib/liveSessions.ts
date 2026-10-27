@@ -4,7 +4,7 @@
  */
 import type { LiveSession } from "@/types/liveSession";
 
-export type KindFilter = "all" | "terminal" | "files" | "browser" | "desktop" | "rustdesk" | "ssh" | "ai";
+export type KindFilter = "all" | "terminal" | "files" | "browser" | "desktop" | "rustdesk" | "ssh" | "ai" | "watch";
 
 export interface SessionFilter {
     kind: KindFilter;

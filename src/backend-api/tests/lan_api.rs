@@ -254,3 +254,55 @@ async fn web_terminal_to_a_lan_host() {
     // 裝置那跳的權限照舊。/ Device access is checked as before.
     assert_eq!(lab.terminal_with(&bob, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.err(), Some(4004));
 }
+
+/// 區網那一跳怎麼登入：預設 Telepy 的金鑰（這條隧道自己的 + 共用的），`prompt` 不出示金鑰，`credential` 用憑證庫的
+/// 私鑰 / 密碼；壞的憑證 = 4010。/ How the LAN hop logs in: Telepy's keys by default, `prompt` offers none,
+/// `credential` uses a saved key / password; an unusable saved login = 4010.
+#[tokio::test]
+async fn lan_hop_logs_in_with_the_chosen_key() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let boxm = lab.machine("box", &[("ubuntu", &[&lab.service])], true).await;
+    let own_key = lab.keygen("alice-nas");
+    // nas：admin 只認這條隧道自己的服務金鑰；backup 只認 alice 存進憑證庫的金鑰。
+    // nas: admin trusts only the tunnel's own key; backup trusts only the key alice saves in the vault.
+    let nas = lab.machine("nas", &[("admin", &[]), ("backup", &[&own_key])], false).await;
+    let dev = lab.device(&alice, "box", &boxm).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let id = dev.tunnel_id;
+    let tunnel_key = lab.tunnel_service_key(&dev).await;
+    let dir = nas.account_home("admin").join(".ssh");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("authorized_keys"), format!("{tunnel_key}\n")).unwrap();
+    let r = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "127.0.0.1", "label": "nas", "username": "admin", "ssh_port": nas.port})).await;
+    let nas_id = r.json["id"].as_i64().unwrap();
+
+    // 預設：這條隧道自己的服務金鑰登入了 admin。/ Default: the tunnel's own key logged in as admin.
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id})).await.expect("LAN terminal");
+    t.expect("login:admin@nas").await;
+    assert!(nas.logged_in_bare("admin", &telepy_server::ssh::tunnel_keys::bare(&tunnel_key)));
+    t.close().await;
+
+    // prompt：不出示金鑰 → 這台機器沒有密碼登入，OpenSSH 說 Permission denied。/ prompt: no key offered → refused here.
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "lan_auth": "prompt"})).await.expect("LAN terminal");
+    t.expect("Permission denied").await;
+    t.close().await;
+
+    // credential：憑證庫的私鑰登入了 backup。/ credential: the saved key logged in as backup.
+    let pem = std::fs::read_to_string(&own_key.path).unwrap();
+    let r = app.post("/api/credentials", Some(&alice.token), json!({"label": "backup key", "protocol": "ssh", "tunnel_id": id, "lan_host_id": nas_id, "login": "backup", "private_key": pem})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let cid = r.json["id"].as_i64().unwrap();
+    let mut t = lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "lan_username": "backup", "lan_auth": "credential", "lan_credential_id": cid})).await.expect("LAN terminal");
+    t.expect("login:backup@nas").await;
+    assert!(nas.logged_in("backup", &own_key));
+    t.close().await;
+    let r = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "lan_terminal" && e["message"].as_str().unwrap().contains("saved login 'backup key'")), "{}", r.text);
+
+    // 不存在 / 別人的 / 別台主機的憑證 → 4010。/ A missing or foreign saved login → 4010.
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": nas_id, "lan_auth": "credential", "lan_credential_id": 999})).await.err(), Some(4010));
+    let other = app.post(&format!("/api/reverse/server/{id}/lan/hosts"), Some(&alice.token), json!({"address": "127.0.0.2", "username": "admin", "ssh_port": nas.port})).await.json["id"].as_i64().unwrap();
+    assert_eq!(lab.terminal_with(&alice, &dev, "ubuntu", json!({"lan_host_id": other, "lan_auth": "credential", "lan_credential_id": cid})).await.err(), Some(4010));
+}

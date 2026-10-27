@@ -8,7 +8,8 @@
  */
 import React, { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Activity, Plug, Power, RefreshCw, Server, X } from "lucide-react";
+import Link from "next/link";
+import { Activity, Eye, Info, Plug, Power, RefreshCw, Server, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -18,13 +19,14 @@ import { IpPlace } from "@/components/ui/IpPlace";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { PRESENCE_KINDS } from "@/components/tunnels/TunnelPresence";
+import { WatchInfoDialog } from "@/components/watch/WatchInfoDialog";
 import { useLiveSessions } from "@/hooks/useLiveSessions";
 import { useI18n } from "@/lib/i18n";
 import { filterSessions, groupByTunnel, type KindFilter } from "@/lib/liveSessions";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import type { LiveSession } from "@/types/liveSession";
 
-const KIND_FILTERS: KindFilter[] = ["all", "terminal", "files", "browser", "desktop", "rustdesk", "ssh", "ai"];
+const KIND_FILTERS: KindFilter[] = ["all", "terminal", "files", "browser", "desktop", "rustdesk", "ssh", "ai", "watch"];
 
 function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
     const { t, locale } = useI18n();
@@ -47,6 +49,12 @@ function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
                                 {t("sessions.detached", { time: formatRelativeTime(s.detached.ends_at, locale) })}
                             </Chip>
                         )}
+                        {s.watching && <span className="text-muted-foreground">· {t("sessions.watching", { user: s.watching.user.username })}</span>}
+                        {!!s.watched_by?.length && (
+                            <Chip tone="primary" title={s.watched_by.join(", ")}>
+                                <Eye /> {t("sessions.watchedBy", { names: [...new Set(s.watched_by)].join(", ") })}
+                            </Chip>
+                        )}
                         {s.mine && <Chip>{t("sessions.you")}</Chip>}
                     </p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
@@ -59,6 +67,13 @@ function SessionRow({ s, onEnd }: { s: LiveSession; onEnd: () => void }) {
             <span className="text-xs text-muted-foreground whitespace-nowrap" title={new Date(s.since).toLocaleString(locale)}>
                 {t("sessions.since", { time: formatRelativeTime(s.since, locale) })}
             </span>
+            {s.shell_id && (
+                <Button size="sm" variant="outline" asChild>
+                    <Link href={`/tunnels/sessions/watch?shell=${encodeURIComponent(s.shell_id)}`} title={t("sessions.watchHint")}>
+                        <Eye /> {t("sessions.watch")}
+                    </Link>
+                </Button>
+            )}
             <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={onEnd}>
                 <Power /> {t("sessions.end")}
             </Button>
@@ -75,6 +90,7 @@ function LiveSessionsInner() {
     const [kind, setKind] = useState<KindFilter>("all");
     const [mineOnly, setMineOnly] = useState(false);
     const [pending, setPending] = useState<LiveSession | null>(null);
+    const [info, setInfo] = useState(false);
 
     const all = useMemo(() => sessions ?? [], [sessions]);
     const tunnels = useMemo(() => groupByTunnel(all).map((g) => ({ id: g.tunnelId, name: g.name })), [all]);
@@ -90,10 +106,16 @@ function LiveSessionsInner() {
                 title={t("sessions.title")}
                 description={t("sessions.subtitle")}
                 actions={
-                    <Button onClick={() => void reload()} variant="outline">
-                        <RefreshCw size={16} />
-                        {t("common.refresh")}
-                    </Button>
+                    <>
+                        <Button onClick={() => setInfo(true)} variant="outline">
+                            <Info size={16} />
+                            {t("sessions.watchInfo")}
+                        </Button>
+                        <Button onClick={() => void reload()} variant="outline">
+                            <RefreshCw size={16} />
+                            {t("common.refresh")}
+                        </Button>
+                    </>
                 }
             />
 
@@ -178,6 +200,7 @@ function LiveSessionsInner() {
 
             <p className="mt-6 text-xs text-muted-foreground">{t("sessions.footnote")}</p>
 
+            <WatchInfoDialog isOpen={info} onClose={() => setInfo(false)} ctx={{ phase: "watching", recorded: null }} />
             <ConfirmDialog
                 isOpen={pending !== null}
                 onClose={() => setPending(null)}
