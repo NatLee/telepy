@@ -436,8 +436,10 @@
      xterm 5's DOM renderer appends a measuring div (top:-50000px; width:50000px) to <body>. While a dialog
      is open, react-remove-scroll makes body position:relative + overflow:hidden, so that div widened the page
      to 50,000px and phones zoomed the layout out (every dialog on the terminal page rendered 4x wide).
-     position:fixed keeps it out of the page width; measuring is unaffected. */
-  body > div[aria-hidden="true"][style*="top: -50000px"] {
+     position:fixed keeps it out of the page width; measuring is unaffected.
+     不限 aria-hidden：對話框比 xterm 先打開時（?toolbox=1），這個 div 不會被 Radix 標成 aria-hidden。
+     No aria-hidden requirement: when a dialog opens before xterm (?toolbox=1), Radix never marks the div. */
+  body > div[style*="top: -50000px"] {
     position: fixed !important;
   }
 

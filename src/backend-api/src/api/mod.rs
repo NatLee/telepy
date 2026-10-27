@@ -28,6 +28,7 @@ pub mod sessions;
 pub mod sftp;
 pub mod sharing;
 pub mod sign_ins;
+pub mod snippets;
 pub mod web_sessions;
 pub mod site_settings;
 pub mod step_up;

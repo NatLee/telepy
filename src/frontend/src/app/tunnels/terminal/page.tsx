@@ -7,12 +7,16 @@
  * sidebar's Terminal entry), a path diagram that picks the device / account / LAN host first. The info button
  * opens the active tab's live path diagram (where it stopped).
  */
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { Terminal as TerminalIcon, X, Server } from "lucide-react";
+import { Terminal as TerminalIcon, X, Server, Wrench } from "lucide-react";
 import { TerminalHeader } from "@/components/tunnels/TerminalHeader";
-import { TerminalContent } from "@/components/tunnels/TerminalContent";
+import { TerminalContent, type SideTab } from "@/components/tunnels/TerminalContent";
+import { ToolboxPanel } from "@/components/toolbox/ToolboxPanel";
+import { Modal } from "@/components/ui/Modal";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import type { ToolboxTarget } from "@/lib/snippets";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
 import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
 import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
@@ -95,6 +99,69 @@ function TerminalSession({ serverId }: { serverId: string }) {
     const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}`;
     const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner } = actions;
 
+    // 工具箱：桌機 = 側欄的第二個分頁（跟檔案共用一塊），手機 = 底部面板（送出後自動收起，看得到結果）。
+    // Toolbox: on desktop the side panel's second tab (sharing the files panel), on phones a bottom sheet that closes
+    // after sending so the output is visible.
+    const isDesktop = useMediaQuery("(min-width: 768px)");
+    const [sideTab, setSideTab] = useState<SideTab>(searchParams.get("toolbox") ? "toolbox" : "files");
+    const [toolboxSheet, setToolboxSheet] = useState(false);
+    const toolboxOpen = isDesktop ? showFiles && sideTab === "toolbox" : toolboxSheet;
+    const toggleToolbox = useCallback(() => {
+        if (!isDesktop) {
+            setToolboxSheet((v) => !v);
+            return;
+        }
+        if (showFiles && sideTab === "toolbox") setShowFiles(false);
+        else {
+            setSideTab("toolbox");
+            setShowFiles(true);
+        }
+    }, [isDesktop, showFiles, sideTab, setShowFiles]);
+    // ?toolbox=1（隧道選單的「工具箱」）：量到斷點後打開一次。/ ?toolbox=1 opens it once the breakpoint is known.
+    const toolboxParamDone = useRef(false);
+    useEffect(() => {
+        if (toolboxParamDone.current || isDesktop === undefined || !searchParams.get("toolbox")) return;
+        toolboxParamDone.current = true;
+        if (isDesktop) {
+            setSideTab("toolbox");
+            setShowFiles(true);
+        } else setToolboxSheet(true);
+    }, [isDesktop, searchParams, setShowFiles]);
+    // 工具箱讀最新的提示（面板收起來之後也讀得到）。/ The toolbox reads the latest banner, even after its panel closes.
+    const bannerRef = useRef(commandBanner);
+    useEffect(() => { bannerRef.current = commandBanner; }, [commandBanner]);
+    const toolboxTarget: ToolboxTarget = useMemo(() => ({
+        tunnelId: Number(serverId),
+        send: (input: string) => {
+            const ws = wsRef.current;
+            if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+            // 跟鍵盤一樣的 pty_input（不是括號貼上），指令規則照樣讀得到每一行。/ The keyboard's pty_input, never a bracketed paste.
+            ws.send(JSON.stringify({ action: "pty_input", payload: { input } }));
+            return true;
+        },
+        onOutput: (cb: () => void) => {
+            const term = xtermRef.current as { onWriteParsed?: (fn: () => void) => { dispose: () => void } } | null;
+            const sub = term?.onWriteParsed?.(cb);
+            return () => sub?.dispose();
+        },
+        connected,
+        banner: () => bannerRef.current,
+        where: lanHostId
+            ? `${lanUser || lanHost?.username || "?"}@${lanHost ? (lanHost.label || lanHost.address) : t("terminal.lanHostFallback")}`
+            : `${username ?? "?"}@${tunnelName ?? (serverId || "").slice(0, 8)}`,
+    }), [serverId, wsRef, xtermRef, connected, lanHostId, lanUser, lanHost, username, tunnelName, t]);
+    const afterToolboxSend = useCallback(() => {
+        setToolboxSheet(false);
+        setMainView("terminal");
+        const term = xtermRef.current as { focus?: () => void; scrollToBottom?: () => void } | null;
+        setTimeout(() => {
+            try { term?.scrollToBottom?.(); term?.focus?.(); } catch { /* noop */ }
+        }, 50);
+    }, [setMainView, xtermRef]);
+    const toolboxPanel = (
+        <ToolboxPanel target={toolboxTarget} tunnelName={tunnelName ?? (serverId || "").slice(0, 8)} onSent={afterToolboxSend} />
+    );
+
     // Set initial tab from URL param (mount only)
     useEffect(() => {
         const mv = searchParams.get("mainView");
@@ -160,6 +227,10 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     tunnelName={tunnelName}
                     onOpenInfo={() => setInfoOpen(true)}
                     switchHref={switchHref}
+                    sideTab={sideTab}
+                    onSideTab={setSideTab}
+                    onToolbox={toggleToolbox}
+                    toolboxOpen={toolboxOpen}
                 />
 
                 <TerminalContent
@@ -194,12 +265,20 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     serviceKeys={serviceKeys}
                     onReconnect={reconnect}
                     palette={appearance.resolved.scheme.theme}
+                    sideTab={sideTab}
+                    onSideTab={setSideTab}
+                    toolbox={isDesktop ? toolboxPanel : null}
                     commandBanner={commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
                 />
             </div>
 
             <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
             <TerminalInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={flowCtx} />
+            {isDesktop === false && (
+                <Modal isOpen={toolboxSheet} onClose={() => setToolboxSheet(false)} title={t("toolbox.title")} icon={<Wrench />} size="lg" bodyClassName="px-2 py-2 sm:px-3">
+                    <ToolboxPanel target={toolboxTarget} tunnelName={tunnelName ?? (serverId || "").slice(0, 8)} onSent={afterToolboxSend} embedded />
+                </Modal>
+            )}
         </div>
     );
 }
