@@ -32,6 +32,7 @@ import {
     Trash2,
     Users,
     Waypoints,
+    Wrench,
     type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -97,6 +98,7 @@ export function TunnelActions({
     onRequestAccess,
     onRecordings,
     onCommandRules,
+    onToolbox,
     onMoveToGroup,
 }: TunnelActionsProps) {
     const { t } = useI18n();
@@ -123,6 +125,14 @@ export function TunnelActions({
                         hint={t("tunnelActions.portForwardingHint")}
                         onSelect={() => onCommands(tunnel.id)}
                     />
+                    {onToolbox && (
+                        <ActionItem
+                            icon={Wrench}
+                            label={t("toolbox.menu")}
+                            hint={t("toolbox.menuHint")}
+                            onSelect={() => onToolbox(tunnel.id)}
+                        />
+                    )}
                     <ActionItem
                         icon={FileCode2}
                         label={t("tunnelActions.sshConfig")}

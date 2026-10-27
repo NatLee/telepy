@@ -12,7 +12,8 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { FileManagerPanel } from "@/components/tunnels/FileManagerPanel";
 import { RemoteBrowserPanel } from "@/components/tunnels/RemoteBrowserPanel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw, KeyRound, Loader2 } from "lucide-react";
+import { Copy, Terminal as TerminalIcon, MonitorPlay, FolderSync, RefreshCw, KeyRound, Loader2, Wrench } from "lucide-react";
+import { Segmented } from "@/components/ui/segmented";
 import { TerminalMainView } from "@/lib/tunnelUrls";
 import { ShellTabBar } from "@/components/tunnels/ShellTabBar";
 import type { ShellTab } from "@/hooks/useTerminalPage";
@@ -55,7 +56,14 @@ export interface TerminalContentProps {
     commandBanner?: React.ReactNode;
     /** 隧道名稱（檔案管理的 info 圖用）。/ The tunnel name, for the file manager's info diagram. */
     tunnelName?: string | null;
+    /** 桌機側欄顯示哪一個：檔案或工具箱。/ Which the desktop side panel shows: files or the toolbox. */
+    sideTab?: SideTab;
+    onSideTab?: (tab: SideTab) => void;
+    /** 工具箱面板（桌機側欄裡）。/ The toolbox panel (in the desktop side panel). */
+    toolbox?: React.ReactNode;
 }
+
+export type SideTab = "files" | "toolbox";
 
 export function TerminalContent({
     mainView,
@@ -90,6 +98,9 @@ export function TerminalContent({
     palette,
     commandBanner,
     tunnelName,
+    sideTab = "files",
+    onSideTab,
+    toolbox,
 }: TerminalContentProps) {
     const { t } = useI18n();
     const groupRef = useRef<GroupImperativeHandle>(null);
@@ -291,7 +302,25 @@ export function TerminalContent({
                         collapsedSize={0}
                         className="hidden md:flex min-h-0 min-w-0 bg-card rounded-lg border border-border flex-col"
                     >
-                        {isDesktop === true && showFiles && username && accessToken && (
+                        {/* 側欄 = 檔案 | 工具箱 兩個分頁（同一塊，終端機不會被擠成三欄）。/ The side panel holds Files | Toolbox tabs. */}
+                        {isDesktop === true && showFiles && toolbox && onSideTab && (
+                            <div className="shrink-0 border-b border-border p-1.5">
+                                <Segmented
+                                    kind="tabs"
+                                    size="sm"
+                                    fullWidth
+                                    value={sideTab}
+                                    onChange={onSideTab}
+                                    aria-label={t("toolbox.sideTabs")}
+                                    options={[
+                                        { value: "files", label: t("common.files"), icon: <FolderSync size={13} /> },
+                                        { value: "toolbox", label: t("toolbox.title"), icon: <Wrench size={13} /> },
+                                    ]}
+                                />
+                            </div>
+                        )}
+                        {isDesktop === true && showFiles && sideTab === "toolbox" && toolbox}
+                        {isDesktop === true && showFiles && (sideTab === "files" || !toolbox) && username && accessToken && (
                             <FileManagerPanel key={username} serverId={serverId} username={username} accessToken={accessToken} initialPath={syncedPath} deviceName={tunnelName ?? undefined} />
                         )}
                     </ResizablePanel>

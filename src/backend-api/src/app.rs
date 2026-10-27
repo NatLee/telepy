@@ -33,6 +33,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::step_up::router())
         .merge(api::access_requests::router())
         .merge(api::command_rules::router())
+        .merge(api::snippets::router())
         .merge(api::webhooks::router())
         .merge(api::users::router())
         .merge(api::site_settings::router())

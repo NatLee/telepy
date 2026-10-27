@@ -35,6 +35,7 @@ import { liveHealth } from "@/lib/tunnelHealth";
 import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
 import { useI18n } from "@/lib/i18n";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
+import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 
 const TH = "px-4 py-2.5 text-left text-xs text-muted-foreground whitespace-nowrap";
 /** 依群組分段或一個列表（有群組時才有這個選擇）。/ Sections by group or one list (offered once groups exist). */
@@ -142,6 +143,10 @@ export default function TunnelsPage() {
         onRequestAccess: (tunnelId) => setRequestModal({ isOpen: true, tunnelId }),
         onRecordings: (tunnelId) => router.push(`/tunnels/recordings?tunnel=${tunnelId}`),
         onCommandRules: (tunnelId) => router.push(`/tunnels/commands?tunnel=${tunnelId}`),
+        onToolbox: (tunnelId) => {
+            const tn = tunnels.find((x) => x.id === tunnelId);
+            router.push(`${tn ? getTerminalPageUrl(tn) : `/tunnels/terminal?serverId=${tunnelId}`}&toolbox=1`);
+        },
         onLeave: (tunnelId, name) => setLeaveConfirm({ isOpen: true, tunnelId, name }),
         onDelete: (tunnelId, name) => setDeleteConfirm({ isOpen: true, tunnelId, name }),
         onTogglePin: (tunnelId, pinned) => void togglePin(tunnelId, pinned),

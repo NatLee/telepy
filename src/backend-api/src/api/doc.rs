@@ -47,6 +47,7 @@ pub const LOGIN_PATH: &str = "/login";
         (name = "Device Keys", description = "Per-device key lists: Telepy installs users' public keys into a device's authorized_keys over SSH, removes them when access is revoked, and audits what is there"),
         (name = "Tunnel Sharing", description = "Share tunnels with other users (view / edit / admin)"),
         (name = "Command Rules", description = "Commands that the web terminal and MCP agents may not run, or only after the tunnel owner or an ADMIN approves: site-wide rules (admins), per-tunnel rules (owner / ADMIN), and the approval requests"),
+        (name = "Toolbox", description = "Saved command snippets for the web terminal: your own (any tunnel), per tunnel (owner / ADMIN edit, anyone who can open its terminal uses them) and site-wide (admins edit); variables are filled in the browser"),
         (name = "Webhooks", description = "Personal webhooks (each person receives the notifications the web already gives them) and the admins' site-wide webhooks (a curated set of important events); event catalogue, test sends, delivery history and Standard Webhooks signing secrets"),
         (name = "Script", description = "Connection scripts and ssh config for a tunnel"),
         (name = "SFTP", description = "File manager REST endpoints"),
