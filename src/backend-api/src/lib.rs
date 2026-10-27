@@ -4,6 +4,7 @@
 pub mod access_recheck;
 pub mod ai;
 pub mod api;
+pub mod api_calls;
 pub mod app;
 pub mod auth;
 pub mod client_ip;

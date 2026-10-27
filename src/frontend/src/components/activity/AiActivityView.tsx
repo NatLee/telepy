@@ -28,7 +28,6 @@ import { TOOL_FILTERS, WHO_FILTERS, type ToolFilter, type WhoFilter } from "@/li
 import { hasFeature } from "@/lib/features";
 import { useAuth } from "@/lib/auth";
 import { AdminChip, AdminViewLink, type ViewScope } from "@/components/layout/AdminViews";
-import { openPreferences } from "@/components/layout/UserPreferencesModal";
 import type { OAuthGrant } from "@/types/oauth";
 import { ALL, useAiActivityPage, type AiSession } from "@/hooks/useAiActivityPage";
 import { useStickyBar } from "@/hooks/useStickyBar";
@@ -85,8 +84,10 @@ function YourApps({
                 </h2>
                 <div className="ml-auto flex flex-wrap gap-1.5">
                     {hasFeature(user, "api.tokens") && (
-                        <Button size="sm" variant="ghost" className="h-7 gap-1" onClick={() => openPreferences("tokens")}>
-                            <KeyRound size={13} /> {t("activity.appsTokens")}
+                        <Button size="sm" variant="ghost" className="h-7 gap-1" asChild>
+                            <Link href="/tunnels/api" prefetch={false}>
+                                <KeyRound size={13} /> {t("activity.appsTokens")}
+                            </Link>
                         </Button>
                     )}
                     {hasFeature(user, "mcp.connect") && (

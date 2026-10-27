@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * 個人 API token 清單：偏好設定的「API token」分頁（可建立、可撤銷、有說明圖）與管理員的「管理使用者」視窗
- * （`userId`：只能看與撤銷）。每列：名稱、祕密開頭、scope、隧道、最後使用、到期狀態、開著的 session。
- * Personal API token list: the Preferences "API tokens" tab (create, revoke, the explainer) and the admin's
- * Manage-user modal (`userId`: list and revoke only). Each row: name, secret prefix, scopes, tunnels, last use,
- * expiry state, open sessions.
+ * 個人 API token 清單：API 頁的「你的 token」（可建立、可撤銷、有說明圖、每把的呼叫摘要；`onShowCalls` = 點一下看它的紀錄）
+ * 與管理員的「管理使用者」視窗（`userId`：只能看與撤銷）。每列：名稱、祕密開頭、scope、隧道、最後使用、到期狀態、
+ * 開著的 session、最近的呼叫。
+ * Personal API token list: the API page's "Your tokens" (create, revoke, the explainer, each token's call summary;
+ * `onShowCalls` opens its calls) and the admin's Manage-user modal (`userId`: list and revoke only). Each row: name,
+ * secret prefix, scopes, tunnels, last use, expiry state, open sessions, recent calls.
  */
 import React, { useState } from "react";
-import { Info, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Info, KeyRound, ListTree, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Chip, SectionHeading } from "@/components/ui/section";
@@ -28,10 +29,27 @@ const STATE: Record<TokenState, { key: TranslationKey; tone: "success" | "warnin
     revoked: { key: "tokens.state.revoked", tone: "neutral" },
 };
 
-export function ApiTokens({ userId, canCreate = true }: { userId?: number; canCreate?: boolean }) {
+export function ApiTokens({
+    userId,
+    canCreate = true,
+    onShowCalls,
+    onTokens,
+    hideHeading = false,
+}: {
+    userId?: number;
+    canCreate?: boolean;
+    /** 看這把的呼叫紀錄。/ Show this token's calls. */
+    onShowCalls?: (tok: ApiToken) => void;
+    /** 清單載入 / 更新時告訴外面（API 頁的活動篩選要用）。/ Reports the list (the activity filter uses it). */
+    onTokens?: (tokens: ApiToken[] | null) => void;
+    hideHeading?: boolean;
+}) {
     const { t, locale } = useI18n();
     const { showError, showSuccess } = useToast();
     const { tokens, failed, create, revoke, reauthDialog } = useApiTokens(userId);
+    React.useEffect(() => {
+        onTokens?.(tokens);
+    }, [tokens, onTokens]);
     const [creating, setCreating] = useState(false);
     // 每次打開建立視窗都換一個 key：表單從空白開始。/ A new key per open: the form starts blank.
     const [createKey, setCreateKey] = useState(0);
@@ -55,34 +73,40 @@ export function ApiTokens({ userId, canCreate = true }: { userId?: number; canCr
         else showError(t("tokens.revokeFailed"));
     };
 
+    const headingActions = (
+        <div className="flex items-center gap-1.5">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setInfo({ token: null })}>
+                <Info />
+                {t("tokens.howItWorks")}
+            </Button>
+            {!admin && canCreate && (
+                <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                        setCreateKey((k) => k + 1);
+                        setCreating(true);
+                    }}
+                >
+                    <Plus />
+                    {t("tokens.new")}
+                </Button>
+            )}
+        </div>
+    );
+
     return (
         <section className="space-y-3">
-            <SectionHeading
-                icon={<KeyRound />}
-                title={admin ? t("tokens.adminTitle") : t("tokens.title")}
-                description={admin ? t("tokens.adminDescription") : t("tokens.description")}
-                action={
-                    <div className="flex items-center gap-1.5">
-                        <Button type="button" variant="ghost" size="sm" onClick={() => setInfo({ token: null })}>
-                            <Info />
-                            {t("tokens.howItWorks")}
-                        </Button>
-                        {!admin && canCreate && (
-                            <Button
-                                type="button"
-                                size="sm"
-                                onClick={() => {
-                                    setCreateKey((k) => k + 1);
-                                    setCreating(true);
-                                }}
-                            >
-                                <Plus />
-                                {t("tokens.new")}
-                            </Button>
-                        )}
-                    </div>
-                }
-            />
+            {hideHeading ? (
+                <div className="flex justify-end">{headingActions}</div>
+            ) : (
+                <SectionHeading
+                    icon={<KeyRound />}
+                    title={admin ? t("tokens.adminTitle") : t("tokens.title")}
+                    description={admin ? t("tokens.adminDescription") : t("tokens.description")}
+                    action={headingActions}
+                />
+            )}
             {failed && <p className="text-sm text-destructive">{t("tokens.loadFailed")}</p>}
             {tokens === null ? (
                 <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
@@ -120,7 +144,18 @@ export function ApiTokens({ userId, canCreate = true }: { userId?: number; canCr
                                     <span className="block text-xs text-muted-foreground">
                                         {tok.last_used_at ? (tok.last_used_ip ? t("tokens.lastUsedFrom", { time: when(tok.last_used_at), ip: tok.last_used_ip }) : t("tokens.lastUsed", { time: when(tok.last_used_at) })) : t("tokens.neverUsed")}
                                     </span>
+                                    {tok.calls && (tok.call_count ?? 0) > 0 && (
+                                        <span className="block text-xs text-muted-foreground tabular-nums">
+                                            {t("tokens.callSummary", { day: tok.calls.calls_24h, week: tok.calls.calls_7d, total: tok.call_count ?? 0 })}
+                                            {tok.calls.errors_7d > 0 && <span className="text-warning"> · {t("tokens.callErrors", { count: tok.calls.errors_7d })}</span>}
+                                        </span>
+                                    )}
                                 </button>
+                                {onShowCalls && (
+                                    <Button type="button" variant="outline" size="sm" className="h-7 shrink-0 gap-1" onClick={() => onShowCalls(tok)}>
+                                        <ListTree size={13} /> {t("tokens.showCalls")}
+                                    </Button>
+                                )}
                                 {live && (
                                     <Button
                                         type="button"

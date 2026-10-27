@@ -264,7 +264,7 @@ async fn scan_status(State(state): State<AppState>, AuthUser(user): AuthUser, Pa
 }
 
 #[utoipa::path(get, path = "/api/reverse/lan/topology", tag = "LAN", security(("bearer" = [])), responses((status = 200, description = "Every tunnel the user can see with its status and LAN hosts, for the topology view", body = super::schemas::LanTopology)))]
-async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser, d: crate::auth::extractor::Delegated) -> ApiResult<Json<Value>> {
     let tz = state.config.tz_offset_minutes;
     let tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
     let (mine, _) = db::sharing::permission_context(&state.db, user.id).await?;
@@ -274,7 +274,8 @@ async fn topology(State(state): State<AppState>, AuthUser(user): AuthUser) -> Ap
     let last = db::tunnel_endpoints::visible_to(&state.db, user.id).await?;
     let live = state.status.endpoints();
     let mut out = Vec::with_capacity(tunnels.len());
-    for t in &tunnels {
+    // API token / app 的隧道限制。/ A token's tunnel restriction.
+    for t in tunnels.iter().filter(|t| d.allows(t.id)) {
         let Some(eff) = permissions::effective(user.id, t.user_id, mine.get(&t.id).map(String::as_str)) else { continue };
         let port = u16::try_from(t.reverse_port).ok();
         let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;

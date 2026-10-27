@@ -81,6 +81,8 @@ pub struct Inner {
     pub features: Arc<crate::features::Features>,
     /// 個人 API token 的查詢快取（撤銷時清掉）。/ Personal API token lookups (cleared on revoke).
     pub api_tokens: crate::auth::api_tokens::TokenCache,
+    /// 委派 token 的呼叫紀錄（背景批次寫入）。/ The delegated-token call log (batch-written in the background).
+    pub api_calls: crate::api_calls::ApiCalls,
 }
 
 #[derive(Clone)]
@@ -149,6 +151,7 @@ impl AppState {
             device_info: Default::default(),
             features,
             api_tokens: Default::default(),
+            api_calls: crate::api_calls::ApiCalls::new(db.clone()),
             config,
             db,
         }))

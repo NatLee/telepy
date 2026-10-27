@@ -24,6 +24,8 @@ pub struct ApiToken {
     pub last_used_at: Option<String>,
     pub last_used_ip: Option<String>,
     pub revoked_at: Option<String>,
+    /// 累計呼叫次數（呼叫紀錄只留 90 天）。/ Calls made with it so far (the call log itself keeps 90 days).
+    pub call_count: i64,
 }
 
 impl ApiToken {
@@ -40,7 +42,7 @@ impl ApiToken {
 }
 
 const T: &str = "telepy_api_token";
-const COLS: &str = "id, user_id, name, prefix, token_hash, scope, tunnel_ids, expires_at, created_at, last_used_at, last_used_ip, revoked_at";
+const COLS: &str = "id, user_id, name, prefix, token_hash, scope, tunnel_ids, expires_at, created_at, last_used_at, last_used_ip, revoked_at, call_count";
 
 pub struct NewToken<'a> {
     pub user_id: i64,
