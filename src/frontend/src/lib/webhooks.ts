@@ -24,6 +24,7 @@ export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: Translati
     "command.approval_decided": { label: "webhooks.ev.commandApprovalDecided", hint: "webhooks.ev.commandApprovalDecidedHint" },
     "command.blocked": { label: "webhooks.ev.commandBlocked", hint: "webhooks.ev.commandBlockedHint" },
     "session.started": { label: "webhooks.ev.sessionStarted", hint: "webhooks.ev.sessionStartedHint" },
+    "session.watched": { label: "webhooks.ev.sessionWatched", hint: "webhooks.ev.sessionWatchedHint" },
     "mcp.session_opened": { label: "webhooks.ev.mcpSessionOpened", hint: "webhooks.ev.mcpSessionOpenedHint" },
     "mcp.session_closed": { label: "webhooks.ev.mcpSessionClosed", hint: "webhooks.ev.mcpSessionClosedHint" },
     "account.sign_in": { label: "webhooks.ev.accountSignIn", hint: "webhooks.ev.accountSignInHint" },

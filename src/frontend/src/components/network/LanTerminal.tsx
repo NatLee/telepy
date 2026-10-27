@@ -24,6 +24,8 @@ import { translate } from "@/lib/translate";
 import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
 import type { TranslationKey } from "@/locales/en";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { WatchersChip, WatchRequestBanner } from "@/components/watch/WatchersBar";
+import { parseWatchersFrame, type WatchersFrame } from "@/lib/terminalWatch";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import { lanShellEnders, type LanTerminalSession, type LanTerminalStatus } from "@/hooks/useLanTerminals";
 import { lanAuthFrame } from "@/lib/lanAuth";
@@ -57,6 +59,8 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
     const wsRef = useRef<WebSocket | null>(null);
     /** 指令規則的提示列。/ The command-rule banner. */
     const [banner, setBanner] = useState<HoldBanner | null>(null);
+    /** 誰在看這個 shell。/ Who watches this shell. */
+    const [watchers, setWatchers] = useState<WatchersFrame | null>(null);
     /** 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */
     const [reconnect, setReconnect] = useState<ReconnectState | null>(null);
     const retryNow = useRef<() => void>(() => {});
@@ -187,8 +191,13 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
                 const frame = parseTerminalFrame(ev.data as ArrayBuffer);
                 if (frame && frame !== "pong") setBanner((prev) => nextBanner(prev, frame));
                 else if (!frame) {
-                    const sh = parseShellFrame(new TextDecoder().decode(ev.data as ArrayBuffer));
-                    if (!sh) return;
+                    const text = new TextDecoder().decode(ev.data as ArrayBuffer);
+                    const sh = parseShellFrame(text);
+                    if (!sh) {
+                        const w = parseWatchersFrame(text);
+                        if (w) setWatchers(w);
+                        return;
+                    }
                     if (sh.reset) {
                         try { termRef.current?.term.reset(); } catch { /* noop */ }
                     }
@@ -206,6 +215,7 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
                 if (ping) clearInterval(ping);
                 // 伺服器已撤回等核准的指令。/ The server already withdrew a pending command.
                 setBanner((prev) => (prev?.state === "pending" ? null : prev));
+                setWatchers(null);
                 if (wsRef.current === ws) wsRef.current = null;
                 if (closedByUs) return;
                 // 斷線、shell 還留著：重新連線中，退避後接回。/ A drop with the shell kept: reconnect after a backoff.
@@ -325,6 +335,14 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
         if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "command_cancel" }));
     }, []);
     const dismiss = useCallback(() => setBanner(null), []);
+    const answerWatch = useCallback((watcher: number, allow: boolean) => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "watch_answer", watcher, allow }));
+    }, []);
+    const revokeWatch = useCallback(() => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: "watch_revoke" }));
+    }, []);
 
     // 工具箱：送進這個區網終端機（同一條 pty_input，指令規則照樣檢查）。/ The toolbox types into this LAN terminal.
     const { t } = useI18n();
@@ -369,13 +387,19 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
             <Modal isOpen={toolboxOpen} onClose={() => setToolboxOpen(false)} title={t("toolbox.title")} icon={<Wrench />} size="lg" bodyClassName="px-2 py-2 sm:px-3">
                 <ToolboxPanel target={toolboxTarget} tunnelName={session.tunnelName} onSent={afterSend} embedded />
             </Modal>
-            {(banner || reconnect) && (
+            {watchers && watchers.watchers.length > 0 && (
+                <div className="absolute left-3 top-2 z-10">
+                    <WatchersChip frame={watchers} onRevoke={revokeWatch} compact />
+                </div>
+            )}
+            {(banner || reconnect || (watchers && watchers.watchers.some((w) => w.requested || w.control))) && (
                 <div className="pointer-events-none absolute inset-x-2 top-2 z-10 flex justify-end">
                     <div className="pointer-events-auto w-full max-w-md space-y-2">
                         {reconnect && (
                             <ReconnectBanner state={reconnect} onWhy={() => setWhyOpen(true)} onRetry={() => retryNow.current()} />
                         )}
                         {banner && <CommandHoldBanner banner={banner} onWithdraw={withdraw} onDismiss={dismiss} />}
+                        <WatchRequestBanner frame={watchers} onAnswer={answerWatch} onRevoke={revokeWatch} />
                     </div>
                 </div>
             )}

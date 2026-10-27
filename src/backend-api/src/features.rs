@@ -126,7 +126,8 @@ impl Feature {
     /// 一個進行中的 session 需要的功能（被拒絕時把它結束）。/ The feature a live session needs.
     pub fn for_presence(kind: presence::Kind) -> Option<Feature> {
         match kind {
-            presence::Kind::Terminal => Some(Feature::Terminal),
+            // 看別人的終端機也算用終端機。/ Watching a terminal counts as using the terminal.
+            presence::Kind::Terminal | presence::Kind::Watch => Some(Feature::Terminal),
             presence::Kind::Files => Some(Feature::Files),
             presence::Kind::Browser => Some(Feature::RemoteBrowser),
             presence::Kind::Desktop | presence::Kind::RustDesk => Some(Feature::RemoteDesktop),
@@ -545,5 +546,6 @@ mod tests {
         assert_eq!(Feature::for_scope("tunnels:read"), None);
         assert_eq!(Feature::for_presence(presence::Kind::RustDesk), Some(Feature::RemoteDesktop));
         assert_eq!(Feature::for_presence(presence::Kind::Ssh), Some(Feature::KeysPersonal));
+        assert_eq!(Feature::for_presence(presence::Kind::Watch), Some(Feature::Terminal));
     }
 }

@@ -100,6 +100,7 @@ pub fn title(kind: Kind, lang: Lang) -> String {
         Kind::CommandApprovalDecided => ("指令申請有結果了", "コマンド申請の結果"),
         Kind::CommandBlocked => ("指令被擋下", "コマンドをブロック"),
         Kind::SessionStarted => ("有人開了連線", "セッション開始"),
+        Kind::SessionWatched => ("有人在看你的終端機", "ターミナルを見ている人がいます"),
         Kind::McpSessionOpened => ("MCP agent 開了 session", "MCP エージェントのセッション開始"),
         Kind::McpSessionClosed => ("MCP agent 的 session 關閉", "MCP エージェントのセッション終了"),
         Kind::AccountSignIn => ("新的登入", "新しいサインイン"),
@@ -257,6 +258,15 @@ pub fn sentence(kind: Kind, lang: Lang, tunnel: Option<&TunnelRef>, d: &Value) -
         Kind::SessionStarted => {
             let what = session_what(lang, s(d, "kind"), s(d, "account"));
             tri(lang, format!("{by} opened {what} on {t}"), format!("{by} 在 {t} 開了{what}"), format!("{by} が {t} で{what}を開きました"))
+        }
+        Kind::SessionWatched => {
+            let account = s(d, "account");
+            tri(
+                lang,
+                format!("{by} is watching your web terminal on {t} (as {account})"),
+                format!("{by} 正在看你在 {t} 的網頁終端機（帳號 {account}）"),
+                format!("{by} が {t} のあなたの Web ターミナル（アカウント {account}）を見ています"),
+            )
         }
         Kind::McpSessionOpened if s(d, "kind") == "browser" => {
             let (client, account) = (s(d, "client"), s(d, "account"));

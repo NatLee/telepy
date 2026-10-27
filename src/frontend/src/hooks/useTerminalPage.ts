@@ -33,6 +33,7 @@ import {
     updateShells, withShell, withoutShell, type DetachGrace, type ShellFrame,
 } from "@/lib/terminalDetach";
 import { endKeptShell } from "@/lib/terminalShellSocket";
+import { parseWatchersFrame, type WatchersFrame } from "@/lib/terminalWatch";
 import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
 import { lanAuthFrame, TELEPY_AUTH, type LanAuth } from "@/lib/lanAuth";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
@@ -98,6 +99,8 @@ type Session = {
     disposed: boolean;
     /** 指令規則的提示列（每個分頁各自的）。/ This tab's command-rule banner. */
     commandBanner: HoldBanner | null;
+    /** 誰在看這個分頁的 shell（`watchers` frame）。/ Who watches this tab's shell. */
+    watchers: WatchersFrame | null;
     /** 後端的 shell 代號（shell frame 給的；要接回時帶 `resume`）。/ The server's shell id (sent as `resume`). */
     shellId: string | null;
     /** 看過的輸出位置（UTF-16）；null = 這個 xterm 什麼都沒有（重新整理後）。/ Output seen; null = a fresh xterm. */
@@ -154,6 +157,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     /** 作用中分頁的指令規則提示列。/ The active tab's command-rule banner. */
     const [commandBanner, setCommandBanner] = useState<HoldBanner | null>(null);
+    /** 作用中分頁有誰在看。/ Who watches the active tab. */
+    const [watchers, setWatchers] = useState<WatchersFrame | null>(null);
     /** 作用中分頁正在接回保留的 shell。/ The active tab is reconnecting to its kept shell. */
     const [reconnecting, setReconnecting] = useState<TerminalReconnect | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
@@ -283,6 +288,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         wsRef.current = target.ws;
         setLatencyMs(target.lastLatency);
         setCommandBanner(target.commandBanner);
+        setWatchers(target.watchers);
         setReconnecting(target.droppedAt !== null && target.grace ? { droppedAt: target.droppedAt, grace: target.grace } : null);
         // 等 display 生效後再量尺寸；手機不自動聚焦（避免切分頁就彈出原生鍵盤）。
         // Measure after the display change lands; skip autofocus on mobile (no surprise keyboard).
@@ -350,8 +356,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                     s.commandBanner = nextBanner(s.commandBanner, frame);
                     if (activeIdRef.current === s.id) setCommandBanner(s.commandBanner);
                 } else {
-                    const shell = parseShellFrame(new TextDecoder().decode(event.data as ArrayBuffer));
+                    const text = new TextDecoder().decode(event.data as ArrayBuffer);
+                    const shell = parseShellFrame(text);
                     if (shell) onShellFrame(s, shell);
+                    const w = shell ? null : parseWatchersFrame(text);
+                    if (w) {
+                        s.watchers = w;
+                        if (activeIdRef.current === s.id) setWatchers(w);
+                    }
                 }
                 return;
             }
@@ -369,7 +381,10 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             if (s.ws === ws) s.ws = null;
             // 連線斷了：伺服器已撤回等核准的指令。/ Disconnected: the server already withdrew a pending command.
             if (s.commandBanner?.state === "pending") s.commandBanner = null;
+            // 接回時伺服器會再送一次。/ The server sends it again on reattach.
+            s.watchers = null;
             if (activeIdRef.current === s.id) {
+                setWatchers(null);
                 setLatencyMs(null);
                 setCommandBanner(s.commandBanner);
                 if (wsRef.current === ws) wsRef.current = null;
@@ -547,6 +562,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             authRetried: false,
             disposed: false,
             commandBanner: null,
+            watchers: null,
             // 重新整理後接回：這個 xterm 什麼都還沒有，所以不帶 offset（伺服器清畫面重畫）。
             // Re-attaching after a reload: this xterm has nothing yet, so no offset (the server redraws).
             shellId: resumeId,
@@ -940,6 +956,15 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
         if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "command_cancel" }));
     }, []);
+    /** 回應看的人「想打字」、或收回控制權（作用中分頁）。/ Answer a watcher's request to type, or take control back. */
+    const answerWatch = useCallback((watcher: number, allow: boolean) => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "watch_answer", watcher, allow }));
+    }, []);
+    const revokeWatch = useCallback(() => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (s?.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ action: "watch_revoke" }));
+    }, []);
     const dismissCommandBanner = useCallback(() => {
         const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
         if (s) s.commandBanner = null;
@@ -972,6 +997,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             recorded,
             appearance,
             commandBanner,
+            watchers,
             reconnecting,
             detachPolicy,
         },
@@ -986,6 +1012,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             selectTab,
             withdrawCommand,
             dismissCommandBanner,
+            answerWatch,
+            revokeWatch,
             reconnectNow,
         },
     };

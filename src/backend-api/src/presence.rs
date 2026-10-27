@@ -28,6 +28,8 @@ pub enum Kind {
     Desktop,
     /// 網頁內 RustDesk。/ In-browser RustDesk.
     RustDesk,
+    /// 在看別人的網頁終端機（`crate::terminal_watch`）。/ Watching someone's web terminal.
+    Watch,
 }
 
 impl Kind {
@@ -40,6 +42,7 @@ impl Kind {
             Kind::Ai => "ai",
             Kind::Desktop => "desktop",
             Kind::RustDesk => "rustdesk",
+            Kind::Watch => "watch",
         }
     }
 }
@@ -60,11 +63,21 @@ pub struct Entry {
     /// 網頁終端機斷線保留中：(從何時起, 何時結束)，DB 格式（見 `crate::terminal_detach`）。
     /// A detached web terminal: (since, ends at) in DB format (see `crate::terminal_detach`).
     pub detached: Option<(String, String)>,
+    /// 看別人的終端機時：看的是誰的哪個 shell。/ When watching: whose shell.
+    pub watching: Option<WatchOf>,
+}
+
+/// 被看的那個 shell。/ The shell being watched.
+#[derive(Debug, Clone)]
+pub struct WatchOf {
+    pub shell: String,
+    pub user_id: i64,
+    pub username: String,
 }
 
 impl Entry {
     pub fn new(tunnel_id: i64, user_id: i64, username: &str, kind: Kind, ip: Option<String>) -> Self {
-        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, detached: None }
+        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, detached: None, watching: None }
     }
 }
 

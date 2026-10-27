@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::db;
 use crate::state::AppState;
+use crate::terminal_watch::Cmd as WatchCmd;
 
 /// 個人可以選的保留秒數（0 = 斷線就結束）。/ The grace times a user can pick (0 = end at once).
 pub const CHOICES: [i64; 6] = [0, 60, 300, 900, 1800, 3600];
@@ -203,6 +204,20 @@ struct Slot<T> {
     presence_id: u64,
     detached_since: Option<Instant>,
     tx: mpsc::Sender<Takeover<T>>,
+    /// 給看的人用的入口（`crate::terminal_watch`）。/ The entrance for watchers.
+    watch: Option<mpsc::Sender<WatchCmd>>,
+}
+
+/// 要看的那個 shell 是誰的、在哪、怎麼找它（`crate::terminal_watch`）。/ Whose shell a watcher wants, and how to reach it.
+#[derive(Clone)]
+pub struct WatchTarget {
+    pub user_id: i64,
+    pub tunnel_id: i64,
+    pub account: String,
+    pub lan_host: Option<String>,
+    pub presence_id: u64,
+    pub detached: bool,
+    pub tx: mpsc::Sender<WatchCmd>,
 }
 
 /// 要接回時的拒絕原因。/ Why a resume was refused.
@@ -232,6 +247,7 @@ pub struct ShellKey<'a> {
     pub account: &'a str,
     pub lan_host: Option<&'a str>,
     pub presence_id: u64,
+    pub watch: Option<mpsc::Sender<WatchCmd>>,
 }
 
 impl<T> Shells<T> {
@@ -246,6 +262,7 @@ impl<T> Shells<T> {
             presence_id: key.presence_id,
             detached_since: None,
             tx,
+            watch: key.watch,
         };
         self.map.lock().unwrap().insert(id.to_string(), slot);
         rx
@@ -275,6 +292,26 @@ impl<T> Shells<T> {
         detached.sort();
         let extra = detached.len().saturating_sub(cap);
         detached.into_iter().take(extra).map(|d| d.1).collect()
+    }
+
+    /// 看的人要找的 shell。/ The shell a watcher asks for.
+    pub fn watch_target(&self, id: &str) -> Option<WatchTarget> {
+        let map = self.map.lock().unwrap();
+        let s = map.get(id)?;
+        Some(WatchTarget {
+            user_id: s.user_id,
+            tunnel_id: s.tunnel_id,
+            account: s.account.clone(),
+            lan_host: s.lan_host.clone(),
+            presence_id: s.presence_id,
+            detached: s.detached_since.is_some(),
+            tx: s.watch.clone()?,
+        })
+    }
+
+    /// 某筆「使用中」是哪個 shell（即時 session 頁的「看」按鈕）。/ The shell behind a presence entry.
+    pub fn by_presence(&self, presence_id: u64) -> Option<String> {
+        self.map.lock().unwrap().iter().find(|(_, s)| s.presence_id == presence_id).map(|(id, _)| id.clone())
     }
 
     pub fn remove(&self, id: &str) {
@@ -345,15 +382,15 @@ mod tests {
     #[test]
     fn only_the_owner_resumes_and_the_oldest_detached_go_first() {
         let shells: Shells<()> = Shells::default();
-        let _rx = shells.register("a", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 10 });
+        let _rx = shells.register("a", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 10, watch: None });
         assert!(shells.claim("a", 1, 5, "ubuntu", None).is_ok());
         assert_eq!(shells.claim("a", 2, 5, "ubuntu", None).err(), Some(Refusal::NotYours));
         assert_eq!(shells.claim("a", 1, 6, "ubuntu", None).err(), Some(Refusal::NotYours));
         assert_eq!(shells.claim("a", 1, 5, "root", None).err(), Some(Refusal::NotYours));
         assert_eq!(shells.claim("a", 1, 5, "ubuntu", Some("7")).err(), Some(Refusal::NotYours));
         assert_eq!(shells.claim("b", 1, 5, "ubuntu", None).err(), Some(Refusal::Gone));
-        let _rx2 = shells.register("b", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 11 });
-        let _rx3 = shells.register("c", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 12 });
+        let _rx2 = shells.register("b", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 11, watch: None });
+        let _rx3 = shells.register("c", ShellKey { user_id: 1, tunnel_id: 5, account: "ubuntu", lan_host: None, presence_id: 12, watch: None });
         shells.set_detached("a", true);
         std::thread::sleep(std::time::Duration::from_millis(2));
         shells.set_detached("b", true);
