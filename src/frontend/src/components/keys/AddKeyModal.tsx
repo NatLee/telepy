@@ -18,7 +18,7 @@ import { fingerprint, keyProblem, parsePublicKey, type KeyProblem } from "@/lib/
 import type { KeyDevice } from "@/types/keys";
 import type { KeyGroup } from "@/types/groups";
 import type { NewKey } from "@/hooks/useKeysPage";
-import { KeyTypeBadge } from "./KeyCard";
+import { KeyTypeBadge } from "./KeyList";
 import { OnlineDot } from "./DeviceMatrix";
 import { DeviceFilterBar, DeviceFilterFooter, useDeviceFilter } from "./DeviceFilter";
 import { ExpiryPicker } from "@/components/keys/ExpiryPicker";

@@ -11,8 +11,6 @@ export type KeyListSort = "recent" | "name" | "newest";
 
 /** 這麼多把以上才有搜尋 / 分類 / 排序。/ Controls from this many keys on. */
 export const KEY_LIST_FILTER_FROM = 7;
-/** 收合時顯示幾張卡（三欄 × 三列）。/ Cards shown while collapsed (three rows of three). */
-export const KEY_LIST_COLLAPSED = 9;
 /** 裝置矩陣最多先顯示幾欄金鑰。/ Key columns the device matrix shows before "show all". */
 export const MATRIX_COLUMNS = 4;
 
