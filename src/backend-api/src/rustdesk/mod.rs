@@ -12,7 +12,8 @@
 //! 傳檔：RustDesk 的檔案傳輸是另一條連線（登入時帶 `file_transfer`），所以「檔案」面板向 `…/rustdesk/{sid}/files`
 //! 要一個掛在畫面 session 底下的子 session（[`Kind::Files`]，自己的票證與通道，不另佔名額、不另算 presence，畫面那條
 //! 結束就跟著結束）。中繼用 [`codec::LoginGuard`] 看瀏覽器送的登入：畫面 session 只准遙控、檔案 session 只准傳檔，
-//! 站台設定 `desktop_file_transfer` 關掉時不發檔案 session、已開的也收掉。
+//! 站台設定 `desktop_file_transfer` 關掉時不發檔案 session、已開的也收掉。檔案 session 上的刪除與改名由
+//! [`file_audit`] 整理成 tunnel 的 Logs 事件（`rustdesk_file_delete` / `rustdesk_file_rename`）。
 //! 不需要 hbbs / hbbr、不開新的公開埠、不用 UDP。裝置的 Direct IP 連線本身不加密（RustDesk 設計如此：沒有金鑰
 //! 交換，第一則訊息就是密碼挑戰），整段由 SSH 隧道與 TLS 保護；RustDesk 的固定密碼由瀏覽器端核心直接雜湊回應，
 //! **後端看不到密碼**。權限和桌面一樣：隧道 VIEW + 允許的裝置帳號 + step-up。
@@ -20,6 +21,7 @@
 //! and re-frames messages into a direct-tcpip channel to the device's Direct IP port. See `docs/rustdesk-spike.md`.
 
 pub mod codec;
+pub mod file_audit;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

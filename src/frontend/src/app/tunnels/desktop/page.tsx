@@ -13,10 +13,13 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, FolderOpen, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, Volume2, VolumeX, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, FolderOpen, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, XCircle } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RustDeskFiles } from "@/components/desktop/RustDeskFiles";
 import { hasAudioDecoder, streamRows } from "@/lib/desktopStreams";
+import { EMPTY_SNAPSHOT, isMacPlatform, soundReport, type SoundSnapshot } from "@/lib/desktopSound";
+import { SoundButton } from "@/components/desktop/SoundButton";
+import { IDLE_ACTIVITY, type FileActivity } from "@/lib/rustdeskFileOps";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
@@ -56,7 +59,7 @@ import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, formatElapsed, isValidPort, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, RUSTDESK_PORT, soundAvailable, type ClipboardPolicy, type DesktopMode, type DesktopPhase, type DesktopQuality } from "@/lib/desktop";
 import { screenChoices, splitChoices, type ScreenChoice } from "@/lib/desktopScreens";
 import { buildSegments } from "@/lib/forwardRecipes";
 import { hostName } from "@/lib/lanConnect";
@@ -94,15 +97,8 @@ const PRESET_KEY: Record<NonNullable<ScreenChoice["preset"]>, TranslationKey> = 
     third3: "desktop.screen.preset.third3",
 };
 
-const QUALITY_HINT: Record<DesktopQuality, TranslationKey> = {
-    auto: "desktop.quality.hint.auto",
-    speed: "desktop.quality.hint.speed",
-    sharp: "desktop.quality.hint.sharp",
-};
-
 const MODE_LABEL: Record<DesktopMode, string> = { rdp: "RDP", vnc: "VNC", rustdesk: "RustDesk" };
 
-const QUALITY_LABEL: Record<DesktopQuality, TranslationKey> = { auto: "desktop.quality.auto", speed: "desktop.quality.speed", sharp: "desktop.quality.sharp" };
 /** Telepy 的畫質預設 → RustDesk 自己的畫質檔。/ Telepy's quality presets as RustDesk's own profiles. */
 const RD_QUALITY: Record<DesktopQuality, RustDeskQuality> = { auto: "balanced", speed: "low", sharp: "best" };
 
@@ -138,9 +134,12 @@ function DesktopPageInner() {
     // 聲音：RDP 的靜音（只在這一頁，串流照收）與「正在播」；RustDesk 直接切 disable-audio。檔案面板：RustDesk 才有。
     // Sound: RDP's local mute and "playing" indicator; RustDesk switches disable-audio itself. Files panel: RustDesk only.
     const [mutedState, setMuted] = useState<{ sid: string; muted: boolean } | null>(null);
-    const [audioPlaying, setAudioPlaying] = useState(false);
+    // viewer 回報的聲音狀況，綁在當時的 session 上。/ The viewer's sound snapshot, tied to its session.
+    const [soundSnap, setSoundSnap] = useState<{ sid: string; snap: SoundSnapshot } | null>(null);
     const [filesFor, setFilesFor] = useState<string | null>(null);
     const [filesOpenNow, setFilesOpenNow] = useState(false);
+    // 「檔案」面板裡各種動作的狀態（資料流圖用）。/ The Files panel's actions, for the streams diagram.
+    const [fileActivity, setFileActivity] = useState<FileActivity>(IDLE_ACTIVITY);
     const [now, setNow] = useState(() => Date.now());
     // 偵測到的螢幕配置。重算的時機：螢幕清單或畫面大小變了、選單打開時、偵測完兩秒後
     // （macOS 的排列靠畫面裡的黑色區域判斷，要等畫面畫出來）。計算讀 canvas，所以在事件 / 計時器裡做，不在 render 裡。
@@ -191,6 +190,21 @@ function DesktopPageInner() {
     const decoder = typeof window !== "undefined" && hasAudioDecoder(window as unknown as Record<string, unknown>);
     // 連線中 = 那個 session 的聲音；還沒連 = 下一次會怎樣。/ Sound of this session, or of the next one.
     const soundOn = session ? !!session.audio : state.audio;
+    // 連線中的聲音卡在哪（工具列按鈕與資訊對話框的聲音那一條）。/ Where a connected session's sound stops.
+    const sound = phase === "connected" && liveId !== null && connectedAt !== null
+        ? soundReport({
+            mode: session ? session.protocol : "rustdesk",
+            wanted: soundOn,
+            muted,
+            decoder,
+            connectedMs: Math.max(0, now - connectedAt),
+            snapshot: soundSnap?.sid === liveId ? soundSnap.snap : EMPTY_SNAPSHOT,
+            peerPlatform: rdInfo?.platform ?? null,
+        })
+        : null;
+    const onSound = (snap: SoundSnapshot) => {
+        if (liveId !== null) setSoundSnap({ sid: liveId, snap });
+    };
     const fileTransfer = rdSession ? rdSession.file_transfer !== false : true;
     // RustDesk 用 app 的路（探測過、瀏覽器裡沒在連）：階段跟著探測；其餘都是瀏覽器 session 的階段。
     // The native-app path (probed, nothing connecting in the browser) follows the probe; everything else the session.
@@ -212,8 +226,8 @@ function DesktopPageInner() {
         clipboardLimited,
         savedLogin: !!state.savedLogin,
         stats,
-        streams: streamRows({ mode: form.protocol, clipboard, clipboardLimit: session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit, sound: soundOn, muted, soundDecoder: decoder, fileTransfer, filesOpen: filesOpen && filesOpenNow }),
-    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, session, rdSession, state.clipboard.limit, soundOn, muted, decoder, fileTransfer, filesOpen, filesOpenNow]);
+        streams: streamRows({ mode: form.protocol, clipboard, clipboardLimit: session?.clipboard_limit ?? rdSession?.clipboard_limit ?? state.clipboard.limit, sound: soundOn, muted, soundDecoder: decoder, soundLive: sound, fileTransfer, filesOpen: filesOpen && filesOpenNow, fileActivity }),
+    }), [flowPhase, flowFailure, rdNative, form.protocol, form.port, form.account, tunnel, host, clipboard, clipboardLimited, t, state.savedLogin, stats, session, rdSession, state.clipboard.limit, soundOn, muted, decoder, sound, fileTransfer, filesOpen, filesOpenNow, fileActivity]);
 
     const targetLabel = host ? `${hostName(host)} · ${address}` : t("desktop.targetDeviceShort", { address });
     const toggleFullscreen = () => {
@@ -379,11 +393,19 @@ function DesktopPageInner() {
                                 </DropdownMenuCheckboxItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                        {session.audio && (
-                            <Button size="sm" variant="ghost" className={TOOL} onClick={() => setMuted({ sid: session.session_id, muted: !muted })} disabled={!connected} aria-pressed={!muted} title={muted ? t("desktop.sound.unmute") : t("desktop.sound.mute")} aria-label={muted ? t("desktop.sound.unmute") : t("desktop.sound.mute")} data-sound={muted ? "muted" : audioPlaying ? "playing" : "quiet"}>
-                                {muted ? <VolumeX size={15} /> : <Volume2 size={15} className={audioPlaying ? "text-success" : undefined} />}
-                                <span className="hidden md:inline">{muted ? t("desktop.sound.muted") : audioPlaying ? t("desktop.sound.playing") : t("desktop.sound.on")}</span>
-                            </Button>
+                        {session.audio && sound && (
+                            <SoundButton
+                                report={sound}
+                                className={TOOL}
+                                action={muted ? "desktop.sound.unmute" : "desktop.sound.mute"}
+                                pressed={!muted}
+                                disabled={!connected}
+                                onToggle={() => {
+                                    if (muted) viewerRef.current?.resumeSound();
+                                    setMuted({ sid: session.session_id, muted: !muted });
+                                }}
+                                onResume={() => viewerRef.current?.resumeSound()}
+                            />
                         )}
                         {clipboard !== "off" && (
                             <Button size="sm" variant="ghost" className={TOOL} onClick={() => setPasteOpen(true)} disabled={!connected || selecting} title={t("desktop.pasteTitle")}>
@@ -422,7 +444,7 @@ function DesktopPageInner() {
                             onDisplaySize={actions.onDisplaySize}
                             onScale={actions.onScale}
                             muted={muted}
-                            onAudio={setAudioPlaying}
+                            onSound={onSound}
                         />
                         {!connected && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-sm text-white">
@@ -494,10 +516,20 @@ function DesktopPageInner() {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                        <Button size="sm" variant="ghost" className={TOOL} onClick={() => actions.setAudio(!state.audio)} disabled={!connected || !decoder} aria-pressed={state.audio && decoder} title={!decoder ? t("desktop.sound.noDecoder") : state.audio ? t("desktop.sound.turnOff") : t("desktop.sound.turnOn")} aria-label={state.audio ? t("desktop.sound.turnOff") : t("desktop.sound.turnOn")} data-sound={state.audio && decoder ? "on" : "off"}>
-                            {state.audio && decoder ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                            <span className="hidden md:inline">{state.audio && decoder ? t("desktop.sound.on") : t("desktop.sound.off")}</span>
-                        </Button>
+                        {sound && (
+                            <SoundButton
+                                report={sound}
+                                className={TOOL}
+                                action={state.audio ? "desktop.sound.turnOff" : "desktop.sound.turnOn"}
+                                pressed={state.audio && decoder}
+                                disabled={!connected || !decoder}
+                                onToggle={() => {
+                                    if (!state.audio) rdViewerRef.current?.resumeSound();
+                                    actions.setAudio(!state.audio);
+                                }}
+                                onResume={() => rdViewerRef.current?.resumeSound()}
+                            />
+                        )}
                         <Button size="sm" variant={filesOpen ? "secondary" : "ghost"} className={TOOL} onClick={() => setFilesFor(filesOpen ? null : rdSession.session_id)} disabled={!connected || !fileTransfer} aria-pressed={filesOpen} title={fileTransfer ? t("desktop.files.button") : t("desktop.files.err.disabled")}>
                             <FolderOpen size={15} /> <span className="hidden md:inline">{t("desktop.files.button")}</span>
                         </Button>
@@ -520,6 +552,7 @@ function DesktopPageInner() {
                     <div className={cn("relative min-w-0 lg:flex-1", fullscreen ? "flex-1" : SCREEN_FITTED)} style={screenRatio(rdDisplay)}>
                         <RustDeskViewer
                             audio={state.audio}
+                            onSound={onSound}
                             ref={rdViewerRef}
                             start={rdSession}
                             password={rdPassword}
@@ -541,7 +574,7 @@ function DesktopPageInner() {
                     </div>
                     {filesOpen && (
                         <div className="h-96 shrink-0 border-t border-border lg:h-auto lg:w-80 lg:border-l lg:border-t-0">
-                            <RustDeskFiles parent={rdSession} password={rdPassword} onClose={() => setFilesFor(null)} onStateChange={setFilesOpenNow} />
+                            <RustDeskFiles parent={rdSession} password={rdPassword} onClose={() => setFilesFor(null)} onStateChange={setFilesOpenNow} onActivity={setFileActivity} deviceName={tunnel?.name} />
                         </div>
                     )}
                     </div>
@@ -823,7 +856,7 @@ function RustDeskPanel({ state, actions }: { state: PageState; actions: PageActi
             <Callout tone="info">
                 <p>{t("desktop.rustdesk.intro")}</p>
             </Callout>
-            <RustDeskSetup status={setup} port={port} probeLine={probeLine} canCheck={canProbe} checking={probing} onCheck={() => void actions.runProbe()} />
+            <RustDeskSetup status={setup} port={port} probeLine={probeLine} canCheck={canProbe} checking={probing} onCheck={() => void actions.runProbe()} soundFromMac={state.audio && isMacPlatform(state.rdPlatform)} />
             <div className="rounded-md border border-border bg-surface">
                 <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-foreground">
                     <ChevronDown size={15} className={cn("shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} aria-hidden />

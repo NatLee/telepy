@@ -21,6 +21,8 @@ export interface UserProfile {
     /** 粗體的畫法(face / bright / both)與連字。/ Bold style and ligatures. */
     terminal_bold?: string;
     terminal_ligatures?: boolean;
+    /** 各頁的卡片 / 清單顯示（lib/viewModes.ts）。/ Card / list view per page. */
+    view_modes?: Record<string, string>;
     /** 介面顯示大小(%, 85–130;lib/userPrefs.ts)。/ UI display scale in percent. */
     ui_scale?: number;
     /** 已設定任一第二因素。/ A passkey or an authenticator app is set up. */

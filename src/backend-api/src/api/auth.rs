@@ -172,6 +172,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser, d: cra
         "terminal_scheme": settings.as_ref().map(|s| s.terminal_scheme.clone()).unwrap_or_else(|| "telepy".into()),
         "terminal_bold": settings.as_ref().map(|s| s.terminal_bold.clone()).unwrap_or_else(|| "face".into()),
         "terminal_ligatures": settings.as_ref().map(|s| s.terminal_ligatures).unwrap_or(false),
+        "view_modes": settings.as_ref().map(|s| super::users::view_modes_json(&s.view_modes)).unwrap_or_else(|| json!({})),
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
         "mfa_missing": super::mfa::enrollment_missing(&state, user.id).await?,
         "features": features,

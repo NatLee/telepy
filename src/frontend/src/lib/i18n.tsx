@@ -30,6 +30,8 @@ import {
 import { DICTIONARIES, readCookiePreference, resolveLocale, setActiveLocale } from "./translate";
 import { applyTerminalDefaults, applyTheme, applyUiScale, isTheme, readStoredTheme, readTerminalDefaults, readUiScale } from "./userPrefs";
 import { isBoldStyle, isKnownFont, isSchemeId, type TerminalDefaults } from "./terminalAppearance";
+import { parseViewModes } from "./viewModes";
+import { readViewModes, storeViewModes } from "./viewModeStore";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -194,6 +196,14 @@ export function UserSettingsSync() {
         if (Object.keys(terminal).length > 0) applyTerminalDefaults(terminal);
         if (typeof user.ui_scale === "number" && user.ui_scale !== readUiScale()) {
             applyUiScale(user.ui_scale);
+        }
+        // 各頁的卡片 / 清單：帳號上有就用帳號的；帳號還沒有就把這台的（含舊版通道頁的選擇）存上去。
+        // Card / list per page: the account's when it has any; otherwise this browser's choices are saved to it.
+        const serverViews = parseViewModes(user.view_modes);
+        if (Object.keys(serverViews).length > 0) storeViewModes(serverViews, false);
+        else {
+            const localViews = readViewModes();
+            if (Object.keys(localViews).length > 0) storeViewModes(localViews, true);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);

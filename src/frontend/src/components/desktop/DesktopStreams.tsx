@@ -8,11 +8,12 @@
  * the direction, a solid line flows, a dashed one is switched off, a crossed one is blocked or not on this way.
  */
 import React from "react";
-import { ArrowLeft, ArrowRight, ClipboardCopy, FolderUp, Image as ImageIcon, Laptop, Monitor, MousePointer2, Volume2, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, ClipboardCopy, Download, FolderUp, Image as ImageIcon, Laptop, Loader2, Monitor, MousePointer2, PencilLine, Trash2, Upload, Volume2, X, type LucideIcon } from "lucide-react";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { streamFlows, type StreamId, type StreamRow, type StreamState } from "@/lib/desktopStreams";
+import type { FileOpKind, FileOpState } from "@/lib/rustdeskFileOps";
 import type { TranslationKey } from "@/locales/en";
 
 const ICON: Record<StreamId, LucideIcon> = { picture: ImageIcon, input: MousePointer2, clipboard: ClipboardCopy, sound: Volume2, files: FolderUp };
@@ -29,14 +30,49 @@ const STATE_LABEL: Record<StreamState, TranslationKey> = {
     off: "desktop.streams.state.off",
     blocked: "desktop.streams.state.blocked",
     unsupported: "desktop.streams.state.unsupported",
+    waiting: "desktop.streams.state.waiting",
+    problem: "desktop.streams.state.problem",
 };
-const STATE_TONE: Record<StreamState, "success" | "primary" | "neutral" | "warning"> = { on: "success", oneWay: "success", off: "neutral", blocked: "warning", unsupported: "neutral" };
+const STATE_TONE: Record<StreamState, "success" | "primary" | "neutral" | "warning"> = { on: "success", oneWay: "success", off: "neutral", blocked: "warning", unsupported: "neutral", waiting: "neutral", problem: "warning" };
+
+const OP_ICON: Record<FileOpKind, LucideIcon> = { download: Download, upload: Upload, rename: PencilLine, delete: Trash2 };
+const OP_LABEL: Record<FileOpKind, TranslationKey> = {
+    download: "desktop.streams.op.download",
+    upload: "desktop.streams.op.upload",
+    rename: "desktop.streams.op.rename",
+    delete: "desktop.streams.op.delete",
+};
+const OP_STATE: Record<FileOpState, TranslationKey> = {
+    idle: "desktop.streams.opState.idle",
+    running: "desktop.streams.opState.running",
+    done: "desktop.streams.opState.done",
+    failed: "desktop.streams.opState.failed",
+};
+const OP_TONE: Record<FileOpState, "neutral" | "primary" | "success" | "danger"> = { idle: "neutral", running: "primary", done: "success", failed: "danger" };
+
+/** 「檔案」底下的四種動作：下載 / 上傳 / 改名 / 刪除，各自目前的狀態。/ The four file actions under Files. */
+function FileOps({ ops }: { ops: NonNullable<StreamRow["ops"]> }) {
+    const { t } = useI18n();
+    return (
+        <span className="col-span-2 flex flex-wrap gap-1.5 sm:col-span-2 sm:col-start-2" data-file-ops>
+            {ops.map((o) => {
+                const Icon = o.state === "running" ? Loader2 : OP_ICON[o.kind];
+                return (
+                    <Chip key={o.kind} tone={OP_TONE[o.state]} data-op={o.kind} data-state={o.state} title={t(OP_STATE[o.state])}>
+                        <Icon className={o.state === "running" ? "animate-spin" : undefined} aria-hidden /> {t(OP_LABEL[o.kind])}
+                        <span className="sr-only">: {t(OP_STATE[o.state])}</span>
+                    </Chip>
+                );
+            })}
+        </span>
+    );
+}
 
 /** 一條直線：兩端箭頭依方向；走著 = 實線，關掉 = 虛線，擋掉 / 沒有 = 虛線 + 中間的 ✕。/ One straight line with arrowheads. */
 function StreamLine({ row }: { row: StreamRow }) {
     const flows = streamFlows(row.state);
-    const crossed = row.state === "blocked" || row.state === "unsupported";
-    const tone = flows ? "text-success" : row.state === "blocked" ? "text-warning" : "text-muted-foreground/70";
+    const crossed = row.state === "blocked" || row.state === "unsupported" || row.state === "problem";
+    const tone = flows ? "text-success" : row.state === "blocked" || row.state === "problem" ? "text-warning" : "text-muted-foreground/70";
     const left = flows && (row.dir === "toBrowser" || row.dir === "both");
     const right = flows && (row.dir === "toDesktop" || row.dir === "both");
     return (
@@ -46,7 +82,7 @@ function StreamLine({ row }: { row: StreamRow }) {
             {right ? <ArrowRight size={14} className="-ml-1 shrink-0" /> : <span className="w-2.5 shrink-0" />}
             {crossed && (
                 <span className="absolute left-1/2 top-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-sm border border-current bg-card">
-                    <X size={12} />
+                    {row.state === "problem" ? <AlertTriangle size={11} /> : <X size={12} />}
                 </span>
             )}
         </span>
@@ -77,6 +113,7 @@ export function DesktopStreams({ rows, connected }: { rows: StreamRow[]; connect
                             <StreamLine row={r} />
                             <Chip tone={STATE_TONE[r.state]}>{t(STATE_LABEL[r.state])}</Chip>
                             <span className="col-span-2 text-xs leading-snug text-muted-foreground sm:col-span-2 sm:col-start-2">{t(r.reason)}</span>
+                            {r.ops && r.state === "on" && <FileOps ops={r.ops} />}
                         </li>
                     );
                 })}

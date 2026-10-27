@@ -3,24 +3,28 @@
 /**
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
  * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
- * - 一般:帳號資訊、介面語言、主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、終端機的預設字型 / 字級 / 配色
- *   (單一裝置的覆寫在終端機頁的「外觀」按鈕)、遠端桌面剪貼簿的方向(存在帳號上,站台設定是上限)。
- *   變更即時套用並寫入本機(cookie/localStorage),已登入時同步到後端 UserSettings(跨裝置)。
+ * - 一般:帳號資訊(手機)、介面語言、桌面通知。
+ * - 外觀:主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、各頁的卡片 / 列表(存在帳號上)。
+ * - 終端機:預設字型 / 字級 / 配色(單一裝置的覆寫在終端機頁的「外觀」按鈕)、斷線後保留 shell。
+ * - 遠端桌面:剪貼簿方向(存在帳號上,站台設定是上限)、畫質與聲音的預設(這台瀏覽器)。
+ *   變更即時套用並寫入本機(cookie/localStorage),帳號層的值同步到後端 UserSettings(跨裝置)。
  * - 安全性:登入安全性(passkey / 驗證器 App / 復原碼)。
  * - 已連接的應用程式:授權過的 MCP / AI 客戶端(OAuth grants),可撤銷;另有連到 MCP 頁的設定入口。
  * User preferences modal, opened from the sidebar footer gear button. A rail + content layout: on
  * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
  * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
- * - General: account, language, theme, display size (S/M/L + fine slider), the terminal's default font /
- *   size / colour scheme (a device's own override lives behind the terminal page's Appearance button), the remote
- *   desktop clipboard direction (saved on the account, capped by the site setting).
- *   Changes apply instantly, persist locally, and sync to the backend UserSettings for cross-device use.
+ * - General: account (phones), language, desktop notifications.
+ * - Appearance: theme, display size (S/M/L + fine slider), card / list per page (on the account).
+ * - Terminal: default font / size / colour scheme (a device's own override lives behind the terminal page's
+ *   Appearance button), keeping shells after a disconnect.
+ * - Remote desktop: clipboard direction (on the account, capped by the site setting), quality and sound defaults
+ *   (this browser). Changes apply instantly; account-level values sync to the backend UserSettings.
  * - Security: sign-in security (passkeys, authenticator app, recovery codes).
  * - Connected apps: authorized MCP / AI clients with revoke, plus a pointer to the MCP page.
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Gauge, Globe, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare, Volume2, VolumeX } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -43,7 +47,10 @@ import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
-import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed } from "@/lib/desktop";
+import { useViewModes } from "@/hooks/useViewMode";
+import { VIEW_PAGES, viewModeOf } from "@/lib/viewModes";
+import { AUDIO_PREF_VALUES, CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, type AudioPref, type DesktopQuality } from "@/lib/desktop";
+import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
 import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
@@ -57,7 +64,7 @@ import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
-export type PrefsTab = "general" | "security" | "logins" | "apps" | "tokens";
+export type PrefsTab = "general" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps" | "tokens";
 
 /** 從別的頁打開偏好設定的某個分頁（例：MCP 頁 →「API token」）。/ Open Preferences at a tab from another page. */
 export const OPEN_PREFS_EVENT = "telepy:open-prefs";
@@ -83,7 +90,11 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
     const customSchemes = useCustomSchemes();
     const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
-    const [tab, setTab] = useState<PrefsTab>("general");
+    const [viewModes, setViewModeFor] = useViewModes();
+    // 遠端桌面頁用的同一組 localStorage 值(這台瀏覽器),改了那邊也跟著動。/ The desktop page's own per-browser choices.
+    const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
+    const [audio, setAudio] = useStoredChoice<AudioPref>("telepy.desktopAudio", AUDIO_PREF_VALUES, "off");
+    const [chosenTab, setTab] = useState<PrefsTab>("general");
     // 從別的頁指定分頁打開。/ Opened at a given tab from another page.
     React.useEffect(() => {
         if (isOpen && initialTab) setTab(initialTab);
@@ -97,6 +108,10 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
     const tabs = [
         { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
+        { value: "appearance" as const, label: t("prefs.tabAppearance"), hint: t("prefs.tabAppearanceHint"), icon: <Palette /> },
+        // 功能被關掉就不顯示那一頁。/ A tab of a turned-off feature is hidden.
+        ...(hasFeature(user, "terminal") ? [{ value: "terminal" as const, label: t("prefs.tabTerminal"), hint: t("prefs.tabTerminalHint"), icon: <TerminalIcon /> }] : []),
+        ...(hasFeature(user, "remote_desktop") ? [{ value: "desktop" as const, label: t("prefs.tabDesktop"), hint: t("prefs.tabDesktopHint"), icon: <MonitorPlay /> }] : []),
         { value: "security" as const, label: t("prefs.tabSecurity"), hint: t("prefs.tabSecurityHint"), icon: <ShieldCheck /> },
         // 存好的登入只給遠端桌面用；那個功能被關掉就不顯示。/ Saved logins only serve remote desktops; hidden when that is off.
         ...(hasFeature(user, "remote_desktop") ? [{ value: "logins" as const, label: t("prefs.tabLogins"), hint: t("prefs.tabLoginsHint"), icon: <KeyRound /> }] : []),
@@ -104,6 +119,9 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
         // 個人 API token（CLI / 腳本 / CI）；功能被關掉就不顯示。/ Personal API tokens; hidden when the feature is off.
         ...(hasFeature(user, "api.tokens") ? [{ value: "tokens" as const, label: t("prefs.tabTokens"), hint: t("prefs.tabTokensHint"), icon: <KeySquare /> }] : []),
     ];
+
+    // 選到的分頁被藏起來(功能剛被關掉)就回「一般」。/ Fall back to General when the chosen tab is hidden.
+    const tab: PrefsTab = tabs.some((x) => x.value === chosenTab) ? chosenTab : "general";
 
     const initial = user?.username?.slice(0, 1);
     const role = (
@@ -137,7 +155,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             onClose={onClose}
             title={t("prefs.title")}
             icon={<SlidersHorizontal />}
-            size="3xl"
+            size="4xl"
             fixedHeight
             nav={
                 <div className="space-y-4">
@@ -190,6 +208,26 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </div>
                     </Section>
 
+                    {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}
+                    <Section icon={<Bell />} title={t("prefs.desktopNotify")} description={t("prefs.desktopNotifyDescription")}>
+                        <Segmented
+                            fullWidth
+                            options={[
+                                { value: "off" as const, label: t("prefs.desktopNotifyOff"), icon: <BellOff size={15} /> },
+                                { value: "on" as const, label: t("prefs.desktopNotifyOn"), icon: <Bell size={15} /> },
+                            ]}
+                            value={desktopNotify ? "on" : "off"}
+                            onChange={(v) => void changeDesktopNotify(v)}
+                            aria-label={t("prefs.desktopNotify")}
+                        />
+                        {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
+                        {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
+                    </Section>
+                </div>
+            )}
+
+            {tab === "appearance" && (
+                <div className="space-y-6">
                     {/* 主題 / Theme */}
                     <Section icon={<Sun />} title={t("prefs.theme")} description={t("prefs.themeDescription")}>
                         <Segmented fullWidth options={themeOptions} value={theme} onChange={changeTheme} aria-label={t("prefs.theme")} />
@@ -221,6 +259,31 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </div>
                     </Section>
 
+                    {/* 各頁的卡片 / 列表（存在帳號上；頁面上的切換鈕也改這裡）。/ Card / list per page (on the account; the pages' switches change it too). */}
+                    <Section icon={<LayoutGrid />} title={t("prefs.views")} description={t("prefs.viewsDescription")}>
+                        <div className="space-y-2">
+                            {VIEW_PAGES.map((p) => (
+                                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+                                    <span className="text-sm text-foreground">{t(p.label)}</span>
+                                    <Segmented
+                                        size="sm"
+                                        value={viewModeOf(viewModes, p.id)}
+                                        onChange={(m) => setViewModeFor(p.id, m)}
+                                        aria-label={t(p.label)}
+                                        options={[
+                                            { value: "card", label: t("ui.cardView"), icon: <LayoutGrid size={14} /> },
+                                            { value: "list", label: t("ui.listView"), icon: <List size={14} /> },
+                                        ]}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </Section>
+                </div>
+            )}
+
+            {tab === "terminal" && (
+                <div className="space-y-6">
                     {/* 終端機:預設字型 / 字級 / 配色(與終端機頁「外觀 → 我的預設」是同一份)。
                         Terminal: default font / size / colour scheme (the same values as the terminal's Appearance → My default). */}
                     <Section icon={<TerminalIcon />} title={t("prefs.terminal")} description={t("prefs.terminalDescription")}>
@@ -235,7 +298,11 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                     {/* 網頁終端機斷線後 shell 留多久（存在帳號上；站台上限、裝置政策會再收窄）。
                         How long a web terminal's shell is kept after a drop (on the account; narrowed by the site and device). */}
                     <TerminalDetachPref />
+                </div>
+            )}
 
+            {tab === "desktop" && (
+                <div className="space-y-6">
                     {/* 遠端桌面剪貼簿（存在帳號上；超過站台上限的選項關掉）。/ Remote desktop clipboard (on the account; choices above the site's limit are disabled). */}
                     <Section icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>
                         <Segmented
@@ -251,20 +318,30 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </p>
                     </Section>
 
-                    {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}
-                    <Section icon={<Bell />} title={t("prefs.desktopNotify")} description={t("prefs.desktopNotifyDescription")}>
+                    {/* 畫質 / 聲音的預設:和遠端桌面頁的欄位是同一份(這台瀏覽器)。
+                        Quality / sound defaults: the same values as the desktop page's fields (this browser). */}
+                    <Section icon={<Gauge />} title={t("desktop.field.quality")} description={t("prefs.desktopQualityDescription")}>
+                        <Segmented
+                            fullWidth
+                            options={QUALITY_VALUES.map((v) => ({ value: v, label: t(QUALITY_LABEL[v]) }))}
+                            value={quality}
+                            onChange={setQuality}
+                            aria-label={t("desktop.field.quality")}
+                        />
+                        <p className="text-xs text-muted-foreground">{t(QUALITY_HINT[quality])}</p>
+                    </Section>
+
+                    <Section icon={<Volume2 />} title={t("desktop.field.sound")} description={t("prefs.desktopSoundDescription")}>
                         <Segmented
                             fullWidth
                             options={[
-                                { value: "off" as const, label: t("prefs.desktopNotifyOff"), icon: <BellOff size={15} /> },
-                                { value: "on" as const, label: t("prefs.desktopNotifyOn"), icon: <Bell size={15} /> },
+                                { value: "off" as const, label: t("desktop.sound.off"), icon: <VolumeX size={15} /> },
+                                { value: "on" as const, label: t("desktop.sound.on"), icon: <Volume2 size={15} /> },
                             ]}
-                            value={desktopNotify ? "on" : "off"}
-                            onChange={(v) => void changeDesktopNotify(v)}
-                            aria-label={t("prefs.desktopNotify")}
+                            value={audio}
+                            onChange={setAudio}
+                            aria-label={t("desktop.field.sound")}
                         />
-                        {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
-                        {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
                     </Section>
                 </div>
             )}

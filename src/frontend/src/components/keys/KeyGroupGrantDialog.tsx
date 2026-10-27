@@ -92,6 +92,8 @@ export function KeyGroupGrantDialog({
             description={t("groups.grant.description")}
             icon={<Send />}
             size="3xl"
+            // 兩個分頁的內容高度不同：固定視窗大小，切換時才不會跳來跳去。/ The two tabs differ in height: a fixed size keeps the dialog still when switching.
+            fixedHeight
             toolbar={
                 <Segmented
                     size="sm"

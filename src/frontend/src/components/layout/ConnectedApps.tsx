@@ -5,6 +5,8 @@
  * session、最近紀錄），也可以直接撤銷。偏好設定與 MCP 頁共用。
  * Connected apps: the MCP / AI clients the user has authorized. A row opens the details (permissions,
  * tunnels, sessions, recent calls); revoke from the row or the details. Used in preferences and on the MCP page.
+ * 管理員在「管理使用者」傳 `userId` 看別人的（詳細資料與撤銷用同一組 API，管理員本來就能用）。
+ * Admins pass `userId` in the Manage-user dialog to see someone else's (details and revoke use the same API).
  */
 import React, { useEffect, useState } from "react";
 import { Bot, ChevronRight, Trash2 } from "lucide-react";
@@ -19,18 +21,19 @@ import { ConnectedAppDialog } from "./ConnectedAppDialog";
 
 export type { OAuthGrant } from "@/types/oauth";
 
-export function ConnectedApps() {
+export function ConnectedApps({ userId }: { userId?: number } = {}) {
     const { t, locale } = useI18n();
     const { showError, showSuccess } = useToast();
     const [grants, setGrants] = useState<OAuthGrant[] | null>(null);
     const [pending, setPending] = useState<OAuthGrant | null>(null);
     const [openId, setOpenId] = useState<number | null>(null);
+    const admin = userId !== undefined;
 
     useEffect(() => {
         let cancelled = false;
         (async () => {
             try {
-                const res = await apiFetch("/api/oauth/grants");
+                const res = await apiFetch(admin ? `/api/user/users/${userId}/grants` : "/api/oauth/grants");
                 const data = res.ok ? await res.json() : [];
                 if (!cancelled) setGrants(data);
             } catch {
@@ -40,7 +43,7 @@ export function ConnectedApps() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [admin, userId]);
 
     const removeFromList = (id: number) => setGrants((prev) => (prev ?? []).filter((x) => x.id !== id));
 
@@ -67,11 +70,11 @@ export function ConnectedApps() {
 
     return (
         <section className="space-y-3">
-            <SectionHeading icon={<Bot />} title={t("prefs.connectedApps")} description={t("prefs.connectedAppsDescription")} />
+            <SectionHeading icon={<Bot />} title={t("prefs.connectedApps")} description={admin ? t("apps.adminDescription") : t("prefs.connectedAppsDescription")} />
             {grants === null ? (
                 <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
             ) : grants.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{t("prefs.noConnectedApps")}</p>
+                <p className="rounded-xl border border-dashed border-border px-4 py-4 text-center text-sm leading-relaxed text-muted-foreground">{admin ? t("apps.adminEmpty") : t("prefs.noConnectedApps")}</p>
             ) : (
                 <ul className="divide-y divide-border rounded-xl border border-border">
                     {grants.map((g) => (

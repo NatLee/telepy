@@ -18,7 +18,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
-import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare } from "lucide-react";
+import { Settings, ShieldCheck, Users as UsersIcon, Shield, UserPlus, Globe, Bot, Plug, Activity, ArrowRight, UserCog, Bell, ScreenShare, SquareTerminal, LogIn, Webhook, KeySquare, History } from "lucide-react";
 import { apiFetch, readJson } from "@/lib/api";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Callout } from "@/components/ui/callout";
 import { Segmented } from "@/components/ui/segmented";
+import { NavTabs } from "@/components/ui/nav-tabs";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -40,6 +41,8 @@ import type { TranslationKey } from "@/locales/en";
 import { SignInHistory } from "@/components/layout/SignInHistory";
 import { SignInDevices } from "@/components/layout/SignInDevices";
 import { ApiTokens } from "@/components/tokens/ApiTokens";
+import { ConnectedApps } from "@/components/layout/ConnectedApps";
+import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 
 function titleize(key: string) {
@@ -487,8 +490,14 @@ function UsersTab() {
     );
 }
 
-/** 單一使用者的「管理」modal:帳號旗標 + 個人設定,變更即時套用。
- *  Per-user "Manage" modal: account flags + personal settings; changes apply immediately. */
+/** 單一使用者的「管理」modal:帳號旗標 + 個人設定,變更即時套用。分頁跟偏好設定一樣放在左側欄
+ *  (帳號 / 安全性 / 登入紀錄 / 已連接的應用程式 / API token / AI 活動),fixedHeight 讓切換分頁時視窗不跳動。
+ *  Per-user "Manage" modal: account flags + personal settings; changes apply immediately. Tabs sit in
+ *  the side rail like the preferences modal (account / security / sign-in history / connected apps / API tokens /
+ *  AI activity), and
+ *  fixedHeight keeps the dialog the same size when switching tabs. */
+type UserModalTab = "account" | "security" | "history" | "apps" | "tokens" | "activity";
+
 function UserEditModal({
     user,
     isSelf,
@@ -506,6 +515,7 @@ function UserEditModal({
 }) {
     const [saving, setSaving] = useState(false);
     const [confirmReset, setConfirmReset] = useState(false);
+    const [tab, setTab] = useState<UserModalTab>("account");
 
     const apply = async (patch: ManagedUserPatch) => {
         setSaving(true);
@@ -518,6 +528,21 @@ function UserEditModal({
         ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
     ];
 
+    const tabs = [
+        { value: "account" as const, label: t("settings.userTabAccount"), hint: t("settings.userTabAccountHint"), icon: <UserCog /> },
+        { value: "security" as const, label: t("settings.userTabSecurity"), hint: t("settings.userTabSecurityHint"), icon: <ShieldCheck /> },
+        { value: "history" as const, label: t("settings.userTabHistory"), hint: t("settings.userTabHistoryHint"), icon: <History /> },
+        { value: "apps" as const, label: t("settings.userTabApps"), hint: t("settings.userTabAppsHint"), icon: <Plug /> },
+        { value: "tokens" as const, label: t("settings.userTabTokens"), hint: t("settings.userTabTokensHint"), icon: <KeySquare /> },
+        { value: "activity" as const, label: t("settings.userTabActivity"), hint: t("settings.userTabActivityHint"), icon: <Activity /> },
+    ];
+
+    const role = (
+        <span className={`shrink-0 rounded-sm px-1.5 py-px text-xs ${user.is_superuser ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+            {user.is_superuser ? t("settings.roleAdmin") : t("settings.roleUser")}
+        </span>
+    );
+
     return (
         <Modal
             isOpen
@@ -526,105 +551,139 @@ function UserEditModal({
             description={user.email || undefined}
             icon={<UserCog />}
             isLoading={saving}
+            size="4xl"
+            fixedHeight
+            nav={
+                <div className="space-y-4">
+                    {/* 被管理的人(桌面在側欄上方)。/ Who is being managed: top of the rail on desktop. */}
+                    <div className="hidden items-center gap-2.5 px-1.5 sm:flex">
+                        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background uppercase" aria-hidden>
+                            {user.username.slice(0, 1)}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm text-foreground">{user.username}</span>
+                            {role}
+                        </span>
+                    </div>
+                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("settings.userModalTitle")} />
+                </div>
+            }
             footer={
                 <Button type="button" variant="outline" onClick={onClose}>
                     {t("common.close")}
                 </Button>
             }
         >
-            <div className="space-y-6">
-                {isSelf && <Callout tone="warning">{t("settings.selfEditNote")}</Callout>}
+            {tab === "account" && (
+                <div className="space-y-6">
+                    {isSelf && <Callout tone="warning">{t("settings.selfEditNote")}</Callout>}
 
-                {/* 帳號啟用 / Account enabled */}
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
-                        <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
+                    {/* 帳號啟用 / Account enabled */}
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm text-foreground">{t("settings.userActiveLabel")}</p>
+                            <p className="text-sm text-muted-foreground">{t("settings.userActiveDescription")}</p>
+                        </div>
+                        <Switch
+                            checked={user.is_active}
+                            disabled={isSelf || saving}
+                            onCheckedChange={(v) => apply({ is_active: v })}
+                            aria-label={t("settings.userActiveLabel")}
+                        />
                     </div>
-                    <Switch
-                        checked={user.is_active}
-                        disabled={isSelf || saving}
-                        onCheckedChange={(v) => apply({ is_active: v })}
-                        aria-label={t("settings.userActiveLabel")}
-                    />
-                </div>
 
-                {/* 管理員角色 / Administrator role */}
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <p className="text-sm text-foreground">{t("settings.userSuperuserLabel")}</p>
-                        <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
+                    {/* 管理員角色 / Administrator role */}
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm text-foreground">{t("settings.userSuperuserLabel")}</p>
+                            <p className="text-sm text-muted-foreground">{t("settings.userSuperuserDescription")}</p>
+                        </div>
+                        <Switch
+                            checked={user.is_superuser}
+                            disabled={isSelf || saving}
+                            onCheckedChange={(v) => apply({ is_superuser: v })}
+                            aria-label={t("settings.userSuperuserLabel")}
+                        />
                     </div>
-                    <Switch
-                        checked={user.is_superuser}
-                        disabled={isSelf || saving}
-                        onCheckedChange={(v) => apply({ is_superuser: v })}
-                        aria-label={t("settings.userSuperuserLabel")}
-                    />
-                </div>
 
-                {/* 介面語言 / Interface language */}
-                <div>
-                    <p className="text-sm text-foreground mb-2">{t("settings.userLanguageLabel")}</p>
-                    <NativeSelect
-                        value={user.language ?? ""}
-                        disabled={saving}
-                        onChange={(e) => {
-                            const value = e.target.value as LanguagePreference | "";
-                            if (value) apply({ language: value });
-                        }}
-                    >
-                        {user.language === null && (
-                            <option value="" disabled>
-                                {t("settings.userLanguageNotSet")}
-                            </option>
-                        )}
-                        {languageOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                                {option.label}
-                            </option>
-                        ))}
-                    </NativeSelect>
-                </div>
-
-                {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <p className="text-sm text-foreground">{t("security.adminTitle")}</p>
-                        <p className="text-sm text-muted-foreground">{user.mfa_enabled ? t("security.adminOn") : t("security.adminOff")}</p>
-                    </div>
-                    {user.mfa_enabled && (
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
+                    {/* 介面語言 / Interface language */}
+                    <div className="max-w-sm">
+                        <p className="text-sm text-foreground mb-2">{t("settings.userLanguageLabel")}</p>
+                        <NativeSelect
+                            value={user.language ?? ""}
                             disabled={saving}
-                            onClick={() => setConfirmReset(true)}
-                            className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            onChange={(e) => {
+                                const value = e.target.value as LanguagePreference | "";
+                                if (value) apply({ language: value });
+                            }}
                         >
-                            {t("security.adminReset")}
-                        </Button>
-                    )}
-                </div>
-
-                {/* 功能權限（存取分頁；跟隧道分享無關）。/ Feature permissions (the Access tab; not tunnel sharing). */}
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <p className="text-sm text-foreground">{t("access.manageTitle")}</p>
-                        <p className="text-sm text-muted-foreground">{user.is_superuser ? t("access.adminAlways") : t("access.manageHint", { user: user.username })}</p>
+                            {user.language === null && (
+                                <option value="" disabled>
+                                    {t("settings.userLanguageNotSet")}
+                                </option>
+                            )}
+                            {languageOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                    {option.label}
+                                </option>
+                            ))}
+                        </NativeSelect>
                     </div>
-                    <Button asChild type="button" size="sm" variant="outline" className="shrink-0">
-                        <Link href={`/tunnels/settings?tab=access&user=${user.id}`} onClick={onClose}>{t("access.manageOpen")}</Link>
-                    </Button>
-                </div>
 
-                {/* 登入中的瀏覽器（可登出）/ Signed-in browsers (sign out) */}
-                <SignInDevices userId={user.id} userName={user.username} />
-                {/* 最近的登入 / Recent sign-ins */}
+                    {/* 功能權限（存取分頁；跟隧道分享無關）。/ Feature permissions (the Access tab; not tunnel sharing). */}
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm text-foreground">{t("access.manageTitle")}</p>
+                            <p className="text-sm text-muted-foreground">{user.is_superuser ? t("access.adminAlways") : t("access.manageHint", { user: user.username })}</p>
+                        </div>
+                        <Button asChild type="button" size="sm" variant="outline" className="shrink-0">
+                            <Link href={`/tunnels/settings?tab=access&user=${user.id}`} onClick={onClose}>{t("access.manageOpen")}</Link>
+                        </Button>
+                    </div>
+                </div>
+            )}
+
+            {tab === "security" && (
+                <div className="space-y-6">
+                    {/* 兩步驟驗證（使用者遺失 passkey / 手機時由管理員重設）/ Two-step verification reset */}
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm text-foreground">{t("security.adminTitle")}</p>
+                            <p className="text-sm text-muted-foreground">{user.mfa_enabled ? t("security.adminOn") : t("security.adminOff")}</p>
+                        </div>
+                        {user.mfa_enabled && (
+                            <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={saving}
+                                onClick={() => setConfirmReset(true)}
+                                className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            >
+                                {t("security.adminReset")}
+                            </Button>
+                        )}
+                    </div>
+
+                    {/* 登入中的瀏覽器（可登出）/ Signed-in browsers (sign out) */}
+                    <SignInDevices userId={user.id} userName={user.username} />
+                </div>
+            )}
+
+            {/* 最近的登入 / Recent sign-ins */}
+            {tab === "history" && (
                 <SignInHistory endpoint={`/api/user/users/${user.id}/sign-ins`} description={t("security.signInsAdminDescription")} />
-                {/* 這個人的個人 API token（可撤銷）/ Their personal API tokens (revoke) */}
-                <ApiTokens userId={user.id} />
-            </div>
+            )}
+
+            {/* 這個人的個人 API token（可撤銷）/ Their personal API tokens (revoke) */}
+            {/* 這個人核可過的 OAuth 應用程式（可看詳細、可撤銷）/ The OAuth apps they approved (details, revoke) */}
+            {tab === "apps" && <ConnectedApps userId={user.id} />}
+
+            {tab === "tokens" && <ApiTokens userId={user.id} />}
+
+            {/* 這個人的 app 與 token 呼叫過的工具 / Tool calls by their apps and tokens */}
+            {tab === "activity" && <UserActivity userId={user.id} onNavigate={onClose} />}
+
             <ConfirmDialog
                 isOpen={confirmReset}
                 onClose={() => setConfirmReset(false)}

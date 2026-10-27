@@ -43,13 +43,25 @@ function NodeTile({ node, compact }: { node: WayNode; compact?: boolean }) {
             <span className="min-w-0">
                 <span className="block text-sm leading-tight text-foreground">{t(node.label)}</span>
                 <span className="block text-xs leading-snug text-muted-foreground">{t(node.sub)}</span>
-                {node.draws && (
-                    <span className="mt-1 inline-flex max-w-full items-center gap-1 rounded-sm bg-muted px-1.5 text-xs leading-5 text-foreground">
-                        <Paintbrush size={12} className="shrink-0" aria-hidden /> <span className="min-w-0">{t("desktop.ways.draws")}</span>
-                    </span>
-                )}
+                {node.draws && compact && <DrawsBadge className="mt-1" />}
             </span>
+            {node.draws && !compact && <DrawsBadge className="mt-0.5" />}
         </div>
+    );
+}
+
+/**
+ * 「畫面在此繪製」小標：一律一行；寬版放在點的直欄裡置中，欄比它窄時兩邊平均超出一點（落在線那欄的內距裡），不會折行。
+ * The "renders here" tag: always one line; in the wide grid it is a direct child of the centred column, so a column
+ * narrower than the tag lets it overhang evenly into the links' padding instead of wrapping.
+ */
+function DrawsBadge({ className }: { className?: string }) {
+    const { t } = useI18n();
+    return (
+        <span className={cn("inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-muted px-1.5 text-xs leading-5 text-foreground", className)}>
+            <Paintbrush size={12} className="shrink-0" aria-hidden />
+            {t("desktop.ways.draws")}
+        </span>
     );
 }
 

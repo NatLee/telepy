@@ -6,6 +6,7 @@
 //!
 //! 內容幾乎不解析（帳密的雜湊交換、影像、聲音、輸入、檔案都在核心與裝置之間）；唯一看的是瀏覽器 → 裝置方向的
 //! 登入（[`codec::LoginGuard`]）：畫面 session 只准遙控、檔案 session 只准傳檔，不符就 4403。
+//! 檔案 session 另外讀刪除 / 改名動作與裝置的回答，寫進 Logs（[`crate::rustdesk::file_audit`]，只有路徑與數量）。
 //! 檔案 session（畫面 session 的子 session）不另記 presence；畫面那條結束時一併收掉。
 //! 關閉碼：4404 session / 票證無效或過期、4403 無權限、4013 裝置斷線、4014 伺服器端結束（stop / 權限被收回）、
 //! 4400 壞框（超長或第一則不是 rendezvous 訊息）、4009 從即時 session 頁被結束。
@@ -23,6 +24,7 @@ use crate::desktop::fmt_duration;
 use crate::desktop::stats::fmt_bytes;
 use crate::presence::{Entry, Kind};
 use crate::rustdesk::codec::{self, FrameError};
+use crate::rustdesk::file_audit::{AuditEvent, FileAudit};
 use crate::rustdesk::{Kind as SessionKind, Role};
 use crate::state::AppState;
 
@@ -50,6 +52,12 @@ async fn next_binary(socket: &mut WebSocket) -> Option<Vec<u8>> {
             Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return None,
             Some(Ok(_)) => {}
         }
+    }
+}
+
+async fn write_audit(state: &AppState, tunnel_id: i64, events: Vec<AuditEvent>, tail: &str) {
+    for e in events {
+        state.gateway.event(e.kind, None, None, Some(tunnel_id), format!("RustDesk {}{tail}", e.message)).await;
     }
 }
 
@@ -145,6 +153,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     let mut guard = codec::LoginGuard::new(session.kind.login());
     let mut refused: Option<String> = None;
+    // 檔案 session 的刪除 / 改名寫進 Logs（只有路徑與數量）。/ Deletions and renames on a files session go to the Logs.
+    let mut audit = files.then(FileAudit::new);
+    let audit_tail = format!(" by {} (session {})", session.user_name, short(&session.id));
 
     let mut buf = vec![0u8; 64 * 1024];
     let mut pending: Vec<u8> = Vec::with_capacity(256 * 1024);
@@ -168,6 +179,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                         break "refused";
                     }
                     to_device += b.len() as u64;
+                    if let Some(a) = audit.as_mut() {
+                        if let Some(op) = codec::file_op(&b) {
+                            write_audit(&state, session.tunnel_id, a.on_action(&op), &audit_tail).await;
+                        }
+                    }
                     if channel.write_all(&codec::encode_frame(&b)).await.is_err() {
                         close_code = Some(CLOSE_DEVICE_CLOSED);
                         break "device";
@@ -204,6 +220,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                     let mut send_failed = false;
                     for m in out {
                         to_browser += m.len() as u64;
+                        if let Some(a) = audit.as_mut() {
+                            if let Some(reply) = codec::file_reply(&m) {
+                                write_audit(&state, session.tunnel_id, a.on_reply(&reply), &audit_tail).await;
+                            }
+                        }
                         if socket.send(Message::Binary(m.into())).await.is_err() {
                             send_failed = true;
                             break;
@@ -233,6 +254,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             }
         }
     };
+    if let Some(a) = audit.as_mut() {
+        write_audit(&state, session.tunnel_id, a.finish(), &audit_tail).await;
+    }
     let mut message = format!("{opened} closed after {} ({reason}, session {}; {} to the browser, {} to the device)", fmt_duration(connected_at.elapsed()), short(&session.id), fmt_bytes(to_browser), fmt_bytes(to_device));
     if let Some(why) = &refused {
         message.push_str(&format!("; refused: {why}"));

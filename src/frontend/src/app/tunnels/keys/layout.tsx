@@ -1,26 +1,24 @@
 "use client";
 
 /**
- * SSH 金鑰區的外框：標題列（怎麼運作 / 重新整理 / 新增金鑰）、子頁分頁（我的金鑰 / 金鑰群組 / 裝置，側欄也列出來）、
- * 「裝置金鑰清單怎麼運作」說明，以及共用的資料與視窗（`KeysAreaProvider`）。以前三塊擠在同一頁，金鑰或裝置一多就很長。
- * The SSH keys area's frame: the header (how it works / refresh / add key), the sub-page tabs (your keys / key
- * groups / devices, also listed in the sidebar), the "how device key lists work" explainer, and the shared data and
- * dialogs (`KeysAreaProvider`). The three parts used to share one page, which got long with many keys or devices.
+ * SSH 金鑰區的外框：標題列（運作方式 → 說明視窗 / 重新整理 / 新增金鑰）、子頁分頁（我的金鑰 / 金鑰群組 / 裝置，側欄
+ * 也列出來），以及共用的資料與視窗（`KeysAreaProvider`）。以前三塊擠在同一頁，金鑰或裝置一多就很長。
+ * The SSH keys area's frame: the header (how it works → explainer dialog / refresh / add key), the sub-page tabs
+ * (your keys / key groups / devices, also listed in the sidebar), and the shared data and dialogs
+ * (`KeysAreaProvider`). The three parts used to share one page, which got long with many keys or devices.
  */
 import React, { Suspense, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { CircleHelp, HardDrive, Key as KeyIcon, KeyRound, Layers, Plus, RefreshCw } from "lucide-react";
+import { HardDrive, Info, Key as KeyIcon, KeyRound, Layers, Plus, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
-import { KeyListExplainer } from "@/components/keys/KeyListExplainer";
+import { KeyListExplainerDialog } from "@/components/keys/KeyListExplainer";
 import { KeysAreaProvider, useKeysArea } from "@/components/keys/KeysArea";
 import { useI18n } from "@/lib/i18n";
 import { useFeatures } from "@/hooks/useFeatures";
 import { Callout } from "@/components/ui/callout";
 import { expiryState } from "@/lib/keyExpiry";
-
-const EXPLAINER_KEY = "telepy.keysExplainer";
 
 const KEYS_TABS = [
     { value: "mine", href: "/tunnels/keys" },
@@ -43,28 +41,9 @@ function KeysShell({ children }: { children: React.ReactNode }) {
     const router = useRouter();
     const pathname = usePathname();
     const { page, keyGroups, setAddOpen } = useKeysArea();
-    // 頁面只在瀏覽器端算繪（Suspense 內），直接讀 localStorage。沒選過時，只有還沒有金鑰的人看到說明（已有金鑰的人
-    // 用標題列的「怎麼運作」打開），免得它把清單推到第二個畫面。
-    // Client-only (inside Suspense), so localStorage is read up front. Without a stored choice only people with no
-    // keys yet see the explainer (others open it from the header), so it never pushes the lists below the fold.
-    const [explainerChoice, setExplainerChoice] = useState<"shown" | "hidden" | null>(() => {
-        try {
-            const v = localStorage.getItem(EXPLAINER_KEY);
-            return v === "shown" || v === "hidden" ? v : null;
-        } catch {
-            return null;
-        }
-    });
+    // 「運作方式」跟其他頁面的 info 一樣打開對話框。/ "How it works" opens a dialog like every other page's info.
+    const [howOpen, setHowOpen] = useState(false);
     const firstLoad = page.loading && page.keys.length === 0;
-    const explainer = explainerChoice === "shown" || (explainerChoice === null && !page.loading && page.keys.length === 0);
-    const showExplainer = (show: boolean) => {
-        setExplainerChoice(show ? "shown" : "hidden");
-        try {
-            localStorage.setItem(EXPLAINER_KEY, show ? "shown" : "hidden");
-        } catch {
-            /* ignore */
-        }
-    };
     // 「我的金鑰」分頁上的小點：有已到期或 7 天內到期的金鑰。/ A dot on "Your keys" when a key expired or expires within a week.
     const expiring = page.keys.some((k) => ["soon", "expired"].includes(expiryState(k.expires_at)));
     const tab = tabOf(pathname);
@@ -80,11 +59,9 @@ function KeysShell({ children }: { children: React.ReactNode }) {
                 description={t("keys.subtitle")}
                 actions={
                     <>
-                        {!explainer && !firstLoad && (
-                            <Button variant="ghost" onClick={() => showExplainer(true)}>
-                                <CircleHelp size={16} /> {t("keys.how.show")}
-                            </Button>
-                        )}
+                        <Button variant="outline" onClick={() => setHowOpen(true)}>
+                            <Info size={16} /> {t("keys.how.show")}
+                        </Button>
                         <Button variant="outline" onClick={page.refresh} disabled={page.loading} aria-label={t("keys.refreshAria")}>
                             <RefreshCw size={16} className={page.loading ? "animate-spin" : ""} />
                             {t("common.refresh")}
@@ -101,7 +78,7 @@ function KeysShell({ children }: { children: React.ReactNode }) {
 
             {!keysOn && <Callout tone="warning">{t("access.keysOff")}</Callout>}
 
-            {explainer && <KeyListExplainer onHide={() => showExplainer(false)} />}
+            <KeyListExplainerDialog isOpen={howOpen} onClose={() => setHowOpen(false)} />
 
             <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
                 <Segmented
