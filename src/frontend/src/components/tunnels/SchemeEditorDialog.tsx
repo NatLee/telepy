@@ -2,9 +2,9 @@
 
 /**
  * 自訂終端機配色的編輯對話框:名稱、「從目前的配色開始」、匯入(Windows Terminal JSON / base16 YAML,即時辨識)、
- * 前景 / 背景 / 游標 / 選取 + 2×8 的 ANSI 色票(原生 <input type=color>),以及即時預覽。新增與編輯共用。
+ * 前景 / 背景 / 游標 / 選取 + 16 格 ANSI 色票(兩欄 / 四欄)(原生 <input type=color>),以及即時預覽。新增與編輯共用。
  * The custom-scheme editor: name, "start from the current scheme", import (Windows Terminal JSON / base16 YAML
- * with live detection), text / background / cursor / selection + the 2×8 ANSI grid (native colour inputs) and a
+ * with live detection), text / background / cursor / selection + the 16 ANSI swatches (2 / 4 columns) (native colour inputs) and a
  * live preview. Shared by create and edit.
  */
 import React, { useEffect, useMemo, useState } from "react";
@@ -76,8 +76,9 @@ function ColorSwatch({ k, value, onChange, compact }: { k: ColorKey; value: stri
                 />
             </span>
             <span className="min-w-0 flex-1">
-                <span className={compact ? "block truncate text-xs text-foreground" : "block truncate text-sm text-foreground"}>{t(COLOR_LABEL[k])}</span>
-                <span className="block font-mono text-xs tabular-nums text-muted-foreground">{value || "—"}</span>
+                {/* 名稱可換行、不截斷;色碼截斷,窄格也不會撐出格子。/ The name wraps, the hex truncates, so a narrow cell never overflows. */}
+                <span className={compact ? "block break-words text-xs leading-tight text-foreground" : "block truncate text-sm text-foreground"}>{t(COLOR_LABEL[k])}</span>
+                <span className="block truncate font-mono text-xs tabular-nums text-muted-foreground">{value || "—"}</span>
             </span>
         </label>
     );
@@ -210,7 +211,9 @@ export function SchemeEditorDialog({ isOpen, onClose, editing, current, look, on
                 </Section>
 
                 <Section title={t("terminal.schemeColorsAnsi")} description={t("terminal.schemeColorsAnsiHint")} as="h4">
-                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 lg:grid-cols-8">
+                    {/* 最多四欄:八欄在 2xl 對話框裡每格只剩約 70px,色碼與「明るいマゼンタ」都塞不下。
+                        At most four columns: eight left ~70px per cell in the 2xl dialog, too narrow for the hex and the longer names. */}
+                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                         {ANSI_KEYS.map((k) => <ColorSwatch key={k} k={k} value={colors[k]} onChange={set(k)} compact />)}
                     </div>
                 </Section>
