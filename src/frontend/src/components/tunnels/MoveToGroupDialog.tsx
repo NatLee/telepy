@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { groupNameProblem, MAX_GROUP_NAME, normalizeGroupName } from "@/lib/groups";
 import { NAME_PROBLEM } from "@/components/tunnels/TunnelGroupEditor";
+import { GroupSearchBox, GroupSearchFooter, useGroupSearch } from "@/components/groups/GroupSearch";
 import type { TunnelGroup } from "@/types/groups";
 import type { Tunnel } from "@/types/tunnel";
 
@@ -42,6 +43,8 @@ export function MoveToGroupDialog({
     const [name, setName] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    // 群組很多時：搜尋 + 分頁（目前選的那組一定看得到）。/ Many groups: search + pages (the current choice stays visible).
+    const search = useGroupSearch(ordered, choice.kind === "group" ? choice.id : null);
     const problem = choice.kind === "new" ? groupNameProblem(name, groups) : null;
     const unchanged = (choice.kind === "none" && current === null) || (choice.kind === "group" && choice.id === current);
 
@@ -85,13 +88,15 @@ export function MoveToGroupDialog({
             <form id="move-to-group-form" onSubmit={submit} className="space-y-3">
                 <fieldset className="space-y-1.5">
                     <legend className="sr-only">{t("groups.move.title")}</legend>
-                    {ordered.map((g) => (
+                    <GroupSearchBox s={search} />
+                    {search.visible.map((g) => (
                         <label key={g.id} className={row}>
                             <input type="radio" name="group" checked={choice.kind === "group" && choice.id === g.id} onChange={() => setChoice({ kind: "group", id: g.id })} className="size-4 accent-primary" />
                             <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={g.name}>{g.name}</span>
                             <span className="shrink-0 text-xs text-muted-foreground">{t("groups.tunnel.count", { count: g.tunnel_ids.length })}</span>
                         </label>
                     ))}
+                    <GroupSearchFooter s={search} />
                     {ordered.length > 0 && (
                         <label className={row}>
                             <input type="radio" name="group" checked={choice.kind === "none"} onChange={() => setChoice({ kind: "none" })} className="size-4 accent-primary" />

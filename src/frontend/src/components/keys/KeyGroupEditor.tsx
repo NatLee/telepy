@@ -34,7 +34,9 @@ export function KeyGroupEditor({
     const { t } = useI18n();
     const [name, setName] = useState(group?.name ?? "");
     const [ids, setIds] = useState<number[]>(group?.key_ids ?? []);
-    const [touched, setTouched] = useState(false);
+    // 空名稱只在按下儲存後才提示（不會一離開欄位、開始挑成員就變紅）；太長 / 重名打字時就提示。
+    // An empty name is flagged only after Save (not when you leave the field to pick members); too long / taken show as you type.
+    const [submitted, setSubmitted] = useState(false);
     const [serverError, setServerError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const groupOfKey = useMemo(() => {
@@ -43,7 +45,7 @@ export function KeyGroupEditor({
         return m;
     }, [groups]);
     const problem = groupNameProblem(name, groups, group?.id);
-    const nameError = serverError ?? (touched && problem ? t(NAME_PROBLEM[problem]) : undefined);
+    const nameError = serverError ?? (problem && (submitted || problem !== "empty") ? t(NAME_PROBLEM[problem]) : undefined);
     const items = useMemo<MemberItem[]>(
         () =>
             [...keys]
@@ -66,7 +68,7 @@ export function KeyGroupEditor({
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
-        setTouched(true);
+        setSubmitted(true);
         if (problem) return;
         setSaving(true);
         const err = await onSubmit(normalizeGroupName(name), ids);
@@ -86,7 +88,7 @@ export function KeyGroupEditor({
             footer={
                 <>
                     <Button variant="outline" onClick={onClose} disabled={saving}>{t("common.cancel")}</Button>
-                    <Button type="submit" form="key-group-form" disabled={saving || (touched && !!problem)}>
+                    <Button type="submit" form="key-group-form" disabled={saving || (submitted && !!problem)}>
                         {saving && <Loader2 className="animate-spin" />} {t("common.save")}
                     </Button>
                 </>
@@ -103,7 +105,6 @@ export function KeyGroupEditor({
                             setName(e.target.value);
                             setServerError(null);
                         }}
-                        onBlur={() => setTouched(true)}
                         placeholder={t("groups.example.group")}
                     />
                 </Field>
