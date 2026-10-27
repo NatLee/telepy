@@ -1,13 +1,14 @@
 /**
  * 通道列表的群組段落標題：收合 / 展開、名稱、幾條（搜尋時「N 條中的 M 條」）與幾條在線，右邊是群組選單
- * （編輯、上下移、刪除）。卡片檢視用 `GroupHeader`，表格檢視用 `GroupHeaderRow`（同一份內容放進一列）。
+ * （編輯、上下移、刪除）；群組的標籤與說明在下一行。卡片檢視用 `GroupHeader`，表格檢視用 `GroupHeaderRow`（同一份內容放進一列）。
  * Section header for a tunnel group: collapse toggle, name, counts (and "M of N" while filtering), online count,
- * and the group menu (edit, move up / down, delete). Cards use `GroupHeader`, the table `GroupHeaderRow`.
+ * and the group menu (edit, move up / down, delete); the group's labels and description on a line below. Cards use `GroupHeader`, the table `GroupHeaderRow`.
  */
 import React from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, FolderOpen, MoreHorizontal, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { TunnelLabels } from "@/components/tunnels/TunnelTags";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { TunnelGroup } from "@/types/groups";
@@ -30,6 +31,8 @@ export interface GroupHeaderProps {
     extra?: React.ReactNode;
     /** 標題元素的 id（分頁換頁後捲回這裡）。/ The header element's id (paging scrolls back to it). */
     id?: string;
+    /** 點群組的標籤（通道頁：加進搜尋）。/ Clicking one of the group's labels (tunnels page: adds it to the search). */
+    onLabel?: (label: string) => void;
 }
 
 function GroupMenu({ group, isFirst, isLast, onEdit, onMove, onDelete }: GroupHeaderProps) {
@@ -62,7 +65,33 @@ function GroupMenu({ group, isFirst, isLast, onEdit, onMove, onDelete }: GroupHe
     );
 }
 
+/** 群組的標籤與說明（有才顯示）：標題下一行，說明最多兩行，完整的在 tooltip。/ The group's labels and description under
+ *  the title (the description up to two lines, in full on hover); nothing when there are neither. */
+function GroupMetaLine({ group, onLabel }: { group: TunnelGroup | null; onLabel?: (label: string) => void }) {
+    const labels = group?.labels ?? [];
+    const description = group?.description ?? "";
+    if (!labels.length && !description) return null;
+    return (
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pb-0.5 pl-6">
+            <TunnelLabels labels={labels} onLabel={onLabel} />
+            {/* 放不下 16rem 就換到下一行，最多兩行（不切成「…」一行）。/ Wraps below the labels when under 16rem fits; two lines at most. */}
+            {description && (
+                <p className="line-clamp-2 min-w-[min(100%,16rem)] flex-1 text-xs text-muted-foreground" title={description}>{description.replace(/\s+/g, " ")}</p>
+            )}
+        </div>
+    );
+}
+
 function HeaderContent(p: GroupHeaderProps) {
+    return (
+        <>
+            <HeaderLine {...p} />
+            <GroupMetaLine group={p.group} onLabel={p.onLabel} />
+        </>
+    );
+}
+
+function HeaderLine(p: GroupHeaderProps) {
     const { t } = useI18n();
     const name = p.group?.name ?? t("groups.tunnel.ungrouped");
     const Icon = p.collapsed ? Folder : FolderOpen;

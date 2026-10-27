@@ -29,6 +29,18 @@ test("sound: RDP when asked, never on VNC, RustDesk needs a decoder", () => {
     assert.equal(row({ mode: "rustdesk", sound: true, soundDecoder: false }, "sound").reason, "desktop.streams.reason.soundNoDecoder");
 });
 
+test("sound while connected follows where it actually stops", () => {
+    const live = (state: "playing" | "quiet" | "waiting" | "blocked" | "none" | "muted", reason = "desktop.sound.reason.blocked" as const) => row({ sound: true, soundLive: { state, reason } }, "sound");
+    assert.equal(live("playing").state, "on");
+    assert.equal(live("quiet").state, "waiting");
+    assert.equal(live("waiting").state, "waiting");
+    assert.equal(live("blocked").state, "problem");
+    assert.equal(live("none").state, "problem");
+    assert.equal(live("muted").state, "off");
+    assert.equal(live("blocked").reason, "desktop.sound.reason.blocked");
+    assert.ok(streamFlows("on") && !streamFlows("waiting") && !streamFlows("problem"));
+});
+
 test("files: only RustDesk, blocked by the site switch, on while the panel is open", () => {
     assert.equal(row({}, "files").state, "unsupported");
     assert.equal(row({ mode: "vnc" }, "files").state, "unsupported");

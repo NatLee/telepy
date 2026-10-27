@@ -4,7 +4,7 @@ import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
-import { keysToAdd, splitBulkConfig, type BulkAccounts, type BulkConfigData } from "@/lib/bulkSshConfig";
+import { keysToAdd, pickParam, splitBulkConfig, type BulkAccounts, type BulkConfigData } from "@/lib/bulkSshConfig";
 import type { KeyDevice, UserKey } from "@/types/keys";
 
 const ACCOUNTS_KEY = "telepy.sshConfigAccounts";
@@ -36,9 +36,16 @@ export function useBulkConfig() {
     const [devices, setDevices] = useState<KeyDevice[] | null>(null);
     const [myKeys, setMyKeys] = useState<UserKey[] | null>(null);
     const [adding, setAdding] = useState(false);
-    const key = `${accounts}|${transport}`;
+    // 逐台挑的帳號（只放改過的那幾台；其餘照上面的模式）。/ Per-device accounts (only the changed ones; others follow the mode).
+    const [picks, setPicks] = useState<Record<number, number[]>>({});
+    const pick = pickParam(picks);
+    const key = `${accounts}|${transport}|${pick}`;
 
+    const setDeviceAccounts = (tunnelId: number, ids: number[]) => setPicks((prev) => ({ ...prev, [tunnelId]: ids }));
+
+    // 換模式 = 全部照新的模式重來，逐台的選擇清掉。/ A new mode starts every device over; per-device picks are cleared.
     const setAccounts = (v: BulkAccounts) => {
+        setPicks({});
         setAccountsState(v);
         try {
             localStorage.setItem(ACCOUNTS_KEY, v);
@@ -49,6 +56,7 @@ export function useBulkConfig() {
         let stale = false;
         const params = new URLSearchParams({ accounts });
         if (transport === "websocket") params.set("transport", "websocket");
+        if (pick) params.set("pick", pick);
         apiFetch(`/tunnels/server/config?${params}`)
             .then(async (res) => {
                 if (stale) return;
@@ -64,7 +72,7 @@ export function useBulkConfig() {
         return () => {
             stale = true;
         };
-    }, [key, accounts, transport, showError, t]);
+    }, [key, accounts, transport, pick, showError, t]);
 
     const loadDevices = useCallback(
         () =>
@@ -130,5 +138,5 @@ export function useBulkConfig() {
         [myKeys, deviceMap, loadDevices, showError, showSuccess, t]
     );
 
-    return { data, split, loading, accounts, setAccounts, transport, setTransport, deviceMap, devicesLoaded: devices !== null, myKeys, adding, addMyKeys };
+    return { data, split, loading, accounts, setAccounts, transport, setTransport, picks, setDeviceAccounts, deviceMap, devicesLoaded: devices !== null, myKeys, adding, addMyKeys };
 }

@@ -12,7 +12,10 @@ import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
 export interface TunnelConfigData {
     config: string;
     usernames: TargetUser[];
-    server: { alias: string; host: string; port: string };
+    /** alias = telepy-<網域>-<port>；legacy_alias = 舊版共用的名稱。/ alias = telepy-<domain>-<port>; legacy_alias = the old shared one. */
+    server: { alias: string; host: string; port: string; legacy_alias?: string };
+    /** 隧道的預設帳號（我能用時）。/ The tunnel's default account, when I may use it. */
+    default_username_id?: number | null;
     hosts: { alias: string; username: string; username_id: number }[];
     reverse_port: number;
     /** 筆電要存成 known_hosts_path 的行（Telepy 的主機金鑰）；gateway 沒有金鑰時是空字串。/ Lines to save as known_hosts_path. */

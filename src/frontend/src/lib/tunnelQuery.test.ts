@@ -106,6 +106,16 @@ test("group matches my group's name, none = ungrouped, and free text finds it", 
     assert.deepEqual(parseQuery("group:").invalid, ["group:"]);
 });
 
+test("label also matches the labels of the tunnel's group", () => {
+    const t = tunnel({ labels: ["web"] });
+    const m = (q: string, groupLabels?: string[]) => matchTunnel(t, parseQuery(q), { health: "online", now: NOW, group: "Prod", groupLabels });
+    assert.ok(m("label:web"), "its own label");
+    assert.ok(m("label:env=prod", ["env=prod"]), "its group's label");
+    assert.ok(!m("label:env=prod"), "no group labels");
+    assert.ok(!m("-label:env=prod", ["env=prod"]));
+    assert.ok(m("env=prod", ["env=prod"]), "free text finds group labels");
+});
+
 test("warn: device warnings", () => {
     const facts = (...kinds: string[]) => ({ ip: "1.2.3.4", live: true, connected_at: "2026-10-23T10:00:00Z", last_seen_at: null, facts: { warnings: kinds.map((kind) => ({ kind, detail: "" })) } });
     const full = tunnel({ endpoint: facts("disk", "reboot") });

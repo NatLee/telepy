@@ -11,10 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { MemberPicker, type MemberItem } from "@/components/groups/MemberPicker";
+import { GroupMetaFields, useGroupMetaForm } from "@/components/groups/GroupMetaFields";
 import { NAME_PROBLEM } from "@/components/tunnels/TunnelGroupEditor";
 import { useI18n } from "@/lib/i18n";
 import { groupNameProblem, MAX_GROUP_NAME, normalizeGroupName } from "@/lib/groups";
-import type { KeyGroup } from "@/types/groups";
+import type { GroupMeta, KeyGroup } from "@/types/groups";
 import type { UserKey } from "@/types/keys";
 
 export function KeyGroupEditor({
@@ -29,7 +30,7 @@ export function KeyGroupEditor({
     keys: UserKey[];
     onClose: () => void;
     /** 回傳名稱欄位的錯誤（null = 成功）。/ Returns the name error (null = saved). */
-    onSubmit: (name: string, keyIds: number[]) => Promise<string | null>;
+    onSubmit: (name: string, meta: GroupMeta, keyIds: number[]) => Promise<string | null>;
 }) {
     const { t } = useI18n();
     const [name, setName] = useState(group?.name ?? "");
@@ -39,6 +40,7 @@ export function KeyGroupEditor({
     const [submitted, setSubmitted] = useState(false);
     const [serverError, setServerError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+    const meta = useGroupMetaForm(group);
     const groupOfKey = useMemo(() => {
         const m = new Map<number, KeyGroup>();
         for (const g of groups) for (const k of g.key_ids) m.set(k, g);
@@ -69,9 +71,9 @@ export function KeyGroupEditor({
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSubmitted(true);
-        if (problem) return;
+        if (problem || !meta.valid) return;
         setSaving(true);
-        const err = await onSubmit(normalizeGroupName(name), ids);
+        const err = await onSubmit(normalizeGroupName(name), meta.value, ids);
         setSaving(false);
         if (err !== null) setServerError(err || null);
         else onClose();
@@ -88,7 +90,7 @@ export function KeyGroupEditor({
             footer={
                 <>
                     <Button variant="outline" onClick={onClose} disabled={saving}>{t("common.cancel")}</Button>
-                    <Button type="submit" form="key-group-form" disabled={saving || (submitted && !!problem)}>
+                    <Button type="submit" form="key-group-form" disabled={saving || (submitted && !!problem) || !meta.valid}>
                         {saving && <Loader2 className="animate-spin" />} {t("common.save")}
                     </Button>
                 </>
@@ -108,6 +110,7 @@ export function KeyGroupEditor({
                         placeholder={t("groups.example.group")}
                     />
                 </Field>
+                <GroupMetaFields form={meta} idPrefix="key-group" descriptionPlaceholder={t("groups.key.descriptionPlaceholder")} />
                 <MemberPicker items={items} selected={ids} onChange={setIds} current={group?.id ?? null} title={t("groups.key.keys")} hint={t("groups.key.moveHint")} />
             </form>
         </Modal>

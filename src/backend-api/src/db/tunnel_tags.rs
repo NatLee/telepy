@@ -40,7 +40,7 @@ pub fn normalize_labels(input: &[String]) -> Result<Vec<String>, String> {
         }
     }
     if out.len() > MAX_LABELS {
-        return Err(format!("A tunnel can have at most {MAX_LABELS} labels."));
+        return Err(format!("Use at most {MAX_LABELS} labels."));
     }
     out.sort();
     Ok(out)

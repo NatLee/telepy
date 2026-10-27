@@ -24,6 +24,8 @@ export interface StreamStats {
     behind: number;
     /** guacd 一次 sync 併了幾個邏輯幀（> 1 = 瀏覽器跟不上）。/ Logical frames merged into one. */
     merged: number;
+    /** 聲音串流每秒的量（guacd 開了聲音串流才有；null / 沒有 = 沒有聲音串流）。/ Sound bytes per second, null without a sound stream. */
+    audioBps?: number | null;
     /** 收到的時間（Date.now()）。/ When it arrived. */
     at: number;
 }
@@ -58,6 +60,7 @@ export function parseStats(json: string, at = Date.now()): StreamStats | null {
         upBps: perSecond(num(o.up) ?? 0),
         behind: num(o.behind) ?? 0,
         merged: num(o.merged) ?? 0,
+        audioBps: num(o.audio) === null ? null : perSecond(num(o.audio) ?? 0),
         at,
     };
 }

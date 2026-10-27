@@ -13,6 +13,10 @@ export interface NamedRef {
 export interface TunnelGroup {
     id: number;
     name: string;
+    /** 說明（"" = 沒有）。/ Description ("" = none). */
+    description: string;
+    /** 標籤（規則同通道標籤）。/ Labels (tunnel label rules). */
+    labels: string[];
     position: number;
     /** 這組裡我看得到的通道。/ Tunnels in it that I can see. */
     tunnel_ids: number[];
@@ -32,9 +36,17 @@ export interface KeyGroupGrant {
 export interface KeyGroup {
     id: number;
     name: string;
+    description: string;
+    labels: string[];
     key_ids: number[];
     grants: KeyGroupGrant[];
     created_at: string;
+}
+
+/** 群組的說明與標籤（建立 / 編輯表單送出的）。/ A group's description and labels, as the editors send them. */
+export interface GroupMeta {
+    description: string;
+    labels: string[];
 }
 
 /** 改動的回應：整份清單 + 剛建立 / 改到的那組。/ Write replies: the whole list plus the group just touched. */

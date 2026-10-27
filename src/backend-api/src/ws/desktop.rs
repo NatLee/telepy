@@ -309,6 +309,11 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     } };
     let duration = connected_at.elapsed();
     let mut message = format!("{opened} closed after {} ({reason}, session {}; {})", fmt_duration(duration), short(&session_id), stats.summary());
+    // 要了聲音、guacd 卻沒開聲音串流 = RDP 伺服器沒接受聲音轉送（Windows 的原則關了、xrdp 沒裝 pulseaudio-module-xrdp）。
+    // Sound was asked for but guacd never opened an audio stream: the RDP server does not redirect sound.
+    if session.audio && !stats.audio_opened() {
+        message.push_str(", no sound channel from the RDP server");
+    }
     if let Some(e) = &last_error {
         message.push_str(&format!("; guacd: {e}"));
     }

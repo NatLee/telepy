@@ -131,7 +131,10 @@ export function KeyGroupGrantDialog({
                                     <label key={g.id} className={choice}>
                                         <input type="radio" name="grant-group" checked={groupId === g.id} onChange={() => setGroupId(g.id)} className="size-4 shrink-0 accent-primary" />
                                         <FolderTree size={14} className="shrink-0 text-muted-foreground" aria-hidden />
-                                        <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={g.name}>{g.name}</span>
+                                        <span className="min-w-0 flex-1">
+                                            <span className="block truncate text-sm text-foreground" title={g.name}>{g.name}</span>
+                                            {g.description && <span className="block truncate text-xs text-muted-foreground" title={g.description}>{g.description.replace(/\s+/g, " ")}</span>}
+                                        </span>
                                         <span className="shrink-0 text-xs text-muted-foreground">{t("groups.grant.devices", { count: g.tunnel_ids.length })}</span>
                                     </label>
                                 ))}

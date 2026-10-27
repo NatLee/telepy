@@ -11,23 +11,24 @@
  */
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, FileCode2, KeyRound, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, FileCode2, FolderPlus, KeyRound, Loader2, Search } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
-import { NativeSelect } from "@/components/ui/native-select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { ConfigRouteMap, type ConfigPart } from "./ConfigRouteMap";
 import { SshConfigInstall } from "./SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "./ConfigSteps";
 import { TransportInfoDialog } from "./TransportInfoDialog";
+import { AccountChips } from "./AccountChips";
 import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
-import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, type DeviceAccess } from "@/lib/bulkSshConfig";
+import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, toggleAccount, type BulkConfigTunnel, type DeviceAccess } from "@/lib/bulkSshConfig";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { TunnelGroup } from "@/types/groups";
@@ -94,6 +95,8 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
     const visible = collapsed ? filtered.slice(0, COLLAPSE_AT) : filtered;
 
     const chosen = rows.filter((r) => selected.has(r.id));
+    // 這台現在寫哪些帳號：改過的照改的（回應還沒回來時也先顯示），否則照回應。/ Accounts in use for a device.
+    const chosenOf = (r: BulkConfigTunnel) => bulk.picks[r.id] ?? r.hosts.map((h) => h.username_id);
     const stanzas = split ? pickStanzas(split, order, selected) : [];
     const aliases = chosen.flatMap((r) => r.hosts.map((h) => h.alias));
     const access = new Map(chosen.map((r) => [r.id, deviceAccess(bulk.deviceMap.get(r.id), r.hosts.map((h) => h.username))]));
@@ -129,7 +132,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
             title={t("config.bulk.title")}
             description={tn("config.bulk.subtitle", { cmd: code(t("config.bulk.cmdExample")) })}
             icon={<FileCode2 />}
-            size="3xl"
+            size="4xl"
             isLoading={bulk.loading && !data}
             toolbar={
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
@@ -186,6 +189,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                 n={1}
                                 done={chosen.length > 0}
                                 title={t("config.bulk.step.pick")}
+                                hint={t("config.bulk.pickHint")}
                                 status={<span className="text-xs text-muted-foreground">{t("config.bulk.selected", { count: chosen.length, total: rows.length })}</span>}
                             >
                                 <div className="flex flex-wrap items-center gap-2">
@@ -201,20 +205,23 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         </Button>
                                     )}
                                     {groupChoices.length > 0 && (
-                                        <NativeSelect
-                                            className="h-8 w-auto min-w-40 text-sm"
-                                            aria-label={t("config.bulk.pickGroup")}
-                                            value=""
-                                            onChange={(e) => {
-                                                const g = groupChoices.find((x) => String(x.g.id) === e.target.value);
-                                                if (g) setMany(g.ids, true);
-                                            }}
-                                        >
-                                            <option value="">{t("config.bulk.pickGroup")}</option>
-                                            {groupChoices.map(({ g, ids }) => (
-                                                <option key={g.id} value={String(g.id)}>{`${g.name} (${ids.length})`}</option>
-                                            ))}
-                                        </NativeSelect>
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <Button type="button" variant="outline" size="sm">
+                                                    <FolderPlus size={15} />
+                                                    {t("config.bulk.pickGroup")}
+                                                    <ChevronDown size={14} className="text-muted-foreground" />
+                                                </Button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="start" className="max-w-[min(20rem,calc(100vw-2rem))]">
+                                                {groupChoices.map(({ g, ids }) => (
+                                                    <DropdownMenuItem key={g.id} onSelect={() => setMany(ids, true)}>
+                                                        <span className="min-w-0 flex-1 truncate" title={g.name}>{g.name}</span>
+                                                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{ids.length}</span>
+                                                    </DropdownMenuItem>
+                                                ))}
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
                                     )}
                                     {chosen.length > 0 && (
                                         <Button type="button" variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
@@ -234,28 +241,42 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         const chip = bulk.devicesLoaded && keyCount > 0 && selected.has(r.id) ? ACCESS_CHIP[a] : null;
                                         const chipText = chip && t(a === "installing" && !isUp(r.id) ? "config.access.waitingOnline" : chip.key);
                                         return (
-                                            <li key={r.id}>
-                                                <label className="flex min-w-0 cursor-pointer items-center gap-3 px-3 py-2.5 hover:bg-muted/40">
-                                                    <input type="checkbox" checked={selected.has(r.id)} onChange={(e) => setMany([r.id], e.target.checked)} className="size-4 shrink-0 accent-primary" />
-                                                    <StatusDot health={healthOf(r.id)} />
-                                                    <span className="min-w-0 flex-1">
-                                                        <span className="block truncate text-foreground" title={r.name}>{r.name}</span>
-                                                        {/* 手機上別名換行、狀態放在下面，名字才不會被擠成「…」。/ Phones: aliases wrap, the chip goes below. */}
-                                                        <span className="block font-mono text-xs text-muted-foreground [overflow-wrap:anywhere] sm:truncate" title={r.hosts.map((h) => `ssh ${h.alias} (${h.username})`).join("\n")}>
-                                                            {r.hosts.map((h) => `${h.alias} → ${h.username}`).join(" · ")}
-                                                        </span>
-                                                        {chip && (
-                                                            <span className="mt-1 block sm:hidden">
-                                                                <Chip tone={chip.tone} className="h-auto max-w-full whitespace-normal py-0.5 text-left">{chipText}</Chip>
+                                            <li key={r.id} className="px-3 py-2.5 hover:bg-muted/40">
+                                                <div className="flex min-w-0 items-center gap-3">
+                                                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                                                        <input type="checkbox" checked={selected.has(r.id)} onChange={(e) => setMany([r.id], e.target.checked)} className="size-4 shrink-0 accent-primary" />
+                                                        <StatusDot health={healthOf(r.id)} />
+                                                        <span className="min-w-0 flex-1">
+                                                            <span className="block truncate text-foreground" title={r.name}>{r.name}</span>
+                                                            {/* 手機上別名換行、狀態放在下面，名字才不會被擠成「…」。/ Phones: aliases wrap, the chip goes below. */}
+                                                            <span className="block font-mono text-xs text-muted-foreground [overflow-wrap:anywhere] sm:truncate" title={r.hosts.map((h) => `ssh ${h.alias} (${h.username})`).join("\n")}>
+                                                                {r.hosts.map((h) => `${h.alias} → ${h.username}`).join(" · ")}
                                                             </span>
-                                                        )}
-                                                    </span>
+                                                            {chip && (
+                                                                <span className="mt-1 block sm:hidden">
+                                                                    <Chip tone={chip.tone} className="h-auto max-w-full whitespace-normal py-0.5 text-left">{chipText}</Chip>
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    </label>
                                                     {chip && (
                                                         <span className="hidden shrink-0 sm:block">
                                                             <Chip tone={chip.tone}>{chipText}</Chip>
                                                         </span>
                                                     )}
-                                                </label>
+                                                </div>
+                                                {/* 這台要寫哪些帳號（有兩個以上才給選）；放在 label 外面，點了不會切換勾選。
+                                                    Which accounts go in for this device (from two up); outside the label so a click never toggles the row. */}
+                                                {selected.has(r.id) && r.usernames.length > 1 && (
+                                                    <AccountChips
+                                                        className="mt-2 pl-7 sm:pl-12"
+                                                        accounts={r.usernames}
+                                                        selected={new Set(chosenOf(r))}
+                                                        onToggle={(id) => bulk.setDeviceAccounts(r.id, toggleAccount(chosenOf(r), id, r.usernames.map((u) => u.id)))}
+                                                        onAll={() => bulk.setDeviceAccounts(r.id, r.usernames.map((u) => u.id))}
+                                                        defaultId={r.default_username_id}
+                                                    />
+                                                )}
                                             </li>
                                         );
                                     })}
@@ -282,6 +303,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                                         deviceStanzas={stanzas}
                                         knownHosts={data.known_hosts}
                                         wsClient={wsClient}
+                                        legacyAlias={data.server.legacy_alias}
                                         active={active}
                                         onActive={setActive}
                                         bulk

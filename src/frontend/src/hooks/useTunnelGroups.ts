@@ -1,14 +1,14 @@
 /**
- * 我的通道群組（每個人自己的資料夾）：讀取、建立、改名、刪除、排序、整組成員、把一條通道換組。
+ * 我的通道群組（每個人自己的資料夾）：讀取、建立、改名稱 / 說明 / 標籤、刪除、排序、整組成員、把一條通道換組。
  * 每次改動後端都回整份清單，直接換掉；換組先改畫面再送出，失敗就重抓。
- * My tunnel groups (personal folders): load, create, rename, delete, reorder, replace members, move one tunnel.
+ * My tunnel groups (personal folders): load, create, edit (name / description / labels), delete, reorder, replace members, move one tunnel.
  * Every write answers the whole list, which replaces ours; moving a tunnel updates the screen first.
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
-import type { GroupsReply, TunnelGroup } from "@/types/groups";
+import type { GroupMeta, GroupsReply, TunnelGroup } from "@/types/groups";
 
 /** 寫入的結果：成功時有剛改到的群組，失敗時有錯誤訊息（`name` 欄位的錯另外給，表單顯示在欄位下）。 */
 export interface GroupWrite<T> {
@@ -66,8 +66,9 @@ export function useTunnelGroups() {
         [showError, t]
     );
 
-    const create = useCallback((name: string, tunnelIds: number[] = []) => write("/api/reverse/tunnel-groups", "POST", { name, tunnel_ids: tunnelIds }), [write]);
-    const rename = useCallback((id: number, name: string) => write(`/api/reverse/tunnel-groups/${id}`, "PATCH", { name }), [write]);
+    const create = useCallback((name: string, tunnelIds: number[] = [], meta?: GroupMeta) => write("/api/reverse/tunnel-groups", "POST", { name, tunnel_ids: tunnelIds, ...meta }), [write]);
+    /** 只送有改的欄位。/ Sends only the fields that changed. */
+    const update = useCallback((id: number, patch: Partial<GroupMeta> & { name?: string }) => write(`/api/reverse/tunnel-groups/${id}`, "PATCH", patch), [write]);
     const remove = useCallback((id: number) => write(`/api/reverse/tunnel-groups/${id}`, "DELETE"), [write]);
     const setMembers = useCallback((id: number, tunnelIds: number[]) => write(`/api/reverse/tunnel-groups/${id}/tunnels`, "PUT", { tunnel_ids: tunnelIds }), [write]);
 
@@ -97,5 +98,5 @@ export function useTunnelGroups() {
         [load, write]
     );
 
-    return { groups, loaded, load, create, rename, remove, reorder, setMembers, moveTunnel };
+    return { groups, loaded, load, create, update, remove, reorder, setMembers, moveTunnel };
 }

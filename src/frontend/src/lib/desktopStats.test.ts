@@ -21,6 +21,11 @@ test("parseStats turns the relay JSON into per-second numbers", () => {
     assert.equal(parseStats("nope"), null);
     assert.equal(parseStats("[1]")?.fps, 0, "an array is an object with no fields");
     assert.equal(parseStats("null"), null);
+    // 聲音串流：沒開 = null，開了 = 每秒的量。/ Sound stream: null when none is open, bytes per second otherwise.
+    assert.equal(idle.audioBps, null);
+    assert.equal(parseStats('{"ms":2000,"audio":null}')?.audioBps, null);
+    assert.equal(parseStats('{"ms":2000,"audio":0}')?.audioBps, 0);
+    assert.equal(parseStats('{"ms":2000,"audio":352800}')?.audioBps, 176400);
 });
 
 test("latency tiers and formatting", () => {

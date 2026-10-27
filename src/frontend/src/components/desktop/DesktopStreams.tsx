@@ -8,7 +8,7 @@
  * the direction, a solid line flows, a dashed one is switched off, a crossed one is blocked or not on this way.
  */
 import React from "react";
-import { ArrowLeft, ArrowRight, ClipboardCopy, Download, FolderUp, Image as ImageIcon, Laptop, Loader2, Monitor, MousePointer2, PencilLine, Trash2, Upload, Volume2, X, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, ClipboardCopy, Download, FolderUp, Image as ImageIcon, Laptop, Loader2, Monitor, MousePointer2, PencilLine, Trash2, Upload, Volume2, X, type LucideIcon } from "lucide-react";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -30,8 +30,10 @@ const STATE_LABEL: Record<StreamState, TranslationKey> = {
     off: "desktop.streams.state.off",
     blocked: "desktop.streams.state.blocked",
     unsupported: "desktop.streams.state.unsupported",
+    waiting: "desktop.streams.state.waiting",
+    problem: "desktop.streams.state.problem",
 };
-const STATE_TONE: Record<StreamState, "success" | "primary" | "neutral" | "warning"> = { on: "success", oneWay: "success", off: "neutral", blocked: "warning", unsupported: "neutral" };
+const STATE_TONE: Record<StreamState, "success" | "primary" | "neutral" | "warning"> = { on: "success", oneWay: "success", off: "neutral", blocked: "warning", unsupported: "neutral", waiting: "neutral", problem: "warning" };
 
 const OP_ICON: Record<FileOpKind, LucideIcon> = { download: Download, upload: Upload, rename: PencilLine, delete: Trash2 };
 const OP_LABEL: Record<FileOpKind, TranslationKey> = {
@@ -69,8 +71,8 @@ function FileOps({ ops }: { ops: NonNullable<StreamRow["ops"]> }) {
 /** 一條直線：兩端箭頭依方向；走著 = 實線，關掉 = 虛線，擋掉 / 沒有 = 虛線 + 中間的 ✕。/ One straight line with arrowheads. */
 function StreamLine({ row }: { row: StreamRow }) {
     const flows = streamFlows(row.state);
-    const crossed = row.state === "blocked" || row.state === "unsupported";
-    const tone = flows ? "text-success" : row.state === "blocked" ? "text-warning" : "text-muted-foreground/70";
+    const crossed = row.state === "blocked" || row.state === "unsupported" || row.state === "problem";
+    const tone = flows ? "text-success" : row.state === "blocked" || row.state === "problem" ? "text-warning" : "text-muted-foreground/70";
     const left = flows && (row.dir === "toBrowser" || row.dir === "both");
     const right = flows && (row.dir === "toDesktop" || row.dir === "both");
     return (
@@ -80,7 +82,7 @@ function StreamLine({ row }: { row: StreamRow }) {
             {right ? <ArrowRight size={14} className="-ml-1 shrink-0" /> : <span className="w-2.5 shrink-0" />}
             {crossed && (
                 <span className="absolute left-1/2 top-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-sm border border-current bg-card">
-                    <X size={12} />
+                    {row.state === "problem" ? <AlertTriangle size={11} /> : <X size={12} />}
                 </span>
             )}
         </span>

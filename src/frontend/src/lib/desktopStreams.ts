@@ -2,18 +2,20 @@
  * 遠端桌面的「這條連線上有哪些資料流」（純函式，無 React）：畫面、輸入、剪貼簿、聲音、檔案，各自的方向與狀態。
  * info 對話框的路徑圖下面畫成並排的直線（DesktopStreams），讓人一眼看出「為什麼 VNC 沒有聲音」「為什麼這裡不能傳檔」。
  * 狀態：on = 這次連線有；oneWay = 只有一個方向（剪貼簿 to_remote）；off = 自己關了；blocked = 管理員的上限關掉；
- * unsupported = 這種連法本來就沒有（guacd 的 VNC 沒聲音、RDP / VNC 在瀏覽器裡不傳檔）。
+ * unsupported = 這種連法本來就沒有（guacd 的 VNC 沒聲音、RDP / VNC 在瀏覽器裡不傳檔）；聲音連線中另有
+ * waiting = 開了但還沒聲音（等遠端開通道 / 遠端安靜）、problem = 卡住了（瀏覽器擋著 / 遠端不送），由 lib/desktopSound 判斷。
  * The streams a desktop connection carries — picture, input, clipboard, sound, files — with their direction and
  * state, drawn as parallel lines under the path diagram so it is obvious why VNC has no sound or why files are
  * unavailable here.
  */
 import type { TranslationKey } from "@/locales/en";
 import type { ClipboardPolicy, DesktopMode } from "@/lib/desktop";
+import type { SoundReport } from "@/lib/desktopSound";
 import { FILE_OP_KINDS, type FileActivity, type FileOpKind, type FileOpState } from "./rustdeskFileOps.ts";
 
 export type StreamId = "picture" | "input" | "clipboard" | "sound" | "files";
 export const STREAM_IDS: readonly StreamId[] = ["picture", "input", "clipboard", "sound", "files"];
-export type StreamState = "on" | "oneWay" | "off" | "blocked" | "unsupported";
+export type StreamState = "on" | "oneWay" | "off" | "blocked" | "unsupported" | "waiting" | "problem";
 /** 資料往哪走：桌面 → 瀏覽器、瀏覽器 → 桌面、雙向。/ Which way the data flows. */
 export type StreamDir = "toBrowser" | "toDesktop" | "both";
 
@@ -39,6 +41,8 @@ export interface StreamInput {
     muted?: boolean;
     /** 瀏覽器播得了 RustDesk 的聲音（WebCodecs AudioDecoder）。/ The browser can decode RustDesk's sound. */
     soundDecoder: boolean;
+    /** 連線中：聲音實際卡在哪（lib/desktopSound）；沒連 = null。/ While connected, where the sound actually stops. */
+    soundLive?: SoundReport | null;
     /** 站台允許 RustDesk 傳檔（`desktop_file_transfer`）。/ The site allows RustDesk file transfer. */
     fileTransfer: boolean;
     /** 「檔案」面板開著。/ The Files panel is open. */
@@ -60,8 +64,21 @@ function clipboardRow(c: ClipboardPolicy | null, limit: ClipboardPolicy): Stream
     return { ...base, state: "on", dir: "both", reason: "desktop.streams.reason.clipboardBoth" };
 }
 
+/** 連線中的聲音狀況 → 這一條線的狀態。/ The live sound case as this line's state. */
+const LIVE_SOUND: Record<SoundReport["state"], StreamState> = {
+    playing: "on",
+    quiet: "waiting",
+    waiting: "waiting",
+    blocked: "problem",
+    none: "problem",
+    muted: "off",
+    off: "off",
+    unsupported: "unsupported",
+};
+
 function soundRow(i: StreamInput): StreamRow {
     const base = { id: "sound" as const, dir: "toBrowser" as const };
+    if (i.soundLive) return { ...base, state: LIVE_SOUND[i.soundLive.state], reason: i.soundLive.reason };
     if (i.mode === "vnc") return { ...base, state: "unsupported", reason: "desktop.streams.reason.soundVnc" };
     if (i.mode === "rustdesk" && !i.soundDecoder) return { ...base, state: "unsupported", reason: "desktop.streams.reason.soundNoDecoder" };
     if (!i.sound) return { ...base, state: "off", reason: i.mode === "rdp" ? "desktop.streams.reason.soundOffRdp" : "desktop.streams.reason.soundOffRd" };

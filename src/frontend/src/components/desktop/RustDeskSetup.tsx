@@ -15,19 +15,21 @@ import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { allReady, nextStep, SETUP_STEPS, type SetupStepId, type StepStatus } from "@/lib/rustdeskSetup";
+import { allReady, nextStep, visibleSteps, type SetupStepId, type StepStatus } from "@/lib/rustdeskSetup";
 import type { TranslationKey } from "@/locales/en";
 
 const TITLE: Record<SetupStepId, TranslationKey> = {
     directIp: "desktop.rdSetup.directIp.title",
     password: "desktop.rdSetup.password.title",
     permissions: "desktop.rdSetup.permissions.title",
+    sound: "desktop.rdSetup.sound.title",
     service: "desktop.rdSetup.service.title",
 };
 const DETAIL: Record<SetupStepId, TranslationKey> = {
     directIp: "desktop.rdSetup.directIp.detail",
     password: "desktop.rdSetup.password.detail",
     permissions: "desktop.rdSetup.permissions.detail",
+    sound: "desktop.rdSetup.sound.detail",
     service: "desktop.rdSetup.service.detail",
 };
 const FAILED: Partial<Record<SetupStepId, TranslationKey>> = {
@@ -169,6 +171,23 @@ function PermissionsMock() {
     );
 }
 
+/** Mac 的聲音：Apple 晶片版抓系統聲音（螢幕錄製權限）；Intel 版要在 RustDesk 的「音訊輸入」選 loopback 裝置。 */
+function SoundMock() {
+    const { t } = useI18n();
+    const nav = [t("desktop.rdSetup.mock.general"), t("desktop.rdSetup.mock.security"), t("desktop.rdSetup.mock.network"), t("desktop.rdSetup.mock.display")];
+    return (
+        <MockWindow title={`RustDesk — ${t("desktop.rdSetup.mock.settings")}`} nav={nav} active={0}>
+            <p className="text-muted-foreground">{t("desktop.rdSetup.mock.audioInput")}</p>
+            <Target note={t("desktop.rdSetup.mock.intelOnly")}>
+                <span className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-background px-1.5 py-0.5 text-foreground">
+                    BlackHole 2ch <ChevronDown size={11} aria-hidden />
+                </span>
+            </Target>
+            <p className="text-[0.7rem] leading-relaxed text-muted-foreground">{t("desktop.rdSetup.mock.audioNote")}</p>
+        </MockWindow>
+    );
+}
+
 function ServiceMock() {
     const { t } = useI18n();
     return (
@@ -187,6 +206,7 @@ function Mock({ id, port }: { id: SetupStepId; port: string }) {
     if (id === "directIp") return <SecurityMock port={port} />;
     if (id === "password") return <PasswordMock />;
     if (id === "permissions") return <PermissionsMock />;
+    if (id === "sound") return <SoundMock />;
     return <ServiceMock />;
 }
 
@@ -200,9 +220,11 @@ export interface RustDeskSetupProps {
     canCheck: boolean;
     checking: boolean;
     onCheck: () => void;
+    /** 開了聲音、上次連到的是 Mac：顯示「Mac 的聲音」。/ Sound is on and the last peer was a Mac. */
+    soundFromMac?: boolean;
 }
 
-export function RustDeskSetup({ status, port, probeLine, canCheck, checking, onCheck }: RustDeskSetupProps) {
+export function RustDeskSetup({ status, port, probeLine, canCheck, checking, onCheck, soundFromMac = false }: RustDeskSetupProps) {
     const { t } = useI18n();
     const next = nextStep(status);
     const ready = allReady(status);
@@ -231,6 +253,7 @@ export function RustDeskSetup({ status, port, probeLine, canCheck, checking, onC
                     </button>
                 </div>
                 <p className="flex items-start gap-2 pl-[1.6rem] text-xs leading-relaxed text-muted-foreground">{t("desktop.rdSetup.readyService")}</p>
+                {soundFromMac && <p className="flex items-start gap-2 pl-[1.6rem] text-xs leading-relaxed text-muted-foreground">{t("desktop.rdSetup.readySound")}</p>}
             </section>
         );
     }
@@ -242,7 +265,7 @@ export function RustDeskSetup({ status, port, probeLine, canCheck, checking, onC
                 <p className={cn("text-xs leading-relaxed", probeLine.tone === "success" ? "text-success" : probeLine.tone === "danger" ? "text-destructive" : "text-muted-foreground")}>{probeLine.text}</p>
             )}
             <ol className="space-y-2">
-                {SETUP_STEPS.map((id, i) => {
+                {visibleSteps(soundFromMac).map((id, i) => {
                     const s = status[id];
                     const current = id === next;
                     const show = current || !!opened[id];
@@ -262,7 +285,7 @@ export function RustDeskSetup({ status, port, probeLine, canCheck, checking, onC
                                     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-foreground">
                                         <span>{t(TITLE[id])}</span>
                                         {current && s !== "ok" && <Chip tone={s === "failed" ? "danger" : "primary"}>{s === "failed" ? t("desktop.rdSetup.status.failed") : t("desktop.rdSetup.nextChip")}</Chip>}
-                                        {id === "permissions" && <Chip>macOS</Chip>}
+                                        {(id === "permissions" || id === "sound") && <Chip>macOS</Chip>}
                                         {s === "advice" && <Chip>{t("desktop.rdSetup.status.advice")}</Chip>}
                                     </p>
                                     {line && <p className={cn("text-xs", s === "failed" ? "text-destructive" : "text-success")}>{t(line, { port })}</p>}

@@ -4,18 +4,21 @@ import assert from "node:assert/strict";
 import {
     accountChoices,
     deviceProgress,
+    groupMatches,
     groupNameProblem,
     groupOf,
     groupSections,
     keyGroupReach,
     moveId,
+    normalizeGroupDescription,
     normalizeGroupName,
     placedAccounts,
+    sameMeta,
     unionAccounts,
 } from "./groups.ts";
 import type { KeyGroup, KeyGroupGrant, TunnelGroup } from "../types/groups";
 
-const tg = (id: number, name: string, position: number, tunnel_ids: number[]): TunnelGroup => ({ id, name, position, tunnel_ids, created_at: "" });
+const tg = (id: number, name: string, position: number, tunnel_ids: number[]): TunnelGroup => ({ id, name, description: "", labels: [], position, tunnel_ids, created_at: "" });
 const grant = (id: number, over: Partial<KeyGroupGrant>): KeyGroupGrant => ({ id, tunnel: null, tunnel_group: null, accounts: null, created_at: "", ...over });
 
 test("names are normalised and checked like the backend", () => {
@@ -52,6 +55,8 @@ test("a key group reaches tunnels through both kinds of grants", () => {
     const kg: KeyGroup = {
         id: 5,
         name: "Laptops",
+        description: "",
+        labels: [],
         key_ids: [7],
         created_at: "",
         grants: [grant(1, { tunnel_group: { id: 10, name: "Prod" }, accounts: ["deploy"] }), grant(2, { tunnel: { id: 2, name: "two" }, accounts: ["ubuntu"] }), grant(3, { tunnel: { id: 3, name: "three" } })],
@@ -85,4 +90,20 @@ test("device progress counts only the group's keys", () => {
     };
     assert.deepEqual(deviceProgress(device, [1, 2]), { installed: 1, pending: 1, error: 1 });
     assert.deepEqual(deviceProgress(undefined, [1]), { installed: 0, pending: 0, error: 0 });
+});
+
+test("group search matches the name, the description and labels", () => {
+    const g = { name: "Production", description: "Web servers in Tokyo", labels: ["env=prod", "web"] };
+    assert.ok(groupMatches(g, ["prod"]));
+    assert.ok(groupMatches(g, ["tokyo", "env=prod"]));
+    assert.ok(groupMatches(g, []));
+    assert.ok(!groupMatches(g, ["osaka"]));
+    assert.ok(groupMatches({ name: "Old" }, ["old"]), "older replies without the fields still match by name");
+});
+
+test("descriptions are trimmed like the backend, and meta compares both fields", () => {
+    assert.equal(normalizeGroupDescription("  a\r\nb  "), "a\nb");
+    assert.ok(sameMeta({ description: "x", labels: ["a", "b"] }, { description: "x", labels: ["a", "b"] }));
+    assert.ok(!sameMeta({ description: "x", labels: ["a"] }, { description: "x", labels: ["a", "b"] }));
+    assert.ok(!sameMeta({ description: "x", labels: [] }, { description: "y", labels: [] }));
 });

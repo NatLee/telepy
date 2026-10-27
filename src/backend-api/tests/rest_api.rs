@@ -115,12 +115,16 @@ async fn tunnel_lifecycle_and_dashboard() {
     let r = app.get(&format!("/tunnels/server/config/{id}"), Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let cfg = r.json["config"].as_str().unwrap();
-    assert!(cfg.contains("Host telepy-ssh-server"), "{cfg}");
+    // 伺服器區塊的別名 = 它的 HostKeyAlias（每台 Telepy 各一個）。/ The server alias is its HostKeyAlias.
+    let server_alias = r.json["server"]["alias"].as_str().unwrap().to_string();
+    assert!(server_alias.starts_with("telepy-") && server_alias != "telepy-ssh-server", "{server_alias}");
+    assert!(cfg.contains(&format!("Host {server_alias}\n")), "{cfg}");
+    assert!(cfg.contains(&format!("ProxyCommand ssh -W %h:%p {server_alias}\n")), "{cfg}");
+    assert_eq!(r.json["server"]["legacy_alias"], "telepy-ssh-server");
     assert!(cfg.contains("Host box-a\n"), "{cfg}");
     assert!(cfg.contains("User ubuntu"), "{cfg}");
     assert_eq!(r.json["usernames"][0]["username"], "ubuntu");
     // 指令速查用的結構化欄位。/ Structured fields for the command sheet.
-    assert_eq!(r.json["server"]["alias"], "telepy-ssh-server");
     assert_eq!(r.json["hosts"][0]["alias"], "box-a");
     assert_eq!(r.json["hosts"][0]["username"], "ubuntu");
     assert_eq!(r.json["hosts"][0]["username_id"], uname_id);

@@ -196,6 +196,20 @@ pub async fn allowed_username_ids(db: &Db, sharing_id: i64) -> sqlx::Result<Vec<
         .await
 }
 
+/// 每個帳號在幾位 sharee 的允許清單上（沒過期的；ADMIN 不用清單、不算在內）。/ How many sharees' allow-lists hold each
+/// account (unexpired rows; ADMIN sharees need no list and are not counted).
+pub async fn allowed_counts(db: &Db, tunnel_id: i64) -> sqlx::Result<std::collections::HashMap<i64, i64>> {
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&format!(
+        "SELECT a.reverse_server_username_id, COUNT(DISTINCT s.shared_with_id) FROM {A} a JOIN {S} s ON s.id = a.tunnel_sharing_id \
+         WHERE s.tunnel_id = ? AND s.permission_type != 'admin' AND (a.expires_at IS NULL OR a.expires_at > ?) GROUP BY a.reverse_server_username_id"
+    ))
+    .bind(tunnel_id)
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// 這條隧道的 ADMIN sharee（管理它的人；收安全通知用）。/ ADMIN sharees of a tunnel (they manage it).
 pub async fn admin_sharee_ids(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar(&format!("SELECT shared_with_id FROM {S} WHERE tunnel_id = ? AND permission_type = 'admin' ORDER BY id"))

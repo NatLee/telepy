@@ -89,6 +89,9 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 let pairs: Vec<(String, String)> = ARG_NAMES.iter().map(|n| n.to_string()).zip(values).collect();
                 let host = pairs.iter().find(|(n, _)| n == "hostname").unwrap().1.clone();
                 let port: u16 = pairs.iter().find(|(n, _)| n == "port").unwrap().1.parse().unwrap();
+                // 登入名 `silent` = 扮演不轉送聲音的 RDP 伺服器（Windows 原則關掉、xrdp 沒裝聲音模組）。
+                // Login `silent` plays an RDP server that does not redirect sound.
+                let silent = pairs.iter().any(|(n, v)| n == "username" && v == "silent");
                 seen.lock().unwrap().connect = pairs;
                 let mut bridge = TcpStream::connect((host.as_str(), port)).await.expect("rendezvous");
                 bridge.write_all(b"PING").await.unwrap();
@@ -102,7 +105,7 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 c.s.write_all(encode(&["sync", "1000", "2"], Unit::CodePoints).as_bytes()).await.unwrap();
                 // 有要聲音：開一個 L16 音訊串流、送一塊、結束（RDP 的 rdpsnd 經 guacd 就是這樣到瀏覽器）。
                 // Sound asked for: one L16 audio stream, one blob, end (how rdpsnd reaches the browser through guacd).
-                if !audio.is_empty() {
+                if !audio.is_empty() && !silent {
                     let mut out = encode(&["audio", "1", "audio/L16;rate=44100,channels=2"], Unit::CodePoints);
                     out.push_str(&encode(&["blob", "1", "AAAAAA=="], Unit::CodePoints));
                     out.push_str(&encode(&["end", "1"], Unit::CodePoints));
@@ -612,6 +615,32 @@ async fn desktop_rdp_sound_is_offered_and_relayed() {
     let ev = events(&lab, &alice.token, id).await;
     assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("Remote desktop (RDP, sound) by alice")), "{ev:?}");
     drop(ws);
+    // 結束那句帶聲音的量（中繼數 guacd 聲音串流上的 blob）。/ The close line carries the sound byte count.
+    let closed = |needle: &'static str| {
+        let lab = &lab;
+        let token = alice.token.clone();
+        async move {
+            for _ in 0..50 {
+                let ev = events(lab, &token, id).await;
+                if let Some(m) = ev.iter().filter(|e| e["event"] == "desktop_close").filter_map(|e| e["message"].as_str()).find(|m| m.contains(needle)) {
+                    return m.to_string();
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            panic!("no desktop_close containing {needle:?}: {:?}", events(lab, &token, id).await);
+        }
+    };
+    let m = closed(", sound 8 B").await;
+    assert!(!m.contains("no sound channel"), "{m}");
+
+    // 要了聲音、RDP 伺服器卻沒開聲音通道：日誌講清楚。/ Sound asked for but the server opened no sound channel.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "silent", "password": "b", "audio": true})).await;
+    assert_eq!(r.json["audio"], true);
+    let mut ws = open_ws(&lab, &r.json).await.unwrap();
+    assert!(recv(&mut ws).await.is_ok());
+    wait_for("the silent server's handshake", || seen.lock().unwrap().connect.iter().any(|(k, v)| k == "username" && v == "silent")).await;
+    drop(ws);
+    closed("no sound channel from the RDP server").await;
 
     // 沒開聲音（預設）→ disable-audio、握手不給格式。/ Sound off (the default): disable-audio, no formats.
     let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "a", "password": "b"})).await;

@@ -90,6 +90,7 @@ export function DesktopStatsButton({ stats, unstable, now, framebuffer, viewport
                             </Property>
                             <Property label={t("desktop.stats.fps")} mono>{stats.fps}</Property>
                             <Property label={t("desktop.stats.down")} mono>{formatRate(stats.downBps)}</Property>
+                            {stats.audioBps != null && <Property label={t("desktop.stats.sound")} mono>{formatRate(stats.audioBps)}</Property>}
                             <Property label={t("desktop.stats.up")} mono>{formatRate(stats.upBps)}</Property>
                             {!rd && (
                                 <Property label={<Label title={t("desktop.stats.behind")} hint={t("desktop.stats.behindHint")} />} mono>

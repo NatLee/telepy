@@ -14,8 +14,10 @@
  * - 串流統計：中繼每秒送 `telepy-ping`（這裡立刻回 `telepy-pong`）與 `telepy-stats`（交給 onStats）；
  *   兩者在交給 Guacamole.Client 前攔下。tunnel 的 UNSTABLE 狀態也往上報。
  * - 聲音（只有 RDP、start 時開了才有）：guacd 開 `audio` 串流（L16 PCM），guacamole-common-js 的 RawAudioPlayer 播；
- *   靜音 = 在這裡把 blob 丟掉（不排進 AudioContext，取消靜音時不會一次湧出來）。最近 1.5 秒有收到就回報「正在播」。
- *   瀏覽器的自動播放限制：第一次按鍵 / 點擊時把共用的 AudioContext resume。
+ *   靜音 = 在這裡把 blob 丟掉（不排進 AudioContext，取消靜音時不會一次湧出來）。播放器用的 AudioContext 是頁面在
+ *   「連線」那一下點擊裡建好的共用 context（lib/soundTap `primeAudio`），不然它會在 WebSocket 訊息裡才建、被瀏覽器的
+ *   自動播放限制擋住；之後在框上點擊 / 按鍵也會 resume。每塊 blob 量峰值，`onSound` 回報給 lib/desktopSound 判斷
+ *   「在播 / 瀏覽器擋著 / 遠端安靜 / 遠端沒開聲音通道」。
  * - 錯誤：guacd 的 `error` 指令（client.onerror）或後端的關閉碼（後端把代碼放在 close reason，tunnel.onerror
  *   拿到的 status.code 就是它）；VNC 伺服器要求我們沒給的帳密（onrequired）時直接斷線，請使用者補填。
  * Remote desktop canvas on guacamole-common-js; see the backend relay in `ws/desktop.rs`.
@@ -27,6 +29,8 @@ import { getWsOrigin } from "@/lib/wsCommon";
 import { useI18n } from "@/lib/i18n";
 import { sessionFailure, type DesktopFailure, type DesktopStart } from "@/lib/desktop";
 import { parseStats, PING_OPCODE, PONG_OPCODE, STATS_OPCODE, type StreamStats } from "@/lib/desktopStats";
+import { EMPTY_SNAPSHOT, pcmPeak, rawBytesPerSample, type SoundSnapshot } from "@/lib/desktopSound";
+import { sameSnapshot, sharedAudio, SoundTap } from "@/lib/soundTap";
 import { fitScale, rectFromPoints, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
 import { FIT, zoomLayout } from "@/lib/desktopZoom";
 import { useDesktopZoom } from "@/hooks/useDesktopZoom";
@@ -81,6 +85,8 @@ export interface DesktopViewerHandle {
     focus: () => void;
     /** 畫面上這一點是不是黑的（多螢幕排列推斷用）。/ Is this framebuffer pixel black (layout inference)? */
     isBlack: (x: number, y: number) => boolean;
+    /** 在點擊裡呼叫：讓被自動播放限制擋住的聲音動起來。/ From a click: let sound the browser held back play. */
+    resumeSound: () => void;
 }
 
 interface Props {
@@ -108,11 +114,11 @@ interface Props {
     onScale: (scale: number) => void;
     /** 聲音靜音（只在瀏覽器這邊；串流照收）。/ Mute the sound locally (the stream keeps coming). */
     muted?: boolean;
-    /** 遠端的聲音開始 / 停止播放。/ The remote's sound started or stopped playing. */
-    onAudio?: (playing: boolean) => void;
+    /** 聲音的狀況變了（通道、資料、靜音與否、AudioContext）。/ The sound's situation changed. */
+    onSound?: (snapshot: SoundSnapshot) => void;
 }
 
-export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, muted = false, onAudio }, ref) {
+export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, muted = false, onSound }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -123,12 +129,13 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
     const displayElRef = useRef<HTMLElement | null>(null);
     const rescaleRef = useRef<(() => void) | null>(null);
     const typingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const soundRef = useRef(new SoundTap());
     const endedRef = useRef(false);
     // 最新的回呼與選項（連線只建一次，這些每次 render 都可能換）。/ Latest callbacks and options; the connection is set up once.
-    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onAudio });
+    const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onSound });
     const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting, muted });
     useLayoutEffect(() => {
-        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onAudio };
+        callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onSound };
         options.current = { viewport, pixelRatio, ctrlAsCmd, selecting, muted };
     });
     const [focused, setFocused] = useState(false);
@@ -203,6 +210,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             step();
         },
         focus: () => sinkRef.current?.focus(),
+        resumeSound: () => soundRef.current.resume(),
         isBlack: (x: number, y: number) => {
             const c = clientRef.current;
             if (!c) return false;
@@ -331,32 +339,38 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 end({ key: "desktop.err.required", vars: { fields: params.join(", ") }, at: "target" });
                 client.disconnect();
             };
-            // 遠端的聲音：照預設的播放器播，靜音時 blob 直接丟掉；記下最後一塊的時間給「正在播」指示。
-            // The remote's sound: the default player, with blobs dropped while muted; the last blob's time drives the indicator.
-            let lastAudioAt = 0;
-            let audioPlaying = false;
+            // 遠端的聲音：播放器用頁面在點擊裡建好的共用 AudioContext（沒有才讓它自己建）；靜音時 blob 直接丟掉；
+            // 每塊量峰值給「在播 / 安靜 / 被擋」的判斷。
+            // The remote's sound: the player uses the click-unlocked shared context; blobs are dropped while muted;
+            // each blob's peak feeds the playing / quiet / blocked decision.
+            const factory = (G as unknown as { AudioContextFactory?: { singleton: AudioContext | null; getAudioContext?: () => AudioContext | null } }).AudioContextFactory;
+            const tap = soundRef.current;
+            tap.reset();
+            if (start.audio && factory && (!factory.singleton || factory.singleton.state === "closed")) factory.singleton = sharedAudio();
             client.onaudio = (stream, mimetype) => {
                 const player = G.AudioPlayer.getInstance(stream, mimetype);
                 if (!player) return null;
+                tap.open();
+                tap.context = factory?.singleton ?? null;
+                const bytes = rawBytesPerSample(mimetype) ?? 2;
                 const play = stream.onblob;
                 stream.onblob = (data: string) => {
-                    lastAudioAt = Date.now();
+                    tap.data(pcmPeak(data, bytes));
                     if (!options.current.muted) play?.call(stream, data);
                 };
                 return player;
             };
-            const audioTimer = setInterval(() => {
-                const playing = Date.now() - lastAudioAt < 1500;
-                if (playing !== audioPlaying) {
-                    audioPlaying = playing;
-                    callbacks.current.onAudio?.(playing);
+            let lastSnapshot: SoundSnapshot = EMPTY_SNAPSHOT;
+            const audioTimer = start.audio ? setInterval(() => {
+                const snap = tap.snapshot();
+                if (!sameSnapshot(snap, lastSnapshot)) {
+                    lastSnapshot = snap;
+                    callbacks.current.onSound?.(snap);
                 }
-            }, 500);
-            // 自動播放限制：使用者第一次操作時讓共用的 AudioContext 動起來。/ Autoplay: resume the shared context on a gesture.
+            }, 500) : null;
+            // 自動播放限制：在框上點擊 / 按鍵也讓 context 動起來。/ Autoplay: a click or key on the frame resumes the context too.
             const resumeAudio = () => {
-                const factory = (G as unknown as { AudioContextFactory?: { getAudioContext?: () => AudioContext | null } }).AudioContextFactory;
-                const ctx = start.audio ? factory?.getAudioContext?.() : null;
-                if (ctx && ctx.state === "suspended") void ctx.resume().catch(() => undefined);
+                if (start.audio) tap.resume();
             };
             frame.addEventListener("pointerdown", resumeAudio, true);
             frame.addEventListener("keydown", resumeAudio, true);
@@ -409,7 +423,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
 
             cleanup = () => {
                 observer.disconnect();
-                clearInterval(audioTimer);
+                if (audioTimer) clearInterval(audioTimer);
                 frame.removeEventListener("pointerdown", resumeAudio, true);
                 frame.removeEventListener("keydown", resumeAudio, true);
                 client.onaudio = null;
