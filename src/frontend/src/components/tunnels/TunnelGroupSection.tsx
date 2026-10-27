@@ -26,11 +26,16 @@ export interface GroupHeaderProps {
     onEdit?: () => void;
     onMove?: (delta: -1 | 1) => void;
     onDelete?: () => void;
+    /** 數量後面的補充（例如金鑰頁的「N 台需要處理」）。/ Extra text after the counts (e.g. the keys page's "N need attention"). */
+    extra?: React.ReactNode;
+    /** 標題元素的 id（分頁換頁後捲回這裡）。/ The header element's id (paging scrolls back to it). */
+    id?: string;
 }
 
 function GroupMenu({ group, isFirst, isLast, onEdit, onMove, onDelete }: GroupHeaderProps) {
     const { t } = useI18n();
-    if (!group) return null;
+    // 沒給動作（金鑰頁的裝置矩陣只是借用分段）就不顯示選單。/ No actions (the keys page only borrows the sections): no menu.
+    if (!group || !onEdit) return null;
     return (
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -78,6 +83,7 @@ function HeaderContent(p: GroupHeaderProps) {
                 {p.filtering ? t("groups.tunnel.matches", { shown: p.shown, total: p.total }) : t("groups.tunnel.count", { count: p.total })}
                 {p.total > 0 && <> · {t("groups.tunnel.online", { count: p.online })}</>}
             </span>
+            {p.extra}
             <span className="ml-auto shrink-0">
                 <GroupMenu {...p} />
             </span>
@@ -88,7 +94,7 @@ function HeaderContent(p: GroupHeaderProps) {
 /** 卡片檢視的段落標題。/ Section header for the card view. */
 export function GroupHeader(p: GroupHeaderProps) {
     return (
-        <div className="border-b border-border pb-1.5">
+        <div id={p.id} className="scroll-mt-20 border-b border-border pb-1.5">
             <HeaderContent {...p} />
         </div>
     );
@@ -97,7 +103,7 @@ export function GroupHeader(p: GroupHeaderProps) {
 /** 表格檢視：一列橫跨所有欄位的段落標題。/ Section header row spanning the table. */
 export function GroupHeaderRow({ colSpan, ...p }: GroupHeaderProps & { colSpan: number }) {
     return (
-        <tr className="bg-surface/60">
+        <tr id={p.id} className="scroll-mt-20 bg-surface/60">
             <th scope="colgroup" colSpan={colSpan} className="px-3 py-1.5 text-left font-normal">
                 <HeaderContent {...p} />
             </th>

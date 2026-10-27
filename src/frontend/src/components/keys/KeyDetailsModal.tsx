@@ -23,12 +23,12 @@ import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, KeyTarget, UserKey } from "@/types/keys";
 import type { KeyGroup, KeyGroupSource } from "@/types/groups";
 import type { KeyPatch, KeyPatchErrors } from "@/hooks/useKeysPage";
-import { KeyTypeBadge } from "./KeyCard";
+import { KeyTypeBadge } from "./KeyList";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { TargetChips } from "./TargetChips";
 import { DeviceFilterBar, DeviceFilterFooter, needsAttention, useDeviceFilter } from "./DeviceFilter";
 import { ExpiryPicker } from "@/components/keys/ExpiryPicker";
-import { KeyExpiryText } from "@/components/keys/KeyCard";
+import { KeyExpiryText } from "@/components/keys/KeyList";
 import { expiryValue, localDate, type ExpiryPreset } from "@/lib/keyExpiry";
 
 const PROBLEM: Record<KeyProblem, TranslationKey> = {
