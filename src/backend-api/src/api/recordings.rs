@@ -1,7 +1,9 @@
 //! 終端機錄影的 API：清單、讀檔（asciicast）、刪除，以及開關隧道的錄影。
-//! 看得到：自己的錄影、自己擁有或 ADMIN 的隧道上的錄影；管理員看全部。刪除與開關只給 owner / ADMIN / 管理員。
-//! Terminal recordings API: list, read (asciicast), delete, and switch a tunnel's recording. You see your own
-//! recordings and those on tunnels you own or ADMIN (admins see all); deleting and switching are for managers.
+//! 清單（`?scope=`）：`mine`（預設，管理員也一樣）= 自己的錄影 ∪ 自己擁有或 ADMIN 的隧道上的；`all`（只有管理員，管理區）= 全部。
+//! 讀檔、刪除與開關照權限：管理員任何一筆都能看、能刪。
+//! Terminal recordings API: list, read (asciicast), delete, and switch a tunnel's recording. The list (`?scope=`):
+//! `mine` (default, admins too) = your own plus those on tunnels you own or ADMIN; `all` (admins only, the admin
+//! section) = everything. Reading, deleting and switching follow the permission: admins may open or delete any.
 
 use std::collections::HashMap;
 
@@ -60,13 +62,16 @@ fn recording_json(r: &Recording, tunnel_name: Option<&str>, can_delete: bool) ->
 }
 
 /// 錄影清單（新的在前，最多 500 筆）；`tunnel_id` 只看一條。/ Recordings, newest first (at most 500); `tunnel_id` narrows.
-#[utoipa::path(get, path = "/api/recordings", tag = "Recordings", security(("bearer" = [])), params(("tunnel_id" = Option<i64>, Query, description = "Only this tunnel"), ("limit" = Option<i64>, Query, description = "At most this many (default 200, max 500)")), responses((status = 200, body = super::schemas::RecordingList)))]
+#[utoipa::path(get, path = "/api/recordings", tag = "Recordings", security(("bearer" = [])), params(("tunnel_id" = Option<i64>, Query, description = "Only this tunnel"), ("limit" = Option<i64>, Query, description = "At most this many (default 200, max 500)"), ("scope" = Option<String>, Query, description = "mine (default, admins too: yours plus those on tunnels you own or ADMIN) or all (admins only)")), responses((status = 200, body = super::schemas::RecordingList), (status = 403, description = "scope=all from a non-admin (code admin_only)", body = super::schemas::ErrorBody)))]
 async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let scope = super::ViewScope::parse(q.get("scope").map(String::as_str), me.is_superuser)?;
+    // 列哪些照範圍，能不能刪照權限。/ Which to list follows the scope; deleting follows the permission.
+    let listed = super::sessions::managed_in(&state, &me, scope).await?;
     let managed = super::sessions::managed(&state, &me).await?;
-    let ids: Vec<i64> = managed.keys().copied().collect();
+    let ids: Vec<i64> = listed.keys().copied().collect();
     let tunnel_id = q.get("tunnel_id").and_then(|v| v.parse().ok());
     let limit = q.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(200).clamp(1, 500);
-    let rows = db::recordings::visible(&state.db, me.is_superuser, me.id, &ids, tunnel_id, limit).await?;
+    let rows = db::recordings::visible(&state.db, scope == super::ViewScope::All, me.id, &ids, tunnel_id, limit).await?;
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows.iter().filter(|r| d.allows(r.tunnel_id)) {

@@ -18,6 +18,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(get_settings, update_settings))
         .routes(routes!(list_users))
         .routes(routes!(update_user))
+        .routes(routes!(disable_preview))
 }
 
 const LANGUAGES: [&str; 4] = ["auto", "en", "zh-TW", "ja"];
@@ -268,10 +269,9 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
         None => None,
     };
     db::users::set_flags(&state.db, id, is_active, is_superuser).await?;
-    // 停用帳號：他開著的網頁終端機（含斷線保留中的）跟著結束。/ A disabled account's open web terminals end.
-    if is_active == Some(false) {
-        crate::terminal_detach::kick(&state, None, Some(id));
-    }
+    // 停用帳號：登出所有瀏覽器、結束所有進行中的 session（含斷線保留中的終端機）與 MCP agent，token / app 暫停。
+    // Disabling: sign out every browser, end every live session (detached terminals too) and agent; tokens / apps pause.
+    let disabled = if is_active == Some(false) && target.is_active { Some(crate::access_recheck::account_disabled(&state, id).await?) } else { None };
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
         db::users::settings_update(&state.db, id, SettingsPatch { language: Some(lang), ..SettingsPatch::default() }).await?;
@@ -279,7 +279,27 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     let target = db::users::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("User not found."))?;
     let lang = db::users::settings_for(&state.db, id).await?.and_then(|s| s.language);
     let mfa_enabled = super::mfa::factors(&state, id).await?.any();
-    Ok(Json(managed_user_json(&target, lang.as_deref(), mfa_enabled, state.config.tz_offset_minutes)))
+    let mut out = managed_user_json(&target, lang.as_deref(), mfa_enabled, state.config.tz_offset_minutes);
+    if let Some(d) = disabled {
+        out["disabled"] = d.json();
+        let what = format!(
+            "{} disabled {}: {} sign-ins revoked, {} live sessions and {} agent sessions ended, {} API tokens and {} connected apps suspended",
+            me.username, target.username, d.web_sessions, d.live_sessions, d.agent_sessions, d.api_tokens, d.connected_apps
+        );
+        tracing::info!("{what}");
+    }
+    Ok(Json(out))
+}
+
+/// 停用前的預估：停用這個帳號會登出幾個瀏覽器、結束幾個 session、暫停幾把 token / 幾個 app（管理員）。
+/// Before disabling: how many browsers are signed out, sessions ended, tokens and apps suspended (admins only).
+#[utoipa::path(get, path = "/api/user/users/{id}/disable-preview", tag = "User Management", security(("bearer" = [])), params(("id" = i64, Path, description = "User id")), responses((status = 200, body = super::schemas::DisableImpact), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
+async fn disable_preview(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+    if !me.is_superuser {
+        return Err(ApiError::forbidden("Permission denied. Only administrators can manage users."));
+    }
+    db::users::by_id(&state.db, id).await?.ok_or_else(|| ApiError::not_found("User not found."))?;
+    Ok(Json(crate::access_recheck::disable_preview(&state, id).await?.json()))
 }
 
 #[allow(dead_code)]

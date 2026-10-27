@@ -44,6 +44,7 @@ import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
 import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
+import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 
 function titleize(key: string) {
     return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -515,6 +516,8 @@ function UserEditModal({
 }) {
     const [saving, setSaving] = useState(false);
     const [confirmReset, setConfirmReset] = useState(false);
+    // 停用前先看會切掉什麼（啟用不必問）。/ Disabling shows what gets cut first; enabling needs no confirmation.
+    const [confirmDisable, setConfirmDisable] = useState(false);
     const [tab, setTab] = useState<UserModalTab>("account");
 
     const apply = async (patch: ManagedUserPatch) => {
@@ -587,7 +590,7 @@ function UserEditModal({
                         <Switch
                             checked={user.is_active}
                             disabled={isSelf || saving}
-                            onCheckedChange={(v) => apply({ is_active: v })}
+                            onCheckedChange={(v) => (v ? apply({ is_active: true }) : setConfirmDisable(true))}
                             aria-label={t("settings.userActiveLabel")}
                         />
                     </div>
@@ -683,6 +686,16 @@ function UserEditModal({
 
             {/* 這個人的 app 與 token 呼叫過的工具 / Tool calls by their apps and tokens */}
             {tab === "activity" && <UserActivity userId={user.id} onNavigate={onClose} />}
+
+            <DisableAccountDialog
+                isOpen={confirmDisable}
+                user={user}
+                onClose={() => setConfirmDisable(false)}
+                onConfirm={async () => {
+                    await apply({ is_active: false });
+                    setConfirmDisable(false);
+                }}
+            />
 
             <ConfirmDialog
                 isOpen={confirmReset}

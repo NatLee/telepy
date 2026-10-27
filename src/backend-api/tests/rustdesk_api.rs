@@ -455,3 +455,47 @@ async fn rustdesk_file_operations_are_relayed_and_audited() {
     assert!(ev.iter().any(|e| e["event"] == "rustdesk_close" && e["message"].as_str().unwrap_or("").contains("refused: a file transfer message on a remote control session")), "{ev:?}");
     assert!(!received.lock().unwrap().iter().any(|m| file_op(m) == Some(FileOp::RemoveFile { id: 1, path: "/etc/hosts".into() })), "the refused action never reached the device");
 }
+
+/// 失去權限（取消分享）：連線中的 RustDesk 馬上以 4009 結束，`rustdesk_close` 說為什麼。
+/// Losing access (unshared): a connected RustDesk session ends at once with 4009, and `rustdesk_close` says why.
+#[tokio::test]
+async fn rustdesk_ends_when_access_is_lost() {
+    let Some(lab) = Lab::start().await else { return };
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let (rd_port, _received) = fake_rustdesk_device().await;
+    let id = dev.tunnel_id;
+
+    let r = app.post(&format!("/api/reverse/server/{id}/rustdesk/start"), Some(&bob.token), json!({"username": "ubuntu", "port": rd_port})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let mut relay = open_ws(&lab, &r.json).await;
+    relay.send(Message::Binary(rendezvous_with_id(REQUEST_RELAY, "telepy").into())).await.unwrap();
+    assert!(recv(&mut relay).await.is_ok(), "the device's greeting");
+    wait_for("rustdesk presence", || app.state.presence.for_tunnel(id).iter().any(|e| e.kind.as_str() == "rustdesk")).await;
+    let r = app.delete(&format!("/tunnels/unshare/{id}/{}", bob.id), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let reason = loop {
+        match tokio::time::timeout(Duration::from_secs(5), relay.next()).await.expect("the relay stayed open") {
+            Some(Ok(Message::Close(Some(f)))) => break (u16::from(f.code), f.reason.to_string()),
+            Some(Ok(_)) => continue,
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(reason, (4009, telepy_server::access_recheck::ENDED_BY.to_string()));
+    wait_for("presence cleared", || app.state.presence.for_tunnel(id).iter().all(|e| e.kind.as_str() != "rustdesk")).await;
+    let mut found = None;
+    for _ in 0..50 {
+        found = events(&lab, &alice.token, id).await.into_iter().find(|e| e["event"] == "rustdesk_close");
+        if found.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let msg = found.expect("rustdesk_close")["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("(ended,") && msg.contains("access to the tunnel was removed"), "{msg}");
+}

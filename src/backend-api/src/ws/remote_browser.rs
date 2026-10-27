@@ -116,7 +116,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         return;
     }
     tracing::info!(session_id, url, "remote-browser(vnc): bridged session");
-    let mut presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip));
+    let mut presence = state.presence.join(crate::presence::Entry::new(session.server_id, user.id, &user.username, crate::presence::Kind::Browser, meta.ip).as_account(&session.username));
     let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Browser, session.server_id, &user.username, Some(&session.username)).await;
     crate::session_audit::webhook_started(&state, session.server_id, user.id, &user.username, "browser", Some(&session.username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
@@ -136,6 +136,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut begun = false;
     let mut close_code: Option<u16> = None;
     let mut ended_by: Option<String> = None;
+    let mut ended_note: Option<String> = None;
     let mut signed_out: Option<String> = None;
     loop {
         tokio::select! {
@@ -156,6 +157,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             },
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
+                ended_note = Some(presence.ended_note(&by));
                 ended_by = Some(by);
                 break;
             }
@@ -182,7 +184,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     keepalive.abort();
     // 人已經走了：先移出「使用中」再收尾（收 kasm session 要一點時間）。/ Leave presence before the teardown.
     drop(presence);
-    audit.close(&state).await;
+    audit.close_with(&state, ended_note.as_deref()).await;
     if let Some(by) = &ended_by {
         close_with(&mut socket, CLOSE_ENDED, by).await;
     } else if let Some(reason) = &signed_out {

@@ -172,3 +172,64 @@ async fn offline_device_reports_device_offline() {
     let r = app.post(&format!("/api/reverse/server/remote-browser/whatever/ping"), Some(&token), json!({})).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
+
+/// 失去權限（允許帳號被拿掉）：開著的遠端瀏覽器以 4009 結束（原因 = 存取變了），session 收掉，`browser_close` 說為什麼。
+/// Losing access (the account removed): an open remote browser ends with 4009, the session is torn down, and
+/// `browser_close` says why.
+#[tokio::test]
+async fn remote_browser_ends_when_access_is_lost() {
+    let Some(mut lab) = common::lab::Lab::start().await else { return };
+    let log = KasmLog::default();
+    let vnc_port = mock_vnc_ws().await;
+    let kasm = mock_kasm(log.clone(), vnc_port).await;
+    lab.reconfigure(|c| {
+        c.kasm_api = kasm;
+        c.kasm_host = "127.0.0.1".to_string();
+        c.hostname = "127.0.0.1".to_string();
+        c.remote_browser_gc = false;
+    });
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let edge = lab.machine("edge", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "edge", &edge).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let (app, id) = (&lab.app, dev.tunnel_id);
+
+    let r = app.post(&format!("/api/reverse/server/{id}/remote-browser/start"), Some(&bob.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let sid = r.json["session_id"].as_str().unwrap().to_string();
+    let base = lab.ws_base().await;
+    let (mut ws, _) = connect_async(format!("{base}/ws/remote-browser/{sid}/")).await.unwrap();
+    ws.send(Message::Text(json!({"type": "auth", "token": bob.token}).to_string().into())).await.unwrap();
+    let ready = tokio::time::timeout(Duration::from_secs(5), ws.next()).await.unwrap().unwrap().unwrap();
+    assert_eq!(ready, Message::Text(json!({"type": "ready"}).to_string().into()));
+    for _ in 0..50 {
+        if app.state.presence.for_tunnel(id).iter().any(|e| e.kind.as_str() == "browser") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let r = app.patch(&format!("/tunnels/share/{id}/{}/allowed-usernames", bob.id), Some(&alice.token), json!({"allowed_target_username_ids": []})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let closed = loop {
+        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await.expect("the browser socket stayed open") {
+            Some(Ok(Message::Close(Some(f)))) => break (u16::from(f.code), f.reason.to_string()),
+            Some(Ok(_)) => continue,
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(closed, (4009, telepy_server::access_recheck::ENDED_BY.to_string()));
+    let mut msg = None;
+    for _ in 0..50 {
+        let ev = app.get(&format!("/api/log/ssh/events?tunnel_id={id}"), Some(&alice.token)).await;
+        msg = ev.json.as_array().unwrap().iter().find(|e| e["event"] == "browser_close").and_then(|e| e["message"].as_str().map(str::to_string));
+        if msg.is_some() && log.0.lock().unwrap().iter().any(|l| l == "delete kasm-1") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let msg = msg.expect("browser_close");
+    assert!(msg.contains("the login account is no longer allowed"), "{msg}");
+    assert!(log.0.lock().unwrap().iter().any(|l| l == "delete kasm-1"), "the kasm session is stopped: {:?}", log.0.lock().unwrap());
+}

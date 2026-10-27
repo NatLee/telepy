@@ -262,10 +262,12 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         close(&mut socket, 4005).await;
         return;
     };
-    let mut presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip));
+    let mut presence = state.presence.join(crate::presence::Entry::new(tunnel.id, user.id, &user.username, crate::presence::Kind::Files, meta.ip).as_account(&username));
     let audit = crate::session_audit::ConsoleSession::open_for(&state, crate::session_audit::ConsoleKind::Files, tunnel.id, &user.username, Some(&username)).await;
     crate::session_audit::webhook_started(&state, tunnel.id, user.id, &user.username, "files", Some(&username)).await;
     let mut heartbeat = Heartbeat::new(&state.config);
+    // 被結束時寫進 `files_close` 的那句（誰、為什麼）。/ Who ended it and why, for `files_close`.
+    let mut ended_note: Option<String> = None;
 
     loop {
         let frame = tokio::select! {
@@ -275,6 +277,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             },
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
+                ended_note = Some(presence.ended_note(&by));
                 close_with(&mut socket, CLOSE_ENDED, &by).await;
                 break;
             }
@@ -324,7 +327,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
             break;
         }
     }
-    audit.close(&state).await;
+    audit.close_with(&state, ended_note.as_deref()).await;
 }
 
 #[cfg(test)]

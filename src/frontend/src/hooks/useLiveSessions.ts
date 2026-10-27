@@ -1,8 +1,9 @@
 /**
- * 即時 session：讀 `/api/sessions`、結束一個。有人進出（UPDATE-TUNNEL-PRESENCE）、AI session 開關或被結束時重抓，
- * 另外每 15 秒抓一次（看得到但收不到通知的隧道，例如管理員看別人的）。
- * Live sessions: read `/api/sessions` and end one. Refetches on presence / AI session / session-ended notifications
- * and every 15 seconds (admins see tunnels they get no notifications for).
+ * 即時 session：讀 `/api/sessions`（`all` = 管理區的全站清單）、結束一個。有人進出（UPDATE-TUNNEL-PRESENCE）、
+ * AI session 開關或被結束時重抓，另外每 15 秒抓一次（管理區看得到但收不到通知的隧道）。
+ * Live sessions: read `/api/sessions` (`all` = the admin section's site-wide list) and end one. Refetches on
+ * presence / AI session / session-ended notifications and every 15 seconds (the admin section sees tunnels it gets
+ * no notifications for).
  */
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
@@ -11,10 +12,11 @@ import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import type { LiveSession } from "@/types/liveSession";
+import type { ViewScope } from "@/components/layout/AdminViews";
 
 const POLL_MS = 15_000;
 
-export function useLiveSessions() {
+export function useLiveSessions(scope: ViewScope = "mine") {
     const { t } = useI18n();
     const { showSuccess, showError } = useToast();
     const [sessions, setSessions] = useState<LiveSession[] | null>(null);
@@ -22,7 +24,7 @@ export function useLiveSessions() {
 
     const reload = useCallback(async () => {
         try {
-            const res = await apiFetch("/api/sessions");
+            const res = await apiFetch(scope === "all" ? "/api/sessions?scope=all" : "/api/sessions");
             if (!res.ok) {
                 setFailed(true);
                 return;
@@ -33,7 +35,7 @@ export function useLiveSessions() {
         } catch {
             setFailed(true);
         }
-    }, []);
+    }, [scope]);
 
     useEffect(() => {
         // 進頁面與每 15 秒抓一次（setState 在非同步回呼裡）。/ Load on mount and every 15 s.

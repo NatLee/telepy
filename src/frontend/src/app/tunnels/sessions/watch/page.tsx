@@ -37,6 +37,8 @@ function WatchInner() {
     const { t } = useI18n();
     const params = useSearchParams();
     const shell = params.get("shell");
+    // 從管理區的全站即時連線來的，就回那裡。/ Opened from the admin section's live sessions: go back there.
+    const backTo = params.get("from") === "admin" ? "/tunnels/admin/sessions" : "/tunnels/sessions";
     const { hostRef, ...w } = useTerminalWatch(shell);
     const [info, setInfo] = useState(false);
     const [confirmForce, setConfirmForce] = useState(false);
@@ -79,7 +81,7 @@ function WatchInner() {
                             <Info size={16} /> {t("watch.howItWorks")}
                         </Button>
                         <Button variant="ghost" asChild>
-                            <Link href={w.start ? `/tunnels/sessions?tunnel=${w.start.tunnel.id}` : "/tunnels/sessions"}>
+                            <Link href={`${backTo}${w.start ? `?tunnel=${w.start.tunnel.id}` : ""}`}>
                                 <ArrowLeft size={16} /> {t("watch.back")}
                             </Link>
                         </Button>

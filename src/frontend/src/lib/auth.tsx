@@ -58,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     announceSignedOutRef.current = () => {
         const reason = takeSignedOutReason();
         if (reason === "admin") showToast(t("security.signedOutByAdmin"), "warning");
+        else if (reason === "disabled") showToast(t("security.signedOutDisabled"), "warning");
         else if (reason === "user") showToast(t("security.signedOutElsewhere"), "warning");
     };
 
