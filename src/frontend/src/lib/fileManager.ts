@@ -360,7 +360,7 @@ export type FileLink = "connecting" | "open" | "retrying" | "offline" | "stepup"
 export function linkFromClose(code: number): FileLink {
     if (code === 4005) return "offline";
     if (code === 4008) return "stepup";
-    if ([4000, 4001, 4002, 4003, 4004, 4006, 4009].includes(code)) return "stopped";
+    if ([4000, 4001, 4002, 4003, 4004, 4006, 4009, 4012].includes(code)) return "stopped";
     return "retrying";
 }
 

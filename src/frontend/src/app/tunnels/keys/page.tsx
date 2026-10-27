@@ -8,6 +8,7 @@
  */
 import React, { useCallback, useMemo, useRef } from "react";
 import { Key as KeyIcon, Plus } from "lucide-react";
+import { useFeatures } from "@/hooks/useFeatures";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { KeyList } from "@/components/keys/KeyList";
@@ -20,6 +21,7 @@ export default function YourKeysPage() {
     const { t } = useI18n();
     const { page, groupNameOf, setAddOpen, setDetailsId, setDeleting } = useKeysArea();
     const top = useRef<HTMLElement>(null);
+    const keysOn = useFeatures().has("keys.personal");
     // 金鑰多時：搜尋 / 分類 / 排序（對全部金鑰），結果再分頁。/ Many keys: search, buckets and sort over every key, then pages.
     const devicesOf = useCallback((id: number) => (page.placements.get(id) ?? []).length, [page.placements]);
     const keyFilter = useKeyListFilter(page.keys, devicesOf);
@@ -51,9 +53,11 @@ export default function YourKeysPage() {
                     <KeyIcon size={44} className="mb-4 text-muted-foreground/50" />
                     <h3 className="text-lg text-foreground">{t("keys.emptyTitle")}</h3>
                     <p className="mt-1 max-w-sm text-sm text-muted-foreground">{t("keys.emptyBody")}</p>
-                    <Button className="mt-6" onClick={() => setAddOpen(true)}>
-                        <Plus size={16} /> {t("keys.addKey")}
-                    </Button>
+                    {keysOn && (
+                        <Button className="mt-6" onClick={() => setAddOpen(true)}>
+                            <Plus size={16} /> {t("keys.addKey")}
+                        </Button>
+                    )}
                 </div>
             ) : (
                 <div>

@@ -213,6 +213,10 @@ pub async fn handle(state: AppState, mut socket: WebSocket, meta: ClientMeta) {
         return;
     };
     tracing::info!(user = %user.username, "FileManager user authenticated");
+    if let Err(code) = auth::require_feature(&state, &user, crate::features::Feature::Files).await {
+        close_with(&mut socket, code, crate::features::Feature::Files.id()).await;
+        return;
+    }
 
     // 與 Django 版相同順序：權限(4004) → port(4002) → 有無 usernames(4006) → username 允許(4003)。
     let tunnel = match server_id.parse::<i64>() {

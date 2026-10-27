@@ -132,6 +132,8 @@ async fn verify_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
 #[utoipa::path(get, path = "/api/auth/user/profile", tag = "Authentication", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserProfile), (status = 401, body = super::schemas::ErrorBody)))]
 async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let settings = db::users::settings_for(&state.db, user.id).await?;
+    // 這個人能用的功能（前端用來藏導覽 / 選單；真正的門在 API）。/ Features this person may use (the UI hides the rest).
+    let features = state.features.policy().await?.allowed_ids(&user);
     Ok(Json(json!({
         "id": user.id,
         "username": user.username,
@@ -153,6 +155,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> Api
         "terminal_ligatures": settings.as_ref().map(|s| s.terminal_ligatures).unwrap_or(false),
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
         "mfa_missing": super::mfa::enrollment_missing(&state, user.id).await?,
+        "features": features,
     })))
 }
 

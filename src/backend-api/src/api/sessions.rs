@@ -91,14 +91,8 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
     if !may_end(entry.user_id, me.id, managed.contains_key(&entry.tunnel_id)) {
         return Err(not_found());
     }
-    if entry.kind == Kind::Ai {
-        let ai = state.ai.list().into_iter().find(|s| s.presence_id() == id).ok_or_else(not_found)?;
-        crate::ai::close(&state, &ai.id, crate::ai::CloseReason::ClosedByUser).await;
-    } else if let Some(b) = state.ai.browsers.list().into_iter().find(|b| b.presence_id() == id) {
-        // agent 開的遠端瀏覽器：沒有 WebSocket 迴圈在等，直接收掉並記下是誰。/ An agent browser has no socket loop: close it here.
-        crate::ai::browser::close(&state, &b.id, crate::ai::CloseReason::ClosedByUser, Some(&me.username)).await;
-    } else {
-        state.presence.end(id, &me.username).ok_or_else(not_found)?;
+    if !end_entry(&state, &entry, &me.username).await {
+        return Err(not_found());
     }
     let tunnel = db::tunnels::by_id(&state.db, entry.tunnel_id).await?;
     let name = tunnel.as_ref().map(|t| t.host_friendly_name.clone()).unwrap_or_default();
@@ -117,6 +111,24 @@ async fn end(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Pa
         .event("session_ended", None, port, Some(entry.tunnel_id), format!("{} ended {}'s {kind} session on {name} (from {ip})", me.username, entry.username))
         .await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// 結束一個進行中的 session（MCP agent session、agent 的瀏覽器、或有 socket 迴圈在等的那些）；不在了 = false。
+/// 功能權限被關掉時（`features::end_denied_sessions`）也走這裡。
+/// Ends one live session (an MCP agent session, an agent browser, or one with a socket loop); false when it is gone.
+/// Also used when a feature is turned off (`features::end_denied_sessions`).
+pub async fn end_entry(state: &AppState, entry: &crate::presence::Entry, by: &str) -> bool {
+    let id = entry.id;
+    if entry.kind == Kind::Ai {
+        let Some(ai) = state.ai.list().into_iter().find(|s| s.presence_id() == id) else { return false };
+        crate::ai::close(state, &ai.id, crate::ai::CloseReason::ClosedByUser).await;
+    } else if let Some(b) = state.ai.browsers.list().into_iter().find(|b| b.presence_id() == id) {
+        // agent 開的遠端瀏覽器：沒有 WebSocket 迴圈在等，直接收掉並記下是誰。/ An agent browser has no socket loop: close it here.
+        crate::ai::browser::close(state, &b.id, crate::ai::CloseReason::ClosedByUser, Some(by)).await;
+    } else if state.presence.end(id, by).is_none() {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

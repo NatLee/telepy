@@ -56,6 +56,7 @@ import { accountsFromDevice, placeKey } from "@/lib/keyPlacement";
 import { OnlineDot, RoleBadge } from "./DeviceMatrix";
 import { KeyPlacementFlow } from "./KeyPlacementFlow";
 import { MyKeyGroupsOnDevice, MyKeysOnDevice } from "./MyKeysOnDevice";
+import { useFeatures } from "@/hooks/useFeatures";
 import { RowFilterBar, RowsMore, SelectAllRemovable, useRowFilter, useRowLimit, useRowSelection, type RowFilterState, type RowSelection } from "./KeyRowFilter";
 
 type Tone = "neutral" | "success" | "warning" | "danger" | "primary";
@@ -461,6 +462,8 @@ function AccountCard({
 const NO_ACCOUNTS: ViewAccount[] = [];
 
 export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: number | null; onClose: () => void; onChanged: () => void }) {
+    // 「個人 SSH 金鑰」被關掉：不能把自己的金鑰加進清單。/ Personal keys turned off: you cannot add your own keys.
+    const keysOn = useFeatures().has("keys.personal");
     const { t } = useI18n();
     const dk = useDeviceKeys(tunnelId, onChanged);
     const [confirm, setConfirm] = useState<{ username: string; row: ViewRow } | null>(null);
@@ -538,8 +541,8 @@ export function DeviceKeysModal({ tunnelId, onClose, onChanged }: { tunnelId: nu
                 <div className="space-y-6">
                     {d.platform?.error && d.can_manage && !filter.filtering && <Callout tone="warning">{t("keys.device.platformError", { error: d.platform.error })}</Callout>}
                     {/* 你的金鑰（篩選帳號裡的列時收起來，讓結果在最上面）/ Your keys (hidden while filtering rows so matches come first) */}
-                    {!filter.filtering && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onSetAccounts={dk.setAccounts} onNavigate={onClose} />}
-                    {!filter.filtering && <MyKeyGroupsOnDevice d={d} busy={dk.busy} onToggle={(id, on, grantId) => void dk.toggleGroup(id, on, grantId)} />}
+                    {!filter.filtering && keysOn && <MyKeysOnDevice d={d} busy={dk.busy} onToggle={dk.toggleMine} onAddAll={dk.addAllMine} onSetAccounts={dk.setAccounts} onNavigate={onClose} />}
+                    {!filter.filtering && keysOn && <MyKeyGroupsOnDevice d={d} busy={dk.busy} onToggle={(id, on, grantId) => void dk.toggleGroup(id, on, grantId)} />}
 
                     {/* 每個帳號：清單 × 裝置上實際內容 / Each account: the list × what is on the device */}
                     <section className="space-y-3">

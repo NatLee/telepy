@@ -16,6 +16,7 @@ pub mod device_keys;
 pub mod doctor;
 pub mod error;
 pub mod expiry;
+pub mod features;
 pub mod gateway;
 pub mod geoip;
 pub mod hub;

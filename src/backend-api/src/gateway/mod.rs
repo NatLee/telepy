@@ -100,6 +100,8 @@ pub struct Gateway {
     webhooks: Arc<crate::webhooks::Webhooks>,
     /// 敏感隧道的 step-up（網頁與 gateway 共用）。/ Step-up confirmations, shared with the web side.
     step_ups: Arc<crate::step_up::StepUps>,
+    /// 功能權限（網頁與 gateway 共用；筆電的 SSH 要有「個人 SSH 金鑰」）。/ Feature permissions, shared with the web side.
+    features: Arc<crate::features::Features>,
     /// 會先送 PROXY protocol header 的 L4 代理（`GATEWAY_PROXY_PROTOCOL_FROM`）。/ Proxies that send a PROXY header.
     proxy_from: proxy_protocol::Trusted,
     forwards: DashMap<u16, Arc<Forward>>,
@@ -189,6 +191,7 @@ impl Gateway {
             }
         };
         let webhooks = Arc::new(crate::webhooks::Webhooks::new(&config, db.clone(), hub.clone()));
+        let features = Arc::new(crate::features::Features::new(db.clone()));
         Self {
             server_config: server_config(keys),
             config,
@@ -198,6 +201,7 @@ impl Gateway {
             hub,
             webhooks,
             step_ups: Arc::new(crate::step_up::StepUps::default()),
+            features,
             proxy_from,
             forwards: DashMap::new(),
             conns: DashMap::new(),
@@ -279,6 +283,11 @@ impl Gateway {
     /// step-up 紀錄（AppState 共用同一份）。/ Step-up confirmations, shared with AppState.
     pub fn step_ups(&self) -> Arc<crate::step_up::StepUps> {
         self.step_ups.clone()
+    }
+
+    /// 功能權限快取（AppState 共用同一份）。/ The feature-permission cache, shared with AppState.
+    pub fn features(&self) -> Arc<crate::features::Features> {
+        self.features.clone()
     }
 
     /// 筆電經 gateway 連敏感隧道：這個人最近沒在網頁確認過就回那條隧道（要擋）。
@@ -426,6 +435,13 @@ impl Gateway {
             return Ok(Some(Identity::Tunnel { tunnel_id: t.id, user_id: t.user_id, reverse_port: t.reverse_port }));
         }
         if let Some(uid) = db::keys::user_key_owner_by_prefix(&self.db, &like).await? {
+            // 功能權限：「個人 SSH 金鑰」被關掉的人不能用金鑰經 gateway 連裝置。/ Personal SSH keys turned off: refused.
+            if let Some(user) = db::users::by_id(&self.db, uid).await? {
+                if !self.features.allowed(&user, crate::features::Feature::KeysPersonal).await? {
+                    tracing::info!(user_id = uid, "gateway: personal SSH keys are turned off for this user; rejected");
+                    return Ok(None);
+                }
+            }
             let has_tunnels = !db::tunnels::keys_for_user(&self.db, uid).await?.is_empty();
             let has_shares = db::sharing::user_has_any_share(&self.db, uid).await?;
             if has_tunnels || has_shares {

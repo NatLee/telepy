@@ -7,7 +7,8 @@ import { ReverseServerUsername } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 import { shareExpiryValue, type ShareExpiryPreset } from "@/lib/shareExpiry";
 
-export function useShareModal(tunnelId: number | null, isOpen: boolean) {
+/** canAdd：能新增分享（「分享隧道」功能開著）；關著就不抓可分享的人（API 會 403）。/ canAdd: may add shares; skips the available-users fetch otherwise. */
+export function useShareModal(tunnelId: number | null, isOpen: boolean, canAdd = true) {
     const { t } = useI18n();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [sharedUsers, setSharedUsers] = useState<any[]>([]);
@@ -30,13 +31,13 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
         try {
             const [sharedRes, availableRes, usernamesRes] = await Promise.all([
                 apiFetch(`/tunnels/shared-users/${tunnelId}`),
-                apiFetch(`/tunnels/available-users/${tunnelId}`),
+                canAdd ? apiFetch(`/tunnels/available-users/${tunnelId}`) : Promise.resolve(null),
                 apiFetch(`/api/reverse/server/${tunnelId}/usernames`),
             ]);
 
-            if (sharedRes.ok && availableRes.ok) {
+            if (sharedRes.ok && (!availableRes || availableRes.ok)) {
                 setSharedUsers((await sharedRes.json()).users);
-                setAvailableUsers((await availableRes.json()).users);
+                setAvailableUsers(availableRes ? (await availableRes.json()).users : []);
             } else {
                 showError(t("share.fetchSharedFailed"));
             }
@@ -50,7 +51,7 @@ export function useShareModal(tunnelId: number | null, isOpen: boolean) {
         } finally {
             setLoading(false);
         }
-    }, [tunnelId, showError, t]);
+    }, [tunnelId, canAdd, showError, t]);
 
     useEffect(() => {
         if (isOpen) {

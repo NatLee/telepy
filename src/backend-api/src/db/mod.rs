@@ -8,6 +8,7 @@ pub mod command_rules;
 pub mod snippets;
 pub mod credentials;
 pub mod device_keys;
+pub mod features;
 pub mod groups;
 pub mod host_keys;
 pub mod keys;

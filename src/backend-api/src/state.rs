@@ -77,6 +77,8 @@ pub struct Inner {
     pub shells: crate::terminal_detach::Shells<crate::ws::terminal::Shell>,
     /// 裝置狀況：警示去重複與「立即重新整理」的頻率限制。/ Device facts: alert de-dup and the refresh rate limit.
     pub device_info: crate::device_info::DeviceInfoState,
+    /// 功能權限（誰可以用哪些功能）的快取；gateway 擁有。/ Feature-permission cache, owned by the gateway.
+    pub features: Arc<crate::features::Features>,
 }
 
 #[derive(Clone)]
@@ -112,6 +114,7 @@ impl AppState {
         let hub = gateway.hub();
         let step_up = gateway.step_ups();
         let webhooks = gateway.webhooks();
+        let features = gateway.features();
         db.audit.set_anchors_file(config.log_root.join(crate::db::audit_chain::ANCHORS_FILE));
         Self(Arc::new(Inner {
             remote_browser,
@@ -142,6 +145,7 @@ impl AppState {
             webhooks,
             shells: Default::default(),
             device_info: Default::default(),
+            features,
             config,
             db,
         }))
