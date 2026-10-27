@@ -589,7 +589,7 @@ async fn losing_access_ends_attached_and_detached_shells() {
     let r = lab.app.delete(&format!("/tunnels/unshare/{}/{}", dev.tunnel_id, bob.id), Some(&alice.token)).await;
     assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
     let (code, reason) = live.wait_closed_reason().await.expect("closed");
-    assert_eq!((code, reason.as_str()), (4009, telepy_server::terminal_detach::ENDED_BY));
+    assert_eq!((code, reason.as_str()), (4009, telepy_server::access_recheck::ENDED_BY));
     wait_presence(&lab, dev.tunnel_id, "empty", |p| p.is_empty()).await;
     wait_device_sessions(&boxm, 0).await;
     close_event(&lab, &alice.token, dev.tunnel_id, "while detached: access to the tunnel was removed").await;

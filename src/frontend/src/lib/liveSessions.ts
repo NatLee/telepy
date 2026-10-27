@@ -37,9 +37,9 @@ export function groupByTunnel(list: LiveSession[]): TunnelGroup[] {
 
 /**
  * `SESSION-ENDED` 該怎麼說（純函式）：功能被關掉（`feature`，斷線保留中的 shell 另外說）、存取變了
- * （`reason`，後端 `terminal_detach::Lost`）、或某人從即時 session 頁結束。
+ * （`reason`，後端 `access_recheck::Lost`）、或某人從即時 session 頁結束。
  * How to word a `SESSION-ENDED`: a feature turned off (`feature`; a detached shell gets its own sentence), access
- * changed (`reason`, the backend's `terminal_detach::Lost`), or someone ended it from the Live sessions page.
+ * changed (`reason`, the backend's `access_recheck::Lost`), or someone ended it from the Live sessions page.
  */
 export type EndedNotice =
     | { kind: "feature"; feature: string; detached: boolean }
@@ -59,4 +59,32 @@ export function endedNotice(msg: Record<string, unknown>): EndedNotice {
     const lost = typeof msg.reason === "string" ? LOST[msg.reason] : undefined;
     if (lost) return { kind: "lost", reason: lost, detached };
     return { kind: "by", by: String(msg.by ?? "") };
+}
+
+/** 存取變了的原因（`EndedNotice` 的 `lost`）。/ The access-changed reasons. */
+export type LostReason = Extract<EndedNotice, { kind: "lost" }>["reason"];
+
+/** 每種 session 需要什麼（一句話，i18n key 的尾巴）。/ What each kind of session needs (an i18n key suffix). */
+const NEEDS: Record<string, string> = {
+    terminal: "terminal",
+    files: "files",
+    browser: "browser",
+    desktop: "desktop",
+    rustdesk: "desktop",
+    ssh: "ssh",
+};
+
+/**
+ * 「存取變了」的提醒怎麼說（純函式）：主句（筆電 ssh 與看終端機有自己的說法），加上這種 session 需要什麼
+ * （帳號停用、斷線保留政策這兩種不必解釋）。回 i18n key。
+ * How to word an "access changed" toast: the main sentence (laptop SSH and watching have their own) plus what this
+ * kind of session needs (not for a disabled account or the detach policy). Returns i18n keys.
+ */
+export function lostToast(reason: LostReason, kind: string): { key: string; need: string | null } {
+    let key = `sessions.lost.${reason}`;
+    if (kind === "ssh" && (reason === "accessRemoved" || reason === "loginRemoved")) key = `sessions.lost.ssh.${reason}`;
+    if (kind === "watch" && reason === "accessRemoved") key = "sessions.lost.watch";
+    const needs = NEEDS[kind];
+    const need = needs && (reason === "accessRemoved" || reason === "loginRemoved") && kind !== "watch" ? `sessions.need.${needs}` : null;
+    return { key, need };
 }

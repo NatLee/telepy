@@ -110,6 +110,18 @@ pub async fn allowed_usernames(db: &Db, user_id: i64, tunnel: &Tunnel) -> sqlx::
     }
 }
 
+/// 筆電能不能經 gateway（使用者金鑰的 direct-tcpip）連到這台裝置的 sshd：owner、ADMIN sharee，或至少有一個
+/// 允許帳號的 sharee。gateway 放行時與失去權限的重新檢查（`crate::access_recheck`）共用這條規則。
+/// May a laptop reach this device's sshd through the gateway (user-key direct-tcpip): owner, ADMIN sharee, or a sharee
+/// with at least one allowed account. Shared by the gateway's admission and the access recheck.
+pub fn can_reach_device(eff: Option<Effective>, has_allowed_account: bool) -> bool {
+    match eff {
+        Some(e) if e.satisfies(Permission::Admin) => true,
+        Some(_) => has_allowed_account,
+        None => false,
+    }
+}
+
 /// 從允許的 username 挑一個：指定的必須在清單內；沒指定就用隧道預設（若允許），清單只有一個就用它。
 /// 錯誤訊息直接給人看（列出可用的）。/ Pick a target username: the requested one must be allowed;
 /// otherwise the tunnel default (when allowed) or the only allowed one.
@@ -168,6 +180,15 @@ mod tests {
             updated_at: String::new(),
             created_by: String::new(),
         }
+    }
+
+    #[test]
+    fn who_reaches_the_device_through_the_gateway() {
+        assert!(can_reach_device(Some(Effective::Owner), false));
+        assert!(can_reach_device(Some(Effective::Shared(Permission::Admin)), false), "ADMIN without an account of their own");
+        assert!(can_reach_device(Some(Effective::Shared(Permission::View)), true));
+        assert!(!can_reach_device(Some(Effective::Shared(Permission::Edit)), false), "status only");
+        assert!(!can_reach_device(None, true), "not shared");
     }
 
     #[test]

@@ -1086,6 +1086,24 @@ pub struct ManagedUser {
     pub last_login: Option<String>,
     pub language: Option<String>,
     pub mfa_enabled: bool,
+    /// 這次更新停用了帳號時：切掉了什麼。/ Present when this update disabled the account: what was cut.
+    pub disabled: Option<DisableImpact>,
+}
+
+/// 停用一個帳號切掉的東西（`GET …/disable-preview` = 預估；`POST /api/user/users/{id}` 停用時 = 實際）。
+/// What disabling an account cuts (the preview's estimate, or what the update did).
+#[derive(ToSchema)]
+pub struct DisableImpact {
+    /// 撤銷的網頁登入（瀏覽器）。/ Web sign-ins revoked.
+    pub web_sessions: u64,
+    /// 結束的進行中 session（含斷線保留中的終端機）。/ Live sessions ended, detached terminals included.
+    pub live_sessions: u64,
+    /// 關掉的 MCP agent session / 瀏覽器。/ MCP agent sessions / browsers closed.
+    pub agent_sessions: u64,
+    /// 暫停的個人 API token（重新啟用就恢復）。/ API tokens suspended (back on re-enable).
+    pub api_tokens: u64,
+    /// 暫停的已連接 app。/ Connected apps suspended.
+    pub connected_apps: u64,
 }
 
 #[derive(ToSchema)]

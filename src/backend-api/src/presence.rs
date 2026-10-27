@@ -65,6 +65,11 @@ pub struct Entry {
     pub detached: Option<(String, String)>,
     /// 看別人的終端機時：看的是誰的哪個 shell。/ When watching: whose shell.
     pub watching: Option<WatchOf>,
+    /// 這個 session 用哪個裝置帳號登入（終端機、檔案、遠端瀏覽器、遠端桌面、RustDesk 的跳板帳號）；
+    /// 失去權限的重新檢查（`crate::access_recheck`）看它還在不在允許清單裡。
+    /// The device account the session runs as (terminal, files, remote browser, desktop / RustDesk hop account);
+    /// the access recheck (`crate::access_recheck`) checks it is still allowed.
+    pub account: Option<String>,
 }
 
 /// 被看的那個 shell。/ The shell being watched.
@@ -77,7 +82,13 @@ pub struct WatchOf {
 
 impl Entry {
     pub fn new(tunnel_id: i64, user_id: i64, username: &str, kind: Kind, ip: Option<String>) -> Self {
-        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, detached: None, watching: None }
+        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, detached: None, watching: None, account: None }
+    }
+
+    /// 同 [`new`](Self::new)，帶上登入的裝置帳號。/ Like [`new`](Self::new), with the device account.
+    pub fn as_account(mut self, account: &str) -> Self {
+        self.account = Some(account.to_string());
+        self
     }
 }
 
@@ -126,6 +137,14 @@ impl PresenceGuard {
     /// Why it was ended ([`Presence::end_because`]); read after [`ended`](Self::ended) resolved.
     pub fn why(&self) -> Option<String> {
         self.ended.borrow().as_ref().and_then(|e| e.why.clone())
+    }
+
+    /// 結束事件的那句：`ended by <誰>[: <為什麼>]`。/ The close event's note: `ended by <who>[: <why>]`.
+    pub fn ended_note(&self, by: &str) -> String {
+        match self.why() {
+            Some(why) => format!("ended by {by}: {why}"),
+            None => format!("ended by {by}"),
+        }
     }
 
     /// 標成斷線保留中（Some((since, ends_at))）或接回來了（None）。/ Mark as detached (since, ends at) or attached again.

@@ -477,27 +477,11 @@ impl Desktop {
         n
     }
 
-    /// 連線中的 session 若已失去權限（取消分享、帳號被移出允許清單、隧道被刪）→ 請中繼結束。
-    /// Ask connected sessions whose user lost access to end.
-    pub async fn revoke_lost(&self, db: &Db) -> usize {
-        let mut n = 0;
-        let sessions: Vec<Arc<Session>> = self.sessions.iter().filter(|e| e.connected.load(Ordering::SeqCst)).map(|e| e.value().clone()).collect();
-        for s in sessions {
-            if !still_allowed(db, &s).await {
-                tracing::info!(session = %s.id, user = %s.user_name, "desktop: access revoked; closing");
-                s.request_stop("revoked");
-                n += 1;
-            }
-        }
-        n
-    }
-
     pub async fn run_reaper(self: Arc<Self>, db: Db) {
         loop {
             tokio::time::sleep(REAP_INTERVAL).await;
             let idle = db::settings::get_solo(&db).await.map(|s| s.desktop_session_idle_timeout).unwrap_or(0).max(0) as u64;
             self.reap(Duration::from_secs(idle));
-            self.revoke_lost(&db).await;
         }
     }
 }

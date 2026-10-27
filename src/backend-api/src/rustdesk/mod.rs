@@ -291,20 +291,6 @@ impl RustDesk {
         n
     }
 
-    /// 失去權限的連線中 session → 請中繼結束。/ End connected sessions whose user lost access.
-    pub async fn revoke_lost(&self, db: &Db) -> usize {
-        let mut n = 0;
-        let sessions: Vec<Arc<Session>> = self.sessions.iter().filter(|e| e.connected.load(Ordering::SeqCst)).map(|e| e.value().clone()).collect();
-        for s in sessions {
-            if !crate::desktop::allowed_for(db, s.user_id, s.tunnel_id, &s.hop_username).await {
-                tracing::info!(session = %s.id, user = %s.user_name, "rustdesk: access revoked; closing");
-                s.request_stop("revoked");
-                n += 1;
-            }
-        }
-        n
-    }
-
     /// 站台關掉了檔案傳輸：收掉所有檔案 session。/ The site turned file transfer off: end every files session.
     pub fn end_all_files(&self) -> usize {
         let files: Vec<Arc<Session>> = self.sessions.iter().filter(|e| e.kind == Kind::Files).map(|e| e.value().clone()).collect();
@@ -322,7 +308,6 @@ impl RustDesk {
         loop {
             tokio::time::sleep(REAP_INTERVAL).await;
             self.reap();
-            self.revoke_lost(&db).await;
             if let Ok(settings) = crate::db::settings::get_solo(&db).await {
                 if !settings.desktop_file_transfer {
                     self.end_all_files();

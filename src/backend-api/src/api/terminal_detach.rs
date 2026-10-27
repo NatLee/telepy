@@ -44,7 +44,7 @@ async fn set_policy(State(state): State<AppState>, AuthUser(user): AuthUser, hea
     db::tunnels::set_terminal_detach_policy(&state.db, t.id, policy.as_str()).await?;
     // 改成 never：這條隧道上斷線保留中的 shell 立刻結束。/ Now `never`: detached shells on this tunnel end at once.
     if policy == Policy::Never {
-        crate::terminal_detach::kick(&state, Some(t.id), None);
+        crate::access_recheck::kick(&state, Some(t.id), None);
     }
     let t = db::tunnels::by_id(&state.db, t.id).await?.unwrap_or(t);
     notify::tunnel_updated(&state, &t).await?;

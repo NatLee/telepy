@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/Toast";
 import { PRESENCE_KINDS } from "@/components/tunnels/TunnelPresence";
 import { useI18n } from "@/lib/i18n";
 import { featureKey } from "@/lib/features";
-import { endedNotice } from "@/lib/liveSessions";
+import { endedNotice, lostToast } from "@/lib/liveSessions";
 import type { TranslationKey } from "@/locales/en";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
@@ -29,9 +29,12 @@ export function SessionEndedNotice() {
                 showToast(t(n.detached ? "access.sessionEndedToastDetached" : "access.sessionEndedToast", { feature, kind: kindLabel }), "warning");
                 return;
             }
-            // 存取變了（取消分享、帳號被拿掉、帳號停用、隧道不再保留斷線的 shell）。/ Access changed.
+            // 存取變了（取消分享、帳號被拿掉、帳號停用、隧道不再保留斷線的 shell）：每種 session 說它需要什麼。
+            // Access changed: the sentence plus what this kind of session needs.
             if (n.kind === "lost") {
-                showToast(t(`sessions.lost.${n.reason}` as TranslationKey, { kind: kindLabel }), "warning");
+                const { key, need } = lostToast(n.reason, String(msg.kind ?? ""));
+                const text = t(key as TranslationKey, { kind: kindLabel });
+                showToast(need ? `${text} ${t(need as TranslationKey)}` : text, "warning");
                 return;
             }
             showToast(t("sessions.endedToast", { by: n.by, kind: kindLabel }), "warning");

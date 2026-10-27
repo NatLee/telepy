@@ -190,7 +190,11 @@ fn grace_reissue(state: &AppState, session: &WebSession, presented_jti: &str, no
 /// the grace, otherwise the whole session is revoked.
 pub async fn refresh(state: &AppState, token: &str, meta: &ClientMeta) -> ApiResult<Value> {
     let claims = state.jwt.verify(token, TokenType::Refresh).map_err(|_| token_not_valid())?;
-    let user = db::users::by_id(&state.db, claims.user_id).await?.filter(|u| u.is_active).ok_or_else(token_not_valid)?;
+    let user = db::users::by_id(&state.db, claims.user_id).await?.ok_or_else(token_not_valid)?;
+    // 帳號被停用：說原因（網頁顯示「管理員停用了你的帳號」）。/ A disabled account: say so, for the web.
+    if !user.is_active {
+        return Err(signed_out("disabled"));
+    }
     let lt = lifetimes(state).await?;
     let now = Utc::now();
     let Some(sid) = claims.sid else {
@@ -200,7 +204,7 @@ pub async fn refresh(state: &AppState, token: &str, meta: &ClientMeta) -> ApiRes
     let session = match web_sessions::by_id(&state.db, sid).await? {
         Some(s) if live(&s) => s,
         // 被使用者 / 管理員登出的：說是誰，網頁好解釋。/ Signed out by the user or an admin: say so, for the web.
-        Some(s) if s.user_id == user.id && matches!(s.revoked_reason.as_deref(), Some("user" | "admin")) => {
+        Some(s) if s.user_id == user.id && matches!(s.revoked_reason.as_deref(), Some("user" | "admin" | "disabled")) => {
             return Err(signed_out(s.revoked_reason.as_deref().unwrap_or("user")));
         }
         _ => return Err(token_not_valid()),

@@ -470,6 +470,23 @@ pub async fn reap_once(state: &AppState) {
     browser::reap_once(state).await;
 }
 
+/// 存取剛變過（`crate::access_recheck::kick`）：只對範圍內的 agent session 與瀏覽器馬上跑一次授權檢查
+/// （跟 reaper 同一條規則，不等下一輪）。回傳關掉幾個。
+/// Access just changed (`crate::access_recheck::kick`): run the reaper's own authorization check now, only for the
+/// agent sessions and browsers in scope. Returns how many were closed.
+pub async fn recheck(state: &AppState, tunnel_id: Option<i64>, user_id: Option<i64>) -> usize {
+    let in_scope = |t: i64, u: i64| tunnel_id.is_none_or(|x| x == t) && user_id.is_none_or(|x| x == u);
+    let mut n = 0;
+    for s in state.ai.list().into_iter().filter(|s| in_scope(s.tunnel_id, s.user_id)) {
+        if let Some(r) = authorization_lost(state, &s).await {
+            if close(state, &s.id, r).await.is_some() {
+                n += 1;
+            }
+        }
+    }
+    n + browser::recheck(state, &in_scope).await
+}
+
 pub async fn run_reaper(state: AppState, interval: Duration) {
     let mut tick = tokio::time::interval(interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
