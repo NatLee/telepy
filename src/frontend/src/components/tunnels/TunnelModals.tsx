@@ -39,6 +39,7 @@ export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel, on
                 isOpen={configModal.isOpen}
                 onClose={() => setConfigModal({ isOpen: false, tunnelId: null })}
                 tunnelId={configModal.tunnelId}
+                tunnel={tunnels.find((x) => x.id === configModal.tunnelId) ?? null}
                 onBulk={
                     onBulkConfig &&
                     (() => {

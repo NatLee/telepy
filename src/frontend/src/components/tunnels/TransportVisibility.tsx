@@ -32,7 +32,7 @@ const ROWS: { label: TranslationKey; ssh: TranslationKey; websocket: Translation
 const subscribe = () => () => {};
 
 /** 這個 Telepy 是否走 https（SSR 時先當作是，免得閃一下警告）。/ Whether Telepy is served over https (assumed during SSR). */
-function useHttps(): boolean {
+export function useHttps(): boolean {
     return useSyncExternalStore(subscribe, () => window.location.protocol === "https:", () => true);
 }
 

@@ -6,7 +6,7 @@
  * status and body on the right; plus one check row.
  */
 import React from "react";
-import { Check } from "lucide-react";
+import { Check, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function Step({ n, done = false, title, status, hint, last = false, children }: {
@@ -58,10 +58,28 @@ export function CheckRow({ icon, children, right }: { icon: React.ReactNode; chi
  * One "label + toggle" pair in a dialog toolbar: stacked and full width on phones (so large display sizes never
  * push it out of the dialog), side by side from `sm`.
  */
-export function ToolbarField({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+export function ToolbarField({ label, info, children }: {
+    label: React.ReactNode;
+    /** 標籤旁的 ⓘ：打開說明。/ An ⓘ next to the label that opens an explainer. */
+    info?: { label: string; onClick: () => void };
+    children: React.ReactNode;
+}) {
     return (
         <div className="flex w-full min-w-0 flex-col gap-1.5 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
-            <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+            <span className="flex shrink-0 items-center gap-1 text-sm text-muted-foreground">
+                {label}
+                {info && (
+                    <button
+                        type="button"
+                        onClick={info.onClick}
+                        aria-label={info.label}
+                        title={info.label}
+                        className="grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                        <Info size={15} aria-hidden />
+                    </button>
+                )}
+            </span>
             {children}
         </div>
     );

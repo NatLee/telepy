@@ -24,6 +24,7 @@ import { StatusDot } from "@/components/tunnels/TunnelStatus";
 import { ConfigRouteMap, type ConfigPart } from "./ConfigRouteMap";
 import { SshConfigInstall } from "./SshConfigInstall";
 import { CheckRow, Step, ToolbarField } from "./ConfigSteps";
+import { TransportInfoDialog } from "./TransportInfoDialog";
 import { useBulkConfig } from "@/hooks/useBulkConfig";
 import { useFeatures } from "@/hooks/useFeatures";
 import { countAccess, deviceAccess, initialSelection, keysToAdd, pickStanzas, type DeviceAccess } from "@/lib/bulkSshConfig";
@@ -75,6 +76,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
     const [query, setQuery] = useState("");
     const [expanded, setExpanded] = useState(false);
     const [active, setActive] = useState<ConfigPart | null>(null);
+    const [transportInfo, setTransportInfo] = useState(false);
 
     const byId = useMemo(() => new Map(tunnels.map((x) => [x.id, x])), [tunnels]);
     const rows = useMemo(() => data?.tunnels ?? [], [data]);
@@ -144,7 +146,7 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                             ]}
                         />
                     </ToolbarField>
-                    <ToolbarField label={t("config.transportLabel")}>
+                    <ToolbarField label={t("config.transportLabel")} info={{ label: t("config.ti.open"), onClick: () => setTransportInfo(true) }}>
                         <Segmented
                             size="sm"
                             fullWidth
@@ -352,6 +354,18 @@ export function BulkConfigModal({ onClose, tunnels, health, groups, shownIds }: 
                     )}
                 </div>
             )}
+            <TransportInfoDialog
+                isOpen={transportInfo}
+                onClose={() => setTransportInfo(false)}
+                choice={bulk.transport}
+                onChoose={bulk.setTransport}
+                server={data ? { host: data.server.host, port: String(data.server.port) } : null}
+                wsUrl={data?.ws_url ?? null}
+                devices={chosen.map((r) => {
+                    const tun = byId.get(r.id);
+                    return { online: isUp(r.id), transport: tun?.endpoint?.live ? tun.endpoint.transport : null };
+                })}
+            />
         </Modal>
     );
 }
