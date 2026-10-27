@@ -9,7 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Plus, Network, Info, RefreshCw, SearchX, FolderTree, FolderPlus } from "lucide-react";
+import { Plus, Network, Info, RefreshCw, SearchX, FolderTree, FolderPlus, FileCode2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Tooltip,
@@ -25,6 +25,7 @@ import { ViewToggle } from "@/components/ui/ViewToggle";
 import { Segmented } from "@/components/ui/segmented";
 import { EmptyGroup, GroupHeader, GroupHeaderRow, type GroupHeaderProps } from "@/components/tunnels/TunnelGroupSection";
 import { TunnelGroupDialogs } from "@/components/tunnels/TunnelGroupDialogs";
+import { BulkConfigModal } from "@/components/sshconfig/BulkConfigModal";
 import { sectionKey, useTunnelGroupsUi } from "@/hooks/useTunnelGroupsUi";
 import { groupOf, groupSections, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, type Section } from "@/lib/groups";
 
@@ -72,6 +73,8 @@ export default function TunnelsPage() {
     const [viewMode, setViewMode] = useViewMode("tunnels-view");
     const [filter, setFilter] = useState<TunnelFilter>("all");
     const [query, setQuery] = useState("");
+    // 多台的 SSH config（標題列按鈕）。/ The bulk SSH config (header button).
+    const [bulkConfigOpen, setBulkConfigOpen] = useState(false);
 
     const isOnline = (tunnel: Tunnel) => portsMap[String(tunnel.reverse_port)] === true;
     // 我的通道群組（每個人自己的資料夾）。/ My tunnel groups (personal folders).
@@ -229,6 +232,12 @@ export default function TunnelsPage() {
                             <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
                             {t("common.refresh")}
                         </Button>
+                        {tunnels.length > 0 && (
+                            <Button variant="outline" onClick={() => setBulkConfigOpen(true)} title={t("config.bulk.openHint")}>
+                                <FileCode2 size={16} />
+                                {t("config.bulk.open")}
+                            </Button>
+                        )}
                         {canCreate && (
                             <Button asChild>
                                 <Link href="/tunnels/create" prefetch={false}>
@@ -414,8 +423,18 @@ export default function TunnelsPage() {
                 tunnels={tunnels}
                 fetchData={fetchData}
                 handleLeaveTunnel={handleLeaveTunnel}
+                onBulkConfig={() => setBulkConfigOpen(true)}
             />
             <TunnelGroupDialogs ui={groupsUi} tunnels={tunnels} health={(tn) => liveHealth(tn, isOnline(tn))} />
+            {bulkConfigOpen && (
+                <BulkConfigModal
+                    onClose={() => setBulkConfigOpen(false)}
+                    tunnels={tunnels}
+                    health={(tn) => liveHealth(tn, isOnline(tn))}
+                    groups={groupsUi.groups}
+                    shownIds={filtering ? visible.map((tn) => tn.id) : null}
+                />
+            )}
         </div>
     );
 }

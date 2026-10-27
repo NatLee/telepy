@@ -16,9 +16,11 @@ interface TunnelModalsProps {
     tunnels: Tunnel[];
     fetchData: () => void;
     handleLeaveTunnel: (tunnelId: number, name: string) => void;
+    /** 從單台的 SSH config 跳到多台的。/ Switch from one device's SSH config to the bulk one. */
+    onBulkConfig?: () => void;
 }
 
-export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel }: TunnelModalsProps) {
+export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel, onBulkConfig }: TunnelModalsProps) {
     const { t, tn } = useI18n();
     const {
         configModal, setConfigModal,
@@ -37,6 +39,13 @@ export function TunnelModals({ modals, tunnels, fetchData, handleLeaveTunnel }: 
                 isOpen={configModal.isOpen}
                 onClose={() => setConfigModal({ isOpen: false, tunnelId: null })}
                 tunnelId={configModal.tunnelId}
+                onBulk={
+                    onBulkConfig &&
+                    (() => {
+                        setConfigModal({ isOpen: false, tunnelId: null });
+                        onBulkConfig();
+                    })
+                }
             />
             <ServerScriptModal
                 isOpen={scriptModal.isOpen}

@@ -52,6 +52,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/reverse/create/key/{token}", vec!["post"]),
         ("/tunnels/share/{id}", vec!["post"]),
         ("/tunnels/server/script/{kind}/{id}/{ssh_port}", vec!["get"]),
+        ("/tunnels/server/config", vec!["get"]),
         ("/api/sftp/upload/{id}/{username}", vec!["post"]),
         ("/api/reverse/server/{id}/remote-browser/start", vec!["post"]),
         ("/api/credentials", vec!["get", "post"]),

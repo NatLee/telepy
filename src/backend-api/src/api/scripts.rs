@@ -1,6 +1,6 @@
 //! `/tunnels/server/config/*`、`/tunnels/server/script/*`：ssh config 與六種連線腳本、一次性 token。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -25,6 +25,7 @@ const SERVER_STEM: &str = "# ========================================\n# Reverse
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(config))
+        .routes(routes!(config_many))
         .routes(routes!(one_time_token))
         .routes(routes!(one_time_script))
         .routes(routes!(script))
@@ -52,6 +53,61 @@ fn clean_key_path(raw: Option<&String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// ~/.ssh/config 的伺服器那一半：`Host telepy-ssh-server` 區塊加上筆電要存的東西（單台與多台共用）。
+/// The server half of the ~/.ssh/config: the `Host telepy-ssh-server` stanza plus what the laptop saves (shared by
+/// the single and the bulk config).
+struct ServerPart {
+    /// 標題 + 伺服器區塊。/ Banner + server stanza.
+    text: String,
+    /// 回應裡除了裝置以外的欄位。/ The response fields that are not about devices.
+    fields: serde_json::Map<String, Value>,
+}
+
+fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>) -> ApiResult<ServerPart> {
+    let domain = server_domain(headers, state);
+    let gateway_keys = state.gateway.host_public_keys();
+    // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
+    // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
+    let via_web = super::join::parse_transport(transport)? == "websocket";
+    let base = crate::oauth::issuer(state.config.public_url.as_deref(), headers);
+    let ws_url = super::join::ws_url(&base);
+    let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
+    let mut text = String::from(SERVER_STEM);
+    text.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
+    let server = json!({ "alias": scripts::SERVER_ALIAS, "host": domain, "port": state.config.reverse_server_ssh_port });
+    // 筆電要存的 known_hosts（`HostKeyAlias` 的別名 + gateway 的 host key）；gateway 沒有金鑰時是空字串。
+    // The known_hosts the laptop saves (alias for `HostKeyAlias` + the gateway's host keys); empty without gateway keys.
+    let known_hosts = scripts::known_hosts_lines(&scripts::gateway_alias(&domain, &state.config.reverse_server_ssh_port), &gateway_keys);
+    let Value::Object(fields) = json!({
+        "server": server,
+        "known_hosts": known_hosts, "known_hosts_path": scripts::LAPTOP_KNOWN_HOSTS,
+        "transport": if via_web { "websocket" } else { "ssh" },
+        "ws_url": ws_url,
+        "ws_client_url": format!("{base}/api/join/telepy-ws.py"),
+        "ws_client_path": scripts::WS_CLIENT_PATH,
+    }) else {
+        unreachable!()
+    };
+    Ok(ServerPart { text, fields })
+}
+
+/// 一台裝置的 Host 區塊（附在 `out` 後面）與給前端的別名清單。`used` = 已經用掉的別名（多台時避免重複）。
+/// One device's Host stanzas (appended to `out`) and the alias list for the frontend; `used` = aliases taken already.
+fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], used: &mut HashSet<String>) -> Vec<Value> {
+    let names: Vec<&str> = accounts.iter().map(|u| u.username.as_str()).collect();
+    let aliases = scripts::device_aliases(&t.host_friendly_name, &names, used);
+    // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
+    // Structured fields for the frontend command sheet (commands must use the exact Host aliases above).
+    accounts
+        .iter()
+        .zip(aliases)
+        .map(|(u, alias)| {
+            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name));
+            json!({ "alias": alias, "username": u.username, "username_id": u.id })
+        })
+        .collect()
+}
+
 /// `ReverseServerAuthorizedKeysConfig`
 #[utoipa::path(get, path = "/tunnels/server/config/{id}", tag = "Script", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username_id" = Option<i64>, Query, description = "Render the client stanza for one target username only")), responses((status = 200, description = "~/.ssh/config stanzas (server + one per target username)", body = super::schemas::ConfigResponse), (status = 404, body = super::schemas::ErrorBody)))]
 async fn config(
@@ -62,16 +118,7 @@ async fn config(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let t = viewable_tunnel(&state, user.id, id).await?;
-    let domain = server_domain(&headers, &state);
-    let gateway_keys = state.gateway.host_public_keys();
-    // SSH over WebSocket（筆電只能出網頁 port）：伺服器區塊多一行 ProxyCommand，筆電要先存 telepy-ws.py。
-    // SSH over WebSocket for laptops that can only reach the web port: the server stanza gets a ProxyCommand.
-    let via_web = super::join::parse_transport(q.get("transport").cloned())? == "websocket";
-    let base = crate::oauth::issuer(state.config.public_url.as_deref(), &headers);
-    let ws_url = super::join::ws_url(&base);
-    let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
-    let mut out = String::from(SERVER_STEM);
-    out.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
+    let ServerPart { text: mut out, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
 
     let all = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let usernames_list: Vec<Value> = all
@@ -85,27 +132,78 @@ async fn config(
     if !selected.is_empty() {
         out.push_str(CLIENT_STEM);
     }
-    let multi = selected.len() > 1;
-    // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
-    // Structured fields for the frontend command sheet (commands must use the exact Host aliases above).
-    let mut hosts: Vec<Value> = Vec::with_capacity(selected.len());
-    for u in selected {
-        let alias = if multi { format!("{}-{}", t.host_friendly_name, u.username) } else { t.host_friendly_name.clone() };
-        out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name));
-        hosts.push(json!({ "alias": scripts::sanitize_host_alias(&alias), "username": u.username, "username_id": u.id }));
+    let hosts = push_device_stanzas(&mut out, &t, &selected, &mut HashSet::new());
+    fields.insert("config".into(), json!(out));
+    fields.insert("usernames".into(), json!(usernames_list));
+    fields.insert("hosts".into(), json!(hosts));
+    fields.insert("reverse_port".into(), json!(t.reverse_port));
+    Ok(Json(Value::Object(fields)))
+}
+
+/// 多台一次：一個伺服器區塊 + 每台裝置的區塊，依裝置名稱排序。`ids` 沒給 = 我能登入的每一台；給了就只挑那些
+/// （看不到的 id 直接略過，不透露存在與否）。`accounts=default`（預設）= 每台一個 Host，用隧道的預設帳號（不能用就用
+/// 第一個），別名就是裝置名稱；`accounts=all` = 每個帳號一個，跟單台的「全部帳號」同一套別名。沒有任何帳號的裝置列在
+/// `skipped`。
+/// Several devices at once: one server stanza plus every device's stanzas, sorted by device name. Without `ids`:
+/// every device I can log in to; with them, just those (ids I can't see are skipped silently). `accounts=default`
+/// (the default) = one Host per device with the tunnel's default account (else the first) and the device name as the
+/// alias; `accounts=all` = one per account, with the single config's aliases. Devices without an account for me are
+/// listed in `skipped`.
+#[utoipa::path(get, path = "/tunnels/server/config", tag = "Script", security(("bearer" = [])), params(("ids" = Option<String>, Query, description = "Comma-separated tunnel ids (default: every tunnel you can log in to)"), ("accounts" = Option<String>, Query, description = "default (one Host per device) | all (one Host per account)"), ("transport" = Option<String>, Query, description = "ssh | websocket")), responses((status = 200, description = "~/.ssh/config stanzas (server + every chosen device)", body = super::schemas::BulkConfigResponse), (status = 400, body = super::schemas::ErrorBody)))]
+async fn config_many(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Query(q): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    let every_account = match q.get("accounts").map(|s| s.trim()) {
+        None | Some("") | Some("default") => false,
+        Some("all") => true,
+        Some(_) => return Err(ApiError::field("accounts", "Use \"default\" or \"all\".")),
+    };
+    let wanted: Option<HashSet<i64>> = match q.get("ids").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(s) => Some(
+            s.split(',')
+                .map(|p| p.trim().parse::<i64>())
+                .collect::<Result<_, _>>()
+                .map_err(|_| ApiError::field("ids", "A comma-separated list of tunnel ids."))?,
+        ),
+    };
+    let ServerPart { text: mut out, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
+
+    let mut tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
+    if let Some(w) = &wanted {
+        tunnels.retain(|t| w.contains(&t.id));
     }
-    let server = json!({ "alias": "telepy-ssh-server", "host": domain, "port": state.config.reverse_server_ssh_port });
-    // 筆電要存的 known_hosts（`HostKeyAlias` 的別名 + gateway 的 host key）；gateway 沒有金鑰時是空字串。
-    // The known_hosts the laptop saves (alias for `HostKeyAlias` + the gateway's host keys); empty without gateway keys.
-    let known_hosts = scripts::known_hosts_lines(&scripts::gateway_alias(&domain, &state.config.reverse_server_ssh_port), &gateway_keys);
-    Ok(Json(json!({
-        "config": out, "usernames": usernames_list, "server": server, "hosts": hosts, "reverse_port": t.reverse_port,
-        "known_hosts": known_hosts, "known_hosts_path": scripts::LAPTOP_KNOWN_HOSTS,
-        "transport": if via_web { "websocket" } else { "ssh" },
-        "ws_url": ws_url,
-        "ws_client_url": format!("{base}/api/join/telepy-ws.py"),
-        "ws_client_path": scripts::WS_CLIENT_PATH,
-    })))
+    tunnels.sort_by(|a, b| a.host_friendly_name.to_lowercase().cmp(&b.host_friendly_name.to_lowercase()).then(a.id.cmp(&b.id)));
+
+    let mut used: HashSet<String> = HashSet::from([scripts::SERVER_ALIAS.to_string()]);
+    let mut listed = Vec::new();
+    let mut skipped = Vec::new();
+    for t in &tunnels {
+        let allowed = permissions::allowed_usernames(&state.db, user.id, t).await?;
+        if allowed.is_empty() {
+            skipped.push(json!({ "id": t.id, "name": t.host_friendly_name, "reason": "no_accounts" }));
+            continue;
+        }
+        let chosen: Vec<_> = if every_account {
+            allowed.iter().collect()
+        } else {
+            vec![allowed.iter().find(|u| Some(u.id) == t.default_username_id).unwrap_or(&allowed[0])]
+        };
+        if listed.is_empty() {
+            out.push_str(CLIENT_STEM);
+        }
+        let hosts = push_device_stanzas(&mut out, t, &chosen, &mut used);
+        let usernames: Vec<Value> = allowed.iter().map(|u| json!({ "id": u.id, "username": u.username })).collect();
+        listed.push(json!({ "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port, "hosts": hosts, "usernames": usernames }));
+    }
+    fields.insert("config".into(), json!(out));
+    fields.insert("accounts".into(), json!(if every_account { "all" } else { "default" }));
+    fields.insert("tunnels".into(), json!(listed));
+    fields.insert("skipped".into(), json!(skipped));
+    Ok(Json(Value::Object(fields)))
 }
 
 /// `transport=websocket` 時腳本要的兩個位址 (ws url, 小程式 url)。/ The carrier's URLs when the WebSocket transport is asked for.

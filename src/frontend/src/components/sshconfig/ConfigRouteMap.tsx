@@ -8,7 +8,7 @@
  * trip. Stacks vertically on phones.
  */
 import React from "react";
-import { ChevronDown, ChevronRight, Cpu, Laptop, Lock } from "lucide-react";
+import { Boxes, ChevronDown, ChevronRight, Cpu, Laptop, Lock } from "lucide-react";
 import { TelepyGlyph } from "@/components/brand/TelepyGlyph";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
@@ -24,6 +24,8 @@ interface Props {
     online: boolean | null;
     active: ConfigPart | null;
     onActive: (part: ConfigPart | null) => void;
+    /** 多台一次（多台的 SSH config）：最後一格是「N 台裝置」。/ Several devices at once: the last node reads "N devices". */
+    many?: { count: number; online: number };
 }
 
 function Badge({ n }: { n: number }) {
@@ -58,9 +60,10 @@ function Node({ tile, tileClass, name, sub, badge, part, active, onActive }: Nod
                 {tile}
                 {badge !== undefined && <Badge n={badge} />}
             </span>
+            {/* 手機直排時換行（日文標籤在放大顯示下會被截掉），桌面的窄欄才截斷。/ Wrap when stacked, truncate in the desktop columns. */}
             <div className="min-w-0">
-                <p className="truncate text-sm text-foreground">{name}</p>
-                <div className="truncate font-mono text-[0.75rem] text-muted-foreground">{sub}</div>
+                <p className="text-sm text-foreground [overflow-wrap:anywhere] sm:truncate">{name}</p>
+                <div className="font-mono text-[0.75rem] text-muted-foreground [overflow-wrap:anywhere] sm:truncate">{sub}</div>
             </div>
         </div>
     );
@@ -121,7 +124,7 @@ function Link({ kind, label, lit, dim }: { kind: "ssh" | "tunnel"; label: string
     );
 }
 
-export function ConfigRouteMap({ server, hosts, deviceName, reversePort, online, active, onActive }: Props) {
+export function ConfigRouteMap({ server, hosts, deviceName, reversePort, online, active, onActive, many }: Props) {
     const { t } = useI18n();
     const users = hosts.map((h) => h.username);
     const deviceSub: React.ReactNode = (
@@ -162,20 +165,38 @@ export function ConfigRouteMap({ server, hosts, deviceName, reversePort, online,
                 />
                 <Link
                     kind="tunnel"
-                    label={reversePort !== null ? t("config.map.tunnel", { port: reversePort }) : "Telepy"}
+                    label={many ? t("config.bulk.mapTunnels", { count: many.count }) : reversePort !== null ? t("config.map.tunnel", { port: reversePort }) : "Telepy"}
                     lit={active === "device"}
                     dim={active === "server"}
                 />
-                <Node
-                    tile={<Cpu size={22} strokeWidth={1.75} />}
-                    tileClass="bg-card text-foreground ring-border"
-                    name={hosts.length === 1 ? hosts[0].alias : deviceName}
-                    sub={deviceSub}
-                    badge={hosts.length > 0 ? 2 : undefined}
-                    part={hosts.length > 0 ? "device" : undefined}
-                    active={active}
-                    onActive={onActive}
-                />
+                {many ? (
+                    <Node
+                        tile={<Boxes size={22} strokeWidth={1.75} />}
+                        tileClass="bg-card text-foreground ring-border"
+                        name={t("config.bulk.mapDevices", { count: many.count })}
+                        sub={
+                            <span className="inline-flex max-w-full items-center gap-1.5">
+                                <span className={cn("size-1.5 shrink-0 rounded-full", many.online > 0 ? "bg-success" : "bg-muted-foreground/50")} aria-hidden />
+                                <span className="sm:truncate">{t("config.bulk.mapOnline", { online: many.online, count: many.count })}</span>
+                            </span>
+                        }
+                        badge={many.count > 0 ? 2 : undefined}
+                        part={many.count > 0 ? "device" : undefined}
+                        active={active}
+                        onActive={onActive}
+                    />
+                ) : (
+                    <Node
+                        tile={<Cpu size={22} strokeWidth={1.75} />}
+                        tileClass="bg-card text-foreground ring-border"
+                        name={hosts.length === 1 ? hosts[0].alias : deviceName}
+                        sub={deviceSub}
+                        badge={hosts.length > 0 ? 2 : undefined}
+                        part={hosts.length > 0 ? "device" : undefined}
+                        active={active}
+                        onActive={onActive}
+                    />
+                )}
             </div>
         </figure>
     );
