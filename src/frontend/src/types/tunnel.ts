@@ -38,6 +38,8 @@ export interface Tunnel {
     require_step_up?: boolean;
     /** 網頁終端機會錄影。/ Web terminal sessions are recorded. */
     record_sessions?: boolean;
+    /** 網頁終端機斷線時：user = 照每個人的保留時間、never = 一律立刻結束。/ user = each person's grace, never = end at once. */
+    terminal_detach_policy?: "user" | "never";
     /** 分享給我的這筆什麼時候結束（只在列表裡；自己的隧道或沒期限時 null）。/ When my share ends (list only; null = mine or no end). */
     share_expires_at?: string | null;
     /** owner / ADMIN：等我決定的存取申請數（只在列表裡）。/ Owner / ADMIN: access requests waiting (list only). */
@@ -200,6 +202,8 @@ export interface TunnelActionHandlers {
     onRecordings?: (tunnelId: number) => void;
     /** 指令規則頁（這條隧道）。/ The command rules page for this tunnel. */
     onCommandRules?: (tunnelId: number) => void;
+    /** 開終端機並打開工具箱。/ Open the terminal with the toolbox open. */
+    onToolbox?: (tunnelId: number) => void;
     /** 釘選 / 取消釘選（每個人自己的）。/ Pin or unpin (per user). */
     onTogglePin?: (tunnelId: number, pinned: boolean) => void;
     /** 點了某個標籤：用它篩選列表。/ A label was clicked: filter the list by it. */

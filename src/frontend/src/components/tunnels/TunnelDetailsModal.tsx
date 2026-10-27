@@ -15,6 +15,7 @@ import { TunnelConnectionsSection } from "@/components/tunnels/TunnelConnections
 import { DeviceHostKeySection } from "@/components/tunnels/DeviceHostKeySection";
 import { StepUpSetting } from "@/components/tunnels/StepUpSetting";
 import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
+import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
 import { Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ import { Field } from "@/components/ui/field";
 import { Callout } from "@/components/ui/callout";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip, Section } from "@/components/ui/section";
-import { KeyTypeBadge } from "@/components/keys/KeyCard";
+import { KeyTypeBadge } from "@/components/keys/KeyList";
 import { fingerprint, parsePublicKey } from "@/lib/sshKeys";
 import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
@@ -160,6 +161,9 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate }: Tunn
 
                     {/* 錄下網頁終端機（owner / ADMIN 可改）。/ Record web terminals (owner / ADMIN). */}
                     <RecordingSetting tunnelId={details.id} enabled={!!details.record_sessions} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
+
+                    {/* 斷線後保留網頁終端機的 shell（owner / ADMIN 可改）。/ Keep web terminal shells after a drop (owner / ADMIN). */}
+                    <TerminalDetachSetting tunnelId={details.id} policy={details.terminal_detach_policy} canManage={role === "owner" || role === "admin"} onChanged={onUpdate} />
 
                     {/* 裝置公鑰 / Device public key */}
                     <Section

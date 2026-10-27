@@ -30,6 +30,7 @@ export interface TunnelDetails {
     require_step_up?: boolean;
     /** 網頁終端機會錄影。/ Web terminal sessions are recorded. */
     record_sessions?: boolean;
+    terminal_detach_policy?: "user" | "never";
     /** 裝置的位址與基本狀況（能登入裝置的人才有，否則 null）。/ Addresses and facts (null when hidden). */
     endpoint?: TunnelEndpoint | null;
 }

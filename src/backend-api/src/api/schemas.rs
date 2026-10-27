@@ -196,6 +196,10 @@ pub struct Tunnel {
     pub require_step_up: bool,
     /// 網頁終端機會錄影（`PUT /api/reverse/server/{id}/recording`）。/ Web terminal sessions are recorded.
     pub record_sessions: bool,
+    /// 網頁終端機斷線時：user = 照使用者的保留時間、never = 一律立刻結束（`PUT /api/reverse/server/{id}/terminal-detach`）。
+    /// When a web terminal drops: user = keep the shell per the user's choice, never = always end it at once.
+    #[schema(example = "user")]
+    pub terminal_detach_policy: String,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -280,6 +284,17 @@ pub struct PresenceSession {
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
     pub client: Option<String>,
+    /// 斷線保留中的網頁終端機（否則 null）。/ A detached web terminal (null otherwise).
+    pub detached: Option<DetachedShell>,
+}
+
+/// 網頁終端機斷線後還留著 shell：從何時起、何時結束。/ A web terminal whose shell is kept after a drop: since when, until when.
+#[derive(ToSchema)]
+pub struct DetachedShell {
+    #[schema(example = "2026-10-27T01:02:03.123456Z")]
+    pub since: String,
+    #[schema(example = "2026-10-27T01:07:03.123456Z")]
+    pub ends_at: String,
 }
 
 /// 裝置連上 gateway 的來源位址（gateway 看到的 TCP 來源；中間若有 L4 proxy 會是 proxy 的 IP）。
@@ -854,6 +869,12 @@ pub struct UserSettings {
     /// The site's ceiling for it (read-only; the narrower of the two applies)
     #[schema(example = "both")]
     pub desktop_clipboard_limit: String,
+    /// Seconds a web terminal's shell is kept after its browser drops: 0 | 60 | 300 | 900 | 1800 | 3600 (0 = end at once)
+    #[schema(example = 300)]
+    pub terminal_detach_secs: i64,
+    /// The site's ceiling for it (read-only; 0 = the feature is off)
+    #[schema(example = 1800)]
+    pub terminal_detach_max_secs: i64,
 }
 
 #[derive(ToSchema)]
@@ -877,6 +898,9 @@ pub struct UserSettingsPatch {
     /// both | to_remote | off (capped by the site setting at connect time)
     #[schema(example = "to_remote")]
     pub desktop_clipboard: Option<String>,
+    /// 0 | 60 | 300 | 900 | 1800 | 3600 (capped by the site setting and the tunnel's policy)
+    #[schema(example = 300)]
+    pub terminal_detach_secs: Option<i64>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default
@@ -2624,6 +2648,8 @@ pub struct LiveSession {
     pub client: Option<String>,
     /// kind = ai: interactive shells open on the agent's session
     pub shells: Option<i64>,
+    /// kind = terminal: the shell is kept after its browser dropped, until `ends_at`
+    pub detached: Option<DetachedShell>,
     pub mine: bool,
 }
 
@@ -2669,6 +2695,14 @@ pub struct RecordingList {
 pub struct RecordingSetting {
     pub enabled: bool,
     pub reauth: Option<MfaProof>,
+}
+
+/// 隧道的網頁終端機斷線政策：user = 照每個人的選擇（受站台上限）、never = 斷線就結束。
+/// A tunnel's web terminal detach policy: user = each person's choice (within the site ceiling), never = end at once.
+#[derive(ToSchema)]
+pub struct TerminalDetachPolicy {
+    #[schema(example = "never")]
+    pub policy: String,
 }
 
 // ---------------------------------------------------------------- command rules
@@ -2972,6 +3006,86 @@ pub struct WebhookTestResult {
 pub struct WebhookSecret {
     /// `whsec_…`（Standard Webhooks）。/ `whsec_…` (Standard Webhooks).
     pub secret: String,
+}
+
+// ---------------------------------------------------------------- toolbox (command snippets)
+
+/// 片段要問的變數。秘密變數沒有預設值（值永遠不存）。/ A variable a snippet asks for; a secret one never has a default.
+#[derive(ToSchema)]
+pub struct SnippetVariable {
+    /// `$name` / `${name}` 裡的名稱。/ The name used as `$name` / `${name}`.
+    pub name: String,
+    pub label: String,
+    pub default: String,
+    pub secret: bool,
+}
+
+/// 工具箱裡的一個指令片段。/ A command snippet in the toolbox.
+#[derive(ToSchema)]
+pub struct Snippet {
+    pub id: i64,
+    /// user（自己的）/ tunnel（這條隧道的）/ site（全站）。/ user (your own), tunnel (this tunnel's) or site (site-wide).
+    pub scope: String,
+    pub tunnel_id: Option<i64>,
+    pub name: String,
+    pub command: String,
+    pub description: String,
+    pub variables: Vec<SnippetVariable>,
+    /// 送出前先問一次。/ Ask before running.
+    pub confirm: bool,
+    pub sort_order: i64,
+    pub use_count: i64,
+    pub last_used_at: Option<String>,
+    /// 你能不能改它。/ Whether you may change it.
+    pub can_edit: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(ToSchema)]
+pub struct SnippetTunnel {
+    pub id: i64,
+    pub name: String,
+    /// 能用這條隧道的片段（能開它的終端機）。/ May use this tunnel's snippets (can open its terminal).
+    pub can_use: bool,
+    /// owner / ADMIN：能新增 / 修改它的片段。/ Owner / ADMIN: may add and change its snippets.
+    pub can_edit: bool,
+}
+
+/// `GET /api/snippets`：自己的 + 那條隧道的 + 全站的。/ Your own + that tunnel's + site-wide.
+#[derive(ToSchema)]
+pub struct SnippetList {
+    pub snippets: Vec<Snippet>,
+    /// 帶了 `tunnel_id` 才有。/ Present with `tunnel_id`.
+    pub tunnel: Option<SnippetTunnel>,
+    pub can_edit_site: bool,
+    /// 每個範圍最多幾個。/ Snippets per scope at most.
+    pub limit: i64,
+}
+
+/// 新增或修改片段（修改時只帶要改的欄位；`scope` / `tunnel_id` 只在新增時用）。
+/// Create or change a snippet (send only what changes on PATCH; `scope` / `tunnel_id` only on create).
+#[derive(ToSchema)]
+pub struct SnippetInput {
+    /// user（預設）/ tunnel / site
+    pub scope: Option<String>,
+    pub tunnel_id: Option<i64>,
+    /// ≤ 60
+    pub name: Option<String>,
+    /// ≤ 4000；多行 = 每行一個 Enter。/ ≤ 4000; several lines = one Enter each.
+    pub command: Option<String>,
+    pub description: Option<String>,
+    /// ≤ 20
+    pub variables: Option<Vec<SnippetVariable>>,
+    pub confirm: Option<bool>,
+    pub sort_order: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct SnippetUse {
+    pub id: i64,
+    pub use_count: i64,
+    pub last_used_at: Option<String>,
 }
 
 // ---------------------------------------------------------------- groups

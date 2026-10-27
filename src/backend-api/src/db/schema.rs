@@ -354,6 +354,28 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：工具箱的指令片段（scope user = 某人的、tunnel = 某條隧道的、site = 全站）。
+    // Toolbox command snippets (scope user = someone's own, tunnel = one tunnel's, site = site-wide).
+    (
+        "telepy_snippet",
+        r#"CREATE TABLE "telepy_snippet" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "scope" varchar(8) NOT NULL,
+            "user_id" integer NULL,
+            "tunnel_id" integer NULL,
+            "name" varchar(60) NOT NULL,
+            "command" text NOT NULL,
+            "description" text NOT NULL,
+            "variables" text NOT NULL,
+            "confirm" bool NOT NULL DEFAULT 0,
+            "sort_order" integer NOT NULL DEFAULT 0,
+            "use_count" integer NOT NULL DEFAULT 0,
+            "last_used_at" datetime NULL,
+            "created_by_id" integer NULL,
+            "created_at" datetime NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：被規則擋下或送去核准的指令（誰、哪裡、哪條規則、結果）。
     // Commands a rule blocked or held for approval (who, where, which rule, outcome).
     (
@@ -767,6 +789,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_user" ON "telepy_snippet" ("scope", "user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_tunnel" ON "telepy_snippet" ("scope", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_user" ON "telepy_webhook" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_tunnel_tunnel" ON "telepy_webhook_tunnel" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_delivery_hook" ON "telepy_webhook_delivery" ("webhook_id", "id")"#,
@@ -891,6 +915,11 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_terminal_profile", "ligatures", "bool NULL"),
     // 遠端桌面剪貼簿方向（個人選擇；站台的 desktop_clipboard 是上限）。/ Desktop clipboard direction (the site setting caps it).
     ("user_management_usersettings", "desktop_clipboard", "varchar(16) NOT NULL DEFAULT 'both'"),
+    // 網頁終端機斷線後 shell 留多久（秒，0 = 斷線就結束）；站台上限（0 = 功能關閉）；隧道政策（user / never）。
+    // How long a web terminal's shell outlives a dropped socket (0 = end at once); the site ceiling (0 = off); the tunnel's policy.
+    ("user_management_usersettings", "terminal_detach_secs", "integer NOT NULL DEFAULT 0"),
+    ("site_settings_sitesettings", "terminal_detach_max_secs", "integer NOT NULL DEFAULT 1800"),
+    ("authorized_keys_reverseserverauthorizedkeys", "terminal_detach_policy", "varchar(8) NOT NULL DEFAULT 'user'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

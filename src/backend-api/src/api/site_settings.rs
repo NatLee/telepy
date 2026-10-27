@@ -55,6 +55,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "mfa_require_passkey", kind: Kind::Bool, label: "Require a passkey", description: "要求每個帳號都至少註冊一把 passkey。還沒註冊的使用者登入後只能先完成註冊,才能使用其他功能。passkey 需要以網域名稱(不是 IP)開啟網站。開啟前你自己的帳號必須已經有 passkey。變更後立即生效。" },
     FieldMeta { name: "recording_retention_days", kind: Kind::Int, label: "Keep terminal recordings (days)", description: "開了「錄下網頁終端機」的隧道，錄影檔要留幾天；超過就連檔案一起刪掉（每小時清一次）。設 0 = 一直留。" },
     FieldMeta { name: "command_approval_timeout", kind: Kind::Int, label: "Command approval timeout (seconds)", description: "指令規則要求核准時，等 owner / ADMIN 多久(秒)；沒人回應就當作拒絕，終端機那一行被取消。核准後 agent 的同一個指令 10 分鐘內可以跑一次。" },
+    FieldMeta { name: "terminal_detach_max_secs", kind: Kind::Int, label: "Keep detached terminals for at most (seconds)", description: "網頁終端機斷線(換網路、筆電睡著、重新整理)後,shell 最多留多久等同一個人接回來(秒)。每個人在偏好設定裡選自己要留多久(預設斷線就結束),實際用的是兩者較小的那個;隧道也可以設成一律斷線就結束。設 0 = 關閉這個功能。0 到 86400。" },
     FieldMeta { name: "signin_lifetime", kind: Kind::Int, label: "Stay signed in for (seconds)", description: "網頁登入沒有任何造訪多久後要重新登入(秒)。只要有來,效期就從那時重新起算(分頁開著時瀏覽器會在背景自動續期),所以常用的人不會被登出;登出則立刻結束。300(5 分鐘)到 31536000(365 天)。" },
     FieldMeta { name: "signin_access_lifetime", kind: Kind::Int, label: "Access token lifetime (seconds)", description: "每顆短效 access token 的有效時間(秒);到期前瀏覽器會自動用登入 session 換一顆新的,使用者不會察覺。越短,外洩的 token 能用的時間越短。60(1 分鐘)到 86400(24 小時)。" },
     FieldMeta { name: "ai_max_sessions_per_user", kind: Kind::Int, label: "AI Sessions per User", description: "每位使用者同時可開的 AI SSH session 數上限(所有已授權的 app 合計)。設 0 = 不允許 AI 開 session。下次開 session 時生效。" },
@@ -97,6 +98,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("command_approval_timeout".into(), json!(s.command_approval_timeout));
     m.insert("signin_lifetime".into(), json!(s.signin_lifetime));
     m.insert("signin_access_lifetime".into(), json!(s.signin_access_lifetime));
+    m.insert("terminal_detach_max_secs".into(), json!(s.terminal_detach_max_secs));
     Value::Object(m)
 }
 
@@ -213,6 +215,7 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         }
         ("notify_max_webhooks", SettingValue::Int(n)) if !(0..=100).contains(n) => Err(ApiError::field(name, "Must be between 0 and 100.")),
         ("command_approval_timeout", SettingValue::Int(n)) if !(30..=86_400).contains(n) => Err(ApiError::field(name, "Must be between 30 and 86400 seconds.")),
+        ("terminal_detach_max_secs", SettingValue::Int(n)) if !crate::terminal_detach::SITE_MAX_RANGE.contains(n) => Err(ApiError::field(name, "Must be between 0 and 86400 seconds.")),
         ("signin_lifetime", SettingValue::Int(n)) if !crate::auth::sessions::SIGNIN_LIFETIME_RANGE.contains(n) => {
             Err(ApiError::field(name, "Must be between 300 seconds (5 minutes) and 31536000 seconds (365 days)."))
         }

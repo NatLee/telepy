@@ -54,7 +54,7 @@ const SETTING_CHOICES: Record<string, { value: string; label: TranslationKey }[]
 };
 
 /** 以秒為單位的站台設定(逾時 / 存活時間)。/ Site settings measured in seconds. */
-const SECONDS_KEY = /_(timeout|lifetime|delay)$/;
+const SECONDS_KEY = /_(timeout|lifetime|delay|secs)$/;
 
 /** 秒數設定的單位(由小到大)。/ Units for seconds-based settings, smallest first. */
 type DurationUnit = "seconds" | "minutes" | "hours" | "days";
@@ -126,14 +126,15 @@ type SiteTabId = "general" | "signin" | "browser" | "desktop" | "ai" | "notify" 
 type TabId = SiteTabId | "users";
 
 const SITE_TAB_KEYS: Record<SiteTabId, (key: string) => boolean> = {
-    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_") && !k.startsWith("signin_") && !k.startsWith("mfa_"),
+    general: (k) => !k.startsWith("remote_browser") && !k.startsWith("ai_") && !k.startsWith("notify_") && !k.startsWith("desktop_") && !k.startsWith("command_") && !k.startsWith("terminal_") && !k.startsWith("signin_") && !k.startsWith("mfa_"),
     // 登入效期與必要的第二因素。/ Sign-in lifetimes and the required second factors.
     signin: (k) => k.startsWith("signin_") || k.startsWith("mfa_"),
     browser: (k) => k.startsWith("remote_browser"),
     desktop: (k) => k.startsWith("desktop_"),
     ai: (k) => k.startsWith("ai_"),
     notify: (k) => k.startsWith("notify_"),
-    commands: (k) => k.startsWith("command_"),
+    // 終端機與指令規則：斷線保留上限 + 核准等待時間。/ Terminal & commands: the detach ceiling and the approval wait.
+    commands: (k) => k.startsWith("command_") || k.startsWith("terminal_"),
 };
 
 const TAB_IDS: TabId[] = ["general", "signin", "browser", "desktop", "ai", "notify", "commands", "users"];

@@ -57,6 +57,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     rustdesk_close: { key: "logs.event.rustdesk_close", tone: "secondary", category: "session" },
     session_ended: { key: "logs.event.session_ended", tone: "warning", category: "session" },
     recording_setting: { key: "logs.event.recording_setting", tone: "outline", category: "change" },
+    terminal_detach_setting: { key: "logs.event.terminal_detach_setting", tone: "outline", category: "change" },
     recording_deleted: { key: "logs.event.recording_deleted", tone: "outline", category: "change" },
     step_up_setting: { key: "logs.event.step_up_setting", tone: "outline", category: "change" },
     access_request: { key: "logs.event.access_request", tone: "outline", category: "change" },
