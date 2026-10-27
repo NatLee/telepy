@@ -20,7 +20,7 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, ClipboardPaste, Globe, LayoutGrid, List, Monitor, Moon, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, KeySquare } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -43,6 +43,8 @@ import { useThemePreference } from "@/hooks/useThemePreference";
 import { useUiScale } from "@/hooks/useUiScale";
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
+import { useViewModes } from "@/hooks/useViewMode";
+import { VIEW_PAGES, viewModeOf } from "@/lib/viewModes";
 import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed } from "@/lib/desktop";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
 import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
@@ -83,6 +85,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
     const customSchemes = useCustomSchemes();
     const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
+    const [viewModes, setViewModeFor] = useViewModes();
     const [tab, setTab] = useState<PrefsTab>("general");
     // 從別的頁指定分頁打開。/ Opened at a given tab from another page.
     React.useEffect(() => {
@@ -235,6 +238,27 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                     {/* 網頁終端機斷線後 shell 留多久（存在帳號上；站台上限、裝置政策會再收窄）。
                         How long a web terminal's shell is kept after a drop (on the account; narrowed by the site and device). */}
                     <TerminalDetachPref />
+
+                    {/* 各頁的卡片 / 清單（存在帳號上；頁面上的切換鈕也改這裡）。/ Card / list per page (on the account; the pages' switches change it too). */}
+                    <Section icon={<LayoutGrid />} title={t("prefs.views")} description={t("prefs.viewsDescription")}>
+                        <div className="space-y-2">
+                            {VIEW_PAGES.map((p) => (
+                                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+                                    <span className="text-sm text-foreground">{t(p.label)}</span>
+                                    <Segmented
+                                        size="sm"
+                                        value={viewModeOf(viewModes, p.id)}
+                                        onChange={(m) => setViewModeFor(p.id, m)}
+                                        aria-label={t(p.label)}
+                                        options={[
+                                            { value: "card", label: t("ui.cardView"), icon: <LayoutGrid size={14} /> },
+                                            { value: "list", label: t("ui.listView"), icon: <List size={14} /> },
+                                        ]}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    </Section>
 
                     {/* 遠端桌面剪貼簿（存在帳號上；超過站台上限的選項關掉）。/ Remote desktop clipboard (on the account; choices above the site's limit are disabled). */}
                     <Section icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>

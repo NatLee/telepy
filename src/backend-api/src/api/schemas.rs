@@ -150,6 +150,9 @@ pub struct UserProfile {
     pub terminal_bold: String,
     /// Programming ligatures in the web terminal (fonts that have them)
     pub terminal_ligatures: bool,
+    /// Card or list view per page (`tunnels`, `key_groups`, …); pages missing here use their default
+    #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
+    pub view_modes: serde_json::Value,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
     /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
@@ -939,6 +942,9 @@ pub struct UserSettings {
     /// The site's ceiling for it (read-only; 0 = the feature is off)
     #[schema(example = 1800)]
     pub terminal_detach_max_secs: i64,
+    /// Card or list view per page; pages missing here use their default
+    #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
+    pub view_modes: serde_json::Value,
 }
 
 #[derive(ToSchema)]
@@ -965,6 +971,9 @@ pub struct UserSettingsPatch {
     /// 0 | 60 | 300 | 900 | 1800 | 3600 (capped by the site setting and the tunnel's policy)
     #[schema(example = 300)]
     pub terminal_detach_secs: Option<i64>,
+    /// Replaces the whole map: page id (lowercase letters, digits, `_`; up to 32) → `card` | `list`, at most 20
+    #[schema(value_type = Option<Object>, example = json!({"tunnels": "list", "key_groups": "card"}))]
+    pub view_modes: Option<serde_json::Value>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default

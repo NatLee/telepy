@@ -6,5 +6,5 @@
 export interface ViewToggleProps {
     value: "list" | "card";
     onChange: (value: "list" | "card") => void;
-    storageKey?: string;
+    className?: string;
 }

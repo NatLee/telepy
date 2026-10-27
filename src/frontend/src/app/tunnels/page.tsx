@@ -31,6 +31,7 @@ import { groupOf, groupSections, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, type Sec
 
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
@@ -70,7 +71,11 @@ export default function TunnelsPage() {
         }
     } = useTunnelsPage();
 
-    const [viewMode, setViewMode] = useViewMode("tunnels-view");
+    // 卡片 / 清單跟著帳號（偏好設定也能改）；1200px 以下表格放不下，一律卡片（不改掉選擇）。
+    // Card / list follows the account (also in Preferences); below 1200px the table doesn't fit, so cards (the choice stays).
+    const [preferredView, setViewMode] = useViewMode("tunnels");
+    const wide = useMediaQuery("(min-width: 1200px)");
+    const viewMode = wide ? preferredView : "card";
     const [filter, setFilter] = useState<TunnelFilter>("all");
     const [query, setQuery] = useState("");
     // 多台的 SSH config（標題列按鈕）。/ The bulk SSH config (header button).
@@ -321,7 +326,7 @@ export default function TunnelsPage() {
                         }
                         viewToggle={
                             <div className="hidden min-[1200px]:flex items-center">
-                                <ViewToggle value={viewMode} onChange={setViewMode} storageKey="tunnels-view" />
+                                <ViewToggle value={viewMode} onChange={setViewMode} />
                             </div>
                         }
                     />
