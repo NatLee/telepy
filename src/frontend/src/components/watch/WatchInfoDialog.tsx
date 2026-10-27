@@ -17,7 +17,7 @@ export function WatchInfoDialog({ isOpen, onClose, ctx }: { isOpen: boolean; onC
             title={t("watch.flow.title")}
             description={t("watch.flow.description")}
             icon={<Eye />}
-            size="3xl"
+            size="5xl"
             footer={<Button onClick={onClose}>{t("common.close")}</Button>}
         >
             <WatchFlow ctx={ctx} />

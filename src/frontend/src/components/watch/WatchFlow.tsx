@@ -97,7 +97,7 @@ export function WatchFlow({ ctx }: { ctx: WatchFlowContext }) {
         { icon: <Users size={15} />, key: "watch.flow.factOneLogin", vars: { account } },
     ];
     return (
-        <div className="space-y-5">
+        <div className="@container/watch space-y-5">
             <FlowNow failed={ctx.phase === "refused"}>{t(NOW[ctx.phase], { user })}</FlowNow>
 
             {/* 上排：他們 ─ Telepy ─ 裝置；Telepy 正下方往下一條線到你。/ Top row, then a branch straight down from Telepy. */}
@@ -131,14 +131,15 @@ export function WatchFlow({ ctx }: { ctx: WatchFlowContext }) {
                 </div>
             </div>
 
-            <ul className="space-y-2 border-t border-border pt-4 text-sm">
+            {/* 寬的時候分兩欄：五條說明疊成一長串會把對話框撐出一點點捲軸。/ Two columns when wide: five stacked notes pushed the dialog just past the window. */}
+            <ul className="grid gap-2 border-t border-border pt-4 text-sm @3xl/watch:grid-cols-2">
                 {facts.map((f) => (
                     <li key={f.key} className={cn("flex gap-2.5 rounded-md border px-3 py-2", f.lit ? "border-primary/40 bg-primary/5 text-foreground" : "border-transparent text-muted-foreground")}>
                         <span className="mt-0.5 shrink-0" aria-hidden>{f.icon}</span>
                         <span>{t(f.key, f.vars)}</span>
                     </li>
                 ))}
-                <li className="flex gap-2.5 px-3 text-muted-foreground">
+                <li className="flex gap-2.5 px-3 text-muted-foreground @3xl/watch:col-span-2">
                     <MonitorSmartphone size={15} className="mt-0.5 shrink-0" aria-hidden />
                     <span>{t("watch.flow.factWho")}</span>
                 </li>

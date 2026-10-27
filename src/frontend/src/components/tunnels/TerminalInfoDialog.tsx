@@ -17,7 +17,7 @@ export function TerminalInfoDialog({ isOpen, onClose, ctx }: { isOpen: boolean; 
             title={t("terminal.flow.title")}
             description={t("terminal.flow.description")}
             icon={<Info />}
-            size="4xl"
+            size="5xl"
             footer={<Button onClick={onClose}>{t("common.close")}</Button>}
         >
             <TerminalFlow ctx={ctx} />

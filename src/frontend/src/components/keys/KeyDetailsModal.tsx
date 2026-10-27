@@ -291,7 +291,7 @@ function KeyDetailsBody({
                 </span>
             }
             icon={<KeyRound />}
-            size="4xl"
+            size="5xl"
             fixedHeight
             nav={
                 <div className="space-y-4">

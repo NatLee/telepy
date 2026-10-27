@@ -559,7 +559,7 @@ function UserEditModal({
             description={user.email || undefined}
             icon={<UserCog />}
             isLoading={saving}
-            size="4xl"
+            size="5xl"
             fixedHeight
             nav={
                 <div className="space-y-4">
