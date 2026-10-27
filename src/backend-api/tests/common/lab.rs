@@ -1218,7 +1218,8 @@ impl Lab {
         let id = r.json["usernames"].as_array().unwrap().iter().find(|u| u["username"] == os_user).unwrap_or_else(|| panic!("{os_user} not allowed for {}", user.username))["id"].as_i64().unwrap();
         let r = self.app.get(&format!("/tunnels/server/config/{}?username_id={id}", device.tunnel_id), Some(&user.token)).await;
         let generated = r.json["config"].as_str().unwrap().to_string();
-        let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != "telepy-ssh-server").next_back().unwrap().to_string();
+        let server_alias = r.json["server"]["alias"].as_str().unwrap().to_string();
+        let alias = generated.lines().filter_map(|l| l.trim().strip_prefix("Host ")).map(str::trim).filter(|h| *h != server_alias).next_back().unwrap().to_string();
         let path = self.write_ssh_config(user, &device.name, &generated, r.json["known_hosts"].as_str().unwrap_or_default());
         (path, alias)
     }

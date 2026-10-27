@@ -64,6 +64,16 @@ async fn one_device_many_users() {
     let r = lab.laptop_exec(&erin, &[(Hop::Tunnel(&dev), "ubuntu")], "whereami").await;
     assert_eq!(r.stdout, "ubuntu@box", "{r:?}");
     assert!(boxm.logged_in("ubuntu", &erin.key));
+    // 帳號清單：管理的人看得到每個帳號分給了幾位 sharee（bob 有 ubuntu；dave 一個都沒有）與 ADMIN 人數（erin）；sharee 看不到。
+    // The account list: managers see how many sharees hold each account and how many ADMINs there are; sharees don't.
+    let r = lab.app.get(&format!("/api/reverse/server/{}/usernames", dev.tunnel_id), Some(&alice.token)).await;
+    let shared = |name: &str| r.json["usernames"].as_array().unwrap().iter().find(|u| u["username"] == name).unwrap()["shared_with"].clone();
+    assert_eq!((shared("ubuntu"), shared("root")), (serde_json::json!(1), serde_json::json!(0)), "{}", r.text);
+    assert_eq!((r.json["admin_sharees"].clone(), r.json["can_manage"].clone()), (serde_json::json!(1), serde_json::json!(true)));
+    let r = lab.app.get(&format!("/api/reverse/server/{}/usernames", dev.tunnel_id), Some(&bob.token)).await;
+    assert_eq!(r.json["usernames"].as_array().unwrap().len(), 1, "bob sees only his allowed account: {}", r.text);
+    assert!(r.json["usernames"][0]["shared_with"].is_null() && r.json["admin_sharees"].is_null(), "{}", r.text);
+    assert_eq!(r.json["can_manage"], false);
     // API 產生的 ~/.ssh/config 原樣可用，而且釘住了 gateway 的 host key：換成別的金鑰就連不上
     // The generated config works as is and pins the gateway's host key: a different key in known_hosts and ssh refuses
     let (cfg, alias) = lab.generated_ssh_config(&alice, &dev, "root").await;

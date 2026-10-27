@@ -111,25 +111,66 @@ export function adaptForShell(stanzas: ConfigStanza[], shell: ConfigShell): Conf
 }
 
 /**
- * 建立 ~/.ssh（和 config，權限 600——群組可寫的 config 會讓 ssh 直接拒絕）、備份、拿掉舊區塊、加上新區塊。
- * `knownHosts`（後端給的 `<alias> <type> <base64>` 行）有內容時先把它存成 ~/.ssh/telepy_known_hosts：伺服器區塊用它
- * 釘住 Telepy 的主機金鑰，筆電就只會連到真的 Telepy。
- * Create ~/.ssh and the config (mode 600 — ssh refuses a group-writable config), back it up, drop old blocks,
- * append the new ones. With `knownHosts` (the backend's `<alias> <type> <base64>` lines) the command first saves
- * ~/.ssh/telepy_known_hosts, which the server stanza pins Telepy's host key with.
+ * known_hosts 行裡的別名（第一欄，去重）。/ The aliases (first field, unique) of known_hosts lines.
  */
-export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null, wsClient?: WsClient | null): string {
+function knownHostAliases(lines: string): string[] {
+    return [...new Set(lines.split("\n").map((l) => l.trim().split(/\s+/)[0]).filter(Boolean))];
+}
+
+/**
+ * 舊版共用的伺服器區塊（`telepy-ssh-server`）怎麼清：第一個寫著 `HostKeyAlias <me>` 的完整標記區塊，而且檔案裡其他
+ * 非註解行都沒有再用這個名字（ProxyCommand / ProxyJump / Host…）時才拿掉——一定是這台的，也沒有裝置區塊還指著它。
+ * 兩遍 awk：第一遍找區塊、看有沒有人用，第二遍照行號略過。CLI 的 `prune_legacy`（Rust）是同一條規則。
+ * How the old shared server block is cleaned up: the first complete marked block that says `HostKeyAlias <me>` goes
+ * only when no other non-comment line in the file names it (ProxyCommand / ProxyJump / Host …) — provably this
+ * server's, and no device block still jumps through it. Two awk passes: find the block and look for users, then skip
+ * it by line number. The CLI's `prune_legacy` (Rust) follows the same rule.
+ */
+function pruneLegacyAwk(legacy: string, me: string): string {
+    return `-v L='${legacy}' -v M='${me}' 'function u(t, n,i,W){if(t~/^[ \\t]*#/)return;n=split(t,W,/[ \\t,]+/);for(i=1;i<=n;i++)if(W[i]==L)used=1} BEGIN{O="# >>> telepy " L " >>>";C="# <<< telepy " L " <<<"} NR==FNR{if(!ce&&!st&&$0==O){st=1;bs=FNR;bn=0;mb=0;next} if(st){if($0==C){st=0;if(mb){cs=bs;ce=FNR}else{for(i=1;i<=bn;i++)u(B[i])};next} if($0~/^# >>> telepy /){st=0;for(i=1;i<=bn;i++)u(B[i])}else{B[++bn]=$0;if(tolower($1)=="hostkeyalias"&&$2==M)mb=1;next}} u($0);next} FNR==1{if(st)for(i=1;i<=bn;i++)u(B[i]);d=(ce&&!used)} !(d&&FNR>=cs&&FNR<=ce)'`;
+}
+
+/** 同一條規則的 PowerShell 版（在寫回檔案前對 `$text` 做）。/ The same rule in PowerShell, applied to `$text` before writing. */
+function pruneLegacyPowershell(legacy: string, me: string): string[] {
+    return [
+        `$L = [regex]::Escape('${legacy}'); $M = [regex]::Escape('${me}')`,
+        `$blk = [regex]::Matches($text, "(?ms)^# >>> telepy $L >>>[^\\S\\n]*\\n(?:(?!^# >>> telepy ).)*?^# <<< telepy $L <<<[^\\S\\n]*(\\n|\\z)") | Where-Object { $_.Value -match "(?m)^\\s*HostKeyAlias\\s+$M\\s*$" } | Select-Object -First 1`,
+        `if ($blk) { $rest = $text.Remove($blk.Index, $blk.Length); if ($rest -notmatch "(?m)^(?!\\s*#)[^\\n]*(?<![^\\s,])$L(?![^\\s,])") { $text = $rest } }`,
+    ];
+}
+
+/** 舊版的共用伺服器區塊名稱與這台的（`me`）；兩個一樣 = 舊版伺服器，不清。/ The old shared alias and this server's. */
+export interface LegacyServer {
+    alias: string;
+    me: string;
+}
+
+/**
+ * 建立 ~/.ssh（和 config，權限 600——群組可寫的 config 會讓 ssh 直接拒絕）、備份、拿掉舊區塊、加上新區塊。
+ * `knownHosts`（後端給的 `<alias> <type> <base64>` 行）有內容時先合併進 ~/.ssh/telepy_known_hosts：只換掉同一個別名
+ * 的舊行（別台 Telepy 的留著），伺服器區塊用它釘住 Telepy 的主機金鑰。`legacy` 有給時，最後依
+ * [`pruneLegacyAwk`] 的規則清掉舊版共用的伺服器區塊。
+ * Create ~/.ssh and the config (mode 600 — ssh refuses a group-writable config), back it up, drop old blocks,
+ * append the new ones. With `knownHosts` (the backend's `<alias> <type> <base64>` lines) they are merged into
+ * ~/.ssh/telepy_known_hosts first — only lines of the same alias are replaced, other Telepy servers' stay — and the
+ * server stanza pins Telepy's host key with them. With `legacy`, the old shared server block is cleaned up last by
+ * the rule in [`pruneLegacyAwk`].
+ */
+export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], knownHosts?: string | null, wsClient?: WsClient | null, legacy?: LegacyServer | null): string {
     const aliases = stanzas.map((s) => s.alias);
     const blocks = markedBlocks(adaptForShell(stanzas, shell));
     const hostKeys = knownHosts?.trim() ? knownHosts.trim() + "\n" : "";
+    const keyAliases = knownHostAliases(hostKeys);
+    const prune = legacy && legacy.alias && legacy.alias !== legacy.me && aliases.includes(legacy.me) ? legacy : null;
     if (shell === "posix") {
+        const kh = KNOWN_HOSTS_PATH;
         return [
             ...(wsClient ? [`mkdir -p ~/.ssh && curl -fsSL '${wsClient.url}' -o ${wsClient.path} && chmod 700 ${wsClient.path}`] : []),
             ...(hostKeys
                 ? [
-                    `mkdir -p ~/.ssh && cat > ${KNOWN_HOSTS_PATH} <<'${KNOWN_HOSTS_HEREDOC}'`,
+                    `mkdir -p ~/.ssh && touch ${kh} && chmod 600 ${kh}`,
+                    `{ awk -v t='${keyAliases.join(" ")}' 'BEGIN{n=split(t,A," ");for(i=1;i<=n;i++)K[A[i]]=1} !($1 in K)' ${kh}; cat <<'${KNOWN_HOSTS_HEREDOC}'; } > ${kh}.new && cat ${kh}.new > ${kh} && rm -f ${kh}.new`,
                     hostKeys + KNOWN_HOSTS_HEREDOC,
-                    `chmod 600 ${KNOWN_HOSTS_PATH}`,
                 ]
                 : []),
             "mkdir -p ~/.ssh && touch ~/.ssh/config && chmod 600 ~/.ssh/config \\",
@@ -137,19 +178,29 @@ export function installCommand(shell: ConfigShell, stanzas: ConfigStanza[], know
             `  && awk ${stripAwk(aliases)} ~/.ssh/config.bak > ~/.ssh/config \\`,
             `  && cat >> ~/.ssh/config <<'${HEREDOC}'`,
             blocks + HEREDOC,
+            ...(prune ? [`awk ${pruneLegacyAwk(prune.alias, prune.me)} ~/.ssh/config ~/.ssh/config > ~/.ssh/config.new && cat ~/.ssh/config.new > ~/.ssh/config && rm -f ~/.ssh/config.new`] : []),
         ].join("\n") + "\n";
     }
     // [IO.File] 讀寫：ReadAllText 會吃掉 BOM、WriteAllText 寫出不帶 BOM 的 UTF-8（Windows OpenSSH 讀到 BOM 會報錯）。
     // [IO.File]: ReadAllText drops a BOM and WriteAllText writes UTF-8 without one (Windows OpenSSH chokes on a BOM).
+    const keyList = keyAliases.map((a) => `'${a}'`).join(", ");
     return [
         `$cfg = "$HOME\\.ssh\\config"; New-Item -ItemType Directory -Force "$HOME\\.ssh" | Out-Null`,
         ...(wsClient ? [`Invoke-WebRequest -UseBasicParsing '${wsClient.url}' -OutFile "$HOME\\.ssh\\telepy-ws.py"`] : []),
-        ...(hostKeys ? [`[IO.File]::WriteAllText("$HOME\\.ssh\\telepy_known_hosts", @'`, hostKeys + "'@ + \"`n\")"] : []),
+        ...(hostKeys
+            ? [
+                `$kh = "$HOME\\.ssh\\telepy_known_hosts"; $keep = ''; if (Test-Path $kh) { $keep = ([IO.File]::ReadAllLines($kh) | Where-Object { $_.Trim() -and (@(${keyList}) -notcontains ($_.Trim() -split '\\s+')[0]) }) -join "\`n"; if ($keep) { $keep += "\`n" } }`,
+                "[IO.File]::WriteAllText($kh, $keep + @'",
+                hostKeys + "'@ + \"`n\")",
+            ]
+            : []),
         `$text = ''; if (Test-Path $cfg) { Copy-Item $cfg "$cfg.bak" -Force; $text = [IO.File]::ReadAllText($cfg) }`,
         `$text = [regex]::Replace($text, '${stripRegex(aliases)}', '')`,
         "if ($text -and -not $text.EndsWith(\"`n\")) { $text += \"`n\" }",
-        "[IO.File]::WriteAllText($cfg, $text + @'",
-        blocks + "'@ + \"`n\")",
+        "$text += @'",
+        blocks + "'@ + \"`n\"",
+        ...(prune ? pruneLegacyPowershell(prune.alias, prune.me) : []),
+        "[IO.File]::WriteAllText($cfg, $text)",
     ].join("\n") + "\n";
 }
 

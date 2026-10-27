@@ -53,12 +53,14 @@ fn clean_key_path(raw: Option<&String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// ~/.ssh/config 的伺服器那一半：`Host telepy-ssh-server` 區塊加上筆電要存的東西（單台與多台共用）。
-/// The server half of the ~/.ssh/config: the `Host telepy-ssh-server` stanza plus what the laptop saves (shared by
-/// the single and the bulk config).
+/// ~/.ssh/config 的伺服器那一半：`Host telepy-<網域>-<port>` 區塊加上筆電要存的東西（單台與多台共用）。
+/// The server half of the ~/.ssh/config: the `Host telepy-<domain>-<port>` stanza plus what the laptop saves (shared
+/// by the single and the bulk config).
 struct ServerPart {
     /// 標題 + 伺服器區塊。/ Banner + server stanza.
     text: String,
+    /// 伺服器區塊的別名（裝置區塊的 ProxyCommand 跳它）。/ The server stanza's alias (the devices' ProxyCommand target).
+    alias: String,
     /// 回應裡除了裝置以外的欄位。/ The response fields that are not about devices.
     fields: serde_json::Map<String, Value>,
 }
@@ -74,7 +76,9 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     let ws_proxy = via_web.then(|| scripts::laptop_proxy_command(&ws_url));
     let mut text = String::from(SERVER_STEM);
     text.push_str(&scripts::render_server_config(&domain, &state.config.reverse_server_ssh_port, &gateway_keys, ws_proxy.as_deref()));
-    let server = json!({ "alias": scripts::SERVER_ALIAS, "host": domain, "port": state.config.reverse_server_ssh_port });
+    let alias = scripts::server_alias(&domain, &state.config.reverse_server_ssh_port);
+    // legacy_alias：舊版的共用別名，安裝指令確定是這台的、又沒人用時會拿掉。/ The old shared alias install commands clean up.
+    let server = json!({ "alias": alias, "legacy_alias": scripts::LEGACY_SERVER_ALIAS, "host": domain, "port": state.config.reverse_server_ssh_port });
     // 筆電要存的 known_hosts（`HostKeyAlias` 的別名 + gateway 的 host key）；gateway 沒有金鑰時是空字串。
     // The known_hosts the laptop saves (alias for `HostKeyAlias` + the gateway's host keys); empty without gateway keys.
     let known_hosts = scripts::known_hosts_lines(&scripts::gateway_alias(&domain, &state.config.reverse_server_ssh_port), &gateway_keys);
@@ -88,12 +92,12 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     }) else {
         unreachable!()
     };
-    Ok(ServerPart { text, fields })
+    Ok(ServerPart { text, alias, fields })
 }
 
 /// 一台裝置的 Host 區塊（附在 `out` 後面）與給前端的別名清單。`used` = 已經用掉的別名（多台時避免重複）。
 /// One device's Host stanzas (appended to `out`) and the alias list for the frontend; `used` = aliases taken already.
-fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], used: &mut HashSet<String>) -> Vec<Value> {
+fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], server_alias: &str, used: &mut HashSet<String>) -> Vec<Value> {
     let names: Vec<&str> = accounts.iter().map(|u| u.username.as_str()).collect();
     let aliases = scripts::device_aliases(&t.host_friendly_name, &names, used);
     // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
@@ -102,14 +106,14 @@ fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::U
         .iter()
         .zip(aliases)
         .map(|(u, alias)| {
-            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name));
+            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name, server_alias));
             json!({ "alias": alias, "username": u.username, "username_id": u.id })
         })
         .collect()
 }
 
 /// `ReverseServerAuthorizedKeysConfig`
-#[utoipa::path(get, path = "/tunnels/server/config/{id}", tag = "Script", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username_id" = Option<i64>, Query, description = "Render the client stanza for one target username only")), responses((status = 200, description = "~/.ssh/config stanzas (server + one per target username)", body = super::schemas::ConfigResponse), (status = 404, body = super::schemas::ErrorBody)))]
+#[utoipa::path(get, path = "/tunnels/server/config/{id}", tag = "Script", security(("bearer" = [])), params(("id" = i64, Path, description = "Tunnel id"), ("username_ids" = Option<String>, Query, description = "Comma-separated target username ids to render (default: all you may use); one id = the plain device alias"), ("username_id" = Option<i64>, Query, description = "Older form of username_ids with one id"), ("transport" = Option<String>, Query, description = "ssh | websocket")), responses((status = 200, description = "~/.ssh/config stanzas (server + one per target username)", body = super::schemas::ConfigResponse), (status = 404, body = super::schemas::ErrorBody)))]
 async fn config(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -118,21 +122,30 @@ async fn config(
     headers: HeaderMap,
 ) -> ApiResult<Json<Value>> {
     let t = viewable_tunnel(&state, user.id, id).await?;
-    let ServerPart { text: mut out, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
+    let ServerPart { text: mut out, alias: server_alias, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
 
     let all = permissions::allowed_usernames(&state.db, user.id, &t).await?;
     let usernames_list: Vec<Value> = all
         .iter()
         .map(|u| json!({ "id": u.id, "username": u.username, "created_by": u.created_by, "created_by_id": u.user_id }))
         .collect();
-    let selected: Vec<_> = match q.get("username_id").and_then(|s| s.parse::<i64>().ok()) {
-        Some(sel) => all.iter().filter(|u| u.id == sel).collect(),
+    // 挑幾個帳號（照帳號清單的順序）；沒給 = 全部。不能用的 id 直接略過。/ Picked accounts, in list order; none = all.
+    let picked: Option<Vec<i64>> = match (q.get("username_ids").map(|s| s.trim()).filter(|s| !s.is_empty()), q.get("username_id").and_then(|s| s.parse::<i64>().ok())) {
+        (Some(list), _) => Some(scripts::parse_id_list(list).map_err(|_| ApiError::field("username_ids", "A comma-separated list of username ids."))?),
+        (None, Some(one)) => Some(vec![one]),
+        (None, None) => None,
+    };
+    let selected: Vec<_> = match &picked {
+        Some(ids) => all.iter().filter(|u| ids.contains(&u.id)).collect(),
         None => all.iter().collect(),
     };
     if !selected.is_empty() {
         out.push_str(CLIENT_STEM);
     }
-    let hosts = push_device_stanzas(&mut out, &t, &selected, &mut HashSet::new());
+    let hosts = push_device_stanzas(&mut out, &t, &selected, &server_alias, &mut HashSet::from([server_alias.clone()]));
+    // 隧道的預設帳號（我能用的話），前端拿來決定一開始勾哪個。/ The tunnel's default account, when I may use it.
+    let default_id = t.default_username_id.filter(|d| all.iter().any(|u| u.id == *d));
+    fields.insert("default_username_id".into(), json!(default_id));
     fields.insert("config".into(), json!(out));
     fields.insert("usernames".into(), json!(usernames_list));
     fields.insert("hosts".into(), json!(hosts));
@@ -147,9 +160,11 @@ async fn config(
 /// Several devices at once: one server stanza plus every device's stanzas, sorted by device name. Without `ids`:
 /// every device I can log in to; with them, just those (ids I can't see are skipped silently). `accounts=default`
 /// (the default) = one Host per device with the tunnel's default account (else the first) and the device name as the
-/// alias; `accounts=all` = one per account, with the single config's aliases. Devices without an account for me are
-/// listed in `skipped`.
-#[utoipa::path(get, path = "/tunnels/server/config", tag = "Script", security(("bearer" = [])), params(("ids" = Option<String>, Query, description = "Comma-separated tunnel ids (default: every tunnel you can log in to)"), ("accounts" = Option<String>, Query, description = "default (one Host per device) | all (one Host per account)"), ("transport" = Option<String>, Query, description = "ssh | websocket")), responses((status = 200, description = "~/.ssh/config stanzas (server + every chosen device)", body = super::schemas::BulkConfigResponse), (status = 400, body = super::schemas::ErrorBody)))]
+/// alias; `accounts=all` = one per account, with the single config's aliases. `pick=<tunnel>:<account>.<account>,…`
+/// overrides that per device (one account = the plain alias, several = `<name>-<account>`; ids I may not use are
+/// dropped, and a device left with none falls back to the mode). Devices without an account for me are listed in
+/// `skipped`.
+#[utoipa::path(get, path = "/tunnels/server/config", tag = "Script", security(("bearer" = [])), params(("ids" = Option<String>, Query, description = "Comma-separated tunnel ids (default: every tunnel you can log in to)"), ("accounts" = Option<String>, Query, description = "default (one Host per device) | all (one Host per account)"), ("pick" = Option<String>, Query, description = "Per-device accounts overriding `accounts`: `<tunnel id>:<username id>.<username id>,…`"), ("transport" = Option<String>, Query, description = "ssh | websocket")), responses((status = 200, description = "~/.ssh/config stanzas (server + every chosen device)", body = super::schemas::BulkConfigResponse), (status = 400, body = super::schemas::ErrorBody)))]
 async fn config_many(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -170,7 +185,8 @@ async fn config_many(
                 .map_err(|_| ApiError::field("ids", "A comma-separated list of tunnel ids."))?,
         ),
     };
-    let ServerPart { text: mut out, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
+    let picks = scripts::parse_picks(q.get("pick").map(String::as_str).unwrap_or("")).map_err(|_| ApiError::field("pick", "Use <tunnel id>:<username id>.<username id>, separated by commas."))?;
+    let ServerPart { text: mut out, alias: server_alias, mut fields } = server_part(&state, &headers, q.get("transport").cloned())?;
 
     let mut tunnels = db::tunnels::visible_to(&state.db, user.id).await?;
     if let Some(w) = &wanted {
@@ -178,7 +194,7 @@ async fn config_many(
     }
     tunnels.sort_by(|a, b| a.host_friendly_name.to_lowercase().cmp(&b.host_friendly_name.to_lowercase()).then(a.id.cmp(&b.id)));
 
-    let mut used: HashSet<String> = HashSet::from([scripts::SERVER_ALIAS.to_string()]);
+    let mut used: HashSet<String> = HashSet::from([server_alias.clone()]);
     let mut listed = Vec::new();
     let mut skipped = Vec::new();
     for t in &tunnels {
@@ -187,7 +203,10 @@ async fn config_many(
             skipped.push(json!({ "id": t.id, "name": t.host_friendly_name, "reason": "no_accounts" }));
             continue;
         }
-        let chosen: Vec<_> = if every_account {
+        let picked: Vec<_> = picks.get(&t.id).map(|ids| allowed.iter().filter(|u| ids.contains(&u.id)).collect()).unwrap_or_default();
+        let chosen: Vec<_> = if !picked.is_empty() {
+            picked
+        } else if every_account {
             allowed.iter().collect()
         } else {
             vec![allowed.iter().find(|u| Some(u.id) == t.default_username_id).unwrap_or(&allowed[0])]
@@ -195,9 +214,10 @@ async fn config_many(
         if listed.is_empty() {
             out.push_str(CLIENT_STEM);
         }
-        let hosts = push_device_stanzas(&mut out, t, &chosen, &mut used);
+        let hosts = push_device_stanzas(&mut out, t, &chosen, &server_alias, &mut used);
         let usernames: Vec<Value> = allowed.iter().map(|u| json!({ "id": u.id, "username": u.username })).collect();
-        listed.push(json!({ "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port, "hosts": hosts, "usernames": usernames }));
+        let default_id = t.default_username_id.filter(|d| allowed.iter().any(|u| u.id == *d));
+        listed.push(json!({ "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port, "hosts": hosts, "usernames": usernames, "default_username_id": default_id, "picked": picks.contains_key(&t.id) }));
     }
     fields.insert("config".into(), json!(out));
     fields.insert("accounts".into(), json!(if every_account { "all" } else { "default" }));

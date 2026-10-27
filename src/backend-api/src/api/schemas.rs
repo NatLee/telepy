@@ -542,8 +542,14 @@ pub struct UsernameEntry {
 
 #[derive(ToSchema)]
 pub struct UsernamesForServer {
+    /// 每列另有 `shared_with`：幾位 sharee 的允許清單上有它（只給 owner / ADMIN，其餘 null）。/ Each row also carries
+    /// `shared_with`: how many sharees' allow-lists hold it (owner / ADMIN only, else null).
     pub usernames: Vec<UsernameEntry>,
     pub default_username_id: Option<i64>,
+    /// ADMIN sharee 人數（不用清單、每個帳號都能用；只給 owner / ADMIN）。/ ADMIN sharees (owner / ADMIN only).
+    pub admin_sharees: Option<i64>,
+    /// 你能不能新增 / 刪除帳號（owner / ADMIN）。/ Whether you may add / remove accounts.
+    pub can_manage: bool,
 }
 
 #[derive(ToSchema)]
@@ -730,10 +736,12 @@ pub struct DuplicateCheck {
 pub struct ConfigResponse {
     pub config: String,
     pub usernames: Vec<UsernameEntry>,
-    /// `Host telepy-ssh-server` 的連線資訊。/ Where `Host telepy-ssh-server` points.
+    /// 伺服器區塊（`Host telepy-<網域>-<port>`）的連線資訊。/ Where the server stanza points.
     pub server: ConfigServer,
-    /// config 裡每個裝置 Host 區塊（依 username_id 篩選後）。/ One entry per device Host stanza in `config`.
+    /// config 裡每個裝置 Host 區塊（依 username_ids 篩選後）。/ One entry per device Host stanza in `config`.
     pub hosts: Vec<ConfigHost>,
+    /// 隧道的預設帳號（你能用時），否則 null。/ The tunnel's default account when you may use it, else null.
+    pub default_username_id: Option<i64>,
     #[schema(example = 10022)]
     pub reverse_port: i64,
     /// Lines to save as `known_hosts_path` on your computer (`<alias> <type> <base64>`, one per gateway host key); empty when the gateway has no host keys
@@ -784,6 +792,10 @@ pub struct BulkConfigTunnel {
     pub hosts: Vec<ConfigHost>,
     /// 我在這台能用的帳號。/ The accounts I may use here.
     pub usernames: Vec<serde_json::Value>,
+    /// 隧道的預設帳號（你能用時）。/ The tunnel's default account when you may use it.
+    pub default_username_id: Option<i64>,
+    /// 這台的帳號是 `pick` 指定的。/ This device's accounts came from `pick`.
+    pub picked: bool,
 }
 
 #[derive(ToSchema)]
@@ -797,8 +809,12 @@ pub struct BulkConfigSkipped {
 
 #[derive(ToSchema)]
 pub struct ConfigServer {
-    #[schema(example = "telepy-ssh-server")]
+    /// `telepy-<網域>-<port>`，與 HostKeyAlias 相同，每台 Telepy 各自一個。/ Same as the HostKeyAlias; one per Telepy server.
+    #[schema(example = "telepy-telepy.example.com-24242")]
     pub alias: String,
+    /// 舊版共用的別名；安裝指令只在它確定屬於這台、又沒有區塊再用時拿掉。/ The old shared alias, cleaned up when safe.
+    #[schema(example = "telepy-ssh-server")]
+    pub legacy_alias: String,
     #[schema(example = "telepy.example.com")]
     pub host: String,
     /// REVERSE_SERVER_SSH_PORT（未設定時是空字串）。/ REVERSE_SERVER_SSH_PORT (empty string when unset).

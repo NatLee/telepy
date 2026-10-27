@@ -5,7 +5,7 @@
 //!   那把金鑰在每台裝置的 authorized_keys 裡，若也能登入 gateway，外洩一把就能從外網進所有裝置。
 //! - `tcpip-forward`：只**記住** port → 這條連線（不綁任何本機 port；`reverse_port` 只是識別號碼）。後端要連裝置時
 //!   用 [`Gateway::open_stream`] 在行程內開 `forwarded-tcpip` channel（終端機、檔案、SFTP、SOCKS、AI 都是）。
-//! - `direct-tcpip`（使用者金鑰的 `ProxyCommand ssh -W localhost:<port> telepy-ssh-server`）：橋到同一條 forward。
+//! - `direct-tcpip`（使用者金鑰的 `ProxyCommand ssh -W <隧道名稱>:22 telepy-<網域>-<port>`）：橋到同一條 forward。
 //! - 其餘（session/shell/exec/pty/subsystem/agent/x11）一律拒絕，等同現在 `Match User telepy` 的 sshd 設定。
 //!
 //! 狀態：forward 註冊/消失即時寫入 `StatusState`（取代 `ss` 取樣）；延遲：每 15s 開一條 forwarded 通道讀

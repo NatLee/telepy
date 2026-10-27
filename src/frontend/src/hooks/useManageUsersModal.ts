@@ -3,15 +3,20 @@ import { apiFetch } from "@/lib/api";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useToast } from "@/components/ui/Toast";
-import { ReverseServerUsername } from "@/types/tunnel";
+import type { TargetAccount } from "@/lib/targetUsers";
 import { useI18n } from "@/lib/i18n";
 
 export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
     const { t } = useI18n();
-    const [users, setUsers] = useState<ReverseServerUsername[]>([]);
+    const [users, setUsers] = useState<TargetAccount[]>([]);
+    // 隧道的預設帳號、ADMIN 人數、我能不能管（後端給）。/ The default account, ADMIN count and whether I may manage.
+    const [defaultId, setDefaultId] = useState<number | null>(null);
+    const [adminSharees, setAdminSharees] = useState<number | null>(null);
+    const [canManage, setCanManage] = useState(false);
+    const [savingDefault, setSavingDefault] = useState<number | null>(null);
     const [newUsername, setNewUsername] = useState("");
     const [loading, setLoading] = useState(false);
-    const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; user: ReverseServerUsername | null }>({ isOpen: false, user: null });
+    const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; user: TargetAccount | null }>({ isOpen: false, user: null });
     const { showSuccess, showError } = useToast();
 
     const fetchUsers = useCallback(async () => {
@@ -23,6 +28,9 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
                 const data = await res.json();
                 const list = data?.usernames ?? (Array.isArray(data) ? data : (data.results ?? []));
                 setUsers(list);
+                setDefaultId(data?.default_username_id ?? null);
+                setAdminSharees(typeof data?.admin_sharees === "number" ? data.admin_sharees : null);
+                setCanManage(data?.can_manage === true);
             } else {
                 showError(t("manageUsers.fetchFailed"));
             }
@@ -109,16 +117,40 @@ export function useManageUsersModal(tunnelId: number | null, isOpen: boolean) {
         }
     };
 
+    /** 設成預設帳號（再按一次 = 取消）。/ Make an account the default (again = clear it). */
+    const setDefault = async (id: number | null) => {
+        if (!tunnelId) return;
+        setSavingDefault(id ?? -1);
+        try {
+            const res = await apiFetch(`/api/reverse/server/${tunnelId}/default-username`, { method: "PATCH", body: JSON.stringify({ default_username_id: id }) });
+            if (res.ok) {
+                setDefaultId(id);
+                showSuccess(id === null ? t("manageUsers.defaultCleared") : t("manageUsers.defaultSet", { username: users.find((u) => u.id === id)?.username ?? "" }));
+            } else {
+                showError(t("manageUsers.defaultFailed"));
+            }
+        } catch {
+            showError(t("manageUsers.defaultFailed"));
+        } finally {
+            setSavingDefault(null);
+        }
+    };
+
     return {
         state: {
             users,
+            defaultId,
+            adminSharees,
+            canManage,
+            savingDefault,
             newUsername, setNewUsername,
             loading,
             deleteConfirm, setDeleteConfirm
         },
         actions: {
             handleAddUser,
-            handleDeleteUser
+            handleDeleteUser,
+            setDefault,
         }
     };
 }

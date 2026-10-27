@@ -136,7 +136,7 @@ export function ConfigRouteMap({ server, hosts, deviceName, reversePort, online,
                     aria-label={online ? t("config.map.online") : t("config.map.offline")}
                 />
             )}
-            <span className="truncate">{users.length > 0 ? t("config.map.asUser", { user: users.join(", ") }) : "—"}</span>
+            <span className="sm:truncate">{users.length > 0 ? t("config.map.asUser", { user: users.join(", ") }) : "—"}</span>
         </span>
     );
     // 多個帳號時別名各不相同（第三步會逐一列出），這裡只寫 ssh。/ Several aliases (listed in step 3): just "ssh".
