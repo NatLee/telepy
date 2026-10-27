@@ -1,13 +1,17 @@
 /**
- * 金鑰詳情:ID、類型、指紋、建立 / 最後使用,以及可直接編輯的名稱、公鑰與說明(公鑰不能和別把重複;
- * 換了金鑰內容,Telepy 會在每台有這把金鑰的裝置上換成新的),還有它在每台裝置每個帳號上的狀態。
- * Key details: id, type, fingerprint, created / last used, the editable name, public key and description
- * (the key must be unique; new key material is re-installed on every device that has it), and its state
- * on every device account.
+ * 金鑰詳情，分頁放在左側欄（跟偏好設定一樣），視窗固定高度、切頁不跳動：
+ * 「概覽」= ID、類型、指紋、效期、建立 / 最後使用與它在幾台裝置上；「編輯」= 名稱、說明、群組、公鑰（不能和別把重複；
+ * 換了內容，Telepy 會在每台有這把金鑰的裝置上換成新的）與效期；「裝置」= 它在每台裝置每個帳號上的狀態，勾選立即生效。
+ * 有沒存的改動或要修正的欄位時，「編輯」分頁標一個點；「儲存」只在編輯頁或有改動時出現。
+ * Key details with tabs in a side rail (like Preferences) and a fixed height: Overview (id, type, fingerprint,
+ * expiry, created / last used, how many devices), Edit (name, description, group, public key — unique; new key
+ * material is re-installed on every device that has it — and expiry) and Devices (its state on every device
+ * account; ticks apply at once). Unsaved or invalid fields dot the Edit tab; Save shows there or while dirty.
  */
 import React, { useEffect, useMemo, useState } from "react";
-import { HardDrive, Hash, KeyRound, Layers, Loader2, Pencil, Save, Settings2 } from "lucide-react";
+import { ArrowRight, HardDrive, Hash, Info, KeyRound, Layers, Loader2, Pencil, Save, Settings2 } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
+import { NavTabLabel, NavTabs } from "@/components/ui/nav-tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,7 +22,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip, Property, PropertyList, Section } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
-import { fingerprint, keyProblem, parsePublicKey, type KeyProblem } from "@/lib/sshKeys";
+import { fingerprint, keyProblem, parsePublicKey, shortFingerprint, type KeyProblem } from "@/lib/sshKeys";
 import type { TranslationKey } from "@/locales/en";
 import type { KeyDevice, KeyTarget, UserKey } from "@/types/keys";
 import type { KeyGroup, KeyGroupSource } from "@/types/groups";
@@ -72,6 +76,23 @@ export function KeyDetailsModal({
  */
 type Placement = { device: KeyDevice; targets: KeyTarget[] | null; direct: boolean; groups: KeyGroupSource[] };
 
+/** 這把金鑰在幾台清單上、幾台全裝好、幾台要處理。/ Devices with this key listed, fully installed, needing attention. */
+function deviceCounts(devices: KeyDevice[], keyId: number) {
+    let on = 0;
+    let installed = 0;
+    let problems = 0;
+    for (const device of devices) {
+        const targets = device.keys.find((x) => x.user_key_id === keyId)?.targets;
+        if (!targets) continue;
+        on++;
+        if (targets.length > 0 && targets.every((x) => x.status === "installed")) installed++;
+        if (needsAttention(targets, device.online)) problems++;
+    }
+    return { on, installed, problems, total: devices.length };
+}
+
+type KeyDetailsTab = "overview" | "edit" | "devices";
+
 function rank(p: Placement): number {
     if (p.targets && needsAttention(p.targets, p.device.online)) return 0;
     return p.targets ? 1 : 2;
@@ -92,8 +113,7 @@ function KeyDevices({ keyItem, devices, pending, onToggle, onManageDevice }: { k
         [devices, keyItem.id]
     );
     const onList = placements.filter((p) => p.targets);
-    const installed = onList.filter((p) => p.targets!.length > 0 && p.targets!.every((x) => x.status === "installed")).length;
-    const problems = onList.filter((p) => needsAttention(p.targets!, p.device.online)).length;
+    const { installed, problems } = deviceCounts(devices, keyItem.id);
     const filter = useDeviceFilter(placements, {
         device: (p) => p.device,
         isOn: (p) => !!p.targets,
@@ -174,6 +194,14 @@ function KeyDetailsBody({
     const [expiryDate, setExpiryDate] = useState("");
     const [serverErrors, setServerErrors] = useState<KeyPatchErrors>({});
     const [saving, setSaving] = useState(false);
+    const [tab, setTabState] = useState<KeyDetailsTab>("overview");
+    const formRef = React.useRef<HTMLFormElement>(null);
+    // 各頁共用同一個捲動區，切頁時回到頂端。/ The pages share one scroll area; start at the top.
+    const setTab = (next: KeyDetailsTab) => {
+        setTabState(next);
+        const scroller = formRef.current?.parentElement;
+        if (scroller) scroller.scrollTop = 0;
+    };
 
     const setField = (name: keyof typeof form, value: string) => {
         setForm((f) => ({ ...f, [name]: value }));
@@ -225,6 +253,19 @@ function KeyDetailsBody({
     const previewFp = computed?.key === form.key ? computed.fp : null;
 
     const fmt = (iso: string) => new Date(iso).toLocaleString(locale);
+    const counts = deviceCounts(devices.devices, keyItem.id);
+    const hasErrors = Object.keys(errors).length > 0;
+    const tabs = [
+        { value: "overview" as const, label: t("keys.details.tabOverview"), hint: t("keys.details.tabOverviewHint"), icon: <Info /> },
+        { value: "edit" as const, label: <NavTabLabel label={t("keys.details.tabEdit")} mark={hasErrors ? "error" : dirty ? "dirty" : null} />, hint: t("keys.details.tabEditHint"), icon: <Pencil /> },
+        {
+            value: "devices" as const,
+            label: <NavTabLabel label={t("keys.details.tabDevices")} mark={counts.problems > 0 ? "error" : null} />,
+            hint: t("keys.details.tabDevicesHint", { on: counts.on, total: counts.total }),
+            icon: <HardDrive />,
+        },
+    ];
+    const showSave = tab === "edit" || dirty;
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -232,8 +273,10 @@ function KeyDetailsBody({
         setSaving(true);
         const errs = await onSave(keyItem, patch);
         setSaving(false);
-        if (errs) setServerErrors(errs);
-        else onClose();
+        if (errs) {
+            setServerErrors(errs);
+            setTab("edit");
+        } else onClose();
     };
 
     return (
@@ -248,109 +291,139 @@ function KeyDetailsBody({
                 </span>
             }
             icon={<KeyRound />}
-            size="2xl"
+            size="4xl"
+            fixedHeight
+            nav={
+                <div className="space-y-4">
+                    {/* 這把金鑰（桌面在側欄上方）。/ Which key: top of the rail on desktop. */}
+                    <div className="hidden min-w-0 px-1.5 sm:block">
+                        <span className="block break-all text-sm text-foreground">{keyItem.host_friendly_name}</span>
+                        {keyItem.fingerprint && <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground" title={keyItem.fingerprint}>{shortFingerprint(keyItem.fingerprint)}</span>}
+                    </div>
+                    <NavTabs tabs={tabs} value={tab} onChange={setTab} aria-label={t("keys.detailsTitle")} />
+                </div>
+            }
             footer={
                 <>
+                    {dirty && tab !== "edit" && <span className="mr-auto text-sm text-muted-foreground">{t("ui.tabUnsaved")}</span>}
                     <Button variant="outline" onClick={onClose} disabled={saving}>{t("common.close")}</Button>
-                    <Button type="submit" form="key-details-form" disabled={saving || !dirty || !valid}>
-                        {saving ? <Loader2 className="animate-spin" /> : <Save />} {t("common.saveChanges")}
-                    </Button>
+                    {showSave && (
+                        <Button type="submit" form="key-details-form" disabled={saving || !dirty || !valid}>
+                            {saving ? <Loader2 className="animate-spin" /> : <Save />} {t("common.saveChanges")}
+                        </Button>
+                    )}
                 </>
             }
         >
-            <form id="key-details-form" onSubmit={submit} className="space-y-6">
-                <PropertyList>
-                    <Property label={t("keys.keyId")} mono>#{keyItem.id}</Property>
-                    <Property label={t("keys.fingerprint")}>
-                        <span className="flex items-center gap-1">
-                            <span className="min-w-0 break-all font-mono text-xs">{keyItem.fingerprint ?? t("keys.noFingerprint")}</span>
-                            {keyItem.fingerprint && <CopyButton value={keyItem.fingerprint} />}
-                        </span>
-                    </Property>
-                    {keyItem.comment && (
-                        <Property label={t("keys.comment")} mono><span className="text-xs">{keyItem.comment}</span></Property>
-                    )}
-                    <Property label={t("keys.expiry.label")}>
-                        <KeyExpiryText expiresAt={keyItem.expires_at} />
-                    </Property>
-                    <Property label={t("keys.created")}>{fmt(keyItem.created_at)}</Property>
-                    <Property label={t("keys.lastUsed")}>
-                        {keyItem.last_used_at ? (
-                            <span title={fmt(keyItem.last_used_at)}>
-                                {formatRelativeTime(keyItem.last_used_at, locale)}
-                                {keyItem.last_used_ip && <span className="text-muted-foreground"> · {keyItem.last_used_ip}</span>}
+            <form ref={formRef} id="key-details-form" onSubmit={submit}>
+                <div role="tabpanel" hidden={tab !== "overview"} className="space-y-6">
+                    <PropertyList>
+                        <Property label={t("keys.keyId")} mono>#{keyItem.id}</Property>
+                        <Property label={t("keys.fingerprint")}>
+                            <span className="flex items-center gap-1">
+                                <span className="min-w-0 break-all font-mono text-xs">{keyItem.fingerprint ?? t("keys.noFingerprint")}</span>
+                                {keyItem.fingerprint && <CopyButton value={keyItem.fingerprint} />}
                             </span>
-                        ) : (
-                            <span className="text-muted-foreground">{t("keys.neverUsed")}</span>
+                        </Property>
+                        {keyItem.comment && (
+                            <Property label={t("keys.comment")} mono><span className="text-xs">{keyItem.comment}</span></Property>
                         )}
-                    </Property>
-                </PropertyList>
+                        <Property label={t("keys.expiry.label")}>
+                            <KeyExpiryText expiresAt={keyItem.expires_at} />
+                        </Property>
+                        <Property label={t("keys.created")}>{fmt(keyItem.created_at)}</Property>
+                        <Property label={t("keys.lastUsed")}>
+                            {keyItem.last_used_at ? (
+                                <span title={fmt(keyItem.last_used_at)}>
+                                    {formatRelativeTime(keyItem.last_used_at, locale)}
+                                    {keyItem.last_used_ip && <span className="text-muted-foreground"> · {keyItem.last_used_ip}</span>}
+                                </span>
+                            ) : (
+                                <span className="text-muted-foreground">{t("keys.neverUsed")}</span>
+                            )}
+                        </Property>
+                    </PropertyList>
+                    <Section icon={<HardDrive />} title={t("keys.onDevices")}>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted-foreground">
+                            <span>{t("keys.details.devicesSummary", { on: counts.on, total: counts.total })}</span>
+                            {counts.installed > 0 && <Chip tone="success">{t("keys.details.installedCount", { count: counts.installed })}</Chip>}
+                            {counts.problems > 0 && <Chip tone="warning">{t("keys.details.problemCount", { count: counts.problems })}</Chip>}
+                            <Button type="button" variant="outline" size="sm" className="ml-auto" onClick={() => setTab("devices")}>
+                                {t("keys.details.seeDevices")} <ArrowRight />
+                            </Button>
+                        </div>
+                    </Section>
+                </div>
 
                 {/* 可編輯的部分 / The editable part */}
-                <Section icon={<Pencil />} title={t("keys.editSection")} description={t("keys.editSectionHint")}>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                        <Field id="key-details-name" label={t("keys.hostFriendlyName")} required error={errors.host_friendly_name}>
-                            <Input value={form.host_friendly_name} onChange={(e) => setField("host_friendly_name", e.target.value)} maxLength={100} placeholder={t("keys.namePlaceholder")} />
-                        </Field>
-                        <Field id="key-details-description" label={t("common.description")} addon={t("common.optional")} error={errors.description}>
-                            <Input value={form.description} onChange={(e) => setField("description", e.target.value)} placeholder={t("keys.descriptionPlaceholder")} />
-                        </Field>
-                        {keyGroups.length > 0 && (
-                            <Field id="key-details-group" label={t("groups.key.field")} hint={t("groups.key.fieldHint")}>
-                                <NativeSelect value={groupId ?? ""} onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : null)}>
-                                    <option value="">{t("groups.key.fieldNone")}</option>
-                                    {keyGroups.map((g) => (
-                                        <option key={g.id} value={g.id}>{g.name}</option>
-                                    ))}
-                                </NativeSelect>
+                <div role="tabpanel" hidden={tab !== "edit"}>
+                    <Section icon={<Pencil />} title={t("keys.editSection")} description={t("keys.editSectionHint")}>
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field id="key-details-name" label={t("keys.hostFriendlyName")} required error={errors.host_friendly_name}>
+                                <Input value={form.host_friendly_name} onChange={(e) => setField("host_friendly_name", e.target.value)} maxLength={100} placeholder={t("keys.namePlaceholder")} />
                             </Field>
-                        )}
-                    </div>
-                    <Field
-                        id="key-details-key"
-                        label={t("keys.publicKey")}
-                        required
-                        addon={form.key.trim() ? <CopyButton value={form.key.trim()} /> : undefined}
-                        error={errors.key}
-                        hint={!errors.key && !keyChanged ? t("keys.keyEditHint") : undefined}
-                    >
-                        <Textarea
-                            value={form.key}
-                            onChange={(e) => setField("key", e.target.value)}
-                            rows={3}
-                            spellCheck={false}
-                            className="break-all font-mono text-xs leading-relaxed md:text-xs"
-                            placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… you@laptop"
-                        />
-                    </Field>
-                    {parsed && keyChanged && !errors.key && (
-                        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface px-2.5 py-1.5 ring-1 ring-inset ring-border/80">
-                            <KeyTypeBadge type={parsed.label} bits={parsed.bits} />
-                            <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{previewFp ?? "…"}</span>
+                            <Field id="key-details-description" label={t("common.description")} addon={t("common.optional")} error={errors.description}>
+                                <Input value={form.description} onChange={(e) => setField("description", e.target.value)} placeholder={t("keys.descriptionPlaceholder")} />
+                            </Field>
+                            {keyGroups.length > 0 && (
+                                <Field id="key-details-group" label={t("groups.key.field")} hint={t("groups.key.fieldHint")}>
+                                    <NativeSelect value={groupId ?? ""} onChange={(e) => setGroupId(e.target.value ? Number(e.target.value) : null)}>
+                                        <option value="">{t("groups.key.fieldNone")}</option>
+                                        {keyGroups.map((g) => (
+                                            <option key={g.id} value={g.id}>{g.name}</option>
+                                        ))}
+                                    </NativeSelect>
+                                </Field>
+                            )}
                         </div>
-                    )}
-                    {keyChanged && !errors.key && <Callout tone="warning">{t("keys.keyChangedHint")}</Callout>}
-                    <Field id="key-details-expiry" label={t("keys.expiry.change")} error={errors.expires_at} hint={!errors.expires_at ? t(expiryState(keyItem.expires_at) === "expired" ? "keys.expiry.changeHintExpired" : "keys.expiry.changeHint") : undefined}>
-                        <ExpiryPicker
-                            id="key-details-expiry"
-                            preset={expiryPreset ?? (keyItem.expires_at ? "custom" : "never")}
-                            customDate={expiryPreset === null && keyItem.expires_at ? localDate(new Date(keyItem.expires_at)) : expiryDate}
-                            onPreset={(p) => {
-                                setExpiryPreset(p);
-                                if (p === "custom" && !expiryDate && keyItem.expires_at) setExpiryDate(localDate(new Date(keyItem.expires_at)));
-                            }}
-                            onCustomDate={(d) => {
-                                setExpiryPreset("custom");
-                                setExpiryDate(d);
-                            }}
-                        />
-                    </Field>
-                </Section>
+                        <Field
+                            id="key-details-key"
+                            label={t("keys.publicKey")}
+                            required
+                            addon={form.key.trim() ? <CopyButton value={form.key.trim()} /> : undefined}
+                            error={errors.key}
+                            hint={!errors.key && !keyChanged ? t("keys.keyEditHint") : undefined}
+                        >
+                            <Textarea
+                                value={form.key}
+                                onChange={(e) => setField("key", e.target.value)}
+                                rows={3}
+                                spellCheck={false}
+                                className="break-all font-mono text-xs leading-relaxed md:text-xs"
+                                placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… you@laptop"
+                            />
+                        </Field>
+                        {parsed && keyChanged && !errors.key && (
+                            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-surface px-2.5 py-1.5 ring-1 ring-inset ring-border/80">
+                                <KeyTypeBadge type={parsed.label} bits={parsed.bits} />
+                                <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">{previewFp ?? "…"}</span>
+                            </div>
+                        )}
+                        {keyChanged && !errors.key && <Callout tone="warning">{t("keys.keyChangedHint")}</Callout>}
+                        <Field id="key-details-expiry" label={t("keys.expiry.change")} error={errors.expires_at} hint={!errors.expires_at ? t(expiryState(keyItem.expires_at) === "expired" ? "keys.expiry.changeHintExpired" : "keys.expiry.changeHint") : undefined}>
+                            <ExpiryPicker
+                                id="key-details-expiry"
+                                preset={expiryPreset ?? (keyItem.expires_at ? "custom" : "never")}
+                                customDate={expiryPreset === null && keyItem.expires_at ? localDate(new Date(keyItem.expires_at)) : expiryDate}
+                                onPreset={(p) => {
+                                    setExpiryPreset(p);
+                                    if (p === "custom" && !expiryDate && keyItem.expires_at) setExpiryDate(localDate(new Date(keyItem.expires_at)));
+                                }}
+                                onCustomDate={(d) => {
+                                    setExpiryPreset("custom");
+                                    setExpiryDate(d);
+                                }}
+                            />
+                        </Field>
+                    </Section>
+                </div>
 
-                {/* 在哪些裝置上（勾選立即生效，與上面的儲存無關）/ Devices (ticks apply right away, separate from Save) */}
-                <Section icon={<HardDrive />} title={t("keys.onDevices")} description={t("keys.details.devicesHint")}>
-                    <KeyDevices keyItem={keyItem} {...devices} />
-                </Section>
+                {/* 在哪些裝置上（勾選立即生效，與儲存無關）/ Devices (ticks apply right away, separate from Save) */}
+                <div role="tabpanel" hidden={tab !== "devices"}>
+                    <Section icon={<HardDrive />} title={t("keys.onDevices")} description={t("keys.details.devicesHint")}>
+                        <KeyDevices keyItem={keyItem} {...devices} />
+                    </Section>
+                </div>
             </form>
         </Modal>
     );
