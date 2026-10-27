@@ -158,6 +158,11 @@ pub async fn desired(db: &db::Db, tunnel: &Tunnel) -> sqlx::Result<Desired> {
         if db::keys::is_expired(e.expires_at.as_deref()) {
             continue;
         }
+        // 擁有者的帳號停用了：同樣拿掉（清單留著，重新啟用就裝回去）；手動加的行 Telepy 不管。
+        // The owner's account is disabled: drop it too (the list stays, so re-enabling puts it back).
+        if !e.owner_active {
+            continue;
+        }
         let Some(parsed) = parse_public_key(&e.key) else { continue };
         if let std::collections::hash_map::Entry::Vacant(slot) = allowed.entry(e.user_id) {
             let names = permissions::allowed_usernames(db, e.user_id, tunnel).await?.into_iter().map(|u| (u.id, u.username)).collect();
@@ -310,6 +315,9 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
         return Ok(SyncOutcome::Offline);
     }
     let (mut changed, mut errors) = (false, 0);
+    // 停用帳號的金鑰被移掉了：每條隧道記一筆（哪些帳號、誰的）。/ Keys of disabled accounts removed: one event per tunnel.
+    let disabled = db::users::inactive_ids(&state.db).await?;
+    let mut owner_removed: BTreeMap<i64, BTreeSet<String>> = BTreeMap::new();
     for acct in todo {
         let empty = BTreeMap::new();
         let want = desired.get(acct).unwrap_or(&empty);
@@ -320,8 +328,13 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
         protected.insert(own.bare.clone());
         let stale_shared = if drop_shared { shared.clone() } else { BTreeSet::new() };
         match sync_account(state, &tunnel, acct, want, &mine, &own, &protected, &stale_shared).await {
-            Ok(c) => {
+            Ok((c, removed)) => {
                 changed |= c;
+                for i in mine.iter().filter(|i| removed.contains(&i.key_bare)) {
+                    if let Some(uid) = i.user_id.filter(|u| disabled.contains(u)) {
+                        owner_removed.entry(uid).or_default().insert(acct.clone());
+                    }
+                }
                 state.device_keys.retry_at.lock().unwrap().remove(&(tunnel.id, acct.clone()));
                 db::device_keys::sync_set(&state.db, tunnel.id, acct, None).await?;
             }
@@ -333,6 +346,20 @@ pub async fn sync_tunnel(state: &AppState, tunnel_id: i64, force: bool) -> anyho
                 db::device_keys::sync_set(&state.db, tunnel.id, acct, Some(&msg)).await?;
             }
         }
+    }
+    for (uid, accounts) in owner_removed {
+        let who = db::users::by_id(&state.db, uid).await?.map(|u| u.username).unwrap_or_else(|| format!("user #{uid}"));
+        let list = accounts.into_iter().collect::<Vec<_>>().join(", ");
+        state
+            .gateway
+            .event(
+                "device_key_owner_disabled",
+                None,
+                u16::try_from(tunnel.reverse_port).ok(),
+                Some(tunnel.id),
+                format!("{who}'s account is disabled: removed the keys Telepy installed for them from {list} on '{}' (keys added by hand stay)", tunnel.host_friendly_name),
+            )
+            .await;
     }
     let audience = crate::api::notify::tunnel_audience(state, &tunnel).await?;
     state.hub.notify_users(audience, &json!({ "action": "DEVICE-KEYS-UPDATED", "tunnel_id": tunnel.id }));
@@ -352,7 +379,7 @@ async fn sync_account(
     own: &WantedKey,
     protected: &BTreeSet<String>,
     stale_shared: &BTreeSet<String>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<(bool, Vec<String>)> {
     let file = remote::AuthorizedKeysFile::open(state, account, tunnel.reverse_port, true).await?;
     let content = file.read().await?;
     let mut wanted: Vec<WantedKey> = want.values().map(|d| WantedKey { bare: d.bare.clone(), comment: d.comment.clone() }).collect();
@@ -378,7 +405,7 @@ async fn sync_account(
             db::device_keys::installed_delete(&state.db, tunnel.id, account, &i.key_bare).await?;
         }
     }
-    Ok(plan.content.is_some())
+    Ok((plan.content.is_some(), plan.removed))
 }
 
 /// 刪隧道時要不要動裝置上的金鑰。/ What to remove from the device when its tunnel is deleted.

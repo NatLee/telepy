@@ -3,7 +3,7 @@
 //! Merged view for the device-key panel: the list (where keys should be) × what Telepy installed × the
 //! account's authorized_keys as last read. One card per account, one row per key. Pure.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -59,6 +59,10 @@ pub struct Row {
     pub direct: bool,
     /// 清單上的金鑰：經由哪些金鑰群組來的。/ Listed keys: the key groups that bring it here.
     pub groups: Vec<GroupRef>,
+    /// 金鑰擁有者的帳號停用了：`removing` = Telepy 正在把它拿掉；`manual` = 手動加的，Telepy 不會動，要管理者自己移除。
+    /// The key owner's account is disabled: `removing` = Telepy is taking it off; `manual` = added by hand, Telepy
+    /// leaves it, a manager has to remove it.
+    pub owner_disabled: bool,
 }
 
 /// 一個金鑰群組（名稱給畫面用）。/ A key group, named for display.
@@ -131,6 +135,8 @@ pub struct Inputs<'a> {
     pub restrictions: &'a HashMap<i64, Vec<i64>>,
     /// 清單上的金鑰從哪來（直接 / 金鑰群組）。/ Where listed keys come from (directly / key groups).
     pub sources: &'a HashMap<i64, Sources>,
+    /// 停用中的帳號（user id）。/ Disabled accounts (user ids).
+    pub disabled: &'a HashSet<i64>,
 }
 
 fn base(state: RowState) -> Row {
@@ -155,6 +161,7 @@ fn base(state: RowState) -> Row {
         accounts: None,
         direct: false,
         groups: Vec::new(),
+        owner_disabled: false,
     }
 }
 
@@ -170,6 +177,7 @@ fn with_known(mut r: Row, k: &KnownKey, i: &Inputs) -> Row {
     r.name = Some(k.name.clone());
     r.owner = Some(k.owner.clone());
     r.mine = k.owner_id == i.viewer;
+    r.owner_disabled = i.disabled.contains(&k.owner_id);
     r.accounts = i.restrictions.get(&k.user_key_id).cloned();
     if r.on_list {
         let src = i.sources.get(&k.user_key_id);
@@ -251,6 +259,7 @@ fn account(i: &Inputs, acct: &str) -> AccountView {
         } else {
             r.owner = owner.and_then(|id| i.users.get(&id).cloned());
             r.mine = *owner == Some(i.viewer);
+            r.owner_disabled = owner.is_some_and(|id| i.disabled.contains(&id));
         }
         if let Some(l) = line {
             r.options = l.options.clone();
@@ -348,6 +357,7 @@ mod tests {
         platform: Option<Platform>,
         restrictions: HashMap<i64, Vec<i64>>,
         sources: HashMap<i64, Sources>,
+        disabled: HashSet<i64>,
     }
 
     impl Fixture {
@@ -364,6 +374,7 @@ mod tests {
                 platform: None,
                 restrictions: HashMap::new(),
                 sources: HashMap::new(),
+                disabled: HashSet::new(),
             }
         }
         fn build(&self, viewer: i64, manager: bool) -> AccountView {
@@ -382,6 +393,7 @@ mod tests {
                 platform: self.platform.as_ref(),
                 restrictions: &self.restrictions,
                 sources: &self.sources,
+                disabled: &self.disabled,
             };
             build(&i).remove(0)
         }
@@ -439,6 +451,35 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_owners_keys_are_marked() {
+        let mut f = Fixture::new();
+        // bob 被停用：Telepy 裝過的那把正在移除；alice 被停用、她的那把是手動加的（Telepy 不會動）。
+        // Bob is disabled: the key Telepy installed is being removed; Alice is disabled and hers was added by hand.
+        f.disabled = HashSet::from([10, 20]);
+        f.installed.push(("ubuntu".into(), bare(BOB), "fp-bob".into(), Some(20)));
+        f.snapshots.insert("ubuntu".into(), (Some(format!("{BOB}
+{ALICE}
+{STRANGER}
+")), "t".into()));
+        let v = f.build(30, true);
+        assert_eq!(states(&v), vec![RowState::Removing, RowState::Manual, RowState::Unknown]);
+        assert!(v.rows[0].owner_disabled && v.rows[1].owner_disabled && !v.rows[2].owner_disabled);
+        // 金鑰已刪、只剩擁有者 id 的移除列也認得。/ A removal whose key was deleted is matched by the owner id.
+        f.known.remove(&bare(BOB));
+        let v = f.build(30, true);
+        assert!(v.rows[0].state == RowState::Removing && v.rows[0].owner_disabled);
+        // 讀檔顯示已經拿掉：列消失；手動那行留著。/ Once gone, the removal row disappears; the hand-added line stays.
+        f.snapshots.insert("ubuntu".into(), (Some(format!("{ALICE}
+")), "t2".into()));
+        let v = f.build(30, true);
+        assert_eq!(states(&v), vec![RowState::Manual]);
+        assert!(v.rows[0].owner_disabled);
+        // 帳號還啟用：沒有標記。/ Active owners carry no mark.
+        f.disabled.clear();
+        assert!(!f.build(30, true).rows[0].owner_disabled);
+    }
+
+    #[test]
     fn sharees_only_see_their_own_keys() {
         let mut f = Fixture::new();
         f.desired.insert("ubuntu".into(), BTreeSet::from([bare(ALICE), bare(BOB)]));
@@ -480,6 +521,7 @@ mod tests {
             platform: f.platform.as_ref(),
             restrictions: &f.restrictions,
             sources: &f.sources,
+            disabled: &f.disabled,
         };
         let v = build(&i);
         assert_eq!((v[0].file, v[0].windows_admin), (super::super::platform::ADMIN_FILE_LABEL, true));

@@ -272,6 +272,10 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     // 停用帳號：登出所有瀏覽器、結束所有進行中的 session（含斷線保留中的終端機）與 MCP agent，token / app 暫停。
     // Disabling: sign out every browser, end every live session (detached terminals too) and agent; tokens / apps pause.
     let disabled = if is_active == Some(false) && target.is_active { Some(crate::access_recheck::account_disabled(&state, id).await?) } else { None };
+    // 重新啟用：他的金鑰回到清單上的裝置（同步馬上跑）。/ Re-enabled: their keys go back onto the listed devices.
+    if is_active == Some(true) && !target.is_active {
+        crate::access_recheck::kick_device_keys(&state, id).await?;
+    }
     if let Some(v) = body.get("language") {
         let lang = parse_language(v)?;
         db::users::settings_update(&state.db, id, SettingsPatch { language: Some(lang), ..SettingsPatch::default() }).await?;
@@ -283,8 +287,8 @@ async fn update_user(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     if let Some(d) = disabled {
         out["disabled"] = d.json();
         let what = format!(
-            "{} disabled {}: {} sign-ins revoked, {} live sessions and {} agent sessions ended, {} API tokens and {} connected apps suspended",
-            me.username, target.username, d.web_sessions, d.live_sessions, d.agent_sessions, d.api_tokens, d.connected_apps
+            "{} disabled {}: {} sign-ins revoked, {} live sessions and {} agent sessions ended, {} API tokens and {} connected apps suspended, keys Telepy installed on {} devices ({} offline) being removed",
+            me.username, target.username, d.web_sessions, d.live_sessions, d.agent_sessions, d.api_tokens, d.connected_apps, d.device_keys.devices, d.device_keys.offline_devices
         );
         tracing::info!("{what}");
     }

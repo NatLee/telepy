@@ -68,6 +68,8 @@ export interface DeviceKeyEntry {
     key_type: string | null;
     owner: { id: number; username: string };
     mine: boolean;
+    /** 擁有者的帳號停用了：還在清單上，但 Telepy 把它從裝置拿掉了（重新啟用就裝回去）。/ Owner disabled: listed, off the device. */
+    owner_disabled?: boolean;
     added_by: string;
     created_at: string;
     /** 只裝到這些帳號（id）；null = 擁有者能用的每個帳號。/ Chosen account ids; null = every allowed account. */
@@ -161,6 +163,8 @@ export interface ViewRow {
     direct?: boolean;
     /** 清單上的金鑰：經由哪些金鑰群組。/ Listed keys: the key groups that bring it here. */
     groups?: NamedRef[];
+    /** 金鑰擁有者的帳號停用了（removing = Telepy 正在拿掉；manual = 手動加的，Telepy 不動）。/ The key owner is disabled. */
+    owner_disabled?: boolean;
 }
 
 export interface ViewAccount {
