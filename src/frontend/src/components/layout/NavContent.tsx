@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -14,8 +14,6 @@ import { LanguageSwitcher } from "./LanguageSwitcher";
 import { ScaleSwitcher } from "./ScaleSwitcher";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { OPEN_PREFS_EVENT, UserPreferencesModal, type PrefsTab } from "./UserPreferencesModal";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
 interface NavLink {
     key: TranslationKey;
@@ -54,6 +52,9 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
             { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} />, feature: "webhooks.personal" },
+            // 腳本 / CLI / CI 的入口（token、可呼叫的端點、呼叫紀錄）；跟 Logs、Webhooks 一樣是「接到別的系統」的頁。
+            // The way in for scripts / the CLI / CI (tokens, reachable endpoints, the call log), next to Logs and Webhooks.
+            { key: "nav.api", href: "/tunnels/api", icon: <Braces size={18} />, feature: "api.tokens" },
         ],
     },
     {
@@ -66,10 +67,11 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         ],
     },
     {
-        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、即時連線、錄影、AI 活動、全站 webhook）在這裡，加上網站設定。
+        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、即時連線、錄影、AI 活動、全站 webhook、API 活動）在這裡，
+        // 加上網站設定。API 文件（Swagger）改從 API 頁連過去。
         // The admin section: the pages above only hold "mine"; everyone's (logs, live sessions, recordings, AI
-        // activity, site webhooks) live here,
-        // next to the site settings.
+        // activity, site webhooks, API activity) live here, next to the site settings. The API docs (Swagger) are
+        // linked from the API page now.
         key: "nav.admin",
         admin: true,
         links: [
@@ -79,6 +81,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },
             { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
             { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
+            { key: "nav.adminApiActivity", href: "/tunnels/admin/api-activity", icon: <ListChecks size={18} /> },
         ],
     },
 ];
@@ -216,25 +219,6 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             );
                             return item;
                         })}
-                        {/* 管理區最後是 API 文件（外部頁面，不在 navLinks 裡）。/ The admin section ends with the API docs (an outside page, not in navLinks). */}
-                        {section.admin && (
-                            <a
-                                href={`${API_BASE}/api/__hidden_swagger`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={onNavigate}
-                                title={collapsed ? t("nav.apiDocs") : undefined}
-                                className={navItemClass(false, collapsed)}
-                            >
-                                <BookOpen size={18} />
-                                {!collapsed && (
-                                    <>
-                                        {t("nav.apiDocs")}
-                                        <ExternalLink size={12} className="ml-auto opacity-50" />
-                                    </>
-                                )}
-                            </a>
-                        )}
                     </React.Fragment>
                 ))}
             </nav>

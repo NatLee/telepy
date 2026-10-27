@@ -245,6 +245,93 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason, by: Option<&
     Some(b)
 }
 
+/// 呼叫者的瀏覽器（同一個使用者、同一把憑證）。找不到：`Err(Some(原因))` = 最近關掉了，`Err(None)` = 不認得。
+/// The caller's browser (same user, same credential). Not found: `Err(Some(why))` = closed recently, `Err(None)` = unknown.
+pub fn lookup(state: &AppState, p: &McpPrincipal, id: &str) -> Result<Arc<AiBrowser>, Option<String>> {
+    match state.ai.browsers.get(id) {
+        Some(b) if b.user_id == p.user.id && b.credential == p.credential => Ok(b),
+        _ => Err(state.ai.browsers.closed_reason(id)),
+    }
+}
+
+/// 一個瀏覽器動作的稽核列（MCP tool 與 REST 共用）。/ The audit row of one browser action (MCP tools and REST).
+pub async fn audit_action(state: &AppState, p: &McpPrincipal, tool: &str, started: Instant, b: &AiBrowser, detail: Option<String>, error: Option<String>) {
+    audit(
+        state,
+        db::ai_audit::NewEvent {
+            user_id: p.user.id,
+            grant_id: p.credential.grant_id(),
+            client_name: &p.client_name,
+            tool,
+            tunnel_id: Some(b.tunnel_id),
+            session_id: Some(&b.id),
+            target_username: Some(&b.target_username),
+            detail: detail.as_deref(),
+            ok: error.is_none(),
+            duration_ms: Some(started.elapsed().as_millis() as i64),
+            error: error.as_deref(),
+            ip: p.ip.as_deref(),
+            ..Default::default()
+        },
+    )
+    .await;
+}
+
+/// 跑一個動作並寫稽核。/ Run one action and audit it.
+pub async fn run_action(state: &AppState, p: &McpPrincipal, tool: &str, b: &AiBrowser, action: Value, detail: String) -> Result<Value, String> {
+    let started = Instant::now();
+    let r = b.action(state, action).await;
+    audit_action(state, p, tool, started, b, Some(detail), r.as_ref().err().cloned()).await;
+    r
+}
+
+/// 開瀏覽器、有網址就順便導向，並寫 `browser_open` 稽核。回（瀏覽器, 頁面 {url, title}, 導向錯誤）。
+/// Open a browser, navigate when a URL is given, and audit `browser_open`. Returns (browser, page, navigate error).
+pub async fn open_at(state: &AppState, p: &McpPrincipal, req: OpenBrowserRequest, url: Option<String>) -> Result<(Arc<AiBrowser>, Option<Value>, Option<String>), String> {
+    let started = Instant::now();
+    let detail = format!("username: {}{}", req.username.as_deref().unwrap_or("(default)"), url.as_deref().map(|u| format!("; url: {u}")).unwrap_or_default());
+    let tunnel_id = req.tunnel_id;
+    let b = match open(state, p, req).await {
+        Ok(b) => b,
+        Err(e) => {
+            audit(
+                state,
+                db::ai_audit::NewEvent {
+                    user_id: p.user.id,
+                    grant_id: p.credential.grant_id(),
+                    client_name: &p.client_name,
+                    tool: "browser_open",
+                    tunnel_id: Some(tunnel_id),
+                    detail: Some(&detail),
+                    ok: false,
+                    duration_ms: Some(started.elapsed().as_millis() as i64),
+                    error: Some(&e),
+                    ip: p.ip.as_deref(),
+                    ..Default::default()
+                },
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    let (mut page, mut error) = (None, None);
+    if let Some(u) = &url {
+        match b.action(state, json!({ "action": "navigate", "url": u })).await {
+            Ok(v) => page = Some(json!({ "url": v.get("url"), "title": v.get("title") })),
+            Err(e) => error = Some(e),
+        }
+    }
+    audit_action(state, p, "browser_open", started, &b, Some(detail), error.clone()).await;
+    Ok((b, page, error))
+}
+
+/// `browser_type` 的稽核說明：敏感的（預設）只記長度。/ The audit detail of a type action; sensitive text (the default) by length only.
+pub fn type_detail(selector: &str, text: &str, press_enter: bool, sensitive: bool) -> String {
+    let n = text.chars().count();
+    let shown = if sensitive { format!("{n} characters") } else { format!("\"{text}\"") };
+    format!("selector: {selector}; {shown}{}", if press_enter { " + Enter" } else { "" })
+}
+
 /// 權限面的關閉理由（同 AI session）。/ Authorization-based close reasons (as for AI sessions).
 async fn authorization_lost(state: &AppState, b: &AiBrowser) -> Option<CloseReason> {
     if !b.credential.is_live(&state.db).await? {

@@ -24,7 +24,8 @@ A self-hosted web platform for managing **reverse SSH tunnels**. Register a devi
 - **Toolbox** — saved command snippets beside the web terminal (and in the LAN terminal dock): your own, per device or site-wide, with `$variables` filled in before each run (secret ones masked and never stored), favourites, "ask first" for risky ones and a dozen built-in examples; a snippet is typed into the shell like your own keystrokes, so command rules still apply, and an info diagram shows each step of a run.
 - **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels). Per-device key lists put your keys into exactly the accounts you may use — or a chosen subset — including the administrators file on Windows devices, and a key removed from a device by hand can be put back for 7 days.
 - **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser. Optional two-factor sign-in with passkeys (also passwordless) or an authenticator app (TOTP), plus one-time recovery codes; administrators can reset a user's second factors. "Your devices" lists every browser signed in to your account and signs any of them out at once (open pages close too); a sign-in from a new country or browser is announced, and admins can sign users out.
-- **`telepy` command line & API tokens** — `telepy ls`, `telepy ssh box`, `telepy exec --label env=prod -- uptime`, `telepy cp`, live sessions and recordings from your terminal; sign in through the browser or with a personal API token (scopes, tunnel limit, required expiry, revoked at once) that scripts, CI and headless MCP agents can use too. A diagram shows how a token differs from a web sign-in and an MCP app.
+- **`telepy` command line & API tokens** — `telepy ls`, `telepy ssh box`, `telepy exec --label env=prod -- uptime`, `telepy cp`, live sessions and recordings from your terminal; `telepy lan`, `telepy browse` (a scripted browser on a device's network: read pages, screenshots, clicks); sign in through the browser or with a personal API token (scopes, tunnel limit, required expiry, revoked at once) that scripts, CI and headless MCP agents can use too.
+- **API page** — your tokens, every endpoint a token can call (grouped by scope, with copy-ready `curl` and the matching CLI command, built from the server's own allow-list), and an activity log of every call your tokens made; admins get everyone's. A diagram compares the three ways in (web sign-in, API token, MCP app) and what each revoke cuts.
 - **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
 
 ## Usage
@@ -140,7 +141,8 @@ token (`Authorization: Bearer <access_token>` from `POST /api/auth/token`). "Try
 carry your login automatically; **Authorize** lets you test with another token. The spec is
 generated from the actual routes (`utoipa`), so it is always in sync with the server;
 `telepy-server openapi` prints the same document from the CLI. Set `OPENAPI_ENABLED=false` to
-remove both.
+remove both. The **API** page in the web app links to it ("Full reference") and lists, from the same document, which
+endpoints a personal API token may call.
 
 ## CLI helper
 
@@ -163,7 +165,7 @@ Sub-commands:
 Install a release build (macOS, Linux, Windows; see [docs/cli.md](./docs/cli.md)) or `cargo install --git https://github.com/NatLee/telepy telepy-cli`, then:
 
 ```sh
-telepy login https://telepy.example.com          # browser sign-in, or --token tpt_… (Preferences → API tokens)
+telepy login https://telepy.example.com          # browser sign-in, or --token tpt_… (the API page → Your tokens)
 telepy ls                                        # tunnels with health, latency, accounts and labels
 telepy ssh box@pi                                # system ssh through the tunnel, Telepy's host key pinned
 telepy exec --label env=prod -- uptime           # many devices at once; command rules and audit apply

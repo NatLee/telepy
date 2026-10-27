@@ -10,24 +10,26 @@ use crate::oauth;
 use crate::state::AppState;
 use crate::util::db_time;
 
-/// 呼叫者拿的是什麼：OAuth grant（一個 app 的同意）或個人 API token。/ What the caller holds: an OAuth grant or an API token.
+/// 呼叫者拿的是什麼：OAuth grant（一個 app 的同意）、個人 API token，或網頁登入（REST 版的瀏覽器動作；值 = 使用者 id）。
+/// What the caller holds: an OAuth grant, an API token, or a web sign-in (the REST browser actions; the user id).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Credential {
     Grant(i64),
     Token(i64),
+    Web(i64),
 }
 
 impl Credential {
     pub fn grant_id(self) -> Option<i64> {
         match self {
             Credential::Grant(id) => Some(id),
-            Credential::Token(_) => None,
+            _ => None,
         }
     }
     pub fn token_id(self) -> Option<i64> {
         match self {
             Credential::Token(id) => Some(id),
-            Credential::Grant(_) => None,
+            _ => None,
         }
     }
     /// 撤銷 / 到期了嗎（reaper 用；DB 錯誤 = 不知道 → None）。/ Whether it is still live (None on a DB error).
@@ -36,7 +38,29 @@ impl Credential {
         Some(match self {
             Credential::Grant(id) => db::oauth::grant_by_id(db, id).await.ok()?.map(|g| g.is_active(&now)).unwrap_or(false),
             Credential::Token(id) => db::api_tokens::by_id(db, id).await.ok()?.map(|t| t.is_active(&now)).unwrap_or(false),
+            // 網頁登入沒有可撤銷的憑證；使用者停用與權限另外檢查。/ Nothing to revoke; the user and permissions are checked separately.
+            Credential::Web(_) => true,
         })
+    }
+}
+
+/// 網頁登入打 REST 瀏覽器動作時，稽核 / 通知 / 「誰在用」裡的名稱。/ How a web sign-in is named for the REST browser actions.
+pub const WEB_CLIENT_NAME: &str = "Telepy web sign-in";
+
+impl McpPrincipal {
+    /// 網頁登入的呼叫者（只給 REST 版的瀏覽器動作用：scope 只有 `browser:use`，功能另外由 extractor 擋）。
+    /// A web sign-in as a caller, for the REST browser actions only (scope `browser:use`; features are checked by the extractor).
+    pub fn web(user: User, ip: Option<String>) -> Self {
+        McpPrincipal {
+            credential: Credential::Web(user.id),
+            user,
+            client_id: "web".into(),
+            client_name: WEB_CLIENT_NAME.into(),
+            scopes: vec!["browser:use".into()],
+            tunnel_ids: None,
+            ip,
+            denied: Vec::new(),
+        }
     }
 }
 

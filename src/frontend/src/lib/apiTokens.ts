@@ -33,6 +33,12 @@ export interface ApiToken {
     expired: boolean;
     active: boolean;
     sessions: number;
+    /** 開著的腳本瀏覽器。/ Scripted browsers open right now. */
+    browsers?: number;
+    /** 建立以來的呼叫次數（紀錄只留 90 天）。/ Calls since it was created (the log keeps 90 days). */
+    call_count?: number;
+    /** 最近的呼叫摘要。/ The recent-call summary. */
+    calls?: { calls_24h: number; calls_7d: number; errors_7d: number; last_call_at: string | null; last_status: number | null };
 }
 
 /** 選項 → 「那天本地時間結束」的 ISO 時間；自選日期不合法 / 超過一年 = undefined（還不能送）。

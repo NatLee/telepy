@@ -7,9 +7,10 @@
 //! Personal API token management (web sign-ins only — a token cannot mint tokens). Creating needs `reauth` once the
 //! account has a second factor; the secret is returned once. Revocation is immediate (cache cleared, its sessions closed).
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
@@ -27,6 +28,8 @@ use crate::util::{db_time, db_to_iso_utc_z, opt_db_to_iso_utc_z};
 pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list_mine, create))
+        .routes(routes!(calls))
+        .routes(routes!(catalogue))
         .routes(routes!(revoke_mine))
         .routes(routes!(list_for_user))
         .routes(routes!(revoke_for_user))
@@ -42,7 +45,25 @@ pub fn check_expiry(at: Option<chrono::DateTime<chrono::Utc>>, now: chrono::Date
     }
 }
 
+fn summary_json(s: Option<&db::api_calls::Summary>) -> Value {
+    let s = s.cloned().unwrap_or_default();
+    json!({
+        "calls_24h": s.calls_24h,
+        "calls_7d": s.calls_7d,
+        "errors_7d": s.errors_7d,
+        "last_call_at": opt_db_to_iso_utc_z(&s.last_call_at),
+        "last_status": s.last_status,
+    })
+}
+
 async fn token_json(state: &AppState, t: &ApiToken) -> Value {
+    let mut v = token_json_bare(state, t).await;
+    let sums = db::api_calls::summaries(&state.db, &[t.id]).await.unwrap_or_default();
+    v["calls"] = summary_json(sums.get(&t.id));
+    v
+}
+
+async fn token_json_bare(state: &AppState, t: &ApiToken) -> Value {
     let now = crate::util::now_db();
     let tunnels = match t.tunnel_id_list() {
         None => Value::Null,
@@ -69,13 +90,20 @@ async fn token_json(state: &AppState, t: &ApiToken) -> Value {
         "expired": t.revoked_at.is_none() && t.expires_at.as_str() <= now.as_str(),
         "active": t.is_active(&now),
         "sessions": state.ai.list().iter().filter(|s| s.credential == Credential::Token(t.id)).count(),
+        "browsers": state.ai.browsers.list().iter().filter(|b| b.credential == Credential::Token(t.id)).count(),
+        "call_count": t.call_count,
     })
 }
 
 async fn list_json(state: &AppState, user_id: i64) -> ApiResult<Value> {
+    let tokens = db::api_tokens::for_user(&state.db, user_id).await?;
+    let ids: Vec<i64> = tokens.iter().map(|t| t.id).collect();
+    let sums = db::api_calls::summaries(&state.db, &ids).await?;
     let mut out = Vec::new();
-    for t in db::api_tokens::for_user(&state.db, user_id).await? {
-        out.push(token_json(state, &t).await);
+    for t in &tokens {
+        let mut v = token_json_bare(state, t).await;
+        v["calls"] = summary_json(sums.get(&t.id));
+        out.push(v);
     }
     Ok(Value::Array(out))
 }
@@ -168,6 +196,181 @@ async fn revoke_mine(State(state): State<AppState>, AuthUser(me): AuthUser, d: D
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------------------------------------------------------------- call log
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct CallsQuery {
+    scope: Option<String>,
+    token_id: Option<i64>,
+    grant_id: Option<i64>,
+    user_id: Option<i64>,
+    status: Option<String>,
+    method: Option<String>,
+    limit: Option<i64>,
+    before: Option<i64>,
+}
+
+/// 每頁預設 / 最多幾列（網頁一次加 300）。/ Rows per page by default and at most (the web adds 300 at a time).
+pub const CALLS_DEFAULT_LIMIT: i64 = 300;
+pub const CALLS_MAX_LIMIT: i64 = 1000;
+
+fn call_json(c: &db::api_calls::Call, visible: Option<&std::collections::HashSet<i64>>) -> Value {
+    // 「我的」：隧道名稱只給看得到那條隧道的人（被拒絕的請求可能指向別人的隧道）。/ Tunnel names only for tunnels the viewer can see.
+    let tunnel = c.tunnel_id.map(|id| {
+        let name = if visible.map(|v| v.contains(&id)).unwrap_or(true) { c.tunnel_name.clone() } else { None };
+        json!({ "id": id, "name": name })
+    });
+    json!({
+        "id": c.id,
+        "at": db_to_iso_utc_z(&c.at),
+        "user": { "id": c.user_id, "username": c.username },
+        "token": c.token_id.map(|id| json!({ "id": id, "name": c.token_name, "prefix": c.token_prefix })),
+        "grant_id": c.grant_id,
+        "client_name": c.client_name,
+        "kind": c.kind,
+        "method": c.method,
+        "route": c.route,
+        "tunnel": tunnel,
+        "status": c.status,
+        "duration_ms": c.duration_ms,
+        "ip": c.ip,
+        "error": c.error,
+    })
+}
+
+#[utoipa::path(get, path = "/api/auth/tokens/calls", tag = "API Tokens", security(("bearer" = [])), params(
+    ("scope" = Option<String>, Query, description = "`mine` (default): your own calls; `all`: everyone's (admins only, else 403 admin_only)"),
+    ("token_id" = Option<i64>, Query, description = "Only the calls of one personal API token"),
+    ("grant_id" = Option<i64>, Query, description = "Only the calls of one connected app (OAuth grant)"),
+    ("user_id" = Option<i64>, Query, description = "Only one person's calls (needs scope=all)"),
+    ("status" = Option<String>, Query, description = "ok (< 400), 4xx, 5xx or error (≥ 400)"),
+    ("method" = Option<String>, Query, description = "GET, POST, PUT, PATCH, DELETE, or MCP (tool calls)"),
+    ("limit" = Option<i64>, Query, description = "Rows, newest first (default 300, max 1000)"),
+    ("before" = Option<i64>, Query, description = "Only rows with an id below this (page back)"),
+), responses(
+    (status = 200, description = "Calls made with personal API tokens and connected apps' tokens (REST requests, reads included, and MCP tool calls of personal tokens), newest first. Route templates, never query strings", body = super::schemas::ApiCallPage),
+    (status = 400, body = super::schemas::ErrorBody),
+    (status = 403, description = "admin_only, or called with a token (token_route)", body = super::schemas::ErrorBody),
+))]
+async fn calls(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<CallsQuery>) -> ApiResult<Json<Value>> {
+    web_only(&d)?;
+    let scope = super::ViewScope::parse(q.scope.as_deref(), me.is_superuser)?;
+    let user_id = match scope {
+        super::ViewScope::Mine => {
+            if q.user_id.is_some_and(|u| u != me.id) {
+                return Err(ApiError::bad_request("user_id needs scope=all"));
+            }
+            Some(me.id)
+        }
+        super::ViewScope::All => q.user_id,
+    };
+    let status = match q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(raw) => Some(db::api_calls::StatusFilter::parse(raw).ok_or_else(|| ApiError::bad_request("status must be ok, 4xx, 5xx or error"))?),
+    };
+    let filter = db::api_calls::Filter {
+        user_id,
+        token_id: q.token_id,
+        grant_id: q.grant_id,
+        status,
+        method: q.method.filter(|m| !m.trim().is_empty()),
+        before: q.before,
+        limit: q.limit.unwrap_or(CALLS_DEFAULT_LIMIT).clamp(1, CALLS_MAX_LIMIT),
+    };
+    let rows = db::api_calls::list(&state.db, &filter).await?;
+    let visible: Option<std::collections::HashSet<i64>> = match scope {
+        super::ViewScope::All => None,
+        super::ViewScope::Mine => Some(db::tunnels::visible_to(&state.db, me.id).await?.iter().map(|t| t.id).collect()),
+    };
+    let has_more = rows.len() as i64 == filter.limit;
+    Ok(Json(json!({
+        "calls": rows.iter().map(|c| call_json(c, visible.as_ref())).collect::<Vec<_>>(),
+        "limit": filter.limit,
+        "has_more": has_more,
+        // 寫入佇列滿了而丟掉的筆數（啟動以來，全站）：管理員才看得到。/ Calls dropped because the queue was full (admins).
+        "dropped": if me.is_superuser { json!(state.api_calls.dropped()) } else { Value::Null },
+    })))
+}
+
+// ---------------------------------------------------------------- reachable endpoints
+
+/// OpenAPI 的每個操作：(方法, 路徑樣板, tag, 摘要)。從 `app::openapi()` 算一次。
+/// Every OpenAPI operation as (method, path template, tag, summary), computed once from `app::openapi()`.
+fn openapi_ops() -> &'static [(String, String, String, String)] {
+    static OPS: std::sync::OnceLock<Vec<(String, String, String, String)>> = std::sync::OnceLock::new();
+    OPS.get_or_init(|| {
+        let doc = crate::app::openapi();
+        let mut out = Vec::new();
+        for (path, item) in &doc.paths.paths {
+            let ops = [("GET", &item.get), ("POST", &item.post), ("PUT", &item.put), ("PATCH", &item.patch), ("DELETE", &item.delete)];
+            for (m, op) in ops {
+                let Some(op) = op else { continue };
+                let tag = op.tags.as_ref().and_then(|t| t.first().cloned()).unwrap_or_default();
+                let first_ok = op.responses.responses.iter().find(|(code, _)| code.starts_with('2')).and_then(|(_, r)| match r {
+                    utoipa::openapi::RefOr::T(r) => Some(r.description.clone()),
+                    _ => None,
+                });
+                // 回應說明是英文且具體；doc comment 是中英混寫，只取英文那半。/ Response descriptions are English and
+                // specific; doc comments mix Chinese and English, so only their English half is used.
+                let summary = [first_ok, op.summary.as_deref().and_then(english_part), op.description.as_deref().and_then(english_part)]
+                    .into_iter()
+                    .flatten()
+                    .find(|s| !s.trim().is_empty())
+                    .unwrap_or_default();
+                out.push((m.to_string(), path.clone(), tag, summary));
+            }
+        }
+        out
+    })
+}
+
+/// 中英混寫的說明 → 英文的那一段（`中文。/ English.` 取斜線後；全是中文 = None）。
+/// A bilingual doc line → its English part (after the slash in `中文。/ English.`; all-Chinese = None).
+pub fn english_part(text: &str) -> Option<String> {
+    let cjk = |s: &str| s.chars().any(|c| ('\u{3000}'..='\u{9fff}').contains(&c) || ('\u{ff00}'..='\u{ffef}').contains(&c));
+    let line = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+    if !cjk(&line) {
+        return (!line.is_empty()).then_some(line);
+    }
+    let tail = line.rsplit_once(" / ").or_else(|| line.rsplit_once("/ ")).map(|(_, t)| t.trim().to_string())?;
+    (!tail.is_empty() && !cjk(&tail)).then_some(tail)
+}
+
+/// (方法, 路徑樣板)：白名單漂移測試用。/ (method, path template) pairs, for the allow-list drift test.
+pub fn operations() -> Vec<(String, String)> {
+    openapi_ops().iter().map(|(m, p, _, _)| (m.clone(), p.clone())).collect()
+}
+
+/// 一個操作在目錄裡的樣子（純函式：白名單 + 功能表）。/ One operation as the catalogue shows it (pure).
+pub fn catalogue_entry(method: &str, path: &str, tag: &str, summary: &str) -> Value {
+    let sample = api_tokens::sample_path(path);
+    let route = api_tokens::matching_rule(method, &sample).map(|(r, _)| r);
+    json!({
+        "method": method,
+        "path": path,
+        "tag": tag,
+        "summary": summary,
+        "token": route.is_some(),
+        "scope": route.and_then(|r| r.scope),
+        "tunnel": route.map(|r| r.tunnel.as_str()),
+        "feature": crate::features::for_route(method, &sample).map(|f| f.id()),
+    })
+}
+
+#[utoipa::path(get, path = "/api/auth/tokens/routes", tag = "API Tokens", security(("bearer" = [])), responses(
+    (status = 200, description = "Every documented endpoint with whether an API token may call it, the scope it needs, where its tunnel restriction is checked (path / handler / unrestricted / none) and its feature gate — built from the same allow-list the server enforces", body = super::schemas::ApiRouteCatalogue),
+))]
+async fn catalogue(State(state): State<AppState>, headers: HeaderMap, AuthUser(_me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
+    web_only(&d)?;
+    let routes: Vec<Value> = openapi_ops().iter().map(|(m, p, t, s)| catalogue_entry(m, p, t, s)).collect();
+    Ok(Json(json!({
+        "base_url": crate::oauth::issuer(state.config.public_url.as_deref(), &headers),
+        "scopes": api_tokens::all_scopes(),
+        "routes": routes,
+    })))
+}
+
 fn admin_only(me: &User) -> ApiResult<()> {
     if !me.is_superuser {
         return Err(ApiError::forbidden("Permission denied. Only administrators can manage other people's API tokens."));
@@ -204,5 +407,29 @@ mod tests {
         assert!(check_expiry(Some(now + chrono::Duration::days(366) + chrono::Duration::hours(1)), now).is_err());
         assert!(check_expiry(Some(now + chrono::Duration::days(365)), now).is_ok());
         assert!(check_expiry(Some(now + chrono::Duration::days(30)), now).is_ok());
+    }
+
+    #[test]
+    fn summaries_keep_the_english_half() {
+        assert_eq!(english_part("List the tunnels").as_deref(), Some("List the tunnels"));
+        assert_eq!(english_part("列出隧道。/ List the tunnels.").as_deref(), Some("List the tunnels."));
+        assert_eq!(english_part("UserProfileView：基本資料 + 個人設定。"), None);
+        assert_eq!(english_part(""), None);
+    }
+
+    #[test]
+    fn the_catalogue_follows_the_allow_list_and_features() {
+        let e = catalogue_entry("GET", "/api/reverse/server/{id}/lan/hosts", "LAN", "x");
+        assert_eq!((e["token"].as_bool(), e["scope"].as_str(), e["tunnel"].as_str(), e["feature"].as_str()), (Some(true), Some("tunnels:read"), Some("path"), Some("network")));
+        let e = catalogue_entry("POST", "/api/browser/sessions/{id}/click", "", "");
+        assert_eq!((e["scope"].as_str(), e["tunnel"].as_str(), e["feature"].as_str()), (Some("browser:use"), Some("handler"), Some("remote_browser")));
+        let e = catalogue_entry("POST", "/api/auth/tokens", "", "");
+        assert_eq!((e["token"].as_bool(), e["scope"].is_null(), e["feature"].as_str()), (Some(false), true, Some("api.tokens")));
+        let e = catalogue_entry("GET", "/api/auth/user/profile", "", "");
+        assert_eq!((e["token"].as_bool(), e["scope"].is_null(), e["tunnel"].as_str()), (Some(true), true, Some("none")));
+        // 目錄涵蓋每一個 OpenAPI 操作，而且至少一些是 token 能打的。/ It covers every operation, some reachable.
+        let ops = openapi_ops();
+        assert!(ops.len() > 100);
+        assert!(ops.iter().filter(|(m, p, t, s)| catalogue_entry(m, p, t, s)["token"] == true).count() > 40);
     }
 }
