@@ -79,7 +79,7 @@ async fn groups_and_users_decide_which_features_people_use() {
 
     // 預設全部可以用；只有管理員能看 / 改設定。/ Everything is allowed by default; only admins manage it.
     let profile = app.get("/api/auth/user/profile", Some(&bob.token)).await.json;
-    assert_eq!(features_of(&profile).len(), 14, "{profile}");
+    assert_eq!(features_of(&profile).len(), telepy_server::features::Feature::ALL.len(), "{profile}");
     assert_eq!(app.get("/api/access", Some(&bob.token)).await.status, StatusCode::FORBIDDEN);
     let t = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal by default");
     t.close().await;

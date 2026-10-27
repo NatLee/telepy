@@ -125,7 +125,8 @@ pub struct AiSession {
     pub id: String,
     pub user_id: i64,
     pub user_name: String,
-    pub grant_id: i64,
+    /// 開它的 grant / API token（同一把才能用它）。/ The grant or API token that opened it (only it may use the session).
+    pub credential: crate::auth::mcp::Credential,
     pub client_name: String,
     pub tunnel_id: i64,
     pub tunnel_name: String,
@@ -338,7 +339,7 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenRequest) -> Resul
         id: format!("ais_{}", crate::util::uuid_hex()),
         user_id: p.user.id,
         user_name: p.user.username.clone(),
-        grant_id: p.grant_id,
+        credential: p.credential,
         client_name: p.client_name.clone(),
         tunnel_id: tunnel.id,
         tunnel_name: tunnel.host_friendly_name.clone(),
@@ -379,7 +380,7 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Ar
         state,
         db::ai_audit::NewEvent {
             user_id: s.user_id,
-            grant_id: Some(s.grant_id),
+            grant_id: s.credential.grant_id(),
             client_name: &s.client_name,
             tool: "ssh_session_close",
             tunnel_id: Some(s.tunnel_id),
@@ -399,7 +400,12 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason) -> Option<Ar
 
 /// grant 撤銷時立即關掉它的所有 session 與瀏覽器。/ Close every session and browser of a grant (on revocation).
 pub async fn close_for_grant(state: &AppState, grant_id: i64, reason: CloseReason) -> usize {
-    close_where(state, |s| s.grant_id == grant_id, reason).await + browser::close_where(state, |b| b.grant_id == grant_id, reason).await
+    close_for(state, crate::auth::mcp::Credential::Grant(grant_id), reason).await
+}
+
+/// grant 或 API token 撤銷時立即關掉它的所有 session 與瀏覽器。/ Close everything a grant or API token opened.
+pub async fn close_for(state: &AppState, c: crate::auth::mcp::Credential, reason: CloseReason) -> usize {
+    close_where(state, |s| s.credential == c, reason).await + browser::close_where(state, |b| b.credential == c, reason).await
 }
 
 /// 隧道刪除時立即關掉上面的 session 與瀏覽器（不等 reaper）。/ Close every session and browser on a tunnel (on delete).
@@ -420,8 +426,7 @@ async fn close_where(state: &AppState, pick: impl Fn(&AiSession) -> bool, reason
 
 /// 權限面的關閉理由：grant / 使用者 / 隧道 / 權限 / username 是否仍然有效（DB 錯誤時不關）。
 async fn authorization_lost(state: &AppState, s: &AiSession) -> Option<CloseReason> {
-    let grant = db::oauth::grant_by_id(&state.db, s.grant_id).await.ok()?;
-    if !grant.map(|g| g.is_active(&now_db())).unwrap_or(false) {
+    if !s.credential.is_live(&state.db).await? {
         return Some(CloseReason::Revoked);
     }
     if !db::users::by_id(&state.db, s.user_id).await.ok()?.map(|u| u.is_active).unwrap_or(false) {
@@ -562,7 +567,7 @@ pub async fn close_shell(state: &AppState, s: &AiSession, sh: &AiShell, reason: 
         state,
         db::ai_audit::NewEvent {
             user_id: s.user_id,
-            grant_id: Some(s.grant_id),
+            grant_id: s.credential.grant_id(),
             client_name: &s.client_name,
             tool: "shell_close",
             tunnel_id: Some(s.tunnel_id),

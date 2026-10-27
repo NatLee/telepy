@@ -10,12 +10,14 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Activity, ArrowRight, Info, KeyRound, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
+import { Activity, ArrowRight, Info, KeyRound, KeySquare, Plug, ShieldCheck, SlidersHorizontal, Timer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentReachDialog } from "@/components/mcp/AgentReachDialog";
 import { CodeBlock } from "@/components/ui/CodeBlock";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
+import { openPreferences } from "@/components/layout/UserPreferencesModal";
+import { hasFeature } from "@/lib/features";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { useAuth } from "@/lib/auth";
@@ -113,6 +115,17 @@ export default function McpPage() {
                             </div>
                         )}
                     </Panel>
+
+                    {/* 沒有瀏覽器的 agent / CI：個人 API token 當 Bearer。/ Headless agents and CI: a personal API token as the bearer. */}
+                    {hasFeature(user, "api.tokens") && (
+                        <Panel icon={<KeySquare />} title={t("mcp.tokensTitle")} description={t("mcp.tokensBody")}>
+                            <CodeBlock language="json" value={JSON.stringify({ mcpServers: { telepy: { url, headers: { Authorization: "Bearer tpt_…" } } } }, null, 2)} />
+                            <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => openPreferences("tokens")}>
+                                {t("mcp.tokensOpen")}
+                                <ArrowRight />
+                            </Button>
+                        </Panel>
+                    )}
 
                     {/* 權限與工具 / Permissions and tools */}
                     <Panel icon={<KeyRound />} title={t("mcp.permissionsTitle")} description={t("mcp.permissionsHint")}>

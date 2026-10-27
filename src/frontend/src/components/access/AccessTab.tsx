@@ -36,8 +36,7 @@ import {
     Webhook,
     Wrench,
     X,
-    type LucideIcon,
-} from "lucide-react";
+    type LucideIcon, KeySquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -80,6 +79,7 @@ const FEATURE_ICON: Record<FeatureId, LucideIcon> = {
     "command_rules.manage": ShieldCheck,
     "webhooks.personal": Webhook,
     "mcp.connect": Plug,
+    "api.tokens": KeySquare,
     "api.docs": BookOpen,
 };
 

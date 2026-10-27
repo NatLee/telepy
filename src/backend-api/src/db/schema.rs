@@ -177,6 +177,24 @@ const TABLES: &[(&str, &str)] = &[
             "revoked_at" datetime NULL
         )"#,
     ),
+    // Rust 自有：個人 API token（祕密只存 SHA-256；scope、隧道限制、必填的到期時間）。/ Personal API tokens.
+    (
+        "telepy_api_token",
+        r#"CREATE TABLE "telepy_api_token" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "name" varchar(100) NOT NULL,
+            "prefix" varchar(16) NOT NULL,
+            "token_hash" varchar(64) NOT NULL UNIQUE,
+            "scope" varchar(256) NOT NULL,
+            "tunnel_ids" text NULL,
+            "expires_at" datetime NOT NULL,
+            "created_at" datetime NOT NULL,
+            "last_used_at" datetime NULL,
+            "last_used_ip" varchar(64) NULL,
+            "revoked_at" datetime NULL
+        )"#,
+    ),
     // Rust 自有：兩步驟驗證（TOTP secret 加密存放、passkey、復原碼只存雜湊）。/ Two-factor login.
     (
         "telepy_user_mfa",
@@ -804,6 +822,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_tunnel_id" ON "telepy_ai_audit_event" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_ai_audit_event_at" ON "telepy_ai_audit_event" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_user_id" ON "telepy_oauth_grant" ("user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_token_user_id" ON "telepy_api_token" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_oauth_grant_client_id" ON "telepy_oauth_grant" ("client_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_user_key_id" ON "telepy_device_key" ("user_key_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_device_key_installed_user_key_id" ON "telepy_device_key_installed" ("user_key_id")"#,
@@ -915,6 +934,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Command rules: the approvers an "approve" rule names (JSON array; NULL / empty = owner + ADMIN). Events keep a snapshot.
     ("telepy_command_rule", "approver_ids", "text NULL"),
     ("telepy_command_event", "approver_ids", "text NULL"),
+    // 指令申請來自哪把個人 API token（agent 的核准沿用要對同一把）。/ The API token an agent request came from.
+    ("telepy_command_event", "token_id", "integer NULL"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
     ("site_settings_sitesettings", "user_key_max_days", "integer NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "desktop_enabled", "bool NOT NULL DEFAULT 1"),

@@ -1,0 +1,78 @@
+# telepy CLI 的發行版：只在推 `cli-v*` tag 時跑（不跑 PR、不是 CI）。五個平台各編一個 binary，打包 + SHA-256，
+# 掛到同名的 GitHub Release。伺服器的 Docker build 不受影響（CLI 是獨立的 crate：src/cli）。
+# Release builds of the telepy CLI: runs only on `cli-v*` tags (never on PRs; this is not CI). One binary per
+# platform, packed with a SHA-256, attached to the release of that tag. The server build is unaffected.
+name: Release CLI
+
+on:
+  push:
+    tags: ["cli-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+      - name: musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        shell: bash
+        run: cargo build --release --locked --manifest-path src/cli/Cargo.toml --bin telepy --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          dir=src/cli/target/${{ matrix.target }}/release
+          name=telepy-${GITHUB_REF_NAME#cli-}-${{ matrix.target }}
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$dir/telepy.exe" dist/telepy.exe
+            (cd dist && 7z a "../$name.zip" telepy.exe >/dev/null)
+            archive="$name.zip"
+          else
+            cp "$dir/telepy" dist/telepy
+            tar -C dist -czf "$name.tar.gz" telepy
+            archive="$name.tar.gz"
+          fi
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            telepy-*.tar.gz
+            telepy-*.zip
+            telepy-*.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "telepy CLI ${GITHUB_REF_NAME#cli-}" --notes "Command-line client for Telepy. Install: see docs/cli.md."
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

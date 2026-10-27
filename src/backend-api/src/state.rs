@@ -79,6 +79,8 @@ pub struct Inner {
     pub device_info: crate::device_info::DeviceInfoState,
     /// 功能權限（誰可以用哪些功能）的快取；gateway 擁有。/ Feature-permission cache, owned by the gateway.
     pub features: Arc<crate::features::Features>,
+    /// 個人 API token 的查詢快取（撤銷時清掉）。/ Personal API token lookups (cleared on revoke).
+    pub api_tokens: crate::auth::api_tokens::TokenCache,
 }
 
 #[derive(Clone)]
@@ -146,6 +148,7 @@ impl AppState {
             shells: Default::default(),
             device_info: Default::default(),
             features,
+            api_tokens: Default::default(),
             config,
             db,
         }))

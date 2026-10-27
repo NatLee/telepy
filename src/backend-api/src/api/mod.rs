@@ -4,6 +4,7 @@
 pub mod access;
 pub mod access_requests;
 pub mod ai;
+pub mod api_tokens;
 pub mod auth;
 pub mod command_rules;
 pub mod credentials;

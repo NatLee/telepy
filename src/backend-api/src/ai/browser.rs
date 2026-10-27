@@ -35,7 +35,7 @@ pub struct AiBrowser {
     pub id: String,
     pub user_id: i64,
     pub user_name: String,
-    pub grant_id: i64,
+    pub credential: crate::auth::mcp::Credential,
     pub client_name: String,
     pub tunnel_id: i64,
     pub tunnel_name: String,
@@ -180,7 +180,7 @@ pub async fn open(state: &AppState, p: &McpPrincipal, req: OpenBrowserRequest) -
         id: format!("aib_{}", crate::util::uuid_hex()),
         user_id: p.user.id,
         user_name: p.user.username.clone(),
-        grant_id: p.grant_id,
+        credential: p.credential,
         client_name: p.client_name.clone(),
         tunnel_id: tunnel.id,
         tunnel_name: tunnel.host_friendly_name.clone(),
@@ -222,7 +222,7 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason, by: Option<&
         state,
         db::ai_audit::NewEvent {
             user_id: b.user_id,
-            grant_id: Some(b.grant_id),
+            grant_id: b.credential.grant_id(),
             client_name: &b.client_name,
             tool: "browser_close",
             tunnel_id: Some(b.tunnel_id),
@@ -247,8 +247,7 @@ pub async fn close(state: &AppState, id: &str, reason: CloseReason, by: Option<&
 
 /// 權限面的關閉理由（同 AI session）。/ Authorization-based close reasons (as for AI sessions).
 async fn authorization_lost(state: &AppState, b: &AiBrowser) -> Option<CloseReason> {
-    let grant = db::oauth::grant_by_id(&state.db, b.grant_id).await.ok()?;
-    if !grant.map(|g| g.is_active(&now_db())).unwrap_or(false) {
+    if !b.credential.is_live(&state.db).await? {
         return Some(CloseReason::Revoked);
     }
     if !db::users::by_id(&state.db, b.user_id).await.ok()?.map(|u| u.is_active).unwrap_or(false) {

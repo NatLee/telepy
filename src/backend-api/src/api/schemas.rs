@@ -105,6 +105,20 @@ pub struct SetupStatus {
     pub first_time_setup: bool,
 }
 
+/// 呼叫用的委派 token。/ The delegated token the call came with.
+#[derive(ToSchema)]
+pub struct ProfileCredential {
+    /// api_token / oauth_app
+    pub kind: String,
+    pub id: i64,
+    pub name: String,
+    pub scopes: Vec<String>,
+    /// null = every tunnel
+    pub tunnel_ids: Option<Vec<i64>>,
+    /// API tokens only
+    pub expires_at: Option<String>,
+}
+
 #[derive(ToSchema)]
 pub struct UserProfile {
     pub id: i64,
@@ -145,6 +159,8 @@ pub struct UserProfile {
     /// Feature ids this person may use (all of them for administrators); the rest answer 403 `feature_disabled`.
     #[schema(example = json!(["tunnels.create", "terminal", "files"]))]
     pub features: Vec<String>,
+    /// Set when the call came with a personal API token or an OAuth app token
+    pub credential: Option<ProfileCredential>,
 }
 
 // ---------------------------------------------------------------- tunnels
@@ -1838,7 +1854,10 @@ pub struct AiSession {
     pub id: String,
     pub user: AiUserRef,
     pub client_name: String,
-    pub grant_id: i64,
+    /// The OAuth grant (connected app) that opened it; null for an API token
+    pub grant_id: Option<i64>,
+    /// The personal API token that opened it; null for a connected app
+    pub token_id: Option<i64>,
     pub tunnel: AiTunnelRef,
     /// Target username on the device
     pub username: String,
@@ -3371,4 +3390,91 @@ pub struct KeyGroupGrantWrite {
 #[derive(ToSchema)]
 pub struct KeyGroupGrantAccounts {
     pub accounts: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------- REST exec sessions (API tokens / connected apps)
+
+#[derive(ToSchema)]
+pub struct AiSessionOpen {
+    pub tunnel_id: i64,
+    /// Device account; omit for the tunnel's default
+    pub username: Option<String>,
+    pub idle_timeout_s: Option<i64>,
+    pub max_lifetime_s: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AiExecRequest {
+    #[schema(example = "uptime")]
+    pub command: String,
+    /// Seconds before the command is killed (default 60, max 600)
+    pub timeout_s: Option<i64>,
+    /// Bytes kept per stream (default 65536, max 1048576)
+    pub max_output_bytes: Option<i64>,
+}
+
+#[derive(ToSchema)]
+pub struct AiExecResult {
+    pub exit_code: Option<i64>,
+    pub signal: Option<String>,
+    pub timed_out: bool,
+    pub duration_ms: i64,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_bytes: i64,
+    pub stderr_bytes: i64,
+    pub truncated: bool,
+}
+
+// ---------------------------------------------------------------- personal API tokens
+
+#[derive(ToSchema)]
+pub struct ApiTokenTunnel {
+    pub id: i64,
+    /// null when the tunnel was deleted
+    pub name: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiToken {
+    pub id: i64,
+    #[schema(example = "ci deploy")]
+    pub name: String,
+    /// The start of the secret, to recognise it
+    #[schema(example = "tpt_Ab12Cd")]
+    pub prefix: String,
+    #[schema(example = json!(["tunnels:read", "ssh:exec"]))]
+    pub scopes: Vec<String>,
+    /// null = every tunnel the user can see
+    pub tunnels: Option<Vec<ApiTokenTunnel>>,
+    pub expires_at: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub last_used_ip: Option<String>,
+    pub revoked_at: Option<String>,
+    pub expired: bool,
+    pub active: bool,
+    /// Exec sessions it has open right now
+    pub sessions: i64,
+}
+
+#[derive(ToSchema)]
+pub struct ApiTokenCreate {
+    pub name: String,
+    /// Any of tunnels:read, ssh:exec, ssh:files, network:scan, browser:use, tunnels:manage
+    pub scopes: Vec<String>,
+    /// Tunnel ids, or null for every tunnel the user can see
+    pub tunnel_ids: Option<Vec<i64>>,
+    /// Required, at most 365 days away: RFC 3339 or YYYY-MM-DD (end of that day, UTC)
+    #[schema(example = "2027-01-31")]
+    pub expires_at: String,
+    /// Second-factor proof, required once the account has a factor (see /api/auth/mfa/reauth/options)
+    pub reauth: Option<serde_json::Value>,
+}
+
+#[derive(ToSchema)]
+pub struct ApiTokenCreated {
+    pub token: ApiToken,
+    /// The secret (`tpt_…`); shown only in this response
+    pub secret: String,
 }

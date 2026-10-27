@@ -71,10 +71,23 @@ export function ExistingConnection({ app, existing, replace, onReplace }: { app:
 }
 
 /** 權限：每項可取消；會改東西的標成警告色。/ Permissions, each can be unticked; the ones that change things are flagged. */
-export function ScopeChoices({ scopes, selected, onToggle }: { scopes: ConsentScope[]; selected: string[]; onToggle: (name: string) => void }) {
+export function ScopeChoices({
+    scopes,
+    selected,
+    onToggle,
+    hint,
+    needOne,
+}: {
+    scopes: ConsentScope[];
+    selected: string[];
+    onToggle: (name: string) => void;
+    /** 換掉「app」的說法（API token 對話框用）。/ Replaces the app wording (the API token dialog). */
+    hint?: string;
+    needOne?: string;
+}) {
     const { t } = useI18n();
     return (
-        <Section as="h2" title={t("oauth.permissions")} description={t("oauth.permissionsHint")}>
+        <Section as="h2" title={t("oauth.permissions")} description={hint ?? t("oauth.permissionsHint")}>
             <ul className="space-y-2">
                 {scopes.map((s) => {
                     const meta = SCOPE_META[s.name];
@@ -106,7 +119,7 @@ export function ScopeChoices({ scopes, selected, onToggle }: { scopes: ConsentSc
                     );
                 })}
             </ul>
-            {selected.length === 0 && <p className="text-xs text-destructive">{t("oauth.needOneScope")}</p>}
+            {selected.length === 0 && <p className="text-xs text-destructive">{needOne ?? t("oauth.needOneScope")}</p>}
         </Section>
     );
 }
@@ -125,7 +138,12 @@ export function TunnelChoice({
     onToggle,
     onQuery,
     onShown,
+    hint,
+    emptyText,
 }: {
+    /** 換掉「app」的說法。/ Replace the app wording. */
+    hint?: string;
+    emptyText?: string;
     all: ConsentTunnel[];
     shown: ConsentTunnel[];
     mode: "all" | "some";
@@ -140,12 +158,12 @@ export function TunnelChoice({
     if (all.length === 0) {
         return (
             <Section as="h2" title={t("oauth.tunnels")}>
-                <p className="text-sm text-muted-foreground">{t("oauth.noTunnels")}</p>
+                <p className="text-sm text-muted-foreground">{emptyText ?? t("oauth.noTunnels")}</p>
             </Section>
         );
     }
     return (
-        <Section as="h2" title={t("oauth.tunnels")} description={t("oauth.tunnelsHint")}>
+        <Section as="h2" title={t("oauth.tunnels")} description={hint ?? t("oauth.tunnelsHint")}>
             <Segmented
                 fullWidth
                 size="sm"

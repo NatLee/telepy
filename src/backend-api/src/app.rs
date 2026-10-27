@@ -20,6 +20,7 @@ use crate::ws;
 fn api_router() -> OpenApiRouter<AppState> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(api::auth::router())
+        .merge(api::api_tokens::router())
         .merge(api::tunnels::router())
         .merge(api::usernames::router())
         .merge(api::user_keys::router())
@@ -81,7 +82,7 @@ pub fn build(state: AppState) -> Router {
         // OPENAPI_ENABLED=false 可整組關掉。/ Login-gated Swagger UI + spec (see api/doc.rs); OPENAPI_ENABLED=false removes both.
         rest = rest.merge(api::doc::router(&openapi));
     }
-    let rest = rest.layer(CompressionLayer::new());
+    let rest = rest.layer(CompressionLayer::new()).layer(axum::middleware::from_fn_with_state(state.clone(), token_calls));
 
     // WebSocket 與 MCP 路由不掛壓縮層（升級回應沒有 body；MCP 可能回 SSE 串流）。
     // No compression on WebSockets (no body) or MCP (may stream SSE).
@@ -92,6 +93,26 @@ pub fn build(state: AppState) -> Router {
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// 委派 token（個人 API token / OAuth app）打的 REST 寫入：回應後記一筆 `token_call` gateway 事件，Logs 頁上看得到
+/// 「誰透過哪把 token 做了什麼」（handler 自己的事件照常寫）。`/api/ai/` 有自己的稽核，不重複記。
+/// REST writes made with a delegated token get a `token_call` gateway event after the response (who, through which
+/// token, what); the handlers' own events are written as usual. `/api/ai/` has its own audit trail.
+async fn token_calls(axum::extract::State(state): axum::extract::State<AppState>, mut req: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    let slot = crate::auth::extractor::TokenCallSlot::default();
+    req.extensions_mut().insert(slot.clone());
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let resp = next.run(req).await;
+    if let Some(call) = slot.0.get() {
+        if !matches!(method, axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS) && !path.starts_with("/api/ai/") {
+            let status = resp.status().as_u16();
+            let msg = format!("{} via {}: {method} {path} → {status}", call.username, call.client_name);
+            state.gateway.event("token_call", None, None, call.tunnel_id, msg).await;
+        }
+    }
+    resp
 }
 
 async fn healthz() -> Json<serde_json::Value> {

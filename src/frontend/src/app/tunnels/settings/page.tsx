@@ -39,6 +39,7 @@ import { en } from "@/locales/en";
 import type { TranslationKey } from "@/locales/en";
 import { SignInHistory } from "@/components/layout/SignInHistory";
 import { SignInDevices } from "@/components/layout/SignInDevices";
+import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { AccessTab } from "@/components/access/AccessTab";
 
 function titleize(key: string) {
@@ -621,6 +622,8 @@ function UserEditModal({
                 <SignInDevices userId={user.id} userName={user.username} />
                 {/* 最近的登入 / Recent sign-ins */}
                 <SignInHistory endpoint={`/api/user/users/${user.id}/sign-ins`} description={t("security.signInsAdminDescription")} />
+                {/* 這個人的個人 API token（可撤銷）/ Their personal API tokens (revoke) */}
+                <ApiTokens userId={user.id} />
             </div>
             <ConfirmDialog
                 isOpen={confirmReset}

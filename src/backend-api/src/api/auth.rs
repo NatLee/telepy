@@ -130,7 +130,26 @@ async fn verify_token(State(state): State<AppState>, AppJson(body): AppJson<Valu
 
 /// UserProfileView：基本資料 + 個人設定（language / theme / terminal_* / ui_scale）。
 #[utoipa::path(get, path = "/api/auth/user/profile", tag = "Authentication", security(("bearer" = [])), responses((status = 200, body = super::schemas::UserProfile), (status = 401, body = super::schemas::ErrorBody)))]
-async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
+async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser, d: crate::auth::extractor::Delegated) -> ApiResult<Json<Value>> {
+    // 用 API token / OAuth app 的 token 打的：說明是哪一把、哪些 scope 與隧道（`telepy whoami` / `doctor`）。
+    // Called with an API token or an OAuth app token: which one, its scopes and tunnels (`telepy whoami` / `doctor`).
+    let credential = match d.0.as_deref() {
+        None => Value::Null,
+        Some(p) => {
+            let expires_at = match p.credential {
+                crate::auth::mcp::Credential::Token(id) => db::api_tokens::by_id(&state.db, id).await?.map(|t| db_to_iso_utc_z(&t.expires_at)),
+                crate::auth::mcp::Credential::Grant(_) => None,
+            };
+            json!({
+                "kind": if p.credential.token_id().is_some() { "api_token" } else { "oauth_app" },
+                "id": p.credential.token_id().or(p.credential.grant_id()),
+                "name": p.client_name,
+                "scopes": p.scopes,
+                "tunnel_ids": p.tunnel_ids,
+                "expires_at": expires_at,
+            })
+        }
+    };
     let settings = db::users::settings_for(&state.db, user.id).await?;
     // 這個人能用的功能（前端用來藏導覽 / 選單；真正的門在 API）。/ Features this person may use (the UI hides the rest).
     let features = state.features.policy().await?.allowed_ids(&user);
@@ -156,6 +175,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser) -> Api
         "mfa_enabled": super::mfa::factors(&state, user.id).await?.any(),
         "mfa_missing": super::mfa::enrollment_missing(&state, user.id).await?,
         "features": features,
+        "credential": credential,
     })))
 }
 

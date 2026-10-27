@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::{mfa, notify, AppJson};
+use crate::auth::extractor::Delegated;
 use crate::auth::AuthUser;
 use crate::db::{self, recordings::Recording, tunnels::Tunnel, users::User};
 use crate::error::{ApiError, ApiResult};
@@ -60,7 +61,7 @@ fn recording_json(r: &Recording, tunnel_name: Option<&str>, can_delete: bool) ->
 
 /// 錄影清單（新的在前，最多 500 筆）；`tunnel_id` 只看一條。/ Recordings, newest first (at most 500); `tunnel_id` narrows.
 #[utoipa::path(get, path = "/api/recordings", tag = "Recordings", security(("bearer" = [])), params(("tunnel_id" = Option<i64>, Query, description = "Only this tunnel"), ("limit" = Option<i64>, Query, description = "At most this many (default 200, max 500)")), responses((status = 200, body = super::schemas::RecordingList)))]
-async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
     let managed = super::sessions::managed(&state, &me).await?;
     let ids: Vec<i64> = managed.keys().copied().collect();
     let tunnel_id = q.get("tunnel_id").and_then(|v| v.parse().ok());
@@ -68,7 +69,7 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Q
     let rows = db::recordings::visible(&state.db, me.is_superuser, me.id, &ids, tunnel_id, limit).await?;
     let mut names: HashMap<i64, String> = managed.iter().map(|(id, t)| (*id, t.host_friendly_name.clone())).collect();
     let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
+    for r in rows.iter().filter(|r| d.allows(r.tunnel_id)) {
         if !names.contains_key(&r.tunnel_id) {
             if let Some(t) = db::tunnels::by_id(&state.db, r.tunnel_id).await? {
                 names.insert(t.id, t.host_friendly_name);
@@ -81,8 +82,8 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Q
 
 /// 錄影檔（asciicast v2）；還在錄的也讀得到目前為止的部分。/ The asciicast v2 file; a live one returns what is recorded so far.
 #[utoipa::path(get, path = "/api/recordings/{id}/cast", tag = "Recordings", security(("bearer" = [])), params(("id" = i64, Path, description = "Recording id")), responses((status = 200, description = "asciicast v2 (one JSON value per line)", content_type = "application/x-asciicast"), (status = 404, body = super::schemas::ErrorBody)))]
-async fn cast(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<Response> {
-    let rec = db::recordings::get(&state.db, id).await?.ok_or_else(not_found)?;
+async fn cast(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Path(id): Path<i64>) -> ApiResult<Response> {
+    let rec = db::recordings::get(&state.db, id).await?.filter(|r| d.allows(r.tunnel_id)).ok_or_else(not_found)?;
     access(&state, &me, &rec).await?;
     let path = recording::resolve(&recording::root(&state), &rec.file).ok_or_else(not_found)?;
     let bytes = tokio::fs::read(&path).await.map_err(|_| not_found())?;

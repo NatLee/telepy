@@ -17,6 +17,7 @@
 - **網路拓撲（跳板機）** — 一眼看出每台裝置背後有哪些機器：不用在裝置上安裝任何東西就能掃描它的區網（由裝置自己的 sshd 去連），幫主機加標籤、設定登入帳號，再經由裝置直接開網頁終端機連進去，或複製 `ssh -J` 一行指令與 `ProxyJump` 的 ssh config 片段。
 - **金鑰與日誌** — 在介面中管理授權金鑰並檢視 SSH gateway 日誌，可看全部或只看某條隧道（使用者只看得到自己與被分享的隧道）。
 - **身分驗證** — Google OAuth2 或帳號密碼登入，API 採 JWT。第一位登入的使用者自動成為超級管理員。可選用兩步驟驗證：passkey（也能免密碼登入）或驗證器 App（TOTP），並附一次性復原碼；管理員可以重設使用者的第二因素。
+- **`telepy` 命令列與 API token** — 在終端機裡 `telepy ls`、`telepy ssh box`、`telepy exec --label env=prod -- uptime`、`telepy cp`，看即時 session、播錄影；用瀏覽器登入，或用個人 API token（scope、隧道限制、必填到期日、撤銷立即生效），腳本、CI 與沒有瀏覽器的 MCP agent 也能用。說明圖畫出 token 跟網頁登入、MCP app 的差別。
 - **多語系與主題** — 英文、繁體中文、日本語；淺色與深色主題。
 
 ## 使用方式
@@ -146,6 +147,7 @@ Sub-commands:
 - [遠端瀏覽器架構](./docs/remote-browser.md)
 - [遠端桌面（RDP / VNC）架構](./docs/remote-desktop.md)
 - [延遲量測深入解析](./docs/latency-deep-dive.md)
+- [`telepy` 命令列與 API token](./docs/cli.md)
 - [後端效能比較：Django vs Rust](./docs/benchmarks.md)
 - [文章](./docs/articles/)
 
