@@ -55,6 +55,7 @@ fn session_json(state: &AppState, e: &Entry, tunnel_name: Option<&str>, me: i64)
         "since": db_to_iso_utc_z(&e.since),
         "client": e.client,
         "shells": shells,
+        "detached": super::serialize::detached_json(e),
         "mine": e.user_id == me,
     })
 }

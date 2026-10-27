@@ -25,8 +25,11 @@ const THEMES: [&str; 3] = ["system", "light", "dark"];
 
 /// `desktop_clipboard_limit` 是站台設定（唯讀）：桌面頁和偏好設定拿它把超過上限的選項關掉。
 /// `desktop_clipboard_limit` is the site setting (read-only), so the UI can disable choices above it.
+/// `terminal_detach_max_secs` 同理：網頁終端機斷線保留的站台上限（唯讀，0 = 功能關閉）。
+/// Likewise `terminal_detach_max_secs`: the site's ceiling for keeping a detached web terminal (read-only, 0 = off).
 async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
-    let limit = db::settings::get_solo(&state.db).await?.desktop_clipboard;
+    let site = db::settings::get_solo(&state.db).await?;
+    let limit = site.desktop_clipboard;
     Ok(json!({
         "language": s.language,
         "theme": s.theme,
@@ -38,6 +41,8 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "terminal_ligatures": s.terminal_ligatures,
         "desktop_clipboard": s.desktop_clipboard,
         "desktop_clipboard_limit": limit,
+        "terminal_detach_secs": s.terminal_detach_secs,
+        "terminal_detach_max_secs": site.terminal_detach_max_secs,
     }))
 }
 
@@ -140,6 +145,17 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             None => None,
             Some(Value::String(c)) if crate::desktop::Clipboard::parse(c).is_some() => Some(c.trim().to_string()),
             Some(_) => return Err(ApiError::field("desktop_clipboard", format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", ")))),
+        },
+        // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
+        terminal_detach_secs: match body.get("terminal_detach_secs") {
+            None => None,
+            Some(v) => match v.as_i64() {
+                Some(n) if crate::terminal_detach::CHOICES.contains(&n) => Some(n),
+                _ => {
+                    let list = crate::terminal_detach::CHOICES.iter().map(i64::to_string).collect::<Vec<_>>().join(", ");
+                    return Err(ApiError::field("terminal_detach_secs", format!("Must be one of: {list}.")));
+                }
+            },
         },
     };
     let s = db::users::settings_update(&state.db, user.id, patch).await?;

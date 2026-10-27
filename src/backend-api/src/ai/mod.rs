@@ -706,6 +706,7 @@ mod tests {
             command_approval_timeout: 300,
             signin_lifetime: 2_592_000,
             signin_access_lifetime: 3600,
+            terminal_detach_max_secs: 1800,
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

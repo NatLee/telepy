@@ -18,6 +18,10 @@ import { Modal } from "@/components/ui/Modal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ToolboxTarget } from "@/lib/snippets";
 import { CommandHoldBanner } from "@/components/commands/CommandHoldBanner";
+import { ReconnectBanner } from "@/components/tunnels/ReconnectBanner";
+import { ReconnectWhy } from "@/components/tunnels/ReconnectWhy";
+import { useTerminalDetach } from "@/hooks/useTerminalDetach";
+import { detachLayers } from "@/lib/terminalDetach";
 import { TerminalAppearanceDialog } from "@/components/tunnels/TerminalAppearance";
 import { TerminalInfoDialog } from "@/components/tunnels/TerminalInfoDialog";
 import { TerminalConnectPage } from "@/components/tunnels/TerminalConnectPanel";
@@ -80,7 +84,11 @@ function TerminalSession({ serverId }: { serverId: string }) {
         recorded,
         appearance,
         commandBanner,
+        reconnecting,
+        detachPolicy,
     } = state;
+    const detachPref = useTerminalDetach();
+    const [whyOpen, setWhyOpen] = useState(false);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     const [infoOpen, setInfoOpen] = useState(false);
     // 作用中分頁的階段 → 路徑圖。/ The active tab's phase → the path diagram.
@@ -97,7 +105,7 @@ function TerminalSession({ serverId }: { serverId: string }) {
         recorded,
     };
     const switchHref = `/tunnels/terminal?tunnel=${serverId}${lanHostId ? `&lanHost=${lanHostId}` : ""}`;
-    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner } = actions;
+    const { fetchServiceKeys, reconnect, addTab, closeTab, selectTab, withdrawCommand, dismissCommandBanner, reconnectNow } = actions;
 
     // 工具箱：桌機 = 側欄的第二個分頁（跟檔案共用一塊），手機 = 底部面板（送出後自動收起，看得到結果）。
     // Toolbox: on desktop the side panel's second tab (sharing the files panel), on phones a bottom sheet that closes
@@ -268,10 +276,25 @@ function TerminalSession({ serverId }: { serverId: string }) {
                     sideTab={sideTab}
                     onSideTab={setSideTab}
                     toolbox={isDesktop ? toolboxPanel : null}
-                    commandBanner={commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                    commandBanner={(commandBanner || reconnecting) && (
+                        <div className="space-y-2">
+                            {/* 斷線、shell 還留著：重新連線中。/ Dropped with the shell kept: reconnecting. */}
+                            {reconnecting && (
+                                <ReconnectBanner state={reconnecting} onWhy={() => setWhyOpen(true)} onRetry={reconnectNow} />
+                            )}
+                            {commandBanner && <CommandHoldBanner banner={commandBanner} onWithdraw={withdrawCommand} onDismiss={dismissCommandBanner} />}
+                        </div>
+                    )}
                 />
             </div>
 
+            <ReconnectWhy
+                isOpen={whyOpen}
+                onClose={() => setWhyOpen(false)}
+                reconnecting={reconnecting}
+                ended={activeTab?.status === "closed"}
+                layers={detachLayers(detachPref.choice, detachPref.limit, detachPolicy)}
+            />
             <TerminalAppearanceDialog isOpen={appearanceOpen} onClose={() => setAppearanceOpen(false)} appearance={appearance} />
             <TerminalInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} ctx={flowCtx} />
             {isDesktop === false && (

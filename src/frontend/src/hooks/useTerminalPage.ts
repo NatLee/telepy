@@ -4,11 +4,13 @@
  * Terminal page logic: multi shell tabs, xterm init, WebSocket PTY, service keys loading.
  *
  * 多分頁架構 / Multi-tab architecture:
- * - 每個分頁 = 一個獨立 session（自己的 xterm 實例 + 自己的 /ws/terminal/ WebSocket + 後端一個
- *   全新 PTY/ssh shell）。後端無需任何協定變更；分頁互不影響，關分頁（或關頁面）即關 WS，
- *   後端 disconnect 隨即殺掉該 shell —— 符合「每次都是新 shell、斷線就殺舊 shell」的語意。
- *   Each tab = one session (own xterm + own WebSocket + a fresh PTY/ssh shell on the backend).
- *   No backend protocol change; closing a tab closes its WS and the backend kills that shell.
+ * - 每個分頁 = 一個獨立 session（自己的 xterm 實例 + 自己的 /ws/terminal/ WebSocket + 後端一個 PTY/ssh shell）。
+ *   關分頁送 `{action:"end"}` → 後端立刻結束那個 shell。
+ *   Each tab = one session (own xterm + own WebSocket + a PTY/ssh shell); closing a tab sends `end`.
+ * - 斷線保留（lib/terminalDetach）：後端在 auth 後送 shell frame（id + 保留時間）；網路斷了就顯示「重新連線中」並帶
+ *   `resume` + 看過的 `offset` 接回同一個 shell；4015 = 不在了 → 開新的。shell id 存在 sessionStorage，重新整理後接回。
+ *   Detach: the server sends a shell frame (id + grace); a dropped socket reconnects with `resume` + `offset` to the
+ *   same shell (4015 = gone → a fresh one). Shell ids live in sessionStorage, so a reload re-attaches the tabs.
  * - session 物件存在 ref Map（xterm/WebSocket 不可序列化）；React state 只放渲染用的
  *   tabs metadata（id/title/username/status）與 activeTabId。
  *   Sessions live in a ref Map; React state holds only render metadata.
@@ -26,6 +28,11 @@ import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
 import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
+import {
+    canResume, isDropCode, loadShells, parseShellFrame, reconnectDelay, shellStoreKey, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE,
+    updateShells, withShell, withoutShell, type DetachGrace, type ShellFrame,
+} from "@/lib/terminalDetach";
+import { endKeptShell } from "@/lib/terminalShellSocket";
 import type { ResolvedTerminalAppearance } from "@/lib/terminalAppearance";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 
@@ -88,7 +95,23 @@ type Session = {
     disposed: boolean;
     /** 指令規則的提示列（每個分頁各自的）。/ This tab's command-rule banner. */
     commandBanner: HoldBanner | null;
+    /** 後端的 shell 代號（shell frame 給的；要接回時帶 `resume`）。/ The server's shell id (sent as `resume`). */
+    shellId: string | null;
+    /** 看過的輸出位置（UTF-16）；null = 這個 xterm 什麼都沒有（重新整理後）。/ Output seen; null = a fresh xterm. */
+    offset: number | null;
+    /** 伺服器說的保留時間。/ The grace time the server announced. */
+    grace: DetachGrace | null;
+    /** 斷線的時間（重新連線中才有）。/ When it dropped (only while reconnecting). */
+    droppedAt: number | null;
+    reconnectAttempt: number;
+    reconnectTimer: ReturnType<typeof setTimeout> | null;
 };
+
+/** 重新連線中的作用中分頁（提示列用）。/ The active tab's reconnect state, for the banner. */
+export interface TerminalReconnect {
+    droppedAt: number;
+    grace: DetachGrace;
+}
 
 export function useTerminalPage(serverId: string | null, accessToken: string | null, lan: TerminalLanTarget | null = null) {
     const { t } = useI18n();
@@ -126,6 +149,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const [latencyMs, setLatencyMs] = useState<number | null>(null);
     /** 作用中分頁的指令規則提示列。/ The active tab's command-rule banner. */
     const [commandBanner, setCommandBanner] = useState<HoldBanner | null>(null);
+    /** 作用中分頁正在接回保留的 shell。/ The active tab is reconnecting to its kept shell. */
+    const [reconnecting, setReconnecting] = useState<TerminalReconnect | null>(null);
     const [permissionDenied, setPermissionDenied] = useState<string | null>(null);
     const [noUsers, setNoUsers] = useState(false);
     const [showFiles, setShowFiles] = useState(false);
@@ -168,6 +193,41 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
 
     const stopPing = (s: Session) => {
         if (s.pingInterval) { clearInterval(s.pingInterval); s.pingInterval = null; }
+    };
+
+    /** 這個分頁的 shell id 存在哪（隧道 + 帳號 [+ 區網主機]）。/ Where this tab's shell id is stored. */
+    const storeKey = useCallback((account: string) => shellStoreKey(serverId ?? "", account, lanHostId, lanUsername), [serverId, lanHostId, lanUsername]);
+
+    /** 作用中分頁的重連狀態 → 提示列。/ Mirror the active tab's reconnect state into the banner. */
+    const syncReconnect = (s: Session) => {
+        if (activeIdRef.current !== s.id) return;
+        setReconnecting(s.droppedAt !== null && s.grace ? { droppedAt: s.droppedAt, grace: s.grace } : null);
+    };
+
+    /** 不再接回這個 shell（結束了、不在了、被別的視窗拿走）。/ Stop tracking this tab's shell. */
+    const forgetShell = (s: Session) => {
+        if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
+        if (s.shellId) {
+            const id = s.shellId;
+            updateShells(shellStoreKey(serverId ?? "", s.username, lanHostId, lanUsername), (l) => withoutShell(l, id));
+        }
+        s.shellId = null;
+        s.offset = null;
+        s.grace = null;
+        s.droppedAt = null;
+        s.reconnectAttempt = 0;
+        syncReconnect(s);
+    };
+
+    /** 明確結束這個分頁的 shell（關分頁、換帳號、全新 shell）：開著就送 end，沒開著就另開一條去結束它。
+     *  End this tab's shell explicitly: `end` on the open socket, or a short-lived socket when it is reconnecting. */
+    const endShell = (s: Session) => {
+        if (s.ws && s.ws.readyState === WebSocket.OPEN) {
+            try { s.ws.send(JSON.stringify({ action: "end" })); } catch { /* noop */ }
+        } else if (s.shellId && serverId) {
+            endKeptShell({ server_id: serverId, username: s.username, ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}) }, s.shellId);
+        }
+        forgetShell(s);
     };
 
     /** 靜默拆掉 ws（不觸發 onclose 的狀態更新）。/ Detach handlers and close the ws silently. */
@@ -218,6 +278,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         wsRef.current = target.ws;
         setLatencyMs(target.lastLatency);
         setCommandBanner(target.commandBanner);
+        setReconnecting(target.droppedAt !== null && target.grace ? { droppedAt: target.droppedAt, grace: target.grace } : null);
         // 等 display 生效後再量尺寸；手機不自動聚焦（避免切分頁就彈出原生鍵盤）。
         // Measure after the display change lands; skip autofocus on mobile (no surprise keyboard).
         requestAnimationFrame(() => {
@@ -258,10 +319,13 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 step_up: stepUpToken() ?? undefined,
                 // 區網主機：username 是裝置那一跳的帳號。/ LAN host: `username` is the device hop.
                 ...(lanHostId ? { lan_host_id: lanHostId, ...(lanUsername ? { lan_username: lanUsername } : {}) } : {}),
+                // 接回保留的 shell：帶看過的位置，只補沒看到的。/ Resume the kept shell from what this xterm has seen.
+                ...(s.shellId ? { resume: s.shellId, ...(s.offset !== null ? { offset: s.offset } : {}) } : {}),
             }));
             updateTab(s.id, { status: "connected", closeCode: undefined });
-            // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋，首個 PTY 輸出會覆蓋此行。
-            s.term.write(`\x1b[90m${t("terminal.connectingToServer")}\x1b[0m\r\n`);
+            // WS 已開，但後端仍在建立到裝置的 SSH 連線；先給回饋（接回時不寫，畫面照舊）。
+            // Feedback while the backend dials the device (not when resuming: the screen stays as it was).
+            if (!s.shellId) s.term.write(`\x1b[90m${t("terminal.connectingToServer")}\x1b[0m\r\n`);
             if (activeIdRef.current === s.id) fitAndResize(s);
             sendPing();
             stopPing(s);
@@ -280,11 +344,15 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 } else if (frame) {
                     s.commandBanner = nextBanner(s.commandBanner, frame);
                     if (activeIdRef.current === s.id) setCommandBanner(s.commandBanner);
+                } else {
+                    const shell = parseShellFrame(new TextDecoder().decode(event.data as ArrayBuffer));
+                    if (shell) onShellFrame(s, shell);
                 }
                 return;
             }
             // 收到真正的 PTY 輸出 = 認證成功，歸零 4001 refresh 重試旗標。
             s.authRetried = false;
+            if (s.offset !== null) s.offset += (event.data as string).length;
             s.term.write(event.data);
         };
 
@@ -302,7 +370,41 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 if (wsRef.current === ws) wsRef.current = null;
             }
             const code = event.code;
+            // 斷線（不是結束）、shell 還留著：顯示「重新連線中」，退避後帶 resume 接回。
+            // A drop (not an end) while the shell is kept: show "reconnecting" and resume after a short backoff.
+            const now = Date.now();
+            if (s.shellId && canResume(code, s.grace, s.droppedAt ?? now, now)) {
+                s.droppedAt ??= now;
+                updateTab(s.id, { status: "connecting" });
+                syncReconnect(s);
+                if (s.reconnectTimer) clearTimeout(s.reconnectTimer);
+                s.reconnectTimer = setTimeout(() => {
+                    s.reconnectTimer = null;
+                    if (!s.disposed) connectSession(s);
+                }, reconnectDelay(s.reconnectAttempt++));
+                return;
+            }
+            // shell 已經不在了（時間到、伺服器重啟）：開一個新的，留一行說明。/ The shell is gone: open a fresh one, with a note.
+            if (code === SHELL_GONE_CLOSE_CODE) {
+                forgetShell(s);
+                s.term.write(`\r\n\x1b[33m${t("detach.goneXterm")}\x1b[0m\r\n`);
+                updateTab(s.id, { status: "connecting" });
+                connectSession(s);
+                return;
+            }
+            const wasReconnecting = s.droppedAt !== null;
             updateTab(s.id, { status: "closed", closeCode: code });
+            // 要重新驗證 / step-up 的會帶著 resume 再連；其他的關閉 = 這個 shell 結束了。
+            // Auth refresh / step-up reconnect with `resume`; any other close means the shell is over.
+            if (code !== 4001 && code !== STEP_UP_CLOSE_CODE) forgetShell(s);
+            if (code === SHELL_TAKEN_CLOSE_CODE) {
+                s.term.write(`\r\n\x1b[33m${t("detach.takenXterm")}\x1b[0m\r\n`);
+                return;
+            }
+            if (wasReconnecting && isDropCode(code)) {
+                s.term.write(`\r\n\x1b[31m${t("detach.expiredXterm")}\x1b[0m\r\n`);
+                return;
+            }
 
             if (lanHostId && code === 4004) {
                 setPermissionDenied(t("terminal.lanHostMissingCard"));
@@ -369,8 +471,23 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         };
     }, [serverId, lanHostId, lanUsername, updateTab, fitAndResize, t]);
 
+    /** shell frame：記住 id / 位置 / 保留時間；接回成功就收起提示列。/ Remember the id, position and grace; a resume clears the banner. */
+    function onShellFrame(s: Session, f: ShellFrame) {
+        if (f.reset) {
+            try { s.term.reset(); } catch { /* noop */ }
+        }
+        s.shellId = f.id;
+        s.offset = f.offset;
+        s.grace = f.detach;
+        s.droppedAt = null;
+        s.reconnectAttempt = 0;
+        syncReconnect(s);
+        // 會留才記，重新整理後才接得回去。/ Only a kept shell is remembered for a reload.
+        updateShells(storeKey(s.username), (l) => (f.detach.secs > 0 ? withShell(l, f.id) : withoutShell(l, f.id)));
+    }
+
     /** 建立新分頁（含 xterm 實例與 WS 連線），並切換為作用中。/ Create + activate a new tab. */
-    const createSession = useCallback(async (sessionUsername: string) => {
+    const createSession = useCallback(async (sessionUsername: string, resumeId: string | null = null) => {
         if (!serverId || sessionsRef.current.size + pendingCreatesRef.current >= MAX_SHELL_TABS) return;
         const generation = generationRef.current;
 
@@ -417,6 +534,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             authRetried: false,
             disposed: false,
             commandBanner: null,
+            // 重新整理後接回：這個 xterm 什麼都還沒有，所以不帶 offset（伺服器清畫面重畫）。
+            // Re-attaching after a reload: this xterm has nothing yet, so no offset (the server redraws).
+            shellId: resumeId,
+            offset: null,
+            grace: null,
+            droppedAt: null,
+            reconnectAttempt: 0,
+            reconnectTimer: null,
         };
 
         // OSC 7 同步當前路徑（僅作用中分頁，避免背景分頁改動檔案面板路徑）。
@@ -450,8 +575,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const destroySession = useCallback((id: number) => {
         const s = sessionsRef.current.get(id);
         if (!s) return;
+        endShell(s); // 關分頁 = 明確結束 / closing a tab ends its shell
         s.disposed = true;
-        detachWs(s); // 關 WS → 後端 disconnect() 殺掉該 shell / closing the WS kills the shell server-side
+        detachWs(s);
         try { s.term.dispose(); } catch { /* noop */ }
         try { s.el.remove(); } catch { /* noop */ }
         sessionsRef.current.delete(id);
@@ -461,6 +587,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const respawnSession = useCallback((id: number, newUsername?: string) => {
         const s = sessionsRef.current.get(id);
         if (!s || s.disposed) return;
+        // 全新 shell：舊的明確結束。/ A fresh shell: the old one is ended explicitly.
+        endShell(s);
         detachWs(s);
         if (newUsername) s.username = newUsername;
         s.authRetried = false;
@@ -549,11 +677,14 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 if (cancelled) return;
                 setTunnelName(typeof data?.host_friendly_name === "string" ? data.host_friendly_name : null);
                 setRecorded(data?.record_sessions === true);
+                setDetachPolicy(data?.terminal_detach_policy === "never" ? "never" : "user");
             })
             .catch(() => { /* 只影響顯示 / display only */ });
         return () => { cancelled = true; };
     }, [serverId, accessToken]);
     const [recorded, setRecorded] = useState(false);
+    /** 這台裝置的斷線政策（說明圖用）。/ This device's detach policy, for the explainer. */
+    const [detachPolicy, setDetachPolicy] = useState<"user" | "never" | null>(null);
 
     // 區網主機資訊（標頭顯示用；連線本身只靠 id）。/ LAN host details for the header.
     const [lanHostState, setLanHost] = useState<TerminalLanHost | null>(null);
@@ -584,11 +715,15 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 const s = sessionsRef.current.get(id);
                 if (!s) return;
                 s.disposed = true;
+                // 離開頁面不算結束：shell 照保留時間留著，回來（或重新整理）就接回。
+                // Leaving the page is not an end: the shell is kept for its grace and re-attached on return.
+                if (s.reconnectTimer) clearTimeout(s.reconnectTimer);
                 detachWs(s);
                 try { s.term.dispose(); } catch { /* noop */ }
                 try { s.el.remove(); } catch { /* noop */ }
             });
             sessionsRef.current.clear();
+            setReconnecting(null);
             activeIdRef.current = null;
             xtermRef.current = null;
             wsRef.current = null;
@@ -606,7 +741,13 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         if (!serverId || !accessToken || username === null || !appearanceReady) return;
         usernameRef.current = username;
         if (sessionsRef.current.size === 0) {
-            if (pendingCreatesRef.current === 0) void createSession(username);
+            if (pendingCreatesRef.current === 0) {
+                // 這個分頁之前留著的 shell（重新整理、回到這頁）一個個接回；沒有就開新的。
+                // Re-attach the shells this browser tab kept (reload, coming back); otherwise open a fresh one.
+                const kept = loadShells(storeKey(username)).slice(0, MAX_SHELL_TABS);
+                if (kept.length) kept.forEach((id) => void createSession(username, id));
+                else void createSession(username);
+            }
             return;
         }
         const activeId = activeIdRef.current;
@@ -614,7 +755,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         if (active && active.username !== username) {
             respawnSession(active.id, username);
         }
-    }, [serverId, accessToken, username, appearanceReady, createSession, respawnSession]);
+    }, [serverId, accessToken, username, appearanceReady, createSession, respawnSession, storeKey]);
 
     // 視窗 / 容器尺寸變化 → refit 作用中分頁。/ Window & container resize → refit the active tab.
     useEffect(() => {
@@ -757,6 +898,30 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
         }
     };
 
+    /** 立刻重試接回（不等退避）。/ Retry the resume now instead of waiting for the backoff. */
+    const reconnectNow = useCallback(() => {
+        const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
+        if (!s || s.disposed || s.droppedAt === null) return;
+        if (s.reconnectTimer) { clearTimeout(s.reconnectTimer); s.reconnectTimer = null; }
+        s.reconnectAttempt = 0;
+        connectSession(s);
+    }, [connectSession]);
+
+    // 網路回來了：重連中的分頁不必等退避。/ Back online: reconnecting tabs don't wait for their backoff.
+    useEffect(() => {
+        const online = () => {
+            sessionsRef.current.forEach((s) => {
+                if (!s.disposed && s.droppedAt !== null && s.reconnectTimer) {
+                    clearTimeout(s.reconnectTimer);
+                    s.reconnectTimer = null;
+                    connectSession(s);
+                }
+            });
+        };
+        window.addEventListener("online", online);
+        return () => window.removeEventListener("online", online);
+    }, [connectSession]);
+
     /** 撤回作用中分頁等核准的指令。/ Withdraw the active tab's command that waits for approval. */
     const withdrawCommand = useCallback(() => {
         const s = activeIdRef.current === null ? undefined : sessionsRef.current.get(activeIdRef.current);
@@ -794,6 +959,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             recorded,
             appearance,
             commandBanner,
+            reconnecting,
+            detachPolicy,
         },
         actions: {
             fetchServiceKeys,
@@ -806,6 +973,7 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
             selectTab,
             withdrawCommand,
             dismissCommandBanner,
+            reconnectNow,
         },
     };
 }

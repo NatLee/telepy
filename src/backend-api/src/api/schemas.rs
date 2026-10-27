@@ -196,6 +196,10 @@ pub struct Tunnel {
     pub require_step_up: bool,
     /// 網頁終端機會錄影（`PUT /api/reverse/server/{id}/recording`）。/ Web terminal sessions are recorded.
     pub record_sessions: bool,
+    /// 網頁終端機斷線時：user = 照使用者的保留時間、never = 一律立刻結束（`PUT /api/reverse/server/{id}/terminal-detach`）。
+    /// When a web terminal drops: user = keep the shell per the user's choice, never = always end it at once.
+    #[schema(example = "user")]
+    pub terminal_detach_policy: String,
     /// 只有列表帶：隧道標籤（大家共用）。/ List / dashboard only: the tunnel's labels (shared).
     #[schema(example = json!(["home", "env=prod"]))]
     pub labels: Option<Vec<String>>,
@@ -280,6 +284,17 @@ pub struct PresenceSession {
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
     pub client: Option<String>,
+    /// 斷線保留中的網頁終端機（否則 null）。/ A detached web terminal (null otherwise).
+    pub detached: Option<DetachedShell>,
+}
+
+/// 網頁終端機斷線後還留著 shell：從何時起、何時結束。/ A web terminal whose shell is kept after a drop: since when, until when.
+#[derive(ToSchema)]
+pub struct DetachedShell {
+    #[schema(example = "2026-10-27T01:02:03.123456Z")]
+    pub since: String,
+    #[schema(example = "2026-10-27T01:07:03.123456Z")]
+    pub ends_at: String,
 }
 
 /// 裝置連上 gateway 的來源位址（gateway 看到的 TCP 來源；中間若有 L4 proxy 會是 proxy 的 IP）。
@@ -854,6 +869,12 @@ pub struct UserSettings {
     /// The site's ceiling for it (read-only; the narrower of the two applies)
     #[schema(example = "both")]
     pub desktop_clipboard_limit: String,
+    /// Seconds a web terminal's shell is kept after its browser drops: 0 | 60 | 300 | 900 | 1800 | 3600 (0 = end at once)
+    #[schema(example = 300)]
+    pub terminal_detach_secs: i64,
+    /// The site's ceiling for it (read-only; 0 = the feature is off)
+    #[schema(example = 1800)]
+    pub terminal_detach_max_secs: i64,
 }
 
 #[derive(ToSchema)]
@@ -877,6 +898,9 @@ pub struct UserSettingsPatch {
     /// both | to_remote | off (capped by the site setting at connect time)
     #[schema(example = "to_remote")]
     pub desktop_clipboard: Option<String>,
+    /// 0 | 60 | 300 | 900 | 1800 | 3600 (capped by the site setting and the tunnel's policy)
+    #[schema(example = 300)]
+    pub terminal_detach_secs: Option<i64>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default
@@ -2624,6 +2648,8 @@ pub struct LiveSession {
     pub client: Option<String>,
     /// kind = ai: interactive shells open on the agent's session
     pub shells: Option<i64>,
+    /// kind = terminal: the shell is kept after its browser dropped, until `ends_at`
+    pub detached: Option<DetachedShell>,
     pub mine: bool,
 }
 
@@ -2669,6 +2695,14 @@ pub struct RecordingList {
 pub struct RecordingSetting {
     pub enabled: bool,
     pub reauth: Option<MfaProof>,
+}
+
+/// 隧道的網頁終端機斷線政策：user = 照每個人的選擇（受站台上限）、never = 斷線就結束。
+/// A tunnel's web terminal detach policy: user = each person's choice (within the site ceiling), never = end at once.
+#[derive(ToSchema)]
+pub struct TerminalDetachPolicy {
+    #[schema(example = "never")]
+    pub policy: String,
 }
 
 // ---------------------------------------------------------------- command rules

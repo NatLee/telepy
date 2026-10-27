@@ -57,11 +57,14 @@ pub struct Entry {
     pub since: String,
     /// AI session 的 app 名稱。/ The app behind an AI session.
     pub client: Option<String>,
+    /// 網頁終端機斷線保留中：(從何時起, 何時結束)，DB 格式（見 `crate::terminal_detach`）。
+    /// A detached web terminal: (since, ends at) in DB format (see `crate::terminal_detach`).
+    pub detached: Option<(String, String)>,
 }
 
 impl Entry {
     pub fn new(tunnel_id: i64, user_id: i64, username: &str, kind: Kind, ip: Option<String>) -> Self {
-        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None }
+        Self { id: 0, tunnel_id, user_id, username: username.to_string(), kind, ip, since: now_db(), client: None, detached: None }
     }
 }
 
@@ -94,6 +97,16 @@ impl PresenceGuard {
             Some(by) => by,
             None => std::future::pending().await,
         }
+    }
+}
+
+impl PresenceGuard {
+    /// 標成斷線保留中（Some((since, ends_at))）或接回來了（None）。/ Mark as detached (since, ends at) or attached again.
+    pub fn set_detached(&self, detached: Option<(String, String)>) {
+        if let Some(mut slot) = self.presence.map.get_mut(&self.id) {
+            slot.0.detached = detached;
+        }
+        self.presence.mark(self.tunnel_id);
     }
 }
 
@@ -198,6 +211,10 @@ mod tests {
         assert_ne!(a.id(), b.id());
         assert_eq!(p.all().len(), 2);
         assert_eq!(p.get(a.id()).unwrap().username, "alice");
+        a.set_detached(Some(("2026-10-27 01:00:00.000000".into(), "2026-10-27 01:05:00.000000".into())));
+        assert_eq!(p.get(a.id()).unwrap().detached.unwrap().1, "2026-10-27 01:05:00.000000");
+        a.set_detached(None);
+        assert!(p.get(a.id()).unwrap().detached.is_none());
         let ended = p.end(a.id(), "carol").unwrap();
         assert_eq!(ended.user_id, 10);
         assert_eq!(a.ended().await, "carol");
