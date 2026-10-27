@@ -143,7 +143,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     // 檔案 session 是畫面那條的一部分：不另算 presence、不另發 webhook（畫面那條結束時一起收）。
     // A files session is part of its screen session: no presence or webhook of its own.
     let files = session.kind == SessionKind::Files;
-    let mut presence = (!files).then(|| state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::RustDesk, meta.ip)));
+    let mut presence = (!files).then(|| state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::RustDesk, meta.ip).as_account(&session.hop_username)));
     let opened = session.describe();
     tracing::info!(session = %session.id, "rustdesk: {opened}");
     let parent_note = session.parent.as_deref().map(|p| format!(", part of {}", short(p))).unwrap_or_default();
@@ -163,6 +163,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut to_device: u64 = 0;
     let mut close_code: Option<u16> = None;
     let mut ended_by: Option<String> = None;
+    let mut ended_note: Option<String> = None;
     let mut signed_out: Option<String> = None;
     let reason: &str = loop {
         tokio::select! {
@@ -240,6 +241,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                 }
             },
             by = async { match presence.as_mut() { Some(p) => p.ended().await, None => std::future::pending().await } } => {
+                ended_note = presence.as_ref().map(|p| p.ended_note(&by));
                 ended_by = Some(by);
                 break "ended";
             }
@@ -260,6 +262,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     let mut message = format!("{opened} closed after {} ({reason}, session {}; {} to the browser, {} to the device)", fmt_duration(connected_at.elapsed()), short(&session.id), fmt_bytes(to_browser), fmt_bytes(to_device));
     if let Some(why) = &refused {
         message.push_str(&format!("; refused: {why}"));
+    }
+    if let Some(note) = &ended_note {
+        message.push_str(&format!("; {note}"));
     }
     tracing::info!(session = %session.id, "rustdesk: {message}");
     state.gateway.event("rustdesk_close", None, None, Some(session.tunnel_id), message).await;

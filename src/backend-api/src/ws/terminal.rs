@@ -666,7 +666,7 @@ async fn keep(state: AppState, mut shell: Box<Shell>, grace: u64, mut signout: a
                 return;
             }
             // 即時 session 頁、功能被關掉、權限被拿掉（`terminal_detach::recheck`）都走這裡。
-            // The live sessions page, a feature turned off, access removed (`terminal_detach::recheck`) all land here.
+            // The live sessions page, a feature turned off, access removed (`access_recheck::recheck`) all land here.
             by = shell.presence.ended() => {
                 let note = match shell.presence.why() {
                     Some(why) => format!("ended by {by} while detached: {why}"),
@@ -983,7 +983,7 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
     };
     tracing::info!(%username, reverse_port, "SSH connection started");
     // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
-    let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip.clone()));
+    let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip.clone()).as_account(username));
     let audit = match lan_audit {
         Some(what) => ConsoleSession::open(state, ConsoleKind::LanTerminal, tunnel_id, what).await,
         None => ConsoleSession::open_for(state, ConsoleKind::Terminal, tunnel_id, &user.username, Some(username)).await,

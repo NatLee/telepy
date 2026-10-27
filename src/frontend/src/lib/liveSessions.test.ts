@@ -35,3 +35,14 @@ test("SESSION-ENDED wording: feature, lost access, or who", async () => {
     assert.deepEqual(endedNotice({ reason: "something_new", by: "Telepy" }), { kind: "by", by: "Telepy" }, "an unknown reason falls back to who");
     assert.deepEqual(endedNotice({ by: "carol" }), { kind: "by", by: "carol" });
 });
+
+test("an access-changed toast is worded per kind", async () => {
+    const { lostToast } = await import("./liveSessions.ts");
+    assert.deepEqual(lostToast("loginRemoved", "files"), { key: "sessions.lost.loginRemoved", need: "sessions.need.files" });
+    assert.deepEqual(lostToast("accessRemoved", "rustdesk"), { key: "sessions.lost.accessRemoved", need: "sessions.need.desktop" }, "RustDesk needs what a desktop needs");
+    assert.deepEqual(lostToast("loginRemoved", "ssh"), { key: "sessions.lost.ssh.loginRemoved", need: "sessions.need.ssh" }, "laptop SSH: no allowed account left");
+    assert.deepEqual(lostToast("accessRemoved", "watch"), { key: "sessions.lost.watch", need: null }, "a watcher no longer manages the tunnel");
+    assert.deepEqual(lostToast("accountDisabled", "terminal"), { key: "sessions.lost.accountDisabled", need: null }, "nothing to explain");
+    assert.deepEqual(lostToast("detachOff", "terminal"), { key: "sessions.lost.detachOff", need: null });
+    assert.deepEqual(lostToast("loginRemoved", "something"), { key: "sessions.lost.loginRemoved", need: null }, "an unknown kind gets the plain sentence");
+});

@@ -161,8 +161,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
         state.desktop.remove(&session_id);
         return;
     }
-    let mut presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::Desktop, meta.ip));
+    let mut presence = state.presence.join(Entry::new(session.tunnel_id, session.user_id, &session.user_name, Kind::Desktop, meta.ip).as_account(&session.hop_username));
     let mut ended_by: Option<String> = None;
+    let mut ended_note: Option<String> = None;
     let mut signed_out: Option<String> = None;
     let opened = session.describe();
     tracing::info!(session = %session_id, connection = %connection_id, "desktop: {opened}");
@@ -291,6 +292,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             }
             // 有人從即時 session 頁結束了它。/ Someone ended it from the live sessions page.
             by = presence.ended() => {
+                ended_note = Some(presence.ended_note(&by));
                 ended_by = Some(by);
                 break "ended";
             }
@@ -316,6 +318,9 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
     }
     if let Some(e) = &last_error {
         message.push_str(&format!("; guacd: {e}"));
+    }
+    if let Some(note) = &ended_note {
+        message.push_str(&format!("; {note}"));
     }
     tracing::info!(session = %session_id, "desktop: {message}");
     state.gateway.event("desktop_close", None, None, Some(session.tunnel_id), message).await;

@@ -437,6 +437,11 @@ impl Gateway {
         if let Some(uid) = db::keys::user_key_owner_by_prefix(&self.db, &like).await? {
             // 功能權限：「個人 SSH 金鑰」被關掉的人不能用金鑰經 gateway 連裝置。/ Personal SSH keys turned off: refused.
             if let Some(user) = db::users::by_id(&self.db, uid).await? {
+                // 停用的帳號：金鑰還在，但不能再經 gateway 連裝置。/ A disabled account's keys stay but are refused.
+                if !user.is_active {
+                    tracing::info!(user_id = uid, "gateway: the key's account is disabled; rejected");
+                    return Ok(None);
+                }
                 if !self.features.allowed(&user, crate::features::Feature::KeysPersonal).await? {
                     tracing::info!(user_id = uid, "gateway: personal SSH keys are turned off for this user; rejected");
                     return Ok(None);
@@ -472,8 +477,8 @@ impl Gateway {
                 return Ok(true);
             }
             let Some(share) = db::sharing::get(&self.db, t.id, user_id).await? else { continue };
-            let admin = crate::permissions::effective(user_id, t.user_id, Some(share.permission())).is_some_and(|e| e.satisfies(crate::permissions::Permission::Admin));
-            if admin || !db::sharing::allowed_usernames(&self.db, share.id).await?.is_empty() {
+            let eff = crate::permissions::effective(user_id, t.user_id, Some(share.permission()));
+            if crate::permissions::can_reach_device(eff, !db::sharing::allowed_usernames(&self.db, share.id).await?.is_empty()) {
                 return Ok(true);
             }
         }
@@ -805,6 +810,9 @@ impl Handler for GatewayHandler {
             (Some(Identity::User { user_id }), Some(p)) => self.gw.ssh_presence(*user_id, p, self.peer).await,
             _ => None,
         };
+        let gw = self.gw.clone();
+        let peer = self.peer;
+        let fwd_port = fwd.port;
         tokio::spawn(async move {
             let bridge = bridge_channels(fwd, channel, originator, originator_port);
             let result = match guard {
@@ -814,6 +822,14 @@ impl Handler for GatewayHandler {
                     r = bridge => r,
                     by = presence.ended() => {
                         tracing::info!(by = %by, "gateway: laptop ssh session ended from the web");
+                        // 失去權限 / 功能被關掉（有原因）：記在隧道的 Logs，跟其他 session 的 `*_close` 一樣說為什麼。
+                        // Access lost / feature off (a reason is given): log it on the tunnel, like the other `*_close` events.
+                        if presence.why().is_some() {
+                            if let Some(e) = gw.presence.get(presence.id()) {
+                                let msg = format!("Laptop SSH by {} from {} {}", e.username, peer.ip(), presence.ended_note(&by));
+                                gw.event("session_ended", Some(peer), Some(fwd_port), Some(e.tunnel_id), msg).await;
+                            }
+                        }
                         Ok(())
                     }
                 },

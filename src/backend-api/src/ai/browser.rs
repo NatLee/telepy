@@ -286,6 +286,19 @@ pub async fn reap_once(state: &AppState) {
     }
 }
 
+/// 範圍內的 agent 瀏覽器馬上跑一次授權檢查（`super::recheck`）。/ The authorization check now, for browsers in scope.
+pub async fn recheck(state: &AppState, in_scope: &impl Fn(i64, i64) -> bool) -> usize {
+    let mut n = 0;
+    for b in state.ai.browsers.list().into_iter().filter(|b| in_scope(b.tunnel_id, b.user_id)) {
+        if let Some(r) = authorization_lost(state, &b).await {
+            if close(state, &b.id, r, None).await.is_some() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 pub async fn close_where(state: &AppState, pick: impl Fn(&AiBrowser) -> bool, reason: CloseReason) -> usize {
     let ids: Vec<String> = state.ai.browsers.list().iter().filter(|b| pick(b)).map(|b| b.id.clone()).collect();
     let mut n = 0;

@@ -7,6 +7,7 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import type { LanguagePreference } from "@/lib/locale";
+import { parseImpact } from "@/lib/accountDisable";
 
 export interface ManagedUser {
     id: number;
@@ -66,9 +67,16 @@ export function useUserManagement(enabled: boolean) {
                 body: JSON.stringify(patch),
             });
             if (res.ok) {
-                const updated = await readJson(res) as ManagedUser | null;
-                if (updated && typeof updated === "object") {
+                const body = await readJson(res) as (ManagedUser & { disabled?: unknown }) | null;
+                if (body && typeof body === "object") {
+                    const { disabled, ...updated } = body;
                     setUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, ...updated } : u)));
+                    // 停用了帳號：回報切掉了什麼。/ The account was disabled: report what was cut.
+                    const d = parseImpact(disabled);
+                    if (d) {
+                        showSuccess(t("settings.disable.done", { user: updated.username, browsers: d.web_sessions, sessions: d.live_sessions + d.agent_sessions, tokens: d.api_tokens, apps: d.connected_apps }));
+                        return true;
+                    }
                 }
                 showSuccess(t("settings.userUpdated"));
                 return true;

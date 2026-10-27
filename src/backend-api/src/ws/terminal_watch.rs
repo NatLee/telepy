@@ -213,7 +213,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, shell_id: String, me
                 },
                 by = presence.ended() => {
                     close_with(&mut socket, CLOSE_ENDED, &by).await;
-                    break 'session format!("ended by {by}");
+                    break 'session presence.ended_note(&by);
                 }
                 reason = signout.ended() => {
                     close_with(&mut socket, auth::CLOSE_SIGNED_OUT, &reason).await;

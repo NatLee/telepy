@@ -658,3 +658,53 @@ async fn desktop_rdp_sound_is_offered_and_relayed() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert!(r.json["audio"][0].is_string(), "{}", r.text);
 }
+
+/// 失去權限（允許帳號被拿掉）：連線中的桌面馬上以 4009 結束（原因 = 存取變了），`desktop_close` 說為什麼。
+/// Losing access (the hop account removed): a connected desktop ends at once with 4009, and `desktop_close` says why.
+#[tokio::test]
+async fn desktop_ends_when_access_is_lost() {
+    let (guacd, _seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.guacd_addr = guacd.clone();
+        c.desktop_callback_host = "127.0.0.1".into();
+    });
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    let desktop = echo_service().await;
+    let id = dev.tunnel_id;
+
+    let r = app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&bob.token), json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "password": "x"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let mut ws = open_ws(&lab, &r.json).await.unwrap();
+    assert!(recv(&mut ws).await.is_ok(), "the tunnel UUID");
+    wait_for("desktop presence", || app.state.presence.for_tunnel(id).iter().any(|e| e.kind.as_str() == "desktop")).await;
+    let started = std::time::Instant::now();
+    let r = app.patch(&format!("/tunnels/share/{id}/{}/allowed-usernames", bob.id), Some(&alice.token), json!({"allowed_target_username_ids": []})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let reason = loop {
+        match tokio::time::timeout(Duration::from_secs(15), ws.next()).await.expect("the desktop socket stayed open") {
+            Some(Ok(Message::Close(Some(f)))) => break (u16::from(f.code), f.reason.to_string()),
+            Some(Ok(_)) => continue,
+            other => panic!("unexpected {other:?}"),
+        }
+    };
+    assert_eq!(reason, (4009, telepy_server::access_recheck::ENDED_BY.to_string()));
+    assert!(started.elapsed() < Duration::from_secs(5), "ended right after the change, not by a later sweep");
+    wait_for("presence cleared", || app.state.presence.for_tunnel(id).iter().all(|e| e.kind.as_str() != "desktop")).await;
+    let mut found = None;
+    for _ in 0..50 {
+        found = events(&lab, &alice.token, id).await.into_iter().find(|e| e["event"] == "desktop_close");
+        if found.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let msg = found.expect("desktop_close")["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("(ended,") && msg.contains("the login account is no longer allowed"), "{msg}");
+}

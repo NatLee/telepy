@@ -110,7 +110,7 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     // 限時分享：到期的每 30 秒收掉。/ Timed shares end within 30 s of their expiry.
     tokio::spawn(telepy_server::api::sharing::run_expiry(state.clone()));
     // 網頁終端機 shell 失去存取（暫時授權到期、站台關掉斷線保留…）就結束，每 10 秒。/ Shells that lost access end.
-    tokio::spawn(telepy_server::terminal_detach::run(state.clone()));
+    tokio::spawn(telepy_server::access_recheck::run(state.clone()));
     // 上次沒關到的連線紀錄（後端重啟 = 所有 forward 都斷了）。/ Connection rows left open by the last run.
     match telepy_server::db::tunnel_sessions::close_orphans(&state.db).await {
         Ok(0) => {}
