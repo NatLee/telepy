@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, ExternalLink, BookOpen, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -30,7 +30,7 @@ interface NavLink {
 // 導覽連結以翻譯 key 定義,依區段分組;Header 用攤平後的 navLinks 反查目前頁面標題。
 // Nav links carry translation keys and are grouped by section; the Header resolves the current
 // page title from the flattened navLinks.
-export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
+export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管理員看得到。/ Admins only. */ admin?: boolean }[] = [
     {
         key: "nav.sectionWorkspace",
         links: [
@@ -63,6 +63,19 @@ export const navSections: { key: TranslationKey; links: NavLink[] }[] = [
         links: [
             { key: "nav.mcp", href: "/tunnels/mcp", icon: <Plug size={18} />, feature: "mcp.connect" },
             { key: "nav.activity", href: "/tunnels/activity", icon: <Bot size={18} /> },
+        ],
+    },
+    {
+        // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、AI 活動、全站 webhook）在這裡，加上網站設定。
+        // The admin section: the pages above only hold "mine"; everyone's (logs, AI activity, site webhooks) live here,
+        // next to the site settings.
+        key: "nav.admin",
+        admin: true,
+        links: [
+            { key: "nav.settings", href: "/tunnels/settings", icon: <Settings size={18} /> },
+            { key: "nav.adminLogs", href: "/tunnels/admin/logs", icon: <ScrollText size={18} /> },
+            { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
+            { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
         ],
     },
 ];
@@ -131,12 +144,10 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
         logout();
     };
 
-    const settingsActive = pathname.startsWith("/tunnels/settings");
-
     return (
         <>
             <nav className="flex-1 overflow-y-auto px-3 pb-4 space-y-0.5">
-                {navSections.map((section) => (
+                {navSections.filter((section) => !section.admin || user?.is_superuser).map((section) => (
                     <React.Fragment key={section.key}>
                         <SectionLabel collapsed={collapsed}>{t(section.key)}</SectionLabel>
                         {section.links.filter((link) => !link.feature || hasFeature(user, link.feature)).map((link) => {
@@ -202,45 +213,27 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                             );
                             return item;
                         })}
+                        {/* 管理區最後是 API 文件（外部頁面，不在 navLinks 裡）。/ The admin section ends with the API docs (an outside page, not in navLinks). */}
+                        {section.admin && (
+                            <a
+                                href={`${API_BASE}/api/__hidden_swagger`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={onNavigate}
+                                title={collapsed ? t("nav.apiDocs") : undefined}
+                                className={navItemClass(false, collapsed)}
+                            >
+                                <BookOpen size={18} />
+                                {!collapsed && (
+                                    <>
+                                        {t("nav.apiDocs")}
+                                        <ExternalLink size={12} className="ml-auto opacity-50" />
+                                    </>
+                                )}
+                            </a>
+                        )}
                     </React.Fragment>
                 ))}
-
-                {/* 設定頁只剩站台管理(個人偏好在左下齒輪 modal),回歸管理員限定。Django admin 已隨後端改寫移除,
-                    所以這裡只剩設定頁與 API 文件。
-                    The settings page is admin-only; personal preferences live in the gear modal. The Django
-                    admin panel went away with the Rust backend, so only Settings and the API docs remain. */}
-                {user?.is_superuser && (
-                    <>
-                        <SectionLabel collapsed={collapsed}>{t("nav.admin")}</SectionLabel>
-                        <Link
-                            href="/tunnels/settings"
-                            prefetch={false}
-                            onClick={onNavigate}
-                            title={collapsed ? t("nav.settings") : undefined}
-                            aria-current={settingsActive ? "page" : undefined}
-                            className={navItemClass(settingsActive, collapsed)}
-                        >
-                            <Settings size={18} />
-                            {!collapsed && t("nav.settings")}
-                        </Link>
-                        <a
-                            href={`${API_BASE}/api/__hidden_swagger`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={onNavigate}
-                            title={collapsed ? t("nav.apiDocs") : undefined}
-                            className={navItemClass(false, collapsed)}
-                        >
-                            <BookOpen size={18} />
-                            {!collapsed && (
-                                <>
-                                    {t("nav.apiDocs")}
-                                    <ExternalLink size={12} className="ml-auto opacity-50" />
-                                </>
-                            )}
-                        </a>
-                    </>
-                )}
             </nav>
 
             <div className={`p-3 border-t border-sidebar-border space-y-2.5 ${className}`}>

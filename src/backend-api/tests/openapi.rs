@@ -58,6 +58,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/credentials", vec!["get", "post"]),
         ("/api/credentials/{id}", vec!["patch", "delete"]),
         ("/api/log/ssh/events", vec!["get"]),
+        ("/api/log/tunnels", vec!["get"]),
         ("/api/log/audit/verify", vec!["get"]),
         ("/.well-known/oauth-authorization-server", vec!["get"]),
         ("/api/oauth/authorize", vec!["get", "post"]),

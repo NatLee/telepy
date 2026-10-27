@@ -1,11 +1,11 @@
 /**
- * Webhooks 頁的資料：我的 webhook、（管理員）全站 webhook、事件目錄與網站限制；新增 / 修改 / 刪除、開關、送測試、
- * 送出紀錄與簽章密鑰。範圍在網址上（`?scope=site`）。
- * Data for the Webhooks page: my webhooks, the site-wide ones (admins), the catalogue and the site's limits;
- * create / change / delete, on / off, test sends, delivery history and signing secrets. The scope is in the URL.
+ * Webhooks 頁的資料：我的 webhook（Webhooks 頁）或全站 webhook（管理區的全站 Webhook 頁）、事件目錄與網站限制；
+ * 新增 / 修改 / 刪除、開關、送測試、送出紀錄與簽章密鑰。
+ * Data for the webhook pages: my webhooks (the Webhooks page) or the site-wide ones (the admin section's Site
+ * webhooks page), the catalogue and the site's limits; create / change / delete, on / off, test sends, delivery
+ * history and signing secrets.
  */
 import { useCallback, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -19,18 +19,12 @@ export type WebhookErrors = Partial<Record<keyof WebhookInput | "form", string>>
 
 const FIELDS: (keyof WebhookInput)[] = ["name", "url", "format", "language", "events", "all_tunnels", "tunnel_ids", "delay", "enabled", "headers"];
 
-export function useWebhooksPage() {
+export function useWebhooksPage(scope: WebhookScope = "user") {
     const { t } = useI18n();
     const { showSuccess, showError } = useToast();
-    const router = useRouter();
-    const params = useSearchParams();
     const [data, setData] = useState<WebhookList | null>(null);
     const [failed, setFailed] = useState(false);
     const [tunnels, setTunnels] = useState<{ id: number; name: string }[]>([]);
-    const wantsSite = params.get("scope") === "site";
-    const scope: WebhookScope = wantsSite && data?.can_manage_site ? "site" : "user";
-
-    const setScope = useCallback((s: WebhookScope) => router.replace(s === "site" ? "/tunnels/webhooks?scope=site" : "/tunnels/webhooks"), [router]);
 
     const load = useCallback(async () => {
         try {
@@ -178,5 +172,5 @@ export function useWebhooksPage() {
     // 全站 webhook 能選整台伺服器的隧道。/ Site-wide webhooks pick from every tunnel on the server.
     const tunnelChoices = scope === "site" ? (data?.site_tunnels ?? []) : tunnels;
 
-    return { data, failed, scope, setScope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
+    return { data, failed, scope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
 }

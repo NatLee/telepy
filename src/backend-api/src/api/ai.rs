@@ -1,7 +1,7 @@
 //! `/api/ai/*`：AI（MCP）SSH session 與稽核紀錄的 web 端點。
-//! - `GET /api/ai/sessions`：我的 session ∪ 在我擁有的隧道上的 session（管理員：全部）
+//! - `GET /api/ai/sessions`：我的 session ∪ 在我擁有的隧道上的 session；`?scope=all` = 全部（只有管理員）
 //! - `DELETE /api/ai/sessions/{id}`：session 的使用者、隧道擁有者或管理員可以關
-//! - `GET /api/ai/activity`：管理員全部；其他人 = 自己的 ∪ 自己擁有的隧道上的
+//! - `GET /api/ai/activity`：自己的 ∪ 自己擁有的隧道上的（管理員也一樣）；`?scope=all` = 全部（只有管理員）
 //! - `POST /api/ai/sessions`、`POST /api/ai/sessions/{id}/exec`：MCP 的 `ssh_session_open` / `ssh_exec` 的 REST 版，
 //!   只收個人 API token / OAuth app 的 token（`telepy exec`），同樣的 reaper、指令規則與稽核
 //!
@@ -32,9 +32,9 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(activity))
 }
 
-/// 誰看得到 / 關得掉一個 session：本人、隧道擁有者、管理員。/ Who may see or close a session.
+/// 誰關得掉一個 session：本人、隧道擁有者、管理員。/ Who may close a session.
 fn can_manage(me: &User, s: &AiSession) -> bool {
-    me.is_superuser || s.user_id == me.id || s.tunnel_owner_id == me.id
+    me.is_superuser || is_mine(me, s)
 }
 
 pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
@@ -56,10 +56,22 @@ pub(crate) fn session_json(s: &AiSession, tz: i32) -> Value {
     })
 }
 
-#[utoipa::path(get, path = "/api/ai/sessions", tag = "AI", security(("bearer" = [])), responses((status = 200, description = "Open AI sessions: yours plus those on tunnels you own (admins: all), oldest first", body = Vec<super::schemas::AiSession>)))]
-async fn list_sessions(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated) -> ApiResult<Json<Value>> {
+/// 「我的」：我開的 ∪ 在我擁有的隧道上的（管理員也一樣；全部要 `scope=all`）。/ "Mine": mine plus those on my tunnels.
+fn is_mine(me: &User, s: &AiSession) -> bool {
+    s.user_id == me.id || s.tunnel_owner_id == me.id
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+struct ScopeQuery {
+    scope: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/ai/sessions", tag = "AI", security(("bearer" = [])), params(("scope" = Option<String>, Query, description = "mine (default, admins too: yours plus those on tunnels you own) or all (admins only)")), responses((status = 200, description = "Open AI sessions in the scope, oldest first", body = Vec<super::schemas::AiSession>), (status = 403, description = "scope=all from a non-admin (code admin_only)", body = super::schemas::ErrorBody)))]
+async fn list_sessions(State(state): State<AppState>, AuthUser(me): AuthUser, d: Delegated, Query(q): Query<ScopeQuery>) -> ApiResult<Json<Value>> {
+    let all = super::ViewScope::parse(q.scope.as_deref(), me.is_superuser)? == super::ViewScope::All;
     let tz = state.config.tz_offset_minutes;
-    Ok(Json(Value::Array(state.ai.list().iter().filter(|s| can_manage(&me, s) && d.allows(s.tunnel_id)).map(|s| session_json(s, tz)).collect())))
+    Ok(Json(Value::Array(state.ai.list().iter().filter(|s| (all || is_mine(&me, s)) && d.allows(s.tunnel_id)).map(|s| session_json(s, tz)).collect())))
 }
 
 /// REST 版的 session 只給委派 token（session 要記是哪把 token / 哪個 app 開的）。/ Delegated tokens only.
@@ -126,6 +138,7 @@ struct ActivityQuery {
     tunnel_id: Option<i64>,
     user_id: Option<i64>,
     grant_id: Option<i64>,
+    scope: Option<String>,
 }
 
 #[utoipa::path(get, path = "/api/ai/activity", tag = "AI", security(("bearer" = [])), params(
@@ -133,10 +146,12 @@ struct ActivityQuery {
     ("tunnel_id" = Option<i64>, Query),
     ("user_id" = Option<i64>, Query),
     ("grant_id" = Option<i64>, Query, description = "Only the calls of one connected app (OAuth grant)"),
-), responses((status = 200, description = "MCP tool calls: admins see everything, others their own calls plus calls on tunnels they own", body = Vec<super::schemas::AiActivity>)))]
+    ("scope" = Option<String>, Query, description = "mine (default, admins too: your own calls plus calls on tunnels you own) or all (admins only)"),
+), responses((status = 200, description = "MCP tool calls in the scope, newest first", body = Vec<super::schemas::AiActivity>), (status = 403, description = "scope=all from a non-admin (code admin_only)", body = super::schemas::ErrorBody)))]
 async fn activity(State(state): State<AppState>, AuthUser(me): AuthUser, Query(q): Query<ActivityQuery>) -> ApiResult<Json<Value>> {
+    let all = super::ViewScope::parse(q.scope.as_deref(), me.is_superuser)? == super::ViewScope::All;
     let filter = db::ai_audit::Filter {
-        visible_to: (!me.is_superuser).then_some(me.id),
+        visible_to: (!all).then_some(me.id),
         user_id: q.user_id,
         tunnel_id: q.tunnel_id,
         grant_id: q.grant_id,

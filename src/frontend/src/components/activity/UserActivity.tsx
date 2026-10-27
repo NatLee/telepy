@@ -42,7 +42,7 @@ export function UserActivity({ userId, onNavigate }: { userId: number; onNavigat
         let cancelled = false;
         (async () => {
             try {
-                const res = await apiFetch(`/api/ai/activity?user_id=${userId}&limit=${limit}`);
+                const res = await apiFetch(`/api/ai/activity?scope=all&user_id=${userId}&limit=${limit}`);
                 if (cancelled) return;
                 if (res.ok) {
                     setData({ rows: await res.json(), limit, at: new Date() });
@@ -78,7 +78,7 @@ export function UserActivity({ userId, onNavigate }: { userId: number; onNavigat
                 description={t("activity.userDescription")}
                 action={
                     <Button asChild size="sm" variant="outline">
-                        <Link href={`/tunnels/activity?user=${userId}`} onClick={onNavigate}>
+                        <Link href={`/tunnels/admin/activity?user=${userId}`} onClick={onNavigate}>
                             {t("activity.userOpenPage")}
                             <ArrowRight />
                         </Link>

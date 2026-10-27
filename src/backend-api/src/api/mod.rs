@@ -86,3 +86,42 @@ pub fn body_object(v: &serde_json::Value) -> serde_json::Value {
         serde_json::json!({})
     }
 }
+
+/// 列表端點的 `?scope=`：`mine`（預設，每個人都一樣 —— 管理員也只看到自己的）或 `all`（只有管理員，給管理區的頁面）。
+/// The `?scope=` of the list endpoints: `mine` (the default, the same for everyone — admins too) or `all` (admins
+/// only, for the admin section's pages).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewScope {
+    Mine,
+    All,
+}
+
+impl ViewScope {
+    /// 解析並檢查權限：非管理員要 `all` = 403 `admin_only`，認不得的值 = 400。
+    /// Parse and check: `all` from a non-admin is 403 `admin_only`, an unknown value 400.
+    pub fn parse(raw: Option<&str>, is_superuser: bool) -> crate::error::ApiResult<Self> {
+        match raw.map(str::trim) {
+            None | Some("") | Some("mine") => Ok(Self::Mine),
+            Some("all") if is_superuser => Ok(Self::All),
+            Some("all") => Err(crate::error::ApiError::new(
+                axum::http::StatusCode::FORBIDDEN,
+                serde_json::json!({ "error": "Only administrators can see everyone's records.", "code": "admin_only" }),
+            )),
+            Some(_) => Err(crate::error::ApiError::bad_request("scope must be mine or all")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod view_scope_tests {
+    use super::ViewScope;
+
+    #[test]
+    fn mine_is_the_default_and_all_needs_an_admin() {
+        assert_eq!(ViewScope::parse(None, true).unwrap(), ViewScope::Mine);
+        assert_eq!(ViewScope::parse(Some("mine"), true).unwrap(), ViewScope::Mine);
+        assert_eq!(ViewScope::parse(Some("all"), true).unwrap(), ViewScope::All);
+        assert_eq!(ViewScope::parse(Some("all"), false).unwrap_err().status, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(ViewScope::parse(Some("everything"), true).unwrap_err().status, axum::http::StatusCode::BAD_REQUEST);
+    }
+}

@@ -96,7 +96,7 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                     </dl>
 
                     {/* 能做什麼 / Permissions */}
-                    <Section icon={<KeyRound />} title={t("apps.permissions")} description={t("apps.permissionsHint")}>
+                    <Section icon={<KeyRound />} title={t("apps.permissions")} description={someoneElse ? t("apps.permissionsHintOther", { user: d.user.username ?? `#${d.user.id}` }) : t("apps.permissionsHint")}>
                         <ul className="divide-y divide-border rounded-lg border border-border">
                             {granted.map((s) => (
                                 <li key={s.scope} className="px-3.5 py-2.5 text-sm">
@@ -118,7 +118,7 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                     {/* 碰得到的隧道 / Tunnels */}
                     <Section icon={<Server />} title={t("apps.tunnels")}>
                         {d.tunnels === null ? (
-                            <p className="text-sm text-muted-foreground">{t("apps.tunnelsAll")}</p>
+                            <p className="text-sm text-muted-foreground">{someoneElse ? t("apps.tunnelsAllOther", { user: d.user.username ?? `#${d.user.id}` }) : t("apps.tunnelsAll")}</p>
                         ) : d.tunnels.length === 0 ? (
                             <Callout tone="warning">{t("apps.tunnelsNone")}</Callout>
                         ) : (
@@ -158,7 +158,7 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                         icon={<Activity />}
                         title={t("apps.recentActivity")}
                         action={
-                            <Link href="/tunnels/activity" prefetch={false} onClick={onClose} className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                            <Link href={someoneElse ? `/tunnels/admin/activity?app=${d.id}` : `/tunnels/activity?app=${d.id}`} prefetch={false} onClick={onClose} className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
                                 {t("apps.allActivity")}
                             </Link>
                         }

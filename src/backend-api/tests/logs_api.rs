@@ -1,5 +1,8 @@
-//! Gateway 事件的可見範圍：管理員全看，一般使用者只看自己擁有／被分享的隧道，指定別人的隧道 404。
-//! Visibility of gateway events: admins see all, other users only their own / shared tunnels, foreign tunnel → 404.
+//! Gateway 事件的可見範圍：預設（`mine`）每個人只看自己擁有／被分享的隧道，管理員也一樣；`scope=all` 只給管理員
+//! （含沒有隧道的事件，`tunnel_id=none` 只看那些）；指定別人的隧道 404（管理員可以指定任何一條）。
+//! Visibility of gateway events: by default (`mine`) everyone — admins too — sees their own / shared tunnels;
+//! `scope=all` is admins only (tunnel-less events included, `tunnel_id=none` = only those); a foreign tunnel → 404
+//! (admins may name any tunnel).
 mod common;
 
 use axum::http::StatusCode;
@@ -36,16 +39,36 @@ async fn events_are_scoped_to_visible_tunnels() {
     gw.event("forward", None, Some(40001), Some(a), "Remote forward registered on port 40001".into()).await;
     gw.event("accepted", None, None, Some(b), "Accepted publickey for telepy (tunnel b)".into()).await;
 
-    // admin: everything, oldest first, filter by any tunnel
-    let r = app.get("/api/log/ssh/events", Some(&admin)).await;
+    // admin, scope=all: everything, oldest first, with tunnel names
+    let r = app.get("/api/log/ssh/events?scope=all", Some(&admin)).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let kinds: Vec<&str> = r.json.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert_eq!(kinds, ["listening", "accepted", "forward", "accepted"]);
+    assert_eq!(r.json[1]["tunnel_name"], "boxa");
+    assert_eq!(r.json[0]["tunnel_name"], serde_json::Value::Null);
+    let text = app.get("/api/log/ssh?scope=all", Some(&admin)).await.json;
+    assert!(text.as_str().unwrap().contains("Server listening"));
+    // tunnel_id=none = only the tunnel-less site events
+    let r = app.get("/api/log/ssh/events?scope=all&tunnel_id=none", Some(&admin)).await;
+    let kinds: Vec<&str> = r.json.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["listening"]);
+
+    // admin, default (mine): only their own tunnel a, no tunnel-less events — but any tunnel by id
+    let r = app.get("/api/log/ssh/events", Some(&admin)).await;
+    let kinds: Vec<&str> = r.json.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["accepted", "forward"], "{}", r.text);
+    assert!(!app.get("/api/log/ssh", Some(&admin)).await.json.as_str().unwrap().contains("Server listening"));
     let r = app.get(&format!("/api/log/ssh/events?tunnel_id={b}"), Some(&admin)).await;
     assert_eq!(r.json.as_array().unwrap().len(), 1);
     assert_eq!(r.json[0]["tunnel_id"], b);
-    let text = app.get("/api/log/ssh", Some(&admin)).await.json;
-    assert!(text.as_str().unwrap().contains("Server listening"));
+    assert_eq!(app.get("/api/log/ssh/events?tunnel_id=none", Some(&admin)).await.json, json!([]));
+
+    // the admin tunnel list: every tunnel with its owner
+    let r = app.get("/api/log/tunnels", Some(&admin)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let names: Vec<&str> = r.json.as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["boxa", "boxb"]);
+    assert_eq!(r.json[1]["owner"]["username"], "bob");
 
     // bob: only tunnel b, no tunnel-less events, a is a 404
     let r = app.get("/api/log/ssh/events", Some(&bob)).await;
@@ -58,6 +81,13 @@ async fn events_are_scoped_to_visible_tunnels() {
     let text = app.get("/api/log/ssh", Some(&bob)).await.json;
     let text = text.as_str().unwrap();
     assert!(text.contains("(tunnel b)") && !text.contains("(tunnel a)") && !text.contains("Server listening"), "{text}");
+    // everyone's events and the admin tunnel list are admins only
+    for path in ["/api/log/ssh/events?scope=all", "/api/log/ssh?scope=all", "/api/log/tunnels"] {
+        let r = app.get(path, Some(&bob)).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{path}: {}", r.text);
+    }
+    assert_eq!(app.get("/api/log/ssh/events?scope=all", Some(&bob)).await.json["code"], "admin_only");
+    assert_eq!(app.get("/api/log/ssh/events?scope=bogus", Some(&bob)).await.status, StatusCode::BAD_REQUEST);
 
     // sharing a with bob makes its events visible
     let r = app.post(&format!("/tunnels/share/{a}"), Some(&admin), json!({"shared_with_user_id": bob_id, "permission_type": "view"})).await;

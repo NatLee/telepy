@@ -6,10 +6,13 @@ import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/lib/auth";
 import { EVENT_KINDS, countByCategory, filterLogs, type CategoryFilter } from "@/lib/gatewayLogs";
 import { dayKey, labelDays, type LabeledDayGroup } from "@/lib/timeline";
+import type { ViewScope } from "@/components/layout/AdminViews";
 
 /**
- * SSH gateway 事件（/api/log/ssh/events 的一筆）。後端已依權限過濾：管理員全看，其他人只看自己擁有／被分享的隧道。
- * One gateway event from /api/log/ssh/events; the backend scopes them (admins: all, others: own + shared tunnels).
+ * SSH gateway 事件（/api/log/ssh/events 的一筆）。`mine`（個人的日誌頁，管理員也一樣）= 自己擁有／被分享的隧道；
+ * `all`（管理區的稽核日誌，只有管理員）= 全部，含沒有隧道的站台事件。
+ * One gateway event from /api/log/ssh/events. `mine` (the personal Logs page, admins too) = tunnels you own or that
+ * are shared with you; `all` (the admin section's audit log, admins only) = everything, tunnel-less site events too.
  */
 export interface GatewayEvent {
     id: number;
@@ -18,6 +21,8 @@ export interface GatewayEvent {
     peer: string | null;
     port: number | null;
     tunnel_id: number | null;
+    /** 隧道還在時的名稱。/ The tunnel's name while it exists. */
+    tunnel_name?: string | null;
     message: string;
 }
 
@@ -35,6 +40,7 @@ export interface LogEntry {
     event: string;
     message: string;
     tunnelId: number | null;
+    tunnelName: string | null;
     port: number | null;
 }
 
@@ -42,6 +48,8 @@ export interface TunnelOption {
     id: number;
     host_friendly_name: string;
     reverse_port: number;
+    /** 擁有者（只有管理區的清單有）。/ The owner (only in the admin section's list). */
+    owner?: string | null;
 }
 
 /**
@@ -68,6 +76,8 @@ export interface AuditVerifyReport {
 
 /** 隧道篩選的「全部」值（URL 上不帶 ?tunnel=）。/ The "all tunnels" filter value (no ?tunnel= in the URL). */
 export const ALL_TUNNELS = "all";
+/** 只看沒有隧道的站台事件（管理區）。/ Only the tunnel-less site events (admin section). */
+export const SITE_EVENTS = "none";
 
 /** 一次多載幾筆；後端最多 5000。/ Events per page; the backend caps `limit` at 5000. */
 export const PAGE_LIMIT = 500;
@@ -75,7 +85,7 @@ const MAX_LIMIT = 5000;
 
 export type LogDayGroup = LabeledDayGroup<LogEntry>;
 
-export function useLogsPage() {
+export function useLogsPage(scope: ViewScope = "mine") {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -100,7 +110,8 @@ export function useLogsPage() {
     const { showError } = useToast();
     const { t, locale } = useI18n();
     const { user } = useAuth();
-    const isAdmin = !!user?.is_superuser;
+    // 完整性驗證只在管理區（它驗的是整張表）。/ The integrity check lives in the admin section (it checks whole tables).
+    const isAdmin = scope === "all" && !!user?.is_superuser;
 
     // 完整性驗證（管理員）：對話框開著時顯示結果。/ Integrity check (admins); the dialog shows the result.
     const [verifyOpen, setVerifyOpen] = useState(false);
@@ -140,11 +151,19 @@ export function useLogsPage() {
         [router, pathname, searchParams]
     );
 
-    // 篩選用的隧道清單（後端只回看得到的）。/ Tunnels for the filter (the backend returns only visible ones).
+    // 篩選用的隧道清單：自己的（看得到的）或管理區的全站清單（附擁有者）。
+    // Tunnels for the filter: the ones I can see, or every tunnel with its owner in the admin section.
     useEffect(() => {
         let cancelled = false;
         (async () => {
             try {
+                if (scope === "all") {
+                    const res = await apiFetch("/api/log/tunnels");
+                    if (!res.ok || cancelled) return;
+                    const data: { id: number; name: string; reverse_port: number; owner: { username: string | null } }[] = await res.json();
+                    setTunnels(data.map((x) => ({ id: x.id, host_friendly_name: x.name, reverse_port: x.reverse_port, owner: x.owner.username })));
+                    return;
+                }
                 const res = await apiFetch("/api/reverse/server/keys");
                 if (!res.ok || cancelled) return;
                 const data: TunnelOption[] = await res.json();
@@ -156,12 +175,13 @@ export function useLogsPage() {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [scope]);
 
     const fetchLogs = useCallback(async () => {
         setLoading(true);
         try {
             const qs = new URLSearchParams({ limit: String(limit) });
+            if (scope === "all") qs.set("scope", "all");
             if (tunnelFilter !== ALL_TUNNELS) qs.set("tunnel_id", tunnelFilter);
             const res = await apiFetch(`/api/log/ssh/events?${qs.toString()}`);
             if (!res.ok) {
@@ -192,6 +212,7 @@ export function useLogsPage() {
                             event: e.event,
                             message: e.message,
                             tunnelId: e.tunnel_id,
+                            tunnelName: e.tunnel_name ?? null,
                             port: e.port,
                         };
                     })
@@ -205,7 +226,7 @@ export function useLogsPage() {
         } finally {
             setLoading(false);
         }
-    }, [tunnelFilter, limit, showError, t, locale]);
+    }, [scope, tunnelFilter, limit, showError, t, locale]);
 
     useEffect(() => {
         fetchLogs();
