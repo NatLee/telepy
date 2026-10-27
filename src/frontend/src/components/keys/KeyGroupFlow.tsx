@@ -10,7 +10,7 @@ import React from "react";
 import { FolderTree, HardDrive, KeyRound, Layers, Send } from "lucide-react";
 import { Chip } from "@/components/ui/section";
 import { StatusDot } from "@/components/tunnels/TunnelStatus";
-import { FlowLink, FlowNode } from "@/components/keys/KeyPlacementFlow";
+import { FlowLink, FlowNode, FlowRow } from "@/components/keys/KeyPlacementFlow";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { deviceProgress, keyGroupReach, placedAccounts } from "@/lib/groups";
@@ -34,9 +34,9 @@ export function GrantTarget({ grant, tunnelGroups }: { grant: KeyGroupGrant; tun
     const { t } = useI18n();
     const tg = grant.tunnel_group ? tunnelGroups.find((g) => g.id === grant.tunnel_group!.id) : undefined;
     return (
-        <span className="inline-flex min-w-0 items-center gap-1.5">
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5">
             {grant.tunnel_group ? <FolderTree size={13} className="shrink-0 text-muted-foreground" aria-hidden /> : <HardDrive size={13} className="shrink-0 text-muted-foreground" aria-hidden />}
-            <span className="truncate text-sm text-foreground" title={grant.tunnel_group?.name ?? grant.tunnel?.name ?? ""}>
+            <span className="min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">
                 {grant.tunnel_group?.name ?? grant.tunnel?.name ?? "?"}
             </span>
             {grant.tunnel_group && <span className="shrink-0 text-xs text-muted-foreground">{t("groups.grant.devices", { count: tg?.tunnel_ids.length ?? 0 })}</span>}
@@ -71,8 +71,8 @@ export function KeyGroupFlow({
     const lit = members.length > 0 && grants.length > 0;
     return (
         <div className={className}>
-            <div className="flex flex-col sm:flex-row sm:items-stretch" role="img" aria-label={t("groups.flow.aria", { group: group.name })}>
-                <FlowNode icon={KeyRound} title={t("groups.flow.keys")} className="sm:w-[11rem]">
+            <FlowRow label={t("groups.flow.aria", { group: group.name })}>
+                <FlowNode icon={KeyRound} title={t("groups.flow.keys")} className="@3xl:w-[11rem] @3xl:shrink-0">
                     {members.length === 0 ? (
                         <Chip tone="warning">{t("groups.flow.noKeys")}</Chip>
                     ) : (
@@ -87,7 +87,7 @@ export function KeyGroupFlow({
                     )}
                 </FlowNode>
                 <FlowLink tone={lit ? "success" : "neutral"} />
-                <FlowNode icon={Send} title={t("groups.flow.grants")} className="sm:w-[13rem]">
+                <FlowNode icon={Send} title={t("groups.flow.grants")} className="@3xl:w-[13rem] @3xl:shrink-0">
                     {grants.length === 0 ? (
                         <span className="text-[0.75rem] text-muted-foreground">{t("groups.flow.noGrants")}</span>
                     ) : (
@@ -104,7 +104,7 @@ export function KeyGroupFlow({
                     )}
                 </FlowNode>
                 <FlowLink tone={lit && reach.length > 0 ? "success" : "neutral"} />
-                <FlowNode icon={Layers} title={t("groups.flow.devices")} className="min-w-0 flex-1">
+                <FlowNode icon={Layers} title={t("groups.flow.devices")} className="@3xl:flex-1">
                     {reach.length === 0 ? (
                         <span className="text-[0.75rem] text-muted-foreground">{t("groups.flow.noDevices")}</span>
                     ) : (
@@ -147,7 +147,7 @@ export function KeyGroupFlow({
                         </ul>
                     )}
                 </FlowNode>
-            </div>
+            </FlowRow>
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t("groups.flow.note")}</p>
         </div>
     );

@@ -78,13 +78,17 @@ export function accountsFromDevice(view: ViewAccount[], allowed: DeviceAccount[]
     return out;
 }
 
-/** 說明用的例子：兩個 Linux 帳號 + 一個 Windows 管理員；擁有者能用兩個，金鑰只選了一個。/ The explainer's example. */
+/**
+ * 說明用的例子，跟總覽圖同一台 pi-lab：bob 能用 ubuntu 與 deploy（不能用 root），他的 laptop 金鑰只選了 ubuntu。
+ * The explainer's example, the same pi-lab as its overview: bob may use ubuntu and deploy (not root) and his
+ * laptop key picked only ubuntu.
+ */
 export const EXAMPLE_ACCOUNTS: PlacementAccount[] = [
     { id: 1, username: "ubuntu", file: USER_FILE, windowsAdmin: false },
-    { id: 2, username: "root", file: USER_FILE, windowsAdmin: false },
-    { id: 3, username: "nat", file: ADMIN_FILE, windowsAdmin: true },
+    { id: 2, username: "deploy", file: USER_FILE, windowsAdmin: false },
+    { id: 3, username: "root", file: USER_FILE, windowsAdmin: false },
 ];
-export const EXAMPLE_ALLOWED: number[] = [1, 3];
+export const EXAMPLE_ALLOWED: number[] = [1, 2];
 export const EXAMPLE_CHOSEN: number[] = [1];
 
 /** 選擇的文字摘要用：選了幾個 / 共幾個；null = 全部。/ "N of M" for the picker button; null = all. */
