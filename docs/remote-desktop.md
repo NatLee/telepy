@@ -73,18 +73,33 @@ backend desktop/bridge.rs
 ## 聲音（RDP 經 guacd；RustDesk 見下一節）
 
 - 表單的「聲音」開關（RDP 與 RustDesk 才有；guacd 的 VNC 沒有聲音 —— 它要另接 PulseAudio，裝置那邊不會有 —— 所以 VNC
-  不顯示），記在 localStorage `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬）。
+  不顯示；VNC 協定本身只有畫面與輸入。macOS 的「螢幕共享」就是 VNC，所以要聽 Mac 的聲音請用 RustDesk），記在 localStorage
+  `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬）。
 - RDP：`POST …/desktop/start` 帶 `audio: true`（VNC 帶了也當 false；非布林 → 欄位錯誤），回應帶 `audio`（實際）。
   開：握手的 `audio` 指令列出 `audio/L8`、`audio/L16`（guacamole-common-js 的 RawAudioPlayer 會播的原始 PCM），
   guacd 開音訊串流（`audio` / `blob` / `end`）。guacd → 瀏覽器本來就整個透傳；瀏覽器 → guacd 的白名單放 `ack`（接受串流），
   瀏覽器送的 `audio`（= 麥克風）照樣丟掉。關：連線參數帶 `disable-audio=true`，guacd 不載入 rdpsnd，遠端根本不送。
   `desktop_open` 事件寫 `Remote desktop (RDP, sound) …`。
-- 工具列：聲音開著時有「正在播 / 靜音」按鈕（`DesktopViewer` 的 `onaudio` 包住預設播放器：最近 1.5 秒有 blob = 正在播；
-  靜音 = 在瀏覽器這邊丟掉 blob，取消靜音時不會一次湧出來）。瀏覽器的自動播放限制：第一次按鍵 / 點擊時 resume 共用的
-  AudioContext。
-- 實測：真的 guacd 1.6 + xrdp（OrbStack）：握手後 guacd 開 `audio/L16;rate=44100,channels=2` 串流，瀏覽器回 `ack … OK`；
-  測試 `tests/desktop_api.rs` 的 `desktop_rdp_sound_is_offered_and_relayed`（假 guacd 檢查握手格式、`disable-audio`、串流透傳、
-  麥克風被擋）。
+- 工具列的聲音按鈕（`components/desktop/SoundButton.tsx`）：靜音 = 在瀏覽器這邊丟掉 blob（取消靜音時不會一次湧出來）。
+  按鈕的圖示與字跟著 `lib/desktopSound.ts` 的判斷：**在播**、**安靜**（通道開著但沒聲音）、**等遠端**（剛連上）、
+  **聲音被擋住**（資料到了但 AudioContext 沒在跑 —— 旁邊多一顆「點一下啟用聲音」）、**沒有聲音**（連上 10 秒遠端都沒開聲音
+  通道）、靜音、關；提示與資訊對話框「這條連線上走哪些東西」的聲音那一條講原因。
+- **自動播放（使用者「開了聲音卻聽不到」的修正）**：瀏覽器只讓「在使用者手勢裡」建立或 resume 的 AudioContext 出聲
+  （Safari 最嚴格：在手勢外建的 context 一律是 `suspended`）。guacamole-common-js 的播放器是在 guacd 開音訊串流時
+  （WebSocket 訊息裡、沒有手勢）才建 context，原本只靠「在畫面上點擊 / 按鍵」才 resume —— 只看不點就一直沒聲音，
+  而且舊的「正在播」只看有沒有收到 blob，context 被擋著也照樣顯示正在播。現在「連線」那一下點擊（第一個 await 之前）就
+  `primeAudio()` 建好並 resume 一個共用 context，交給 guacd 當 `Guacamole.AudioContextFactory.singleton`；RustDesk 核心也經
+  `installRustDeskTap` 拿到同一個。被擋時狀態如實顯示「聲音被擋住」。
+- 中繼數聲音串流的量（`desktop/stats.rs`：guacd 開的 `audio` 串流上的 `blob`）：`telepy-stats` 帶 `audio`（沒開過聲音串流 =
+  null），統計面板多一列「聲音資料」；`desktop_close` 事件寫 `sound 1.2 MB`，要了聲音卻沒開通道則寫
+  `no sound channel from the RDP server`（Logs 就能看出是遠端不送）。
+- 遠端那一端：Windows 的 RDP 主機預設會轉送聲音，除非原則關掉（「允許音訊及視訊播放重新導向」）；Linux 的 xrdp 要裝
+  `pulseaudio-module-xrdp`（Debian / Ubuntu 沒有打包，要照它的說明從原始碼建）或 `pipewire-module-xrdp`，否則 guacd 拿不到聲音。
+- 實測（OrbStack）：真的 guacd 1.6 + xrdp + 自己建的 pulseaudio-module-xrdp，session 裡用 `module-sine` 放 440 Hz：
+  Chromium（`--autoplay-policy=document-user-activation-required`）與 WebKit 都排進了非靜音的 buffer（峰值 0.5）、context
+  `running`；WebKit 在點擊裡建的 context 是 `suspended`，靠 `primeAudio` 的 resume 才跑起來。把 context 暫停 → 按鈕變「聲音被
+  擋住」→ 點「點一下啟用聲音」→ 又在播。測試 `tests/desktop_api.rs` 的 `desktop_rdp_sound_is_offered_and_relayed`（假 guacd
+  檢查握手格式、`disable-audio`、串流透傳、麥克風被擋、結束事件的聲音量與「沒有聲音通道」）。
 
 ## 多螢幕：只看一個螢幕（`desktop/screens.rs`、`GET …/desktop/screens`、前端 `lib/desktopScreens.ts`）
 
@@ -162,6 +177,13 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 - **聲音**：核心自己解（RustDesk 送 Opus，WebCodecs `AudioDecoder` → `AudioContext`；瀏覽器沒有 WebCodecs 音訊就沒有聲音，
   按鈕停用並說明）。關 = 那台的 `disable-audio`：登入的 `OptionMessage` 就請裝置別送（裝置不開 audio service，不只是靜音）；
   連線中工具列切換走核心的 `option:toggle`（送 option 給裝置並靜音 / 取消靜音）。和 RDP 共用 `telepy.desktopAudio`。
+  裝置那端送什麼（看 RustDesk 1.5 原始碼）：**Linux** 錄 PulseAudio / PipeWire 的 monitor，由已登入桌面工作階段的連線管理員
+  （`--cm`）行程負責 —— 沒人登入桌面就沒有聲音；**Windows** 錄預設輸出的 WASAPI loopback；**macOS（Apple 晶片版）** 經
+  ScreenCaptureKit 錄系統聲音（用的是本來就要給的「螢幕錄製」權限）；**macOS（Intel 版）** 只錄「音訊輸入裝置」（預設是
+  麥克風），要聽 Mac 播的聲音得裝 BlackHole 這類 loopback 裝置並在 RustDesk 設定 → 一般 → 音訊輸入裝置選它。開了聲音、
+  上次連到的是 Mac 時，準備清單多一步「Mac 的聲音」（附 RustDesk 設定的示意）。
+  實測：容器裡的 Linux RustDesk 1.5（PulseAudio null sink + 440 Hz），補上假的 `loginctl` 與 `sudo` 讓它能起連線管理員後，
+  Chromium 與 WebKit 都播出非靜音的 Opus 解碼結果；連線中從關切到開也有聲音。核心的 AudioContext 就是點擊裡解鎖的那個。
 - **傳檔（「檔案」面板，`components/desktop/RustDeskFiles.tsx`、純函式 `lib/rustdeskFiles.ts`）**：RustDesk 的傳檔是**另一條
   連線**（登入時帶 `file_transfer`），所以面板向 `POST /api/reverse/server/rustdesk/{sid}/files` 要一個掛在畫面 session 底下的
   子 session（`rustdesk::Kind::Files`：同目標、同帳號、自己的票證與 direct-tcpip 通道；只有開畫面的人能開；不佔
@@ -211,7 +233,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   也用同一層代理（加上 `ReadAllFiles`、`ReadEmptyDirs`、多檔 `send`、`remove_*`、`create`、`rename`）驗證：資料夾 zip（串流
   與記憶體兩條路，空資料夾、0 byte 檔案都在、md5 相同）、501 個檔案先問、改名與 `../` 搬移、新資料夾、上傳資料夾、多選刪除
   （確認數到隱藏檔）、裝置錯誤原樣顯示、Logs 的兩種事件。聲音：開著時裝置進入 audio
-  service，關著登入時不進入、連線中切關時退出（容器沒有可擷取的聲音，所以沒聽到實際聲音）。
+  service，關著登入時不進入、連線中切關時退出（真的聲音見上面「聲音」）。
 - 踩過的坑：核心的 `confirmInsecure()` 先同步發 msgbox 事件、**之後**才記下等答案的 resolver，所以在事件處理器裡同步回
   `continue-insecure-connection` 會被丟掉（連線卡住、30 秒後裝置端關閉、relay 統計「0 B to the device」）—— viewer 用
   `setTimeout(…, 0)` 下一個 tick 再答。裝置端 RustDesk 跑在 C locale（沒有 `LANG`）時 xdo 拒絕多位元組文字（log

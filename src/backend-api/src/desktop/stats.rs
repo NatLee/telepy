@@ -6,15 +6,17 @@
 //! - **網路往返**（`net_ms`）：中繼每秒送 `telepy-ping <n>`，瀏覽器立刻回 `telepy-pong <n>`（不經 guacd、
 //!   不畫圖），桌面靜止時也量得到。
 //! - **隧道**（`tunnel_ms`）：monitor 每 15 秒經轉發通道量到的裝置 sshd 往返，由中繼從 `StatusState` 帶上。
+//!
 //! 另有每秒幀數、上下行位元組、瀏覽器落後幾幀（送出但還沒回音的 sync）、guacd 合併了幾個邏輯幀
-//! （`sync` 的第二個參數 > 1 = 瀏覽器跟不上，guacd 在併幀）。
+//! （`sync` 的第二個參數 > 1 = 瀏覽器跟不上，guacd 在併幀），以及聲音串流（guacd 開的 `audio` 串流上的 `blob`）
+//! 的位元組：`audio` = 這一秒的量，沒開過聲音串流時是 null（瀏覽器就能分「遠端沒開聲音通道」與「開了但安靜」）。
 //!
 //! 純邏輯、無 I/O；`ws/desktop.rs` 餵事件、每秒 `tick`。
 //! Stream statistics for the remote desktop relay: frame round-trip (sync echo), network round-trip
 //! (ping / pong), the device's tunnel latency, frames per second, bytes and how far behind the browser is.
 //! Pure; the relay feeds it and calls `tick` every second.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -37,6 +39,8 @@ struct Window {
     merged: u32,
     down: u64,
     up: u64,
+    /// 聲音串流的 blob（base64 字元數）。/ Base64 bytes of blobs on audio streams.
+    audio: u64,
 }
 
 pub struct Stats {
@@ -54,6 +58,10 @@ pub struct Stats {
     frame_sum_ms: u64,
     frame_samples: u64,
     frame_max_ms: u32,
+    /// guacd 目前開著的聲音串流（stream index）。/ guacd's open audio streams, by index.
+    audio_streams: HashSet<String>,
+    audio_opened: bool,
+    total_audio: u64,
 }
 
 impl Default for Stats {
@@ -78,13 +86,39 @@ impl Stats {
             frame_sum_ms: 0,
             frame_samples: 0,
             frame_max_ms: 0,
+            audio_streams: HashSet::new(),
+            audio_opened: false,
+            total_audio: 0,
         }
     }
 
-    /// guacd → 瀏覽器的一個指令：`sync` 記下時間戳與送出時刻。/ An instruction on its way to the browser.
+    /// guacd → 瀏覽器的一個指令：`sync` 記下時間戳與送出時刻；`audio` / `blob` / `end` 記聲音串流。
+    /// An instruction on its way to the browser: syncs are timed, audio streams are counted.
     pub fn sent(&mut self, instruction: &guac::Instruction, now: Instant) {
-        if instruction.opcode() != "sync" {
-            return;
+        match instruction.opcode() {
+            "sync" => {}
+            "audio" => {
+                if let Some(index) = instruction.element(1) {
+                    self.audio_streams.insert(index.to_string());
+                    self.audio_opened = true;
+                }
+                return;
+            }
+            "blob" => {
+                if instruction.element(1).is_some_and(|i| self.audio_streams.contains(i)) {
+                    let n = instruction.element(2).map(str::len).unwrap_or(0) as u64;
+                    self.window.audio += n;
+                    self.total_audio += n;
+                }
+                return;
+            }
+            "end" => {
+                if let Some(index) = instruction.element(1) {
+                    self.audio_streams.remove(index);
+                }
+                return;
+            }
+            _ => return,
         }
         self.window.frames += 1;
         self.total_frames += 1;
@@ -182,6 +216,7 @@ impl Stats {
             "down": w.down,
             "up": w.up,
             "behind": self.pending_syncs.len(),
+            "audio": if self.audio_opened { Some(w.audio) } else { None },
         });
         self.window = Window::default();
         self.window_started = now;
@@ -195,7 +230,15 @@ impl Stats {
         if self.frame_samples > 0 {
             s.push_str(&format!(", frame latency avg {} ms (max {} ms)", self.frame_sum_ms / self.frame_samples, self.frame_max_ms));
         }
+        if self.audio_opened {
+            s.push_str(&format!(", sound {}", fmt_bytes(self.total_audio)));
+        }
         s
+    }
+
+    /// guacd 開過聲音串流（RDP 伺服器接受了聲音轉送）。/ guacd opened an audio stream (the RDP server redirects sound).
+    pub fn audio_opened(&self) -> bool {
+        self.audio_opened
     }
 
     pub fn total_down(&self) -> u64 {
@@ -240,6 +283,30 @@ mod tests {
         let i = parse(Unit::Utf16, wire);
         assert_eq!(i.opcode(), OPCODE_STATS);
         serde_json::from_str(i.element(1).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn audio_stream_blobs_are_counted_and_other_streams_are_not() {
+        let t0 = Instant::now();
+        let mut s = Stats::new(t0);
+        // 還沒開聲音串流：audio = null，結束那句不提聲音。/ No audio stream yet: null, and no sound in the summary.
+        let v = stats_json(&s.tick(t0 + Duration::from_secs(1), None));
+        assert!(v["audio"].is_null());
+        assert!(!s.audio_opened());
+        s.sent(&parse(Unit::CodePoints, "5.audio,1.1,31.audio/L16;rate=44100,channels=2;"), t0);
+        s.sent(&parse(Unit::CodePoints, "4.blob,1.1,8.AAAAAAAA;"), t0);
+        s.sent(&parse(Unit::CodePoints, "4.blob,1.1,4.QUJD;"), t0);
+        // 剪貼簿（stream 2）的 blob 不算聲音。/ A clipboard stream's blob is not sound.
+        s.sent(&parse(Unit::CodePoints, "4.blob,1.2,4.QUJD;"), t0);
+        let v = stats_json(&s.tick(t0 + Duration::from_secs(2), None));
+        assert_eq!(v["audio"], 12);
+        assert!(s.audio_opened());
+        let v = stats_json(&s.tick(t0 + Duration::from_secs(3), None));
+        assert_eq!(v["audio"], 0, "an open but quiet stream reports 0, not null");
+        s.sent(&parse(Unit::CodePoints, "3.end,1.1;"), t0);
+        s.sent(&parse(Unit::CodePoints, "4.blob,1.1,4.QUJD;"), t0);
+        assert_eq!(stats_json(&s.tick(t0 + Duration::from_secs(4), None))["audio"], 0, "an ended stream index is no longer sound");
+        assert!(s.summary().ends_with(", sound 12 B"), "{}", s.summary());
     }
 
     #[test]
