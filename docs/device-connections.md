@@ -189,6 +189,8 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 裝置區塊改成 `HostName <名稱>` / `Port 22`，經 `ProxyCommand ssh -W %h:%p <伺服器區塊>` 跳過去；舊的設定檔照常可用。
 伺服器區塊的別名是 `telepy-<網域>-<port>`（跟 `HostKeyAlias` 同一個字串），每台 Telepy 各自一個，裝在同一份 config 裡互不干擾；
 舊版共用的 `telepy-ssh-server` 區塊由安裝指令在「確定是這台、又沒有區塊再用它」時清掉。
+兩台 Telepy 有同名裝置時，安裝指令看同名區塊的 ProxyCommand 跳到哪台伺服器：是別台的就保留、不覆蓋，並列出這些名字；
+使用者替其中一台設「名稱前綴」（個人設定 `ssh_alias_prefix`，例如 `work-` → `ssh work-pi`）後，兩邊就能並存。
 存取規則與以前相同（擁有者、ADMIN、或至少有一個允許帳號的 sharee；敏感隧道要先在網頁確認）。
 
 裝置端腳本一律寫 `-R 0`（Docker 版 `SSH_TUNNEL_PORT=0`，一鍵加入也是）：號碼只存在伺服器裡。網頁刪除隧道時的移除腳本

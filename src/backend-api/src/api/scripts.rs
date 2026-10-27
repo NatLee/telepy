@@ -95,11 +95,16 @@ fn server_part(state: &AppState, headers: &HeaderMap, transport: Option<String>)
     Ok(ServerPart { text, alias, fields })
 }
 
+/// 這個人的裝置別名前綴（個人設定，空 = 不加）。/ This person's device alias prefix (personal setting; empty = none).
+async fn alias_prefix(state: &AppState, user_id: i64) -> ApiResult<String> {
+    Ok(db::users::settings_for(&state.db, user_id).await?.map(|s| s.ssh_alias_prefix).unwrap_or_default())
+}
+
 /// 一台裝置的 Host 區塊（附在 `out` 後面）與給前端的別名清單。`used` = 已經用掉的別名（多台時避免重複）。
 /// One device's Host stanzas (appended to `out`) and the alias list for the frontend; `used` = aliases taken already.
-fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], server_alias: &str, used: &mut HashSet<String>) -> Vec<Value> {
+fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::UsernameWithCreator], server_alias: &str, prefix: &str, used: &mut HashSet<String>) -> Vec<Value> {
     let names: Vec<&str> = accounts.iter().map(|u| u.username.as_str()).collect();
-    let aliases = scripts::device_aliases(&t.host_friendly_name, &names, used);
+    let aliases = scripts::device_aliases(prefix, &t.host_friendly_name, &names, used);
     // 結構化欄位給前端的指令速查（-L/-R/-D/-J 指令要用跟 config 一模一樣的 Host 別名）。
     // Structured fields for the frontend command sheet (commands must use the exact Host aliases above).
     accounts
@@ -142,7 +147,9 @@ async fn config(
     if !selected.is_empty() {
         out.push_str(CLIENT_STEM);
     }
-    let hosts = push_device_stanzas(&mut out, &t, &selected, &server_alias, &mut HashSet::from([server_alias.clone()]));
+    let prefix = alias_prefix(&state, user.id).await?;
+    let hosts = push_device_stanzas(&mut out, &t, &selected, &server_alias, &prefix, &mut HashSet::from([server_alias.clone()]));
+    fields.insert("alias_prefix".into(), json!(prefix));
     // 隧道的預設帳號（我能用的話），前端拿來決定一開始勾哪個。/ The tunnel's default account, when I may use it.
     let default_id = t.default_username_id.filter(|d| all.iter().any(|u| u.id == *d));
     fields.insert("default_username_id".into(), json!(default_id));
@@ -195,6 +202,7 @@ async fn config_many(
     tunnels.sort_by(|a, b| a.host_friendly_name.to_lowercase().cmp(&b.host_friendly_name.to_lowercase()).then(a.id.cmp(&b.id)));
 
     let mut used: HashSet<String> = HashSet::from([server_alias.clone()]);
+    let prefix = alias_prefix(&state, user.id).await?;
     let mut listed = Vec::new();
     let mut skipped = Vec::new();
     for t in &tunnels {
@@ -214,13 +222,14 @@ async fn config_many(
         if listed.is_empty() {
             out.push_str(CLIENT_STEM);
         }
-        let hosts = push_device_stanzas(&mut out, t, &chosen, &server_alias, &mut used);
+        let hosts = push_device_stanzas(&mut out, t, &chosen, &server_alias, &prefix, &mut used);
         let usernames: Vec<Value> = allowed.iter().map(|u| json!({ "id": u.id, "username": u.username })).collect();
         let default_id = t.default_username_id.filter(|d| allowed.iter().any(|u| u.id == *d));
         listed.push(json!({ "id": t.id, "name": t.host_friendly_name, "reverse_port": t.reverse_port, "hosts": hosts, "usernames": usernames, "default_username_id": default_id, "picked": picks.contains_key(&t.id) }));
     }
     fields.insert("config".into(), json!(out));
     fields.insert("accounts".into(), json!(if every_account { "all" } else { "default" }));
+    fields.insert("alias_prefix".into(), json!(prefix));
     fields.insert("tunnels".into(), json!(listed));
     fields.insert("skipped".into(), json!(skipped));
     Ok(Json(Value::Object(fields)))

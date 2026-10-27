@@ -31,6 +31,8 @@ export interface BulkConfigData {
     config: string;
     server: { alias: string; host: string; port: string; legacy_alias?: string };
     accounts: BulkAccounts;
+    /** 我的裝置別名前綴（個人設定，空 = 不加）。/ My device alias prefix (personal setting; empty = none). */
+    alias_prefix?: string;
     tunnels: BulkConfigTunnel[];
     skipped: { id: number; name: string; reason: "no_accounts" }[];
     known_hosts: string;

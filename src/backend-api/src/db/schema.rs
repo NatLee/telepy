@@ -981,6 +981,8 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("authorized_keys_reverseserverauthorizedkeys", "terminal_detach_policy", "varchar(8) NOT NULL DEFAULT 'user'"),
     // 各頁的卡片 / 清單顯示（JSON：{"tunnels":"list","key_groups":"card"}；跟著帳號走）。/ Card / list view per page (JSON; follows the account).
     ("user_management_usersettings", "view_modes", "text NOT NULL DEFAULT '{}'"),
+    // ~/.ssh/config 裡裝置別名的前綴（空 = 不加）：同一台筆電有兩台 Telepy、裝置同名時用。/ The device alias prefix in ~/.ssh/config.
+    ("user_management_usersettings", "ssh_alias_prefix", "varchar(24) NOT NULL DEFAULT ''"),
     // 通道群組 / 金鑰群組的說明與標籤（標籤 = JSON 字串陣列，規則同通道標籤）。/ Group description and labels (JSON array).
     ("telepy_tunnel_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),

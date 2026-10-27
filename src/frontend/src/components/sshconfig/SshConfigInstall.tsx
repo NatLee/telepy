@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import { adaptForShell, guessShell, installCommand, markedBlocks, openEditorCommand, removeCommand, KNOWN_HOSTS_PATH, type ConfigShell, type ConfigStanza, type WsClient } from "@/lib/sshConfig";
 import { ConfigStanzaCard } from "./ConfigStanzaCard";
+import { AliasPrefix, type AliasPrefixControl } from "./AliasPrefix";
 import type { ConfigPart } from "./ConfigRouteMap";
 
 const SHELL_STORAGE_KEY = "telepy.sshConfigShell";
@@ -60,6 +61,8 @@ interface Props {
     wsClient?: WsClient | null;
     /** 舊版共用的伺服器別名（後端的 `server.legacy_alias`）：確定是這台、沒人用時清掉。/ The old shared alias, cleaned up when safe. */
     legacyAlias?: string | null;
+    /** 這台 Telepy 的裝置別名前綴（同一台電腦有好幾台 Telepy 時）；沒給就不顯示。/ This server's device alias prefix. */
+    aliasPrefix?: AliasPrefixControl;
     active: ConfigPart | null;
     onActive: (part: ConfigPart | null) => void;
     /**
@@ -70,7 +73,7 @@ interface Props {
     bulk?: boolean;
 }
 
-export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, legacyAlias, active, onActive, bulk = false }: Props) {
+export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsClient, legacyAlias, aliasPrefix, active, onActive, bulk = false }: Props) {
     const { t, tn } = useI18n();
     // 只在對話框打開後才掛載，直接讀 localStorage 不會有 hydration 不一致。/ Mounted only inside an open dialog.
     const [shell, setShellState] = useState<ConfigShell>(readShell);
@@ -188,7 +191,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                             ...(knownHosts?.trim() ? [tn("config.cmd.knownHosts", { path: code(KNOWN_HOSTS_PATH) })] : []),
                             tn("config.cmd.backup", { path: code(shell === "posix" ? "~/.ssh/config.bak" : "config.bak") }),
                             t("config.cmd.rerun"),
-                            ...(legacy ? [tn("config.cmd.legacy", { alias: code(legacy.alias) })] : []),
+                            ...(legacy ? [tn("config.cmd.legacy", { alias: code(legacy.alias) }), t("config.cmd.sameName")] : []),
                             t("config.cmd.untouched"),
                         ].map((line, i) => (
                             <li key={i} className="flex items-start gap-2">
@@ -238,6 +241,7 @@ export function SshConfigInstall({ serverStanza, deviceStanzas, knownHosts, wsCl
                     )}
                 </>
             )}
+            {aliasPrefix && <AliasPrefix key={aliasPrefix.value} control={aliasPrefix} />}
         </div>
     );
 }
