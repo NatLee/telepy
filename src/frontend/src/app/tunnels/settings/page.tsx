@@ -374,8 +374,8 @@ function McpEndpointPanel() {
                 <Link href="/tunnels/mcp" prefetch={false} className={linkClass}>
                     <Plug size={13} /> {t("nav.mcp")} <ArrowRight size={12} className="opacity-60" />
                 </Link>
-                <Link href="/tunnels/activity" prefetch={false} className={linkClass}>
-                    <Activity size={13} /> {t("nav.activity")} <ArrowRight size={12} className="opacity-60" />
+                <Link href="/tunnels/admin/activity" prefetch={false} className={linkClass}>
+                    <Activity size={13} /> {t("nav.adminActivity")} <ArrowRight size={12} className="opacity-60" />
                 </Link>
             </div>
         </section>
@@ -731,7 +731,7 @@ function SiteCommandRulesPanel() {
     );
 }
 
-/** 通知分頁：webhook 都搬到 Webhooks 頁了（全站的在「全站」分頁）。/ The Notifications tab: webhooks live on the Webhooks page now. */
+/** 通知分頁：webhook 在自己的頁面（全站的在管理區的全站 Webhook 頁）。/ The Notifications tab: webhooks have their own pages (site-wide ones in the admin section). */
 function WebhooksPanel() {
     const { t } = useI18n();
     return (
@@ -740,7 +740,7 @@ function WebhooksPanel() {
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{t("settings.webhooksBody")}</p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button asChild variant="outline" size="sm">
-                    <Link href="/tunnels/webhooks?scope=site">
+                    <Link href="/tunnels/admin/webhooks">
                         {t("settings.webhooksSite")} <ArrowRight />
                     </Link>
                 </Button>

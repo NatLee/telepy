@@ -1121,7 +1121,24 @@ pub struct GatewayEvent {
     pub peer: Option<String>,
     pub port: Option<i64>,
     pub tunnel_id: Option<i64>,
+    /// 隧道還在時的名稱。/ The tunnel's name while it exists.
+    pub tunnel_name: Option<String>,
     pub message: String,
+}
+
+#[derive(ToSchema)]
+#[schema(description = "A tunnel and its owner, for the admin section's filters")]
+pub struct AdminTunnel {
+    pub id: i64,
+    pub name: String,
+    pub reverse_port: i64,
+    pub owner: AdminTunnelOwner,
+}
+
+#[derive(ToSchema)]
+pub struct AdminTunnelOwner {
+    pub id: i64,
+    pub username: Option<String>,
 }
 
 #[derive(ToSchema)]

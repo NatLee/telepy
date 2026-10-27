@@ -59,14 +59,30 @@ export interface CallLike {
     target_username: string | null;
     client_name: string | null;
     ip?: string | null;
-    user: { username: string | null };
+    user: { id?: number | null; username: string | null };
     tunnel: { name: string | null } | null;
+}
+
+/**
+ * 個人頁上「誰的」呼叫：全部 / 我的 app 下的 / 別人的 agent 在我的隧道上下的。
+ * Whose calls on the personal page: all / made by my apps / other people's agents on my tunnels.
+ */
+export type WhoFilter = "all" | "mine" | "others";
+export const WHO_FILTERS: WhoFilter[] = ["all", "mine", "others"];
+
+function matchesWho(c: CallLike, who: WhoFilter | undefined, meId: number | null | undefined): boolean {
+    if (!who || who === "all" || meId === null || meId === undefined) return true;
+    const mine = c.user.id === meId;
+    return who === "mine" ? mine : !mine;
 }
 
 export interface CallFilter {
     query: string;
     tool: ToolFilter;
     failedOnly: boolean;
+    who?: WhoFilter;
+    /** 「我」是誰（`who` 用）。/ Who "me" is (for `who`). */
+    meId?: number | null;
     /** 工具名稱的顯示文字（翻譯後的也能搜）。/ Tool display text, so translated names match too. */
     label?: (tool: string) => string;
 }
@@ -79,28 +95,38 @@ function matchesQuery(c: CallLike, q: string, label?: (tool: string) => string):
 
 export function filterCalls<T extends CallLike>(calls: T[], f: CallFilter): T[] {
     const q = f.query.trim().toLowerCase();
-    return calls.filter((c) => (f.tool === "all" || toolCategory(c.tool) === f.tool) && (!f.failedOnly || !c.ok) && matchesQuery(c, q, f.label));
+    return calls.filter((c) => matchesWho(c, f.who, f.meId) && (f.tool === "all" || toolCategory(c.tool) === f.tool) && (!f.failedOnly || !c.ok) && matchesQuery(c, q, f.label));
 }
 
 export interface CallCounts {
+    /** 已套用搜尋，還沒套用「誰的」。/ After the search, before the "whose" filter. */
+    who: Record<WhoFilter, number>;
     tools: Record<ToolFilter, number>;
     /** 目前工具分類下失敗的筆數。/ Failed calls within the current tool category. */
     failed: number;
 }
 
-/** 分類鈕與「失敗」鈕上的數字：都已套用搜尋；失敗數再套用目前的分類。/ Numbers on the filters, after the search. */
-export function countCalls<T extends CallLike>(calls: T[], query: string, tool: ToolFilter, label?: (tool: string) => string): CallCounts {
+/**
+ * 篩選鈕上的數字：都已套用搜尋；「誰的」之外的再套用目前的「誰的」，失敗數再套用目前的分類。
+ * Numbers on the filters, after the search; all but the "whose" ones also after the current "whose", and the failed
+ * count also after the current category.
+ */
+export function countCalls<T extends CallLike>(calls: T[], query: string, tool: ToolFilter, label?: (tool: string) => string, who?: WhoFilter, meId?: number | null): CallCounts {
     const q = query.trim().toLowerCase();
+    const whoCounts: Record<WhoFilter, number> = { all: 0, mine: 0, others: 0 };
     const tools: Record<ToolFilter, number> = { all: 0, exec: 0, files: 0, browser: 0, session: 0, read: 0 };
     let failed = 0;
     for (const c of calls) {
         if (!matchesQuery(c, q, label)) continue;
+        whoCounts.all += 1;
+        whoCounts[matchesWho(c, "mine", meId) ? "mine" : "others"] += 1;
+        if (!matchesWho(c, who, meId)) continue;
         tools.all += 1;
         const cat = toolCategory(c.tool);
         if (cat) tools[cat] += 1;
         if (!c.ok && (tool === "all" || cat === tool)) failed += 1;
     }
-    return { tools, failed };
+    return { who: whoCounts, tools, failed };
 }
 
 /** 125 ms、7.8 s、2m 05s。/ 125 ms, 7.8 s, 2m 05s. */

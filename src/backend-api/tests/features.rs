@@ -145,7 +145,7 @@ async fn groups_and_users_decide_which_features_people_use() {
     lab.terminal(&bob, &dev, "ubuntu").await.expect("the group is gone").close().await;
 
     // 每個變更都是沒有隧道的管理員事件。/ Every change is a tunnel-less admin event.
-    let events = app.get("/api/log/ssh/events?limit=500", Some(&lab.admin_token)).await.json;
+    let events = app.get("/api/log/ssh/events?limit=500&scope=all", Some(&lab.admin_token)).await.json;
     let kinds: Vec<&str> = events.as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert!(kinds.contains(&"user_group") && kinds.contains(&"feature_grant"), "{kinds:?}");
     let mine = app.get("/api/log/ssh/events?limit=500", Some(&bob.token)).await.json;

@@ -258,7 +258,7 @@ async fn site_webhooks_get_the_curated_events() {
     mine.wait("account.sign_in_failed").await;
 
     // 全站 webhook 的變動記進 Logs。/ Site webhook changes are in the Logs.
-    let logs = lab.app.get("/api/log/ssh/events?limit=50", Some(&lab.admin_token)).await;
+    let logs = lab.app.get("/api/log/ssh/events?limit=50&scope=all", Some(&lab.admin_token)).await;
     assert!(logs.json.as_array().unwrap().iter().any(|e| e["event"] == "webhook"), "{}", logs.text);
 }
 

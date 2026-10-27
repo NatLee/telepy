@@ -122,7 +122,7 @@ async fn reverse_tunnel_through_real_openssh_client() {
     assert!(app.state.status.listen_ports().is_some(), "gateway publishes an (empty) live port set immediately");
     // Logs 頁從第一天就有東西：還沒有任何裝置連線時，/api/log/ssh 也要 200 並含 listening 事件。
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let r = app.get("/api/log/ssh", Some(&token)).await;
+    let r = app.get("/api/log/ssh?scope=all", Some(&token)).await;
     assert_eq!(r.status, axum::http::StatusCode::OK, "{}", r.text);
     assert!(r.json.as_str().unwrap().contains("Server listening on"), "{}", r.text);
 
@@ -231,7 +231,7 @@ async fn reverse_tunnel_through_real_openssh_client() {
     assert!(log.contains("Accepted publickey for telepy from 127.0.0.1"), "{log}");
     assert!(log.contains(&format!("Remote forward registered on port {reverse_port}")), "{log}");
     assert!(log.contains("Disconnected from user telepy"), "{log}");
-    let r = app.get("/api/log/ssh", Some(&token)).await;
+    let r = app.get("/api/log/ssh?scope=all", Some(&token)).await;
     assert!(r.json.as_str().unwrap().contains("Accepted publickey"));
     // structured events, filterable by tunnel
     let r = app.get(&format!("/api/log/ssh/events?tunnel_id={}", tunnel.id), Some(&token)).await;

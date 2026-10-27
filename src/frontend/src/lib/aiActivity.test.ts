@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { countCalls, filterCalls, formatBytes, formatDuration, isCodeDetail, toolCategory, withTimes } from "./aiActivity.ts";
 
-const call = (id: number, tool: string, ok: boolean, detail: string | null, extra: { error?: string; tunnel?: string; app?: string } = {}) => ({
+const call = (id: number, tool: string, ok: boolean, detail: string | null, extra: { error?: string; tunnel?: string; app?: string; userId?: number } = {}) => ({
     id,
     tool,
     ok,
@@ -11,7 +11,7 @@ const call = (id: number, tool: string, ok: boolean, detail: string | null, extr
     target_username: "root",
     client_name: extra.app ?? "Agent CLI",
     ip: "203.0.113.50",
-    user: { username: "admin" },
+    user: { id: extra.userId ?? 1, username: extra.userId && extra.userId !== 1 ? "bob" : "admin" },
     tunnel: extra.tunnel ? { name: extra.tunnel } : null,
 });
 
@@ -56,9 +56,29 @@ test("filter by tool, result and query", () => {
 });
 
 test("counts follow the search, failures follow the category", () => {
-    assert.deepEqual(countCalls(calls, "", "all"), { tools: { all: 6, exec: 2, files: 1, browser: 0, session: 1, read: 1 }, failed: 2 });
+    assert.deepEqual(countCalls(calls, "", "all"), { who: { all: 6, mine: 6, others: 0 }, tools: { all: 6, exec: 2, files: 1, browser: 0, session: 1, read: 1 }, failed: 2 });
     assert.deepEqual(countCalls(calls, "", "exec").failed, 1);
-    assert.deepEqual(countCalls(calls, "office-nas", "all"), { tools: { all: 3, exec: 1, files: 1, browser: 0, session: 1, read: 0 }, failed: 0 });
+    assert.deepEqual(countCalls(calls, "office-nas", "all"), { who: { all: 3, mine: 3, others: 0 }, tools: { all: 3, exec: 1, files: 1, browser: 0, session: 1, read: 0 }, failed: 0 });
+});
+
+test("whose calls: my apps vs other people's agents on my tunnels", () => {
+    const mixed = [
+        call(1, "ssh_exec", true, "uptime", { tunnel: "office-nas" }),
+        call(2, "ssh_exec", false, "reboot", { tunnel: "office-nas", userId: 2, error: "blocked" }),
+        call(3, "sftp_read", true, "/etc/hosts", { tunnel: "home-pi", userId: 2 }),
+    ];
+    const ids = (list: { id: number }[]) => list.map((c) => c.id);
+    assert.deepEqual(ids(filterCalls(mixed, { query: "", tool: "all", failedOnly: false, who: "mine", meId: 1 })), [1]);
+    assert.deepEqual(ids(filterCalls(mixed, { query: "", tool: "all", failedOnly: false, who: "others", meId: 1 })), [2, 3]);
+    assert.deepEqual(ids(filterCalls(mixed, { query: "", tool: "all", failedOnly: false, who: "all", meId: 1 })), [1, 2, 3]);
+    // 不知道我是誰就不篩。/ Without knowing who "me" is, nothing is filtered.
+    assert.deepEqual(ids(filterCalls(mixed, { query: "", tool: "all", failedOnly: false, who: "others", meId: null })), [1, 2, 3]);
+    // 「誰的」數字不受自己影響，其他數字跟著它。/ The "whose" numbers ignore it; the others follow it.
+    const c = countCalls(mixed, "", "all", undefined, "others", 1);
+    assert.deepEqual(c.who, { all: 3, mine: 1, others: 2 });
+    assert.deepEqual(c.tools, { all: 2, exec: 1, files: 1, browser: 0, session: 0, read: 0 });
+    assert.equal(c.failed, 1);
+    assert.deepEqual(countCalls(mixed, "home-pi", "all", undefined, "all", 1).who, { all: 1, mine: 0, others: 1 });
 });
 
 test("durations and sizes", () => {

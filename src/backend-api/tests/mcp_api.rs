@@ -628,6 +628,19 @@ async fn sharees_agents_notify_the_owner_and_can_be_closed_by_them() {
     assert_eq!(app.delete(&format!("/api/ai/sessions/{sid}"), Some(&carol)).await.status, StatusCode::NOT_FOUND);
     assert!(app.get("/api/ai/activity", Some(&carol)).await.json.as_array().unwrap().is_empty(), "strangers see no activity");
     assert!(!app.get("/api/ai/activity", Some(&bob)).await.json.as_array().unwrap().is_empty());
+    // 全站的 session / 紀錄只給管理員（管理區）；管理員預設也只看自己的。
+    // Everyone's sessions / calls are admins only (the admin section); by default an admin sees only their own too.
+    for path in ["/api/ai/sessions?scope=all", "/api/ai/activity?scope=all"] {
+        let r = app.get(path, Some(&carol)).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{path}: {}", r.text);
+        assert_eq!(r.json["code"], "admin_only");
+    }
+    let carol_id = app.get("/api/auth/user/profile", Some(&carol)).await.json["id"].as_i64().unwrap();
+    db::users::set_flags(&app.state.db, carol_id, None, Some(true)).await.unwrap();
+    assert_eq!(app.get("/api/ai/sessions", Some(&carol)).await.json, json!([]), "an admin's own view has nothing of others");
+    assert!(app.get("/api/ai/activity", Some(&carol)).await.json.as_array().unwrap().is_empty());
+    assert_eq!(app.get("/api/ai/sessions?scope=all", Some(&carol)).await.json[0]["user"]["username"], "bob");
+    assert!(!app.get("/api/ai/activity?scope=all", Some(&carol)).await.json.as_array().unwrap().is_empty());
     assert_eq!(app.delete(&format!("/api/ai/sessions/{sid}"), Some(&s.web)).await.status, StatusCode::NO_CONTENT);
     let (err, _) = call(app, &bob_token, "ssh_exec", json!({"session_id": sid, "command": "true"})).await;
     assert!(err);
