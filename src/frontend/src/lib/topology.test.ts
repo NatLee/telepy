@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultExpanded, filterDevices, kindCounts } from "./topology.ts";
+import { defaultExpanded, deviceAddresses, filterDevices, kindCounts } from "./topology.ts";
 
 const dev = (id: number, hosts: number, online = false) => ({ id, hosts: Array.from({ length: hosts }, (_, i) => i), online });
 const devices = [dev(1, 3, true), dev(2, 0), dev(3, 5), dev(4, 0, true)];
@@ -32,4 +32,15 @@ test("few devices: those with hosts start expanded; many: only the focused one",
     const many = Array.from({ length: 10 }, (_, i) => dev(i + 1, i % 2));
     assert.deepEqual([...defaultExpanded(many, null)], []);
     assert.deepEqual([...defaultExpanded(many, 7)], [7]);
+});
+
+test("device addresses: first LAN IP, the public IP only when it really is public", () => {
+    const geo = (scope: string) => ({ scope, country: null, org: null, asn: null, source: null });
+    assert.equal(deviceAddresses(null), null);
+    // gateway 看到公網位址 → 就是它。/ A public gateway peer is the public IP.
+    assert.deepEqual(deviceAddresses({ ip: "203.0.113.5", geo: geo("public"), lan: [{ ip: "192.168.1.10" }, { ip: "10.0.0.2" }] }), { lan: "192.168.1.10", lanMore: 1, public: "203.0.113.5" });
+    // gateway 只看到 Docker 的位址、裝置也沒回報 → 不明，不拿內部位址充數。/ Only Docker's address seen: unknown.
+    assert.deepEqual(deviceAddresses({ ip: "172.19.0.1", geo: geo("private") }), { lan: null, lanMore: 0, public: null });
+    // 裝置回報的公網 IP 優先。/ The reported public IP wins.
+    assert.equal(deviceAddresses({ ip: "172.19.0.1", geo: geo("private"), public_ip: "198.51.100.7" })!.public, "198.51.100.7");
 });

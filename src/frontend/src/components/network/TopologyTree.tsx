@@ -18,7 +18,7 @@ import { Router, Terminal, Monitor, HardDrive, Globe, CircleDot, Radar, Plus, Lo
 import { Pagination } from "@/components/ui/pagination";
 import { useSectionPages, type PaginationState } from "@/hooks/usePagination";
 import { pageSlice } from "@/lib/pagination";
-import { kindCounts } from "@/lib/topology";
+import { deviceAddresses, kindCounts } from "@/lib/topology";
 import type { MatrixSection } from "@/lib/deviceMatrix";
 import { Badge } from "@/components/ui/badge";
 import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
@@ -186,12 +186,16 @@ function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
                 focused ? "border-primary ring-2 ring-primary/30" : "border-border"
             )}
         >
-            <div className="flex items-start gap-3">
+            <div className="flex items-start gap-2">
+                {/* 收合鈕跟收起來那一行的展開鈕在同一個位置（最左邊）。/ The collapse button sits where the collapsed row's expand arrow is (far left). */}
+                <Button variant="ghost" size="icon-sm" className="-ml-2.5 mt-1 shrink-0 text-muted-foreground" onClick={onCollapse} aria-expanded aria-label={t("network.collapseDevice", { name: tn.name })} title={t("network.collapseDevice", { name: tn.name })}>
+                    <ChevronRight className="rotate-90" />
+                </Button>
                 <span className={cn("relative grid size-10 shrink-0 place-items-center rounded-xl ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
                     <Router size={18} />
                     <span className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
                 </span>
-                <div className="min-w-0 flex-1">
+                <div className="ml-1 min-w-0 flex-1">
                     <p className="line-clamp-2 text-[1rem] text-foreground [overflow-wrap:anywhere]" title={tn.name}>{tn.name}</p>
                     <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         <span>{online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}</span>
@@ -209,9 +213,6 @@ function DeviceCard({ tn, online, onScan, onAdd, focused, onCollapse }: {
                 {permission && tn.permission !== "owner" && (
                     <Badge variant="outline" className="shrink-0 text-[0.6875rem]">{t(permission)}</Badge>
                 )}
-                <Button variant="ghost" size="icon-sm" className="-mr-1 -mt-1 shrink-0 text-muted-foreground" onClick={onCollapse} aria-expanded aria-label={t("network.collapseDevice", { name: tn.name })} title={t("network.collapseDevice", { name: tn.name })}>
-                    <ChevronRight className="rotate-90" />
-                </Button>
             </div>
             {(tn.can_scan || tn.can_edit) && (
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -258,16 +259,16 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
     const permission = PERMISSION_LABEL[tn.permission];
     const running = scanRunning(tn.scan);
     const pct = running ? scanPercent(tn.scan!) : null;
-    const lanIp = tn.endpoint?.lan?.[0]?.ip;
+    const addr = deviceAddresses(tn.endpoint);
     return (
         <button
             type="button"
             onClick={onExpand}
             aria-expanded={false}
-            className="flex w-full min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 rounded-xl border border-border bg-card px-2.5 py-2 text-left shadow-card transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex w-full min-w-0 flex-wrap items-start gap-x-2.5 gap-y-1 rounded-xl border border-border bg-card px-2.5 py-2 text-left shadow-card transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-            <ChevronRight size={16} className="shrink-0 text-muted-foreground" aria-hidden />
-            <span className={cn("relative grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
+            <ChevronRight size={16} className="mt-1.5 shrink-0 text-muted-foreground" aria-hidden />
+            <span className={cn("relative mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-inset", online ? "bg-success/10 text-success ring-success/20" : "bg-muted text-muted-foreground ring-border")} aria-hidden>
                 <Router size={14} />
                 <span className={cn("absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card", online ? "bg-success" : "bg-muted-foreground/50")} />
             </span>
@@ -277,21 +278,29 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
                 <span className="block truncate text-xs text-muted-foreground">
                     {online ? (tn.rtt_ms !== null ? t("network.onlineRtt", { ms: tn.rtt_ms }) : t("network.online")) : t("network.offline")}
                     {permission && tn.permission !== "owner" && ` · ${t(permission)}`}
-                    {lanIp && (
-                        <>
-                            {" · "}
-                            <span className="font-mono" title={`${t("tunnels.lanTag")} ${lanIp}`}>{lanIp}</span>
-                        </>
-                    )}
                 </span>
+                {/* 裝置自己的位址：內網 + 外網（不明就寫不明），放不下就換行，不截斷。/ The device's own LAN + public IP; wraps instead of being cut. */}
+                {addr && (
+                    <span className="mt-0.5 flex flex-wrap gap-x-2.5 text-xs text-muted-foreground">
+                        {addr.lan && (
+                            <span>
+                                {t("tunnels.lanTag")} <span className="font-mono text-foreground/80">{addr.lan}</span>
+                                {addr.lanMore > 0 && ` +${addr.lanMore}`}
+                            </span>
+                        )}
+                        <span>
+                            {t("tunnels.endpointTag")} {addr.public ? <span className="font-mono text-foreground/80">{addr.public}</span> : t("tunnels.endpointUnknown")}
+                        </span>
+                    </span>
+                )}
             </span>
             {running ? (
-                <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-primary">
+                <span className="ml-auto flex shrink-0 items-center gap-1.5 self-center text-xs text-primary">
                     <Loader2 size={12} className="animate-spin" />
                     {pct !== null ? `${pct}%` : t("network.scanning")}
                 </span>
             ) : (
-                <span className="ml-auto">
+                <span className="ml-auto self-center">
                     <KindSummary hosts={tn.hosts} />
                 </span>
             )}

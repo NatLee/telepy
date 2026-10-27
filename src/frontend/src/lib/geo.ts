@@ -37,6 +37,17 @@ export function isNonPublic(geo: IpGeo | null | undefined): boolean {
     return !!geo && geo.scope !== "public";
 }
 
+/**
+ * 裝置真正的對外 IP：裝置 / 查詢網址回報的公網 IP，不然是 gateway 看到的來源（只在它是公網位址時）；都不是 = null（不明）。
+ * 不拿代理 / Docker 的內部位址充當裝置的 IP。
+ * The device's real public IP: the reported one, else the gateway's peer when that is public; null = unknown.
+ */
+export function devicePublicIp(endpoint: { ip: string; public_ip?: string | null; geo?: IpGeo | null } | null | undefined): string | null {
+    if (!endpoint) return null;
+    if (endpoint.public_ip) return endpoint.public_ip;
+    return isNonPublic(endpoint.geo) ? null : endpoint.ip;
+}
+
 /** 「台灣 · Chunghwa Telecom」；沒有資料回 null。/ "Taiwan · Chunghwa Telecom", or null without data. */
 export function placeLabel(geo: IpGeo | null | undefined, locale: string): string | null {
     if (!geo) return null;
