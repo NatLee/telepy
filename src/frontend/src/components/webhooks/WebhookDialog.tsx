@@ -1,6 +1,9 @@
 "use client";
 
 /**
+ * 左側是步驟分頁（StepTabs）：送到哪 → 送什麼 → 哪些隧道（有隧道事件時）→ 自訂標頭（選填）；填好的變綠、有錯的變琥珀色，
+ * 存檔失敗就跳到第一個有錯的那步。/ Side step tabs: where → what → which tunnels (with tunnel events) → custom headers
+ * (optional); filled steps turn green, steps with an error amber, and a failed save jumps to the first one.
  * 新增 / 修改 webhook：送到哪（網址、認出來的服務、格式、訊息語言、名稱）→ 送什麼（依分組勾事件，附「誰會收到」與預設組合）
  * → 狀態事件等多久 → 哪些隧道。全站 webhook 一律涵蓋每條隧道，不顯示隧道選單。
  * Add or change a webhook: where (URL, the recognised service, format, message language, name) → what (events by
@@ -18,6 +21,8 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Chip } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { Switch } from "@/components/ui/switch";
+import { StepTabs, type StepTab } from "@/components/ui/step-tabs";
+import type { StepState } from "@/lib/stepTabs";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -47,6 +52,8 @@ import {
 import type { WebhookErrors } from "@/hooks/useWebhooksPage";
 import type { CatalogEvent, Webhook, WebhookInput, WebhookLanguage, WebhookScope } from "@/types/webhooks";
 import { useDelayLabel } from "./parts";
+
+type WebhookTab = "where" | "what" | "tunnels" | "headers";
 
 /** 隧道多到要搜尋。/ Show a search box from this many tunnels. */
 const SEARCH_FROM = 7;
@@ -103,16 +110,50 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
         const r = await onSave({ ...input, events: selected, headers: headersToSave(input.headers) }, hook);
         setSaving(false);
         if ("saved" in r) onClose();
-        else setErrors(r.errors);
+        else {
+            setErrors(r.errors);
+            // 跳到第一個有錯的那步。/ Jump to the first step with an error.
+            const e = r.errors;
+            const first: WebhookTab | null = e.url || e.format || e.language || e.name ? "where" : e.events || e.delay ? "what" : e.tunnel_ids ? "tunnels" : e.headers ? "headers" : null;
+            if (first) setTab(first);
+        }
     };
 
     const canSave = !saving && Boolean(detected) && selected.length > 0 && (!showTunnels || input.all_tunnels || input.tunnel_ids.length > 0) && headerProblems.every((p) => p === null);
+
+    // 左側的步驟：送到哪 → 送什麼 → 哪些隧道（有隧道事件時）→ 自訂標頭（選填）。填好的變綠、有錯的變琥珀色。
+    // The steps on the left: where → what → which tunnels (with tunnel events) → custom headers (optional).
+    const errorOn: Record<WebhookTab, boolean> = {
+        where: Boolean(errors.url || errors.format || errors.language || errors.name),
+        what: Boolean(errors.events || errors.delay),
+        tunnels: Boolean(errors.tunnel_ids),
+        headers: Boolean(errors.headers) || headerProblems.some((p) => p !== null),
+    };
+    const savedHeaders = headersToSave(input.headers).length;
+    const tabs: StepTab<WebhookTab>[] = [
+        { value: "where", label: t("webhooks.form.where"), state: errorOn.where ? "attention" : detected ? "done" : "todo", status: detected ? FORMAT_SHORT[detected] : t("webhooks.tab.whereTodo") },
+        { value: "what", label: t("webhooks.form.what"), state: errorOn.what ? "attention" : selected.length > 0 ? "done" : "todo", status: selected.length > 0 ? t("webhooks.tab.events", { count: selected.length }) : t("webhooks.tab.whatTodo") },
+        ...(showTunnels
+            ? [{
+                value: "tunnels" as const,
+                label: t("webhooks.form.tunnels"),
+                state: (errorOn.tunnels ? "attention" : input.all_tunnels || input.tunnel_ids.length > 0 ? "done" : "todo") as StepState,
+                status: input.all_tunnels ? t("webhooks.tab.allTunnels") : t("webhooks.tab.someTunnels", { count: input.tunnel_ids.length }),
+            }]
+            : []),
+        { value: "headers", label: t("webhooks.headers.title"), state: errorOn.headers ? "attention" : savedHeaders > 0 ? "done" : "todo", status: savedHeaders > 0 ? t("webhooks.tab.headers", { count: savedHeaders }) : t("webhooks.form.optional") },
+    ];
+    const [picked, setTab] = useState<WebhookTab>("where");
+    // 隧道那步消失了（沒有隧道事件）就回到「送什麼」。/ Back to "what" when the tunnel step goes away.
+    const tab: WebhookTab = tabs.some((x) => x.value === picked) ? picked : "what";
 
     return (
         <Modal
             isOpen={isOpen}
             onClose={onClose}
-            size="2xl"
+            size="4xl"
+            fixedHeight
+            nav={<StepTabs aria-label={t("webhooks.tab.aria")} tabs={tabs} value={tab} onChange={setTab} />}
             icon={<WebhookIcon />}
             title={hook ? t("webhooks.form.editTitle") : scope === "site" ? t("webhooks.form.addSiteTitle") : t("webhooks.form.addTitle")}
             description={scope === "site" ? t("webhooks.form.siteDescription") : t("webhooks.form.description")}
@@ -130,7 +171,7 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
             <div className="space-y-7">
                 {errors.form && <Callout tone="danger">{errors.form}</Callout>}
 
-                <section className="space-y-4">
+                <section role="tabpanel" hidden={tab !== "where"} className="space-y-4">
                     <h3 className="text-base text-foreground">{t("webhooks.form.where")}</h3>
                     <Field
                         label={t("webhooks.form.url")}
@@ -181,9 +222,14 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                     <Field label={t("webhooks.form.name")} addon={t("webhooks.form.optional")} error={errors.name}>
                         <Input value={input.name} onChange={(e) => set("name", e.target.value)} placeholder={detected ? (safeHost(input.url) ?? t("webhooks.form.namePlaceholder")) : t("webhooks.form.namePlaceholder")} maxLength={80} />
                     </Field>
+                <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
+                    <Switch checked={input.enabled} onCheckedChange={(v) => set("enabled", v)}>
+                        <span className="text-sm text-foreground">{t("webhooks.form.enabled")}</span>
+                    </Switch>
+                </div>
                 </section>
 
-                <section className="space-y-3">
+                <section role="tabpanel" hidden={tab !== "what"} className="space-y-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <h3 className="text-base text-foreground">{t("webhooks.form.what")}</h3>
                         <span className="text-xs tabular-nums text-muted-foreground">{t("webhooks.form.selectedCount", { n: selected.length, total: catalog.length })}</span>
@@ -245,8 +291,6 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                             </fieldset>
                         ))}
                     </div>
-                </section>
-
                 {showDelay && (
                     <Field label={t("webhooks.form.delay")} error={errors.delay} hint={t("webhooks.form.delayHint")}>
                         <NativeSelect value={String(input.delay)} onChange={(e) => set("delay", Number(e.target.value))} className="sm:w-60">
@@ -258,9 +302,11 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                         </NativeSelect>
                     </Field>
                 )}
+                </section>
+
 
                 {showTunnels && (
-                    <section className="space-y-3">
+                    <section role="tabpanel" hidden={tab !== "tunnels"} className="space-y-3">
                         <h3 className="text-base text-foreground">{t("webhooks.form.tunnels")}</h3>
                         <Segmented
                             size="sm"
@@ -305,7 +351,7 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                     </section>
                 )}
 
-                <section className="space-y-3">
+                <section role="tabpanel" hidden={tab !== "headers"} className="space-y-3">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <h3 className="text-base text-foreground">{t("webhooks.headers.title")}</h3>
                         {input.headers.length > 0 && (
@@ -376,11 +422,6 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                     )}
                 </section>
 
-                <div className="rounded-lg border border-border bg-surface px-3 py-2.5">
-                    <Switch checked={input.enabled} onCheckedChange={(v) => set("enabled", v)}>
-                        <span className="text-sm text-foreground">{t("webhooks.form.enabled")}</span>
-                    </Switch>
-                </div>
             </div>
         </Modal>
     );
