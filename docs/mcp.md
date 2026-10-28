@@ -3,8 +3,9 @@
 > 讓 Claude Code、Claude Desktop / claude.ai、Cursor 等支援 MCP 的 AI 工具，用使用者自己的權限操作 Telepy：
 > 看隧道狀態、開一個**會自己關掉**的 SSH session、跑指令、用互動 shell 操作 TUI、讀寫檔案、經裝置開遠端瀏覽器。
 > 追蹤 issue：#93、#107。
-> 後端程式：`oauth/`、`api/oauth.rs`、`db/oauth.rs`、`auth/mcp.rs`（OAuth 2.1）；`mcp/`（MCP server）；
-> `ai/`（SSH session 與 reaper）；`api/ai.rs`、`db/ai_audit.rs`（session 列表與稽核）。
+> 後端程式：`oauth/`、`api/oauth.rs`、`db/oauth.rs`、`auth/mcp.rs`（OAuth 2.1 與個人 API token）；`mcp/`（MCP server）；
+> `ai/`（SSH session 與 reaper；`ai/shell.rs` 互動 shell、`ai/browser.rs` agent 的瀏覽器）；`api/ai.rs`、`api/browser.rs`、
+> `db/ai_audit.rs`（session 列表、REST 版與稽核）。
 
 ## 連線方式
 
@@ -22,12 +23,16 @@ MCP 端點是 `https://<你的主機>/mcp`（Streamable HTTP）。正式環境�
 
 沒有瀏覽器的 agent / CI 可以改用**個人 API token**（`tpt_…`，在網頁左側 **API** 頁建立）當 Bearer：
 `{"mcpServers": {"telepy": {"url": "https://telepy.example.com/mcp", "headers": {"Authorization": "Bearer tpt_…"}}}}`。
-token 在 `/mcp` 上的工具、scope、隧道限制跟 OAuth app 一樣（還要「MCP app」功能開著）；它的每個 tool call 除了 AI 稽核，
-也記在 API 頁的「活動」（`MCP <tool>`，200 / tool 回錯誤時 400）。同一組動作也有 REST 版：`/api/ai/sessions*`（指令）與
-`/api/browser/sessions*`（遠端瀏覽器，見下），`telepy exec` / `telepy browse` 就是用它們。
+token 在 `/mcp` 上的工具、scope、隧道限制跟 OAuth app 一樣（這個人的「API token」與「MCP app」兩個功能都要開著）；
+它的 session 與 shell、瀏覽器都只屬於這把 token，稽核的 app 名稱是 `API token "<名稱>"`。它的每個 tool call 除了 AI 稽核，
+也記在 API 頁的「活動」（`MCP <tool>`，200 / tool 回錯誤時 400）。撤銷 token 時它開著的 session 立刻關閉。同一組動作也有
+REST 版：`/api/ai/sessions*`（指令）與 `/api/browser/sessions*`（遠端瀏覽器，見下），`telepy exec` / `telepy browse` 就是用它們
+（見 [cli.md](cli.md)）。
 
 網頁左側 **AI → MCP**（`/tunnels/mcp`）顯示實際要填的端點網址（取自 discovery 的 `resource`，所以會反映
 `PUBLIC_URL`）、上表三種客戶端可直接複製的設定、各權限對應的工具、session 何時關閉，以及已連接的應用程式。
+右上的「app 碰得到哪裡？」打開一張圖：MCP app ─ Telepy ─ 裝置 ─ 區網 / 網際網路，依選到的已連接 app 的權限亮起對應的
+分支（`lib/aiAccess.ts` `reachFor`）。
 
 ## 授權流程（OAuth 2.1）
 
@@ -49,16 +54,20 @@ MCP client ── POST /mcp ─────────────────�
 
   | scope | 允許 |
   | --- | --- |
-  | `tunnels:read` | `list_tunnels`、`tunnel_status` |
+  | `tunnels:read` | `list_tunnels`、`tunnel_status`、`lan_hosts` |
   | `ssh:exec` | `ssh_session_open`、`ssh_exec`、`shell_open` / `shell_send` / `shell_read` / `shell_resize` / `shell_close` |
   | `ssh:files` | `ssh_session_open`、`sftp_list` / `sftp_read` / `sftp_write` |
   | `network:scan` | `lan_scan`（掃描裝置背後的區網；只限擁有者或 ADMIN 的隧道） |
   | `browser:use` | `browser_open` / `browser_navigate` / `browser_read` / `browser_screenshot` / `browser_click` / `browser_type` / `browser_close`（經裝置上網的真瀏覽器；同意頁標「會改東西」） |
 
   使用者可以取消勾選任何一項，也可以把 app 限制在部分隧道。
-- access token 是 `token_type: "mcp_access"` 的 JWT，REST API 不接受；網頁的 token 也不能打 `/mcp`。
-  每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁** 或 **偏好設定 → 已連接的應用程式** 撤銷後立即失效，
-  該 app 開著的 SSH session 也會馬上關閉。
+- access token 是 `token_type: "mcp_access"` 的 JWT，網頁的 token 不能打 `/mcp`。REST API 只在 token 白名單
+  （`auth::api_tokens::ROUTES`，見 [cli.md](cli.md)）內接受它，`telepy` 命令列的瀏覽器登入就是這樣用的。
+- 每個 `/mcp` 請求都會重新檢查 grant 與使用者，所以在 **MCP 頁**、**偏好設定 → 已連接的應用程式**、或 AI 活動頁的
+  「你已連接的 app」撤銷後立即失效，該 app 開著的 SSH session、shell 與瀏覽器也會馬上關閉（管理員可以在「管理使用者」對話框
+  撤銷任何人的）。
+- 帳號被停用時，grant 與個人 API token **暫停而不撤銷**：`/mcp` 立刻拒絕、開著的 session 關閉，重新啟用後照常可用。
+  管理員替這個人關掉「MCP app」功能時，app 全部拿到 401（像被撤銷）、開著的 agent session 也會結束；功能打開就恢復。
 
 ## 工具
 
@@ -88,14 +97,21 @@ MCP client ── POST /mcp ─────────────────�
 | `browser_close(browser_id)` | 關瀏覽器 |
 
 權限完全照網頁規則：要有該隧道的 VIEW 權限，而且目標 username 必須在允許清單內（被分享的隧道只能用分享時允許的
-username，與 web terminal 相同）。
+username，與 web terminal 相同）。另外：
+
+- **功能權限**（網站設定 → 存取權限）一樣適用：管理員替這個人關掉的功能，對應的工具回錯誤（`isError`）說明——
+  `ssh:exec` 的工具要「網頁終端機」、`ssh:files` 要「檔案管理」、`lan_hosts` 與 `lan_scan` 要「區網探索」、`browser:use`
+  要「遠端瀏覽器」。scope 本身沒給時，錯誤會告訴 agent 請使用者重新連接並核准那個 scope。
+- **需要 step-up 的隧道**（每次 session 前都要使用者用第二道驗證確認）拒絕 agent 開 SSH session、瀏覽器與 `lan_scan`；
+  `list_tunnels` 的 `requires_step_up` 先告訴 agent。
 
 ### 指令規則（`ssh_exec`）
 
 管理員的全站規則與隧道擁有者 / ADMIN 設的隧道規則（網頁的「指令規則」頁，`/tunnels/commands`）也管 agent 的指令：
 
 - **擋下**：不執行，tool 回錯誤（`isError`），內容寫出是哪條規則與規則的說明。
-- **需要核准**：Telepy 送出核准申請（隧道擁有者與 ADMIN 會在網頁右下角看到，也可在指令規則頁處理），這次 tool call
+- **需要核准**：Telepy 送出核准申請（核准人——規則指定的人，沒指定就是隧道擁有者與 ADMIN——會在網頁右下角看到，
+  也可在指令規則頁處理），這次 tool call
   最多等 45 秒；核准就照常執行並回結果，拒絕或逾時回錯誤。還沒有人決定時回錯誤「還在等」——請 agent 告訴使用者，
   核准後**用一模一樣的指令**再呼叫一次；核准在 10 分鐘內可用一次（同一個 app、隧道、帳號與指令）。
 - agent 用隧道擁有者的身分跑時，一樣要擁有者按核准（human in the loop）；規則可以只管 MCP agent（`via: agents`）。
@@ -117,7 +133,7 @@ username，與 web terminal 相同）。
 ## 遠端瀏覽器（`browser:use`）
 
 - 就是一般的 remote-browser session（`remote_browser/`：經裝置的 SOCKS、kasm-browser 裡的 Chromium，算進
-  `remote_browser_max_sessions`），只是由 agent 經 session-manager 的 CDP 端點操作（見 `docs/remote-browser.md`「MCP agent 操作」）。
+  `remote_browser_max_sessions`），只是由 agent 經 session-manager 的 CDP 端點操作（見 [remote-browser.md](remote-browser.md)「MCP agent 與腳本操作」）。
   backend 從不直接連 Chromium 的 DevTools。
 - 跟 SSH session 共用每人上限 `ai_max_sessions_per_user`、同一組 idle / 壽命限制與 reaper（裝置離線、grant 撤銷、權限或 username
   被拿掉、remote-browser session 不見了都會關）；step-up 隧道拒絕。
@@ -140,20 +156,21 @@ username，與 web terminal 相同）。
 | 何時關閉 | 原因（通知與稽核裡的 `reason`） |
 | --- | --- |
 | agent 呼叫 `ssh_session_close` | `closed_by_agent` |
-| 使用者 / 隧道擁有者 / 管理員在網頁關掉（`DELETE /api/ai/sessions/{id}`） | `closed_by_user` |
+| 使用者 / 隧道擁有者 / 管理員在網頁關掉（AI 活動頁或即時 session 頁，`DELETE /api/ai/sessions/{id}`）；管理員替這個人關掉「MCP app」功能 | `closed_by_user` |
 | 閒置超過 `ai_session_idle_timeout`（預設 600 秒；執行中的指令不算閒置） | `idle` |
 | 存活超過 `ai_session_max_lifetime`（預設 7200 秒；一律關閉） | `max_lifetime` |
 | 裝置離線、連線中斷 | `device_offline` / `disconnected` |
-| grant 撤銷或過期、使用者停用 | `revoked` |
-| 隧道被刪、權限被拿掉、username 被移除 | `permission_removed` |
+| grant 或個人 API token 撤銷 / 過期、帳號停用 | `revoked` |
+| 隧道被刪 | `tunnel_deleted` |
+| 權限被拿掉、username 被移除（取消分享、分享到期、允許清單縮小…） | `permission_removed` |
 
-- reaper 每 30 秒檢查一次；撤銷 grant 時立即關閉。
+- reaper 每 30 秒檢查一次；撤銷 grant / token 時立即關閉，取消分享、改權限這類變更也會立刻重新檢查一次（`ai::recheck`）。
 - agent 可以要求更短的 `idle_timeout_s` / `max_lifetime_s`，但不能超過站台設定（最短 10 秒）。
 - 每位使用者同時最多 `ai_max_sessions_per_user` 個（預設 3，所有 app 合計，SSH session 與 agent 的瀏覽器一起算；0 = 不允許 AI 開 session）。
 - 指令逾時預設 60 秒、最多 600 秒，逾時送 `KILL` 並關 channel；每個輸出串流預設保留 64 KiB、最多 1 MiB，
   超過時保留開頭 1/4 與結尾 3/4。
-- MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是 OAuth grant（哪個 app），不是 MCP 連線；
-  不同 app 互相看不到彼此的 session。
+- MCP 2026-07-28 版沒有 transport session，所以 SSH session 綁的是憑證（哪個 OAuth grant 或哪把個人 API token），
+  不是 MCP 連線；不同 app / token 互相看不到彼此的 session。
 
 三個上限都在管理員的 **網站設定 → AI 存取（MCP）** 分頁（`/tunnels/settings?tab=ai`，同頁也顯示 MCP 端點網址），變更後對新開的 session 生效。
 
@@ -162,10 +179,13 @@ username，與 web terminal 相同）。
 - 開 / 關 session 時，`/ws/notifications` 會送 `AI-SESSION-OPENED` / `AI-SESSION-CLOSED`
   （`details`、`tunnel_id`、`session_id`、`by`、`client`，關閉時另有 `reason`）給 session 的使用者與隧道擁有者 ——
   被分享的使用者用 AI 連上別人的隧道時，擁有者會知道。
-- 每一次 tool call 寫一列 `telepy_ai_audit_event`（最多保留 10 萬列）：誰、哪個 app、哪個隧道與 username、
-  指令或路徑（最多 2000 字元）、exit code、耗時、輸出 bytes、錯誤。`GET /api/ai/activity`：管理員看全部，
-  其他人看自己的與自己擁有的隧道上的。**指令原文會被記錄**，請勿讓 agent 在指令列帶密碼。
-- `GET /api/ai/sessions`：自己的 session 與自己隧道上的 session（管理員：全部）。
+- 每一次 tool call 寫一列 `telepy_ai_audit_event`（最多保留 10 萬列，90 天後刪掉，hash chain 防竄改）：誰、哪個 app、
+  哪個隧道與 username、指令或路徑（最多 2000 字元）、exit code、耗時、輸出 bytes、錯誤、來源 IP。**指令原文會被記錄**，
+  請勿讓 agent 在指令列帶密碼。
+- `GET /api/ai/activity` 與 `GET /api/ai/sessions` 預設 `?scope=mine`（管理員也一樣）：自己的，加上自己擁有的隧道上的；
+  `scope=all` = 全部，只有管理員（其他人 403 `admin_only`）。`activity` 另外可用 `tunnel_id`、`user_id`、`grant_id` 篩選。
+- 網頁：**AI 活動**（`/tunnels/activity`）是自己的（含開著的 session、你已連接的 app）；管理員的全站版在管理區的
+  **全站 AI 活動**（`/tunnels/admin/activity`）。
 
 ## 手動驗證
 
@@ -178,7 +198,6 @@ curl -s https://telepy.example.com/.well-known/oauth-authorization-server
 
 自動化測試：`tests/oauth_api.rs`（OAuth 流程）、`tests/mcp_api.rs`（以假的裝置 sshd 端到端測 exec / SFTP /
 逾時 / 截斷 / scope / 上限 / 撤銷 / reaper / 分享通知、互動 shell（PTY echo shell：畫面、控制字元、錄影、指令規則），
-以及以假的 session-manager 測 agent 瀏覽器）；`docker/kasm-browser/tests/test_cdp.py`（CDP 動作、WebSocket frame、/cdp 路由）。
-
-網頁 **AI → MCP** 頁右上的「app 碰得到哪裡？」打開一張圖：MCP app ─ Telepy ─ 裝置 ─ 區網 / 網際網路，依選到的已連接 app
-的權限亮起對應的分支（`lib/aiAccess.ts` `reachFor`）。
+以及以假的 session-manager 測 agent 瀏覽器）；`tests/api_tokens.rs`（個人 API token 打 `/mcp` 與 REST）、`tests/api_token_calls.rs`
+（呼叫紀錄）；`tests/features.rs`（功能權限擋工具）；`docker/kasm-browser/tests/test_cdp.py`（CDP 動作、WebSocket
+frame、/cdp 路由）。

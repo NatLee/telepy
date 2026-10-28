@@ -108,7 +108,7 @@ pub struct JsonFlag {
 pub struct LoginArgs {
     /// Telepy server URL, e.g. https://telepy.example.com
     pub url: String,
-    /// Sign in with a personal API token (Preferences → API tokens) instead of the browser
+    /// Sign in with a personal API token (the API page → Your tokens) instead of the browser
     #[arg(long = "with-token", alias = "api-token")]
     pub with_token: Option<String>,
     /// Scopes for the browser sign-in (space-separated)
@@ -566,7 +566,7 @@ fn logout() -> Result<()> {
     creds::forget(&p.server)?;
     eprintln!("Signed out of {}.", p.server);
     if p.kind == Kind::Token {
-        eprintln!("The API token itself still works until you revoke it in Telepy (Preferences → API tokens).");
+        eprintln!("The API token itself still works until you revoke it in Telepy (the API page → Your tokens).");
     }
     Ok(())
 }

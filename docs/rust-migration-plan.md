@@ -1,8 +1,18 @@
 # Telepy → Rust 後端重構規劃
 
-> 狀態：**已切換**（2026-10-22，M1–M6 完成；golden contract tests（M0/#81）改以 Rust 側的整合測試覆蓋，
-> 效能基線量測待補）。追蹤：GitHub #80 與 sub-issues #81–#87。
-> 本文是「看完現有程式碼後」的重構規劃，不是最終設計書；每個 Phase 開工前再各自細化。
+> 狀態：**已完成**（2026-10-22 切換；M1–M6 = PR #88–#91，#80 已關閉；golden contract tests（M0/#81）改以 Rust 側的
+> 整合測試覆蓋；效能 before/after 量測見 [`benchmarks.md`](benchmarks.md)（#94））。追蹤：GitHub #80 與 sub-issues #81–#87。
+> 本文是「看完現有程式碼後」的重構規劃，保留作為歷史紀錄，不是現況說明；文中的 `tunnels/consumers.py` 等 Python 路徑
+> 都已隨 Django 一起移除。之後的實作有幾處和這裡寫的不同：
+> - terminal 不再 spawn OpenSSH：每個分頁是連線池（`ssh/pool.rs`）上的一條 russh PTY channel（`ssh/terminal.rs`），§3.4 不再適用；
+>   只剩連到 LAN 主機的那一跳還用 OpenSSH。
+> - gateway 不在 loopback 綁任何埠（§3.6 表格「單跳」那列）：後端在行程內開 forwarded-tcpip 通道（`Gateway::open_stream`）。
+> - remote browser 不用 `ssh -D`：SOCKS5 在行程內，走連線池（`ssh/socks.rs`）。
+> - `/api/reverse/internal/keys` 已移除（gateway 直接查 DB）；schema 一直是 `db/schema.rs` 的冪等 DDL，沒有改用 `sqlx migrate`；
+>   §3.6 提到的 `legacy-sshd` compose profile 沒有做。
+> - §11 的回滾路徑只在切換當時成立，之後沒有再維護（後來新增的資料表與功能 Django 版都不認識）。
+>
+> 現況見 [`README.md`](../README.md) 與 [`device-connections.md`](device-connections.md)。
 
 ---
 

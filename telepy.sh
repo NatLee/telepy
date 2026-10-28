@@ -68,15 +68,15 @@ case "$1" in
         execute_script "dev-doctor" "$@"
         ;;
     *)
-        print_message "$YELLOW" "Usage: $0 sub-command [args]"
+        print_message "$YELLOW" "Usage: $0 <sub-command> [args]"
         print_message "$BLUE" "Sub-commands:"
-        print_message "$GREEN" "  keygen: Generate SSH host keys (gateway) and the backend service key."
-        print_message "$GREEN" "  create-superuser: Create an admin account for Telepy management."
+        print_message "$GREEN" "  keygen: Generate the SSH gateway host keys and the backend service key (run once before the first start; devices pin the host keys)."
+        print_message "$GREEN" "  create-superuser: Create an admin account for Telepy management (the first account to sign up is an admin anyway)."
         print_message "$GREEN" "  shell: Open a shell in the backend container."
         print_message "$GREEN" "  migration: Reconcile the database schema (also runs automatically on start)."
         print_message "$GREEN" "  backend-debug: Recreate the backend container and follow its logs."
-        print_message "$GREEN" "  geoip: Download the offline IP geolocation databases (DB-IP Lite; re-run monthly)."
-        print_message "$GREEN" "  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor (re-run now and then)."
+        print_message "$GREEN" "  geoip: Download the offline IP geolocation databases (DB-IP Lite) into ./telepy-data/geoip; re-run monthly, then restart the backend."
+        print_message "$GREEN" "  oui: Download the IEEE OUI registry into ./telepy-data/oui so LAN hosts show their NIC vendor; then restart the backend."
         print_message "$GREEN" "  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken."
         ;;
 esac

@@ -4,7 +4,8 @@
 > 或自己的服務；管理員另外共管「全站」webhook，收整台伺服器的重要事件。
 > 後端程式：`webhooks/`（`catalog.rs` 事件目錄、`text.rs` 三種語言的句子、`format.rs` 各服務格式、`sign.rs` 簽章、
 > `target.rs` 位址檢查、`mod.rs` 發送）；`api/webhooks.rs`、`db/webhooks.rs`；狀態告警的計時在 `monitor/alerts.rs` + `monitor/runner.rs`。
-> 前端：`/tunnels/webhooks`（`app/tunnels/webhooks/page.tsx`、`components/webhooks/`、`hooks/useWebhooksPage.ts`、`lib/webhooks.ts`）。
+> 前端：`/tunnels/webhooks` = 我的 webhook（管理員也只看到自己的）、`/tunnels/admin/webhooks` = 全站 webhook（側欄管理區
+> 「全站 Webhook」）；兩頁共用 `components/webhooks/WebhooksView.tsx`（`hooks/useWebhooksPage.ts`、`lib/webhooks.ts`）。
 
 ## 兩種 webhook
 
@@ -20,6 +21,9 @@
 - `notify_user_webhooks`（預設開）：關掉就暫停所有個人 webhook，全站的不受影響。
 - `notify_private_targets`（預設關）：個人 webhook 能不能連內網 / 本機 / 雲端 metadata。
 - `notify_max_webhooks`（預設 10，0–100）：每人上限。
+
+管理員也可以在網站設定 → 存取權限替某些人（或某個使用者群組）關掉「個人 webhook」功能：那個人的 Webhooks 頁換成說明，
+`/api/webhooks*` 回 403 `feature_disabled`。帳號被停用時，他的個人 webhook 不再送出。
 
 以前的單一告警網址（`notify_webhook_url` / `notify_down_delay`）在升級時（data migration
 `2026-10-26-site-webhook-from-settings`）搬成一個名為 “Status alerts” 的全站 webhook：同樣的四個狀態事件加上
@@ -42,13 +46,14 @@
 | `share.ended` | 分享與存取 | 分享的雙方，不含動手的人 | |
 | `access.requested` | 分享與存取 | owner 與 ADMIN，不含申請人 | |
 | `access.decided` | 分享與存取 | 申請人 | |
-| `command.approval_requested` | 指令規則 | owner 與 ADMIN（自己在終端機打的不送，自己的 MCP agent 的會送） | |
+| `command.approval_requested` | 指令規則 | 這條規則的核准人（規則有指定就是那些人，否則 owner 與 ADMIN；自己在終端機打的不送，自己的 MCP agent 的會送） | |
 | `command.approval_decided` | 指令規則 | 申請人（自己決定或取消的不送） | |
 | `command.blocked` | 指令規則 | owner 與 ADMIN，不含本人；訊息含指令 | |
 | `session.started` | 連線 | owner 與 ADMIN，不含本人（終端機、區網終端機、檔案、瀏覽器、桌面、RustDesk） | |
-| `mcp.session_opened` / `mcp.session_closed` | 連線 | agent 的使用者與通道 owner | |
+| `session.watched` | 連線 | 被看的人（owner / ADMIN / 管理員開始看他的網頁終端機；data 有 `by` / `account` / `lan_host`） | |
+| `mcp.session_opened` / `mcp.session_closed` | 連線 | agent 的使用者與通道 owner（data 的 `kind`：`ssh` 或 `browser`） | |
 | `account.sign_in` | 登入 | 帳號本人 | |
-| `account.sign_in_new_device` | 新裝置登入（90 天內沒見過的國家或瀏覽器） | 帳號本人 | |
+| `account.sign_in_new_device` | 登入 | 帳號本人（90 天內成功登入都沒見過的國家或瀏覽器） | |
 | `account.sign_in_failed` | 登入 | 帳號本人 | ✓（任何帳號） |
 | `key.expiring` | SSH 金鑰 | 金鑰的擁有者（個人 SSH 金鑰 7 天內到期） | |
 | `key.expired` | SSH 金鑰 | 金鑰的擁有者（剛到期：gateway 拒絕、從裝置移除） | |
@@ -142,7 +147,7 @@ API 只回給能管這個 webhook 的人；`PATCH` 帶 `headers` 就整組取代
 | | |
 | --- | --- |
 | `GET /api/webhooks` | 我的、（管理員）全站的、兩個範圍的事件目錄、`policy` |
-| `POST /api/webhooks` | `{scope?, name?, url, format?, language?, events?, all_tunnels?, tunnel_ids?, delay?, enabled?}` → `{webhook, secret}` |
+| `POST /api/webhooks` | `{scope?, name?, url, format?, language?, events?, all_tunnels?, tunnel_ids?, delay?, enabled?, headers?}` → `{webhook, secret}` |
 | `GET / PATCH / DELETE /api/webhooks/{id}` | 只有自己的（全站的：管理員）；別人的一律 404 |
 | `POST /api/webhooks/{id}/test` | 送 `webhook.test` 並等結果（不重試、不算進連續失敗） |
 | `GET /api/webhooks/{id}/deliveries` | 最新 50 筆 |

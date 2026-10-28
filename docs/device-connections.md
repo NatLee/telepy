@@ -1,15 +1,18 @@
 # 後端怎麼連到裝置：共用連線與 port
 
 > 本文涵蓋現在的連線路徑、port 用在哪裡、依「隧道 + OS 帳號」共用連線的設計，以及還沒做的部分。
-> 程式：`gateway/mod.rs`、`ssh/device.rs`、`ssh/pool.rs`、`ssh/sftp_watch.rs`、`ssh/terminal.rs`、`ssh/socks.rs`、`ssh/bridge.rs`；
-> 測試：`tests/terminal_e2e.rs`、`tests/socks_e2e.rs`、`tests/device_pool.rs`、`tests/ssh_topology.rs`
-> （都建在 `tests/common/lab.rs` 上）。
+> 程式：`gateway/mod.rs`、`gateway/proxy_protocol.rs`、`ws/gateway.rs`、`ssh/device.rs`、`ssh/pool.rs`、`ssh/sftp_watch.rs`、
+> `ssh/resolve.rs`、`ssh/terminal.rs`、`ssh/socks.rs`、`ssh/bridge.rs`、`ssh/host_keys.rs`、`ssh/tunnel_keys.rs`；
+> 測試：`tests/terminal_e2e.rs`、`tests/socks_e2e.rs`、`tests/device_pool.rs`、`tests/ssh_topology.rs`、`tests/gateway_ws.rs`、
+> `tests/proxy_protocol.rs`（都建在 `tests/common/lab.rs` 上）。
 
 ## 一、現在怎麼連？跟以前一樣嗎？
 
-**裝置端完全一樣。** 裝置照舊用隧道金鑰跑
-`ssh / autossh -NR '*:<reverse_port>:localhost:22' telepy@<server> -p 24242`，腳本沒改。差別只在伺服器端：
-以前接住這條連線的是 OpenSSH 容器，現在是後端行程裡的 gateway（russh）。
+**裝置端還是 OpenSSH 的 `-R`。** 裝置用隧道金鑰跑
+`ssh / autossh -NR '*:0:localhost:22' telepy@<server> -p 24242`：現在的腳本一律要求 `-R 0`，由 gateway 依金鑰認出隧道
+（第十節），並用 `StrictHostKeyChecking=yes` + `HostKeyAlias=telepy-<host>-<port>` 釘住 gateway 的 host key；以前寫著
+號碼的舊腳本照常可用。只能出網頁 port 的網路改走 WebSocket（第九節），裡面是同一條 SSH。伺服器端以前接住這條連線的是
+OpenSSH 容器，現在是後端行程裡的 gateway（russh）。
 
 ```
 裝置                                         Telepy 後端（單一行程）
@@ -23,7 +26,7 @@
        └──────────────────────────────────── │   ├ 遠端瀏覽器：行程內 SOCKS5，每個 CONNECT 一條 direct-tcpip    │
                                             │   └ 區網主機那一跳：一條 direct-tcpip（最後一跳仍是 OpenSSH）   │
                                             │ AI session、區網掃描：各自一條連線（同樣在行程內開通道）         │
-                                            │ 筆電：ssh -W localhost:<port> telepy@server（使用者金鑰）→ 通道 │
+                                            │ 筆電：ssh -W <隧道名>:22 telepy@server（使用者金鑰）→ 通道       │
                                             └──────────────────────────────────────────────────────────┘
 ```
 
@@ -31,9 +34,9 @@
 
 | 路徑 | 以前（Django + OpenSSH 容器） | 現在 |
 |---|---|---|
-| 裝置 → 伺服器 | `ssh -NR` 到 ssh 容器 | 一樣的指令，連到後端內建 gateway |
+| 裝置 → 伺服器 | `ssh -NR` 到 ssh 容器 | 一樣是 `ssh -NR`（`-R 0`），連到後端內建 gateway；也可包在 `/ws/gateway/` 的 WebSocket 裡 |
 | 網頁終端機 | 後端 → ssh 容器（第一次 SSH）→ 裝置（第二次） | 池子連線上的 PTY channel；同一台同一帳號的分頁、檔案管理共用**一次** SSH 登入 |
-| 檔案管理 / SFTP | 每個操作 spawn `ssh` / `scp`，各自兩次 SSH | 池子連線上一個操作一條 channel；沒有 sftp 子系統時用 exec channel 跑 `ls -la` |
+| 檔案管理 / SFTP | 每個操作 spawn `ssh` / `scp`，各自兩次 SSH | SFTP REST 與所有檔案管理共用池子連線上的**一條** sftp channel；沒有 sftp 子系統時檔案管理用 exec channel 跑 `ls -la` |
 | 遠端瀏覽器 | `ssh -D` 子程序 | 後端自己的 SOCKS5（只做 CONNECT），CONNECT = 池子連線上的 direct-tcpip |
 | 區網主機終端機 | `ProxyCommand ssh -W` 經 ssh 容器 | 池子連線上的 direct-tcpip 接到一次性本機入口（`ssh::bridge`），最後一跳 OpenSSH（可問密碼） |
 | 裝置金鑰清單（`device_keys`） | 沒有 | 同一個池子借連線，SFTP 讀寫 `~/.ssh/authorized_keys` |
@@ -43,10 +46,11 @@
 
 | port | 用途 | 數量 | 會不會用完 |
 |---|---|---|---|
-| 24242、8787 | 對外：裝置隧道、網頁 | 固定 | 不會 |
+| 24242、8787 | 對外：裝置隧道、網頁（走 WebSocket 的裝置也用網頁這個 port） | 固定 | 不會 |
 | `reverse_port` | 每條隧道一個**號碼**：裝置在 `-R` 指定它，gateway 用它找到那條連線。**不綁任何本機 port** | 每條隧道 1 個 | 號碼上限約 64,500 條隧道 |
 | SOCKS port | 每個遠端瀏覽器 session 一個（kasm 容器連進來；Chromium 的 SOCKS 不支援帳密，所以無法共用一個） | 受 session 上限限制 | 不會 |
 | 區網主機一次性入口 | 每開一個區網主機終端機，`127.0.0.1:<臨時埠>` 等一條連線（30 秒沒人來就關） | 開著的區網終端機數 | 不會 |
+| 遠端桌面回連埠 | 每個 RDP / VNC session 一個一次性 listener（隨機埠，只收 guacd 的位址），guacd 連進來就接到裝置的 direct-tcpip、listener 關掉 | 開著的桌面 session 數 | 不會 |
 
 後端連裝置不再經過任何 loopback TCP，所以也沒有臨時 port、TIME_WAIT 的問題。`reverse_port` 只是號碼，
 不會跟容器裡任何東西衝突，分配時只要避開已經發出去的號碼（`monitor::find_free_port`）。
@@ -99,10 +103,11 @@
 
 ## 四、還沒做的
 
-- **AI session 仍是自己的一條連線。** 一個 AI session 會同時跑最多 4 個指令再加 SFTP，若只算一個 session，會讓
-  池子低估裝置的 MaxSessions 用量。它已經在行程內開通道（不占 port），共用連線只省一次握手，所以先不搬。
-- **隧道已經由金鑰辨識**（第十節）：裝置在 `-R` 要求哪個號碼都無所謂，筆電可以用 `ssh -W <隧道名>:22`。
-  `reverse_port` 仍是每條隧道的內部號碼（u16），超過 6 萬條隧道時要把它放寬成更大的整數——純粹是型別與分配器
+- **AI session 與區網掃描仍是自己的一條連線**（`ssh::device::connect`）。一個 AI session 同時最多開 4 條 channel（指令與
+  互動 shell 共用）再加 SFTP，若只算一個 session，會讓池子低估裝置的 MaxSessions 用量。它已經在行程內開通道（不占 port），
+  共用連線只省一次握手，所以先不搬。
+- **`reverse_port` 的上限**：隧道已經由金鑰辨識（第十節），裝置在 `-R` 要求哪個號碼都無所謂，筆電也用 `ssh -W <隧道名>:22`；
+  但 `reverse_port` 仍是每條隧道的內部號碼（u16），超過 6 萬條隧道時要把它放寬成更大的整數——純粹是型別與分配器
   的改動，裝置與筆電都不用改。
 
 ## 五、怎麼測
@@ -125,13 +130,15 @@
   - sftp 子系統被拒時 channel 會關掉（不留在裝置上占 MaxSessions）
   - 裝置重連、閒置回收、使用中的連線不會被收
 - `tests/ssh_topology.rs`：同一台多使用者、多 OS 帳號，以及多跳路徑。
+- `tests/gateway_ws.rs`：裝置經 `/ws/gateway/` 連上（含真的 `telepy-ws.py` 當 ProxyCommand）；`tests/proxy_protocol.rs`：
+  L4 代理的 PROXY header（見第九節）。
 - 新的 SSH 路徑一律建在 `tests/common/lab.rs` 上（說明見 `.claude/CLAUDE.md` 的 Code Conventions）。
 
 ## 六、裝置的 host key 釘選
 
 後端每次連到裝置（`ssh::device::connect`）都會比對裝置 sshd 出示的 host key：這條隧道第一次連線時記下（TOFU，
 通常就是裝置加入後後端自己的驗證登入），之後不同就拒絕握手、記成待確認，並通知擁有者與分享者。擁有者 / ADMIN 在
-隧道詳細資訊的「裝置身分」核對指紋後按「改信任這把金鑰」，或「忘掉」讓下一次連線重新記。理由：裝置分不出 Telepy
+隧道詳細資訊「金鑰與身分」分頁的「裝置身分」核對指紋後按「改信任這把金鑰」，或「忘掉」讓下一次連線重新記。理由：裝置分不出 Telepy
 使用者、只認服務金鑰，而拿到隧道金鑰的人可以把 `-R` 指到自己的 sshd 冒充裝置，接住終端機輸入、上傳的檔案與遠端桌面
 的密碼；釘選之後這種冒充在握手時就被擋下，服務金鑰的登入也不會送出。測試：`tests/host_keys.rs`。
 
@@ -153,7 +160,8 @@
   金鑰（gateway 只認金鑰，先登記的那條隧道會被當成那把金鑰的裝置）。
 - **gateway 的 direct-tcpip**：只看狀態、一個帳號都沒被允許的 sharee 不能開通道到裝置的 sshd（允許清單是唯一邊界；
   ADMIN 管清單所以例外）。
-- 隧道刪掉後釘選也沒了，機器就沒有主人，下一個指過來的人會釘選它；要在刪除時勾「移除服務金鑰」，機器才真的離開 Telepy。
+- 隧道刪掉後釘選也沒了，機器就沒有主人，下一個指過來的人會釘選它。刪除時這條隧道自己的服務金鑰一定從裝置移掉（第八節）；
+  裝置上還留著舊的共用金鑰時，要勾「移除服務金鑰」（這台機器的最後一條隧道會預先勾好），機器才真的離開 Telepy。
 
 測試：`tests/machine_identity.rs`（指到別人的機器、兩種繞法、自己的第二條、刪掉後釋出）、`tests/join_api.rs`
 （註冊時的拒絕 / 同一台提醒 / 立刻釘選）、`tests/rest_api.rs`（裝置金鑰去重）、`tests/ssh_topology.rs`（沒有允許帳號的
@@ -179,6 +187,27 @@ sharee）。
 
 測試：`tests/tunnel_service_keys.rs`（新裝置只信隧道金鑰、舊裝置遷移、同一台機器等每條隧道、刪除移除）。
 
+## 九、裝置怎麼到 gateway：TCP、WebSocket、PROXY protocol
+
+- **TCP（預設）**：對外 `REVERSE_SERVER_SSH_PORT`（24242，容器內 2222）。
+- **WebSocket**（`ws/gateway.rs`）：給只放行網頁 port 的網路（公司內網、飯店、4G 路由器）。裝置的 ssh 加上
+  `ProxyCommand python3 telepy-ws.py wss://<host>/ws/gateway/`，小程式（只用 Python 標準函式庫，`GET /api/join/telepy-ws.py`）
+  把位元組包成二進位 frame 送到網頁 port。裡面是**同一條** SSH session：同一組 host key、同樣的金鑰認證與 forward 規則，
+  沒有多信任什麼，也沒有 auth 第一則訊息（認證在裡面的 SSH 做）。在精靈的連線步驟或一鍵加入時選（`transport: websocket`）。
+  - 來源 IP 取自轉送 header（`X-Forwarded-For`，信任的層數見 `TRUSTED_PROXY_HOPS`），port 記成 0；連線資訊、`accepted` 事件與
+    清單的 `endpoint.transport` 記 `websocket`。連線上限（`GATEWAY_MAX_CONNECTIONS`）兩個入口一起算。
+  - 筆電也能這樣連：SSH config 對話框的「連到 Telepy 的方式」選「只有網頁 port」，伺服器區塊就多一行 ProxyCommand
+    （先把 `telepy-ws.py` 存到 `~/.ssh/telepy-ws.py`）。
+- **PROXY protocol**（`gateway/proxy_protocol.rs`）：gateway 前面有 L4 代理（nginx stream、HAProxy `mode tcp`、雲端 NLB）時，
+  gateway 看到的來源都是代理。把代理列進 `GATEWAY_PROXY_PROTOCOL_FROM`（IP / CIDR，逗號或空白分隔；空 = 關閉），它送的 v1 / v2
+  header 裡的來源就取代 peer：事件、endpoint、誰在用、IP 變更告警都用它。
+  - header **可有可無、自動判斷**：先偷看第一個 byte（SSH 一定以 `S` 開頭，header 是 `P` / `\r`），5 秒都沒送東西就當成等 banner
+    的直連客戶端；讀取剛好停在 header 結尾，後面的 SSH 一個 byte 都不動。所以設錯也不會把直連的裝置擋在外面。
+  - v1 `UNKNOWN` / v2 `LOCAL` 沿用 peer；格式錯或 5 秒內沒送完 → 拒絕並記 `refused_proxy` 事件；只連上就斷（健康檢查）不記。
+  - 沒列出的來源**從不**讀 header：否則任何人都能自稱任何 IP，IP 變更告警就沒有意義。裝置端腳本不用改。
+
+測試：`tests/gateway_ws.rs`、`tests/proxy_protocol.rs`（lab 用 `Lab::start_with(|config| …)` 設定代理位址）。
+
 ## 十、隧道由金鑰辨識（port 只是號碼）
 
 gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所以 `tcpip-forward` 不再看裝置要求的號碼：要求 0 或
@@ -191,7 +220,8 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 舊版共用的 `telepy-ssh-server` 區塊由安裝指令在「確定是這台、又沒有區塊再用它」時清掉。
 兩台 Telepy 有同名裝置時，安裝指令看同名區塊的 ProxyCommand 跳到哪台伺服器：是別台的就保留、不覆蓋，並列出這些名字；
 使用者替其中一台設「名稱前綴」（個人設定 `ssh_alias_prefix`，例如 `work-` → `ssh work-pi`）後，兩邊就能並存。
-存取規則與以前相同（擁有者、ADMIN、或至少有一個允許帳號的 sharee；敏感隧道要先在網頁確認）。
+存取規則與以前相同（擁有者、ADMIN、或至少有一個允許帳號的 sharee；敏感隧道要先在網頁確認）。個人金鑰過期（記 `expired_key`
+事件）、帳號被停用、或管理員替這個人關掉「個人 SSH 金鑰」功能時，gateway 在認證時就拒絕這把金鑰。
 
 裝置端腳本一律寫 `-R 0`（Docker 版 `SSH_TUNNEL_PORT=0`，一鍵加入也是）：號碼只存在伺服器裡。網頁刪除隧道時的移除腳本
 改用**金鑰**辨認這條隧道的東西（命令列或檔案裡的 `-i <金鑰檔>`、`IdentityFile`、docker 的 `KEY_FILE=` / `<path>:/id_rsa`、
