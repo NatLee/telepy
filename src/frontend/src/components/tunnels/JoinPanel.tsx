@@ -11,12 +11,13 @@ import { CheckCircle2, Circle, Clock, ExternalLink, KeyRound, Lightbulb, Loader2
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
+import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { getTerminalPageUrl } from "@/lib/tunnelUrls";
 import type { DeviceJoin, JoinPhase } from "@/hooks/useDeviceJoin";
 import type { TranslationKey } from "@/locales/en";
-import { CopyLine, Disclosure, FieldError, Segmented, StepFooter, StepHeading } from "./CreateWizardSteps/parts";
+import { CopyLine, Disclosure, Segmented, StepFooter, StepHeading } from "./CreateWizardSteps/parts";
 import { DialInRadar, type RadarState } from "@/components/tunnels/DialIn";
 import { TransportVisibility } from "@/components/tunnels/TransportVisibility";
 
@@ -68,8 +69,9 @@ export function JoinPanel({ join }: { join: DeviceJoin }) {
                 <StepHeading title={t("join.title")} subtitle={t("join.subtitle")} />
                 <div className="space-y-1.5">
                     <label htmlFor="join-name" className="text-sm text-foreground">{t("join.nameLabel")}</label>
-                    <Input id="join-name" value={form.name} onChange={(e) => form.setName(e.target.value)} placeholder={t("join.namePlaceholder")} maxLength={64} autoComplete="off" spellCheck={false} className="h-10 font-mono" aria-invalid={!!form.nameError || undefined} />
-                    {form.nameError ? <FieldError>{form.nameError}</FieldError> : <p className="text-xs text-muted-foreground">{t("join.nameHint")}</p>}
+                    <Input id="join-name" value={form.name} onChange={(e) => form.setName(e.target.value)} placeholder={t("join.namePlaceholder")} maxLength={63} autoComplete="off" spellCheck={false} className="h-10 font-mono" aria-invalid={!!form.nameError || undefined} aria-describedby="join-name-help" />
+                    {/* 空 = 用裝置的主機名稱；規則同建立隧道。/ Empty = the device's hostname; the same rules as creating a tunnel. */}
+                    <TunnelNameHelp id="join-name-help" value={form.name} error={form.nameError} onUse={form.setName} rulesKey="tunnelName.rulesJoin" />
                 </div>
                 {form.myKeyCount !== null && form.myKeyCount > 0 && (
                     <fieldset className="space-y-2">

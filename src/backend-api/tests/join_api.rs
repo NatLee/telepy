@@ -63,7 +63,8 @@ async fn one_command_join() {
     let pi = lab.machine("pi", &[("ubuntu", &[&lab.service]), ("nobody", &[])], false).await;
 
     // 網頁發票。/ Mint a ticket on the web.
-    assert_eq!(app.post("/api/reverse/join", Some(&alice.token), json!({"name": "9lives"})).await.status, StatusCode::BAD_REQUEST);
+    // 名稱 = ssh 主機名稱：空白不行（數字開頭可以）。/ The name is an ssh host name: no spaces (a leading digit is fine).
+    assert_eq!(app.post("/api/reverse/join", Some(&alice.token), json!({"name": "office pi"})).await.status, StatusCode::BAD_REQUEST);
     let r = app.post("/api/reverse/join", Some(&alice.token), json!({"name": "office-pi", "key_list": "mine"})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
     let token = r.json["token"].as_str().unwrap().to_string();

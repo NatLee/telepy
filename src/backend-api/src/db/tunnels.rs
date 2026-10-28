@@ -123,6 +123,19 @@ pub async fn by_name_ignoring_case(db: &Db, name: &str) -> sqlx::Result<Vec<Tunn
         .await
 }
 
+/// 名稱有沒有被用掉，不分大小寫（ssh 連線時主機名稱一律轉小寫，見 [`crate::tunnel_name`]）；`except` = 改名時的自己。
+/// UNIQUE 本身分大小寫，所以新名稱在這裡擋。
+/// Whether a name is taken ignoring case (ssh lowercases host names, see [`crate::tunnel_name`]); `except` = the tunnel
+/// being renamed. The UNIQUE constraint is case-sensitive, so new names are checked here.
+pub async fn name_taken_ignoring_case(db: &Db, name: &str, except: Option<i64>) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE lower(host_friendly_name) = lower(?) AND id != ?"))
+        .bind(name)
+        .bind(except.unwrap_or(-1))
+        .fetch_one(&db.read)
+        .await?;
+    Ok(n > 0)
+}
+
 /// 名稱全站唯一（UNIQUE）。/ Names are unique across all users.
 pub async fn name_taken(db: &Db, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_one(&db.read).await?;

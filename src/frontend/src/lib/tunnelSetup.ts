@@ -55,13 +55,7 @@ export function commentUser(comment: string): string | null {
     return user && /^[a-z_][a-z0-9._-]{0,31}$/i.test(user) ? user : null;
 }
 
-/**
- * 名稱規則與後端相同：第一個字必須是字母（Rust `is_alphabetic`，含中日文）。
- * Same rule as the backend: the name must start with a letter (Rust `is_alphabetic`, CJK included).
- */
-export function isValidTunnelName(name: string): boolean {
-    return /^\p{Alphabetic}/u.test(name.trim());
-}
+// 名稱規則在 `lib/tunnelName.ts`（與後端同一份）。/ Name rules live in `lib/tunnelName.ts` (same as the backend).
 
 const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;

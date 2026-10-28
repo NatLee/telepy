@@ -13,11 +13,12 @@ import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { useI18n } from "@/lib/i18n";
+import { tunnelNameProblem } from "@/lib/tunnelName";
+import { useTunnelNameError } from "@/components/tunnels/TunnelNameHelp";
 import {
     bareKey,
     checkPublicKey,
     classifyLoginError,
-    isValidTunnelName,
     oneTimeCommand,
     type ConnectMethod,
     type DeviceOs,
@@ -76,6 +77,7 @@ const isPort = (v: string) => /^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 
 export function useCreateTunnelWizard() {
     const { showSuccess, showError } = useToast();
     const { t } = useI18n();
+    const nameError = useTunnelNameError();
 
     const [step, setStepState] = useState<WizardStep>(1);
     const [maxStep, setMaxStep] = useState<WizardStep>(1);
@@ -174,8 +176,10 @@ export function useCreateTunnelWizard() {
         else if (keyCheck.kind === "private") next.key = t("wizard.device.keyPrivate");
         else if (keyCheck.kind === "invalid") next.key = t("wizard.device.keyInvalid");
         const name = hostName.trim();
-        if (!name) next.name = t("wizard.device.nameRequired");
-        else if (!isValidTunnelName(name)) next.name = t("wizard.device.nameLetter");
+        // 規則同後端（`lib/tunnelName.ts`）：名稱會變成 ssh 的主機名稱。/ The backend's rule: the name becomes the ssh host name.
+        const nameProblem = tunnelNameProblem(name);
+        if (nameProblem === "name_empty") next.name = t("wizard.device.nameRequired");
+        else if (nameProblem) next.name = nameError(name) ?? undefined;
         if (!isPort(sshPort)) next.port = t("wizard.device.portInvalid");
         setErrors(next);
         if (Object.keys(next).length > 0 || keyCheck.kind !== "valid") return;
@@ -199,8 +203,8 @@ export function useCreateTunnelWizard() {
                 body: JSON.stringify(payload),
             });
             if (!dupRes.ok) {
-                const dup = await readJson<{ host_friendly_name_exists?: boolean; key_exists?: boolean; key_reason?: string | null }>(dupRes);
-                if (dup?.host_friendly_name_exists || dup?.key_exists) {
+                const dup = await readJson<{ host_friendly_name_exists?: boolean; host_friendly_name_problem?: string | null; key_exists?: boolean; key_reason?: string | null }>(dupRes);
+                if (dup?.host_friendly_name_exists || dup?.host_friendly_name_problem || dup?.key_exists) {
                     // 金鑰不能用的原因：別人的裝置金鑰、個人金鑰、服務金鑰、太弱。/ Why the key cannot be used.
                     const keyError = !dup.key_exists ? undefined
                         : dup.key_reason === "personal" ? t("wizard.device.keyPersonal")
@@ -208,7 +212,7 @@ export function useCreateTunnelWizard() {
                         : dup.key_reason === "invalid" ? t("wizard.device.keyWeak")
                         : t("wizard.device.keyTaken");
                     setErrors({
-                        name: dup.host_friendly_name_exists ? t("wizard.device.nameTaken") : undefined,
+                        name: dup.host_friendly_name_problem ? (nameError(name) ?? t("wizard.device.nameRequired")) : dup.host_friendly_name_exists ? t("tunnelName.taken") : undefined,
                         key: keyError,
                     });
                     return;

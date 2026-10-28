@@ -187,6 +187,22 @@ fn unique_error(e: sqlx::Error) -> ApiError {
     }
 }
 
+/// 名稱已被用掉時的訊息（前端改名對話框看 "already exists" 標到欄位上）。/ The "taken" message (the rename dialog looks for "already exists").
+pub(crate) const NAME_TAKEN: &str = "reverse server key with this Host Friendly Name already exists.";
+
+/// 新名稱（建立或改名）：[`crate::tunnel_name`] 的規則，再加上不分大小寫唯一；`except` = 改名時的自己。回錯誤訊息。
+/// A new name (create or rename): the [`crate::tunnel_name`] rule, then unique ignoring case; `except` = the tunnel
+/// being renamed. Returns the error message.
+pub(crate) async fn new_name_problem(state: &AppState, name: &str, except: Option<i64>) -> ApiResult<Option<&'static str>> {
+    if let Some(p) = crate::tunnel_name::problem(name) {
+        return Ok(Some(p.message()));
+    }
+    if db::tunnels::name_taken_ignoring_case(&state.db, name, except).await? {
+        return Ok(Some(NAME_TAKEN));
+    }
+    Ok(None)
+}
+
 /// DRF ModelSerializer 的必填/型別檢查（create 與 PUT 用）。
 fn validate_full(body: &Value) -> Result<(String, String, i64), ApiError> {
     let mut errors = serde_json::Map::new();
@@ -220,6 +236,9 @@ fn validate_full(body: &Value) -> Result<(String, String, i64), ApiError> {
 #[utoipa::path(post, path = "/api/reverse/server/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::TunnelWrite, responses((status = 201, body = super::schemas::Tunnel), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
     let (name, key, port) = validate_full(&body)?;
+    if let Some(msg) = new_name_problem(&state, &name, None).await? {
+        return Err(ApiError::field("host_friendly_name", msg));
+    }
     let seed = super::device_keys::key_list_choice(&body)?;
     let description = json_str(&body, "description");
     let default_username_id = json_i64(&body, "default_username");
@@ -274,6 +293,12 @@ async fn apply_update(state: &AppState, user_id: i64, id: i64, body: Value, part
         return Err(ApiError::detail(StatusCode::FORBIDDEN, "You don't have permission to edit this tunnel."));
     }
     let name = json_str(&body, "host_friendly_name");
+    // 改名才檢查：沿用舊名稱（可能不合現在的規則）照樣能改描述等其他欄位。/ Only a changed name is checked.
+    if let Some(n) = name.as_deref().filter(|n| *n != t.host_friendly_name) {
+        if let Some(msg) = new_name_problem(state, n, Some(t.id)).await? {
+            return Err(ApiError::field("host_friendly_name", msg));
+        }
+    }
     let key = json_str(&body, "key");
     let port = json_i64(&body, "reverse_port");
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));

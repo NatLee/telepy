@@ -218,6 +218,10 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 裝置區塊改成 `HostName <名稱>` / `Port 22`，經 `ProxyCommand ssh -W %h:%p <伺服器區塊>` 跳過去；舊的設定檔照常可用。
 名稱**不分大小寫**比對：OpenSSH 會先把 `HostName` 轉成小寫才放進 `%h`（`MyBox` 到閘道時是 `mybox`）。完全相同的優先，
 否則挑這把金鑰連得到的那條；以前精確比對，名稱有大寫的隧道會被拒（`administratively prohibited`）。
+隧道名稱本身也照 OpenSSH 的主機名稱規矩：只能用英數與 `.` `_` `-`、字母或數字開頭、最多 63 字，而且不分大小寫唯一
+（`tunnel_name.rs`）。空白在 ssh_config 會把一個名字拆成兩個、在命令列會被 OpenSSH 9.6 起直接拒絕；`%` 會被當成 `%h`
+展開，`* ? ! ,` 是樣式符號，`#` 是註解，`@` `:` 是 Telepy 自己的 `<隧道>@<帳號>` / `<隧道>:<路徑>`。規則之前就存在、不合規則的
+名稱照樣能用：產生的設定對它們改寫 `HostName localhost` / `Port <號碼>`，網頁提示擁有者改名。
 伺服器區塊的別名是 `telepy-<網域>-<port>`（跟 `HostKeyAlias` 同一個字串），每台 Telepy 各自一個，裝在同一份 config 裡互不干擾；
 舊版共用的 `telepy-ssh-server` 區塊由安裝指令在「確定是這台、又沒有區塊再用它」時清掉。
 兩台 Telepy 有同名裝置時，安裝指令看同名區塊的 ProxyCommand 跳到哪台伺服器：是別台的就保留、不覆蓋，並列出這些名字；

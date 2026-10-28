@@ -67,6 +67,11 @@ impl LabKey {
     }
 }
 
+/// 名稱變成檔名：英數與 `._-` 以外換成 `-`。/ A name as a file name: other characters become `-`.
+fn file_safe(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect()
+}
+
 pub fn keygen(dir: &Path, name: &str) -> LabKey {
     let path = dir.join(name);
     let out = std::process::Command::new("ssh-keygen").args(["-q", "-t", "ed25519", "-N", "", "-C", name, "-f"]).arg(&path).output().unwrap();
@@ -1229,6 +1234,9 @@ impl Lab {
     /// Save a config the API produced into the lab dir: ProxyCommand's ssh reads the same file, the known_hosts sits
     /// next to it (never the developer's ~/.ssh), plus the key defaults.
     pub fn write_ssh_config(&self, user: &LabUser, name: &str, generated: &str, known_hosts: &str) -> PathBuf {
+        // 檔名只留安全字元：舊名稱可能有空白，而 `ProxyCommand ssh -F <路徑>` 不能有空白。
+        // Safe characters only: an older name may hold spaces, and `ProxyCommand ssh -F <path>` can't.
+        let name = file_safe(name);
         let path = self.dir.path().join(format!("{}-{name}-generated.conf", user.username));
         let known = self.dir.path().join(format!("{}-{name}-known_hosts", user.username));
         std::fs::write(&known, known_hosts).unwrap();
@@ -1241,7 +1249,7 @@ impl Lab {
 
     /// `generated_ssh_config` 存下的 known_hosts 檔。/ The known_hosts file `generated_ssh_config` wrote.
     pub fn generated_known_hosts(&self, user: &LabUser, device: &Device) -> PathBuf {
-        self.dir.path().join(format!("{}-{}-known_hosts", user.username, device.name))
+        self.dir.path().join(format!("{}-{}-known_hosts", user.username, file_safe(&device.name)))
     }
 
     pub async fn ssh_with_config(&self, config: &Path, host: &str, cmd: &str) -> Run {

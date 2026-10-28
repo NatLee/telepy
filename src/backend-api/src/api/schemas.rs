@@ -813,7 +813,10 @@ pub struct DuplicateCheckRequest {
 
 #[derive(ToSchema)]
 pub struct DuplicateCheck {
+    /// Another tunnel already has this name, ignoring case (ssh lowercases host names)
     pub host_friendly_name_exists: bool,
+    /// Why the name can't be a tunnel name: name_empty | name_too_long | name_first_char | name_chars (null = fine)
+    pub host_friendly_name_problem: Option<String>,
     /// The key cannot be used: it is any user's device key already (comment ignored), another user's personal key, or Telepy's service key
     pub key_exists: bool,
     /// Why: taken | personal | service (null when the key is free)
