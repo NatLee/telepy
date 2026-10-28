@@ -3,11 +3,11 @@
 /**
  * CLI 頁的資料：這個人自己的東西，拿來把範例填成能直接複製的指令——隧道（`?tunnel=` 選哪一條，預設第一條線上的）、
  * 那條隧道的帳號（預設以外的一個）、另一條隧道、一個標籤、一個自己的通道群組、最常用的工具箱片段；以及 CLI 的登入
- * （Connected apps 裡的 `telepy CLI (<電腦>)`）、個人 SSH 金鑰數（ssh / scp / sftp 要用）、伺服器網址與從瀏覽器猜的平台。
+ * （API 頁「CLI 登入」裡的 `telepy CLI (<電腦>)`）、個人 SSH 金鑰數（ssh / scp / sftp 要用）、伺服器網址與從瀏覽器猜的平台。
  * Data for the CLI page — the person's own things, so the examples are commands they can copy as is: the tunnel
  * (`?tunnel=`, default the first online one), one of its accounts other than the default, a second tunnel, a label,
- * one of their tunnel groups and their most used snippet; plus the CLI's sign-ins (`telepy CLI (<host>)` under
- * Connected apps), the number of personal SSH keys (ssh / scp / sftp need one), the server URL and the platform.
+ * one of their tunnel groups and their most used snippet; plus the CLI's sign-ins (`telepy CLI (<host>)`, listed
+ * on the API page), the number of personal SSH keys (ssh / scp / sftp need one), the server URL and the platform.
  */
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -16,7 +16,8 @@ import { useAuth } from "@/lib/auth";
 import { hasFeature } from "@/lib/features";
 import { useMcpServerUrl } from "@/hooks/useMcpPage";
 import { useTunnelGroups } from "@/hooks/useTunnelGroups";
-import { cliHost, detectPlatform, type CliContext, type CliPlatform } from "@/lib/cliGuide";
+import { detectPlatform, type CliContext, type CliPlatform } from "@/lib/cliGuide";
+import { grantHost } from "@/lib/cliSignIns";
 import type { Snippet, SnippetList } from "@/lib/snippets";
 import type { OAuthGrant } from "@/types/oauth";
 import type { Tunnel } from "@/types/tunnel";
@@ -92,7 +93,7 @@ export function useCliPage() {
             if (grants?.ok) {
                 const list = await readJson<OAuthGrant[]>(grants);
                 const mine = (Array.isArray(list) ? list : [])
-                    .map((g) => ({ g, host: cliHost(g.client_name) }))
+                    .map((g) => ({ g, host: grantHost(g) }))
                     .filter((x): x is { g: OAuthGrant; host: string } => x.host !== null)
                     .map(({ g, host }) => ({ id: g.id, host, lastUsedAt: g.last_used_at, createdAt: g.created_at }))
                     .sort((a, b) => (b.lastUsedAt ?? b.createdAt).localeCompare(a.lastUsedAt ?? a.createdAt));

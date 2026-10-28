@@ -438,7 +438,7 @@ pub enum ApiAction {
         #[arg(long)]
         json: bool,
     },
-    /// Calls made with your API tokens and connected apps, newest first (the web API page's Activity tab)
+    /// Calls made with your API tokens and CLI sign-ins, newest first (the web API page's Activity tab)
     Activity(ActivityArgs),
 }
 

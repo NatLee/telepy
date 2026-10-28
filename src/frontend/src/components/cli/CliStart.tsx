@@ -178,6 +178,11 @@ export function CliStart({ base, username, platform, setPlatform, signIns, brows
                                         </Chip>
                                     ))}
                                     {signIns && signIns.length > 6 && <Chip>+{signIns.length - 6}</Chip>}
+                                    {signIns && signIns.length > 0 && (
+                                        <Link href="/tunnels/api?tab=cli" className="text-foreground underline underline-offset-4">
+                                            {t("cli.signIn.manage")}
+                                        </Link>
+                                    )}
                                 </div>
                             </>
                         ) : (

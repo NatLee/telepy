@@ -14,7 +14,7 @@ import { WebhookPausedNotice } from "@/components/webhooks/WebhookPausedNotice";
 import { StepUpProvider } from "@/components/auth/StepUpProvider";
 import { CommandApprovalCenter, CommandApprovalsProvider } from "@/components/commands/CommandApprovals";
 import { FeatureOffNotice } from "@/components/access/FeatureOffNotice";
-import { featureForPath, hasFeature } from "@/lib/features";
+import { featuresForPath, hasFeature } from "@/lib/features";
 
 type NotificationWsStatus = {
     isConnected: boolean;
@@ -54,8 +54,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const isTerminalPage = pathname?.startsWith("/tunnels/terminal");
     // 這一頁屬於管理員替這個人關掉的功能 → 說明代替頁面（API 本來就會拒絕）。/ A page of a feature turned off → a notice instead.
-    const pageFeature = featureForPath(pathname);
-    const featureOff = pageFeature && user && !hasFeature(user, pageFeature) ? pageFeature : null;
+    const pageFeatures = featuresForPath(pathname);
+    const featureOff = pageFeatures.length > 0 && user && !pageFeatures.some((f) => hasFeature(user, f)) ? pageFeatures[0] : null;
 
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {

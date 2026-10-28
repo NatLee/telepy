@@ -214,31 +214,42 @@ pub struct Summary {
 
 /// 這些 token 的摘要（一個查詢）。/ Summaries for these tokens in one query.
 pub async fn summaries(db: &Db, token_ids: &[i64]) -> sqlx::Result<HashMap<i64, Summary>> {
-    if token_ids.is_empty() {
+    summaries_by(db, "token_id", token_ids).await
+}
+
+/// 這些 OAuth grant（`telepy` CLI 的瀏覽器登入）的摘要，跟 token 的一樣。/ The same summaries for OAuth grants (CLI sign-ins).
+pub async fn grant_summaries(db: &Db, grant_ids: &[i64]) -> sqlx::Result<HashMap<i64, Summary>> {
+    summaries_by(db, "grant_id", grant_ids).await
+}
+
+/// `column` 只會是 `token_id` / `grant_id`（程式內的常數，不是使用者輸入）。/ `column` is a constant, never user input.
+async fn summaries_by(db: &Db, column: &'static str, ids: &[i64]) -> sqlx::Result<HashMap<i64, Summary>> {
+    debug_assert!(matches!(column, "token_id" | "grant_id"));
+    if ids.is_empty() {
         return Ok(HashMap::new());
     }
     let now = chrono::Utc::now();
     let day = db_time(now - chrono::Duration::days(1));
     let week = db_time(now - chrono::Duration::days(7));
-    let mut q: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT token_id, SUM(CASE WHEN at >= ");
+    let mut q: QueryBuilder<Sqlite> = QueryBuilder::new(format!("SELECT {column}, SUM(CASE WHEN at >= "));
     q.push_bind(day.clone())
         .push(" THEN 1 ELSE 0 END), COUNT(*), SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) FROM telepy_api_call WHERE at >= ")
         .push_bind(week)
-        .push(" AND token_id IN (");
+        .push(format!(" AND {column} IN ("));
     let mut sep = q.separated(", ");
-    for id in token_ids {
+    for id in ids {
         sep.push_bind(*id);
     }
-    q.push(") GROUP BY token_id");
+    q.push(format!(") GROUP BY {column}"));
     let rows: Vec<(i64, i64, i64, i64)> = q.build_query_as().fetch_all(&db.read).await?;
     let mut out: HashMap<i64, Summary> = rows.into_iter().map(|(id, d, w, e)| (id, Summary { calls_24h: d, calls_7d: w, errors_7d: e, ..Default::default() })).collect();
-    // 最後一次（不限 7 天）：每把 token 的最大 id。/ The latest call per token (any age).
-    let mut q: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT c.token_id, c.at, c.status FROM telepy_api_call c JOIN (SELECT token_id, MAX(id) AS id FROM telepy_api_call WHERE token_id IN (");
+    // 最後一次（不限 7 天）：每個的最大 id。/ The latest call of each (any age).
+    let mut q: QueryBuilder<Sqlite> = QueryBuilder::new(format!("SELECT c.{column}, c.at, c.status FROM telepy_api_call c JOIN (SELECT {column}, MAX(id) AS id FROM telepy_api_call WHERE {column} IN ("));
     let mut sep = q.separated(", ");
-    for id in token_ids {
+    for id in ids {
         sep.push_bind(*id);
     }
-    q.push(") GROUP BY token_id) m ON m.id = c.id");
+    q.push(format!(") GROUP BY {column}) m ON m.id = c.id"));
     let last: Vec<(i64, String, i64)> = q.build_query_as().fetch_all(&db.read).await?;
     for (id, at, status) in last {
         let s = out.entry(id).or_default();
@@ -292,5 +303,18 @@ mod tests {
         assert_eq!(purge(&db, &cutoff).await.unwrap(), 2);
         assert_eq!(list(&db, &Filter { limit: 100, ..Default::default() }).await.unwrap().len(), 3);
         assert_eq!(trim(&db, 10).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn grants_get_the_same_summaries_as_tokens() {
+        let (_d, db) = db().await;
+        let now = crate::util::now_db();
+        let old = db_time(chrono::Utc::now() - chrono::Duration::days(3));
+        let cli = |grant: i64, status: i64, at: &str| NewCall { grant_id: Some(grant), client_name: "telepy CLI (mac)".into(), ..call(1, None, status, at) };
+        insert_batch(&db, &[cli(7, 200, &old), cli(7, 403, &now), cli(8, 200, &old), call(1, Some(7), 200, &now)]).await.unwrap();
+        let s = grant_summaries(&db, &[7, 8, 9]).await.unwrap();
+        assert_eq!((s[&7].calls_24h, s[&7].calls_7d, s[&7].errors_7d, s[&7].last_status), (1, 2, 1, Some(403)), "token 7's call is not grant 7's");
+        assert_eq!((s[&8].calls_24h, s[&8].calls_7d), (0, 1));
+        assert!(!s.contains_key(&9));
     }
 }

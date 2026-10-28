@@ -5,10 +5,13 @@
  * 用了多少次與最近的工具呼叫,以及它會導回哪個網域(註冊是公開的,名稱誰都能取)。
  * Connected app details: what it may do (scopes and tools), which tunnels, open sessions, usage and the
  * latest tool calls, and where it sends you back to (registration is open, so the name proves nothing).
+ * `telepy` CLI 的登入也可能從 AI 活動打開這裡（`telepy exec` 走同一種 session）：那時標成 CLI、不列 MCP 工具，並指到
+ * API 頁——它的登入與所有 REST 呼叫在那裡。/ A CLI sign-in can open here too (from AI activity, since `telepy exec`
+ * uses the same sessions): it is labelled as the CLI, lists no MCP tools and points to the API page.
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { Activity, Bot, ExternalLink, Info, KeyRound, Loader2, Server, Trash2, X } from "lucide-react";
+import { Activity, ArrowRight, Bot, ExternalLink, Info, KeyRound, Loader2, Server, SquareTerminal, Trash2, X } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { NavTabLabel, NavTabs } from "@/components/ui/nav-tabs";
 import { Button } from "@/components/ui/button";
@@ -20,6 +23,7 @@ import { useI18n } from "@/lib/i18n";
 import { SCOPES, describeDetail, toolLabel } from "@/lib/aiAccess";
 import { cn } from "@/lib/utils";
 import { useConnectedApp } from "@/hooks/useConnectedApp";
+import { grantHost } from "@/lib/cliSignIns";
 
 interface ConnectedAppDialogProps {
     /** null = 關閉。/ null = closed. */
@@ -49,6 +53,11 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
     const granted = d ? SCOPES.filter((s) => d.scopes.includes(s.scope)) : [];
     const unknownScopes = d ? d.scopes.filter((s) => !SCOPES.some((x) => x.scope === s)) : [];
     const someoneElse = d && user && d.user.id !== user.id;
+    // CLI 登入：電腦名稱；其他 app = null。/ A CLI sign-in's computer; null for apps.
+    const host = d ? grantHost(d) : null;
+    const isCli = host !== null;
+    const cliName = isCli ? t("apiPage.calls.cliWho", { host: host || t("cliSignIns.unnamed") }) : null;
+    const cliCalls = d ? (someoneElse ? `/tunnels/admin/api-activity?grant=${d.id}` : `/tunnels/api?tab=activity&grant=${d.id}`) : "";
     // 左側分頁：能做什麼 + 碰得到的隧道 / 開著的 session（有才有）/ 最近的呼叫 / 授權資料。一眼看到的數字放在固定的工具列。
     // Side tabs: what it can do + tunnels / open sessions (when any) / recent calls / about. The numbers sit in the toolbar.
     const [picked, setTab] = useState<AppTab>("access");
@@ -82,13 +91,13 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
         <Modal
             isOpen={grantId !== null}
             onClose={onClose}
-            title={d?.client_name ?? t("apps.detailsTitle")}
+            title={cliName ?? d?.client_name ?? t("apps.detailsTitle")}
             description={
                 d && d.client.redirect_hosts.length > 0
                     ? tn("apps.redirectsTo", { host: code(d.client.redirect_hosts.join(", ")) })
                     : undefined
             }
-            icon={<Bot />}
+            icon={isCli ? <SquareTerminal /> : <Bot />}
             size="4xl"
             fixedHeight
             isLoading={loading}
@@ -99,7 +108,7 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                     {d && (
                         <Button type="button" variant="outline" className="mr-auto text-destructive hover:text-destructive" onClick={() => setConfirmRevoke(true)} disabled={revoking}>
                             {revoking ? <Loader2 className="animate-spin" /> : <Trash2 />}
-                            {t("apps.revoke")}
+                            {isCli ? t("cliSignIns.signOut") : t("apps.revoke")}
                         </Button>
                     )}
                     <Button type="button" variant="outline" onClick={onClose}>
@@ -114,6 +123,14 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                 <div className="space-y-6">
 
                     <div role="tabpanel" hidden={tab !== "access"} className="space-y-6">
+                    {isCli && (
+                        <Callout tone="info" title={t("apps.cliTitle")}>
+                            <p>{t("apps.cliBody")}</p>
+                            <Link href={cliCalls} prefetch={false} onClick={onClose} className="mt-1.5 inline-flex items-center gap-1 text-foreground underline underline-offset-2">
+                                {t("apps.cliOpen")} <ArrowRight size={13} className="opacity-60" aria-hidden />
+                            </Link>
+                        </Callout>
+                    )}
                     {/* 能做什麼 / Permissions */}
                     <Section icon={<KeyRound />} title={t("apps.permissions")} description={someoneElse ? t("apps.permissionsHintOther", { user: d.user.username ?? `#${d.user.id}` }) : t("apps.permissionsHint")}>
                         <ul className="divide-y divide-border rounded-lg border border-border">
@@ -121,11 +138,14 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                                 <li key={s.scope} className="px-3.5 py-2.5 text-sm">
                                     <p className="text-foreground">{t(s.label)}</p>
                                     <p className="text-xs text-muted-foreground">{t(s.description)}</p>
-                                    <div className="mt-1.5 flex flex-wrap gap-1">
-                                        {s.tools.map((tool) => (
-                                            <Chip key={tool} mono>{tool}</Chip>
-                                        ))}
-                                    </div>
+                                    {/* MCP 工具名稱只對 MCP app 有意義。/ MCP tool names only mean something for MCP apps. */}
+                                    {!isCli && (
+                                        <div className="mt-1.5 flex flex-wrap gap-1">
+                                            {s.tools.map((tool) => (
+                                                <Chip key={tool} mono>{tool}</Chip>
+                                            ))}
+                                        </div>
+                                    )}
                                 </li>
                             ))}
                             {unknownScopes.map((s) => (
@@ -257,9 +277,9 @@ export function ConnectedAppDialog({ grantId, onClose, onRevoked }: ConnectedApp
                 onConfirm={async () => {
                     if (await revoke()) onClose();
                 }}
-                title={t("apps.revoke")}
-                message={t("prefs.revokeAppConfirm", { name: d?.client_name ?? "" })}
-                confirmText={t("prefs.revokeApp")}
+                title={isCli ? t("cliSignIns.signOut") : t("apps.revoke")}
+                message={isCli ? t("cliSignIns.signOutConfirm", { host: host || t("cliSignIns.unnamed") }) : t("prefs.revokeAppConfirm", { name: d?.client_name ?? "" })}
+                confirmText={isCli ? t("cliSignIns.signOut") : t("prefs.revokeApp")}
                 isDestructive
             />
         </Modal>

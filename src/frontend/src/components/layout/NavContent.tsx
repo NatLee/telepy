@@ -65,7 +65,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         key: "nav.sectionDev",
         links: [
             { key: "nav.cli", href: "/tunnels/cli", icon: <Terminal size={18} />, feature: ["mcp.connect", "api.tokens"] },
-            { key: "nav.api", href: "/tunnels/api", icon: <Braces size={18} />, feature: "api.tokens" },
+            { key: "nav.api", href: "/tunnels/api", icon: <Braces size={18} />, feature: ["api.tokens", "mcp.connect"] },
         ],
     },
     {

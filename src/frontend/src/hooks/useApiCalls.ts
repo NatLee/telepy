@@ -1,10 +1,10 @@
 /**
  * API 呼叫紀錄（`GET /api/auth/tokens/calls`）：`mine` = 自己的（管理員也一樣），`all` = 管理區的全站（可依使用者篩選，
- * `?user=` 當起始值）。token（`?token=`）/ 使用者在後端篩選；狀態、方法、搜尋在前端。依日期分組，「載入更早的」一次多 300 筆
- * （後端最多 1000）。
+ * `?user=` 當起始值）。一把 token（`?token=`）/ 一個 CLI 登入（`?grant=`）/ 使用者在後端篩選；狀態、方法、搜尋在前端。
+ * 依日期分組，「載入更早的」一次多 300 筆（後端最多 1000）。
  * The API call log: `mine` = your own (admins too), `all` = the admin section's whole site (user filter, seeded by
- * `?user=`). Token (`?token=`) and user filters run on the backend; status, method and search here. Grouped by day;
- * "load older" adds 300 rows at a time (the backend caps at 1000).
+ * `?user=`). One token (`?token=`), one CLI sign-in (`?grant=`) and the user filter run on the backend; status, method
+ * and search here. Grouped by day; "load older" adds 300 rows at a time (the backend caps at 1000).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -27,14 +27,22 @@ export function useApiCalls(scope: ViewScope) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
-    // 只看一把 token：放在網址上，token 那一列可以連過來。/ One token only: in the URL so a token row can link here.
-    const tokenParam = searchParams.get("token");
-    const tokenFilter = tokenParam && /^\d+$/.test(tokenParam) ? tokenParam : ALL;
-    const setTokenFilter = useCallback(
+    // 只看一把 token 或一個 CLI 登入：放在網址上，那一列可以連過來。篩選值 = `token:<id>` / `grant:<id>` / all。
+    // One token or one CLI sign-in: in the URL so its row can link here. The filter value is `token:<id>` / `grant:<id>`.
+    const idParam = (name: string) => {
+        const v = searchParams.get(name);
+        return v && /^\d+$/.test(v) ? v : ALL;
+    };
+    const tokenFilter = idParam("token");
+    const grantFilter = tokenFilter === ALL ? idParam("grant") : ALL;
+    const credFilter = tokenFilter !== ALL ? `token:${tokenFilter}` : grantFilter !== ALL ? `grant:${grantFilter}` : ALL;
+    const setCredFilter = useCallback(
         (value: string) => {
             const params = new URLSearchParams(searchParams.toString());
-            if (value === ALL) params.delete("token");
-            else params.set("token", value);
+            params.delete("token");
+            params.delete("grant");
+            const [kind, id] = value.split(":");
+            if ((kind === "token" || kind === "grant") && id) params.set(kind, id);
             const qs = params.toString();
             router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
         },
@@ -49,7 +57,7 @@ export function useApiCalls(scope: ViewScope) {
     const [dropped, setDropped] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState(false);
-    const filterKey = `${tokenFilter}|${userFilter}`;
+    const filterKey = `${credFilter}|${userFilter}`;
     const [rowsFor, setRowsFor] = useState<string | null>(null);
     const [rowsLimit, setRowsLimit] = useState(PAGE);
     const [fetchedAt, setFetchedAt] = useState<Date | null>(null);
@@ -58,11 +66,12 @@ export function useApiCalls(scope: ViewScope) {
     const [users, setUsers] = useState<{ id: number; label: string }[]>([]);
 
     const fetchCalls = useCallback(async () => {
-        const key = `${tokenFilter}|${userFilter}`;
+        const key = `${credFilter}|${userFilter}`;
         try {
             const qs = new URLSearchParams({ limit: String(limit) });
             if (all) qs.set("scope", "all");
             if (tokenFilter !== ALL) qs.set("token_id", tokenFilter);
+            if (grantFilter !== ALL) qs.set("grant_id", grantFilter);
             if (all && userFilter !== ALL) qs.set("user_id", userFilter);
             const res = await apiFetch(`/api/auth/tokens/calls?${qs.toString()}`);
             if (!res.ok) throw new Error(String(res.status));
@@ -77,7 +86,7 @@ export function useApiCalls(scope: ViewScope) {
         } finally {
             setRowsFor(key);
         }
-    }, [all, tokenFilter, userFilter, limit]);
+    }, [all, tokenFilter, grantFilter, credFilter, userFilter, limit]);
 
     useEffect(() => {
         let cancelled = false;
@@ -129,7 +138,7 @@ export function useApiCalls(scope: ViewScope) {
     const filtering = search.trim() !== "" || status !== "all" || method !== "all";
 
     return {
-        state: { all, rows: entries, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, tokenFilter, userFilter, users, status, method, search, filtering, dropped },
-        actions: { refresh, setTokenFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore },
+        state: { all, rows: entries, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, credFilter, userFilter, users, status, method, search, filtering, dropped },
+        actions: { refresh, setCredFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore },
     };
 }

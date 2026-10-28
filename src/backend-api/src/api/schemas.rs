@@ -1878,8 +1878,13 @@ pub struct AuthorizeInfo {
     /// `{required, methods}`: accounts with a passkey or an authenticator app confirm the approval
     #[schema(value_type = Object)]
     pub reauth: serde_json::Value,
-    /// The user's active grants for this same client (reconnecting an app); `replace` on the decision revokes them
+    /// The user's active grants for this same app — this client, or the `telepy` CLI on the same computer (it registers
+    /// anew on every sign-in); `replace` on the decision revokes them
     pub existing: Vec<OAuthExistingGrant>,
+    /// The `telepy` CLI asking: `{host, signed_in, limit}` — at most `limit` CLI sign-ins are kept, the least recently
+    /// used one is signed out when a new one exceeds it. null for any other app
+    #[schema(value_type = Option<Object>)]
+    pub cli: Option<serde_json::Value>,
 }
 
 #[derive(ToSchema)]
@@ -1977,6 +1982,12 @@ pub struct OAuthGrantTunnel {
 #[derive(ToSchema)]
 pub struct OAuthGrant {
     pub id: i64,
+    /// `cli` = a browser sign-in of the `telepy` CLI (`telepy login`; shown on the API page), `app` = an MCP app.
+    /// Told apart by the registered name `telepy CLI (<host>)`, which is self-declared: labels only, no permissions
+    #[schema(example = "app")]
+    pub kind: String,
+    /// The computer a CLI sign-in came from (may be empty); null for apps
+    pub cli_host: Option<String>,
     pub client_id: String,
     pub client_name: String,
     pub client_uri: Option<String>,
@@ -1987,6 +1998,8 @@ pub struct OAuthGrant {
     pub last_used_at: Option<String>,
     /// When the refresh token expires without further use
     pub expires_at: Option<String>,
+    /// CLI sign-ins only: their REST requests in the API call log, summarised like a token's
+    pub calls: Option<ApiCallSummary>,
 }
 
 #[derive(ToSchema)]

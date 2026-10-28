@@ -45,7 +45,7 @@ pub fn check_expiry(at: Option<chrono::DateTime<chrono::Utc>>, now: chrono::Date
     }
 }
 
-fn summary_json(s: Option<&db::api_calls::Summary>) -> Value {
+pub(crate) fn summary_json(s: Option<&db::api_calls::Summary>) -> Value {
     let s = s.cloned().unwrap_or_default();
     json!({
         "calls_24h": s.calls_24h,

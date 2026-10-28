@@ -1,16 +1,19 @@
 "use client";
 
 /**
- * API 頁的總覽圖：三條進 Telepy 的路，各用各的鑰匙——
+ * API 頁的總覽圖：四條進 Telepy 的路，各用各的鑰匙——
  *   這個瀏覽器 ─登入 session─ Telepy ─SSH─ 裝置（網頁上能做的全部）
- *   腳本 / CLI / CI ─API token（scope、隧道、到期）─ Telepy ─ 裝置（只有白名單上的端點）
+ *   腳本 / CI ─API token（scope、隧道、到期）─ Telepy ─ 裝置（只有白名單上的端點）
+ *   telepy login ─OAuth（跟 MCP app 一樣的同意頁，每台電腦一個）─ Telepy ─ 裝置（跟 token 同一份白名單）
  *   MCP app ─OAuth 同意（每個 app 各自）─ Telepy ─ 裝置
- * 「如果我…」切換：撤銷 token / 中斷 app / 登出，只切掉自己那條，另外兩條照常。狀態來自 `lib/apiCalls.waysIn`（有測試）；只用直線。
- * The API page's overview: three ways into Telepy, each with its own key. The "What if I…" switch cuts only the lane
- * of the chosen revoke; the other two keep working. States come from `lib/apiCalls.waysIn` (tested); straight lines.
+ * CLI 自成一條，回答「為什麼 CLI 登入看起來跟 MCP 一樣」：同一套 OAuth，不同的東西。「如果我…」切換只切掉自己那條。
+ * 狀態來自 `lib/apiCalls.waysIn`（有測試）；只用直線。
+ * The API page's overview: four ways into Telepy, each with its own key. The CLI's browser sign-in is a lane of its
+ * own — the same OAuth as MCP apps, a different thing. The "What if I…" switch cuts only the chosen lane. States come
+ * from `lib/apiCalls.waysIn` (tested); straight lines.
  */
 import React, { useState } from "react";
-import { Bot, Globe, HardDrive, Laptop, Scissors } from "lucide-react";
+import { Bot, Globe, HardDrive, Laptop, Scissors, SquareTerminal } from "lucide-react";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip } from "@/components/ui/section";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
@@ -22,12 +25,14 @@ import type { TranslationKey } from "@/locales/en";
 const WAY_TEXT: Record<WayId, { title: TranslationKey; from: TranslationKey; fromSub: TranslationKey; link: TranslationKey; reach: TranslationKey; revoke: TranslationKey; icon: typeof Laptop }> = {
     web: { title: "apiPage.way.web", from: "apiPage.way.webFrom", fromSub: "apiPage.way.webFromSub", link: "apiPage.way.webLink", reach: "apiPage.way.webReach", revoke: "apiPage.way.webRevoke", icon: Globe },
     token: { title: "apiPage.way.token", from: "apiPage.way.tokenFrom", fromSub: "apiPage.way.tokenFromSub", link: "apiPage.way.tokenLink", reach: "apiPage.way.tokenReach", revoke: "apiPage.way.tokenRevoke", icon: Laptop },
+    cli: { title: "apiPage.way.cli", from: "apiPage.way.cliFrom", fromSub: "apiPage.way.cliFromSub", link: "apiPage.way.cliLink", reach: "apiPage.way.cliReach", revoke: "apiPage.way.cliRevoke", icon: SquareTerminal },
     app: { title: "apiPage.way.app", from: "apiPage.way.appFrom", fromSub: "apiPage.way.appFromSub", link: "apiPage.way.appLink", reach: "apiPage.way.appReach", revoke: "apiPage.way.appRevoke", icon: Bot },
 };
 
 const WHAT_IF_LABEL: Record<WhatIf, TranslationKey> = {
     none: "apiPage.whatIf.none",
     token: "apiPage.whatIf.token",
+    cli: "apiPage.whatIf.cli",
     app: "apiPage.whatIf.app",
     web: "apiPage.whatIf.web",
 };
@@ -47,7 +52,7 @@ export function WaysInDiagram() {
             {ways.map((way) => {
                 const text = WAY_TEXT[way.id];
                 return (
-                    <section key={way.id} aria-label={t(text.title)} className={cn("space-y-2 rounded-xl border p-3", way.id === "token" ? "border-primary/40" : "border-border")}>
+                    <section key={way.id} aria-label={t(text.title)} className={cn("space-y-2 rounded-xl border p-3", way.id === "token" || way.id === "cli" ? "border-primary/40" : "border-border")}>
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm text-foreground">{t(text.title)}</span>
                             {whatIf !== "none" &&

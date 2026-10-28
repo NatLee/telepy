@@ -275,9 +275,15 @@ fn denied_redirect(v: &ValidAuthorize, issuer: &str) -> String {
     redirect_with(&v.redirect_uri, &[("error", "access_denied"), ("error_description", "The user denied the request")], v.state.as_deref(), issuer)
 }
 
-/// 這個使用者對同一個 client 還有效的 grant（重新連接同一個 app 時）。/ The user's active grants for this client.
-async fn active_grants_for_client(state: &AppState, user_id: i64, client_id: &str) -> sqlx::Result<Vec<db::oauth::GrantWithClient>> {
-    Ok(db::oauth::active_grants_for_user(&state.db, user_id).await?.into_iter().filter(|g| g.client_id == client_id).collect())
+/// 這個使用者對「同一個 app」還有效的 grant（重新連接時可以取代）：同一個 client，或同一台電腦上的 `telepy` CLI
+/// （CLI 每次登入都重新註冊，client_id 不會一樣）。/ The user's active grants for the same app: this client, or the
+/// `telepy` CLI on the same computer (it registers anew on every sign-in, so its client_id always differs).
+async fn earlier_grants(state: &AppState, user_id: i64, client: &Client) -> sqlx::Result<Vec<db::oauth::GrantWithClient>> {
+    Ok(db::oauth::active_grants_for_user(&state.db, user_id)
+        .await?
+        .into_iter()
+        .filter(|g| oauth::same_app(&g.client_id, &g.client_name, &client.client_id, &client.client_name))
+        .collect())
 }
 
 /// 登入前的預覽：OAuth 登入頁顯示是哪個 app、導回哪裡、要哪些權限，並提供「取消」導回客戶端。只有客戶端自己送來
@@ -322,7 +328,7 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
     let (mine, _) = db::sharing::permission_context(&state.db, user.id).await?;
     let factors = super::mfa::factors(&state, user.id).await?;
     let tz = state.config.tz_offset_minutes;
-    let existing: Vec<Value> = active_grants_for_client(&state, user.id, &v.client.client_id)
+    let existing: Vec<Value> = earlier_grants(&state, user.id, &v.client)
         .await?
         .iter()
         .map(|g| json!({ "id": g.id, "scopes": oauth::scope_list(&g.scope), "created_at": db_to_iso(&g.created_at, tz), "last_used_at": opt_db_to_iso(&g.last_used_at, tz) }))
@@ -339,7 +345,16 @@ async fn authorize_info(State(state): State<AppState>, AuthUser(user): AuthUser,
         "user": { "id": user.id, "username": user.username },
         "reauth": { "required": factors.any(), "methods": factors.methods() },
         "existing": existing,
+        // `telepy` CLI：電腦名稱、目前有幾個 CLI 登入與上限（同意頁說明超過時哪個會登出）。其他 app = null。
+        // The CLI: its computer, how many CLI sign-ins exist and the limit (the consent page explains the overflow).
+        "cli": cli_consent_json(&state, user.id, &v.client).await?,
     })))
+}
+
+async fn cli_consent_json(state: &AppState, user_id: i64, client: &Client) -> sqlx::Result<Value> {
+    let Some(host) = oauth::cli_host(&client.client_name) else { return Ok(Value::Null) };
+    let signed_in = db::oauth::active_grants_for_user(&state.db, user_id).await?.iter().filter(|g| oauth::cli_host(&g.client_name).is_some()).count();
+    Ok(json!({ "host": host, "signed_in": signed_in, "limit": oauth::MAX_CLI_SIGNINS }))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -394,7 +409,7 @@ async fn authorize_decide(State(state): State<AppState>, AuthUser(user): AuthUse
     };
     // 舊的在兌換成功後才撤銷：客戶端沒完成這次連接的話，原本的連線照常可用。
     // Revoked only after a successful redemption, so an abandoned reconnect leaves the old one working.
-    let replaces = if body.replace { active_grants_for_client(&state, user.id, &v.client.client_id).await?.iter().map(|g| g.id).collect() } else { Vec::new() };
+    let replaces = if body.replace { earlier_grants(&state, user.id, &v.client).await?.iter().map(|g| g.id).collect() } else { Vec::new() };
     let code = state.tokens.issue_oauth_code(OAuthCode {
         client_id: v.client.client_id.clone(),
         redirect_uri: v.redirect_uri.clone(),
@@ -562,8 +577,13 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
             match grant {
                 Ok(g) => {
                     tracing::info!(grant_id = g.id, user_id = g.user_id, client = %client.client_name, "OAuth grant created");
-                    if let Err(e) = replace_grants(&state, &g, &c.replaces).await {
+                    if let Err(e) = replace_grants(&state, &g, &client, &c.replaces).await {
                         tracing::warn!(grant_id = g.id, error = %e, "could not revoke the replaced OAuth grants");
+                    }
+                    if oauth::cli_host(&client.client_name).is_some() {
+                        if let Err(e) = trim_cli_signins(&state, &g).await {
+                            tracing::warn!(grant_id = g.id, error = %e, "could not sign out the oldest CLI sign-ins");
+                        }
                     }
                     token_response(&state, &g, &g.scope, &refresh)
                 }
@@ -608,16 +628,37 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
     }
 }
 
-/// 重新連接時同意頁勾了「取代」：撤銷同一使用者、同一 client 先前的 grant（新的那個除外）。
-/// The consent asked to replace earlier connections: revoke the same user's earlier grants for this client.
-async fn replace_grants(state: &AppState, new: &db::oauth::Grant, ids: &[i64]) -> sqlx::Result<()> {
+/// 重新連接時同意頁勾了「取代」：撤銷同一使用者對同一個 app（同一個 client，或同一台電腦的 CLI）先前的 grant（新的那個除外）。
+/// The consent asked to replace earlier connections: revoke the same user's earlier grants for the same app (this
+/// client, or the CLI on the same computer), never the new one.
+async fn replace_grants(state: &AppState, new: &db::oauth::Grant, client: &Client, ids: &[i64]) -> sqlx::Result<()> {
     let now = crate::util::now_db();
     for &id in ids {
         let Some(old) = db::oauth::grant_by_id(&state.db, id).await? else { continue };
-        if old.id != new.id && old.user_id == new.user_id && old.client_id == new.client_id && old.is_active(&now) {
+        if old.id == new.id || old.user_id != new.user_id || !old.is_active(&now) {
+            continue;
+        }
+        let old_name = db::oauth::client_by_id(&state.db, &old.client_id).await?.map(|c| c.client_name).unwrap_or_default();
+        if oauth::same_app(&old.client_id, &old_name, &client.client_id, &client.client_name) {
             revoke_grant_by_id(state, old.id).await?;
             tracing::info!(grant_id = old.id, replaced_by = new.id, "OAuth grant replaced");
         }
+    }
+    Ok(())
+}
+
+/// 一個人最多 `MAX_CLI_SIGNINS` 個 CLI 登入：新的一個進來後，最久沒用的那些登出。
+/// At most `MAX_CLI_SIGNINS` CLI sign-ins per person: once a new one exists, the least recently used ones go.
+async fn trim_cli_signins(state: &AppState, new: &db::oauth::Grant) -> sqlx::Result<()> {
+    let signins: Vec<(i64, String)> = db::oauth::active_grants_for_user(&state.db, new.user_id)
+        .await?
+        .into_iter()
+        .filter(|g| oauth::cli_host(&g.client_name).is_some())
+        .map(|g| (g.id, g.last_used_at.unwrap_or(g.created_at)))
+        .collect();
+    for id in oauth::cli_overflow(&signins, new.id, oauth::MAX_CLI_SIGNINS) {
+        revoke_grant_by_id(state, id).await?;
+        tracing::info!(grant_id = id, user_id = new.user_id, newest = new.id, "CLI sign-in over the limit signed out");
     }
     Ok(())
 }
@@ -709,8 +750,12 @@ async fn grant_json(state: &AppState, g: &db::oauth::GrantWithClient) -> sqlx::R
             Value::Array(list)
         }
     };
+    let cli_host = oauth::cli_host(&g.client_name);
     Ok(json!({
         "id": g.id,
+        // `cli` = `telepy login` 的瀏覽器登入（列在 API 頁），`app` = MCP app。/ `cli` = a `telepy login` sign-in (API page), `app` = an MCP app.
+        "kind": if cli_host.is_some() { "cli" } else { "app" },
+        "cli_host": cli_host,
         "client_id": g.client_id,
         "client_name": g.client_name,
         "client_uri": g.client_uri,
@@ -724,12 +769,24 @@ async fn grant_json(state: &AppState, g: &db::oauth::GrantWithClient) -> sqlx::R
 
 #[utoipa::path(get, path = "/api/oauth/grants", tag = "OAuth", security(("bearer" = [])), responses((status = 200, description = "Apps the current user has authorized (active grants, newest first)", body = Vec<super::schemas::OAuthGrant>)))]
 async fn list_grants(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
-    let grants = db::oauth::active_grants_for_user(&state.db, user.id).await?;
+    Ok(Json(grants_json(&state, user.id).await?))
+}
+
+/// 一個人的有效 grant；CLI 登入多帶呼叫摘要（呼叫紀錄裡它的 REST 請求，跟 API token 一樣）。
+/// A person's active grants; CLI sign-ins also carry a call summary (their REST requests in the call log, like tokens).
+async fn grants_json(state: &AppState, user_id: i64) -> sqlx::Result<Value> {
+    let grants = db::oauth::active_grants_for_user(&state.db, user_id).await?;
+    let cli_ids: Vec<i64> = grants.iter().filter(|g| oauth::cli_host(&g.client_name).is_some()).map(|g| g.id).collect();
+    let sums = db::api_calls::grant_summaries(&state.db, &cli_ids).await?;
     let mut out = Vec::with_capacity(grants.len());
     for g in &grants {
-        out.push(grant_json(&state, g).await?);
+        let mut v = grant_json(state, g).await?;
+        if cli_ids.contains(&g.id) {
+            v["calls"] = super::api_tokens::summary_json(sums.get(&g.id));
+        }
+        out.push(v);
     }
-    Ok(Json(Value::Array(out)))
+    Ok(Value::Array(out))
 }
 
 #[utoipa::path(get, path = "/api/user/users/{id}/grants", tag = "User Management", security(("bearer" = [])), params(("id" = i64, Path, description = "User id")), responses((status = 200, description = "Apps that user has authorized (active grants, newest first; admins only)", body = Vec<super::schemas::OAuthGrant>), (status = 403, body = super::schemas::ErrorBody), (status = 404, body = super::schemas::ErrorBody)))]
@@ -740,12 +797,7 @@ async fn list_grants_for_user(State(state): State<AppState>, AuthUser(me): AuthU
         return Err(ApiError::forbidden("Permission denied. Only administrators can see other people's connected apps."));
     }
     db::users::by_id(&state.db, id).await?.ok_or_else(ApiError::drf_not_found)?;
-    let grants = db::oauth::active_grants_for_user(&state.db, id).await?;
-    let mut out = Vec::with_capacity(grants.len());
-    for g in &grants {
-        out.push(grant_json(&state, g).await?);
-    }
-    Ok(Json(Value::Array(out)))
+    Ok(Json(grants_json(&state, id).await?))
 }
 
 /// 詳細資料裡的最近紀錄筆數。/ Recent tool calls shown in the details.
@@ -790,6 +842,10 @@ async fn grant_details(State(state): State<AppState>, AuthUser(user): AuthUser, 
     });
     out["sessions"] = Value::Array(state.ai.list().iter().filter(|s| s.credential == crate::auth::mcp::Credential::Grant(grant.id)).map(|s| super::ai::session_json(s, tz)).collect());
     out["stats"] = json!({ "calls": calls, "failed": failed, "last_call_at": last_call.as_deref().map(|t| db_to_iso(t, tz)) });
+    if oauth::cli_host(&client.client_name).is_some() {
+        let sums = db::api_calls::grant_summaries(&state.db, &[grant.id]).await?;
+        out["calls"] = super::api_tokens::summary_json(sums.get(&grant.id));
+    }
     out["activity"] = Value::Array(recent.iter().map(|e| super::ai::activity_json(e, tz)).collect());
     Ok(Json(out))
 }

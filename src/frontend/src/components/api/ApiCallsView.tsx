@@ -1,25 +1,29 @@
 "use client";
 
 /**
- * API 呼叫紀錄（個人 API token 與 OAuth app 的 token 打的 REST 請求，以及個人 token 的 MCP tool call）。兩頁共用：
- * `mine` = API 頁的「活動」（自己的，可依 token 篩選）；`all` = 管理區的全站 API 活動（可依使用者篩選，`?user=`）。
+ * API 呼叫紀錄（個人 API token 與 `telepy` CLI 登入〔OAuth〕打的 REST 請求，以及個人 token 的 MCP tool call）。兩頁共用：
+ * `mine` = API 頁的「活動」（自己的，可依 token / CLI 登入篩選）；`all` = 管理區的全站 API 活動（可依使用者篩選，`?user=`）。
+ * 每列標出是哪一種憑證：token（鑰匙）、CLI 登入（終端機 + 電腦名稱）、其他 OAuth app（機器人）。
  * 依日期分組、整頁捲動（篩選列黏在 Header 下方），狀態 / 方法 / 搜尋在前端篩選，一次多載 300 筆。
  * The API call log (REST requests made with personal tokens and OAuth app tokens, plus personal tokens' MCP tool
  * calls). Shared by the API page's Activity (`mine`, filter by token) and the admin section's All API activity
  * (`all`, filter by user). Grouped by day, the page scrolls as a whole with the filter bar stuck under the header.
  */
 import React from "react";
-import { ChevronDown, Loader2, RefreshCw, Search } from "lucide-react";
+import { Bot, ChevronDown, KeyRound, Loader2, RefreshCw, Search, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Segmented } from "@/components/ui/segmented";
 import { Chip } from "@/components/ui/section";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Highlighted, TimelineDay } from "@/components/ui/timeline";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { formatDuration, METHOD_FILTERS, STATUS_FILTERS, statusClass, type StatusFilter } from "@/lib/apiCalls";
 import type { ApiToken } from "@/lib/apiTokens";
+import { cliHost } from "@/lib/cliClient";
+import { grantHost } from "@/lib/cliSignIns";
+import type { OAuthGrant } from "@/types/oauth";
 import type { ViewScope } from "@/components/layout/AdminViews";
 import { ALL, useApiCalls, type ApiCallEntry } from "@/hooks/useApiCalls";
 import { useStickyBar } from "@/hooks/useStickyBar";
@@ -32,7 +36,10 @@ const DOT_TONE = { ok: "bg-success", "4xx": "bg-warning", "5xx": "bg-destructive
 function CallLine({ c, query, showUser }: { c: ApiCallEntry; query: string; showUser: boolean }) {
     const { t } = useI18n();
     const cls = statusClass(c.status);
-    const who = c.token ? (c.token.name ?? `#${c.token.id}`) : c.client_name;
+    // 哪一種憑證：token、CLI 登入（電腦名稱）、其他 OAuth app。/ Which credential: a token, a CLI sign-in, another app.
+    const host = c.token ? null : cliHost(c.client_name);
+    const who = c.token ? (c.token.name ?? `#${c.token.id}`) : host !== null ? t("apiPage.calls.cliWho", { host: host || t("cliSignIns.unnamed") }) : c.client_name;
+    const WhoIcon = c.token ? KeyRound : host !== null ? SquareTerminal : Bot;
     return (
         <li className="px-4 py-2.5 lg:px-5">
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs leading-5">
@@ -53,8 +60,11 @@ function CallLine({ c, query, showUser }: { c: ApiCallEntry; query: string; show
                             <span aria-hidden>·</span>
                         </>
                     )}
-                    <span className="truncate" title={c.client_name}>
-                        <Highlighted text={who} query={query} />
+                    <span className="inline-flex min-w-0 items-center gap-1" title={c.client_name}>
+                        <WhoIcon size={12} className="shrink-0" aria-hidden />
+                        <span className="truncate">
+                            <Highlighted text={who} query={query} />
+                        </span>
                     </span>
                     {c.ip && (
                         <>
@@ -80,33 +90,62 @@ function CallLine({ c, query, showUser }: { c: ApiCallEntry; query: string; show
     );
 }
 
-export function ApiCallsView({ scope, tokens }: { scope: ViewScope; tokens?: ApiToken[] | null }) {
+export function ApiCallsView({ scope, tokens, signIns }: { scope: ViewScope; tokens?: ApiToken[] | null; signIns?: OAuthGrant[] | null }) {
     const { t, tn } = useI18n();
     const { state, actions } = useApiCalls(scope);
-    const { all, rows, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, tokenFilter, userFilter, users, status, method, search, filtering, dropped } = state;
-    const { refresh, setTokenFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore } = actions;
+    const { all, rows, filtered, groups, counts, loading, initialLoading, failed, hasMore, noOlder, loadingMore, credFilter, userFilter, users, status, method, search, filtering, dropped } = state;
+    const { refresh, setCredFilter, setUserFilter, setStatus, setMethod, setSearch, loadMore } = actions;
     const { ref: barRef, style: barStyle } = useStickyBar();
-    // 篩選中的 token 不在清單上（被刪了、或是管理區看別人的）→ 從紀錄裡找名字。/ A filtered token missing from the list: name from the rows.
-    const tokenName = tokenFilter === ALL ? null : (tokens?.find((x) => String(x.id) === tokenFilter)?.name ?? rows.find((r) => String(r.token?.id) === tokenFilter)?.token?.name ?? `#${tokenFilter}`);
-    const tokenInList = !!tokens?.some((x) => String(x.id) === tokenFilter);
+    const signInLabel = (g: OAuthGrant) => t("apiPage.calls.cliWho", { host: grantHost(g) || t("cliSignIns.unnamed") });
+    // 篩選中的那一個不在清單上（被撤銷了、或是管理區看別人的）→ 從紀錄裡找名字。/ A filtered credential missing from the list: name from the rows.
+    const [credKind, credId] = credFilter === ALL ? [null, null] : credFilter.split(":");
+    const credName = (() => {
+        if (credKind === "token") return tokens?.find((x) => String(x.id) === credId)?.name ?? rows.find((r) => String(r.token?.id) === credId)?.token?.name ?? `#${credId}`;
+        if (credKind === "grant") {
+            const g = signIns?.find((x) => String(x.id) === credId);
+            if (g) return signInLabel(g);
+            const row = rows.find((r) => String(r.grant_id) === credId);
+            const host = row ? cliHost(row.client_name) : null;
+            return row ? (host !== null ? t("apiPage.calls.cliWho", { host: host || t("cliSignIns.unnamed") }) : row.client_name) : `#${credId}`;
+        }
+        return null;
+    })();
+    const credInList = credKind === "token" ? !!tokens?.some((x) => String(x.id) === credId) : credKind === "grant" ? !!signIns?.some((x) => String(x.id) === credId) : false;
+    const hasTokens = !!tokens && tokens.length > 0;
+    const hasSignIns = !!signIns && signIns.length > 0;
 
     return (
         <div className="flex flex-col" style={barStyle}>
             <div ref={barRef} className="z-20 flex flex-col gap-2 bg-background py-3 sm:sticky sm:top-16">
                 <div className="flex flex-col gap-2 lg:flex-row">
                     <div className="flex gap-2">
-                        {!all && tokens && tokens.length > 0 && (
-                            <Select value={tokenInList || tokenFilter === ALL ? tokenFilter : ALL} onValueChange={setTokenFilter}>
-                                <SelectTrigger className="h-10 min-w-0 flex-1 text-sm lg:w-52 lg:flex-none" aria-label={t("apiPage.calls.filterToken")}>
+                        {!all && (hasTokens || hasSignIns) && (
+                            <Select value={credInList || credFilter === ALL ? credFilter : ALL} onValueChange={setCredFilter}>
+                                <SelectTrigger className="h-10 min-w-0 flex-1 text-sm lg:w-56 lg:flex-none" aria-label={t("apiPage.calls.filterToken")}>
                                     <SelectValue placeholder={t("apiPage.calls.filterToken")} />
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value={ALL}>{t("apiPage.calls.allTokens")}</SelectItem>
-                                    {tokens.map((x) => (
-                                        <SelectItem key={x.id} value={String(x.id)}>
-                                            {x.name}
-                                        </SelectItem>
-                                    ))}
+                                    {hasTokens && (
+                                        <SelectGroup>
+                                            <SelectLabel>{t("apiPage.calls.groupTokens")}</SelectLabel>
+                                            {tokens!.map((x) => (
+                                                <SelectItem key={`t${x.id}`} value={`token:${x.id}`}>
+                                                    {x.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectGroup>
+                                    )}
+                                    {hasSignIns && (
+                                        <SelectGroup>
+                                            <SelectLabel>{t("apiPage.calls.groupSignIns")}</SelectLabel>
+                                            {signIns!.map((g) => (
+                                                <SelectItem key={`g${g.id}`} value={`grant:${g.id}`}>
+                                                    {signInLabel(g)}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectGroup>
+                                    )}
                                 </SelectContent>
                             </Select>
                         )}
@@ -137,10 +176,10 @@ export function ApiCallsView({ scope, tokens }: { scope: ViewScope; tokens?: Api
                     </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                    {tokenName && (!tokenInList || all) && (
+                    {credName && (!credInList || all) && (
                         <span className="inline-flex items-center gap-1 rounded-sm border border-border bg-muted px-1.5 py-0.5 text-xs">
-                            {t("apiPage.calls.onlyToken", { name: tokenName })}
-                            <button type="button" onClick={() => setTokenFilter(ALL)} className="text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                            {t("apiPage.calls.onlyToken", { name: credName })}
+                            <button type="button" onClick={() => setCredFilter(ALL)} className="text-muted-foreground underline underline-offset-2 hover:text-foreground">
                                 {t("apiPage.calls.allTokens")}
                             </button>
                         </span>

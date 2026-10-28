@@ -51,19 +51,38 @@ export function AccountRow({ username, onSwitch, disabled }: { username: string;
 }
 
 /** 先前連接過同一個 app：說明 + 「取代舊連線」。/ The app was connected before: notice plus "replace". */
-export function ExistingConnection({ app, existing, replace, onReplace }: { app: string; existing: NonNullable<ConsentInfo["existing"]>; replace: boolean; onReplace: (v: boolean) => void }) {
+export function ExistingConnection({
+    app,
+    existing,
+    replace,
+    onReplace,
+    cliHost,
+}: {
+    app: string;
+    existing: NonNullable<ConsentInfo["existing"]>;
+    replace: boolean;
+    onReplace: (v: boolean) => void;
+    /** `telepy` CLI：電腦名稱（說「這台電腦先前的登入」而不是「先前的連線」）。/ The CLI's computer: "earlier sign-in from it". */
+    cliHost?: string | null;
+}) {
     const { t, locale } = useI18n();
     const latest = existing[0];
     const date = new Date(latest.created_at).toLocaleDateString(locale, { dateStyle: "medium" });
     const used = latest.last_used_at ? formatRelativeTime(latest.last_used_at, locale) : t("oauth.existingNeverUsed");
+    const cli = cliHost !== undefined && cliHost !== null;
+    const host = cliHost || t("oauth.cli.thisComputer");
+    const title = cli ? t("oauth.cli.existingTitle", { host }) : t("oauth.existingTitle", { app });
+    const one = cli ? t("oauth.cli.replaceOne") : t("oauth.replaceOne");
+    const many = cli ? t("oauth.cli.replaceMany", { count: existing.length }) : t("oauth.replaceMany", { count: existing.length });
+    const hint = cli ? (replace ? t("oauth.cli.replaceOnHint") : t("oauth.cli.replaceOffHint")) : replace ? t("oauth.replaceOnHint", { app }) : t("oauth.replaceOffHint");
     return (
-        <Callout tone="info" title={t("oauth.existingTitle", { app })}>
-            <p>{existing.length === 1 ? t("oauth.existingOne", { date, used }) : t("oauth.existingMany", { count: existing.length, date })}</p>
+        <Callout tone="info" title={title}>
+            <p>{existing.length === 1 ? t(cli ? "oauth.cli.existingOne" : "oauth.existingOne", { date, used }) : t(cli ? "oauth.cli.existingMany" : "oauth.existingMany", { count: existing.length, date })}</p>
             <label className="mt-2.5 flex cursor-pointer items-start gap-2.5">
                 <input type="checkbox" className="mt-1 accent-primary" checked={replace} onChange={(e) => onReplace(e.target.checked)} />
                 <span>
-                    <span className="block text-foreground">{existing.length === 1 ? t("oauth.replaceOne") : t("oauth.replaceMany", { count: existing.length })}</span>
-                    <span className="block text-xs text-muted-foreground">{replace ? t("oauth.replaceOnHint", { app }) : t("oauth.replaceOffHint")}</span>
+                    <span className="block text-foreground">{existing.length === 1 ? one : many}</span>
+                    <span className="block text-xs text-muted-foreground">{hint}</span>
                 </span>
             </label>
         </Callout>
@@ -223,7 +242,7 @@ export function TunnelChoice({
  * 送出之後：已允許 / 已拒絕。http(s) 的 app 會直接換頁；自訂 scheme（桌面 app）不會，所以這裡要能再開一次、能關分頁。
  * After the decision. http(s) apps navigate away at once; custom-scheme desktop apps do not, hence "open again".
  */
-export function DecisionView({ approved, app, onReopen }: { approved: boolean; app: string; onReopen: () => void }) {
+export function DecisionView({ approved, app, onReopen, cli = false }: { approved: boolean; app: string; onReopen: () => void; cli?: boolean }) {
     const { t } = useI18n();
     return (
         <div className="space-y-6" role="status">
@@ -238,18 +257,21 @@ export function DecisionView({ approved, app, onReopen }: { approved: boolean; a
                 </span>
                 <div className="min-w-0">
                     <h1 className="text-2xl font-semibold tracking-tight text-foreground">{approved ? t("oauth.doneApprovedTitle") : t("oauth.doneDeniedTitle")}</h1>
-                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{approved ? t("oauth.doneApprovedBody", { app }) : t("oauth.doneDeniedBody", { app })}</p>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                        {cli ? (approved ? t("oauth.cli.doneApprovedBody") : t("oauth.cli.doneDeniedBody")) : approved ? t("oauth.doneApprovedBody", { app }) : t("oauth.doneDeniedBody", { app })}
+                    </p>
                 </div>
             </div>
             <Button variant="outline" className="h-11 w-full" onClick={onReopen}>
                 <CornerDownLeft size={16} aria-hidden />
-                <span className="truncate">{t("oauth.openAgain", { app })}</span>
+                <span className="truncate">{cli ? t("oauth.cli.openAgain") : t("oauth.openAgain", { app })}</span>
             </Button>
             {approved && (
                 <p className="text-center text-sm text-muted-foreground">
                     {t("oauth.manageLater")}{" "}
-                    <Link href="/tunnels/mcp" className="text-primary underline-offset-4 hover:underline">
-                        {t("oauth.manageApps")}
+                    {/* CLI 登入在 API 頁，MCP app 在 MCP 頁。/ CLI sign-ins live on the API page, MCP apps on the MCP page. */}
+                    <Link href={cli ? "/tunnels/api?tab=cli" : "/tunnels/mcp"} className="text-primary underline-offset-4 hover:underline">
+                        {cli ? t("oauth.cli.manage") : t("oauth.manageApps")}
                     </Link>
                 </p>
             )}

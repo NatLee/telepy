@@ -57,7 +57,8 @@ test("durations", () => {
 
 test("each revoke cuts only its own way in", () => {
     assert.ok(waysIn("none").every((w) => !w.cut && w.devices === "ok"));
-    for (const which of ["web", "token", "app"] as const) {
+    assert.deepEqual(waysIn("none").map((w) => w.id), ["web", "token", "cli", "app"], "the CLI's browser sign-in is a lane of its own, not an MCP app");
+    for (const which of ["web", "token", "cli", "app"] as const) {
         const ways = waysIn(which);
         const cut = ways.filter((w) => w.cut);
         assert.deepEqual(cut.map((w) => w.id), [which]);

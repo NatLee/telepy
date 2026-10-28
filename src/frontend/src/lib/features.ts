@@ -56,8 +56,9 @@ export function hasFeature(profile: { is_superuser?: boolean; features?: string[
     return profile.features.includes(id);
 }
 
-/** 整頁屬於某個功能的路徑（被關掉就顯示說明而不是頁面）。/ Pages that belong to one feature (a notice replaces them when off). */
-const PAGE_FEATURES: readonly [string, FeatureId][] = [
+/** 整頁屬於某個功能的路徑（被關掉就顯示說明而不是頁面）；列了幾個 = 任一個開著就能看。
+ *  Pages that belong to a feature (a notice replaces them when off); several = any of them opens the page. */
+const PAGE_FEATURES: readonly [string, FeatureId | readonly FeatureId[]][] = [
     ["/tunnels/create", "tunnels.create"],
     ["/tunnels/terminal", "terminal"],
     ["/tunnels/sessions/watch", "terminal"],
@@ -67,13 +68,20 @@ const PAGE_FEATURES: readonly [string, FeatureId][] = [
     ["/tunnels/commands", "command_rules.manage"],
     ["/tunnels/webhooks", "webhooks.personal"],
     ["/tunnels/mcp", "mcp.connect"],
-    ["/tunnels/api", "api.tokens"],
+    // API 頁 = 你的 token（api.tokens）+ CLI 的瀏覽器登入（跟著 mcp.connect）。/ Tokens + the CLI's browser sign-ins.
+    ["/tunnels/api", ["api.tokens", "mcp.connect"]],
 ];
 
-export function featureForPath(pathname: string | null | undefined): FeatureId | null {
-    if (!pathname) return null;
+/** 這一頁要的功能（任一個開著就能看）；不屬於任何功能 = 空陣列。/ The features a page needs (any of them); none = []. */
+export function featuresForPath(pathname: string | null | undefined): FeatureId[] {
+    if (!pathname) return [];
     const hit = PAGE_FEATURES.find(([p]) => pathname === p || pathname.startsWith(`${p}/`));
-    return hit ? hit[1] : null;
+    return hit ? (typeof hit[1] === "string" ? [hit[1]] : [...hit[1]]) : [];
+}
+
+/** 這一頁的主要功能（說明頁顯示它）。/ The page's main feature (named by the notice). */
+export function featureForPath(pathname: string | null | undefined): FeatureId | null {
+    return featuresForPath(pathname)[0] ?? null;
 }
 
 // ---------------------------------------------------------------- the admin policy (GET /api/access)

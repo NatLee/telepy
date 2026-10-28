@@ -12,7 +12,7 @@
  */
 import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { Bot, RefreshCw, Search, X, Activity, Loader2, ChevronDown, ListTree, BotMessageSquare, Plug, KeyRound, ArrowRight } from "lucide-react";
+import { Bot, RefreshCw, Search, X, Activity, Loader2, ChevronDown, ListTree, BotMessageSquare, Plug, KeyRound, ArrowRight, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -24,6 +24,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { TimelineDay } from "@/components/ui/timeline";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { grantHost, isCliGrant, splitGrants } from "@/lib/cliSignIns";
 import { TOOL_FILTERS, WHO_FILTERS, type ToolFilter, type WhoFilter } from "@/lib/aiActivity";
 import { hasFeature } from "@/lib/features";
 import { useAuth } from "@/lib/auth";
@@ -56,7 +57,7 @@ const WHO_LABELS: Record<WhoFilter, TranslationKey> = {
  * where you manage your own AI access.
  */
 function YourApps({
-    apps,
+    apps: allApps,
     sessions,
     meId,
     appFilter,
@@ -74,6 +75,10 @@ function YourApps({
 }) {
     const { t } = useI18n();
     const { user } = useAuth();
+    // `telepy` CLI 的登入不是 MCP app：這裡只列 app，CLI 指到 API 頁。/ CLI sign-ins are not MCP apps: listed on the API page.
+    const split = allApps === null ? null : splitGrants(allApps);
+    const cliCount = split?.cli.length ?? 0;
+    const apps = split?.apps ?? null;
     return (
         <section className="mb-8">
             <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -131,6 +136,11 @@ function YourApps({
                         );
                     })}
                 </ul>
+            )}
+            {cliCount > 0 && (
+                <Link href="/tunnels/api?tab=cli" prefetch={false} className="mt-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+                    <SquareTerminal size={13} aria-hidden /> {t("apps.cliElsewhere", { count: cliCount })} <ArrowRight size={12} className="opacity-60" aria-hidden />
+                </Link>
             )}
         </section>
     );
@@ -273,7 +283,7 @@ export function AiActivityView({ scope }: { scope: ViewScope }) {
                                     <SelectContent>
                                         <SelectItem value={ALL}>{t("activity.allApps")}</SelectItem>
                                         {apps.map((g) => (
-                                            <SelectItem key={g.id} value={String(g.id)}>{g.client_name}</SelectItem>
+                                            <SelectItem key={g.id} value={String(g.id)}>{isCliGrant(g) ? t("apiPage.calls.cliWho", { host: grantHost(g) || t("cliSignIns.unnamed") }) : g.client_name}</SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
