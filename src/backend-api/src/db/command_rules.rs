@@ -1,6 +1,10 @@
-//! 指令規則（`telepy_command_rule`；`tunnel_id` NULL = 全站）與每次擋下 / 送核准的紀錄（`telepy_command_event`）。
-//! Command rules (`telepy_command_rule`; NULL `tunnel_id` = site-wide) and the record of every block and approval
-//! request (`telepy_command_event`).
+//! 指令規則（`telepy_command_rule`：`scope` site = 全站、user = 某人的個人規則；`all_tunnels` 或
+//! `telepy_command_rule_target` 列出的隧道）與每次擋下 / 送核准的紀錄（`telepy_command_event`）。
+//! Command rules (`telepy_command_rule`: `scope` site = site-wide, user = someone's personal rule; for every tunnel
+//! or the ones in `telepy_command_rule_target`) and the record of every block and approval request
+//! (`telepy_command_event`).
+
+use std::collections::HashMap;
 
 use sqlx::FromRow;
 
@@ -8,6 +12,7 @@ use super::Db;
 use crate::util::now_db;
 
 const R: &str = "telepy_command_rule";
+const RT: &str = "telepy_command_rule_target";
 const E: &str = "telepy_command_event";
 /// 紀錄最多留幾列（等待中的不刪）。/ Row cap for the event log (pending rows are kept).
 pub const MAX_EVENTS: i64 = 20_000;
@@ -15,13 +20,21 @@ pub const MAX_EVENTS: i64 = 20_000;
 #[derive(Debug, Clone, FromRow)]
 pub struct RuleRow {
     pub id: i64,
-    pub tunnel_id: Option<i64>,
+    /// site / user（舊的列在 data migration 前是 NULL）。/ site / user (NULL on pre-upgrade rows until migrated).
+    pub scope: Option<String>,
+    /// 個人規則的主人。/ The owner of a personal rule.
+    pub user_id: Option<i64>,
+    /// 主人的帳號名稱（JOIN 來的）。/ The owner's username (joined).
+    pub owner_name: Option<String>,
+    /// 套用所有隧道（個人規則：自己管的 / 自己能用的全部）；否則只有 `telepy_command_rule_target` 那幾條。
+    /// Every tunnel (personal: all the owner manages / can use); otherwise only the listed ones.
+    pub all_tunnels: bool,
     /// block / approve / allow
     pub action: String,
     /// command / regex
     pub kind: String,
     pub pattern: String,
-    /// everyone / sharees
+    /// everyone / sharees / me（me 只有個人規則）。/ everyone / sharees / me (personal rules only).
     pub who: String,
     /// all / terminal / agents
     pub via: String,
@@ -35,10 +48,22 @@ pub struct RuleRow {
     pub updated_at: String,
 }
 
-const R_COLS: &str = "id, tunnel_id, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at";
+impl RuleRow {
+    /// 全站規則嗎（舊的列：沒有隧道 = 全站）。/ Whether this is a site-wide rule (pre-upgrade rows: no tunnel).
+    pub fn is_site(&self) -> bool {
+        self.scope.as_deref() == Some("site")
+    }
+}
+
+const R_SELECT: &str = "SELECT r.id, r.scope, r.user_id, u.username AS owner_name, r.all_tunnels, r.action, r.kind, r.pattern, r.who, r.via, \
+     r.note, r.enabled, r.approver_ids, r.created_by_id, r.created_at, r.updated_at FROM telepy_command_rule r LEFT JOIN auth_user u ON u.id = r.user_id";
 
 pub struct NewRule<'a> {
-    pub tunnel_id: Option<i64>,
+    /// site / user
+    pub scope: &'a str,
+    /// 個人規則的主人。/ The owner of a personal rule.
+    pub user_id: Option<i64>,
+    pub all_tunnels: bool,
     pub action: &'a str,
     pub kind: &'a str,
     pub pattern: &'a str,
@@ -50,12 +75,17 @@ pub struct NewRule<'a> {
     pub approver_ids: Option<&'a str>,
 }
 
-pub async fn create_rule(db: &Db, r: &NewRule<'_>, by: i64) -> sqlx::Result<RuleRow> {
+/// 新增規則與它的隧道清單（同一個 transaction）。/ Add a rule and its tunnel list (one transaction).
+pub async fn create_rule(db: &Db, r: &NewRule<'_>, tunnel_ids: &[i64], by: i64) -> sqlx::Result<RuleRow> {
     let now = now_db();
+    let mut tx = db.write.begin().await?;
     let id = sqlx::query(&format!(
-        "INSERT INTO {R} (tunnel_id, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO {R} (tunnel_id, scope, user_id, all_tunnels, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at) \
+         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ))
-    .bind(r.tunnel_id)
+    .bind(r.scope)
+    .bind(r.user_id)
+    .bind(r.all_tunnels)
     .bind(r.action)
     .bind(r.kind)
     .bind(r.pattern)
@@ -67,49 +97,110 @@ pub async fn create_rule(db: &Db, r: &NewRule<'_>, by: i64) -> sqlx::Result<Rule
     .bind(by)
     .bind(&now)
     .bind(&now)
-    .execute(&db.write)
+    .execute(&mut *tx)
     .await?
     .last_insert_rowid();
+    for t in tunnel_ids {
+        sqlx::query(&format!("INSERT OR IGNORE INTO {RT} (rule_id, tunnel_id) VALUES (?, ?)")).bind(id).bind(t).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
     rule(db, id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
-/// 整列換掉（tunnel_id 不變）。/ Replace a rule's fields (its tunnel stays).
-pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>) -> sqlx::Result<Option<RuleRow>> {
-    sqlx::query(&format!("UPDATE {R} SET action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, approver_ids = ?, updated_at = ? WHERE id = ?"))
-        .bind(r.action)
-        .bind(r.kind)
-        .bind(r.pattern)
-        .bind(r.who)
-        .bind(r.via)
-        .bind(r.note)
-        .bind(r.enabled)
-        .bind(r.approver_ids)
-        .bind(now_db())
-        .bind(id)
-        .execute(&db.write)
-        .await?;
+/// 整列換掉（範圍與主人不變），隧道清單一起換。/ Replace a rule's fields (scope and owner stay) and its tunnel list.
+pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>, tunnel_ids: &[i64]) -> sqlx::Result<Option<RuleRow>> {
+    let mut tx = db.write.begin().await?;
+    sqlx::query(&format!(
+        "UPDATE {R} SET all_tunnels = ?, action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, approver_ids = ?, updated_at = ? WHERE id = ?"
+    ))
+    .bind(r.all_tunnels)
+    .bind(r.action)
+    .bind(r.kind)
+    .bind(r.pattern)
+    .bind(r.who)
+    .bind(r.via)
+    .bind(r.note)
+    .bind(r.enabled)
+    .bind(r.approver_ids)
+    .bind(now_db())
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(&format!("DELETE FROM {RT} WHERE rule_id = ?")).bind(id).execute(&mut *tx).await?;
+    for t in tunnel_ids {
+        sqlx::query(&format!("INSERT OR IGNORE INTO {RT} (rule_id, tunnel_id) VALUES (?, ?)")).bind(id).bind(t).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
     rule(db, id).await
 }
 
 pub async fn delete_rule(db: &Db, id: i64) -> sqlx::Result<bool> {
-    Ok(sqlx::query(&format!("DELETE FROM {R} WHERE id = ?")).bind(id).execute(&db.write).await?.rows_affected() > 0)
+    let mut tx = db.write.begin().await?;
+    sqlx::query(&format!("DELETE FROM {RT} WHERE rule_id = ?")).bind(id).execute(&mut *tx).await?;
+    let gone = sqlx::query(&format!("DELETE FROM {R} WHERE id = ?")).bind(id).execute(&mut *tx).await?.rows_affected() > 0;
+    tx.commit().await?;
+    Ok(gone)
 }
 
 pub async fn rule(db: &Db, id: i64) -> sqlx::Result<Option<RuleRow>> {
-    sqlx::query_as(&format!("SELECT {R_COLS} FROM {R} WHERE id = ?")).bind(id).fetch_optional(&db.read).await
+    sqlx::query_as(&format!("{R_SELECT} WHERE r.id = ?")).bind(id).fetch_optional(&db.read).await
 }
 
-/// 全站規則（tunnel_id IS NULL）或一條隧道的規則，舊的在前。/ Site-wide rules or one tunnel's, oldest first.
-pub async fn rules_for(db: &Db, tunnel_id: Option<i64>) -> sqlx::Result<Vec<RuleRow>> {
-    match tunnel_id {
-        None => sqlx::query_as(&format!("SELECT {R_COLS} FROM {R} WHERE tunnel_id IS NULL ORDER BY id")).fetch_all(&db.read).await,
-        Some(t) => sqlx::query_as(&format!("SELECT {R_COLS} FROM {R} WHERE tunnel_id = ? ORDER BY id")).bind(t).fetch_all(&db.read).await,
+/// 全站規則，舊的在前。/ The site-wide rules, oldest first.
+pub async fn site_rules(db: &Db) -> sqlx::Result<Vec<RuleRow>> {
+    sqlx::query_as(&format!("{R_SELECT} WHERE r.scope = 'site' ORDER BY r.id")).fetch_all(&db.read).await
+}
+
+/// 一個人的個人規則，舊的在前。/ One person's personal rules, oldest first.
+pub async fn user_rules(db: &Db, user_id: i64) -> sqlx::Result<Vec<RuleRow>> {
+    sqlx::query_as(&format!("{R_SELECT} WHERE r.scope = 'user' AND r.user_id = ? ORDER BY r.id")).bind(user_id).fetch_all(&db.read).await
+}
+
+/// 可能套用到這條隧道的規則：全站在前，再來每個人的個人規則（`all_tunnels` 或清單裡有它）。個人規則的主人是不是還管這條
+/// 隧道、「只有我」管的是誰，評估時才看（`matcher::Ctx`）。
+/// The rules that may apply to a tunnel: site-wide first, then everyone's personal rules (every tunnel, or listed).
+/// Whether a personal rule's owner still manages the tunnel, and whose commands a "me" rule covers, is decided at
+/// evaluation time (`matcher::Ctx`).
+pub async fn rules_targeting(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<RuleRow>> {
+    sqlx::query_as(&format!(
+        "{R_SELECT} WHERE r.scope IN ('site', 'user') AND (r.all_tunnels = 1 OR r.id IN (SELECT rule_id FROM {RT} WHERE tunnel_id = ?)) \
+         ORDER BY CASE r.scope WHEN 'site' THEN 0 ELSE 1 END, r.id"
+    ))
+    .bind(tunnel_id)
+    .fetch_all(&db.read)
+    .await
+}
+
+/// 每條規則限定的隧道（只有 `all_tunnels` = 0 的才有）。/ The tunnels each limited rule covers.
+pub async fn tunnel_map(db: &Db, rule_ids: &[i64]) -> sqlx::Result<HashMap<i64, Vec<i64>>> {
+    let mut out: HashMap<i64, Vec<i64>> = HashMap::new();
+    if rule_ids.is_empty() {
+        return Ok(out);
     }
+    let ids = rule_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&format!("SELECT rule_id, tunnel_id FROM {RT} WHERE rule_id IN ({ids}) ORDER BY tunnel_id")).fetch_all(&db.read).await?;
+    for (rule, tunnel) in rows {
+        out.entry(rule).or_default().push(tunnel);
+    }
+    Ok(out)
 }
 
-/// 每條隧道有幾條規則（列表的小標籤用）。/ Rule counts per tunnel.
-pub async fn counts_by_tunnel(db: &Db) -> sqlx::Result<Vec<(i64, i64)>> {
-    sqlx::query_as(&format!("SELECT tunnel_id, COUNT(*) FROM {R} WHERE tunnel_id IS NOT NULL AND enabled = 1 GROUP BY tunnel_id")).fetch_all(&db.read).await
+/// 隧道刪了：只套用它一條的規則一起刪，其他規則的清單拿掉它。回傳刪掉幾條規則。
+/// A deleted tunnel: rules limited to it alone go, other rules' lists drop it. Returns the rules deleted.
+pub async fn forget_tunnel(tx: &mut sqlx::SqliteConnection, tunnel_id: i64) -> sqlx::Result<u64> {
+    let gone = sqlx::query(&format!(
+        "DELETE FROM {R} WHERE all_tunnels = 0 AND id IN (SELECT rule_id FROM {RT} WHERE tunnel_id = ?) \
+         AND NOT EXISTS (SELECT 1 FROM {RT} x WHERE x.rule_id = {R}.id AND x.tunnel_id <> ?)"
+    ))
+    .bind(tunnel_id)
+    .bind(tunnel_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query(&format!("DELETE FROM {RT} WHERE tunnel_id = ?")).bind(tunnel_id).execute(&mut *tx).await?;
+    // 還沒轉換的舊隧道規則。/ Pre-upgrade tunnel rules not converted yet.
+    sqlx::query(&format!("DELETE FROM {R} WHERE scope IS NULL AND tunnel_id = ?")).bind(tunnel_id).execute(&mut *tx).await?;
+    Ok(gone)
 }
 
 // ---------------------------------------------------------------- events
@@ -133,7 +224,8 @@ pub struct EventRow {
     pub rule_id: Option<i64>,
     pub rule_pattern: String,
     pub rule_kind: String,
-    /// site / tunnel
+    /// site / personal / self（「只有我」的個人規則）/ tunnel（升級前的隧道規則）。
+    /// site / personal / self (an "only me" personal rule) / tunnel (a pre-upgrade tunnel rule).
     pub rule_scope: String,
     pub rule_note: String,
     /// 這筆申請的核准人快照（JSON 陣列）；NULL = 當時的 owner + ADMIN。/ Who could decide (JSON array); NULL = owner + ADMIN at the time.
@@ -282,13 +374,14 @@ pub async fn cancel_orphans(db: &Db) -> sqlx::Result<u64> {
         .rows_affected())
 }
 
-/// 清單：可以看的隧道（`tunnel_ids`）裡全部的、我自己的（`own_user`），加上規則點名我核准的（`approver_ids` 快照裡有我），新的在前。
-/// The list: everything on tunnels in `tunnel_ids`, the caller's own rows, plus requests whose approver snapshot names
-/// the caller, newest first.
+/// 清單：可以看的隧道（`tunnel_ids`）裡全部的（別人「只管自己」規則的除外）、我自己的（`own_user`），加上規則點名我核准的
+/// （`approver_ids` 快照裡有我），新的在前。
+/// The list: everything on tunnels in `tunnel_ids` (except other people's "only me" rules), the caller's own rows,
+/// plus requests whose approver snapshot names the caller, newest first.
 pub async fn list(db: &Db, tunnel_ids: &[i64], own_user: i64, only_tunnel: Option<i64>, pending_only: bool, limit: i64) -> sqlx::Result<Vec<EventRow>> {
     let ids = if tunnel_ids.is_empty() { "NULL".to_string() } else { tunnel_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",") };
     let mut sql = format!(
-        "SELECT {E_COLS} FROM {E} WHERE (tunnel_id IN ({ids}) OR user_id = ? \
+        "SELECT {E_COLS} FROM {E} WHERE ((tunnel_id IN ({ids}) AND rule_scope <> 'self') OR user_id = ? \
          OR (approver_ids IS NOT NULL AND EXISTS (SELECT 1 FROM json_each({E}.approver_ids) WHERE value = ?)))"
     );
     if only_tunnel.is_some() {

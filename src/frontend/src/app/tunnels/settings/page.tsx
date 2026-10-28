@@ -745,7 +745,7 @@ function UserEditModal({
 }
 
 /** 通知分頁：送一則測試告警到存好的 webhook，並說明個人的桌面通知在哪裡開。/ Notifications tab: test send + where desktop notifications live. */
-/** 全站指令規則在指令規則頁編輯；這裡放入口與目前的數量。/ Site-wide rules are edited on the command rules page; this links there. */
+/** 全站指令規則在管理區的全站指令規則頁編輯；這裡放入口與目前的數量。/ Site-wide rules are edited on the admin section's Site command rules page; this links there. */
 function SiteCommandRulesPanel() {
     const { t } = useI18n();
     const [count, setCount] = useState<number | null>(null);
@@ -753,8 +753,8 @@ function SiteCommandRulesPanel() {
         let cancelled = false;
         void (async () => {
             const res = await apiFetch("/api/command-rules");
-            const body = await readJson<{ rules?: unknown[] }>(res);
-            if (!cancelled && res.ok) setCount(body?.rules?.length ?? 0);
+            const body = await readJson<{ site?: unknown[] }>(res);
+            if (!cancelled && res.ok) setCount(body?.site?.length ?? 0);
         })();
         return () => {
             cancelled = true;
@@ -765,7 +765,7 @@ function SiteCommandRulesPanel() {
             <SectionHeading icon={<SquareTerminal />} title={t("settings.commandsRulesTitle")} />
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{count === null ? "…" : t("settings.commandsRulesBody", { count })}</p>
             <Button asChild variant="outline" size="sm" className="mt-3">
-                <Link href="/tunnels/commands">
+                <Link href="/tunnels/admin/commands">
                     {t("settings.commandsRulesOpen")} <ArrowRight />
                 </Link>
             </Button>

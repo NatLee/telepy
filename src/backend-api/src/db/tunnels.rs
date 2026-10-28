@@ -247,7 +247,8 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     // 錄影的列；檔案由呼叫端（`recording::forget_tunnel`）刪。/ Recording rows; the caller removes the files.
     sqlx::query("DELETE FROM telepy_terminal_recording WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_access_request WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
-    sqlx::query("DELETE FROM telepy_command_rule WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    // 只套用它的指令規則刪掉，其他規則的清單拿掉它。/ Rules limited to it alone go; other lists drop it.
+    super::command_rules::forget_tunnel(&mut tx, id).await?;
     sqlx::query("DELETE FROM telepy_command_event WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_snippet WHERE scope = 'tunnel' AND tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query(&format!("DELETE FROM {T} WHERE id = ?")).bind(id).execute(&mut *tx).await?;

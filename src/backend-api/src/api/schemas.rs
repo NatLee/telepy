@@ -3030,20 +3030,39 @@ pub struct TerminalDetachPolicy {
 
 // ---------------------------------------------------------------- command rules
 
+/// 規則套用的一條隧道。/ A tunnel a rule covers.
+#[derive(ToSchema)]
+pub struct CommandRuleTunnel {
+    pub id: i64,
+    pub name: String,
+    /// 只有自己的個人規則有：這條隧道上算不算數（管別人的規則要你是 owner / ADMIN）。
+    /// Your own personal rules only: whether it counts there (rules about other people need you to own or administer it).
+    pub applies: Option<bool>,
+}
+
 /// 一條指令規則。/ A command rule.
 #[derive(ToSchema)]
 pub struct CommandRule {
     pub id: i64,
-    /// None = 全站規則。/ None = a site-wide rule.
-    pub tunnel_id: Option<i64>,
-    /// site / tunnel
+    /// site（管理員的全站規則）/ personal（某個人自己的）。/ site (admins') or personal (someone's own).
     pub scope: String,
-    /// block / approve / allow（例外：只豁免同範圍的規則）。/ block, approve or allow (an exception within its own scope).
+    /// 個人規則的主人。/ The owner of a personal rule.
+    pub owner: Option<UserRef>,
+    /// 是你的個人規則。/ It is your own personal rule.
+    pub mine: bool,
+    /// 套用所有隧道（個人：你管的 / 能用的全部，之後加的也算）；否則只有 `tunnels`。
+    /// Every tunnel (personal: all you manage / can use, later ones too); otherwise only `tunnels`.
+    pub all_tunnels: bool,
+    /// 限定的隧道（你看不到的只算在 `hidden_tunnels`）。/ The tunnels it is limited to (ones you can't see are only counted).
+    pub tunnels: Vec<CommandRuleTunnel>,
+    pub hidden_tunnels: i64,
+    /// block / approve / allow（例外：只豁免同一位主人的規則）。/ block, approve or allow (an exception for the same owner's rules only).
     pub action: String,
     /// command（程式 + 必要參數）/ regex（整行）。/ command (program + required arguments) or regex (whole line).
     pub kind: String,
     pub pattern: String,
-    /// everyone / sharees（只管不能核准的人）。/ everyone, or sharees (people who can't approve).
+    /// everyone / sharees（只管不能核准的人）/ me（只管主人自己，個人規則才有）。
+    /// everyone, sharees (people who can't approve) or me (just the owner; personal rules only).
     pub who: String,
     /// all / terminal / agents
     pub via: String,
@@ -3060,6 +3079,8 @@ pub struct CommandRule {
 /// 新增或修改規則（修改時只帶要改的欄位）。/ Create or change a rule (send only what changes on PATCH).
 #[derive(ToSchema)]
 pub struct CommandRuleInput {
+    /// 新增時：personal（預設）/ site（管理員）。/ On create: personal (default) or site (admins).
+    pub scope: Option<String>,
     /// block / approve / allow
     pub action: Option<String>,
     pub kind: Option<String>,
@@ -3068,22 +3089,51 @@ pub struct CommandRuleInput {
     pub via: Option<String>,
     pub note: Option<String>,
     pub enabled: Option<bool>,
-    /// 核准人（只對 approve 有意義；null / [] = owner + ADMIN）。隧道規則：owner / ADMIN sharee / 管理員；全站規則：任何啟用中的帳號。
-    /// Approvers (approve rules only; null / [] = owner + ADMIN). Tunnel rules: owner / ADMIN sharees / admins; site rules: any active user.
+    /// 核准人（只對 approve 有意義；null / [] = owner + ADMIN；「只有我」= 自己）。個人規則：你管的隧道的 owner / ADMIN
+    /// sharee；全站規則：任何啟用中的帳號。
+    /// Approvers (approve rules only; null / [] = owner + ADMIN; "me" rules = yourself). Personal rules: owners / ADMIN
+    /// sharees of tunnels you manage; site rules: any active user.
     pub approver_ids: Option<Vec<i64>>,
+    /// 預設 true。/ Defaults to true.
+    pub all_tunnels: Option<bool>,
+    /// `all_tunnels` false 時的隧道（≤ 200）。管別人的個人規則只能選你是 owner / ADMIN 的。
+    /// The tunnels when `all_tunnels` is false (≤ 200). A personal rule about other people only takes tunnels you own or administer.
+    pub tunnel_ids: Option<Vec<i64>>,
+}
+
+/// 隧道選單的一項。/ One entry of the tunnel picker.
+#[derive(ToSchema)]
+pub struct CommandRuleTunnelChoice {
+    pub id: i64,
+    pub name: String,
+    /// 你是 owner / ADMIN（能替別人設規則）。/ You own or administer it (rules about other people are possible).
+    pub manage: bool,
 }
 
 #[derive(ToSchema)]
 pub struct CommandRuleList {
-    pub rules: Vec<CommandRule>,
-    pub can_edit: bool,
-    /// 可以指定的核准人（管理員才有；其他人為空）。/ Who a site rule may name (admins only; empty otherwise).
+    /// 你的個人規則。/ Your personal rules.
+    pub mine: Vec<CommandRule>,
+    /// 全站規則（大家都看得到）。/ The site-wide rules (everyone reads them).
+    pub site: Vec<CommandRule>,
+    pub can_edit_site: bool,
+    /// 每個人 / 全站最多幾條。/ Rules per person / site-wide at most.
+    pub limit: i64,
+    /// 你看得到的隧道。/ The tunnels you can see.
+    pub tunnels: Vec<CommandRuleTunnelChoice>,
+    /// 個人規則可以指定的核准人。/ Who a personal rule may name.
     pub approver_candidates: Vec<UserRef>,
+    /// 全站規則可以指定的核准人（管理員才有；其他人為空）。/ Who a site rule may name (admins only; empty otherwise).
+    pub site_approver_candidates: Vec<UserRef>,
+    /// 全站規則可以限定的隧道（管理員才有）。/ Tunnels a site rule may be limited to (admins only).
+    pub site_tunnels: Option<Vec<UserRef>>,
 }
 
 #[derive(ToSchema)]
 pub struct TunnelCommandRules {
     pub tunnel: UserRef,
+    /// 這裡算數的個人規則：owner / ADMIN 寫的，加上你自己「只有我」的。/ Personal rules in force here: by the owner /
+    /// ADMINs, plus your own "only me" ones.
     pub rules: Vec<CommandRule>,
     /// 也適用的全站規則。/ Site-wide rules that apply as well.
     pub site_rules: Vec<CommandRule>,
@@ -3096,8 +3146,11 @@ pub struct TunnelCommandRules {
 #[derive(ToSchema)]
 pub struct CommandCheckInput {
     pub command: String,
-    /// 不帶 = 只看全站規則。/ Omit to check the site-wide rules only.
+    /// 不帶 = 全站與你自己管所有隧道的規則（想成一條你管的隧道）。/ Omit for the site's and your own every-tunnel rules
+    /// (as on a tunnel you manage).
     pub tunnel_id: Option<i64>,
+    /// site = 只看全站規則。/ site = site-wide rules only.
+    pub scope: Option<String>,
     /// terminal（預設）/ agent。/ terminal (default) or agent.
     pub source: Option<String>,
     /// 還沒存的規則 `{kind, pattern}`。/ An unsaved rule `{kind, pattern}`.
@@ -3105,7 +3158,7 @@ pub struct CommandCheckInput {
     pub rule: Option<serde_json::Value>,
 }
 
-/// 一個範圍（全站 / 隧道）的結果。/ One scope's outcome.
+/// 一個範圍（全站 / 個人）的結果。/ One scope's outcome (site-wide / personal).
 #[derive(ToSchema)]
 pub struct CommandScopeVerdict {
     /// 符合的擋下 / 要核准規則（被豁免時也列出）。/ The block / approve rule that matched (listed even when exempted).
@@ -3129,7 +3182,8 @@ pub struct CommandVerdict {
     #[schema(value_type = Option<Object>)]
     pub allowed_by: Option<serde_json::Value>,
     pub site: CommandScopeVerdict,
-    pub tunnel: CommandScopeVerdict,
+    /// 個人規則：每位主人各自算完後最嚴的那個。/ Personal rules: the strictest of each owner's own outcome.
+    pub personal: CommandScopeVerdict,
     /// 要核准時：`{default, users: [{id, username}]}`（`default` = owner + ADMIN，沒選隧道時 users 為空）。
     /// For approve: `{default, users}` (`default` = owner + ADMIN; `users` empty when no tunnel was given).
     #[schema(value_type = Option<Object>)]
@@ -3164,8 +3218,8 @@ pub struct CommandRequest {
     pub account: String,
     pub lan_host: Option<String>,
     pub command: String,
-    /// {id, pattern, kind, scope, note, approver_ids}（approver_ids = 當時能決定的人；空 = owner + ADMIN）
-    /// {id, pattern, kind, scope, note, approver_ids} (approver_ids = who could decide; empty = owner + ADMIN)
+    /// {id, pattern, kind, scope, note, approver_ids}（scope = site / personal / self / tunnel（升級前）；approver_ids = 當時能決定的人）
+    /// {id, pattern, kind, scope, note, approver_ids} (scope = site / personal / self / tunnel (pre-upgrade); approver_ids = who could decide)
     #[schema(value_type = Object)]
     pub rule: serde_json::Value,
     /// blocked / pending / approved / denied / cancelled / expired

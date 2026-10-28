@@ -1,10 +1,12 @@
-//! 指令規則：網頁終端機與 MCP agent 要跑的指令先比對規則——全站規則（管理員）加上隧道自己的規則（owner / ADMIN）。
+//! 指令規則：網頁終端機與 MCP agent 要跑的指令先比對規則——全站規則（管理員，所有隧道或指定的幾條）加上個人規則（每個人
+//! 自己寫，管他是 owner / ADMIN 的隧道上的人，或「只有我」只管他自己；同樣是所有隧道或指定的幾條）。
 //! 「擋下」直接取消；「要核准」先停住，通知 owner 與 ADMIN sharee（或規則自己指定的核准人），有人核准才送出（逾時 = 拒絕）；
 //! 「允許」是例外，只豁免同一個範圍的規則（見 `matcher`）。
 //! 這是防手滑的護欄，不是安全邊界：只看得到網頁終端機畫面上那一行與 agent 送來的指令字串；腳本、alias、
 //! 編輯器、筆電直接 ssh 都不經過這裡。
-//! Command rules: commands from the web terminal and MCP agents are matched against the site-wide rules (admins)
-//! plus the tunnel's own (owner / ADMIN). "Block" cancels the command; "approve" holds it, notifies the owner and
+//! Command rules: commands from the web terminal and MCP agents are matched against the site-wide rules (admins; every
+//! tunnel or picked ones) plus personal rules (anyone's own: for people on the tunnels they own or administer, or
+//! "only me"; every tunnel or picked ones). "Block" cancels the command; "approve" holds it, notifies the owner and
 //! ADMIN sharees (or the approvers the rule names) and runs it once someone approves (a timeout counts as a
 //! denial); "allow" is an exception that exempts the same scope's rules only (see `matcher`). A guard against mistakes, not
 //! a security boundary: only the line on the web terminal's screen and the agent's command string are seen;
@@ -28,7 +30,7 @@ use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_time, db_to_iso_utc_z, now_db};
 use crate::webhooks::{Event, Kind as WebhookKind};
-pub use matcher::{Action, Kind, Matcher, Rule, Scope, Source, Verdict, Via, Who};
+pub use matcher::{Action, Ctx, Kind, Matcher, Rule, Scope, Source, Verdict, Via, Who};
 
 /// agent 的一次 tool call 最多等核准這麼久，之後回「還在等」。/ How long one agent tool call waits for a decision.
 pub const AGENT_WAIT: Duration = Duration::from_secs(45);
@@ -60,8 +62,9 @@ impl Outcome {
     }
 }
 
-/// 規則快取（每條隧道 = 全站 + 自己的，編譯好）與等待中申請的通知管道。
-/// The rule cache (per tunnel: site-wide + its own, compiled) and the channels pending requests wait on.
+/// 規則快取（每條隧道 = 可能套用到它的全站與個人規則，編譯好）與等待中申請的通知管道。
+/// The rule cache (per tunnel: the site-wide and personal rules that may apply, compiled) and the channels pending
+/// requests wait on.
 #[derive(Default)]
 pub struct CommandRules {
     cache: Mutex<HashMap<i64, Arc<Vec<Rule>>>>,
@@ -69,7 +72,7 @@ pub struct CommandRules {
 }
 
 impl CommandRules {
-    /// 規則改了：整個快取丟掉（全站規則影響每條隧道）。/ Rules changed: drop the whole cache.
+    /// 規則改了：整個快取丟掉（一條規則可以套用很多條隧道）。/ Rules changed: drop the whole cache.
     pub fn invalidate(&self) {
         self.cache.lock().unwrap().clear();
     }
@@ -92,9 +95,11 @@ pub fn compile(row: &RuleRow) -> Option<Rule> {
         return None;
     }
     let kind = Kind::parse(&row.kind)?;
+    let owner = if row.is_site() { None } else { Some(row.user_id?) };
     Some(Rule {
         id: row.id,
-        tunnel_id: row.tunnel_id,
+        owner,
+        owner_name: owner.and(row.owner_name.clone()),
         action: Action::parse(&row.action)?,
         who: Who::parse(&row.who)?,
         via: Via::parse(&row.via)?,
@@ -119,18 +124,16 @@ pub fn approver_ids_json(ids: &[i64]) -> Option<String> {
     (!ids.is_empty()).then(|| serde_json::to_string(ids).unwrap_or_default())
 }
 
-/// 一條隧道適用的規則（全站在前）。讀不到資料庫就當沒有規則（護欄，不是安全邊界）。
-/// The rules that apply to a tunnel (site-wide first). A database error means no rules (a guard rail, not a lock).
+/// 可能套用到一條隧道的規則（全站在前）。誰管這條隧道、誰在跑，評估時才看（[`Ctx`]），所以分享改了不用清快取。
+/// 讀不到資料庫就當沒有規則（護欄，不是安全邊界）。
+/// The rules that may apply to a tunnel (site-wide first). Who manages it and who is running the command are looked
+/// at when evaluating ([`Ctx`]), so sharing changes need no cache flush. A database error means no rules (a guard
+/// rail, not a lock).
 pub async fn rules_for(state: &AppState, tunnel_id: i64) -> Arc<Vec<Rule>> {
     if let Some(r) = state.commands.cache.lock().unwrap().get(&tunnel_id) {
         return r.clone();
     }
-    let load = async {
-        let mut rows = db::command_rules::rules_for(&state.db, None).await?;
-        rows.extend(db::command_rules::rules_for(&state.db, Some(tunnel_id)).await?);
-        Ok::<_, sqlx::Error>(rows)
-    };
-    let rules = match load.await {
+    let rules = match db::command_rules::rules_targeting(&state.db, tunnel_id).await {
         Ok(rows) => Arc::new(rows.iter().filter_map(compile).collect::<Vec<_>>()),
         Err(e) => {
             tracing::warn!(error = %e, tunnel_id, "command rules: load failed");
@@ -160,6 +163,13 @@ pub struct Requester {
     pub session_ref: Option<String>,
 }
 
+/// 這個人在這條隧道上可能碰到規則嗎（別人「只有我」的規則不算）：沒有就不用為了規則等回顯。
+/// Whether any rule could apply to this person on this tunnel (other people's "only me" rules don't count): if not,
+/// the terminal needn't wait for the echo.
+pub async fn may_apply(state: &AppState, tunnel_id: i64, user_id: i64) -> bool {
+    rules_for(state, tunnel_id).await.iter().any(|r| r.who != Who::Me || r.owner == Some(user_id))
+}
+
 /// 預設的核准人：owner 與 ADMIN sharee。/ The default approvers: the owner and ADMIN sharees.
 pub async fn default_approvers(state: &AppState, t: &Tunnel) -> Vec<i64> {
     let mut ids = vec![t.user_id];
@@ -169,19 +179,41 @@ pub async fn default_approvers(state: &AppState, t: &Tunnel) -> Vec<i64> {
     ids
 }
 
-/// 這條規則在這條隧道上的核准人：規則自己指定的那些，否則 owner + ADMIN。
-/// Who decides on this rule for this tunnel: the rule's own list, else the owner + ADMIN sharees.
-pub async fn approvers_for(state: &AppState, t: &Tunnel, rule_approvers: &[i64]) -> Vec<i64> {
-    if rule_approvers.is_empty() {
-        default_approvers(state, t).await
+/// 這條規則在這條隧道上的核准人：「只有我」= 主人自己；規則有指定就是那些人（個人規則只留這條隧道的 owner / ADMIN 與
+/// 管理員——別人看不到這條隧道）；都沒有就是 owner + ADMIN。
+/// Who decides on this rule for this tunnel: "only me" = its owner; else the people the rule names (for a personal
+/// rule only those who own or administer this tunnel, or admins — nobody else sees it); else the owner + ADMINs.
+pub async fn approvers_for(state: &AppState, t: &Tunnel, rule: &Rule) -> Vec<i64> {
+    if let (Who::Me, Some(owner)) = (rule.who, rule.owner) {
+        return vec![owner];
+    }
+    let defaults = default_approvers(state, t).await;
+    if rule.approver_ids.is_empty() {
+        return defaults;
+    }
+    if rule.owner.is_none() {
+        return rule.approver_ids.clone();
+    }
+    let mut named = Vec::new();
+    for id in &rule.approver_ids {
+        let admin = || async { db::users::by_id(&state.db, *id).await.ok().flatten().is_some_and(|u| u.is_superuser && u.is_active) };
+        if defaults.contains(id) || admin().await {
+            named.push(*id);
+        }
+    }
+    if named.is_empty() {
+        defaults
     } else {
-        rule_approvers.to_vec()
+        named
     }
 }
 
 /// 一筆申請的核准人：建立時的快照，沒有就是現在的 owner + ADMIN。/ A request's approvers: its snapshot, else today's owner + ADMIN.
 pub async fn request_approvers(state: &AppState, row: &EventRow, t: &Tunnel) -> Vec<i64> {
-    approvers_for(state, t, &parse_approver_ids(row.approver_ids.as_deref())).await
+    match parse_approver_ids(row.approver_ids.as_deref()) {
+        ids if ids.is_empty() => default_approvers(state, t).await,
+        ids => ids,
+    }
 }
 
 /// owner / ADMIN：「只管 sharee」的規則不管他們，也是預設的核准人。/ Owner / ADMIN: skipped by sharees-only rules, default approvers.
@@ -208,7 +240,9 @@ pub async fn check(state: &AppState, r: &Requester, lines: &[String]) -> Option<
     }
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten()?;
     let approver = is_approver(state, r.user_id, &tunnel).await;
-    matcher::evaluate(&rules, lines, approver, r.source).decision().cloned()
+    let managers = default_approvers(state, &tunnel).await;
+    let ctx = Ctx { approver, user: Some(r.user_id), managers: &managers, source: r.source };
+    matcher::evaluate(&rules, lines, &ctx).decision().cloned()
 }
 
 fn clip(command: &str) -> String {
@@ -219,7 +253,17 @@ fn clip(command: &str) -> String {
 }
 
 fn scope_of(rule: &Rule) -> &'static str {
-    rule.scope().as_str()
+    rule.record_scope()
+}
+
+/// 「the site-wide rule `rm -rf`」/「alice's rule `sudo`」/「their own rule」（「只有我」不寫比對式：看 Logs 的人不用知道）。
+/// A rule in words for the Logs ("only me" rules keep their pattern private).
+fn rule_words(rule: &Rule) -> String {
+    match (rule.scope(), rule.who) {
+        (Scope::Site, _) => format!("the site-wide rule `{}`", rule.pattern),
+        (Scope::Personal, Who::Me) => "their own rule".to_string(),
+        (Scope::Personal, _) => format!("{}'s rule `{}`", rule.owner_name.as_deref().unwrap_or("someone"), rule.pattern),
+    }
 }
 
 fn new_event<'a>(r: &'a Requester, command: &'a str, rule: &'a Rule, approver_ids: Option<&'a str>, status: &'a str, expires_at: Option<&'a str>) -> NewEvent<'a> {
@@ -267,7 +311,8 @@ pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: 
     let command = clip(command);
     let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, None, "blocked", None)).await;
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten();
-    if let Some(t) = &tunnel {
+    // 「只有我」的規則是自己的護欄：不通知 owner。/ An "only me" rule is a personal guard: the owner isn't told.
+    if let Some(t) = tunnel.as_ref().filter(|_| rule.who != Who::Me) {
         state.webhooks.emit(
             Event::new(WebhookKind::CommandBlocked)
                 .tunnel(t)
@@ -283,7 +328,7 @@ pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: 
             None,
             reverse_port(tunnel.as_ref()),
             Some(r.tunnel_id),
-            format!("{}: a command was blocked by the {} rule `{}` ({})", r.username, scope_of(rule), rule.pattern, via_words(r)),
+            format!("{}: a command was blocked by {} ({})", r.username, rule_words(rule), via_words(r)),
         )
         .await;
     match row {
@@ -303,7 +348,7 @@ pub async fn request(state: &AppState, r: &Requester, command: &str, rule: &Rule
     let timeout = db::settings::get_solo(&state.db).await.map(|s| s.command_approval_timeout).unwrap_or(300).clamp(30, 86_400);
     let expires = db_time(Utc::now() + chrono::Duration::seconds(timeout));
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await?.ok_or_else(|| anyhow::anyhow!("tunnel is gone"))?;
-    let deciders = approvers_for(state, &tunnel, &rule.approver_ids).await;
+    let deciders = approvers_for(state, &tunnel, rule).await;
     let snapshot = approver_ids_json(&deciders);
     let row = db::command_rules::create_event(&state.db, &new_event(r, &command, rule, snapshot.as_deref(), "pending", Some(&expires))).await?;
     let (tx, rx) = watch::channel(Outcome::Pending);
@@ -348,7 +393,7 @@ pub async fn request(state: &AppState, r: &Requester, command: &str, rule: &Rule
             None,
             reverse_port(Some(&tunnel)),
             Some(tunnel.id),
-            format!("{}: a command is waiting for approval under the {} rule `{}` (request #{}, {})", r.username, scope_of(rule), rule.pattern, row.id, via_words(r)),
+            format!("{}: a command is waiting for approval under {} (request #{}, {})", r.username, rule_words(rule), row.id, via_words(r)),
         )
         .await;
     Ok((row, rx))
@@ -568,12 +613,14 @@ pub async fn agent_approval(state: &AppState, r: &Requester, command: &str, rule
     })
 }
 
-/// 規則的 JSON。/ A rule as JSON.
+/// 規則的 JSON（隧道清單另外補）。/ A rule as JSON (the tunnel list is added by the caller).
 pub fn rule_json(r: &RuleRow) -> Value {
+    let site = r.is_site();
     json!({
         "id": r.id,
-        "tunnel_id": r.tunnel_id,
-        "scope": if r.tunnel_id.is_some() { "tunnel" } else { "site" },
+        "scope": if site { "site" } else { "personal" },
+        "owner": if site { Value::Null } else { json!({ "id": r.user_id, "username": r.owner_name }) },
+        "all_tunnels": r.all_tunnels,
         "action": r.action,
         "kind": r.kind,
         "pattern": r.pattern,
@@ -591,7 +638,8 @@ pub fn rule_json(r: &RuleRow) -> Value {
 pub fn matched_json(r: &Rule) -> Value {
     json!({
         "id": r.id,
-        "scope": scope_of(r),
+        "scope": r.scope().as_str(),
+        "owner": r.owner.map(|id| json!({ "id": id, "username": r.owner_name })),
         "action": r.action.as_str(),
         "kind": r.kind.as_str(),
         "pattern": r.pattern,

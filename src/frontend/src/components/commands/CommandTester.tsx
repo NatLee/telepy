@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import type { CheckResult, CheckVerdict } from "@/types/commandRules";
-import { ActionIcon } from "./RuleList";
+import { ActionIcon, RuleSource } from "./RuleList";
 
 function Verdict({ label, v }: { label: string; v: CheckVerdict }) {
     const { t } = useI18n();
@@ -27,13 +27,13 @@ function Verdict({ label, v }: { label: string; v: CheckVerdict }) {
             <span className="text-foreground">{text}</span>
             {v.rule && (
                 <span className="text-xs text-muted-foreground">
-                    {t(v.rule.scope === "site" ? "commands.matchedSiteRule" : "commands.matchedTunnelRule")} <code className="font-mono text-foreground">{v.rule.pattern}</code>
+                    <RuleSource rule={v.rule} /> <code className="font-mono text-foreground">{v.rule.pattern}</code>
                 </span>
             )}
             {/* 放行是因為例外規則。/ Allowed thanks to an exception. */}
             {!v.rule && v.allowed_by && (
                 <span className="text-xs text-muted-foreground">
-                    {t("commands.tester.allowedBy")} <code className="font-mono text-foreground">{v.allowed_by.pattern}</code> ({t(v.allowed_by.scope === "site" ? "commands.matchedSiteRule" : "commands.matchedTunnelRule")})
+                    {t("commands.tester.allowedBy")} <code className="font-mono text-foreground">{v.allowed_by.pattern}</code> (<RuleSource rule={v.allowed_by} />)
                 </span>
             )}
             {approvers && <span className="basis-full pl-34 text-xs text-muted-foreground">{approvers}</span>}
@@ -43,11 +43,15 @@ function Verdict({ label, v }: { label: string; v: CheckVerdict }) {
 
 export function CommandTester({
     check,
-    scopeIsTunnel,
+    hint,
+    markYou = true,
     onResult,
 }: {
     check: (command: string) => Promise<CheckResult | null>;
-    scopeIsTunnel: boolean;
+    /** 對照哪些規則。/ Which rules are checked. */
+    hint: string;
+    /** 標出哪一行是「你」（全站頁不標）。/ Mark which line is you (not on the site page). */
+    markYou?: boolean;
     /** 每次有新結果（或清空）就通知。/ Called with every new result (or when cleared). */
     onResult?: (command: string, result: CheckResult | null) => void;
 }) {
@@ -76,19 +80,20 @@ export function CommandTester({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [command, check]);
     const shown = command.trim() ? result : null;
+    const you = (label: string, mine: boolean) => (markYou && mine ? t("commands.tester.you", { who: label }) : label);
 
     return (
         <section className="rounded-xl border border-border bg-card p-4">
             <h3 className="mb-1 flex items-center gap-2 text-sm text-foreground">
                 <FlaskConical size={16} className="text-muted-foreground" aria-hidden /> {t("commands.tester.title")}
             </h3>
-            <p className="mb-3 text-xs text-muted-foreground">{t(scopeIsTunnel ? "commands.tester.hintTunnel" : "commands.tester.hintSite")}</p>
+            <p className="mb-3 text-xs text-muted-foreground">{hint}</p>
             <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="sudo systemctl stop nginx" className="font-mono" spellCheck={false} autoCapitalize="off" autoCorrect="off" aria-label={t("commands.tester.title")} />
             {shown && (
                 <div className="mt-3 space-y-2">
                     <ul className="space-y-1.5">
-                        <Verdict label={t("commands.tester.forApprovers")} v={shown.for_approvers} />
-                        <Verdict label={t("commands.tester.forSharees")} v={shown.for_sharees} />
+                        <Verdict label={you(t("commands.tester.forApprovers"), shown.you_approve)} v={shown.for_approvers} />
+                        <Verdict label={you(t("commands.tester.forSharees"), !shown.you_approve)} v={shown.for_sharees} />
                     </ul>
                     {shown.commands.length > 0 && (
                         <p className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">

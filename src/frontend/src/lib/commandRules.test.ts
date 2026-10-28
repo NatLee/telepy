@@ -1,7 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bannerLifetime, countByFilter, countdown, decisionPath, dropRequest, matchesFilter, nextBanner, parseTerminalFrame, secondsLeft, showsInCenter, upsertRequest, verdictToDraw } from "./commandRules.ts";
-import type { CheckVerdict, CommandRequest, MatchedRule, ScopeVerdict } from "../types/commandRules.ts";
+import {
+    bannerLifetime,
+    countByFilter,
+    countdown,
+    coversTunnel,
+    decisionPath,
+    dropRequest,
+    matchesFilter,
+    newRuleInput,
+    nextBanner,
+    parseTerminalFrame,
+    pickableIds,
+    ruleCoverage,
+    ruleSource,
+    ruleToInput,
+    secondsLeft,
+    showsInCenter,
+    tunnelPickable,
+    upsertRequest,
+    verdictToDraw,
+} from "./commandRules.ts";
+import type { CheckVerdict, CommandRequest, CommandRule, MatchedRule, ScopeVerdict } from "../types/commandRules.ts";
 
 const req = (over: Partial<CommandRequest> = {}): CommandRequest => ({
     id: 1,
@@ -13,7 +33,7 @@ const req = (over: Partial<CommandRequest> = {}): CommandRequest => ({
     account: "ubuntu",
     lan_host: null,
     command: "sudo ls",
-    rule: { id: 3, scope: "tunnel", kind: "command", pattern: "sudo", note: "" },
+    rule: { id: 3, scope: "personal", kind: "command", pattern: "sudo", note: "" },
     status: "pending",
     created_at: "2026-10-24T01:00:00Z",
     expires_at: "2026-10-24T01:05:00Z",
@@ -94,46 +114,101 @@ test("decision path: which scope decided, exemptions, approvers", () => {
     const rule = (over: Partial<MatchedRule>): MatchedRule => ({ id: 1, scope: "site", kind: "command", pattern: "rm -rf", note: "", action: "block", ...over });
     const none: ScopeVerdict = { hit: null, allowed_by: null, exempted: false };
     // 全站擋下 / A site block.
-    let p = decisionPath({ action: "block", rule: rule({}), site: { hit: rule({}), allowed_by: null, exempted: false }, tunnel: none });
+    let p = decisionPath({ action: "block", rule: rule({}), site: { hit: rule({}), allowed_by: null, exempted: false }, personal: none });
     assert.equal(p.outcome, "block");
     assert.equal(p.site, "block");
-    assert.equal(p.tunnel, "none");
+    assert.equal(p.personal, "none");
     assert.equal(p.decidedBy, "site");
     assert.equal(p.approvers, null);
-    // 全站被豁免、隧道要核准 → 要核准，核准人是隧道的擁有者 + Admin。/ Site exempted, tunnel approve → approve by default approvers.
-    const sudo = rule({ id: 3, scope: "tunnel", pattern: "sudo", action: "approve" });
+    // 全站被豁免、個人規則要核准 → 要核准，核准人是隧道的擁有者 + Admin。/ Site exempted, personal approve → approve by default approvers.
+    const sudo = rule({ id: 3, scope: "personal", pattern: "sudo", action: "approve", owner: { id: 1, username: "alice" } });
     p = decisionPath({
         action: "approve",
         rule: sudo,
         allowed_by: null,
         site: { hit: rule({}), allowed_by: rule({ id: 2, action: "allow", pattern: "rm -rf /tmp/*" }), exempted: true },
-        tunnel: { hit: sudo, allowed_by: null, exempted: false },
+        personal: { hit: sudo, allowed_by: null, exempted: false },
         approvers: { default: true, users: [{ id: 1, username: "alice" }, { id: 4, username: "carol" }] },
     });
     assert.equal(p.outcome, "approve");
     assert.equal(p.site, "exempted");
-    assert.equal(p.tunnel, "approve");
-    assert.equal(p.decidedBy, "tunnel");
+    assert.equal(p.personal, "approve");
+    assert.equal(p.decidedBy, "personal");
     assert.deepEqual(p.approvers, { byDefault: true, names: ["alice", "carol"] });
     // 放行是因為允許規則。/ Allowed thanks to an allow rule.
     const allow = rule({ id: 2, action: "allow", pattern: "rm -rf /tmp/*" });
-    p = decisionPath({ action: "allow", rule: null, allowed_by: allow, site: { hit: rule({}), allowed_by: allow, exempted: true }, tunnel: { hit: null, allowed_by: rule({ id: 9, scope: "tunnel", action: "allow", pattern: "rm" }), exempted: false } });
+    p = decisionPath({ action: "allow", rule: null, allowed_by: allow, site: { hit: rule({}), allowed_by: allow, exempted: true }, personal: { hit: null, allowed_by: rule({ id: 9, scope: "personal", action: "allow", pattern: "rm" }), exempted: false } });
     assert.equal(p.outcome, "allow");
     assert.equal(p.site, "exempted");
-    assert.equal(p.tunnel, "allowOnly");
+    assert.equal(p.personal, "allowOnly");
     assert.equal(p.decidedBy, null);
     assert.equal(p.allowedBy?.id, 2);
     assert.equal(p.scopes.site.hit?.pattern, "rm -rf");
-    assert.equal(p.scopes.tunnel.allowedBy?.id, 9);
-    // 規則指定的核准人。/ A rule's own approvers.
-    p = decisionPath({ action: "approve", rule: sudo, approvers: { default: false, users: [{ id: 4, username: "carol" }] } });
-    assert.equal(p.tunnel, "approve", "an older verdict lights only the deciding scope");
+    assert.equal(p.scopes.personal.allowedBy?.id, 9);
+    // 規則指定的核准人；舊格式只亮決定的那格（「只有我」與升級前的隧道規則都算個人）。
+    // A rule's own approvers; an older verdict lights only the deciding box ("only me" and pre-upgrade tunnel rules count as personal).
+    p = decisionPath({ action: "approve", rule: { ...sudo, scope: "tunnel" }, approvers: { default: false, users: [{ id: 4, username: "carol" }] } });
+    assert.equal(p.personal, "approve", "an older verdict lights only the deciding scope");
     assert.equal(p.site, "none");
-    assert.equal(p.scopes.tunnel.hit?.id, 3);
+    assert.equal(p.scopes.personal.hit?.id, 3);
     assert.deepEqual(p.approvers, { byDefault: false, names: ["carol"] });
+    p = decisionPath({ action: "block", rule: rule({ scope: "self" }), site: none, tunnel: { hit: rule({ scope: "self" }), allowed_by: null, exempted: false } });
+    assert.equal(p.decidedBy, "personal");
+    assert.equal(p.personal, "block", "a pre-upgrade backend's tunnel verdict is the personal box");
     // 什麼都沒符合。/ Nothing matched.
-    p = decisionPath({ action: "allow", rule: null, site: none, tunnel: none });
-    assert.deepEqual([p.outcome, p.site, p.tunnel, p.decidedBy, p.allowedBy], ["allow", "none", "none", null, null]);
+    p = decisionPath({ action: "allow", rule: null, site: none, personal: none });
+    assert.deepEqual([p.outcome, p.site, p.personal, p.decidedBy, p.allowedBy], ["allow", "none", "none", null, null]);
+});
+
+test("rule source: site, mine, someone's, unknown", () => {
+    assert.deepEqual(ruleSource({ scope: "site" }, 1), { key: "commands.matchedSiteRule" });
+    assert.deepEqual(ruleSource({ scope: "self" }, 1), { key: "commands.matchedOwnRule" });
+    assert.deepEqual(ruleSource({ scope: "personal", owner: { id: 1, username: "alice" } }, 1), { key: "commands.matchedOwnRule" });
+    assert.deepEqual(ruleSource({ scope: "personal", owner: { id: 2, username: "bob" } }, 1), { key: "commands.matchedRuleBy", name: "bob" });
+    assert.deepEqual(ruleSource({ scope: "tunnel" }, 1), { key: "commands.matchedPersonalRule" });
+});
+
+test("rule reach: every tunnel of which kind, or the listed ones", () => {
+    const base: CommandRule = {
+        id: 1,
+        scope: "personal",
+        owner: { id: 1, username: "alice" },
+        mine: true,
+        all_tunnels: true,
+        tunnels: [],
+        hidden_tunnels: 0,
+        action: "block",
+        kind: "command",
+        pattern: "reboot",
+        who: "everyone",
+        via: "all",
+        note: "",
+        enabled: true,
+        approver_ids: [],
+        approvers: [],
+        created_at: "",
+        updated_at: "",
+    };
+    assert.deepEqual(ruleCoverage(base), { kind: "every", whose: "managed" });
+    assert.deepEqual(ruleCoverage({ ...base, who: "me" }), { kind: "every", whose: "used" });
+    assert.deepEqual(ruleCoverage({ ...base, mine: false }), { kind: "every", whose: "theirs" });
+    assert.deepEqual(ruleCoverage({ ...base, scope: "site", owner: null, mine: false }), { kind: "every", whose: "site" });
+    const some = { ...base, all_tunnels: false, tunnels: [{ id: 7, name: "box", applies: true }, { id: 8, name: "nas", applies: false }], hidden_tunnels: 2 };
+    assert.deepEqual(ruleCoverage(some), { kind: "some", tunnels: [{ id: 7, name: "box", applies: true }, { id: 8, name: "nas", applies: false }], hidden: 2 });
+    assert.equal(coversTunnel(some, 8), true);
+    assert.equal(coversTunnel(some, 9), false);
+    assert.equal(coversTunnel(base, 9), true);
+    // 表單：新規則從畫面上的隧道開始；管別人的規則只能勾自己管的。/ The form: start from the tunnel on screen; others-rules only on managed tunnels.
+    assert.deepEqual(newRuleInput(7).tunnel_ids, [7]);
+    assert.equal(newRuleInput(null).all_tunnels, true);
+    assert.deepEqual(ruleToInput(some).tunnel_ids, [7, 8]);
+    const choices = [{ id: 7, name: "box", manage: true }, { id: 8, name: "nas", manage: false }];
+    assert.equal(tunnelPickable(choices[1], "everyone", false, false), false);
+    assert.equal(tunnelPickable(choices[1], "me", false, false), true);
+    assert.equal(tunnelPickable(choices[1], "sharees", true, false), true, "site rules take any tunnel");
+    assert.equal(tunnelPickable(choices[1], "everyone", false, true), true, "already on the rule");
+    assert.deepEqual(pickableIds([7, 8, 99], choices, "everyone", false, []), [7]);
+    assert.deepEqual(pickableIds([7, 8, 99], choices, "me", false, [99]), [7, 8, 99]);
 });
 
 test("verdictToDraw follows whether you approve", () => {

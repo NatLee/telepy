@@ -6,14 +6,33 @@
 /** 擋下 / 要核准 / 允許（例外：只豁免同範圍的規則）。/ block, approve, or allow (an exception within its own scope). */
 export type RuleAction = "block" | "approve" | "allow";
 export type RuleKind = "command" | "regex";
-export type RuleWho = "everyone" | "sharees";
+/** everyone / sharees（ADMIN 以下）/ me（只有寫規則的人自己，個人規則才有）。/ me = only the rule's author (personal rules only). */
+export type RuleWho = "everyone" | "sharees" | "me";
 export type RuleVia = "all" | "terminal" | "agents";
-export type RuleScope = "site" | "tunnel";
+/** site = 管理員的全站規則；personal = 某個人自己的。/ site = admins' site-wide rule; personal = someone's own. */
+export type RuleScope = "site" | "personal";
+/** 紀錄裡的範圍：多了 self（「只有我」）與升級前的 tunnel。/ The scope in records: also self ("only me") and the pre-upgrade tunnel. */
+export type RecordScope = RuleScope | "self" | "tunnel";
+
+/** 規則套用的一條隧道（`applies`：自己的個人規則才有，這裡算不算數）。/ A tunnel a rule covers. */
+export interface RuleTunnel {
+    id: number;
+    name: string;
+    applies?: boolean;
+}
 
 export interface CommandRule {
     id: number;
-    tunnel_id: number | null;
     scope: RuleScope;
+    /** 個人規則的主人。/ The owner of a personal rule. */
+    owner: UserBrief | null;
+    /** 是我的個人規則。/ My own personal rule. */
+    mine: boolean;
+    /** 所有隧道（個人：我管的 / 我能用的全部）；否則只有 `tunnels`。/ Every tunnel; otherwise only `tunnels`. */
+    all_tunnels: boolean;
+    tunnels: RuleTunnel[];
+    /** 我看不到的隧道有幾條。/ Covered tunnels I can't see. */
+    hidden_tunnels: number;
     action: RuleAction;
     kind: RuleKind;
     pattern: string;
@@ -34,6 +53,8 @@ export interface UserBrief {
 }
 
 export interface RuleInput {
+    /** 新增時：personal（預設）/ site（管理員）。/ On create: personal (default) or site (admins). */
+    scope?: RuleScope;
     action: RuleAction;
     kind: RuleKind;
     pattern: string;
@@ -42,17 +63,35 @@ export interface RuleInput {
     note: string;
     enabled: boolean;
     approver_ids: number[];
+    all_tunnels: boolean;
+    tunnel_ids: number[];
 }
 
-export interface SiteRules {
-    rules: CommandRule[];
-    can_edit: boolean;
-    /** 管理員才有（任何啟用中的帳號）。/ Admins only (any active account). */
+/** 規則表單的隧道選項（`manage` = 我是 owner / ADMIN）。/ A tunnel choice (`manage` = I own or administer it). */
+export interface TunnelChoice {
+    id: number;
+    name: string;
+    manage?: boolean;
+}
+
+/** `GET /api/command-rules`。 */
+export interface RulesList {
+    mine: CommandRule[];
+    site: CommandRule[];
+    can_edit_site: boolean;
+    limit: number;
+    tunnels: TunnelChoice[];
+    /** 個人規則可以指定的核准人。/ Who a personal rule may name. */
     approver_candidates: UserBrief[];
+    /** 管理員才有（任何啟用中的帳號）。/ Admins only (any active account). */
+    site_approver_candidates: UserBrief[];
+    /** 管理員才有。/ Admins only. */
+    site_tunnels: TunnelChoice[] | null;
 }
 
 export interface TunnelRules {
     tunnel: { id: number; name: string };
+    /** 這裡算數的個人規則（owner / Admin 寫的與我自己的）。/ Personal rules in force here. */
     rules: CommandRule[];
     site_rules: CommandRule[];
     can_edit: boolean;
@@ -64,7 +103,9 @@ export interface TunnelRules {
 /** 比對到的規則（終端機通知、試跑結果）。/ A matched rule (terminal notices, the tester). */
 export interface MatchedRule {
     id: number | null;
-    scope: RuleScope;
+    scope: RecordScope;
+    /** 個人規則的主人（終端機通知、試跑結果）。/ The personal rule's owner (terminal notices, the tester). */
+    owner?: UserBrief | null;
     action?: RuleAction;
     kind: RuleKind;
     pattern: string;
@@ -99,7 +140,7 @@ export interface CommandRequest {
     can_cancel?: boolean;
 }
 
-/** 一個範圍（全站 / 隧道）的結果。/ One scope's outcome. */
+/** 一個範圍（全站 / 個人）的結果。/ One scope's outcome (site-wide / personal). */
 export interface ScopeVerdict {
     /** 符合的擋下 / 要核准規則（被豁免時也列出）。/ The block / approve rule that matched (listed even when exempted). */
     hit: MatchedRule | null;
@@ -114,6 +155,8 @@ export interface CheckVerdict {
     /** 放行是因為這條允許規則。/ Allowed thanks to this allow rule. */
     allowed_by?: MatchedRule | null;
     site?: ScopeVerdict;
+    personal?: ScopeVerdict;
+    /** 升級前的後端。/ A pre-upgrade backend. */
     tunnel?: ScopeVerdict;
     /** 要核准時誰決定（`default` = 擁有者 + Admin）。/ Who decides (`default` = owner + Admins). */
     approvers?: { default: boolean; users: UserBrief[] } | null;

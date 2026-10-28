@@ -74,14 +74,14 @@ async fn hold_event(hold: &mut Option<Hold>, guard: &TerminalGuard) -> HoldEvent
 
 /// 送出瀏覽器的輸入；碰到要決定的 Enter 就停下來（沒有規則、沒打東西的 Enter 直接送）。
 /// Send browser input; stop at an Enter that needs a decision (Enter with no rules or nothing typed goes straight out).
-async fn feed(state: &AppState, guard: &mut TerminalGuard, pty: &Pty, tunnel_id: i64, mut input: String) -> Option<Hold> {
+async fn feed(state: &AppState, guard: &mut TerminalGuard, pty: &Pty, tunnel_id: i64, user_id: i64, mut input: String) -> Option<Hold> {
     loop {
         let split = guard.split(&input, std::time::Instant::now());
         if !split.send.is_empty() {
             pty_write(pty, split.send.as_bytes()).await;
         }
         let rest = split.enter?;
-        if !guard.tracker.started() || command_rules::rules_for(state, tunnel_id).await.is_empty() {
+        if !guard.tracker.started() || !command_rules::may_apply(state, tunnel_id, user_id).await {
             pty_write(pty, b"\r").await;
             guard.reset();
             input = rest;
@@ -438,7 +438,10 @@ impl Shell {
                 self.guard.reset();
                 pty_write(&self.pty, b"\x03").await;
             }
-            None => self.hold = feed(state, &mut self.guard, &self.pty, self.requester.tunnel_id, input.to_string()).await,
+            None => {
+                let typist = self.line_requester().user_id;
+                self.hold = feed(state, &mut self.guard, &self.pty, self.requester.tunnel_id, typist, input.to_string()).await
+            }
         }
     }
 
@@ -456,7 +459,7 @@ impl Shell {
                     None => {
                         pty_write(&self.pty, b"\r").await;
                         self.guard.reset();
-                        self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, rest).await;
+                        self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, requester.user_id, rest).await;
                         Vec::new()
                     }
                     Some(rule) if rule.action == Action::Block => {
@@ -497,7 +500,8 @@ impl Shell {
                 self.guard.reset();
                 if approved {
                     pty_write(&self.pty, b"\r").await;
-                    self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, rest).await;
+                    let typist = self.line_requester().user_id;
+                    self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, typist, rest).await;
                 } else {
                     pty_write(&self.pty, b"\x03").await;
                 }

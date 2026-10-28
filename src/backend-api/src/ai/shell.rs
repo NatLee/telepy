@@ -225,7 +225,7 @@ impl AiShell {
             sent += split.send.len();
             let Some(rest) = split.enter else { return Ok(SendResult { sent, unsent: 0, hold: Hold::Sent }) };
             let started = self.state.lock().unwrap().guard.tracker.started();
-            if !started || command_rules::rules_for(state, self.tunnel_id).await.is_empty() {
+            if !started || !command_rules::may_apply(state, self.tunnel_id, requester.user_id).await {
                 self.write(b"\r").await?;
                 sent += 1;
                 self.state.lock().unwrap().guard.reset();

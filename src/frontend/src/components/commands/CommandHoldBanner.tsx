@@ -11,10 +11,12 @@ import React, { useEffect, useState } from "react";
 import { Ban, Check, CircleCheck, Hourglass, Info, OctagonX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
-import { bannerLifetime, countdown, type HoldBanner } from "@/lib/commandRules";
+import { bannerLifetime, countdown, ruleSource, type HoldBanner } from "@/lib/commandRules";
+import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { useCountdown } from "./CommandApprovals";
+import { RuleSource } from "./RuleList";
 
 const TONE: Record<HoldBanner["state"], string> = {
     pending: "border-warning/40",
@@ -38,6 +40,7 @@ const ICON: Record<HoldBanner["state"], React.ReactNode> = {
 
 export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: HoldBanner; onWithdraw: () => void; onDismiss: () => void }) {
     const { t } = useI18n();
+    const { user } = useAuth();
     const left = useCountdown(banner.state === "pending" ? banner.expiresAt : null);
     const [busy, setBusy] = useState(false);
 
@@ -59,7 +62,7 @@ export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: H
     const rule = banner.rule;
     const ruleLine = rule ? (
         <span className="block text-xs text-muted-foreground">
-            {t(rule.scope === "site" ? "commands.matchedSiteRule" : "commands.matchedTunnelRule")} <code className="font-mono text-foreground">{rule.pattern}</code>
+            <RuleSource rule={rule} /> <code className="font-mono text-foreground">{rule.pattern}</code>
             {rule.note && <span className="text-foreground/80"> · “{rule.note}”</span>}
         </span>
     ) : null;
@@ -73,7 +76,8 @@ export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: H
             break;
         case "blocked":
             title = t("commands.banner.blocked");
-            detail = t("commands.banner.blockedHint");
+            // 自己的規則擋下的：去改自己的規則，不用問 owner。/ Blocked by your own rule: change it rather than ask the owner.
+            detail = rule && ruleSource(rule, user?.id).key === "commands.matchedOwnRule" ? t("commands.banner.blockedOwnHint") : t("commands.banner.blockedHint");
             break;
         case "error":
             title = t("commands.banner.error");

@@ -81,7 +81,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
         // 管理區：上面的頁面只放「我的」，全站的（每個人的日誌、即時連線、錄影、AI 活動、全站 webhook、API 活動）在這裡，
         // 加上網站設定。API 文件（Swagger）改從 API 頁連過去。
         // The admin section: the pages above only hold "mine"; everyone's (logs, live sessions, recordings, AI
-        // activity, site webhooks, API activity) live here, next to the site settings. The API docs (Swagger) are
+        // activity, site webhooks, site command rules, API activity) live here, next to the site settings. The API docs (Swagger) are
         // linked from the API page now.
         key: "nav.admin",
         admin: true,
@@ -92,6 +92,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },
             { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
             { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
+            { key: "nav.adminCommands", href: "/tunnels/admin/commands", icon: <ShieldCheck size={18} /> },
             { key: "nav.adminApiActivity", href: "/tunnels/admin/api-activity", icon: <ListChecks size={18} /> },
         ],
     },
