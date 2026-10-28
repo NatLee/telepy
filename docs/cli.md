@@ -8,7 +8,7 @@ Source: `src/cli/` (a crate of its own; the server build does not depend on it).
 `api/api_tokens.rs`, `db/api_tokens.rs`, `db/api_calls.rs` + `api_calls.rs` (the call log), the REST exec routes in
 `api/ai.rs`, the scripted-browser routes in `api/browser.rs`.
 
-Tokens are managed on the **API** page (`/tunnels/api`, sidebar "API"): your tokens, every endpoint a token can call
+Tokens are managed on the **API** page (`/tunnels/api`, sidebar "Developers" → API): your tokens, every endpoint a token can call
 (with copy-ready `curl` and the matching `telepy` command), and the **Activity** log of what your tokens did.
 
 ## Three ways in, three keys
@@ -61,34 +61,49 @@ with **your personal SSH key** through the gateway, as the web's SSH config dial
 
 ## Install
 
-Release builds are attached to the `cli-v*` releases on GitHub (macOS arm64 / x86_64, Linux x86_64 / arm64 (static,
-musl), Windows x86_64). Each archive is `telepy-<version>-<target>.tar.gz` (Windows: `.zip`) with the binary at its
-top level, next to a `<archive>.sha256`:
+The web has a **CLI** page (`/tunnels/cli`, sidebar "Developers" → CLI) with the install command for your computer
+(picked from the browser), the sign-in command for your server, and examples filled in with your own tunnels,
+accounts, labels, groups and snippets. The same commands by hand:
+
+Every Telepy release (`v2.7.0`…) carries the CLI for macOS arm64 / x86_64, Linux x86_64 / arm64 (static, musl) and
+Windows x86_64, built from the same tag and reporting the same version (`telepy --version`). The file names carry
+no version, so `releases/latest/download/…` is always the newest:
 
 ```sh
-# macOS / Linux: pick your target from the release page
-VER=cli-v0.1.0
+# macOS / Linux
 TARGET=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-FILE="telepy-${VER#cli-}-$TARGET.tar.gz"   # e.g. telepy-v0.1.0-aarch64-apple-darwin.tar.gz
-curl -fsSLO "https://github.com/NatLee/telepy/releases/download/$VER/$FILE"
-curl -fsSLO "https://github.com/NatLee/telepy/releases/download/$VER/$FILE.sha256"
-shasum -a 256 -c "$FILE.sha256"            # or: sha256sum -c
-tar xzf "$FILE"
-sudo install -m 755 telepy /usr/local/bin/telepy
+curl -fsSL "https://github.com/NatLee/telepy/releases/latest/download/telepy-$TARGET.tar.gz" | tar xz telepy
+sudo mkdir -p /usr/local/bin && sudo install -m 755 telepy /usr/local/bin/ && rm telepy
+telepy --version
 ```
 
 ```powershell
-# Windows
-$ver = "cli-v0.1.0"
-Invoke-WebRequest "https://github.com/NatLee/telepy/releases/download/$ver/telepy-$($ver -replace 'cli-','')-x86_64-pc-windows-msvc.zip" -OutFile telepy.zip
-Expand-Archive telepy.zip -DestinationPath "$env:LOCALAPPDATA\telepy"   # then add that folder to PATH
+# Windows: unpacks into %LOCALAPPDATA%\telepy and adds it to your PATH once
+$dir = "$env:LOCALAPPDATA\telepy"
+Invoke-WebRequest https://github.com/NatLee/telepy/releases/latest/download/telepy-x86_64-pc-windows-msvc.zip -OutFile "$env:TEMP\telepy.zip"
+Expand-Archive "$env:TEMP\telepy.zip" $dir -Force
+$p = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($p -split ";") -notcontains $dir) { [Environment]::SetEnvironmentVariable("Path", "$p;$dir", "User") }
+$env:Path += ";$dir"
+telepy --version
 ```
 
-Or build it yourself (Rust 1.88 or newer): `cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`.
-`ssh`, `scp` and `sftp` also need the system OpenSSH client on your PATH (`telepy doctor` checks).
+Each archive has a `.sha256` next to it, and every release a `SHA256SUMS`
+(`curl -fsSL …/telepy-$TARGET.tar.gz.sha256 | sha256sum -c`; `shasum -a 256 -c` on macOS). A specific version:
+`…/releases/download/v2.7.0/telepy-$TARGET.tar.gz`. The binary is not signed or notarised: downloaded with a browser
+instead of `curl`, macOS needs `xattr -d com.apple.quarantine telepy` first.
 
-Maintainers: push a `cli-v<version>` tag; `.github/workflows/release-cli.yml` builds the five targets and creates the
-release (it runs on those tags only).
+Or build it yourself (Rust 1.88 or newer): `cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`
+(reports Cargo.toml's `0.1.0`; set `TELEPY_VERSION` while building to stamp another). `ssh`, `scp` and `sftp` also
+need the system OpenSSH client on your PATH (`telepy doctor` checks).
+
+**Maintainers:** publishing a GitHub release (`gh release create v2.7.0 …`) runs `.github/workflows/release-cli.yml`:
+the five targets are built from that tag with `TELEPY_VERSION` = the tag without its `v`, smoke-tested
+(`telepy --version` must print it) and attached to the release with their `.sha256` files and `SHA256SUMS`. Run it
+by hand from the Actions tab with a tag to (re)attach to an existing release, or without one for a trial build whose
+files stay as the run's artifacts. A tag from before version stamping (such as `v2.8.0`) can be given builds the same way; its
+CLI reports Cargo.toml's `0.1.0`. The first CLI build was published once on its own as `cli-v0.1.0` (archives
+`telepy-v0.1.0-<target>.tar.gz`), before builds moved to the Telepy releases.
 
 ## Sign in
 

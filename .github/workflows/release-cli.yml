@@ -1,15 +1,36 @@
-# telepy CLI 的發行版：只在推 `cli-v*` tag 時跑（不跑 PR、不是 CI）。五個平台各編一個 binary，打包 + SHA-256，
-# 掛到同名的 GitHub Release。伺服器的 Docker build 不受影響（CLI 是獨立的 crate：src/cli）。
-# Release builds of the telepy CLI: runs only on `cli-v*` tags (never on PRs; this is not CI). One binary per
-# platform, packed with a SHA-256, attached to the release of that tag. The server build is unaffected.
+# telepy CLI 的發行版：Telepy 每發一個 GitHub release（v2.7.0…）就跑——五個平台各編一個 binary，版號跟那個 tag 一樣
+# （`telepy --version`），打包 + SHA-256 掛到同一個 release。檔名不帶版號，所以
+# `releases/latest/download/telepy-<target>.tar.gz` 永遠是最新版（網頁的 CLI 頁用的就是這個網址）。
+# 手動跑（Actions → Release CLI → Run workflow）：填 tag 就補掛到那個 release；不填只編、結果留在這次執行的 artifacts，
+# 用來先試編。不跑 PR、不是 CI。伺服器的 Docker build 不受影響（CLI 是獨立的 crate：src/cli）。
+#
+# Release builds of the telepy CLI: run for every published Telepy release (v2.7.0…) — one binary per platform,
+# stamped with that tag's version (`telepy --version`), packed with a SHA-256 and attached to the same release.
+# The file names carry no version, so `releases/latest/download/telepy-<target>.tar.gz` is always the newest (the
+# web CLI page links to exactly that). Run by hand (Actions → Release CLI → Run workflow): with a tag it attaches to
+# that release, without one it only builds and keeps the files as this run's artifacts (a trial build). Never on PRs;
+# this is not CI. The server's Docker build is unaffected (the CLI is a crate of its own: src/cli).
 name: Release CLI
 
 on:
-  push:
-    tags: ["cli-v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the binaries to (e.g. v2.7.0); empty = build only"
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-cli-${{ github.event.release.tag_name || inputs.tag || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
 jobs:
   build:
@@ -19,13 +40,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, target: aarch64-apple-darwin }
-          - { os: macos-14, target: x86_64-apple-darwin }
-          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
-          - { os: windows-2022, target: x86_64-pc-windows-msvc }
+          # smoke = 這台 runner 能直接跑編出來的 binary（Apple silicon 上的 x86_64 版不跑）。
+          # smoke = the runner can execute the binary it built (not the x86_64 build on Apple silicon).
+          - { os: macos-14, target: aarch64-apple-darwin, smoke: true }
+          - { os: macos-14, target: x86_64-apple-darwin, smoke: false }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl, smoke: true }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, smoke: true }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc, smoke: true }
     steps:
       - uses: actions/checkout@v4
+        with:
+          # release 事件本來就在那個 tag 上；手動跑時編填的 tag（沒填就是選的分支）。
+          # A release event is already on its tag; a manual run builds the given tag (else the chosen branch).
+          ref: ${{ env.TAG || github.ref }}
+      - name: Version
+        shell: bash
+        run: |
+          # v2.7.0 → 2.7.0（舊的 cli-v0.1.0 也行）；沒 tag 的試編 = 0.0.0-dev+<commit>。
+          # v2.7.0 → 2.7.0 (an old-style cli-v0.1.0 too); a trial build without a tag = 0.0.0-dev+<commit>.
+          if [ -n "$TAG" ]; then v="${TAG#cli-}"; v="${v#v}"; else v="0.0.0-dev+$(git rev-parse --short HEAD)"; fi
+          echo "TELEPY_VERSION=$v" >> "$GITHUB_ENV"
+          echo "telepy $v"
       - name: Rust toolchain
         shell: bash
         run: |
@@ -41,18 +76,36 @@ jobs:
         shell: bash
         run: |
           dir=src/cli/target/${{ matrix.target }}/release
-          name=telepy-${GITHUB_REF_NAME#cli-}-${{ matrix.target }}
+          name=telepy-${{ matrix.target }}
           mkdir -p dist
+          # AGPL：授權條款跟 binary 放在一起。/ AGPL: the licence travels with the binary.
+          cp LICENSE NOTICE dist/
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "$dir/telepy.exe" dist/telepy.exe
-            (cd dist && 7z a "../$name.zip" telepy.exe >/dev/null)
+            (cd dist && 7z a "../$name.zip" telepy.exe LICENSE NOTICE >/dev/null)
             archive="$name.zip"
           else
             cp "$dir/telepy" dist/telepy
-            tar -C dist -czf "$name.tar.gz" telepy
+            tar -C dist -czf "$name.tar.gz" telepy LICENSE NOTICE
             archive="$name.tar.gz"
           fi
           if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          cat "$archive.sha256"
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: |
+          bin=dist/telepy; [ "${{ runner.os }}" = "Windows" ] && bin=dist/telepy.exe
+          out=$("$bin" --version)
+          echo "$out"
+          # 這個 workflow 之前的 tag（例如 v2.8.0）還不會蓋版號，那種就只提醒。
+          # Tags from before version stamping (e.g. v2.8.0) report Cargo.toml's version: a warning, not a failure.
+          if grep -q 'option_env!("TELEPY_VERSION")' src/cli/src/lib.rs; then
+            [ "$out" = "telepy $TELEPY_VERSION" ] || { echo "expected: telepy $TELEPY_VERSION"; exit 1; }
+          else
+            echo "::warning::$TAG predates version stamping; its CLI reports '$out'"
+          fi
+          "$bin" --help >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -63,16 +116,21 @@ jobs:
 
   release:
     needs: build
+    # 試編（沒有 tag）到上一步為止：檔案留在 artifacts。/ A trial build stops above: the files stay as artifacts.
+    if: ${{ github.event.release.tag_name || inputs.tag }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Publish
+      - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "telepy CLI ${GITHUB_REF_NAME#cli-}" --notes "Command-line client for Telepy. Install: see docs/cli.md."
-          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          # 一個檔列出全部的雜湊：`sha256sum -c --ignore-missing SHA256SUMS`。/ One file with every hash.
+          (cd dist && cat telepy-*.sha256 > SHA256SUMS)
+          # release 由維護者發（附發行說明）；手動補掛時它得先存在。/ Releases are written by a maintainer; it must exist.
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null \
+            || { echo "::error::release $TAG does not exist; publish it first (gh release create $TAG …)"; exit 1; }
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

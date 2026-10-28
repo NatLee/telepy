@@ -176,8 +176,9 @@ Telepy 由五個容器組成：
 
 ## 命令列、API 與 MCP
 
-**`telepy` 命令列**——下載發行版（macOS、Linux、Windows），或
-`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`：
+**`telepy` 命令列**——下載發行版（macOS、Linux、Windows；每個 Telepy 發行版都附上），或
+`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`。網頁的 **CLI** 頁（側欄「開發者」→ CLI）
+有給你這台電腦的安裝指令，以及用你自己的通道填好的範例：
 
 ```sh
 telepy login https://telepy.example.com        # 瀏覽器登入，或用 API 頁的 --token tpt_…

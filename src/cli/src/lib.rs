@@ -40,8 +40,17 @@ use creds::Kind;
 /// Scopes the browser sign-in asks for by default.
 pub const DEFAULT_SCOPE: &str = "tunnels:read ssh:exec ssh:files";
 
+/// 版本：發行版由 CI 帶 `TELEPY_VERSION`（Telepy 發行的 tag，去掉開頭的 `v`）編進來，跟伺服器同一個版號；
+/// 自己編的就是 Cargo.toml 的版本（一直是 0.1.0）。
+/// The version: release builds get `TELEPY_VERSION` (the Telepy release tag without its `v`) from CI, so the CLI
+/// carries the server's version number; a local build reports Cargo.toml's (always 0.1.0).
+pub const VERSION: &str = match option_env!("TELEPY_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
+
 #[derive(Parser, Debug)]
-#[command(name = "telepy", version, about = "Telepy from the command line: tunnels, SSH, commands, files, sessions and recordings.")]
+#[command(name = "telepy", version = VERSION, about = "Telepy from the command line: tunnels, SSH, commands, files, sessions and recordings.")]
 pub struct Cli {
     /// Telepy server URL (default: the one you signed in to)
     #[arg(long, global = true, env = "TELEPY_URL")]

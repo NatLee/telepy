@@ -188,8 +188,9 @@ Webhook、ターミナルとコマンドルールの既定値、機能の権限�
 
 ## コマンドライン、API、MCP
 
-**`telepy` コマンドライン**——リリース版（macOS、Linux、Windows）をダウンロードするか
-`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`：
+**`telepy` コマンドライン**——リリース版（macOS、Linux、Windows。Telepy の各リリースに付属）をダウンロードするか
+`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`。Web の **CLI** ページ（サイドバーの「開発者」→ CLI）に、
+このコンピューター用のインストールコマンドと、自分のトンネルで埋めた例があります：
 
 ```sh
 telepy login https://telepy.example.com        # ブラウザでサインイン、または API ページの --token tpt_…
