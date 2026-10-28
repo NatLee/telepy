@@ -1,11 +1,13 @@
 /*
  * 低調登入頁（components/auth/DiscreetShell.tsx）的動畫：向日葵點陣上由中心往外的漣漪、兩條軌道、字母由下浮出、
- * 底線畫出、輪播的句子。只動 transform / opacity（交給合成器），顏色全部取設計 token，深淺色都對。
- * 減少動態：全域規則把動畫縮成一瞬間；輪播句子另外固定顯示第一句（否則會停在淡出的最後一格）。
+ * 底線畫出、句子的打字游標，以及滑鼠互動（點被推開並亮起、視差、字母跳起、從字送出的波）。只動 transform / opacity /
+ * translate（交給合成器），顏色全部取設計 token，深淺色都對。
+ * 減少動態：全域規則把動畫縮成一瞬間；滑鼠互動整個不掛（JS 與下面的 media query），句子直接整句顯示、沒有游標。
  * Animations of the discreet sign-in page: a ripple across a sunflower dot field, two orbits, letters rising, a rule
- * drawn under the word and the rotating lines. Only transform / opacity animate (compositor work); colours come from
- * the design tokens, so both themes work. Reduced motion: the global rule collapses animations; the rotating lines
- * additionally pin the first line (they would otherwise stop on the faded-out last frame).
+ * drawn under the word, the typing caret, and the pointer effects (dots pushed aside and lit, parallax, hopping
+ * letters, a ring sent from the word). Only transform / opacity / translate animate (compositor work); colours come
+ * from the design tokens, so both themes work. Reduced motion: the global rule collapses animations; the pointer
+ * effects are not attached at all (JS and the media query below) and the line shows whole, without a caret.
  */
 
 .dsc-field {
@@ -15,6 +17,8 @@
     width: 0;
     height: 0;
     pointer-events: none;
+    /* 視差：JS 設 translate，這裡讓它慢慢跟上。/ Parallax: JS sets translate, this eases it in. */
+    transition: translate 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .dsc-spin {
@@ -24,6 +28,7 @@
     animation: dsc-spin 320s linear infinite;
 }
 
+/* --px / --py / --h 由滑鼠與那圈波設定（JS）：推開的距離與亮度 0–1。/ Set by the pointer and the ring: push and heat 0–1. */
 .dsc-dot {
     position: absolute;
     left: 0;
@@ -32,9 +37,13 @@
     height: 3px;
     margin: -1.5px 0 0 -1.5px;
     border-radius: 9999px;
-    background: color-mix(in oklch, var(--foreground) 24%, transparent);
-    transform: translate(var(--x), var(--y));
-    opacity: var(--o);
+    background: color-mix(in oklch, var(--primary) calc(var(--h, 0) * 100%), color-mix(in oklch, var(--foreground) 24%, transparent));
+    transform: translate(calc(var(--x) + var(--px, 0px)), calc(var(--y) + var(--py, 0px))) scale(calc(1 + var(--h, 0) * 1.2));
+    opacity: max(var(--o), var(--h, 0));
+    transition:
+        transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+        background-color 0.45s ease-out,
+        opacity 0.45s ease-out;
 }
 
 /* 漣漪經過時亮成柿橘色。/ Lights up persimmon as the ripple passes. */
@@ -106,6 +115,32 @@
     border: 1px solid color-mix(in oklch, var(--foreground) 10%, transparent);
     animation: dsc-spin var(--period) linear infinite;
     animation-direction: var(--dir, normal);
+    transition: translate 1.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* 碰到「Telepy」送出的那圈波（JS 加進來、播完就拿掉；速度跟 DiscreetShell 的 BURST_MS 一樣）。/ The ring sent from the word. */
+.dsc-burst {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: calc(var(--R) * 2);
+    height: calc(var(--R) * 2);
+    margin: calc(var(--R) * -1) 0 0 calc(var(--R) * -1);
+    border-radius: 9999px;
+    border: 1.5px solid var(--primary);
+    opacity: 0;
+    animation: dsc-burst 2.2s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+}
+
+@keyframes dsc-burst {
+    from {
+        opacity: 0.9;
+        transform: scale(0.02);
+    }
+    to {
+        opacity: 0;
+        transform: scale(1);
+    }
 }
 
 .dsc-orbit::before {
@@ -126,15 +161,25 @@
     }
 }
 
-/* 字母由下往上浮出（每個字母自己一個遮罩）。/ Letters rise from under their own mask. */
+/*
+ * 字母由下往上浮出（每個字母自己一個遮罩）。上面多留 0.16em（用負的 margin 抵掉，版面不變），字母被滑鼠指到跳起來時才不會被切掉。
+ * 跳的是中間那層（.dsc-lift），外層不動：指到的範圍固定，字跳起來不會離開滑鼠又掉回來。
+ * Letters rise from under their own mask. 0.16em extra room on top (cancelled by a negative margin) so a hopping
+ * letter is not clipped. The middle layer (.dsc-lift) hops while the outer one stays put, so the hover area is fixed
+ * and a letter never jumps away from the pointer and back.
+ */
 .dsc-char {
     display: inline-block;
     overflow: hidden;
-    padding: 0.06em 0.015em 0.22em;
-    margin-bottom: -0.22em;
+    padding: 0.16em 0.015em 0.22em;
+    margin: -0.1em 0 -0.22em;
 }
 
-.dsc-char > span {
+.dsc-lift {
+    display: inline-block;
+}
+
+.dsc-lift > span {
     display: inline-block;
     transform: translateY(115%);
     animation: dsc-rise 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
@@ -155,6 +200,7 @@
     transform: scaleX(0);
     transform-origin: center;
     animation: dsc-draw 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.75s forwards;
+    transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 /* 寬螢幕的字靠左，底線也從左邊畫起（lg = 64rem）。/ Left-aligned from lg, so the rule draws from the left. */
@@ -170,38 +216,65 @@
     }
 }
 
-/* 輪播句子：疊在同一格，各自錯開淡入淡出。/ Rotating lines stacked in one grid cell, staggered. */
-.dsc-lines {
+/*
+ * 打字的句子：每一句（看不見）和正在打的那句疊在同一格，高度 = 最長那句。游標是 0 寬的 inline-block（2px 寬、-2px
+ * 右邊界），不佔位置、不會自己掉到下一行，也不會把置中的字推歪；高度跟字一樣，用主色。
+ * The typed line: every line (invisible) and the live one share one cell, so the height is the longest line's. The
+ * caret is a zero-advance inline-block (2px wide, -2px right margin): it takes no room, never wraps on its own and
+ * never pushes centred text off-centre; as tall as the text, in the primary colour.
+ */
+.dsc-type {
     display: grid;
+    opacity: 0;
+    animation: dsc-fade 0.5s ease-out 0.6s forwards;
 }
 
-.dsc-lines > * {
+.dsc-type > * {
     grid-area: 1 / 1;
-    opacity: 0;
-    animation: dsc-line var(--cycle) ease-in-out infinite;
-    animation-delay: calc(var(--i) * var(--step) + 0.9s);
+    overflow-wrap: break-word;
 }
 
-@keyframes dsc-line {
+.dsc-type-sizer {
+    visibility: hidden;
+}
+
+.dsc-caret {
+    display: inline-block;
+    width: 2px;
+    height: 1.12em;
+    margin: 0 -2px 0 0.06em;
+    vertical-align: -0.2em;
+    border-radius: 1px;
+    background: var(--primary);
+}
+
+/* 打字 / 刪除時實心；停下來閃；留著的那句閃三下淡出。/ Solid while moving, blinking when idle, a kept line's fades. */
+.dsc-caret[data-caret="blink"] {
+    animation: dsc-blink 1.06s steps(1, end) infinite;
+}
+
+.dsc-caret[data-caret="rest"] {
+    animation:
+        dsc-blink 1.06s steps(1, end) 3,
+        dsc-caret-out 0.5s ease-out 3.18s forwards;
+}
+
+@keyframes dsc-blink {
     0% {
-        opacity: 0;
-        transform: translateY(0.45em);
-    }
-    5%,
-    28% {
         opacity: 1;
-        transform: none;
     }
-    33%,
-    100% {
+    50% {
         opacity: 0;
-        transform: translateY(-0.45em);
     }
 }
 
-.dsc-still {
-    opacity: 0;
-    animation: dsc-fade 0.8s ease-out 0.9s forwards;
+@keyframes dsc-caret-out {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
 }
 
 @keyframes dsc-fade {
@@ -210,17 +283,36 @@
     }
 }
 
+/*
+ * 滑鼠 hover：指到的字母跳起來、換成主色，旁邊兩個字母跟著小跳（像水波）；底線變長。只給有滑鼠、沒要求減少動態的人。
+ * Hover: the pointed-at letter hops and turns primary, its neighbours follow a little (a wave), the rule grows. Only
+ * for mouse users without reduced motion.
+ */
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+    .dsc-word .dsc-lift {
+        transition:
+            transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1),
+            color 0.35s ease-out;
+    }
+    .dsc-word .dsc-char:hover .dsc-lift {
+        transform: translateY(-0.12em);
+        color: var(--primary);
+    }
+    .dsc-word .dsc-char:hover + .dsc-char .dsc-lift,
+    .dsc-word .dsc-char:has(+ .dsc-char:hover) .dsc-lift {
+        transform: translateY(-0.055em);
+    }
+    .dsc-word .dsc-char:hover + .dsc-char + .dsc-char .dsc-lift,
+    .dsc-word .dsc-char:has(+ .dsc-char + .dsc-char:hover) .dsc-lift {
+        transform: translateY(-0.02em);
+    }
+    .dsc-hero:has(.dsc-word:hover) .dsc-rule {
+        width: 6rem;
+    }
+}
+
 /* 還不知道要畫哪個樣子：空的底色，久了才出現一個小轉圈。/ Look not known yet: an empty surface, a spinner only if it drags on. */
 .dsc-pending {
     opacity: 0;
     animation: dsc-fade 0.3s ease-out 0.6s forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .dsc-lines > * {
-        animation: none !important;
-    }
-    .dsc-lines > :first-child {
-        opacity: 1;
-    }
 }

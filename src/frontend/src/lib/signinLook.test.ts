@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, messageProblem, parseSignInLook, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
     assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", message: "Hi" }), { style: "discreet", oauthStyle: "standard", message: "Hi" });
@@ -19,14 +19,44 @@ test("each page reads its own look", () => {
     assert.equal(styleOf(look, "oauth"), "discreet");
 });
 
-test("the line is tidied and limited like the backend", () => {
-    assert.equal(tidyMessage("  Hello \r\n  world  \n"), "Hello\n  world");
-    assert.equal(messageProblem("   "), null, "blank = the built-in lines");
-    assert.equal(messageProblem("字".repeat(200)), null, "counted in characters");
-    assert.equal(messageProblem("x".repeat(201)), "tooLong");
-    assert.equal(messageProblem("a\nb\nc"), null);
-    assert.equal(messageProblem("a\nb\nc\nd"), "tooManyLines");
-    assert.equal(messageProblem("a\nb\nc\n\n  "), null, "trailing blank lines are trimmed first");
+test("the lines are tidied and limited like the backend", () => {
+    assert.equal(tidyMessage("  Hello \r\n\n   \n  world  \n"), "Hello\nworld", "trimmed, blank lines dropped");
+    assert.deepEqual(messageLines("One\n\n  Two \r\n"), ["One", "Two"]);
+    assert.deepEqual(messageLines("   "), [], "blank = the built-in lines");
+    assert.equal(joinLines(["  a ", "", "b", "   "]), "a\nb", "editor rows → the stored text");
+    assert.equal(messageProblem("   "), null);
+    assert.equal(lineLength(" 字字 "), 2, "counted in characters, trimmed");
+    assert.equal(messageProblem("字".repeat(80)), null);
+    assert.equal(messageProblem("x".repeat(81)), "tooLong");
+    assert.equal(messageProblem(Array(6).fill("a").join("\n")), null);
+    assert.equal(messageProblem(Array(7).fill("a").join("\n")), "tooManyLines");
+    assert.equal(messageProblem(Array(6).fill("a").join("\n\n") + "\n\n  "), null, "blank lines don't count");
+});
+
+test("rows edit like a text editor", () => {
+    // Enter 在游標處切開這列。/ Enter splits the row at the caret.
+    assert.deepEqual(pasteRows(["Hello world"], 0, 5, 5, "\n"), { rows: ["Hello", " world"], focus: 1, caret: 0, dropped: 0 });
+    // 貼上好幾行：各成一列，游標後面的字接在最後一段後面。/ Pasting several lines: one row each, the tail follows the last.
+    assert.deepEqual(pasteRows(["ab", "z"], 0, 1, 1, "1\r\n2\n3"), { rows: ["a1", "2", "3b", "z"], focus: 2, caret: 1, dropped: 0 });
+    // 取代選取的字。/ Replaces the selection.
+    assert.deepEqual(pasteRows(["abcd"], 0, 1, 3, "X"), { rows: ["aXd"], focus: 0, caret: 2, dropped: 0 });
+    // 最多六列，放不下的不加。/ At most six rows; the rest is left out.
+    const five = ["a", "b", "c", "d", "e"];
+    assert.deepEqual(pasteRows(five, 4, 1, 1, "\nf\ng\nh"), { rows: ["a", "b", "c", "d", "e", "f"], focus: 5, caret: 1, dropped: 2 });
+    assert.deepEqual(pasteRows(["a", "b", "c", "d", "e", "f"], 2, 1, 1, "\n").rows, ["a", "b", "c", "d", "e", "f"], "Enter on a full list does nothing");
+    // Backspace 在開頭接到上一列。/ Backspace at the start joins the row above.
+    assert.deepEqual(mergeUp(["ab", "cd", "e"], 1), { rows: ["abcd", "e"], focus: 0, caret: 2, dropped: 0 });
+    assert.equal(mergeUp(["ab"], 0), null);
+    assert.deepEqual(removeRow(["a", "b"], 0), ["b"]);
+    assert.deepEqual(removeRow(["a"], 0), [""], "one empty row stays");
+    assert.deepEqual(moveRow(["a", "b", "c"], 2, -1), ["a", "c", "b"]);
+    assert.deepEqual(moveRow(["a", "b"], 0, -1), ["a", "b"], "the first row cannot go up");
+});
+
+test("the preview pins the edited line, counting only non-blank rows", () => {
+    assert.equal(pinnedLine(["a", "", "b"], 2), 1, "the blank row in between is dropped on save");
+    assert.equal(pinnedLine(["a", "", "b"], 1), null, "a blank row pins nothing");
+    assert.equal(pinnedLine(["a"], null), null);
 });
 
 test("the sunflower starts at the centre, stays inside the radius and is deterministic", () => {
