@@ -1,4 +1,4 @@
-//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key / openapi。
+//! `telepy-server`：serve（預設）/ migrate / create-superuser / seed-service-key / openapi / doctor / import-user-keys。
 //! 啟動流程 = Django 版 docker-entrypoint 的 migrate + post_migrate signals + 聽埠，一個 binary 搞定，
 //! 不需要 supervisor / collectstatic。
 
@@ -43,6 +43,16 @@ enum Command {
         /// Print JSON instead of text.
         #[arg(long)]
         json: bool,
+    },
+    /// Add personal SSH public keys to existing accounts from a JSON file
+    /// (`[{"username", "name", "key", "expires_at"?, "description"?}]`), with the same checks as the API.
+    /// Exit 1 when any entry was skipped.
+    ImportUserKeys {
+        /// Path of the JSON file.
+        file: std::path::PathBuf,
+        /// Check every entry and print the plan without writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -194,6 +204,22 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    if let Some(Command::ImportUserKeys { file, dry_run }) = &cli.command {
+        let dry_run = *dry_run;
+        // 不開 log：stdout 只放報告（gateway 事件照樣寫進 DB 與 ssh-gateway.log）。
+        // No logging: stdout carries only the report (the gateway events still reach the DB and ssh-gateway.log).
+        let config = Config::from_env();
+        let text = std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("cannot read {}: {e}", file.display()))?;
+        let items = telepy_server::import_keys::parse_items(&text).map_err(|e| anyhow::anyhow!("{}: {e}", file.display()))?;
+        let db = open_db(&config).await?;
+        let state = AppState::new(config, db);
+        let lines = telepy_server::import_keys::run(&state, &items, dry_run).await?;
+        print!("{}", telepy_server::import_keys::render(&lines, dry_run));
+        if telepy_server::import_keys::failed(&lines) {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let config = Config::from_env();
     let _guards = init_logging(&config);
     match cli.command.unwrap_or(Command::Serve) {
@@ -219,6 +245,6 @@ async fn main() -> anyhow::Result<()> {
             let db = open_db(&config).await?;
             seed_service_key(&db, &config.web_service_pubkey_path).await
         }
-        Command::Openapi | Command::Doctor { .. } => unreachable!("handled above"),
+        Command::Openapi | Command::Doctor { .. } | Command::ImportUserKeys { .. } => unreachable!("handled above"),
     }
 }

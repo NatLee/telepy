@@ -107,6 +107,12 @@ pub async fn user_key_bare_taken(db: &Db, like: &str, except_id: Option<i64>) ->
     Ok(n > 0)
 }
 
+/// 金鑰名稱（全站唯一）已被用掉？/ Is this key name (unique site-wide) already used?
+pub async fn user_key_name_taken(db: &Db, name: &str) -> sqlx::Result<bool> {
+    let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {UK} WHERE host_friendly_name = ?")).bind(name).fetch_one(&db.read).await?;
+    Ok(n > 0)
+}
+
 /// 所有使用者金鑰連同擁有者帳號（稽核比對用）：(key id, key, 金鑰名, user id, username)。
 pub async fn all_with_owner(db: &Db) -> sqlx::Result<Vec<(i64, String, String, i64, String)>> {
     sqlx::query_as(&format!("SELECT k.id, k.key, k.host_friendly_name, k.user_id, a.username FROM {UK} k JOIN auth_user a ON a.id = k.user_id"))

@@ -4754,6 +4754,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "logs.event.user_group": "使用者群組",
     "logs.event.feature_grant": "功能權限",
     "logs.event.api_token": "API token",
+    "logs.event.user_key_import": "金鑰匯入",
     "logs.event.token_call": "透過 token",
     "webhooks.title": "Webhooks",
     "webhooks.subtitle": "把你在意的 Telepy 通知送到 Slack、Discord、Teams、手機（ntfy）或你自己的服務。",

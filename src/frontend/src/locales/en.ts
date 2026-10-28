@@ -4772,6 +4772,7 @@ export const en = {
     "logs.event.user_group": "People group",
     "logs.event.feature_grant": "Feature permission",
     "logs.event.api_token": "API token",
+    "logs.event.user_key_import": "Key import",
     "logs.event.token_call": "Via token",
     "webhooks.title": "Webhooks",
     "webhooks.subtitle": "Send the Telepy notifications you care about to Slack, Discord, Teams, your phone (ntfy) or your own service.",

@@ -22,6 +22,7 @@ pub mod features;
 pub mod gateway;
 pub mod geoip;
 pub mod hub;
+pub mod import_keys;
 pub mod join;
 pub mod lan;
 pub mod mascot;
