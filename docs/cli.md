@@ -126,7 +126,8 @@ revokes a browser sign-in on the server; a token stays valid until you revoke it
 In CI there is nothing to store: set `TELEPY_URL` and `TELEPY_TOKEN` (or pass `--server` / `--token`).
 
 In a terminal, `telepy login` and a clean `telepy doctor` show Tapi, Telepy's little ghost, next to the result (never when the
-output is piped; `NO_COLOR` draws it without colour). Set `TELEPY_NO_MASCOT=1` to leave it out.
+output is piped; `NO_COLOR` draws it without colour). The text beside it is wrapped to the terminal's width; in a narrow
+terminal it goes below Tapi, and in a very narrow one Tapi is left out. Set `TELEPY_NO_MASCOT=1` to leave it out.
 
 ## Commands
 
