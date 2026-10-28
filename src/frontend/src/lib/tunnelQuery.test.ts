@@ -129,3 +129,13 @@ test("warn: device warnings", () => {
     assert.ok(!match("warn:any", tunnel({ endpoint: null })), "hidden endpoint = no warnings");
     assert.deepEqual(parseQuery("warn:cpu").invalid, ["warn:cpu"]);
 });
+
+test("make me a sandwich (xkcd 149)", () => {
+    assert.equal(parseQuery("make me a sandwich").reply, "makeItYourself");
+    assert.equal(parseQuery("  sudo make me a sandwich!").reply, "okay");
+    assert.equal(parseQuery("SUDO Make Me A Sandwich.").reply, "okay");
+    assert.deepEqual(parseQuery("sudo make me a sandwich").text, []);
+    // 只認整句；放在別的詞旁邊就是一般文字。/ Only the whole query counts.
+    assert.equal(parseQuery("sandwich").reply, undefined);
+    assert.equal(parseQuery("sudo make me a sandwich status:online").reply, undefined);
+});

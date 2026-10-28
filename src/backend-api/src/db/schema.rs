@@ -1007,6 +1007,10 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("user_management_usersettings", "view_modes", "text NOT NULL DEFAULT '{}'"),
     // ~/.ssh/config 裡裝置別名的前綴（空 = 不加）：同一台筆電有兩台 Telepy、裝置同名時用。/ The device alias prefix in ~/.ssh/config.
     ("user_management_usersettings", "ssh_alias_prefix", "varchar(24) NOT NULL DEFAULT ''"),
+    // Tapi（彩蛋吉祥物）十字髮夾的顏色；空 = 還沒找到 Tapi（彩蛋沒解鎖）。/ Tapi's clip colour; empty = not found yet.
+    ("user_management_usersettings", "tapi_color", "varchar(16) NOT NULL DEFAULT ''"),
+    // 「每天換一個」解鎖了沒（看完片尾名單）。/ Whether "a new colour every day" is unlocked (watched the credits).
+    ("user_management_usersettings", "tapi_daily", "bool NOT NULL DEFAULT 0"),
     // 通道群組 / 金鑰群組的說明與標籤（標籤 = JSON 字串陣列，規則同通道標籤）。/ Group description and labels (JSON array).
     ("telepy_tunnel_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),

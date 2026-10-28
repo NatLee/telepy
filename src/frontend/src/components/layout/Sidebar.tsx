@@ -44,7 +44,7 @@ export function Sidebar() {
         >
             <div className={`h-16 flex items-center border-b border-sidebar-border ${collapsed ? "justify-center px-2" : "justify-between pl-4 pr-3"}`}>
                 <Link href="/tunnels" className="min-w-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                    <BrandMark collapsed={collapsed} />
+                    <BrandMark collapsed={collapsed} playful />
                 </Link>
                 {!collapsed && (
                     <button

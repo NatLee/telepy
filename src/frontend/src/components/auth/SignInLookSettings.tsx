@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁與 OAuth 登入頁各自選一般 / 低調、低調頁上的那句話、即時預覽
- * （PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個），以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
+ * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁與 OAuth 登入頁各自選一般 / 低調、低調頁上輪流打出來的句子
+ * （SignInLinesEditor）、即時預覽（PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個；正在編輯的那句會被釘住），
+ * 以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
  * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in and OAuth sign-in pages, the
- * discreet page's line, a live preview (PreviewFrame renders the real page components, desktop and phone) and the
- * "How it works" dialog (path diagram + a comparison of the two looks).
+ * discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame renders the real page components,
+ * desktop and phone; the line being edited is pinned) and the "How it works" dialog (path diagram + a comparison of
+ * the two looks).
  */
 import React, { useState } from "react";
 import { Eye, EyeOff, Globe, Info, ScanEye, SquareDashed } from "lucide-react";
@@ -13,16 +15,15 @@ import { LoginFormPreview } from "@/components/auth/LoginForm";
 import { OAuthSignInScreen, SignInScreen } from "@/components/auth/SignInScreens";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { Button } from "@/components/ui/button";
+import { SignInLinesEditor, type LinesDraft } from "@/components/auth/SignInLinesEditor";
 import { Callout } from "@/components/ui/callout";
-import { Field } from "@/components/ui/field";
 import { Modal } from "@/components/ui/Modal";
 import { PreviewFrame } from "@/components/ui/preview-frame";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
-import { Textarea } from "@/components/ui/textarea";
 import { rememberSignInLook } from "@/hooks/useSignInLook";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_LOOK, MESSAGE_LINES, MESSAGE_MAX, messageProblem, parseSignInLook, styleOf, tidyMessage, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { DEFAULT_LOOK, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 
@@ -57,7 +58,7 @@ function usePageOptions(look: SignInLook) {
 }
 
 /** 某一頁、某個樣子的畫面（預覽用：表單不會登入）。/ One page in one look, with the inert preview form. */
-function PreviewScreen({ page, look }: { page: SignInPageKind; look: SignInLook }) {
+function PreviewScreen({ page, look, pin }: { page: SignInPageKind; look: SignInLook; pin: number | null }) {
     const { t } = useI18n();
     if (page === "oauth") {
         return (
@@ -67,17 +68,18 @@ function PreviewScreen({ page, look }: { page: SignInPageKind; look: SignInLook 
                 Form={LoginFormPreview}
                 app={{ name: t("signinLook.previewApp"), host: "app.example.com", scopes: ["tunnels:read", "ssh:exec"], loading: false }}
                 onCancel={noop}
+                pin={pin}
             />
         );
     }
-    return <SignInScreen style={look.style} message={look.message} Form={LoginFormPreview} />;
+    return <SignInScreen style={look.style} message={look.message} Form={LoginFormPreview} pin={pin} />;
 }
 
-/** 桌機 + 手機兩個預覽框。/ The desktop and phone frames. */
-export function SignInPreview({ page, look }: { page: SignInPageKind; look: SignInLook }) {
+/** 桌機 + 手機兩個預覽框；`pin` = 正在編輯的那句（只打那一句）。/ The desktop and phone frames; `pin` = the line being edited. */
+export function SignInPreview({ page, look, pin = null }: { page: SignInPageKind; look: SignInLook; pin?: number | null }) {
     const { t } = useI18n();
     const pageName = t(page === "oauth" ? "signinLook.previewOauth" : "signinLook.previewSignin");
-    const screen = <PreviewScreen page={page} look={look} />;
+    const screen = <PreviewScreen page={page} look={look} pin={pin} />;
     return (
         <div className="grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_10.5rem]">
             <figure className="min-w-0">
@@ -116,20 +118,29 @@ function StyleRow({ page, value, onChange }: { page: SignInPageKind; value: Sign
     );
 }
 
+/** 存好的文字 → 編輯器的狀態。/ The saved text → the editor's state. */
+function draftFrom(message: string): LinesDraft {
+    const rows = messageLines(message);
+    return rows.length ? { mode: "custom", rows } : { mode: "builtin", rows: [""] };
+}
+
 export function SignInLookPanel({ values, onSave }: { values: Record<string, unknown>; onSave: (key: string, value: unknown) => Promise<void> | void }) {
     const { t } = useI18n();
     const saved = lookFrom(values);
-    /** 還沒存的那句話（null = 跟存好的一樣）。/ The unsaved line (null = same as saved). */
-    const [draft, setDraft] = useState<string | null>(null);
+    /** 還沒存的句子（null = 跟存好的一樣）。/ The unsaved lines (null = same as saved). */
+    const [draft, setDraft] = useState<LinesDraft | null>(null);
+    /** 正在編輯哪一列（預覽會釘住那句）。/ The row being edited (pinned in the preview). */
+    const [editing, setEditing] = useState<number | null>(null);
     const [page, setPage] = useState<SignInPageKind>("signin");
     const [infoOpen, setInfoOpen] = useState(false);
     const pageOptions = usePageOptions(saved);
 
-    const text = draft ?? saved.message;
-    const dirty = draft !== null && tidyMessage(draft) !== saved.message;
-    const problem = messageProblem(text);
-    const chars = [...tidyMessage(text)].length;
-    const look: SignInLook = { ...saved, message: tidyMessage(text) };
+    const lines = draft ?? draftFrom(saved.message);
+    const message = lines.mode === "custom" ? joinLines(lines.rows) : "";
+    const dirty = message !== saved.message;
+    const problem = messageProblem(message);
+    const look: SignInLook = { ...saved, message };
+    const pin = lines.mode === "custom" ? pinnedLine(lines.rows, editing) : null;
     const unused = saved.style === "standard" && saved.oauthStyle === "standard";
 
     const setStyle = (p: SignInPageKind, v: SignInStyle) => {
@@ -138,11 +149,10 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
         rememberSignInLook({ ...saved, [p === "oauth" ? "oauthStyle" : "style"]: v });
         setPage(p);
     };
-    const saveMessage = async () => {
+    const saveLines = async () => {
         if (problem) return;
-        const next = tidyMessage(text);
-        await onSave("signin_page_message", next);
-        rememberSignInLook({ ...saved, message: next });
+        await onSave("signin_page_message", message);
+        rememberSignInLook({ ...saved, message });
         setDraft(null);
     };
 
@@ -165,27 +175,21 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
                 <StyleRow page="signin" value={saved.style} onChange={(v) => setStyle("signin", v)} />
                 <StyleRow page="oauth" value={saved.oauthStyle} onChange={(v) => setStyle("oauth", v)} />
                 <li className="p-4 sm:px-6 sm:py-5">
-                    <Field
-                        label={t("siteSettings.signin_page_message.label")}
-                        addon={<span className={cn("tabular-nums", problem === "tooLong" && "text-destructive")}>{t("signinLook.messageCount", { count: chars, max: MESSAGE_MAX })}</span>}
-                        hint={unused ? `${t("siteSettings.signin_page_message.description")} ${t("signinLook.messageUnused")}` : t("siteSettings.signin_page_message.description")}
-                        error={problem === "tooLong" ? t("signinLook.messageTooLong", { max: MESSAGE_MAX }) : problem === "tooManyLines" ? t("signinLook.messageTooManyLines", { max: MESSAGE_LINES }) : undefined}
-                    >
-                        <Textarea
-                            rows={3}
-                            value={text}
-                            onChange={(e) => setDraft(e.target.value)}
-                            placeholder={t("signinLook.messagePlaceholder", { lines: BUILT_IN_LINES.map((k) => t(k)).join(" · ") })}
-                            className="resize-y"
-                        />
-                    </Field>
-                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                        <Button type="button" size="sm" variant="soft" disabled={!dirty || !!problem} onClick={() => void saveMessage()}>
+                    <h4 className="text-[1rem] text-foreground">{t("siteSettings.signin_page_message.label")}</h4>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                        {t("siteSettings.signin_page_message.description")}
+                        {unused && ` ${t("signinLook.linesUnused")}`}
+                    </p>
+                    <div className="mt-3">
+                        <SignInLinesEditor value={lines} onChange={setDraft} builtIn={BUILT_IN_LINES.map((k) => t(k))} onFocusRow={setEditing} />
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Button type="button" size="sm" variant="soft" disabled={!dirty || !!problem} onClick={() => void saveLines()}>
                             {t("common.save")}
                         </Button>
-                        {text.trim() !== "" && (
-                            <Button type="button" size="sm" variant="ghost" onClick={() => setDraft("")}>
-                                {t("signinLook.messageBuiltIn")}
+                        {draft !== null && (
+                            <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(null)}>
+                                {t("signinLook.discard")}
                             </Button>
                         )}
                         <span className="font-mono text-xs text-muted-foreground/80">signin_page_message</span>
@@ -194,11 +198,22 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
             </ul>
 
             <div className="space-y-3 border-t border-border/70 bg-surface p-4 sm:px-6 sm:py-5">
-                <SectionHeading as="h4" title={t("signinLook.previewTitle")} description={t("signinLook.previewBody")} action={dirty ? <Chip tone="warning">{t("signinLook.unsaved")}</Chip> : undefined} />
+                <SectionHeading
+                    as="h4"
+                    title={t("signinLook.previewTitle")}
+                    description={t("signinLook.previewBody")}
+                    action={
+                        pin !== null ? (
+                            <Chip tone="primary">{t("signinLook.previewPinned", { n: pin + 1 })}</Chip>
+                        ) : dirty ? (
+                            <Chip tone="warning">{t("signinLook.unsaved")}</Chip>
+                        ) : undefined
+                    }
+                />
                 <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
                     <Segmented kind="toggle" size="sm" options={pageOptions} value={page} onChange={setPage} aria-label={t("signinLook.previewTitle")} />
                 </div>
-                <SignInPreview page={page} look={look} />
+                <SignInPreview page={page} look={look} pin={pin} />
             </div>
 
             <SignInLookInfoDialog isOpen={infoOpen} onClose={() => setInfoOpen(false)} look={saved} page={page} onPage={setPage} />
