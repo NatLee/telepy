@@ -3318,8 +3318,21 @@ pub struct Webhook {
     pub headers_unreadable: bool,
     /// 建立的人（全站 webhook 給管理員看）。/ Who created it.
     pub created_by: Option<String>,
+    /// 全站的：`enforced`（沒人能退出）/ `default`（隧道的 owner / ADMIN 可以退出）；個人的 null。
+    /// Site webhooks: `enforced` (nobody opts out) or `default` (tunnel owners / ADMINs may); null for personal ones.
+    pub mode: Option<String>,
+    /// 全站的退出 `{tunnel_id, tunnel_name, by, at, active}`（active = 退的人現在還管那條隧道）。
+    /// A site webhook's opt-outs (active = whoever opted out still manages the tunnel).
+    #[schema(value_type = Vec<Object>)]
+    pub optouts: Vec<serde_json::Value>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// 我要退出的隧道（整組取代我對這個 webhook 的退出）。/ The tunnels I opt out (replaces my opt-outs of this webhook).
+#[derive(ToSchema)]
+pub struct WebhookOptOutInput {
+    pub tunnel_ids: Vec<i64>,
 }
 
 /// 新增或修改 webhook（PATCH 只帶要改的欄位）。/ Create or change a webhook (send only what changes on PATCH).
@@ -3336,6 +3349,8 @@ pub struct WebhookInput {
     pub tunnel_ids: Option<Vec<i64>>,
     pub delay: Option<i64>,
     pub enabled: Option<bool>,
+    /// 全站的：enforced / default（預設）。/ Site webhooks: enforced or default (the default).
+    pub mode: Option<String>,
     /// 自訂 header `[{name, value}]`（≤ 10；整組取代，沒帶 = 不變）。/ Custom headers (replaces the set; omitted = unchanged).
     #[schema(value_type = Option<Vec<Object>>)]
     pub headers: Option<Vec<serde_json::Value>>,
@@ -3382,6 +3397,14 @@ pub struct SiteWebhookSummary {
     pub hidden_tunnels: i64,
     pub enabled: bool,
     pub paused: bool,
+    /// enforced / default
+    pub mode: String,
+    /// 我退出的隧道 id。/ Tunnel ids I opted out.
+    pub my_optout: Vec<i64>,
+    /// 它涵蓋的、我管的隧道 `{id, name, opted_out, by: [username], mine}`（opted_out = 有現在的管理者退出了）。
+    /// Tunnels I manage that it covers (opted_out = a current manager opted it out; by = who).
+    #[schema(value_type = Vec<Object>)]
+    pub managed: Vec<serde_json::Value>,
 }
 
 #[derive(ToSchema)]

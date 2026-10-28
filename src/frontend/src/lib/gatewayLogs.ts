@@ -75,6 +75,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     command_cancelled: { key: "logs.event.command_cancelled", tone: "secondary", category: "session" },
     command_rule: { key: "logs.event.command_rule", tone: "outline", category: "change" },
     webhook: { key: "logs.event.webhook", tone: "outline", category: "change" },
+    webhook_optout: { key: "logs.event.webhook_optout", tone: "outline", category: "change" },
     user_group: { key: "logs.event.user_group", tone: "outline", category: "change" },
     feature_grant: { key: "logs.event.feature_grant", tone: "outline", category: "change" },
     api_token: { key: "logs.event.api_token", tone: "outline", category: "change" },

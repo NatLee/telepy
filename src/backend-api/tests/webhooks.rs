@@ -330,6 +330,8 @@ async fn status_alerts_follow_each_webhooks_delay_and_audience() {
     create(&lab, &alice.token, json!({"url": slow.url, "delay": 3600})).await;
     create(&lab, &bob.token, json!({"url": theirs.url, "delay": 0})).await;
     create(&lab, &lab.admin_token, json!({"scope": "site", "url": site.url, "delay": 0, "events": ["tunnel.offline", "tunnel.online"]})).await;
+    let opted = Receiver::start().await;
+    let (opted_id, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "url": opted.url, "delay": 0, "events": ["tunnel.offline", "tunnel.online"]})).await;
 
     // 真的隧道：上線 → 斷線（offline）→ 回來（online）。/ A real tunnel: up, down (offline), back (online).
     let key = lab.keygen("dev-tunnel");
@@ -340,6 +342,9 @@ async fn status_alerts_follow_each_webhooks_delay_and_audience() {
     )
     .await
     .unwrap();
+    // alice 把 dev 退出其中一個全站 webhook：狀態告警也不送給它。/ alice opts dev out of one site webhook: no status alerts there either.
+    let r = lab.app.put(&format!("/api/webhooks/{opted_id}/optout"), Some(&alice.token), json!({"tunnel_ids": [t.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
     let sshd = lab.machine("dev", &[], false).await;
     let mut r = runner::Runner::default();
     step(&lab, &mut r, 2).await; // commit "offline" for the new tunnel
@@ -361,6 +366,7 @@ async fn status_alerts_follow_each_webhooks_delay_and_audience() {
     assert_eq!(off["text"], format!("[Telepy] dev is offline (port {port})"));
     site.wait("tunnel.offline").await;
     slow.quiet("tunnel.offline").await; // its delay has not passed
+    opted.quiet("tunnel.offline").await; // alice opted dev out of it
     theirs.quiet("tunnel.offline").await; // bob cannot see alice's tunnel
 
     let _ssh = tunnel_ssh(&lab, &key, port, sshd.port);
@@ -581,4 +587,99 @@ async fn everyone_sees_a_redacted_summary_of_the_site_webhooks() {
     assert_eq!(summary[0]["tunnels"].as_array().unwrap().len(), 3);
     assert_eq!(summary[0]["hidden_tunnels"], 0);
     assert_eq!((summary[2]["enabled"].as_bool(), summary[2]["paused"].as_bool()), (Some(false), Some(false)));
+}
+
+#[tokio::test]
+async fn tunnel_managers_can_opt_their_tunnels_out_of_default_site_webhooks() {
+    let Some(lab) = Lab::start().await else { return };
+    let (soft, hard) = (Receiver::start().await, Receiver::start().await);
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let (k1, k2) = (lab.keygen("box-tunnel"), lab.keygen("lab-tunnel"));
+    let a = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "box", &k1)).await.unwrap();
+    let b = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "lab", &k2)).await.unwrap();
+    // bob = ADMIN on lab, carol = VIEW on box. / bob is an ADMIN sharee of lab, carol a VIEW sharee of box.
+    let bob_share = db::sharing::create(&lab.app.state.db, b.id, alice.id, bob.id, "admin", None).await.unwrap();
+    db::sharing::create(&lab.app.state.db, a.id, alice.id, carol.id, "view", None).await.unwrap();
+
+    let ev = ["tunnel.ip_changed"];
+    let (soft_id, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "name": "Ops", "url": soft.url, "events": ev})).await;
+    let (hard_id, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "name": "Audit", "url": hard.url, "events": ev, "mode": "enforced"})).await;
+    let r = lab.app.get(&format!("/api/webhooks/{soft_id}"), Some(&lab.admin_token)).await;
+    assert_eq!(r.json["mode"], "default", "default unless chosen: {}", r.text);
+    let r = lab.app.patch(&format!("/api/webhooks/{soft_id}"), Some(&lab.admin_token), json!({"mode": "strict"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    settings(&lab, json!({"notify_private_targets": true})).await;
+    let personal = Receiver::start().await;
+    let (mine_id, _) = create(&lab, &alice.token, json!({"url": personal.url, "events": ev})).await;
+
+    // 誰能退：owner 可以；VIEW 分享對象、強制的、個人的都不行。/ Who may opt out: the owner yes; VIEW sharees, enforced, personal no.
+    let r = lab.app.put(&format!("/api/webhooks/{soft_id}/optout"), Some(&alice.token), json!({"tunnel_ids": [a.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["mode"], "default");
+    assert_eq!(r.json["my_optout"], json!([a.id]));
+    assert_eq!(r.json["managed"], json!([{"id": a.id, "name": "box", "opted_out": true, "by": ["alice"], "mine": true}, {"id": b.id, "name": "lab", "opted_out": false, "by": [], "mine": false}]), "{}", r.text);
+    let r = lab.app.put(&format!("/api/webhooks/{soft_id}/optout"), Some(&carol.token), json!({"tunnel_ids": [a.id]})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("not_manager")), "{}", r.text);
+    assert!(r.json["tunnel_ids"].is_array());
+    let r = lab.app.put(&format!("/api/webhooks/{hard_id}/optout"), Some(&alice.token), json!({"tunnel_ids": [a.id]})).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::BAD_REQUEST, Some("enforced")), "{}", r.text);
+    let r = lab.app.put(&format!("/api/webhooks/{mine_id}/optout"), Some(&alice.token), json!({"tunnel_ids": [a.id]})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "personal webhooks have no opt-outs: {}", r.text);
+    let r = lab.app.put("/api/webhooks/9999/optout", Some(&alice.token), json!({"tunnel_ids": []})).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+
+    let ip = |t: &db::tunnels::Tunnel| Event::new(Kind::TunnelIpChanged).tunnel(t).data(json!({"ip": "203.0.113.9", "previous_ip": "198.51.100.1"}));
+    let hooks = lab.app.state.webhooks.clone();
+    let names = |r: &Receiver| -> Vec<String> {
+        let mut v: Vec<String> = r.of("tunnel.ip_changed").iter().filter(|g| g.json()["tunnel"].is_object()).map(|g| g.json()["tunnel"]["name"].as_str().unwrap_or("").to_string()).collect();
+        v.sort();
+        v
+    };
+    hooks.emit(ip(&a));
+    hooks.emit(ip(&b));
+    hard.wait("tunnel.ip_changed").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(names(&hard), vec!["box", "lab"], "enforced ignores opt-outs");
+    assert_eq!(names(&soft), vec!["lab"], "box is opted out of Ops");
+
+    // ADMIN 分享對象可以退，失去 ADMIN 就不算了。/ An ADMIN sharee may opt out; losing ADMIN ends it.
+    let r = lab.app.put(&format!("/api/webhooks/{soft_id}/optout"), Some(&bob.token), json!({"tunnel_ids": [b.id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    soft.got.lock().unwrap().clear();
+    hooks.emit(ip(&b));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(names(&soft).is_empty(), "bob opted lab out");
+    db::sharing::set_permission(&lab.app.state.db, bob_share.id, "view").await.unwrap();
+    soft.got.lock().unwrap().clear();
+    hooks.emit(ip(&b));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(names(&soft), vec!["lab"], "bob is no longer ADMIN: his opt-out stopped counting");
+
+    // 管理員看得到誰退了哪條（失效的標出來）；Logs 有紀錄。/ Admins see who opted what out; the Logs have it.
+    let admin = lab.app.get("/api/webhooks", Some(&lab.admin_token)).await;
+    let site = admin.json["site"].as_array().unwrap().iter().find(|w| w["id"] == soft_id).unwrap().clone();
+    let optouts = site["optouts"].as_array().unwrap();
+    assert_eq!(optouts.len(), 2, "{site}");
+    assert!(optouts.iter().any(|o| o["tunnel_name"] == "box" && o["by"] == "alice" && o["active"] == true), "{site}");
+    assert!(optouts.iter().any(|o| o["tunnel_name"] == "lab" && o["by"] == "bob" && o["active"] == false), "{site}");
+    let logs = lab.app.get(&format!("/api/log/ssh/events?limit=50&tunnel_id={}", a.id), Some(&alice.token)).await;
+    assert!(logs.json.as_array().unwrap().iter().any(|e| e["event"] == "webhook_optout" && e["message"].as_str().unwrap_or("").contains("alice opted box out of the site webhook \"Ops\"")), "{}", logs.text);
+
+    // 改成強制：退出都不算；清掉自己的退出。/ Switched to enforced: opt-outs stop counting; clearing my own.
+    let r = lab.app.patch(&format!("/api/webhooks/{soft_id}"), Some(&lab.admin_token), json!({"mode": "enforced"})).await;
+    assert_eq!(r.json["mode"], "enforced", "{}", r.text);
+    soft.got.lock().unwrap().clear();
+    hooks.emit(ip(&a));
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(names(&soft), vec!["box"], "enforced now");
+    let r = lab.app.delete(&format!("/api/webhooks/{soft_id}/optout"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.text);
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_webhook_optout WHERE user_id = ?").bind(alice.id).fetch_one(&lab.app.state.db.read).await.unwrap();
+    assert_eq!(n, 0);
+    // 刪了 webhook，退出也跟著刪。/ Deleting the webhook deletes its opt-outs.
+    lab.app.delete(&format!("/api/webhooks/{soft_id}"), Some(&lab.admin_token)).await;
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_webhook_optout").fetch_one(&lab.app.state.db.read).await.unwrap();
+    assert_eq!(n, 0);
 }

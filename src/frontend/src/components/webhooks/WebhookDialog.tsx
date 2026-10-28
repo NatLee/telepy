@@ -48,10 +48,11 @@ import {
     presetsFor,
     sameEvents,
     toInput,
+    hookMode,
 } from "@/lib/webhooks";
 import type { WebhookErrors } from "@/hooks/useWebhooksPage";
 import type { CatalogEvent, Webhook, WebhookInput, WebhookLanguage, WebhookScope } from "@/types/webhooks";
-import { useDelayLabel } from "./parts";
+import { EnforcedChip, useDelayLabel } from "./parts";
 
 type WebhookTab = "where" | "what" | "tunnels" | "headers";
 
@@ -114,7 +115,7 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
             setErrors(r.errors);
             // 跳到第一個有錯的那步。/ Jump to the first step with an error.
             const e = r.errors;
-            const first: WebhookTab | null = e.url || e.format || e.language || e.name ? "where" : e.events || e.delay ? "what" : e.tunnel_ids ? "tunnels" : e.headers ? "headers" : null;
+            const first: WebhookTab | null = e.url || e.format || e.language || e.name || e.mode ? "where" : e.events || e.delay ? "what" : e.tunnel_ids ? "tunnels" : e.headers ? "headers" : null;
             if (first) setTab(first);
         }
     };
@@ -124,7 +125,7 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
     // 左側的步驟：送到哪 → 送什麼 → 哪些隧道（有隧道事件時）→ 自訂標頭（選填）。填好的變綠、有錯的變琥珀色。
     // The steps on the left: where → what → which tunnels (with tunnel events) → custom headers (optional).
     const errorOn: Record<WebhookTab, boolean> = {
-        where: Boolean(errors.url || errors.format || errors.language || errors.name),
+        where: Boolean(errors.url || errors.format || errors.language || errors.name || errors.mode),
         what: Boolean(errors.events || errors.delay),
         tunnels: Boolean(errors.tunnel_ids),
         headers: Boolean(errors.headers) || headerProblems.some((p) => p !== null),
@@ -227,6 +228,18 @@ function WebhookForm({ isOpen, onClose, hook, scope, catalog, tunnels, language,
                         <span className="text-sm text-foreground">{t("webhooks.form.enabled")}</span>
                     </Switch>
                 </div>
+                {scope === "site" && (
+                    // 開 = 預設（隧道的 owner / Admin 可以退出）；關 = 強制。/ On = default (owners / Admins may opt out); off = enforced.
+                    <div className="space-y-1 rounded-lg border border-border bg-surface px-3 py-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <Switch checked={hookMode(input) === "default"} onCheckedChange={(v) => set("mode", v ? "default" : "enforced")}>
+                                <span className="text-sm text-foreground">{t("webhooks.mode.switch")}</span>
+                            </Switch>
+                            {hookMode(input) === "enforced" && <EnforcedChip />}
+                        </div>
+                        <p className="text-xs text-muted-foreground">{hookMode(input) === "default" ? t("webhooks.mode.onHint") : t("webhooks.mode.offHint")}</p>
+                    </div>
+                )}
                 </section>
 
                 <section role="tabpanel" hidden={tab !== "what"} className="space-y-3">

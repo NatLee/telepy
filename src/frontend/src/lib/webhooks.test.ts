@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectFormat, effectiveFormat, errorKey, knownEventOrder, siteCoverage, siteHookState, sortSiteSummary, groupCatalog, hasStatusEvent, hasTunnelEvent, headerProblem, headersToSave, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
-import type { CatalogEvent, SiteWebhookSummary } from "../types/webhooks.ts";
+import { activeOptOuts, defaultInput, hookMode, optOutChoices, optOutPath, optedOutTunnelCount, toInput, detectFormat, effectiveFormat, errorKey, knownEventOrder, siteCoverage, siteHookState, sortSiteSummary, groupCatalog, hasStatusEvent, hasTunnelEvent, headerProblem, headersToSave, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
+import type { CatalogEvent, SiteWebhookSummary, Webhook } from "../types/webhooks.ts";
 
 const ev = (event: string, group: CatalogEvent["group"], over: Partial<CatalogEvent> = {}): CatalogEvent => ({
     event,
@@ -130,4 +130,65 @@ test("site webhooks sort running first, then by name", () => {
 
 test("events are ordered like the event table, unknown ones last", () => {
     assert.deepEqual(knownEventOrder(["user.created", "made.up", "tunnel.offline"]), ["tunnel.offline", "user.created", "made.up"]);
+});
+
+const siteHook = (over: Partial<SiteWebhookSummary> = {}): SiteWebhookSummary => ({
+    id: 1,
+    name: "Ops",
+    service: "slack",
+    events: ["tunnel.offline"],
+    all_tunnels: true,
+    tunnels: [],
+    hidden_tunnels: 0,
+    enabled: true,
+    paused: false,
+    mode: "default",
+    my_optout: [],
+    managed: [
+        { id: 5, name: "box", opted_out: true, by: ["alice"], mine: true },
+        { id: 6, name: "lab", opted_out: false, by: [], mine: false },
+    ],
+    ...over,
+});
+
+test("site webhooks are default unless enforced, older backends included", () => {
+    assert.equal(hookMode({}), "default");
+    assert.equal(hookMode({ mode: null }), "default");
+    assert.equal(hookMode({ mode: "enforced" }), "enforced");
+    assert.equal(defaultInput("site", "en").mode, "default");
+    assert.equal(defaultInput("user", "en").mode, undefined, "personal webhooks don't send a mode");
+    const hook = { scope: "site", mode: "enforced", name: "x", url: "", format: "auto", language: "en", events: [], all_tunnels: true, tunnels: [], delay: 0, enabled: true, headers: [] } as unknown as Webhook;
+    assert.equal(toInput(hook).mode, "enforced");
+    assert.equal(toInput({ ...hook, scope: "user" }).mode, undefined);
+});
+
+test("the opt-out path says whether an event goes out and which layer decided", () => {
+    const opted = optOutPath(siteHook(), 5);
+    assert.deepEqual([opted.sends, opted.layer, opted.by], [false, "optedOut", ["alice"]]);
+    assert.equal(opted.spots.optout, "failed");
+    assert.equal(opted.spots.channel, "waiting");
+    const free = optOutPath(siteHook(), 6);
+    assert.deepEqual([free.sends, free.layer], [true, "followsDefault"]);
+    assert.equal(free.spots.channel, "ok");
+    const locked = optOutPath(siteHook({ mode: "enforced" }), 5);
+    assert.deepEqual([locked.sends, locked.layer, locked.by], [true, "locked", ["alice"]], "enforced ignores the opt-out but still says whose it was");
+    assert.equal(optOutPath(siteHook({ enabled: false }), 6).layer, "off");
+    assert.equal(optOutPath(siteHook({ paused: true }), 6).sends, false);
+    const limited = siteHook({ all_tunnels: false, tunnels: [{ id: 9, name: "other" }], managed: [] });
+    assert.equal(optOutPath(limited, 6).layer, "notCovered");
+    assert.equal(optOutPath(limited, 9).layer, "followsDefault");
+});
+
+test("only default webhooks offer opt-out choices; counts use opt-outs that still count", () => {
+    assert.equal(optOutChoices(siteHook()).length, 2);
+    assert.deepEqual(optOutChoices(siteHook({ mode: "enforced" })), []);
+    assert.deepEqual(optOutChoices({ mode: "default" }), [], "older backends: nothing to choose");
+    const optouts = [
+        { tunnel_id: 5, tunnel_name: "box", by: "alice", at: "", active: true },
+        { tunnel_id: 5, tunnel_name: "box", by: "bob", at: "", active: true },
+        { tunnel_id: 6, tunnel_name: "lab", by: "carol", at: "", active: false },
+    ];
+    assert.equal(activeOptOuts({ optouts }).length, 2);
+    assert.equal(optedOutTunnelCount({ optouts }), 1, "box opted out twice is one tunnel; carol's no longer counts");
+    assert.equal(optedOutTunnelCount({}), 0);
 });

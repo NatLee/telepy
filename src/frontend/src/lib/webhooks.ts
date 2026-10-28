@@ -4,7 +4,8 @@
  * the backend), event presets, form defaults, the card state and error-code mapping.
  */
 import type { TranslationKey } from "../locales/en.ts";
-import type { CatalogEvent, EventAudience, EventGroup, SiteWebhookSummary, Webhook, WebhookFormat, WebhookHeader, WebhookInput, WebhookLanguage, WebhookScope } from "../types/webhooks.ts";
+import type { SpotState } from "./flow.ts";
+import type { CatalogEvent, EventAudience, EventGroup, ManagedTunnel, SiteWebhookSummary, Webhook, WebhookFormat, WebhookHeader, WebhookInput, WebhookLanguage, WebhookMode, WebhookOptOut, WebhookScope } from "../types/webhooks.ts";
 
 /** 每個事件的名稱與一句說明。/ Each event's name and one-line explanation. */
 export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: TranslationKey }> = {
@@ -164,7 +165,9 @@ export function hasTunnelEvent(events: string[], catalog: CatalogEvent[]): boole
 }
 
 export function defaultInput(scope: WebhookScope, language: WebhookLanguage): WebhookInput {
-    return { scope, name: "", url: "", format: "auto", language, events: PRESET_EVENTS.status, all_tunnels: true, tunnel_ids: [], delay: 60, enabled: true, headers: [] };
+    const base: WebhookInput = { scope, name: "", url: "", format: "auto", language, events: PRESET_EVENTS.status, all_tunnels: true, tunnel_ids: [], delay: 60, enabled: true, headers: [] };
+    // 全站的預設讓隧道的 owner 可以退出。/ Site webhooks let tunnel owners opt out by default.
+    return scope === "site" ? { ...base, mode: "default" } : base;
 }
 
 export function toInput(h: Webhook): WebhookInput {
@@ -179,6 +182,7 @@ export function toInput(h: Webhook): WebhookInput {
         delay: h.delay,
         enabled: h.enabled,
         headers: h.headers.map((x) => ({ ...x })),
+        ...(h.scope === "site" ? { mode: h.mode ?? "default" } : {}),
     };
 }
 
@@ -249,6 +253,9 @@ const ERROR_KEY: Record<string, TranslationKey> = {
     admins_only: "webhooks.err.adminsOnly",
     secret_unreadable: "webhooks.err.secretUnreadable",
     not_redeliverable: "webhooks.err.notRedeliverable",
+    enforced: "webhooks.optout.err.enforced",
+    not_manager: "webhooks.optout.err.notManager",
+    not_covered: "webhooks.optout.err.notCovered",
 };
 
 export function errorKey(code: unknown): TranslationKey | null {
@@ -305,4 +312,54 @@ export function siteCoverage(h: Pick<SiteWebhookSummary, "all_tunnels" | "tunnel
 export function sortSiteSummary(list: SiteWebhookSummary[]): SiteWebhookSummary[] {
     const rank: Record<SiteHookState, number> = { on: 0, paused: 1, off: 2 };
     return [...list].sort((a, b) => rank[siteHookState(a)] - rank[siteHookState(b)] || (a.name ?? "").localeCompare(b.name ?? "") || a.id - b.id);
+}
+
+/** 全站 webhook 的模式（舊後端沒有 = default）。/ A site webhook's mode (older backends = default). */
+export function hookMode(h: { mode?: WebhookMode | null }): WebhookMode {
+    return h.mode === "enforced" ? "enforced" : "default";
+}
+
+/** 現在算數的退出（退的人還管那條隧道）。/ Opt-outs that count now (whoever opted out still manages the tunnel). */
+export function activeOptOuts(h: Pick<Webhook, "optouts">): WebhookOptOut[] {
+    return (h.optouts ?? []).filter((o) => o.active);
+}
+
+/** 退出了幾條隧道（同一條被兩個人退只算一條）。/ How many tunnels are opted out (one tunnel opted out twice counts once). */
+export function optedOutTunnelCount(h: Pick<Webhook, "optouts">): number {
+    return new Set(activeOptOuts(h).map((o) => o.tunnel_id)).size;
+}
+
+/** 我能決定退不退的隧道（預設的全站 webhook 涵蓋的、我管的）；強制的回空。
+ *  The tunnels I can opt out (ones I manage that a default site webhook covers); none for enforced ones. */
+export function optOutChoices(h: Pick<SiteWebhookSummary, "mode" | "managed">): ManagedTunnel[] {
+    return hookMode(h) === "enforced" ? [] : (h.managed ?? []);
+}
+
+/** 退出那一站的決定者。/ Which layer decided whether the event goes out. */
+export type OptOutLayer = "locked" | "optedOut" | "followsDefault" | "notCovered" | "off";
+
+export interface OptOutPath {
+    /** 事件會不會送到管理員的頻道。/ Whether the event reaches the admins' channel. */
+    sends: boolean;
+    layer: OptOutLayer;
+    /** 退出它的人（強制時 = 被忽略的退出）。/ Who opted it out (for enforced: the opt-outs that are ignored). */
+    by: string[];
+    /** 四站的狀態：事件 → 全站 webhook → 退出 → 頻道。/ States of the four spots: event → site webhook → opt-out → channel. */
+    spots: { event: SpotState; hook: SpotState; optout: SpotState; channel: SpotState };
+}
+
+/** 一條隧道的事件會不會經過這個全站 webhook 送出、哪一層決定的（純函式；資訊圖用）。
+ *  Whether a tunnel's event goes out through this site webhook and which layer decided (pure; for the info diagram).
+ *  順序跟後端一樣：關掉 / 暫停 → 沒涵蓋這條 → 強制（不理退出）→ 有現在的管理者退出 → 照預設送。
+ *  Same order as the backend: off / paused → not covered → enforced (opt-outs ignored) → opted out by a current
+ *  manager → sent by default. */
+export function optOutPath(h: Pick<SiteWebhookSummary, "mode" | "managed" | "enabled" | "paused" | "all_tunnels" | "tunnels">, tunnelId: number): OptOutPath {
+    const mine = (h.managed ?? []).find((m) => m.id === tunnelId);
+    const covered = Boolean(mine) || h.all_tunnels || h.tunnels.some((x) => x.id === tunnelId);
+    const by = mine?.by ?? [];
+    if (!h.enabled || h.paused) return { sends: false, layer: "off", by, spots: { event: "ok", hook: "failed", optout: "waiting", channel: "waiting" } };
+    if (!covered) return { sends: false, layer: "notCovered", by, spots: { event: "ok", hook: "failed", optout: "waiting", channel: "waiting" } };
+    if (hookMode(h) === "enforced") return { sends: true, layer: "locked", by, spots: { event: "ok", hook: "ok", optout: "waiting", channel: "ok" } };
+    if (mine?.opted_out) return { sends: false, layer: "optedOut", by, spots: { event: "ok", hook: "ok", optout: "failed", channel: "waiting" } };
+    return { sends: true, layer: "followsDefault", by, spots: { event: "ok", hook: "ok", optout: "ok", channel: "ok" } };
 }

@@ -17,7 +17,7 @@ import type { Webhook, WebhookDelivery, WebhookInput, WebhookList, WebhookScope,
 /** 存檔時的欄位錯誤。/ Field errors from saving. */
 export type WebhookErrors = Partial<Record<keyof WebhookInput | "form", string>>;
 
-const FIELDS: (keyof WebhookInput)[] = ["name", "url", "format", "language", "events", "all_tunnels", "tunnel_ids", "delay", "enabled", "headers"];
+const FIELDS: (keyof WebhookInput)[] = ["name", "url", "format", "language", "events", "all_tunnels", "tunnel_ids", "delay", "enabled", "headers", "mode"];
 
 export function useWebhooksPage(scope: WebhookScope = "user") {
     const { t } = useI18n();
@@ -166,11 +166,35 @@ export function useWebhooksPage(scope: WebhookScope = "user") {
         [t],
     );
 
+    /** 把我管的隧道退出一個預設的全站 webhook（整組取代我的退出）；成功回 true。
+     *  Opt tunnels I manage out of a default site webhook (replaces my opt-outs); true on success. */
+    const setOptOut = useCallback(
+        async (hookId: number, tunnelIds: number[]): Promise<boolean> => {
+            try {
+                const res = await apiFetch(`/api/webhooks/${hookId}/optout`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tunnel_ids: tunnelIds }) });
+                const body = await readJson<{ code?: string }>(res);
+                if (res.ok) {
+                    showSuccess(t("webhooks.optout.saved"));
+                    await load();
+                    return true;
+                }
+                const key = errorKey(body?.code);
+                showError(key ? t(key) : responseError(res, body, t("webhooks.optout.saveFailed")));
+                await load();
+                return false;
+            } catch {
+                showError(t("webhooks.optout.saveFailed"));
+                return false;
+            }
+        },
+        [load, showError, showSuccess, t],
+    );
+
     const list = scope === "site" ? (data?.site ?? []) : (data?.mine ?? []);
     const catalog = (scope === "site" ? data?.catalog.site : data?.catalog.personal) ?? [];
 
     // 全站 webhook 能選整台伺服器的隧道。/ Site-wide webhooks pick from every tunnel on the server.
     const tunnelChoices = scope === "site" ? (data?.site_tunnels ?? []) : tunnels;
 
-    return { data, failed, scope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], siteSummary: data?.site_summary ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
+    return { data, failed, scope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], siteSummary: data?.site_summary ?? [], tunnelChoices, reload: load, save, setOptOut, setEnabled, remove, sendTest, redeliver, deliveries, secret };
 }

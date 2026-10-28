@@ -14,7 +14,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::db::{self, users::User, webhooks::{DeliveryRow, Fields, WebhookRow}};
+use crate::db::{self, users::User, webhooks::{DeliveryRow, Fields, OptOut, WebhookRow, MODE_DEFAULT, MODE_ENFORCED}};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::util::{db_to_iso_utc_z, opt_db_to_iso_utc_z};
@@ -32,6 +32,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(deliveries))
         .routes(routes!(redeliver))
         .routes(routes!(get_secret, rotate_secret))
+        .routes(routes!(set_optout, clear_optout))
 }
 
 fn coded(status: StatusCode, code: &str, msg: impl Into<String>) -> ApiError {
@@ -63,7 +64,22 @@ fn host_of(url: &str) -> String {
     url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default()
 }
 
-fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>, creators: &HashMap<i64, String>, headers: Result<Vec<Header>, ()>) -> Value {
+/// 全站 webhook 的退出清單（給管理員）：哪條隧道、誰退的、那個人現在還管不管那條隧道（不管了 = 不算數）。
+/// A site webhook's opt-outs (for admins): tunnel, who, and whether that person still manages it (if not, it doesn't count).
+fn optouts_json(rows: &[OptOut], names: &HashMap<i64, String>, users: &HashMap<i64, String>, managers: &HashMap<i64, Vec<i64>>) -> Value {
+    json!(rows
+        .iter()
+        .map(|o| json!({
+            "tunnel_id": o.tunnel_id,
+            "tunnel_name": names.get(&o.tunnel_id),
+            "by": users.get(&o.user_id),
+            "at": db_to_iso_utc_z(&o.created_at),
+            "active": managers.get(&o.tunnel_id).is_some_and(|m| m.contains(&o.user_id)),
+        }))
+        .collect::<Vec<_>>())
+}
+
+fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>, creators: &HashMap<i64, String>, headers: Result<Vec<Header>, ()>, optouts: Value) -> Value {
     let resolved = url::Url::parse(&row.url).ok().map(|u| Format::parse(&row.format).unwrap_or(Format::Auto).resolve(&u).as_str());
     json!({
         "id": row.id,
@@ -90,6 +106,8 @@ fn webhook_json(row: &WebhookRow, tunnels: &[i64], names: &HashMap<i64, String>,
         "headers_unreadable": headers.is_err(),
         "headers": headers.unwrap_or_default(),
         "created_by": row.user_id.and_then(|u| creators.get(&u)),
+        "mode": if row.is_site() { json!(row.mode) } else { Value::Null },
+        "optouts": if row.is_site() { optouts } else { json!([]) },
         "created_at": db_to_iso_utc_z(&row.created_at),
         "updated_at": db_to_iso_utc_z(&row.updated_at),
     })
@@ -105,7 +123,29 @@ async fn usernames(state: &AppState) -> ApiResult<HashMap<i64, String>> {
 
 async fn one_json(state: &AppState, row: &WebhookRow) -> ApiResult<Value> {
     let tunnels = db::webhooks::tunnels_of(&state.db, row.id).await?;
-    Ok(webhook_json(row, &tunnels, &tunnel_names(state).await?, &usernames(state).await?, state.webhooks.headers(row)))
+    let names = tunnel_names(state).await?;
+    let users = usernames(state).await?;
+    let optouts = if row.is_site() {
+        let rows = db::webhooks::optout_map(&state.db).await?.remove(&row.id).unwrap_or_default();
+        optouts_json(&rows, &names, &users, &db::webhooks::all_managers(&state.db).await?)
+    } else {
+        json!([])
+    };
+    Ok(webhook_json(row, &tunnels, &names, &users, state.webhooks.headers(row), optouts))
+}
+
+/// 我管的隧道（owner 或現在有效權限是 ADMIN）。/ Tunnels I manage (owner, or ADMIN in force).
+fn managed_by(managers: &HashMap<i64, Vec<i64>>, user_id: i64) -> HashSet<i64> {
+    managers.iter().filter(|(_, m)| m.contains(&user_id)).map(|(t, _)| *t).collect()
+}
+
+/// 摘要裡「退出」相關的部分要用的東西。/ What the opt-out part of a summary needs.
+struct OptOutContext<'a> {
+    me: i64,
+    managed: &'a HashSet<i64>,
+    managers: &'a HashMap<i64, Vec<i64>>,
+    optouts: &'a HashMap<i64, Vec<OptOut>>,
+    users: &'a HashMap<i64, String>,
 }
 
 /// 我看得到的隧道（個人 webhook 只能限定在這些）。/ Tunnels I can see (what a personal webhook may be limited to).
@@ -121,7 +161,11 @@ async fn visible_tunnels(state: &AppState, me: &User) -> ApiResult<HashSet<i64>>
 /// 沒取名時名稱 = 網址的主機（`host_of`）：非管理員不給，免得內部主機名露出去（畫面改顯示服務名稱）。
 /// A webhook saved without a name is named after its URL's host: non-admins get null instead, so internal host names
 /// don't leak (the page shows the service instead).
-fn site_summary_json(row: &WebhookRow, picked: &[i64], names: &HashMap<i64, String>, visible: &HashSet<i64>, admin: bool) -> Value {
+/// 退出：`mode`、`my_optout`（我退出的隧道 id）、`managed`（這個 webhook 涵蓋的、我管的隧道：
+/// `{id, name, opted_out, by: [現在還管它、退出了的人], mine}`，依名稱排序）。
+/// Opt-outs: `mode`, `my_optout` (tunnel ids I opted out) and `managed` (tunnels I manage that it covers, with
+/// whether they are opted out now and by whom), by name.
+fn site_summary_json(row: &WebhookRow, picked: &[i64], names: &HashMap<i64, String>, visible: &HashSet<i64>, admin: bool, ctx: &OptOutContext) -> Value {
     let service = url::Url::parse(&row.url).ok().map(|u| Format::parse(&row.format).unwrap_or(Format::Auto).resolve(&u).as_str());
     let mut shown: Vec<(i64, &str)> = Vec::new();
     let mut hidden = 0;
@@ -134,6 +178,24 @@ fn site_summary_json(row: &WebhookRow, picked: &[i64], names: &HashMap<i64, Stri
         }
     }
     shown.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    let rows: &[OptOut] = ctx.optouts.get(&row.id).map(Vec::as_slice).unwrap_or(&[]);
+    let mut mine_out: Vec<i64> = rows.iter().filter(|o| o.user_id == ctx.me).map(|o| o.tunnel_id).collect();
+    mine_out.sort_unstable();
+    let mut covered: Vec<(i64, &str)> = ctx
+        .managed
+        .iter()
+        .filter(|t| row.all_tunnels || picked.contains(t))
+        .filter_map(|t| names.get(t).map(|n| (*t, n.as_str())))
+        .collect();
+    covered.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    let managed: Vec<Value> = covered
+        .into_iter()
+        .map(|(id, name)| {
+            let current = ctx.managers.get(&id).map(Vec::as_slice).unwrap_or(&[]);
+            let by: Vec<&String> = rows.iter().filter(|o| o.tunnel_id == id && current.contains(&o.user_id)).filter_map(|o| ctx.users.get(&o.user_id)).collect();
+            json!({ "id": id, "name": name, "opted_out": !by.is_empty(), "by": by, "mine": mine_out.contains(&id) })
+        })
+        .collect();
     json!({
         "id": row.id,
         "name": if !admin && row.name == host_of(&row.url) { None } else { Some(&row.name) },
@@ -144,6 +206,9 @@ fn site_summary_json(row: &WebhookRow, picked: &[i64], names: &HashMap<i64, Stri
         "hidden_tunnels": hidden,
         "enabled": row.enabled,
         "paused": !row.paused_reason.is_empty(),
+        "mode": row.mode,
+        "my_optout": mine_out,
+        "managed": managed,
     })
 }
 
@@ -158,6 +223,8 @@ struct Form {
     tunnel_ids: Vec<i64>,
     delay: i64,
     enabled: bool,
+    /// enforced / default（個人的一律 default）。/ enforced / default (always default for personal webhooks).
+    mode: &'static str,
     /// None = 沒改。/ None = unchanged.
     headers: Option<Vec<Header>>,
 }
@@ -173,6 +240,7 @@ impl Form {
             all_tunnels: self.all_tunnels,
             delay: self.delay,
             enabled: self.enabled,
+            mode: self.mode,
         }
     }
 }
@@ -265,6 +333,22 @@ async fn parse_form(state: &AppState, me: &User, site: bool, body: &Value, curre
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(ApiError::field("enabled", "enabled must be true or false.")),
     };
+    // 模式只對全站的有意義；升級前的、沒指定的都是 default（可以退出）。/ Only site webhooks have a mode; unset = default.
+    let mode = match body.get("mode") {
+        None | Some(Value::Null) => {
+            if cur.is_some_and(|c| c.mode == MODE_ENFORCED) {
+                MODE_ENFORCED
+            } else {
+                MODE_DEFAULT
+            }
+        }
+        Some(v) => match v.as_str() {
+            Some("enforced") => MODE_ENFORCED,
+            Some("default") => MODE_DEFAULT,
+            _ => return Err(ApiError::field("mode", "Choose enforced or default.")),
+        },
+    };
+    let mode = if site { mode } else { MODE_DEFAULT };
     let headers = match body.get("headers") {
         None | Some(Value::Null) => None,
         Some(Value::Array(items)) => {
@@ -279,7 +363,7 @@ async fn parse_form(state: &AppState, me: &User, site: bool, body: &Value, curre
         }
         Some(_) => return Err(ApiError::field("headers", "headers must be a list of {name, value}.")),
     };
-    Ok(Form { name, url, format, language, events, all_tunnels, tunnel_ids, delay, enabled, headers })
+    Ok(Form { name, url, format, language, events, all_tunnels, tunnel_ids, delay, enabled, mode, headers })
 }
 
 /// 全站 webhook 的變動記進 Logs（管理員看得到）。/ Site webhook changes go to the Logs (admins see them).
@@ -297,8 +381,17 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     let names = tunnel_names(&state).await?;
     let creators = usernames(&state).await?;
     let map = db::webhooks::tunnel_map(&state.db).await?;
+    let optouts = db::webhooks::optout_map(&state.db).await?;
+    let managers = db::webhooks::all_managers(&state.db).await?;
+    let managed = managed_by(&managers, me.id);
+    let ctx = OptOutContext { me: me.id, managed: &managed, managers: &managers, optouts: &optouts, users: &creators };
     let render = |rows: Vec<WebhookRow>| -> Vec<Value> {
-        rows.iter().map(|r| webhook_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &creators, state.webhooks.headers(r))).collect()
+        rows.iter()
+            .map(|r| {
+                let o = optouts_json(optouts.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &creators, &managers);
+                webhook_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &creators, state.webhooks.headers(r), o)
+            })
+            .collect()
     };
     let mine = db::webhooks::for_user(&state.db, me.id).await?;
     let used = mine.len();
@@ -309,7 +402,7 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     let site_summary: Vec<Value> = site_rows
         .iter()
         .filter(|r| me.is_superuser || r.enabled || !r.paused_reason.is_empty())
-        .map(|r| site_summary_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &visible, me.is_superuser))
+        .map(|r| site_summary_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &visible, me.is_superuser, &ctx))
         .collect();
     let site = if me.is_superuser { Some(render(site_rows)) } else { None };
     Ok(Json(json!({
@@ -392,6 +485,7 @@ async fn update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
     let form = parse_form(&state, &me, row.is_site(), &body, Some((&row, tunnels))).await?;
     let events = catalog::join_list(&form.events);
     db::webhooks::update(&state.db, id, &form.fields(&events)).await?;
+    let mode_changed = row.is_site() && row.mode != form.mode;
     db::webhooks::set_tunnels(&state.db, id, &form.tunnel_ids).await?;
     if let Some(h) = &form.headers {
         state.webhooks.set_headers(id, h).await?;
@@ -399,6 +493,10 @@ async fn update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id):
     state.webhooks.invalidate();
     let row = db::webhooks::by_id(&state.db, id).await?.ok_or_else(not_found)?;
     log_site(&state, &me, "changed", &row).await;
+    if mode_changed {
+        let verb = if row.is_enforced() { "enforced (tunnel owners can no longer opt out of)" } else { "let tunnel owners opt out of" };
+        log_site(&state, &me, verb, &row).await;
+    }
     Ok(Json(one_json(&state, &row).await?))
 }
 
@@ -484,4 +582,76 @@ async fn redeliver(State(state): State<AppState>, AuthUser(me): AuthUser, Path((
     let allow_private = state.webhooks.allow_private(&hook).await;
     let out = state.webhooks.deliver(&hook, &event, &How::Again { from: d.id, message_id: d.message_id.clone() }, allow_private).await;
     Ok(Json(json!({ "ok": out.ok, "http_status": out.status, "error": if out.error.is_empty() { Value::Null } else { json!(out.error) }, "duration_ms": out.duration_ms })))
+}
+
+/// 退出用：全站 webhook（個人的、不存在的都 404）。/ For opt-outs: a site webhook (personal or unknown = 404).
+async fn site_hook(state: &AppState, id: i64) -> ApiResult<WebhookRow> {
+    db::webhooks::by_id(&state.db, id).await?.filter(WebhookRow::is_site).ok_or_else(not_found)
+}
+
+/// 這個人對這個 webhook 的摘要（退出改完後回傳）。/ This person's summary of a site webhook (returned after an opt-out change).
+async fn summary_for(state: &AppState, me: &User, row: &WebhookRow) -> ApiResult<Value> {
+    let names = tunnel_names(state).await?;
+    let users = usernames(state).await?;
+    let picked = db::webhooks::tunnels_of(&state.db, row.id).await?;
+    let optouts = db::webhooks::optout_map(&state.db).await?;
+    let managers = db::webhooks::all_managers(&state.db).await?;
+    let managed = managed_by(&managers, me.id);
+    let visible: HashSet<i64> = if me.is_superuser { names.keys().copied().collect() } else { visible_tunnels(state, me).await? };
+    let ctx = OptOutContext { me: me.id, managed: &managed, managers: &managers, optouts: &optouts, users: &users };
+    Ok(site_summary_json(row, &picked, &names, &visible, me.is_superuser, &ctx))
+}
+
+/// 退出 / 回來寫進那條隧道的 Logs。/ Opting out / back in goes to that tunnel's Logs.
+async fn log_optouts(state: &AppState, me: &User, row: &WebhookRow, names: &HashMap<i64, String>, added: &[i64], removed: &[i64]) {
+    let hook = if row.name.is_empty() { host_of(&row.url) } else { row.name.clone() };
+    for (list, direction) in [(added, "out of"), (removed, "back into")] {
+        for t in list {
+            let tunnel = names.get(t).cloned().unwrap_or_else(|| format!("#{t}"));
+            let msg = format!("{} opted {tunnel} {direction} the site webhook \"{hook}\"", me.username);
+            state.gateway.event("webhook_optout", None, None, Some(*t), msg).await;
+        }
+    }
+}
+
+/// 把我管的隧道退出一個「預設」的全站 webhook（整組取代我的退出清單）。只有隧道的 owner / ADMIN 能退；強制的不能退。
+/// Opt tunnels I manage out of a default site-wide webhook (replaces my opt-outs for it). Only a tunnel's owner /
+/// ADMIN may; enforced webhooks can't be opted out of.
+#[utoipa::path(put, path = "/api/webhooks/{id}/optout", tag = "Webhooks", security(("bearer" = [])), params(("id" = i64, Path)), request_body = super::schemas::WebhookOptOutInput, responses((status = 200, body = super::schemas::SiteWebhookSummary), (status = 400, description = "{tunnel_ids: [message]} or {error, code: enforced}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+async fn set_optout(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let row = site_hook(&state, id).await?;
+    if row.is_enforced() {
+        return Err(coded(StatusCode::BAD_REQUEST, "enforced", "This site-wide webhook is enforced: tunnels can't be opted out of it."));
+    }
+    let mut ids: Vec<i64> = match body.get("tunnel_ids") {
+        Some(Value::Array(items)) if items.iter().all(Value::is_i64) => items.iter().filter_map(Value::as_i64).collect(),
+        _ => return Err(ApiError::field("tunnel_ids", "tunnel_ids must be a list of ids.")),
+    };
+    ids.sort_unstable();
+    ids.dedup();
+    let managers = db::webhooks::all_managers(&state.db).await?;
+    let managed = managed_by(&managers, me.id);
+    if ids.iter().any(|t| !managed.contains(t)) {
+        return Err(field_coded("tunnel_ids", "not_manager", "Only a tunnel's owner or an ADMIN sharee can opt it out."));
+    }
+    let picked = db::webhooks::tunnels_of(&state.db, id).await?;
+    if !row.all_tunnels && ids.iter().any(|t| !picked.contains(t)) {
+        return Err(field_coded("tunnel_ids", "not_covered", "This webhook doesn't cover one of these tunnels."));
+    }
+    let (added, removed) = db::webhooks::set_optouts(&state.db, id, me.id, &ids).await?;
+    state.webhooks.invalidate();
+    let names = tunnel_names(&state).await?;
+    log_optouts(&state, &me, &row, &names, &added, &removed).await;
+    Ok(Json(summary_for(&state, &me, &row).await?))
+}
+
+/// 拿掉我對這個全站 webhook 的所有退出（強制的也可以清）。/ Remove all my opt-outs of a site webhook (works on enforced ones too).
+#[utoipa::path(delete, path = "/api/webhooks/{id}/optout", tag = "Webhooks", security(("bearer" = [])), params(("id" = i64, Path)), responses((status = 204), (status = 404, body = super::schemas::ErrorBody)))]
+async fn clear_optout(State(state): State<AppState>, AuthUser(me): AuthUser, Path(id): Path<i64>) -> ApiResult<StatusCode> {
+    let row = site_hook(&state, id).await?;
+    let (_, removed) = db::webhooks::set_optouts(&state.db, id, me.id, &[]).await?;
+    state.webhooks.invalidate();
+    let names = tunnel_names(&state).await?;
+    log_optouts(&state, &me, &row, &names, &[], &removed).await;
+    Ok(StatusCode::NO_CONTENT)
 }

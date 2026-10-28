@@ -33,6 +33,7 @@ async fn spec_is_served_and_covers_the_rest_api() {
         ("/api/webhooks/{id}/deliveries", vec!["get"]),
         ("/api/webhooks/{id}/deliveries/{delivery_id}/redeliver", vec!["post"]),
         ("/api/webhooks/{id}/secret", vec!["get", "post"]),
+        ("/api/webhooks/{id}/optout", vec!["put", "delete"]),
         ("/api/auth/user/profile", vec!["get"]),
         ("/api/reverse/server/dashboard", vec!["get"]),
         ("/api/reverse/join", vec!["post"]),
