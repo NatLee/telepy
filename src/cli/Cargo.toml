@@ -42,6 +42,11 @@ urlencoding = "2"
 
 # 憑證存在系統的金鑰圈（macOS Keychain、Windows 認證管理員）；Linux 用 0600 的檔案（無頭伺服器 / CI 常沒有 Secret Service）。
 # Credentials go to the OS keyring on macOS / Windows; Linux uses a 0600 file (headless boxes and CI rarely run a Secret Service).
+# SIGPIPE 回到預設：輸出管線被關掉（`telepy ls | head`）就安靜結束，不是 println! panic。
+# SIGPIPE back to its default: a closed output pipe (`telepy ls | head`) ends telepy quietly instead of a println! panic.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
