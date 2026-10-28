@@ -172,5 +172,5 @@ export function useWebhooksPage(scope: WebhookScope = "user") {
     // 全站 webhook 能選整台伺服器的隧道。/ Site-wide webhooks pick from every tunnel on the server.
     const tunnelChoices = scope === "site" ? (data?.site_tunnels ?? []) : tunnels;
 
-    return { data, failed, scope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
+    return { data, failed, scope, list, catalog, tunnels, siteTunnels: data?.site_tunnels ?? [], siteSummary: data?.site_summary ?? [], tunnelChoices, reload: load, save, setEnabled, remove, sendTest, redeliver, deliveries, secret };
 }

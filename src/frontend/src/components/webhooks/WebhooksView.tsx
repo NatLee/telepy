@@ -24,7 +24,8 @@ import { WebhookDialog } from "@/components/webhooks/WebhookDialog";
 import { useWebhooksPage } from "@/hooks/useWebhooksPage";
 import { useI18n } from "@/lib/i18n";
 import { languageFor } from "@/lib/webhooks";
-import { AdminChip, AdminViewLink } from "@/components/layout/AdminViews";
+import { AdminChip } from "@/components/layout/AdminViews";
+import { SiteWebhooksSection } from "@/components/webhooks/SiteWebhooksSection";
 import type { Webhook, WebhookScope } from "@/types/webhooks";
 
 const SERVICES = ["Slack", "Discord", "Google Chat", "Microsoft Teams", "Telegram", "ntfy", "Mattermost"];
@@ -73,10 +74,6 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
                     </>
                 }
             />
-
-            {!site && page.data?.can_manage_site && (
-                <AdminViewLink className="mb-4" href="/tunnels/admin/webhooks" label={t("webhooks.siteLink", { n: page.data.site?.length ?? 0 })} note={t("webhooks.mineNote")} />
-            )}
 
             {page.failed && <Callout tone="warning" className="mb-4">{t("webhooks.loadFailed")}</Callout>}
             {personalOff && <Callout tone="warning" className="mb-4" title={t("webhooks.personalOffTitle")}>{t("webhooks.personalOff")}</Callout>}
@@ -129,6 +126,7 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
                     {!site && policy && page.list.length > 0 && (
                         <p className="text-xs text-muted-foreground">{atLimit ? t("webhooks.limitReached", { max: policy.max }) : t("webhooks.usage", { used: policy.used, max: policy.max })}</p>
                     )}
+                    {!site && page.data && <SiteWebhooksSection hooks={page.siteSummary} canManage={page.data.can_manage_site} />}
                 </div>
                 <aside className="min-w-0 space-y-4">
                     {page.catalog.length > 0 && <EventCatalog catalog={page.catalog} scope={page.scope} />}

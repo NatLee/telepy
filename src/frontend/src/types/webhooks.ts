@@ -65,9 +65,29 @@ export interface WebhookPolicy {
     per_minute: number;
 }
 
+/** 全站 webhook 的摘要，每個登入者都拿得到（沒有網址、header、密鑰）。
+ *  A redacted site-wide webhook every signed-in user gets (no URL, headers or secret). */
+export interface SiteWebhookSummary {
+    id: number;
+    /** 沒取名（= 網址的主機）時非管理員拿到 null。/ null for non-admins when it was left unnamed (= the URL's host). */
+    name: string | null;
+    /** 實際的送出格式（auto 已依網址判斷）。/ The effective format (auto resolved from the URL). */
+    service: WebhookFormat | null;
+    events: string[];
+    all_tunnels: boolean;
+    /** 選的隧道裡我看得到的，依名稱排序。/ Picked tunnels I can see, by name. */
+    tunnels: { id: number; name: string }[];
+    /** 選的隧道裡我看不到的數量。/ Picked tunnels I can't see. */
+    hidden_tunnels: number;
+    enabled: boolean;
+    paused: boolean;
+}
+
 export interface WebhookList {
     mine: Webhook[];
     site: Webhook[] | null;
+    /** 舊後端沒有。/ Missing from older backends. */
+    site_summary?: SiteWebhookSummary[];
     catalog: { personal: CatalogEvent[]; site: CatalogEvent[] | null };
     policy: WebhookPolicy;
     can_manage_site: boolean;

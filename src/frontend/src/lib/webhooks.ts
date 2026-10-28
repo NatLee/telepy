@@ -4,7 +4,7 @@
  * the backend), event presets, form defaults, the card state and error-code mapping.
  */
 import type { TranslationKey } from "../locales/en.ts";
-import type { CatalogEvent, EventAudience, EventGroup, Webhook, WebhookFormat, WebhookHeader, WebhookInput, WebhookLanguage, WebhookScope } from "../types/webhooks.ts";
+import type { CatalogEvent, EventAudience, EventGroup, SiteWebhookSummary, Webhook, WebhookFormat, WebhookHeader, WebhookInput, WebhookLanguage, WebhookScope } from "../types/webhooks.ts";
 
 /** 每個事件的名稱與一句說明。/ Each event's name and one-line explanation. */
 export const EVENT_KEYS: Record<string, { label: TranslationKey; hint: TranslationKey }> = {
@@ -275,4 +275,34 @@ export function maskUrl(url: string): string {
     const parts = u.pathname.split("/").map((p) => (p.length >= 12 || /\d{5,}/.test(p) ? `${p.slice(0, 3)}…` : p));
     const query = u.search ? "?…" : "";
     return `${u.host}${parts.join("/")}${query}`;
+}
+
+/** 依事件表的順序排（非管理員拿不到全站目錄），不認得的放最後。/ Events in the known order (non-admins get no site
+ *  catalogue); unknown names last. */
+export function knownEventOrder(events: string[]): string[] {
+    const known = Object.keys(EVENT_KEYS);
+    return [...known.filter((e) => events.includes(e)), ...events.filter((e) => !known.includes(e))];
+}
+
+export type SiteHookState = "on" | "paused" | "off";
+
+/** 全站 webhook 摘要的狀態（暫停時 enabled 也是 false）。/ A site summary's state (paused ones are also not enabled). */
+export function siteHookState(h: Pick<SiteWebhookSummary, "enabled" | "paused">): SiteHookState {
+    if (h.paused) return "paused";
+    return h.enabled ? "on" : "off";
+}
+
+export type SiteCoverage = { kind: "all" } | { kind: "some"; names: string[]; hidden: number } | { kind: "none"; hidden: number };
+
+/** 這個全站 webhook 報哪些「我的」隧道。/ Which of my tunnels a site-wide webhook reports on. */
+export function siteCoverage(h: Pick<SiteWebhookSummary, "all_tunnels" | "tunnels" | "hidden_tunnels">): SiteCoverage {
+    if (h.all_tunnels) return { kind: "all" };
+    const names = h.tunnels.map((t) => t.name);
+    return names.length > 0 ? { kind: "some", names, hidden: h.hidden_tunnels } : { kind: "none", hidden: h.hidden_tunnels };
+}
+
+/** 開著的在前，再依名稱。/ Running ones first, then by name. */
+export function sortSiteSummary(list: SiteWebhookSummary[]): SiteWebhookSummary[] {
+    const rank: Record<SiteHookState, number> = { on: 0, paused: 1, off: 2 };
+    return [...list].sort((a, b) => rank[siteHookState(a)] - rank[siteHookState(b)] || (a.name ?? "").localeCompare(b.name ?? "") || a.id - b.id);
 }

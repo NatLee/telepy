@@ -115,6 +115,38 @@ async fn visible_tunnels(state: &AppState, me: &User) -> ApiResult<HashSet<i64>>
     Ok(ids)
 }
 
+/// 給每個登入者看的全站 webhook 摘要：不含網址、header、密鑰、送出紀錄與建立者；隧道只列看得到的，其餘只算數量。
+/// A redacted site-wide webhook for every signed-in user: no URL, headers, secret, deliveries or creator; only the
+/// picked tunnels the caller can see are named, the rest are counted.
+/// 沒取名時名稱 = 網址的主機（`host_of`）：非管理員不給，免得內部主機名露出去（畫面改顯示服務名稱）。
+/// A webhook saved without a name is named after its URL's host: non-admins get null instead, so internal host names
+/// don't leak (the page shows the service instead).
+fn site_summary_json(row: &WebhookRow, picked: &[i64], names: &HashMap<i64, String>, visible: &HashSet<i64>, admin: bool) -> Value {
+    let service = url::Url::parse(&row.url).ok().map(|u| Format::parse(&row.format).unwrap_or(Format::Auto).resolve(&u).as_str());
+    let mut shown: Vec<(i64, &str)> = Vec::new();
+    let mut hidden = 0;
+    if !row.all_tunnels {
+        for id in picked {
+            match names.get(id) {
+                Some(name) if visible.contains(id) => shown.push((*id, name.as_str())),
+                _ => hidden += 1,
+            }
+        }
+    }
+    shown.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    json!({
+        "id": row.id,
+        "name": if !admin && row.name == host_of(&row.url) { None } else { Some(&row.name) },
+        "service": service,
+        "events": catalog::parse_list(&row.events).iter().map(|k| k.name()).collect::<Vec<_>>(),
+        "all_tunnels": row.all_tunnels,
+        "tunnels": shown.into_iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>(),
+        "hidden_tunnels": hidden,
+        "enabled": row.enabled,
+        "paused": !row.paused_reason.is_empty(),
+    })
+}
+
 /// 表單驗證後的值。/ The validated form.
 struct Form {
     name: String,
@@ -258,7 +290,7 @@ async fn log_site(state: &AppState, me: &User, verb: &str, row: &WebhookRow) {
 }
 
 /// 我的 webhook、（管理員）全站 webhook、兩個範圍的事件目錄與網站的限制。
-/// My webhooks, the site-wide ones (admins), the event catalogue per scope and the site's limits.
+/// My webhooks, the site-wide ones (admins; a redacted summary for everyone), the event catalogue per scope and the site's limits.
 #[utoipa::path(get, path = "/api/webhooks", tag = "Webhooks", security(("bearer" = [])), responses((status = 200, body = super::schemas::WebhookList)))]
 async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResult<Json<Value>> {
     let settings = db::settings::get_solo(&state.db).await?;
@@ -270,10 +302,20 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
     };
     let mine = db::webhooks::for_user(&state.db, me.id).await?;
     let used = mine.len();
-    let site = if me.is_superuser { Some(render(db::webhooks::site(&state.db).await?)) } else { None };
+    let site_rows = db::webhooks::site(&state.db).await?;
+    // 每個人都看得到全站 webhook 的摘要；非管理員只看開著的和因為一直失敗而暫停的（暫停時 enabled = 0）。
+    // Everyone gets the redacted site list; non-admins only the enabled ones and the paused ones (paused = enabled 0).
+    let visible: HashSet<i64> = if me.is_superuser { names.keys().copied().collect() } else { visible_tunnels(&state, &me).await? };
+    let site_summary: Vec<Value> = site_rows
+        .iter()
+        .filter(|r| me.is_superuser || r.enabled || !r.paused_reason.is_empty())
+        .map(|r| site_summary_json(r, map.get(&r.id).map(Vec::as_slice).unwrap_or(&[]), &names, &visible, me.is_superuser))
+        .collect();
+    let site = if me.is_superuser { Some(render(site_rows)) } else { None };
     Ok(Json(json!({
         "mine": render(mine),
         "site": site,
+        "site_summary": site_summary,
         "catalog": {
             "personal": catalog::catalog_json(false),
             "site": if me.is_superuser { catalog::catalog_json(true) } else { Value::Null },

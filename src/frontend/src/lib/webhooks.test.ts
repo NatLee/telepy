@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectFormat, effectiveFormat, errorKey, groupCatalog, hasStatusEvent, hasTunnelEvent, headerProblem, headersToSave, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
-import type { CatalogEvent } from "../types/webhooks.ts";
+import { detectFormat, effectiveFormat, errorKey, knownEventOrder, siteCoverage, siteHookState, sortSiteSummary, groupCatalog, hasStatusEvent, hasTunnelEvent, headerProblem, headersToSave, hookState, maskUrl, orderEvents, presetEvents, presetsFor, prettyBody, sameEvents } from "./webhooks.ts";
+import type { CatalogEvent, SiteWebhookSummary } from "../types/webhooks.ts";
 
 const ev = (event: string, group: CatalogEvent["group"], over: Partial<CatalogEvent> = {}): CatalogEvent => ({
     event,
@@ -96,4 +96,38 @@ test("custom headers follow the backend's rules", () => {
     assert.equal(headerProblem(h("X-A", "中文"), []), "webhooks.headers.badValue");
     assert.equal(headerProblem(h("X-A", "a\nb"), []), "webhooks.headers.badValue");
     assert.deepEqual(headersToSave([h(" X-A ", "1"), h("", "")]), [h("X-A", "1")]);
+});
+
+const summary = (over: Partial<SiteWebhookSummary>): SiteWebhookSummary => ({
+    id: 1,
+    name: "Ops",
+    service: "slack",
+    events: [],
+    all_tunnels: false,
+    tunnels: [],
+    hidden_tunnels: 0,
+    enabled: true,
+    paused: false,
+    ...over,
+});
+
+test("site webhook coverage says which of my tunnels it reports on", () => {
+    assert.deepEqual(siteCoverage(summary({ all_tunnels: true, hidden_tunnels: 0 })), { kind: "all" });
+    assert.deepEqual(siteCoverage(summary({ tunnels: [{ id: 2, name: "a" }, { id: 3, name: "b" }], hidden_tunnels: 4 })), { kind: "some", names: ["a", "b"], hidden: 4 });
+    assert.deepEqual(siteCoverage(summary({ hidden_tunnels: 2 })), { kind: "none", hidden: 2 });
+});
+
+test("site webhook state: paused wins, then on / off", () => {
+    assert.equal(siteHookState({ enabled: false, paused: true }), "paused");
+    assert.equal(siteHookState({ enabled: true, paused: false }), "on");
+    assert.equal(siteHookState({ enabled: false, paused: false }), "off");
+});
+
+test("site webhooks sort running first, then by name", () => {
+    const list = [summary({ id: 1, name: "b", enabled: false }), summary({ id: 2, name: "z" }), summary({ id: 3, name: "a", enabled: false, paused: true }), summary({ id: 4, name: "c" })];
+    assert.deepEqual(sortSiteSummary(list).map((h) => h.id), [4, 2, 3, 1]);
+});
+
+test("events are ordered like the event table, unknown ones last", () => {
+    assert.deepEqual(knownEventOrder(["user.created", "made.up", "tunnel.offline"]), ["tunnel.offline", "user.created", "made.up"]);
 });
