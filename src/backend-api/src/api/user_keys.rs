@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::serialize::user_key_json;
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::db::{self, keys::UserKey, tunnels::like_prefix};
+use crate::db::{self, keys::UserKey, tunnels::like_prefix, Db};
 use crate::device_keys::authorized_keys::{parse_public_key, weak_key_reason};
 use crate::error::{is_unique_violation, ApiError, ApiResult};
 use crate::state::AppState;
@@ -23,7 +23,7 @@ pub fn router() -> OpenApiRouter<AppState> {
         .routes(routes!(retrieve, update, replace, destroy))
 }
 
-fn unique_error(e: sqlx::Error) -> ApiError {
+pub fn unique_error(e: sqlx::Error) -> ApiError {
     if is_unique_violation(&e) {
         let msg = crate::error::db_error_message(&e);
         if msg.contains("host_friendly_name") {
@@ -90,19 +90,20 @@ async fn own_key(state: &AppState, user_id: i64, id: i64) -> ApiResult<UserKey> 
 
 /// 用 russh 解析公鑰：格式、強度（拒收 DSA / 短 RSA）、與既有金鑰重複（不看 comment）。回傳去掉前後空白的那一行。
 /// Parse with russh: format, strength and duplicates (ignoring the comment). Returns the trimmed line.
-async fn checked_key(state: &AppState, raw: &str, except_id: Option<i64>) -> ApiResult<String> {
+/// `import-user-keys` 也用這個。/ Shared with `telepy-server import-user-keys`.
+pub async fn checked_key(db: &Db, raw: &str, except_id: Option<i64>) -> ApiResult<String> {
     let key = raw.trim();
     let parsed = parse_public_key(key).ok_or_else(|| ApiError::field("key", "Invalid SSH public key. Paste a single line such as \"ssh-ed25519 AAAA… user@host\"."))?;
     if let Some(reason) = weak_key_reason(&parsed) {
         return Err(ApiError::field("key", reason));
     }
     let like = like_prefix(&parsed.bare);
-    if db::keys::user_key_bare_taken(&state.db, &like, except_id).await? {
+    if db::keys::user_key_bare_taken(db, &like, except_id).await? {
         return Err(ApiError::field("key", "user keys with this SSH Key (public) already exists."));
     }
-    let service = db::keys::service_keys(&state.db).await?;
-    if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some()
-        || db::tunnel_keys::tunnel_by_key_prefix(&state.db, &like).await?.is_some()
+    let service = db::keys::service_keys(db).await?;
+    if db::tunnels::by_key_prefix(db, &like).await?.is_some()
+        || db::tunnel_keys::tunnel_by_key_prefix(db, &like).await?.is_some()
         || service.iter().any(|s| parse_public_key(&s.key).is_some_and(|p| p.bare == parsed.bare))
     {
         return Err(ApiError::field("key", "This key is already used by a tunnel or by Telepy itself; use a different key."));
@@ -110,7 +111,7 @@ async fn checked_key(state: &AppState, raw: &str, except_id: Option<i64>) -> Api
     Ok(key.to_string())
 }
 
-fn validate_full(body: &Value) -> Result<(String, String), ApiError> {
+pub fn validate_full(body: &Value) -> Result<(String, String), ApiError> {
     let mut errors = serde_json::Map::new();
     let name = json_str(body, "host_friendly_name").filter(|s| !s.is_empty());
     let key = json_str(body, "key").filter(|s| !s.is_empty());
@@ -126,23 +127,48 @@ fn validate_full(body: &Value) -> Result<(String, String), ApiError> {
     Ok((name.unwrap(), key.unwrap()))
 }
 
-#[utoipa::path(post, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UserKeyWrite, responses((status = 201, body = super::schemas::UserKey), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
-async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
-    let (name, key) = validate_full(&body)?;
-    let key = checked_key(&state, &key, None).await?;
-    let group = group_choice(&state, user.id, &body).await?;
-    let description = json_str(&body, "description");
-    // 沒給到期時間：站台有上限就用上限，否則不到期。/ No expiry given: the site limit when set, else never.
-    let max_days = db::settings::get_solo(&state.db).await?.user_key_max_days;
+/// 驗證過、可以寫進 DB 的新金鑰。/ A new key that passed every check, ready to insert.
+pub struct NewKey {
+    pub name: String,
+    pub key: String,
+    pub description: Option<String>,
+    /// DB 格式的到期時間。/ Expiry in the DB format.
+    pub expires_at: Option<String>,
+}
+
+/// 新金鑰的到期時間：沒給 = 站台有上限就用上限，否則不到期。/ A new key's expiry: absent = the site limit when set, else never.
+pub async fn new_key_expiry(db: &Db, given: Option<&Value>) -> ApiResult<Option<String>> {
+    let max_days = db::settings::get_solo(db).await?.user_key_max_days;
     let now = Utc::now();
-    let expires = match body.get("expires_at") {
+    let expires = match given {
         Some(v) => check_expiry(parse_expiry(v).map_err(|m| ApiError::field("expires_at", m))?, now, max_days),
         None if max_days > 0 => Ok(Some(now + Duration::days(max_days))),
         None => Ok(None),
     }
     .map_err(|m| ApiError::field("expires_at", m))?;
-    let expires = expires.map(crate::util::db_time);
-    let k = db::keys::user_key_create(&state.db, user.id, &name, &key, description.as_deref(), expires.as_deref()).await.map_err(unique_error)?;
+    Ok(expires.map(crate::util::db_time))
+}
+
+/// `POST /api/reverse/user/keys` 的全部檢查（名稱、公鑰、重複、到期），`import-user-keys` 共用。
+/// Every check of `POST /api/reverse/user/keys` (name, key, duplicates, expiry); shared with `import-user-keys`.
+pub async fn prepare_new(db: &Db, body: &Value) -> ApiResult<NewKey> {
+    let (name, key) = validate_full(body)?;
+    let key = checked_key(db, &key, None).await?;
+    let description = json_str(body, "description");
+    let expires_at = new_key_expiry(db, body.get("expires_at")).await?;
+    Ok(NewKey { name, key, description, expires_at })
+}
+
+/// 寫入（唯一鍵衝突轉成跟 API 一樣的欄位錯誤）。/ Insert; unique violations become the API's field errors.
+pub async fn insert_new(db: &Db, user_id: i64, k: &NewKey) -> ApiResult<UserKey> {
+    db::keys::user_key_create(db, user_id, &k.name, &k.key, k.description.as_deref(), k.expires_at.as_deref()).await.map_err(unique_error)
+}
+
+#[utoipa::path(post, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UserKeyWrite, responses((status = 201, body = super::schemas::UserKey), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
+async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let new = prepare_new(&state.db, &body).await?;
+    let group = group_choice(&state, user.id, &body).await?;
+    let k = insert_new(&state.db, user.id, &new).await?;
     // 放進金鑰群組：那組授予的裝置都會裝上它。/ Into a key group: every device the group is granted to gets it.
     if let Some(Some(g)) = group {
         move_key(&state, k.id, Some(g)).await?;
@@ -169,7 +195,7 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let group = group_choice(&state, user.id, &body).await?;
     let name = json_str(&body, "host_friendly_name");
     let key = match json_str(&body, "key") {
-        Some(k) => Some(checked_key(&state, &k, Some(id)).await?),
+        Some(k) => Some(checked_key(&state.db, &k, Some(id)).await?),
         None => None,
     };
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));

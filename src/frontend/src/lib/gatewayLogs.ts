@@ -78,6 +78,7 @@ export const EVENT_KINDS: Record<string, EventKind> = {
     user_group: { key: "logs.event.user_group", tone: "outline", category: "change" },
     feature_grant: { key: "logs.event.feature_grant", tone: "outline", category: "change" },
     api_token: { key: "logs.event.api_token", tone: "outline", category: "change" },
+    user_key_import: { key: "logs.event.user_key_import", tone: "outline", category: "change" },
     token_call: { key: "logs.event.token_call", tone: "outline", category: "change" },
     host_key_pinned: { key: "logs.event.host_key_pinned", tone: "outline", category: "change" },
     service_key_migrated: { key: "logs.event.service_key_migrated", tone: "success", category: "change" },

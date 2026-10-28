@@ -4754,6 +4754,7 @@ export const ja: Record<TranslationKey, string> = {
     "logs.event.user_group": "ユーザーグループ",
     "logs.event.feature_grant": "機能の権限",
     "logs.event.api_token": "API トークン",
+    "logs.event.user_key_import": "鍵のインポート",
     "logs.event.token_call": "トークン経由",
     "webhooks.title": "Webhooks",
     "webhooks.subtitle": "気になる Telepy の通知を Slack・Discord・Teams・スマートフォン（ntfy）・自分のサービスへ送ります。",
