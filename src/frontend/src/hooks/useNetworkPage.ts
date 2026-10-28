@@ -17,6 +17,7 @@ import type { TranslationKey } from "@/locales/en";
 import type { ConnectTarget } from "@/lib/forwardRecipes";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import { hasSsh, scanRunning } from "@/lib/lanConnect";
+import { hostKind, hostMatches, queryTerms, type HostKind } from "@/lib/lanHosts";
 import type { LanHost, LanScan, TopologyTunnel } from "@/types/lan";
 
 /** 掃描錯誤碼 → 翻譯；其餘（subnet / ports / username）附上後端的說明。/ Scan error codes → messages. */
@@ -305,6 +306,8 @@ export function useNetworkPage() {
     const q = query.trim().toLowerCase();
     const visible = useMemo(() => {
         if (!q) return tunnels;
+        const terms = queryTerms(q);
+        const kindLabel = (k: HostKind) => t(`network.kind.${k}` as TranslationKey);
         return tunnels
             .map((tn) => {
                 // 裝置名稱或它自己的位址（內網網卡、外網 IP、hostname）符合 = 整台連主機一起顯示。
@@ -312,14 +315,12 @@ export function useNetworkPage() {
                 const ep = tn.endpoint;
                 const own = [tn.name, ep?.hostname, ep?.public_ip, ep?.ip, ...(ep?.lan ?? []).map((a) => a.ip)];
                 if (own.some((v) => v && v.toLowerCase().includes(q))) return tn;
-                const hosts = tn.hosts.filter((h) =>
-                    [h.address, h.hostname, h.label, h.mac, h.vendor, h.ssh_banner].some((v) => v && v.toLowerCase().includes(q)) ||
-                    h.open_ports.some((p) => String(p) === q)
-                );
+                // 主機：每個詞都要符合（名稱、IP、MAC、廠商、種類、port、所在裝置）。/ Hosts: every word must match (name, IP, MAC, vendor, kind, port, device).
+                const hosts = tn.hosts.filter((h) => hostMatches({ host: h, device: tn, kind: hostKind(h) }, terms, kindLabel));
                 return hosts.length ? { ...tn, hosts } : null;
             })
             .filter((x): x is TopologyTunnel => x !== null);
-    }, [tunnels, q]);
+    }, [tunnels, q, t]);
 
     const stats = useMemo(() => {
         const hosts = tunnels.flatMap((tn) => tn.hosts);

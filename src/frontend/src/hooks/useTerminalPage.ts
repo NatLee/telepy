@@ -60,6 +60,8 @@ export interface TerminalLanTarget {
     username?: string | null;
     /** 那一跳怎麼登入（預設 Telepy 的金鑰）。/ How that hop logs in (default: Telepy's key). */
     auth?: LanAuth;
+    /** 一開始用哪個裝置帳號（跳板那一跳；不在清單裡就用預設）。/ The device account to start with (falls back to the default). */
+    account?: string | null;
 }
 
 /** 區網主機資訊（顯示用）。/ LAN host details for display. */
@@ -129,6 +131,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const lanHostId = lan?.hostId ?? null;
     const lanUsername = lan?.username ?? null;
     const lanAuth = lan?.auth ?? TELEPY_AUTH;
+    // 只在載入帳號清單時讀一次（之後使用者自己換帳號）。/ Read once when the account list loads.
+    const preferredAccount = useRef<string | null>(lan?.account ?? null);
     const lanAuthKey = `${lanAuth.kind}:${lanAuth.kind === "credential" ? lanAuth.id : ""}`;
     const terminalRef = useRef<HTMLDivElement>(null);
     /** 永遠指向作用中分頁的 xterm / WebSocket（供鍵盤等元件使用）。 */
@@ -684,7 +688,9 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
                 setAvailableUsernames(list);
                 if (list.length > 0) {
                     const defaultItem = defaultId ? list.find((u: any) => u.id === defaultId) : null;
-                    setUsername(defaultItem ? defaultItem.username : (list[0].username ?? list[0]));
+                    const preferred = preferredAccount.current ? list.find((u: any) => (u.username ?? u) === preferredAccount.current) : null;
+                    const pick = preferred ?? defaultItem;
+                    setUsername(pick ? (pick.username ?? pick) : (list[0].username ?? list[0]));
                     setNoUsers(false);
                 } else {
                     setNoUsers(true);

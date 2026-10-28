@@ -58,13 +58,15 @@ function TerminalSession({ serverId }: { serverId: string }) {
     // 區網主機（經裝置跳過去）。/ Optional LAN host reached through the device.
     const lanHostId = searchParams.get("lanHost");
     const lanUser = searchParams.get("lanUser");
+    // 經過的裝置帳號（網路頁選的跳板帳號；沒帶 = 裝置的預設帳號）。/ The device account to hop through (the network page's choice; none = the default).
+    const lanAccount = searchParams.get("lanAccount");
     // 區網那一跳怎麼登入（網址帶的；物件只建一次，免得 hook 以為目標變了）。/ How the hop logs in (from the URL; one stable object).
     const lanAuthRaw = searchParams.get("lanAuth");
     const lanAuth = useMemo(() => lanAuthFromValue(lanAuthRaw), [lanAuthRaw]);
     const router = useRouter();
     const { accessToken } = useAuth();
 
-    const lanTarget = useMemo(() => (lanHostId ? { hostId: lanHostId, username: lanUser, auth: lanAuth } : null), [lanHostId, lanUser, lanAuth]);
+    const lanTarget = useMemo(() => (lanHostId ? { hostId: lanHostId, username: lanUser, auth: lanAuth, account: lanAccount } : null), [lanHostId, lanUser, lanAuth, lanAccount]);
     const { refs, state, actions } = useTerminalPage(serverId, accessToken, lanTarget);
     // 存的登入的名稱（info 路徑圖要說「用哪一組」）。/ The saved login's name for the info diagram.
     const savedLogins = useSavedLogins(lanHostId && lanAuth.kind === "credential" ? { tunnelId: Number(serverId), hostId: Number(lanHostId), protocol: "ssh" } : null, lanAuth.kind === "credential");

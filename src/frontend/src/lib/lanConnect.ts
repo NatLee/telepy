@@ -6,22 +6,9 @@
 import { buildSegments, jumpServerSpec, LOCAL_PRESETS, shq, type ConnectMode, type ConnectTarget, type Segment, type Token } from "@/lib/forwardRecipes";
 import type { LanHost, LanScan } from "@/types/lan";
 
-/** 這台主機的 SSH port 有沒有在最後一次掃描時開著（或看到 SSH banner）。/ SSH seen on this host. */
-export function hasSsh(h: LanHost): boolean {
-    return h.open_ports.includes(h.ssh_port) || !!h.ssh_banner;
-}
-
-export type HostKind = "ssh" | "desktop" | "files" | "web" | "other";
-
-/** 依開著的 port 粗分（決定圖示）。/ Coarse kind from the open ports (picks the icon). */
-export function hostKind(h: LanHost): HostKind {
-    const p = new Set(h.open_ports);
-    if (hasSsh(h)) return "ssh";
-    if (p.has(3389) || p.has(5900) || p.has(21118)) return "desktop";
-    if (p.has(445) || p.has(139) || p.has(548) || p.has(2049)) return "files";
-    if (p.has(80) || p.has(443) || p.has(8080) || p.has(8443)) return "web";
-    return "other";
-}
+// 主機種類搬到 lib/lanHosts.ts（node 測試得到）；這裡轉出去，舊的 import 照常可用。
+// The host kind moved to lib/lanHosts.ts (node-testable); re-exported so existing imports keep working.
+export { hasSsh, hostKind, type HostKind } from "@/lib/lanHosts";
 
 /** 廠商名稱去掉公司字尾，放得進小標籤。/ Vendor name without company suffixes, for a small tag. */
 export function shortVendor(vendor: string): string {

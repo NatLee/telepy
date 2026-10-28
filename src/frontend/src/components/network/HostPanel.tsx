@@ -1,20 +1,25 @@
 "use client";
 
 /**
- * 區網主機面板（就地展開，取代原本的視窗）：終端機（開在本頁底部的 dock）、指令（就地產生）、細節與編輯。
- * 登入帳號與經過的裝置帳號兩個分頁共用。每台主機一份新狀態（key = 主機 id）。
- * The LAN host panel, shown in place of the old dialog: terminal (opens in this page's dock), commands
- * (generated here), details and editing. Fresh state per host (keyed by id).
+ * 區網主機面板（就地展開，取代原本的視窗）：連線（終端機開在本頁的 dock，或跳到終端機頁）、指令（就地產生）、
+ * 細節（可以編輯的人在同一頁下面編輯）。登入帳號、經過的裝置帳號與登入方式兩種開法、指令都共用。
+ * 每台主機一份新狀態（key = 主機 id）。
+ * The LAN host panel, shown in place of the old dialog: connect (a terminal in this page's dock, or on the
+ * terminal page), commands (generated here) and details (editors edit below them on the same tab). The login,
+ * device account and login method apply to both ways of opening and to the commands. Fresh state per host.
  */
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Terminal, Trash2, Save, Loader2, X, ScreenShare } from "lucide-react";
+import { Section } from "@/components/ui/section";
+import { SplitOpen, defaultDeviceUser, lanTerminalUrl } from "@/components/network/HostOpen";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Segmented } from "@/components/ui/segmented";
 import { LanCommands } from "@/components/network/LanCommands";
 import { sessionLabel } from "@/components/network/TerminalDock";
@@ -29,11 +34,11 @@ import type { FormErrors, HostInput } from "@/hooks/useNetworkPage";
 import { MAX_LAN_TERMINALS, type LanTerminalSession } from "@/hooks/useLanTerminals";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 
-type Tab = "terminal" | "commands" | "details" | "edit";
+export type HostPanelTab = "terminal" | "commands" | "details";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
     return (
-        <div className="grid grid-cols-[7rem_1fr] gap-3 py-1.5 text-sm">
+        <div className="grid grid-cols-[minmax(5rem,7rem)_minmax(0,1fr)] gap-3 py-1.5 text-sm">
             <dt className="text-muted-foreground">{label}</dt>
             <dd className="min-w-0 break-words text-foreground">{children}</dd>
         </div>
@@ -54,7 +59,12 @@ interface Props {
     tunnel: TopologyTunnel;
     online: boolean;
     sessions: LanTerminalSession[];
+    /** 一打開就在哪個分頁；`tabRequest` 一變（從列表的「指令」圖示再點）就切過去。/ The tab to show; a new `tabRequest` switches to it again. */
+    initialTab?: HostPanelTab;
+    tabRequest?: number;
     onClose: () => void;
+    /** 跳到終端機頁之前（記到「最近用過」）。/ Before leaving for the terminal page (remembered as recently used). */
+    onNavigate?: () => void;
     onOpenTerminal: (req: OpenTerminalRequest) => boolean;
     onShowSession: (key: number) => void;
     loadConnectTarget: (tn: TopologyTunnel, deviceUser: string | null) => Promise<ConnectTarget>;
@@ -62,12 +72,18 @@ interface Props {
     deleteHost: (h: LanHost) => Promise<boolean>;
 }
 
-export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTerminal, onShowSession, loadConnectTarget, updateHost, deleteHost }: Props) {
+export function HostPanel({ host, tunnel, online, sessions, initialTab = "terminal", tabRequest = 0, onClose, onNavigate, onOpenTerminal, onShowSession, loadConnectTarget, updateHost, deleteHost }: Props) {
     const { t, locale } = useI18n();
-    const [tab, setTab] = useState<Tab>("terminal");
+    const [tab, setTab] = useState<HostPanelTab>(initialTab);
+    // 同一台主機上再從列表要求別的分頁。/ Another tab requested for the same host from a list row.
+    const [seenRequest, setSeenRequest] = useState(tabRequest);
+    if (seenRequest !== tabRequest) {
+        setSeenRequest(tabRequest);
+        setTab(initialTab);
+    }
     const [login, setLogin] = useState(host.username ?? "");
     const [auth, setAuth] = useState<LanAuth>(TELEPY_AUTH);
-    const [deviceUser, setDeviceUser] = useState<string | null>(tunnel.default_username ?? tunnel.usernames[0] ?? null);
+    const [deviceUser, setDeviceUser] = useState<string | null>(defaultDeviceUser(tunnel));
     // 載入結果帶著它是哪個帳號的，換帳號時舊的就不顯示。/ The loaded target remembers its account.
     const [loaded, setLoaded] = useState<{ user: string | null; target: ConnectTarget } | null>(null);
     const [form, setForm] = useState({ label: host.label ?? "", username: host.username ?? "", ssh_port: String(host.ssh_port) });
@@ -116,7 +132,6 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
         else {
             setErrors({});
             setLogin(username);
-            setTab("terminal");
         }
     };
 
@@ -124,27 +139,30 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
         { value: "terminal" as const, label: t("network.tab.terminal") },
         { value: "commands" as const, label: t("network.tab.commands") },
         { value: "details" as const, label: t("network.tab.details") },
-        ...(tunnel.can_edit ? [{ value: "edit" as const, label: t("network.tab.edit") }] : []),
     ];
+    const blocked = !online ? t("network.deviceOffline") : noDeviceUser ? t("network.noDeviceUser") : !loginOk ? t("network.loginHint") : undefined;
 
     const loginFields = (
-        <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-3 @md:grid-cols-2">
+            <div className="min-w-0 space-y-1.5">
                 <Label htmlFor="lan-login">{t("network.loginAs")}</Label>
                 <Input id="lan-login" value={login} onChange={(e) => setLogin(e.target.value)} placeholder="admin" autoComplete="off" spellCheck={false} className="font-mono" />
                 {!loginOk && <p className="text-xs text-muted-foreground">{t("network.loginHint")}</p>}
             </div>
             {tunnel.usernames.length > 1 && (
-                <div className="space-y-1.5">
-                    <Label>{t("network.jumpAccount")}</Label>
-                    <Segmented options={tunnel.usernames.map((u) => ({ value: u, label: u }))} value={deviceUser ?? tunnel.usernames[0]} onChange={setDeviceUser} kind="toggle" />
+                <div className="min-w-0 space-y-1.5">
+                    <Label htmlFor="lan-jump">{t("network.jumpAccount")}</Label>
+                    {/* 帳號多或名字長時分段鈕會撐破面板，用下拉。/ A select: segments overflow with many or long account names. */}
+                    <NativeSelect id="lan-jump" value={deviceUser ?? tunnel.usernames[0]} onChange={(e) => setDeviceUser(e.target.value)} className="font-mono">
+                        {tunnel.usernames.map((u) => <option key={u} value={u}>{u}</option>)}
+                    </NativeSelect>
                 </div>
             )}
         </div>
     );
 
     return (
-        <section aria-label={name} className="rounded-xl border border-border bg-card shadow-card">
+        <section aria-label={name} className="@container min-w-0 rounded-xl border border-border bg-card shadow-card">
             {/* 標題與分頁在面板內捲動時固定在上面。/ Title and tabs stay put while the panel scrolls. */}
             <div className="z-10 rounded-t-xl bg-card xl:sticky xl:top-0">
             <header className="flex items-start gap-3 border-b border-border p-4">
@@ -176,10 +194,15 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                             <LanAuthSelect id="lan-auth" tunnelId={tunnel.id} hostId={host.id} hostName={name} login={cleanLogin} value={auth} onChange={setAuth} />
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                            <Button onClick={openTerminal} disabled={!online || !loginOk || noDeviceUser} title={!online ? t("network.deviceOffline") : undefined}>
-                                <Terminal size={16} /> {t("network.openTerminal")}
-                            </Button>
-                            <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "outline"} asChild>
+                            <SplitOpen
+                                onOpenHere={openTerminal}
+                                href={deviceUser ? lanTerminalUrl(tunnel, host, cleanLogin, deviceUser, auth) : "#"}
+                                disabled={!!blocked}
+                                reason={blocked}
+                                onNavigate={onNavigate}
+                                openShells={sessions.filter((s) => s.status !== "closed").length}
+                            />
+                            <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "ghost"} asChild>
                                 <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>
                                     <ScreenShare size={16} /> {t("network.openDesktop")}
                                 </Link>
@@ -187,7 +210,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                             {!online && <span className="text-sm text-muted-foreground">{t("network.deviceOffline")}</span>}
                         </div>
                         {limitHit && <Callout tone="warning">{t("network.terminalLimit", { count: MAX_LAN_TERMINALS })}</Callout>}
-                        <p className="text-xs text-muted-foreground">{t("network.terminalHintFloat")}</p>
+                        <p className="text-xs text-muted-foreground">{t("network.open.explain")}</p>
                         {mine.length > 0 && (
                             <div className="space-y-1.5">
                                 <p className="text-sm text-foreground">{t("network.openSessions")}</p>
@@ -219,6 +242,7 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                 )}
 
                 {tab === "details" && (
+                    <div className="space-y-6">
                     <dl className="divide-y divide-border">
                         <Row label={t("network.field.address")}><span className="font-mono">{host.address}</span></Row>
                         {host.hostname && <Row label={t("network.field.hostname")}><span className="font-mono">{host.hostname}</span></Row>}
@@ -241,16 +265,18 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                         {host.last_seen && <Row label={t("network.field.lastSeen")}>{fmt.format(new Date(host.last_seen))}</Row>}
                         {host.first_seen && <Row label={t("network.field.firstSeen")}>{fmt.format(new Date(host.first_seen))}</Row>}
                     </dl>
-                )}
 
-                {tab === "edit" && tunnel.can_edit && (
+                    {/* 可以編輯的人：同一頁下面編輯（原本的第四個分頁在窄面板裡被擠到看不到字）。
+                        Editors edit below on the same tab (a fourth tab got squeezed past legibility in the narrow panel). */}
+                    {tunnel.can_edit && (
+                    <Section wrapTitle title={t("network.tab.edit")} className="border-t border-border pt-5">
                     <div className="space-y-4">
                         <div className="space-y-1.5">
                             <Label htmlFor="lan-label">{t("network.field.label")}</Label>
                             <Input id="lan-label" value={form.label} maxLength={100} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder={host.hostname ?? host.address} />
                             {errors.label && <p className="text-xs text-destructive">{errors.label}</p>}
                         </div>
-                        <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+                        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 @md:grid-cols-[minmax(0,1fr)_8rem]">
                             <div className="space-y-1.5">
                                 <Label htmlFor="lan-user">{t("network.field.username")}</Label>
                                 <Input id="lan-user" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="admin" autoComplete="off" spellCheck={false} className="font-mono" />
@@ -272,6 +298,9 @@ export function HostPanel({ host, tunnel, online, sessions, onClose, onOpenTermi
                             </Button>
                         </div>
                         {host.source === "scan" && <p className="text-xs text-muted-foreground">{t("network.deleteScannedHint")}</p>}
+                    </div>
+                    </Section>
+                    )}
                     </div>
                 )}
             </div>
