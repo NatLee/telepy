@@ -1,164 +1,27 @@
 /*
- * 低調登入頁（components/auth/DiscreetShell.tsx）的動畫：向日葵點陣上由中心往外的漣漪、兩條軌道、字母由下浮出、
- * 底線畫出、句子的打字游標，以及滑鼠互動（點被推開並亮起、視差、字母跳起、從字送出的波）。只動 transform / opacity /
- * translate（交給合成器），顏色全部取設計 token，深淺色都對。
- * 減少動態：全域規則把動畫縮成一瞬間；滑鼠互動整個不掛（JS 與下面的 media query），句子直接整句顯示、沒有游標。
- * Animations of the discreet sign-in page: a ripple across a sunflower dot field, two orbits, letters rising, a rule
- * drawn under the word, the typing caret, and the pointer effects (dots pushed aside and lit, parallax, hopping
- * letters, a ring sent from the word). Only transform / opacity / translate animate (compositor work); colours come
- * from the design tokens, so both themes work. Reduced motion: the global rule collapses animations; the pointer
- * effects are not attached at all (JS and the media query below) and the line shows whole, without a caret.
+ * 低調登入頁（components/auth/DiscreetShell.tsx）的 CSS 動畫：字母由下浮出、底線畫出、句子的打字游標，以及滑鼠 hover 時
+ * 字母跳起來、底線變長。背景（向日葵點陣的漣漪、兩條軌道、從字送出的波、點被滑鼠推開）是一張 canvas，在 DiscreetShell.tsx
+ * 裡畫——以前每個點各一個 CSS 動畫，四百多個合成圖層讓畫面不順。這裡只動 transform / opacity，顏色全部取設計 token。
+ * 減少動態：全域規則把動畫縮成一瞬間；背景只畫一張靜止的、滑鼠互動整個不掛，句子直接整句顯示、沒有游標。
+ * CSS animations of the discreet sign-in page: letters rising, the rule drawn under the word, the typing caret, and the
+ * hover hop / longer rule. The background (the ripple across the sunflower field, two orbits, the ring from the word,
+ * dots pushed by the pointer) is one canvas drawn in DiscreetShell.tsx — it used to be one CSS animation per dot, and
+ * those 400-odd composited layers are what made it stutter. Only transform / opacity animate here; colours come from
+ * the design tokens. Reduced motion: the global rule collapses animations; the background draws one still frame, the
+ * pointer effects are not attached and the line shows whole, without a caret.
  */
 
-.dsc-field {
+/* 背景 canvas：以字為中心，淡入（第一幀畫好之前不會突然冒出來）。/ The background canvas, centred on the word, fading in. */
+.dsc-canvas {
     position: absolute;
     left: 50%;
     top: 50%;
-    width: 0;
-    height: 0;
+    width: calc(var(--half) * 2);
+    height: calc(var(--half) * 2);
+    margin: calc(var(--half) * -1) 0 0 calc(var(--half) * -1);
     pointer-events: none;
-    /* 視差：JS 設 translate，這裡讓它慢慢跟上。/ Parallax: JS sets translate, this eases it in. */
-    transition: translate 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.dsc-spin {
-    position: absolute;
-    left: 0;
-    top: 0;
-    animation: dsc-spin 320s linear infinite;
-}
-
-/* --px / --py / --h 由滑鼠與那圈波設定（JS）：推開的距離與亮度 0–1。/ Set by the pointer and the ring: push and heat 0–1. */
-.dsc-dot {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 3px;
-    height: 3px;
-    margin: -1.5px 0 0 -1.5px;
-    border-radius: 9999px;
-    background: color-mix(in oklch, var(--primary) calc(var(--h, 0) * 100%), color-mix(in oklch, var(--foreground) 24%, transparent));
-    transform: translate(calc(var(--x) + var(--px, 0px)), calc(var(--y) + var(--py, 0px))) scale(calc(1 + var(--h, 0) * 1.2));
-    opacity: max(var(--o), var(--h, 0));
-    transition:
-        transform 0.45s cubic-bezier(0.22, 1, 0.36, 1),
-        background-color 0.45s ease-out,
-        opacity 0.45s ease-out;
-}
-
-/* 漣漪經過時亮成柿橘色。/ Lights up persimmon as the ripple passes. */
-.dsc-dot::after {
-    content: "";
-    position: absolute;
-    inset: -0.5px;
-    border-radius: inherit;
-    background: var(--primary);
     opacity: 0;
-    animation: dsc-pulse 6.5s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
-    animation-delay: var(--d);
-}
-
-@keyframes dsc-pulse {
-    0% {
-        opacity: 0;
-        transform: scale(0.6);
-    }
-    5% {
-        opacity: 1;
-        transform: scale(2);
-    }
-    22%,
-    100% {
-        opacity: 0;
-        transform: scale(0.8);
-    }
-}
-
-/* 波前：一條細圓圈，速度跟點的延遲一樣（2.4 秒走完半徑）。/ The wavefront ring, as fast as the dots' delays. */
-.dsc-wave {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: calc(var(--R) * 2);
-    height: calc(var(--R) * 2);
-    margin: calc(var(--R) * -1) 0 0 calc(var(--R) * -1);
-    border-radius: 9999px;
-    border: 1px solid color-mix(in oklch, var(--primary) 60%, transparent);
-    opacity: 0;
-    transform: scale(0);
-    animation: dsc-wave 6.5s linear 0.33s infinite;
-}
-
-@keyframes dsc-wave {
-    0% {
-        opacity: 0.85;
-        transform: scale(0.01);
-    }
-    37% {
-        opacity: 0;
-        transform: scale(1);
-    }
-    100% {
-        opacity: 0;
-        transform: scale(1);
-    }
-}
-
-.dsc-orbit {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: calc(var(--r) * 2);
-    height: calc(var(--r) * 2);
-    margin: calc(var(--r) * -1) 0 0 calc(var(--r) * -1);
-    border-radius: 9999px;
-    border: 1px solid color-mix(in oklch, var(--foreground) 10%, transparent);
-    animation: dsc-spin var(--period) linear infinite;
-    animation-direction: var(--dir, normal);
-    transition: translate 1.6s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-/* 碰到「Telepy」送出的那圈波（JS 加進來、播完就拿掉；速度跟 DiscreetShell 的 BURST_MS 一樣）。/ The ring sent from the word. */
-.dsc-burst {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: calc(var(--R) * 2);
-    height: calc(var(--R) * 2);
-    margin: calc(var(--R) * -1) 0 0 calc(var(--R) * -1);
-    border-radius: 9999px;
-    border: 1.5px solid var(--primary);
-    opacity: 0;
-    animation: dsc-burst 2.2s cubic-bezier(0.33, 1, 0.68, 1) forwards;
-}
-
-@keyframes dsc-burst {
-    from {
-        opacity: 0.9;
-        transform: scale(0.02);
-    }
-    to {
-        opacity: 0;
-        transform: scale(1);
-    }
-}
-
-.dsc-orbit::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 0;
-    width: var(--size, 7px);
-    height: var(--size, 7px);
-    border-radius: 9999px;
-    background: var(--c, var(--primary));
-    transform: translate(-50%, -50%);
-}
-
-@keyframes dsc-spin {
-    to {
-        transform: rotate(360deg);
-    }
+    animation: dsc-fade 0.9s ease-out 0.1s forwards;
 }
 
 /*
