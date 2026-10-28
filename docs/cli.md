@@ -105,6 +105,27 @@ files stay as the run's artifacts. A tag from before version stamping (such as `
 CLI reports Cargo.toml's `0.1.0`. The first CLI build was published once on its own as `cli-v0.1.0` (archives
 `telepy-v0.1.0-<target>.tar.gz`), before builds moved to the Telepy releases.
 
+### Updating
+
+```sh
+telepy update --check        # is a newer release out?
+telepy update                # download it, check it against the release's SHA256SUMS and replace this telepy
+telepy update --to v2.9.0    # a given release (also to go back)
+```
+
+`telepy update` downloads this platform's archive from the release, refuses it when its SHA-256 doesn't match
+`SHA256SUMS`, writes the new binary next to the old one, moves the old one aside, and runs the new one's `--version`;
+if that fails, the old one is put back. It needs write access to the folder telepy is in (`sudo telepy update` for
+`/usr/local/bin`); a telepy installed with `cargo install` or Homebrew is left to those tools. On Windows the old
+`.exe` is renamed (a running file can't be deleted) and cleaned up on the next run.
+
+Release builds also look for a newer release on their own: at most once a day, in the background with a two-second
+timeout, and only when stderr is a terminal and `CI` is not set. When there is one, a single line after a successful
+command says so. `TELEPY_NO_UPDATE_CHECK=1` turns that off; `TELEPY_RELEASES_URL` points both at a mirror of
+`https://github.com/NatLee/telepy/releases` (the latest tag is read from the `/latest` redirect, so no GitHub API
+rate limit applies). `telepy doctor` prints the version and whether a newer one is out (a warning, never a failure).
+A locally built telepy (version from Cargo.toml) never checks on its own.
+
 ## Sign in
 
 ```sh

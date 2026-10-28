@@ -23,6 +23,11 @@ base64 = "0.22"
 # 本機時區的時間（`api activity`）。/ Local times for `api activity`.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
+# `telepy update`：發行檔是 .tar.gz（macOS / Linux）或 .zip（Windows）；兩種都在每個平台上編，解壓縮才測得到。
+# `telepy update`: release archives are .tar.gz (macOS / Linux) or .zip (Windows); both are built everywhere so both get tested.
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
 serde = { version = "1", features = ["derive"] }
