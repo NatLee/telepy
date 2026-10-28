@@ -94,7 +94,7 @@ export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText
                     {tile("size-8", 16)}
                     <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5">
-                            <span className="min-w-0 truncate text-sm text-foreground">{title}</span>
+                            <span className="min-w-0 text-sm text-foreground [overflow-wrap:break-word]">{title}</span>
                             <StateLine state={state} text={stateText} />
                         </div>
                         {sub && <span className="block text-xs leading-snug text-muted-foreground">{sub}</span>}
@@ -107,7 +107,7 @@ export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText
     return (
         <li className={cn("flex min-w-0 flex-col items-center gap-1.5 rounded-xl border bg-card px-3 py-3 text-center @3xl:basis-0", wide ? "@3xl:flex-[2_1_0%]" : "@3xl:flex-1", NODE_BORDER[state], className)}>
             {tile("size-10", 20)}
-            <span className="max-w-full truncate text-sm text-foreground" title={typeof title === "string" ? title : undefined}>{title}</span>
+            <span className="max-w-full text-sm text-foreground [overflow-wrap:break-word]">{title}</span>
             {sub && <span className="text-xs leading-snug text-muted-foreground">{sub}</span>}
             <StateLine state={state} text={stateText} />
         </li>

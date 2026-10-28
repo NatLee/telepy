@@ -45,6 +45,7 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "terminal_detach_secs": s.terminal_detach_secs,
         "terminal_detach_max_secs": site.terminal_detach_max_secs,
         "view_modes": view_modes_json(&s.view_modes),
+        "desktop_display": crate::desktop::display::json(&s.desktop_display),
         "ssh_alias_prefix": s.ssh_alias_prefix,
         "tapi_color": s.tapi_color,
         "tapi_daily": s.tapi_daily,
@@ -188,6 +189,12 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
         view_modes: match body.get("view_modes") {
             None => None,
             Some(v) => Some(parse_view_modes(v).map_err(|e| ApiError::field("view_modes", e))?),
+        },
+        // 遠端桌面的顯示偏好（整份取代；null = 清掉，回到「還沒選過」）。/ Desktop display preferences (whole object; null clears).
+        desktop_display: match body.get("desktop_display") {
+            None => None,
+            Some(Value::Null) => Some(String::new()),
+            Some(v) => Some(crate::desktop::display::parse(v).map_err(|e| ApiError::field("desktop_display", e))?),
         },
         // ~/.ssh/config 的裝置別名前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
         ssh_alias_prefix: match body.get("ssh_alias_prefix") {

@@ -8,9 +8,11 @@
  *   頁面上其他表單照常能打字。滑鼠 / 觸控走 Guacamole.Mouse。
  * - 「Ctrl 當 ⌘」：對 macOS 桌面把 Control 送成 Meta（Command），Windows / Linux 的瀏覽器才能用 Ctrl+C 之類的快捷鍵。
  * - 只看一個螢幕：`viewport` 把畫面裁成那個矩形（多螢幕的 VNC 桌面）；座標仍是整張畫面的，滑鼠位置照舊正確。
- * - 容器大小改變 → 等比縮放畫面（HiDPI 時向 guacd 要 devicePixelRatio 倍的解析度、縮回 CSS 大小，字才銳利）；
- *   RDP 另外送 `size`，遠端桌面會跟著改解析度（resize-method display-update）。
- * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；放大後框是裁切框、畫面元素往左上挪。
+ * - 解析度（lib/desktopDisplay）：跟著框走的 session（start 的 `resize`：RDP 預設、VNC 要另外開）在框大小改變時送
+ *   `size`（HiDPI 開著時是 devicePixelRatio 倍、縮回 CSS 大小，字才銳利）；固定解析度的就只在瀏覽器裡縮放。
+ *   連線中改了解析度 / HiDPI 的偏好，跟著框走的 session 立刻送新的 `size`。
+ * - 縮放（useDesktopZoom）：塞進框裡 / 只縮不放 / 1:1 / 自訂百分比，工具列與手機上的 − / % / + 都能改；
+ *   雙指捏合 / 拖曳；放大後框是裁切框、畫面元素往左上挪。
  * - 串流統計：中繼每秒送 `telepy-ping`（這裡立刻回 `telepy-pong`）與 `telepy-stats`（交給 onStats）；
  *   兩者在交給 Guacamole.Client 前攔下。tunnel 的 UNSTABLE 狀態也往上報。
  * - 聲音（只有 RDP、start 時開了才有）：guacd 開 `audio` 串流（L16 PCM），guacamole-common-js 的 RawAudioPlayer 播；
@@ -31,9 +33,10 @@ import { sessionFailure, type DesktopFailure, type DesktopStart } from "@/lib/de
 import { parseStats, PING_OPCODE, PONG_OPCODE, STATS_OPCODE, type StreamStats } from "@/lib/desktopStats";
 import { EMPTY_SNAPSHOT, pcmPeak, rawBytesPerSample, type SoundSnapshot } from "@/lib/desktopSound";
 import { sameSnapshot, sharedAudio, SoundTap } from "@/lib/soundTap";
-import { fitScale, rectFromPoints, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
-import { FIT, zoomLayout } from "@/lib/desktopZoom";
-import { useDesktopZoom } from "@/hooks/useDesktopZoom";
+import { rectFromPoints, type Framebuffer, type Viewport } from "@/lib/desktopScreens";
+import { FIT, fitScale, zoomLayout, type ZoomMode } from "@/lib/desktopZoom";
+import { requestedSize, type DisplayPrefs } from "@/lib/desktopDisplay";
+import { useDesktopZoom, type ZoomInfo } from "@/hooks/useDesktopZoom";
 import { Button } from "@/components/ui/button";
 import { ZoomControl } from "@/components/desktop/ZoomControl";
 
@@ -87,6 +90,15 @@ export interface DesktopViewerHandle {
     isBlack: (x: number, y: number) => boolean;
     /** 在點擊裡呼叫：讓被自動播放限制擋住的聲音動起來。/ From a click: let sound the browser held back play. */
     resumeSound: () => void;
+    /** 工具列的縮放：放大 / 縮小 / 換模式 / 指定百分比。/ The toolbar's zoom commands. */
+    zoom: ZoomCommands;
+}
+
+export interface ZoomCommands {
+    zoomIn: () => void;
+    zoomOut: () => void;
+    setMode: (mode: Exclude<ZoomMode, "scale">) => void;
+    setPercent: (percent: number) => void;
 }
 
 interface Props {
@@ -97,8 +109,12 @@ interface Props {
     selecting: boolean;
     /** 框選完成（null = 取消）。/ The dragged area, or null when cancelled. */
     onAreaSelected: (area: Viewport | null) => void;
-    /** 1 = CSS 像素；devicePixelRatio = 向 guacd 要原生解析度（sharp）。/ 1, or devicePixelRatio for HiDPI. */
+    /** 1 = CSS 像素；devicePixelRatio = 向 guacd 要裝置像素（HiDPI）。/ 1, or devicePixelRatio for HiDPI. */
     pixelRatio: number;
+    /** 顯示偏好：縮放方式、解析度。/ Display preferences: scaling and resolution. */
+    display: DisplayPrefs;
+    /** 縮放狀態變了（工具列顯示百分比）。/ The zoom changed (the toolbar shows the percentage). */
+    onZoom?: (info: ZoomInfo) => void;
     /** Control 送成 Command（macOS 桌面）。/ Send Control as Command. */
     ctrlAsCmd: boolean;
     onConnected: () => void;
@@ -118,7 +134,7 @@ interface Props {
     onSound?: (snapshot: SoundSnapshot) => void;
 }
 
-export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, muted = false, onSound }, ref) {
+export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function DesktopViewer({ start, viewport, selecting, onAreaSelected, pixelRatio, display, onZoom, ctrlAsCmd, onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, muted = false, onSound }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -133,17 +149,30 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
     const endedRef = useRef(false);
     // 最新的回呼與選項（連線只建一次，這些每次 render 都可能換）。/ Latest callbacks and options; the connection is set up once.
     const callbacks = useRef({ onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onSound });
-    const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting, muted });
+    const options = useRef({ viewport, pixelRatio, ctrlAsCmd, selecting, muted, display });
     useLayoutEffect(() => {
         callbacks.current = { onConnected, onEnded, onRemoteClipboard, onStats, onTunnelUnstable, onDisplaySize, onScale, onAreaSelected, onSound };
-        options.current = { viewport, pixelRatio, ctrlAsCmd, selecting, muted };
+        options.current = { viewport, pixelRatio, ctrlAsCmd, selecting, muted, display };
     });
     const [focused, setFocused] = useState(false);
     // 框選時不縮放（兩指手勢交給框選層）。/ No zooming while selecting an area.
-    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => !options.current.selecting);
+    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => !options.current.selecting, { mode: display.scale, percent: display.percent });
+    const sendSizeRef = useRef<(() => void) | null>(null);
+    // 工具列要顯示百分比。/ The toolbar shows the percentage.
+    const zoomInfo = zoom.info;
+    useEffect(() => {
+        onZoom?.(zoomInfo);
+    }, [zoomInfo, onZoom]);
+    // 連線中改了解析度 / HiDPI：跟著框走的 session 立刻要新的大小。/ A changed resolution or HiDPI resizes a following session now.
+    const sizeKey = `${display.resolution}:${display.fixed.width}x${display.fixed.height}:${pixelRatio}`;
+    useEffect(() => {
+        sendSizeRef.current?.();
+    }, [sizeKey]);
     const zoomLayoutRef = useRef(zoom.layout);
+    const zoomCmds = useRef<ZoomCommands>(zoom);
     useLayoutEffect(() => {
         zoomLayoutRef.current = zoom.layout;
+        zoomCmds.current = zoom;
     });
 
     // 換螢幕、進出框選模式 → 重新裁切縮放。/ A new viewport or selection mode re-crops the display.
@@ -211,6 +240,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
         },
         focus: () => sinkRef.current?.focus(),
         resumeSound: () => soundRef.current.resume(),
+        zoom: { zoomIn: () => zoomCmds.current.zoomIn(), zoomOut: () => zoomCmds.current.zoomOut(), setMode: (m) => zoomCmds.current.setMode(m), setPercent: (p) => zoomCmds.current.setPercent(p) },
         isBlack: (x: number, y: number) => {
             const c = clientRef.current;
             if (!c) return false;
@@ -250,10 +280,10 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
             host.appendChild(el);
             displayElRef.current = el;
 
-            // 裁切 + 等比縮放：host 是裁切框（viewport 的大小 × 比例，放大後最多到框的大小），畫面元素往左上挪
-            // viewport 的位移再加平移量。「塞進框裡」不放大超過 1:1（HiDPI 時 1/devicePixelRatio，backing store 是
-            // 原生解析度），再乘上縮放倍率。框選時一律整張、不縮放。
-            // Crop, fit and zoom: the host is the clip box, the display element shifted by the viewport's origin plus the pan.
+            // 裁切 + 縮放：host 是裁切框（viewport 的大小 × 比例，放大後最多到框的大小），畫面元素往左上挪
+            // viewport 的位移再加平移量。比例由縮放模式決定（1:1 = 一個遠端像素一個 CSS px，HiDPI 時一個裝置像素）。
+            // 框選時一律整張塞進框裡。
+            // Crop and zoom: the host is the clip box, the display element shifted by the viewport's origin plus the pan.
             const rescale = () => {
                 const w = display.getWidth();
                 const h = display.getHeight();
@@ -262,9 +292,8 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 const vpRaw = selecting ? null : options.current.viewport;
                 const vp: Viewport = vpRaw && vpRaw.x < w && vpRaw.y < h ? { x: vpRaw.x, y: vpRaw.y, width: Math.min(vpRaw.width, w - vpRaw.x), height: Math.min(vpRaw.height, h - vpRaw.y) } : { x: 0, y: 0, width: w, height: h };
                 const box = frame.getBoundingClientRect();
-                const pr = Math.max(1, options.current.pixelRatio);
-                const fit = fitScale(box, vp, 1 / pr);
-                const l = selecting ? zoomLayout(box, vp, fit, FIT) : zoomLayoutRef.current(box, vp, fit, fit * pr < 0.99);
+                const unit = 1 / Math.max(1, options.current.pixelRatio);
+                const l = selecting ? zoomLayout(box, vp, { fit: fitScale(box, vp), unit }, FIT) : zoomLayoutRef.current(box, vp, unit);
                 display.scale(l.scale);
                 host.style.width = `${l.hostWidth}px`;
                 host.style.height = `${l.hostHeight}px`;
@@ -382,28 +411,35 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 reader.onend = () => callbacks.current.onRemoteClipboard(data);
             };
 
-            // RDP 跟著框的大小改解析度；VNC 的解析度固定，只縮放。/ RDP follows the frame size; VNC only scales.
+            // 跟著框走的 session（RDP 預設；VNC 要另外開）：框大小改變就送 `size`（停 400 ms 再送，拖視窗時不會一直重設）。
+            // 固定解析度的 session 只縮放。/ A following session sends `size` 400 ms after the frame settles; a fixed one only scales.
             let resizeTimer: ReturnType<typeof setTimeout> | null = null;
             const requested = () => {
                 const box = frame.getBoundingClientRect();
-                const pr = Math.max(1, options.current.pixelRatio);
-                return { width: Math.max(320, Math.round(box.width * pr)), height: Math.max(240, Math.round(box.height * pr)), dpi: Math.round(96 * pr) };
+                return requestedSize(options.current.display, start.protocol, { width: box.width, height: box.height }, options.current.pixelRatio, start.max_resolution ?? null);
             };
+            let lastSent = "";
+            const sendSize = () => {
+                if (!start.resize) return;
+                const box = frame.getBoundingClientRect();
+                if (box.width <= 0 || box.height <= 0) return;
+                const r = requested();
+                const key = `${r.width}x${r.height}`;
+                if (key === lastSent) return;
+                lastSent = key;
+                client.sendSize(r.width, r.height);
+            };
+            sendSizeRef.current = sendSize;
             const observer = new ResizeObserver(() => {
                 rescale();
-                if (start.protocol !== "rdp") return;
+                if (!start.resize) return;
                 if (resizeTimer) clearTimeout(resizeTimer);
-                resizeTimer = setTimeout(() => {
-                    const box = frame.getBoundingClientRect();
-                    if (box.width > 0 && box.height > 0) {
-                        const r = requested();
-                        client.sendSize(r.width, r.height);
-                    }
-                }, 400);
+                resizeTimer = setTimeout(sendSize, 400);
             });
             observer.observe(frame);
 
             const size = requested();
+            lastSent = `${size.width}x${size.height}`;
             client.connect(new URLSearchParams({ ticket: start.ticket, width: String(size.width), height: String(size.height), dpi: String(size.dpi) }).toString());
             // 中繼自己的指令在交給 Client 前攔下：ping 立刻回 pong，stats 往上報。其餘原樣交給 Client。
             // Intercept the relay's own instructions before the Client sees them; everything else passes through.
@@ -443,6 +479,7 @@ export const DesktopViewer = forwardRef<DesktopViewerHandle, Props>(function Des
                 client.disconnect();
                 el.remove();
                 rescaleRef.current = null;
+                sendSizeRef.current = null;
                 sinkRef.current = null;
                 keyboardRef.current = null;
                 displayElRef.current = null;

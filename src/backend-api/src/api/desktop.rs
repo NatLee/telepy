@@ -83,6 +83,16 @@ fn parse_audio(body: &Value) -> Result<bool, ApiError> {
     }
 }
 
+/// 遠端解析度要不要跟著瀏覽器的框走；沒帶 = 該協定的預設（RDP 跟、VNC 不跟）。
+/// Whether the remote resolution follows the browser's frame; omitted = the protocol's default (RDP yes, VNC no).
+fn parse_resize(body: &Value, protocol: Protocol) -> Result<bool, ApiError> {
+    match body.get("resize") {
+        None | Some(Value::Null) => Ok(protocol == Protocol::Rdp),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(ApiError::field("resize", "Must be true or false.")),
+    }
+}
+
 fn parse_port(body: &Value, protocol: Protocol) -> Result<u16, ApiError> {
     let n = match body.get("port") {
         None | Some(Value::Null) => return Ok(protocol.default_port()),
@@ -117,6 +127,7 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
     let (clipboard, clipboard_limit) = clipboard_for(&state, user.id, &settings, &body).await?;
     // 聲音：這次要不要（預設不要，吃頻寬）；只有 RDP 有，VNC 帶 true 也當 false。/ Sound: asked per start, RDP only.
     let audio = parse_audio(&body)? && protocol == Protocol::Rdp;
+    let resize = parse_resize(&body, protocol)?;
     let allowed = permissions::allowed_usernames(&state.db, user.id, &tunnel).await?;
     let requested = json_str(&body, "username").filter(|u| !u.is_empty());
     let hop_username = permissions::choose_username(&allowed, tunnel.default_username_id, requested.as_deref(), &tunnel.host_friendly_name).map_err(ApiError::forbidden)?;
@@ -146,12 +157,13 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         clipboard,
         quality,
         audio,
+        resize,
         credentials,
         prepared,
         saved_label,
         web_session,
     });
-    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), audio, "desktop: session created");
+    tracing::info!(session = %session.id, user = %user.username, tunnel = tunnel.id, protocol = protocol.as_str(), quality = quality.as_str(), clipboard = clipboard.as_str(), audio, resize, "desktop: session created");
     Ok(Json(json!({
         "session_id": session.id,
         "ws_path": format!("/ws/desktop/{}/", session.id),
@@ -162,6 +174,8 @@ async fn start(State(state): State<AppState>, AuthUser(user): AuthUser, CurrentS
         "clipboard_limit": clipboard_limit.as_str(),
         "quality": quality.as_str(),
         "audio": audio,
+        "resize": resize,
+        "max_resolution": settings.desktop_max_resolution.clamp(desktop::MIN_DIMENSION as i64, 16384),
         "target": target_json(&session.target),
         "username": session.hop_username,
     })))

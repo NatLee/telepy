@@ -45,11 +45,29 @@ pub fn is_allowed(opcode: &str) -> bool {
     ALLOWED_OPCODES.contains(&opcode)
 }
 
-/// 瀏覽器要的畫面大小，夾在 [MIN_DIMENSION, max] 之間。/ Requested size, clamped.
+/// 瀏覽器要的畫面大小，等比夾進站台上限（[`desktop::clamp_size`]）。/ Requested size, clamped to the ceiling keeping its shape.
 pub fn parse_size(query: &HashMap<String, String>, max: u32) -> Size {
-    let dim = |key: &str, default: u32| query.get(key).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(default).clamp(desktop::MIN_DIMENSION, max.max(desktop::MIN_DIMENSION));
+    let dim = |key: &str, default: u32| query.get(key).and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(default);
     let dpi = query.get("dpi").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(desktop::DEFAULT_DPI).clamp(72, 288);
-    Size { width: dim("width", 1280), height: dim("height", 720), dpi }
+    let (width, height) = desktop::clamp_size(dim("width", 1280), dim("height", 720), max);
+    Size { width, height, dpi }
+}
+
+/// 瀏覽器連線中送來的 `size,<w>,<h>[,…]`（視窗大小變了）：解析度不跟著走的 session 丟掉（None）；否則等比夾進
+/// 上限後重新編碼 —— 站台上限不能靠瀏覽器自律（舊的中繼原樣轉送，一個 16384×16384 的 `size` 就繞過了上限）。
+/// The browser's `size` while connected: dropped (None) when the session keeps a fixed size, otherwise
+/// re-encoded clamped to the ceiling — the old relay forwarded it as is, so one `size` bypassed the site limit.
+pub fn browser_size(args: &[&str], resize: bool, max: u32) -> Option<String> {
+    if !resize {
+        return None;
+    }
+    let w = args.first()?.trim().parse::<u32>().ok()?;
+    let h = args.get(1)?.trim().parse::<u32>().ok()?;
+    let (w, h) = desktop::clamp_size(w, h, max);
+    let (w, h) = (w.to_string(), h.to_string());
+    let mut elements = vec!["size", w.as_str(), h.as_str()];
+    elements.extend(args.iter().skip(2).copied());
+    Some(guac::encode(&elements, Unit::CodePoints))
 }
 
 /// 關閉並把代碼也放進 reason：guacamole-common-js 的 WebSocketTunnel 只看 reason（`parseInt(reason)` 當狀態碼），
@@ -137,7 +155,7 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
             b.abort();
         }
     };
-    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, session.quality, session.audio, &state.desktop.callback_host, callback_port, size);
+    let params = desktop::guacd_params(session.protocol, &credentials, session.clipboard, session.quality, session.audio, session.resize, &state.desktop.callback_host, callback_port, size);
     drop(credentials);
     let audio: &[&str] = if session.audio { desktop::AUDIO_MIMETYPES } else { &[] };
     let connection_id = match guacd.handshake(session.protocol.as_str(), size, audio, &params, desktop::HANDSHAKE_TIMEOUT).await {
@@ -226,6 +244,17 @@ pub async fn handle(state: AppState, mut socket: WebSocket, session_id: String, 
                             session.touch();
                         }
                         disconnect |= op == "disconnect";
+                        if op == "size" {
+                            let args: Vec<&str> = i.args().collect();
+                            match browser_size(&args, session.resize, max_res) {
+                                Some(wire) => {
+                                    tracing::debug!(session = %session_id, size = ?args, "desktop: browser resized");
+                                    out.push_str(&wire);
+                                }
+                                None => tracing::debug!(session = %session_id, "desktop: dropped a size (fixed resolution)"),
+                            }
+                            continue;
+                        }
                         out.push_str(&i.wire(Unit::CodePoints));
                     }
                     if !out.is_empty() && tx.write_all(out.as_bytes()).await.is_err() {
@@ -360,7 +389,17 @@ mod tests {
         assert_eq!((s.width, s.height, s.dpi), (2560, desktop::MIN_DIMENSION, 96));
         let s = parse_size(&HashMap::new(), 2560);
         assert_eq!((s.width, s.height), (1280, 720));
+        // 等比：以前寬高各自夾，1920×1080 在 1600 上限下變成 1600×1080（比例走樣）。/ Keeps the shape now.
         let s = parse_size(&q("1920", "1080"), 1600);
-        assert_eq!((s.width, s.height), (1600, 1080));
+        assert_eq!((s.width, s.height), (1600, 900));
+    }
+
+    #[test]
+    fn browser_sizes_are_clamped_or_dropped() {
+        assert_eq!(browser_size(&["1920", "1080"], true, 2560).as_deref(), Some("4.size,4.1920,4.1080;"));
+        assert_eq!(browser_size(&["5120", "2880"], true, 2560).as_deref(), Some("4.size,4.2560,4.1440;"));
+        assert_eq!(browser_size(&["1920", "1080"], false, 2560), None, "a fixed size drops it");
+        assert_eq!(browser_size(&["x", "1080"], true, 2560), None);
+        assert_eq!(browser_size(&["1920"], true, 2560), None);
     }
 }

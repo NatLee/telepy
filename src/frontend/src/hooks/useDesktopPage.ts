@@ -24,15 +24,12 @@ import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificati
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import {
-    AUDIO_PREF_VALUES,
     CTRL_MODE_VALUES,
     ctrlAsCmd,
     DEFAULT_PORT,
     desktopPorts,
     isMacBrowser,
     isValidPort,
-    pixelRatioFor,
-    QUALITY_VALUES,
     startFailure,
     type AudioPref,
     type CtrlAsCmdMode,
@@ -50,6 +47,8 @@ import type { ConnectMode, ConnectTarget } from "@/lib/forwardRecipes";
 import type { TunnelConfigData } from "@/hooks/useCheatsheetPage";
 import type { LanHost, TopologyTunnel } from "@/types/lan";
 import { useSavedLogins } from "@/hooks/useSavedLogins";
+import { useDesktopDisplay } from "@/hooks/useDesktopDisplay";
+import { followsWindow, pixelRatioFor } from "@/lib/desktopDisplay";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
 import { primeAudio } from "@/lib/soundTap";
@@ -118,10 +117,15 @@ export function useDesktopPage() {
     const [session, setSession] = useState<DesktopStart | null>(null);
     const [connectedAt, setConnectedAt] = useState<number | null>(null);
     const [endedNormally, setEndedNormally] = useState(false);
-    const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
+
+    // 顯示偏好（縮放、解析度、HiDPI；這台瀏覽器）。/ Display preferences (scaling, resolution, HiDPI; this browser).
+    const [display, setDisplay] = useDesktopDisplay();
+    // 畫質與聲音的預設也在這份帳號偏好裡。/ The quality and sound defaults live in the same account preferences.
+    const quality = display.quality;
+    const setQuality = useCallback((q: DesktopQuality) => setDisplay({ quality: q }), [setDisplay]);
+    const audioPref: AudioPref = display.audio ? "on" : "off";
     const [ctrlMode, setCtrlMode] = useStoredChoice<CtrlAsCmdMode>("telepy.desktopCtrlAsCmd", CTRL_MODE_VALUES, "auto");
     // 聲音：RDP 是每次連線的選項，RustDesk 連線中也能切；預設關（吃頻寬）。/ Sound: per RDP start, live for RustDesk; off by default.
-    const [audioPref, setAudioPref] = useStoredChoice<AudioPref>("telepy.desktopAudio", AUDIO_PREF_VALUES, "off");
     // 剪貼簿方向：個人設定（跟著帳號走），站台設定是上限。還沒讀到就不帶，後端用存著的值。
     // The clipboard direction is a per-account setting capped by the site; omitted until loaded so the backend uses the saved one.
     const clipboardPref = useDesktopClipboard();
@@ -356,6 +360,7 @@ export function useDesktopPage() {
                     lan_host_id: host?.id ?? null,
                     quality,
                     audio: form.protocol === "rdp" && audioPref === "on",
+                    resize: followsWindow(display, form.protocol),
                     ...clipboardBody,
                     ...(credentialId
                         ? { credential_id: credentialId }
@@ -397,7 +402,7 @@ export function useDesktopPage() {
             setFailure({ key: "desktop.err.network", at: "web" });
             setPhase("failed");
         }
-    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody, audioPref]);
+    }, [tunnel, host, form, address, savedLogin, saved, quality, refreshTunnelMs, clipboardBody, audioPref, display]);
 
     // RustDesk 清單用：這個目標（隧道 + 主機 + 帳號 + 埠）這次開頁以來連上過。/ For the RustDesk checklist.
     const [rdReadyKey, setRdReadyKey] = useState<string | null>(null);
@@ -625,12 +630,12 @@ export function useDesktopPage() {
 
     const browserIsMac = typeof navigator !== "undefined" && isMacBrowser(navigator);
     const effectiveCtrlAsCmd = ctrlAsCmd(ctrlMode, screens.os, browserIsMac);
-    const pixelRatio = pixelRatioFor(session?.quality ?? quality, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
+    const pixelRatio = pixelRatioFor(display.hidpi, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
 
     return {
         state: {
             tunnels, loading, tunnel, host, online, form, phase, failure, session, connectedAt, endedNormally, canConnect, address, savedLogins: saved.list, savedLogin,
-            quality, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
+            quality, display, ctrlMode, ctrlAsCmd: effectiveCtrlAsCmd, pixelRatio, stats, unstable, framebuffer, scale, screens, viewportId,
             customArea, selecting, isRustDesk, canProbe, probeState, rdReady: rdReadyKey === probeKey, connectTarget, configLoaded: !!currentConfig, rdSession, rdInfo, rdPassword,
             clipboard: clipboardPref,
             audio: audioPref === "on",
@@ -638,10 +643,10 @@ export function useDesktopPage() {
         },
         actions: {
             setTunnel, setHost, update, setProtocol, connect, stop, onConnected, onEnded,
-            setQuality, setCtrlMode, setClipboard: clipboardPref.setChoice, setAudio: (on: boolean) => {
+            setQuality, setDisplay, setCtrlMode, setClipboard: clipboardPref.setChoice, setAudio: (on: boolean) => {
                 // 打開聲音也是一下點擊：順便解鎖 AudioContext。/ Turning sound on is a click too: unlock the context.
                 if (on) primeAudio();
-                setAudioPref(on ? "on" : "off");
+                setDisplay({ audio: on });
             }, detectScreens, setViewportId,
             startSelecting, finishSelecting, forgetArea, runProbe,
             onStats: setStats, onTunnelUnstable: setUnstable, onDisplaySize: setFramebuffer, onScale: setScale, onRdPeerInfo: setRdInfo, onRdStats,

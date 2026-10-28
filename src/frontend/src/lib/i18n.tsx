@@ -32,6 +32,8 @@ import { applyTerminalDefaults, applyTheme, applyUiScale, isTheme, readStoredThe
 import { isBoldStyle, isKnownFont, isSchemeId, type TerminalDefaults } from "./terminalAppearance";
 import { parseViewModes } from "./viewModes";
 import { readViewModes, storeViewModes } from "./viewModeStore";
+import { fromServer, sameDisplay } from "./desktopDisplay";
+import { hasLocalDisplay, readDisplay, storeDisplay } from "./desktopDisplayStore";
 
 // 讓既有匯入點不用改:純函式與常數實際住在 lib/locale.ts(server 也能用)。
 // Re-export so callers keep one import point; the pure bits live in lib/locale.ts (server-safe).
@@ -205,6 +207,12 @@ export function UserSettingsSync() {
             const localViews = readViewModes();
             if (Object.keys(localViews).length > 0) storeViewModes(localViews, true);
         }
+        // 遠端桌面偏好：同上 —— 帳號上有就用帳號的；帳號還沒有就把這台的（含舊的畫質 / 聲音）存上去。
+        // Remote desktop preferences: the account's when set; otherwise this browser's (incl. the old quality / sound).
+        const serverDisplay = fromServer(user.desktop_display);
+        if (serverDisplay) {
+            if (!sameDisplay(serverDisplay, readDisplay())) storeDisplay(serverDisplay, false);
+        } else if (hasLocalDisplay()) storeDisplay(readDisplay(), true);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
 
