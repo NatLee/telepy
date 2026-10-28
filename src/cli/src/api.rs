@@ -13,7 +13,10 @@ use serde_json::Value;
 
 use crate::creds::{self, Kind, Profile, Secret};
 
-pub const USER_AGENT: &str = concat!("telepy-cli/", env!("CARGO_PKG_VERSION"));
+/// `telepy-cli/<version>`（版本見 `crate::VERSION`）。/ `telepy-cli/<version>` (see `crate::VERSION`).
+pub fn user_agent() -> String {
+    format!("telepy-cli/{}", crate::VERSION)
+}
 
 enum Auth {
     Token(String),
@@ -59,7 +62,7 @@ impl std::fmt::Display for HttpError {
 impl std::error::Error for HttpError {}
 
 pub fn http_client() -> Result<Client> {
-    Ok(Client::builder().user_agent(USER_AGENT).connect_timeout(Duration::from_secs(15)).build()?)
+    Ok(Client::builder().user_agent(user_agent()).connect_timeout(Duration::from_secs(15)).build()?)
 }
 
 fn now() -> i64 {

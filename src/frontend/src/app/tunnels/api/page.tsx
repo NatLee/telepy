@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * API 頁（每個可以建立 API token 的人）：基底網址（頁首的動作列放資訊按鈕〔三條進 Telepy 的路怎麼比〕、CLI 文件與完整參考），以及三個分頁——
+ * API 頁（每個可以建立 API token 的人）：基底網址（頁首的動作列放資訊按鈕〔三條進 Telepy 的路怎麼比〕、CLI 頁與完整參考），以及三個分頁——
  * 你的 token（建立 / 撤銷 / 每把的呼叫摘要，從偏好設定搬過來）、token 能打哪些端點（伺服器的白名單）、活動（自己的呼叫紀錄）。
  * 分頁在 `?tab=`，活動的 token 篩選在 `?token=`，所以 token 那一列能直接連過去。全站的紀錄在管理區。
  * The API page (everyone who may create API tokens): the base URL (header actions: the info button for the three
@@ -10,6 +10,7 @@
  * token filter in `?token=`, so a token row links straight to its calls. Everyone's calls are in the admin section.
  */
 import React, { Suspense, useCallback, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { BookOpen, Braces, ExternalLink, Info, TerminalSquare } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -17,7 +18,7 @@ import { AdminViewLink } from "@/components/layout/AdminViews";
 import { Segmented } from "@/components/ui/segmented";
 import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { Button } from "@/components/ui/button";
-import { ApiOverview, API_BASE, CLI_DOC_URL } from "@/components/api/ApiOverview";
+import { ApiOverview, API_BASE } from "@/components/api/ApiOverview";
 import { WaysInDialog } from "@/components/api/WaysInDialog";
 import { ApiCatalogue } from "@/components/api/ApiCatalogue";
 import { ApiCallsView } from "@/components/api/ApiCallsView";
@@ -73,10 +74,9 @@ function ApiPageInner() {
                             <Info size={16} /> {t("apiPage.how.show")}
                         </Button>
                         <Button variant="outline" asChild>
-                            <a href={CLI_DOC_URL} target="_blank" rel="noopener noreferrer">
+                            <Link href="/tunnels/cli">
                                 <TerminalSquare size={16} /> {t("apiPage.cliDoc")}
-                                <ExternalLink size={12} className="opacity-60" aria-hidden />
-                            </a>
+                            </Link>
                         </Button>
                         {hasFeature(user, "api.docs") && (
                             <Button variant="outline" asChild>

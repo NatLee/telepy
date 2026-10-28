@@ -2,7 +2,7 @@
 
 /**
  * API 頁頂端的基底網址：一列——標籤、等寬網址（太長就截斷、完整網址在 title）、複製按鈕。
- * CLI 說明與完整參考（Swagger）在頁首的動作列，「三條路怎麼比」在資訊按鈕的對話框（WaysInDialog）。
+ * CLI 頁（/tunnels/cli）與完整參考（Swagger）在頁首的動作列，「三條路怎麼比」在資訊按鈕的對話框（WaysInDialog）。
  * The API page's base URL: one row — label, mono URL (truncated, full text in the title) and a copy button.
  * The CLI guide and the full reference (Swagger) are header actions; "three ways in" is the info button's dialog.
  */
@@ -11,7 +11,6 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { useI18n } from "@/lib/i18n";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
-export const CLI_DOC_URL = "https://github.com/NatLee/telepy/blob/main/docs/cli.md";
 
 export function ApiOverview({ baseUrl }: { baseUrl: string }) {
     const { t } = useI18n();

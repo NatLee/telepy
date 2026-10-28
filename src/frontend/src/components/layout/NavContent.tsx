@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -19,8 +19,11 @@ interface NavLink {
     key: TranslationKey;
     href: string;
     icon: React.ReactNode;
-    /** 這個頁面屬於哪個功能；管理員替這個人關掉了就不顯示。/ The feature this page belongs to; hidden when turned off. */
-    feature?: FeatureId;
+    /**
+     * 這個頁面屬於哪個功能；管理員替這個人關掉了就不顯示。給一串 = 其中一個開著就顯示（CLI：瀏覽器登入或 API token）。
+     * The feature this page belongs to; hidden when turned off. A list = shown while any of them is on (the CLI).
+     */
+    feature?: FeatureId | FeatureId[];
     /** 子頁：在這區裡時展開在下面（側欄收合時不顯示，頁面上有分頁）。/ Sub-pages, shown below while inside the area (not when collapsed; the page has tabs). */
     children?: { key: TranslationKey; href: string }[];
 }
@@ -52,8 +55,16 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             },
             { key: "nav.logs", href: "/tunnels/logs", icon: <FileText size={18} /> },
             { key: "nav.webhooks", href: "/tunnels/webhooks", icon: <Webhook size={18} />, feature: "webhooks.personal" },
-            // 腳本 / CLI / CI 的入口（token、可呼叫的端點、呼叫紀錄）；跟 Logs、Webhooks 一樣是「接到別的系統」的頁。
-            // The way in for scripts / the CLI / CI (tokens, reachable endpoints, the call log), next to Logs and Webhooks.
+        ],
+    },
+    {
+        // 開發者：從終端機、腳本、CI 用 Telepy。CLI 在前（多數人要的是它），API（token、可呼叫的端點、呼叫紀錄）在後。
+        // CLI 用瀏覽器登入（OAuth app，要 mcp.connect）或 API token，任一個開著就顯示。
+        // Developers: Telepy from a terminal, scripts and CI. The CLI first (what most people want), then the API
+        // (tokens, reachable endpoints, the call log). The CLI signs in with the browser (mcp.connect) or a token.
+        key: "nav.sectionDev",
+        links: [
+            { key: "nav.cli", href: "/tunnels/cli", icon: <Terminal size={18} />, feature: ["mcp.connect", "api.tokens"] },
             { key: "nav.api", href: "/tunnels/api", icon: <Braces size={18} />, feature: "api.tokens" },
         ],
     },
@@ -156,7 +167,7 @@ export function NavContent({ onNavigate, className = "", collapsed = false }: Na
                 {navSections.filter((section) => !section.admin || user?.is_superuser).map((section) => (
                     <React.Fragment key={section.key}>
                         <SectionLabel collapsed={collapsed}>{t(section.key)}</SectionLabel>
-                        {section.links.filter((link) => !link.feature || hasFeature(user, link.feature)).map((link) => {
+                        {section.links.filter((link) => !link.feature || [link.feature].flat().some((f) => hasFeature(user, f))).map((link) => {
                             const active = isNavActive(pathname, link.href);
                             // 等我核准的指令數。/ Commands waiting for my approval.
                             const badge = link.href === "/tunnels/commands" && approvals.pending.length > 0 ? approvals.pending.length : null;

@@ -187,8 +187,9 @@ MCP sessions, webhooks, terminal and command-rule defaults, feature permissions 
 
 ## Command line, API and MCP
 
-**`telepy` CLI** — install a release build (macOS, Linux, Windows) or
-`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`:
+**`telepy` CLI** — install a release build (macOS, Linux, Windows; every Telepy release carries one) or
+`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`. The web's **CLI** page (sidebar
+Developers → CLI) has the install command for your computer and examples filled in with your own tunnels:
 
 ```sh
 telepy login https://telepy.example.com        # browser sign-in, or --token tpt_… from the API page
