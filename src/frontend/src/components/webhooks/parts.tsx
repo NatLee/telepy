@@ -5,7 +5,8 @@
  * Small shared pieces for the Webhooks page: service icon, event names, delay wording, state dot.
  */
 import React from "react";
-import { BellRing, Braces, Hash, MessageCircle, MessagesSquare, Send, Users, Webhook as WebhookIcon } from "lucide-react";
+import { BellRing, Braces, Hash, Lock, MessageCircle, MessagesSquare, Send, Users, Webhook as WebhookIcon } from "lucide-react";
+import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { EVENT_KEYS, type HookState } from "@/lib/webhooks";
@@ -62,4 +63,15 @@ const DOT: Record<HookState, string> = {
 
 export function StateDot({ state, className }: { state: HookState; className?: string }) {
     return <span className={cn("inline-flex size-2 shrink-0 rounded-full", DOT[state], className)} aria-hidden />;
+}
+
+/** 「強制」籤：鎖 + 字，滑過說明沒人能退出。/ The "Enforced" chip: a lock and the word; the tooltip says nobody can opt out. */
+export function EnforcedChip({ className }: { className?: string }) {
+    const { t } = useI18n();
+    return (
+        <Chip className={className} title={t("webhooks.mode.enforcedTitle")}>
+            <Lock aria-hidden />
+            {t("webhooks.mode.enforced")}
+        </Chip>
+    );
 }

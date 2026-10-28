@@ -126,7 +126,7 @@ export function WebhooksView({ scope }: { scope: WebhookScope }) {
                     {!site && policy && page.list.length > 0 && (
                         <p className="text-xs text-muted-foreground">{atLimit ? t("webhooks.limitReached", { max: policy.max }) : t("webhooks.usage", { used: policy.used, max: policy.max })}</p>
                     )}
-                    {!site && page.data && <SiteWebhooksSection hooks={page.siteSummary} canManage={page.data.can_manage_site} />}
+                    {!site && page.data && <SiteWebhooksSection hooks={page.siteSummary} canManage={page.data.can_manage_site} onOptOut={page.setOptOut} />}
                 </div>
                 <aside className="min-w-0 space-y-4">
                     {page.catalog.length > 0 && <EventCatalog catalog={page.catalog} scope={page.scope} />}

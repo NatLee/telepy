@@ -204,6 +204,8 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
         ("PUT" | "DELETE", ["api", "command-rules", _, "off"]) => CommandRulesManage,
         ("POST", ["api", "reverse", "server", _, "command-rules"]) => CommandRulesManage,
 
+        // 把自己管的隧道退出全站 webhook：管理隧道的事，不是個人 webhook。/ Opting a tunnel out of a site webhook is tunnel management.
+        (_, ["api", "webhooks", _, "optout"]) => return None,
         (_, ["api", "webhooks", ..]) => WebhooksPersonal,
 
         (_, ["api", "oauth", "authorize"]) => McpConnect,
@@ -566,6 +568,8 @@ mod tests {
             ("POST", "/api/command-requests/3/approve", None),
             ("GET", "/api/webhooks", Some(WebhooksPersonal)),
             ("POST", "/api/webhooks/3/test", Some(WebhooksPersonal)),
+            ("PUT", "/api/webhooks/3/optout", None),
+            ("DELETE", "/api/webhooks/3/optout", None),
             ("GET", "/api/oauth/authorize", Some(McpConnect)),
             ("POST", "/api/oauth/authorize", Some(McpConnect)),
             ("GET", "/api/oauth/grants", None),

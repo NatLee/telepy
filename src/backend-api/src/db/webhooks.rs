@@ -34,13 +34,22 @@ pub struct WebhookRow {
     pub updated_at: String,
     /// 自訂 header（密封的 JSON；空字串 = 沒有）。/ Custom headers (sealed JSON; empty = none).
     pub headers: String,
+    /// 全站 webhook 的模式：`enforced` | `default`（個人的不看）。/ A site webhook's mode (personal ones ignore it).
+    pub mode: String,
 }
 
 impl WebhookRow {
     pub fn is_site(&self) -> bool {
         self.scope == "site"
     }
+    /// 全站、而且是強制的：沒人能退出。/ Site-wide and enforced: nobody may opt out.
+    pub fn is_enforced(&self) -> bool {
+        self.is_site() && self.mode == MODE_ENFORCED
+    }
 }
+
+pub const MODE_ENFORCED: &str = "enforced";
+pub const MODE_DEFAULT: &str = "default";
 
 /// 可以改的欄位。/ The editable fields.
 pub struct Fields<'a> {
@@ -52,16 +61,17 @@ pub struct Fields<'a> {
     pub all_tunnels: bool,
     pub delay: i64,
     pub enabled: bool,
+    pub mode: &'a str,
 }
 
 const COLS: &str = "id, user_id, scope, name, url, format, language, events, all_tunnels, delay, secret, enabled, paused_reason, failures, \
-    last_status, last_at, last_code, last_error, created_at, updated_at, headers";
+    last_status, last_at, last_code, last_error, created_at, updated_at, headers, mode";
 
 pub async fn create(db: &Db, user_id: Option<i64>, scope: &str, f: &Fields<'_>) -> sqlx::Result<WebhookRow> {
     let now = now_db();
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO telepy_webhook (user_id, scope, name, url, format, language, events, all_tunnels, delay, enabled, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO telepy_webhook (user_id, scope, name, url, format, language, events, all_tunnels, delay, enabled, mode, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(user_id)
     .bind(scope)
@@ -73,6 +83,7 @@ pub async fn create(db: &Db, user_id: Option<i64>, scope: &str, f: &Fields<'_>) 
     .bind(f.all_tunnels)
     .bind(f.delay)
     .bind(f.enabled)
+    .bind(f.mode)
     .bind(&now)
     .bind(&now)
     .fetch_one(&db.write)
@@ -86,7 +97,7 @@ pub async fn update(db: &Db, id: i64, f: &Fields<'_>) -> sqlx::Result<()> {
         "UPDATE telepy_webhook SET name = ?, url = ?, format = ?, language = ?, events = ?, all_tunnels = ?, delay = ?, \
             paused_reason = CASE WHEN ? = 1 THEN '' ELSE paused_reason END, \
             failures = CASE WHEN ? = 1 AND enabled = 0 THEN 0 ELSE failures END, \
-            enabled = ?, updated_at = ? WHERE id = ?",
+            enabled = ?, mode = ?, updated_at = ? WHERE id = ?",
     )
     .bind(f.name)
     .bind(f.url)
@@ -98,6 +109,7 @@ pub async fn update(db: &Db, id: i64, f: &Fields<'_>) -> sqlx::Result<()> {
     .bind(f.enabled)
     .bind(f.enabled)
     .bind(f.enabled)
+    .bind(f.mode)
     .bind(now_db())
     .bind(id)
     .execute(&db.write)
@@ -136,6 +148,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     let mut tx = db.write.begin().await?;
     sqlx::query("DELETE FROM telepy_webhook_tunnel WHERE webhook_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_webhook_delivery WHERE webhook_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_webhook_optout WHERE webhook_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_webhook WHERE id = ?").bind(id).execute(&mut *tx).await?;
     tx.commit().await
 }
@@ -166,7 +179,91 @@ pub async fn set_tunnels(db: &Db, webhook_id: i64, tunnel_ids: &[i64]) -> sqlx::
 /// 隧道刪了：從每個 webhook 的限定清單拿掉。/ A deleted tunnel leaves every webhook's list.
 pub async fn forget_tunnel(db: &Db, tunnel_id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM telepy_webhook_tunnel WHERE tunnel_id = ?").bind(tunnel_id).execute(&db.write).await?;
+    sqlx::query("DELETE FROM telepy_webhook_optout WHERE tunnel_id = ?").bind(tunnel_id).execute(&db.write).await?;
     Ok(())
+}
+
+/// 一筆退出：哪條隧道、誰退的、什麼時候。/ One opt-out: which tunnel, who, when.
+#[derive(Debug, Clone, FromRow)]
+pub struct OptOut {
+    pub webhook_id: i64,
+    pub user_id: i64,
+    pub tunnel_id: i64,
+    pub created_at: String,
+}
+
+/// 每個 webhook 的退出（依隧道排序）。/ Every webhook's opt-outs, by tunnel.
+pub async fn optout_map(db: &Db) -> sqlx::Result<HashMap<i64, Vec<OptOut>>> {
+    let rows: Vec<OptOut> = sqlx::query_as("SELECT webhook_id, user_id, tunnel_id, created_at FROM telepy_webhook_optout ORDER BY tunnel_id, user_id").fetch_all(&db.read).await?;
+    let mut map: HashMap<i64, Vec<OptOut>> = HashMap::new();
+    for r in rows {
+        map.entry(r.webhook_id).or_default().push(r);
+    }
+    Ok(map)
+}
+
+/// 換掉某人對某個 webhook 的退出清單。回傳 (新加的, 拿掉的) 隧道。
+/// Replace one person's opt-outs for one webhook. Returns the tunnels (added, removed).
+pub async fn set_optouts(db: &Db, webhook_id: i64, user_id: i64, tunnel_ids: &[i64]) -> sqlx::Result<(Vec<i64>, Vec<i64>)> {
+    let mut tx = db.write.begin().await?;
+    let before: Vec<i64> = sqlx::query_scalar("SELECT tunnel_id FROM telepy_webhook_optout WHERE webhook_id = ? AND user_id = ?")
+        .bind(webhook_id)
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let removed: Vec<i64> = before.iter().copied().filter(|t| !tunnel_ids.contains(t)).collect();
+    let added: Vec<i64> = tunnel_ids.iter().copied().filter(|t| !before.contains(t)).collect();
+    for t in &removed {
+        sqlx::query("DELETE FROM telepy_webhook_optout WHERE webhook_id = ? AND user_id = ? AND tunnel_id = ?").bind(webhook_id).bind(user_id).bind(t).execute(&mut *tx).await?;
+    }
+    let now = now_db();
+    for t in &added {
+        sqlx::query("INSERT OR IGNORE INTO telepy_webhook_optout (webhook_id, user_id, tunnel_id, created_at) VALUES (?, ?, ?, ?)")
+            .bind(webhook_id)
+            .bind(user_id)
+            .bind(t)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok((added, removed))
+}
+
+/// 每條隧道現在的管理者（owner + 現在有效權限是 ADMIN 的分享對象）。/ Every tunnel's managers now (owner + ADMIN sharees in force).
+pub async fn all_managers(db: &Db) -> sqlx::Result<HashMap<i64, Vec<i64>>> {
+    let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
+    let owners: Vec<(i64, i64)> = sqlx::query_as("SELECT id, user_id FROM authorized_keys_reverseserverauthorizedkeys").fetch_all(&db.read).await?;
+    for (t, u) in owners {
+        map.entry(t).or_default().push(u);
+    }
+    let admins: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT tunnel_id, shared_with_id FROM tunnels_tunnelsharing WHERE \
+         (CASE WHEN base_permission IS NOT NULL AND permission_until <= ? THEN base_permission ELSE permission_type END) = 'admin'",
+    )
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await?;
+    for (t, u) in admins {
+        map.entry(t).or_default().push(u);
+    }
+    Ok(map)
+}
+
+/// 一條隧道現在的管理者：owner + 現在有效權限是 ADMIN 的分享對象（暫時升級過期了就不算）。
+/// A tunnel's managers now: the owner plus sharees whose permission in force is ADMIN (an ended raise doesn't count).
+pub async fn tunnel_managers(db: &Db, tunnel_id: i64) -> sqlx::Result<Vec<i64>> {
+    let owner: Option<i64> = sqlx::query_scalar("SELECT user_id FROM authorized_keys_reverseserverauthorizedkeys WHERE id = ?").bind(tunnel_id).fetch_optional(&db.read).await?;
+    let mut ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT shared_with_id FROM tunnels_tunnelsharing WHERE tunnel_id = ? AND \
+         (CASE WHEN base_permission IS NOT NULL AND permission_until <= ? THEN base_permission ELSE permission_type END) = 'admin'",
+    )
+    .bind(tunnel_id)
+    .bind(now_db())
+    .fetch_all(&db.read)
+    .await?;
+    ids.extend(owner);
+    Ok(ids)
 }
 
 pub async fn set_headers(db: &Db, id: i64, sealed: &str) -> sqlx::Result<()> {

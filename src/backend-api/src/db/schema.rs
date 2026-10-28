@@ -786,6 +786,18 @@ const TABLES: &[(&str, &str)] = &[
             "redelivered_from" integer NULL
         )"#,
     ),
+    // Rust 自有：隧道的 owner / ADMIN 把自己的隧道退出某個「預設」全站 webhook（強制的不理會）。
+    // A tunnel's owner / ADMIN opting that tunnel out of a "default" site-wide webhook (enforced ones ignore it).
+    (
+        "telepy_webhook_optout",
+        r#"CREATE TABLE "telepy_webhook_optout" (
+            "webhook_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("webhook_id", "user_id", "tunnel_id")
+        )"#,
+    ),
     // Rust 自有：個人 SSH 金鑰的到期通知送過了沒（每把金鑰、每個階段、每個到期時間一次）。
     // Which personal SSH key expiry notices were sent (once per key, stage and expiry time).
     (
@@ -907,6 +919,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_tunnel" ON "telepy_snippet" ("scope", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_user" ON "telepy_webhook" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_tunnel_tunnel" ON "telepy_webhook_tunnel" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_optout_tunnel" ON "telepy_webhook_optout" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_delivery_hook" ON "telepy_webhook_delivery" ("webhook_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_tunnel" ON "telepy_command_event" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_event_user" ON "telepy_command_event" ("user_id")"#,
@@ -989,6 +1002,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "notify_private_targets", "bool NOT NULL DEFAULT 0"),
     ("site_settings_sitesettings", "notify_max_webhooks", "integer NOT NULL DEFAULT 10"),
     ("telepy_webhook", "headers", "text NOT NULL DEFAULT ''"),
+    // 全站 webhook 的模式：enforced = 沒人能退出；default = 隧道的 owner / ADMIN 可以退出（升級前的都是 default）。
+    // A site webhook's mode: enforced = nobody opts out; default = tunnel owners / ADMINs may (existing ones become default).
+    ("telepy_webhook", "mode", "varchar(8) NOT NULL DEFAULT 'default'"),
     ("telepy_webhook_delivery", "event_json", "text NOT NULL DEFAULT ''"),
     ("telepy_webhook_delivery", "redelivered_from", "integer NULL"),
     // 指令規則：這條「要核准」規則指定的核准人（JSON 陣列；NULL / 空 = owner + ADMIN）。紀錄上留一份快照。

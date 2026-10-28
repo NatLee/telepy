@@ -7,7 +7,8 @@
  * the on / off switch and actions (test, deliveries, signing secret, edit, delete).
  */
 import React from "react";
-import { History, KeyRound, MoreHorizontal, Pencil, Play, Send, Trash2 } from "lucide-react";
+import { History, KeyRound, MoreHorizontal, Pencil, Play, Send, Trash2, Undo2 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Switch } from "@/components/ui/switch";
@@ -15,9 +16,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
-import { FORMAT_SHORT, LANGUAGES, effectiveFormat, hasStatusEvent, hasTunnelEvent, hookState, maskUrl, orderEvents } from "@/lib/webhooks";
+import { FORMAT_SHORT, LANGUAGES, effectiveFormat, hasStatusEvent, hasTunnelEvent, hookMode, hookState, maskUrl, optedOutTunnelCount, orderEvents } from "@/lib/webhooks";
 import type { CatalogEvent, Webhook } from "@/types/webhooks";
-import { ServiceTile, StateDot, useDelayLabel, useEventLabel } from "./parts";
+import { EnforcedChip, ServiceTile, StateDot, useDelayLabel, useEventLabel } from "./parts";
 
 /** 卡片上最多列幾個事件名稱。/ Event names shown on a card before "+N". */
 const SHOWN_EVENTS = 4;
@@ -60,7 +61,10 @@ export function WebhookCard({ hook, catalog, pauseAfter, testing, onToggle, onTe
             <div className="flex items-start gap-3">
                 <ServiceTile format={format} />
                 <div className="min-w-0 flex-1 self-center">
-                    <p className="text-base text-foreground [overflow-wrap:anywhere]">{hook.name}</p>
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-base text-foreground [overflow-wrap:anywhere]">
+                        <span className="min-w-0">{hook.name}</span>
+                        {hook.scope === "site" && hookMode(hook) === "enforced" && <EnforcedChip />}
+                    </p>
                     <p className="hidden text-sm text-muted-foreground [overflow-wrap:anywhere] sm:block" title={t("webhooks.card.urlHidden")}>
                         {FORMAT_SHORT[format]} · <span className="font-mono text-xs">{maskUrl(hook.url)}</span>
                     </p>
@@ -97,6 +101,7 @@ export function WebhookCard({ hook, catalog, pauseAfter, testing, onToggle, onTe
                     </button>
                 )}
             </div>
+            {hook.scope === "site" && (hook.optouts?.length ?? 0) > 0 && <OptOutsChip hook={hook} />}
             <p className="text-xs text-muted-foreground">
                 {facts.map((f, i) => (
                     // 每一項整段換行，不在字中間斷開。/ Each fact wraps as a unit, never mid-word.
@@ -152,5 +157,41 @@ export function WebhookCard({ hook, catalog, pauseAfter, testing, onToggle, onTe
                 </div>
             </div>
         </li>
+    );
+}
+
+/** 「N 條已退出」：點開列出哪條隧道、誰退的；不再算數的（那人不管了）劃掉，強制時整組不理會。
+ *  "N opted out": a click lists each tunnel and who; ones that no longer count are struck through, and all are
+ *  ignored while the webhook is enforced. */
+function OptOutsChip({ hook }: { hook: Webhook }) {
+    const { t, locale } = useI18n();
+    const enforced = hookMode(hook) === "enforced";
+    const rows = hook.optouts ?? [];
+    return (
+        <Popover>
+            <PopoverTrigger asChild>
+                <button type="button" className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-1.5 py-px text-xs text-muted-foreground hover:text-foreground">
+                    <Undo2 size={13} aria-hidden />
+                    {t("webhooks.optout.count", { n: optedOutTunnelCount(hook) })}
+                    {enforced && <span>· {t("webhooks.optout.ignored")}</span>}
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-hidden">
+                <p className="shrink-0 border-b border-border px-3 py-2 text-sm text-foreground">{t("webhooks.optout.listTitle")}</p>
+                <ul className="max-h-72 min-h-0 overflow-y-auto overscroll-contain py-1">
+                    {rows.map((o) => (
+                        <li key={`${o.tunnel_id}-${o.by}`} className="px-3 py-1.5" title={new Date(o.at).toLocaleString(locale)}>
+                            <span className={cn("block text-sm [overflow-wrap:anywhere]", o.active && !enforced ? "text-foreground" : "text-muted-foreground line-through")}>
+                                {o.tunnel_name ?? `#${o.tunnel_id}`}
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                                {t("webhooks.optout.by", { name: o.by ?? "?" })}
+                                {!o.active && ` · ${t("webhooks.optout.inactive")}`}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            </PopoverContent>
+        </Popover>
     );
 }

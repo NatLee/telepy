@@ -194,6 +194,9 @@ pub struct Hook {
     pub tunnels: Vec<i64>,
     pub format: Format,
     pub lang: Lang,
+    /// 退出這個 webhook 的隧道：(隧道, 誰退的)。只有「預設」的全站 webhook 會看。
+    /// Tunnels opted out of this webhook: (tunnel, who). Only default site webhooks look at them.
+    pub optouts: Vec<(i64, i64)>,
 }
 
 impl Hook {
@@ -201,7 +204,18 @@ impl Hook {
         let events = catalog::parse_list(&row.events);
         let format = Format::parse(&row.format).unwrap_or(Format::Auto);
         let lang = Lang::parse(&row.language).unwrap_or(Lang::En);
-        Self { row, events, tunnels, format, lang }
+        Self { row, events, tunnels, format, lang, optouts: Vec::new() }
+    }
+
+    pub fn with_optouts(mut self, optouts: Vec<(i64, i64)>) -> Self {
+        self.optouts = optouts;
+        self
+    }
+
+    /// 這條隧道的事件要不要先查退出（預設的全站 webhook、而且有人退過這條）。
+    /// Whether a tunnel's events need the opt-out check (a default site webhook somebody opted this tunnel out of).
+    pub fn may_be_opted_out(&self, tunnel_id: i64) -> bool {
+        self.row.is_site() && !self.row.is_enforced() && self.optouts.iter().any(|(t, _)| *t == tunnel_id)
     }
 
     pub fn wants(&self, kind: Kind) -> bool {
@@ -237,6 +251,17 @@ pub fn matches(hook: &Hook, event: &Event, personal_on: bool) -> bool {
         (Some(t), true) => hook.covers_tunnel(t.id),
         _ => true,
     }
+}
+
+/// 這條隧道是不是退出了這個 webhook（純函式）：預設的全站 webhook，而且退出的人裡有人**現在**還是這條隧道的
+/// owner / ADMIN（`managers`）。強制的、個人的一律不算。回傳是誰退的。
+/// Whether a tunnel is opted out of this webhook (pure): a default site webhook, and someone who opted it out is
+/// **currently** one of the tunnel's managers (owner / ADMIN). Enforced and personal webhooks never are. Returns who.
+pub fn opted_out(hook: &Hook, tunnel_id: i64, managers: &[i64]) -> Option<i64> {
+    if !hook.row.is_site() || hook.row.is_enforced() {
+        return None;
+    }
+    hook.optouts.iter().find(|(t, u)| *t == tunnel_id && managers.contains(u)).map(|(_, u)| *u)
 }
 
 /// 一次送出的結果。/ The outcome of one delivery.
@@ -349,11 +374,13 @@ impl Webhooks {
         let loaded: sqlx::Result<Vec<Hook>> = async {
             let rows = db::webhooks::active(&self.db).await?;
             let mut tunnels = db::webhooks::tunnel_map(&self.db).await?;
+            let mut optouts = db::webhooks::optout_map(&self.db).await?;
             Ok(rows
                 .into_iter()
                 .map(|r| {
                     let t = tunnels.remove(&r.id).unwrap_or_default();
-                    Hook::new(r, t)
+                    let o = optouts.remove(&r.id).unwrap_or_default().into_iter().map(|o| (o.tunnel_id, o.user_id)).collect();
+                    Hook::new(r, t).with_optouts(o)
                 })
                 .collect())
         }
@@ -398,10 +425,20 @@ impl Webhooks {
         });
     }
 
-    /// 直接送給一個 webhook（背景）。/ Send to one webhook in the background.
+    /// 直接送給一個 webhook（背景）。預設的全站 webhook 先看這條隧道有沒有被它現在的 owner / ADMIN 退出
+    /// （emit 與狀態告警都走這裡；測試送出與重送不經過這裡，照送）。
+    /// Send to one webhook in the background. A default site webhook first checks whether a current owner / ADMIN
+    /// opted the tunnel out (both emit and status alerts come through here; tests and re-sends don't, and go out).
     pub fn send_to(self: &Arc<Self>, hook: Hook, event: Event) {
         let me = self.clone();
         tokio::spawn(async move {
+            if let Some(t) = event.tunnel.as_ref().filter(|t| event.kind.about_tunnel() && hook.may_be_opted_out(t.id)) {
+                let managers = db::webhooks::tunnel_managers(&me.db, t.id).await.unwrap_or_default();
+                if let Some(by) = opted_out(&hook, t.id, &managers) {
+                    tracing::debug!(webhook = hook.row.id, tunnel = t.id, by, event = event.kind.name(), "webhook: tunnel opted out");
+                    return;
+                }
+            }
             let allow_private = me.allow_private(&hook).await;
             me.deliver(&hook, &event, &How::Event, allow_private).await;
         });
@@ -700,6 +737,7 @@ mod tests {
             created_at: String::new(),
             updated_at: String::new(),
             headers: String::new(),
+            mode: "default".into(),
         }
     }
 
@@ -753,6 +791,23 @@ mod tests {
         let site = Hook::new(row("site", None, "tunnel.offline", false), vec![5]);
         assert!(site.receives_status_of(5, &[]));
         assert!(!site.receives_status_of(6, &[]));
+    }
+
+    #[test]
+    fn opt_outs_count_only_for_default_site_hooks_and_current_managers() {
+        let site = Hook::new(row("site", None, "tunnel.offline", true), vec![]).with_optouts(vec![(5, 7), (6, 8)]);
+        assert!(site.may_be_opted_out(5));
+        assert!(!site.may_be_opted_out(9), "nobody opted tunnel 9 out");
+        assert_eq!(opted_out(&site, 5, &[7, 3]), Some(7), "alice still manages tunnel 5");
+        assert_eq!(opted_out(&site, 5, &[3]), None, "alice lost ADMIN: her opt-out stops counting");
+        assert_eq!(opted_out(&site, 6, &[8]), Some(8));
+        let mut enforced = row("site", None, "tunnel.offline", true);
+        enforced.mode = "enforced".into();
+        let enforced = Hook::new(enforced, vec![]).with_optouts(vec![(5, 7)]);
+        assert!(!enforced.may_be_opted_out(5));
+        assert_eq!(opted_out(&enforced, 5, &[7]), None, "enforced webhooks ignore opt-outs");
+        let personal = Hook::new(row("user", Some(7), "tunnel.offline", true), vec![]).with_optouts(vec![(5, 7)]);
+        assert_eq!(opted_out(&personal, 5, &[7]), None, "personal webhooks have no opt-outs");
     }
 
     #[test]

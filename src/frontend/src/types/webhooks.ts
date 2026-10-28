@@ -3,6 +3,31 @@
  */
 
 export type WebhookScope = "user" | "site";
+/** 全站 webhook 的模式：enforced = 沒人能退出；default = 隧道的 owner / ADMIN 可以把自己的隧道退出。
+ *  A site webhook's mode: enforced = nobody opts out; default = tunnel owners / ADMINs may opt their tunnels out. */
+export type WebhookMode = "enforced" | "default";
+
+/** 一筆退出（給管理員看）。active = 退的人現在還管那條隧道（不管了就不算）。
+ *  One opt-out (for admins). active = whoever opted out still manages the tunnel (otherwise it doesn't count). */
+export interface WebhookOptOut {
+    tunnel_id: number;
+    tunnel_name: string | null;
+    by: string | null;
+    at: string;
+    active: boolean;
+}
+
+/** 摘要裡：這個 webhook 涵蓋的、我管的一條隧道。/ In a summary: one tunnel I manage that the webhook covers. */
+export interface ManagedTunnel {
+    id: number;
+    name: string;
+    /** 有現在的管理者退出了。/ A current manager opted it out. */
+    opted_out: boolean;
+    /** 退出它的人（現在還管它的）。/ Who opted it out (still managing it). */
+    by: string[];
+    /** 我退的。/ I opted it out. */
+    mine: boolean;
+}
 export type WebhookFormat = "auto" | "json" | "slack" | "discord" | "google_chat" | "teams" | "telegram" | "ntfy";
 export type WebhookLanguage = "en" | "zh-TW" | "ja";
 export type EventGroup = "status" | "device" | "sharing" | "commands" | "sessions" | "account" | "keys" | "admin";
@@ -52,6 +77,9 @@ export interface Webhook {
     /** 自訂 header 解不開（伺服器換了 SECRET_KEY），要重新輸入。/ The custom headers can't be opened any more. */
     headers_unreadable: boolean;
     created_by: string | null;
+    /** 全站的才有；舊後端沒有。/ Site webhooks only; missing from older backends. */
+    mode?: WebhookMode | null;
+    optouts?: WebhookOptOut[];
     created_at: string;
     updated_at: string;
 }
@@ -81,6 +109,10 @@ export interface SiteWebhookSummary {
     hidden_tunnels: number;
     enabled: boolean;
     paused: boolean;
+    /** 舊後端沒有（= default、沒有退出）。/ Missing from older backends (= default, no opt-outs). */
+    mode?: WebhookMode;
+    my_optout?: number[];
+    managed?: ManagedTunnel[];
 }
 
 export interface WebhookList {
@@ -108,6 +140,8 @@ export interface WebhookInput {
     delay: number;
     enabled: boolean;
     headers: WebhookHeader[];
+    /** 只有全站的會送。/ Sent for site webhooks only. */
+    mode?: WebhookMode;
 }
 
 export interface WebhookDelivery {
