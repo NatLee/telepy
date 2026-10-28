@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compareAddress, countKinds, flattenHosts, hasSsh, hostKind, hostMatches, parseRecent, pushRecent, queryTerms, recentRows, RECENT_MAX, sortHosts, stepIndex } from "./lanHosts.ts";
+import { initialNetworkView, HOSTS_VIEW_ABOVE, compareAddress, countKinds, flattenHosts, hasSsh, hostKind, hostMatches, parseRecent, pushRecent, queryTerms, recentRows, RECENT_MAX, sortHosts, stepIndex } from "./lanHosts.ts";
 
 let next = 1;
 const host = (address: string, more: Partial<{ hostname: string; label: string; mac: string; vendor: string; ssh_banner: string; open_ports: number[]; ssh_port: number; last_seen: string }> = {}) => ({
@@ -102,4 +102,13 @@ test("arrow keys step within the list", () => {
     assert.equal(stepIndex(4, 5, 1), 4);
     assert.equal(stepIndex(2, 5, -1), 1);
     assert.equal(stepIndex(0, 0, 1), -1);
+});
+
+test("start view: deep link = topology, then the remembered choice, then the host count", () => {
+    assert.equal(initialNetworkView("hosts", 500, true), "tree");
+    assert.equal(initialNetworkView("tree", 500, false), "tree");
+    assert.equal(initialNetworkView("hosts", 3, false), "hosts");
+    assert.equal(initialNetworkView(null, HOSTS_VIEW_ABOVE, false), "tree");
+    assert.equal(initialNetworkView(null, HOSTS_VIEW_ABOVE + 1, false), "hosts");
+    assert.equal(initialNetworkView("bogus", 0, false), "tree");
 });

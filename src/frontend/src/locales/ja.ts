@@ -4057,6 +4057,7 @@ export const ja: Record<TranslationKey, string> = {
     "network.open.hereHint": "このページ下部に浮かぶパネルで開きます。ネットワークページから移動しません。",
     "network.open.page": "ターミナルページ",
     "network.open.pageHint": "ターミナルページで開きます（Ctrl/⌘ クリックで新しいタブ）。",
+    "network.open.newTabHint": "新しいタブで開くので、ここで開いている {count} 個のターミナルはそのまま動き続けます。",
     "network.open.explain": "「ここで開く」はこのページのまま、ターミナルを下部に浮かべます。「ターミナルページ」はファイルやツールボックス付きのターミナルページで開きます。どちらも上のアカウント・デバイスのアカウント・ログイン方法を使います。",
     "network.open.hereFor": "{name} のターミナルをここで開く",
     "network.open.pageFor": "{name} をターミナルページで開く",

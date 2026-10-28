@@ -200,6 +200,7 @@ export function HostPanel({ host, tunnel, online, sessions, initialTab = "termin
                                 disabled={!!blocked}
                                 reason={blocked}
                                 onNavigate={onNavigate}
+                                openShells={sessions.filter((s) => s.status !== "closed").length}
                             />
                             <Button variant={desktopPorts(host.open_ports).length > 0 ? "secondary" : "ghost"} asChild>
                                 <Link href={`/tunnels/desktop?tunnel=${tunnel.id}&lanHost=${host.id}`} prefetch={false}>

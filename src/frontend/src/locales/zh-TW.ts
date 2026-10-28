@@ -4057,6 +4057,7 @@ export const zhTW: Record<TranslationKey, string> = {
     "network.open.hereHint": "開在這頁底部浮起的面板裡，不離開網路頁。",
     "network.open.page": "終端機頁",
     "network.open.pageHint": "在完整的終端機頁開啟（Ctrl/⌘ 點擊開新分頁）。",
+    "network.open.newTabHint": "會開在新分頁，這裡開著的 {count} 個終端機不會中斷。",
     "network.open.explain": "「在這裡開」留在這頁，終端機浮在底部；「終端機頁」開完整的終端機頁（有檔案與工具箱）。兩種都用上面的帳號、裝置帳號與登入方式。",
     "network.open.hereFor": "在這裡開 {name} 的終端機",
     "network.open.pageFor": "在終端機頁開 {name}",

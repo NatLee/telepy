@@ -162,3 +162,21 @@ export function stepIndex(current: number, length: number, delta: 1 | -1): numbe
     if (current < 0 || current >= length) return delta > 0 ? 0 : length - 1;
     return Math.min(length - 1, Math.max(0, current + delta));
 }
+
+// ── 一開始用哪種看法 / Which view the page starts in ─────────────────────
+
+export type NetworkView = "tree" | "hosts";
+export const NETWORK_VIEWS: readonly NetworkView[] = ["tree", "hosts"];
+/** 主機超過這麼多台、又沒選過時，先開「所有主機」。/ Above this many hosts and without a choice, start in "All hosts". */
+export const HOSTS_VIEW_ABOVE = 40;
+
+/**
+ * 深層連結（`?tunnel=`）一律開拓撲（那台裝置展開）；否則用記住的選擇；沒選過就看主機數量。
+ * A deep link (`?tunnel=`) always opens the topology (with that device expanded); otherwise the remembered choice;
+ * without one, the number of hosts decides.
+ */
+export function initialNetworkView(stored: string | null, hostCount: number, deepLink: boolean): NetworkView {
+    if (deepLink) return "tree";
+    if (stored === "tree" || stored === "hosts") return stored;
+    return hostCount > HOSTS_VIEW_ABOVE ? "hosts" : "tree";
+}

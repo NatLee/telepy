@@ -25,7 +25,7 @@ import { HostPanel, type HostPanelTab, type OpenTerminalRequest } from "@/compon
 import { HostTable } from "@/components/network/HostTable";
 import { defaultDeviceUser } from "@/components/network/HostOpen";
 import { useRecentLanHosts } from "@/hooks/useRecentLanHosts";
-import { flattenHosts, recentRows } from "@/lib/lanHosts";
+import { flattenHosts, initialNetworkView, NETWORK_VIEWS, recentRows, type NetworkView } from "@/lib/lanHosts";
 import { DOCK_BAR, DOCK_GAP, DOCK_HEIGHT, TerminalDock } from "@/components/network/TerminalDock";
 import { ScanDialog } from "@/components/network/ScanDialog";
 import { AddHostDialog } from "@/components/network/AddHostDialog";
@@ -63,16 +63,24 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
     );
 }
 
-const NETWORK_VIEWS = ["tree", "hosts"] as const;
-type NetworkView = (typeof NETWORK_VIEWS)[number];
+// "auto" = 沒選過（由主機數量決定）。/ "auto" = no choice yet (the host count decides).
+const STORED_VIEWS = ["auto", ...NETWORK_VIEWS] as const;
 
 function NetworkInner() {
     const { t } = useI18n();
     const { state, actions } = useNetworkPage();
     const { tunnels, allTunnels, loading, query, stats, focusTunnel } = state;
     const terms = useLanTerminals();
+    // 開著的終端機（「終端機頁」此時開新分頁，dock 裡的不會斷）。/ Open terminals: "Terminal page" then opens a new tab so the dock keeps them.
+    const openShells = terms.sessions.filter((s) => s.status !== "closed").length;
     const recent = useRecentLanHosts();
-    const [view, setView] = useStoredChoice<NetworkView>("telepy.networkView", NETWORK_VIEWS, "tree");
+    const [storedView, storeView] = useStoredChoice<NetworkView | "auto">("telepy.networkView", STORED_VIEWS, "auto");
+    // 這次造訪中自己切過就照選的（深層連結只決定一開始）。/ A switch during this visit wins (a deep link only sets the start).
+    const [switched, setSwitched] = useState(false);
+    const setView = (v: NetworkView) => {
+        setSwitched(true);
+        storeView(v);
+    };
     // `n` 每次要求都 +1，讓同一台主機的面板也會切到要求的分頁。/ `n` bumps per request so an open panel switches tabs too.
     const [openHost, setOpenHost] = useState<{ tunnelId: number; hostId: number; tab: HostPanelTab; n: number } | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
@@ -110,6 +118,7 @@ function NetworkInner() {
             if (!onOpenTerminal({ tunnel: tn, host: h, login: h.username ?? "", deviceUser, auth: TELEPY_AUTH })) onOpenHost(h);
         },
         onNavigate: (h) => remember(h.tunnel_id, h.id),
+        openShells,
     };
 
     // 「/」跳到搜尋（不在輸入框裡時）。/ "/" focuses the search (when not typing somewhere).
@@ -125,6 +134,7 @@ function NetworkInner() {
         return () => window.removeEventListener("keydown", onKey);
     }, []);
 
+    const view = initialNetworkView(storedView === "auto" ? null : storedView, stats.hosts, focusTunnel !== null && !switched);
     const allRows = useMemo(() => flattenHosts(allTunnels), [allTunnels]);
     const tableRows = useMemo(() => flattenHosts(tunnels), [tunnels]);
     const recentList = useMemo(() => recentRows(recent.recent, allRows).slice(0, 6), [recent.recent, allRows]);
@@ -298,6 +308,7 @@ function NetworkInner() {
                             onOpenHost={onOpenHost}
                             onOpenHere={hostActions.onOpenHere}
                             onNavigate={hostActions.onNavigate}
+                            openShells={openShells}
                         />
                     ) : filtered.shown.length === 0 ? (
                         <p className="py-8 text-center text-sm text-muted-foreground">{t("network.noMatch", { query })}</p>

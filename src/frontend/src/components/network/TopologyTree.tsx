@@ -105,6 +105,8 @@ export interface HostActions {
     onOpenHost: (h: LanHost, tab?: "terminal" | "commands") => void;
     onOpenHere: (h: LanHost) => void;
     onNavigate: (h: LanHost) => void;
+    /** dock 裡開著幾個終端機（> 0 時「終端機頁」開新分頁）。/ Open dock terminals (> 0: "Terminal page" opens a new tab). */
+    openShells: number;
 }
 
 function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; tunnel: TopologyTunnel; online: boolean; selected: boolean; actions: HostActions }) {
@@ -154,7 +156,7 @@ function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; 
                 </span>
             </button>
             {/* 有 SSH 的主機：直接開終端機（這裡 / 終端機頁）。/ SSH hosts: open a terminal right away (here / terminal page). */}
-            {ssh && <HostQuickActions compact host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} className="pr-1 pt-1.5" />}
+            {ssh && <HostQuickActions compact host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} openShells={actions.openShells} className="pr-1 pt-1.5" />}
         </div>
     );
 }

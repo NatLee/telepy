@@ -53,7 +53,7 @@ function SortHeader({ k, sort, desc, onSort }: { k: HostSort; sort: HostSort; de
     );
 }
 
-export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost, onOpenHere, onNavigate }: {
+export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost, onOpenHere, onNavigate, openShells }: {
     /** 已經依搜尋篩過的主機。/ Hosts already narrowed by the search. */
     rows: TableRow[];
     /** 搜尋一變就回第 1 頁。/ Back to page 1 when the search changes. */
@@ -63,6 +63,7 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
     onOpenHost: (h: LanHost, tab?: "terminal" | "commands") => void;
     onOpenHere: (h: LanHost) => void;
     onNavigate: (h: LanHost) => void;
+    openShells: number;
 }) {
     const { t, locale } = useI18n();
     const [kind, setKind] = useState<HostKind | "all">("all");
@@ -203,7 +204,7 @@ export function HostTable({ rows, pageKey, selectedHostId, isOnline, onOpenHost,
                                 <span className="hidden text-xs text-muted-foreground @3xl:block" title={host.last_seen ? time.format(new Date(host.last_seen)) : undefined}>
                                     {host.last_seen ? fmt.format(new Date(host.last_seen)) : host.source === "manual" ? t("network.manualTag") : "—"}
                                 </span>
-                                <HostQuickActions host={host} tunnel={tn} online={online} onOpenHere={onOpenHere} onOpenPanel={onOpenHost} onNavigate={onNavigate} className="justify-end @3xl:w-24" />
+                                <HostQuickActions host={host} tunnel={tn} online={online} onOpenHere={onOpenHere} onOpenPanel={onOpenHost} onNavigate={onNavigate} openShells={openShells} className="justify-end @3xl:w-24" />
                             </li>
                         );
                     })}

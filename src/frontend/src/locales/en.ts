@@ -4075,6 +4075,7 @@ export const en = {
     "network.open.hereHint": "Opens in a panel floating at the bottom of this page; you stay on the network page.",
     "network.open.page": "Terminal page",
     "network.open.pageHint": "Opens on the full terminal page (Ctrl/⌘-click for a new tab).",
+    "network.open.newTabHint": "Opens in a new tab so the {count} open terminal(s) here keep running.",
     "network.open.explain": "“Open here” keeps you on this page with the terminal floating at the bottom; “Terminal page” opens the full terminal page with files and the toolbox. Both use the login, device account and login method above.",
     "network.open.hereFor": "Open a terminal on {name} here",
     "network.open.pageFor": "Open {name} on the terminal page",

@@ -36,16 +36,29 @@ export function lanTerminalUrl(tn: Pick<TopologyTunnel, "id" | "reverse_port">, 
  * The panel's pair: primary "Open here" plus a secondary "Terminal page ↗" link. Both disabled with `reason` when
  * the terminal can't open.
  */
-export function SplitOpen({ onOpenHere, href, disabled, reason, onNavigate }: {
+/**
+ * dock 裡有開著的終端機時，「終端機頁」改開新分頁，離開這頁不會把它們關掉；沒有時是一般的換頁（Ctrl/⌘ 點照樣開新分頁）。
+ * With terminals open in the dock, "Terminal page" opens a new tab so leaving doesn't end them; otherwise it is a
+ * normal navigation (Ctrl/⌘-click still opens a tab).
+ */
+function pageLinkProps(openShells: number): { target?: string; rel?: string } {
+    return openShells > 0 ? { target: "_blank", rel: "noopener" } : {};
+}
+
+export function SplitOpen({ onOpenHere, href, disabled, reason, onNavigate, openShells = 0 }: {
     onOpenHere: () => void;
     href: string;
     disabled: boolean;
     reason?: string;
     /** 跳頁前（記錄「最近用過」）。/ Before navigating (to remember the host as recently used). */
     onNavigate?: () => void;
+    /** dock 裡開著幾個終端機。/ Terminals open in the dock. */
+    openShells?: number;
 }) {
     const { t } = useI18n();
+    const newTab = openShells > 0 ? t("network.open.newTabHint", { count: openShells }) : null;
     return (
+        <span className="flex min-w-0 max-w-full flex-col gap-1">
         <div className="inline-flex min-w-0 max-w-full flex-wrap" role="group" aria-label={t("network.open.group")}>
             <Button onClick={onOpenHere} disabled={disabled} title={reason ?? t("network.open.hereHint")} className="rounded-r-none">
                 <Terminal size={16} /> {t("network.open.here")}
@@ -56,12 +69,14 @@ export function SplitOpen({ onOpenHere, href, disabled, reason, onNavigate }: {
                 </Button>
             ) : (
                 <Button variant="outline" asChild className="-ml-px rounded-l-none">
-                    <Link href={href} prefetch={false} title={t("network.open.pageHint")} onClick={onNavigate}>
+                    <Link href={href} prefetch={false} title={newTab ?? t("network.open.pageHint")} onClick={onNavigate} {...pageLinkProps(openShells)}>
                         {t("network.open.page")} <ExternalLink size={14} />
                     </Link>
                 </Button>
             )}
         </div>
+        {newTab && !disabled && <span className="text-xs text-muted-foreground">{newTab}</span>}
+        </span>
     );
 }
 
@@ -70,13 +85,14 @@ export function SplitOpen({ onOpenHere, href, disabled, reason, onNavigate }: {
  * A host row's small icons: open here, terminal page, commands. Without a usable login (the host has no default)
  * the first two open the panel instead so you can fill one in.
  */
-export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel, onNavigate, compact = false, className }: {
+export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel, onNavigate, openShells = 0, compact = false, className }: {
     host: LanHost;
     tunnel: TopologyTunnel;
     online: boolean;
     onOpenHere: (h: LanHost) => void;
     onOpenPanel: (h: LanHost, tab: "terminal" | "commands") => void;
     onNavigate?: (h: LanHost) => void;
+    openShells?: number;
     /** 只有兩個終端機圖示（樹裡的主機卡；指令在面板裡）。/ Only the two terminal icons (tree entries; commands are in the panel). */
     compact?: boolean;
     className?: string;
@@ -109,7 +125,8 @@ export function HostQuickActions({ host, tunnel, online, onOpenHere, onOpenPanel
                         prefetch={false}
                         onClick={() => onNavigate?.(host)}
                         aria-label={t("network.open.pageFor", { name })}
-                        title={t("network.open.pageAs", { login })}
+                        title={openShells > 0 ? `${t("network.open.pageFor", { name })} · ${t("network.open.newTabHint", { count: openShells })}` : t("network.open.pageAs", { login })}
+                        {...pageLinkProps(openShells)}
                     >
                         <ExternalLink size={15} />
                     </Link>
