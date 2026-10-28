@@ -10,7 +10,7 @@
  */
 import React, { useCallback, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Clapperboard, ExternalLink } from "lucide-react";
+import { Clapperboard, ExternalLink, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/section";
 import { Modal } from "@/components/ui/Modal";
@@ -21,7 +21,7 @@ import { CastPlayer } from "@/components/recordings/CastPlayer";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useTapi } from "@/hooks/useTapi";
 import { parseCast } from "@/lib/asciicast";
-import { CREDIT_LINES, creditsCast, type CreditSectionKey } from "@/lib/credits";
+import { CREDIT_ART, CREDIT_LINES, creditsCast, shadowArt, tapiArt, tapiFinale, type CreditSectionKey, type FinaleKind } from "@/lib/credits";
 import { useI18n } from "@/lib/i18n";
 import { CLIP_COLORS, DAILY, MASCOT_PALETTE, type ClipColor } from "@/lib/mascot";
 import type { TranslationKey } from "@/locales/en";
@@ -69,6 +69,7 @@ function handful(x: number, y: number): Pearl[] {
 }
 
 const SECTION_TITLE: Record<CreditSectionKey, TranslationKey> = {
+    contributors: "about.creditsContributors",
     typefaces: "about.creditsTypefaces",
     browser: "about.creditsBrowser",
     server: "about.creditsServer",
@@ -77,25 +78,47 @@ const SECTION_TITLE: Record<CreditSectionKey, TranslationKey> = {
     mascot: "about.creditsMascot",
 };
 
+/**
+ * 片尾名單。謝幕依看的人而定（打開時決定，播完存設定也不會重播）：還沒找到 Tapi = 只看得到影子，結尾提示去
+ * 哪裡找，獎勵（每天換色）先存著；有 Tapi、還沒解鎖 = 髮夾輪流換六種顏色，看完解鎖；都有了 = 戴自己的顏色。
+ * The credits. The finale depends on the viewer (decided on open, so saving at the end never restarts it): no
+ * Tapi yet = only a shadow, the ending says where to look, and the reward (the daily colour) is kept for later;
+ * Tapi but not unlocked = the clips cycle through every colour and finishing unlocks it; both = Tapi's own colour.
+ */
 function CreditsDialog({ onClose }: { onClose: () => void }) {
     const { t } = useI18n();
     const tapi = useTapi();
+    const [kind] = useState<FinaleKind>(() => (!tapi.unlocked ? "shadow" : tapi.dailyUnlocked ? "owned" : "unlock"));
+    const [look] = useState(() => ({ clip: tapi.clip, festival: tapi.festival }));
+    const [ended, setEnded] = useState(false);
     const [justUnlocked, setJustUnlocked] = useState(false);
-    // 看完片尾名單：解鎖「每天換一個」。/ Watching the credits to the end unlocks "a new one every day".
+    // 看完片尾名單：解鎖「每天換一個」（還沒找到 Tapi 也先存著）。/ Watching to the end unlocks the daily colour (kept even before Tapi is found).
     const onEnded = useCallback(() => {
+        setEnded(true);
         if (tapi.dailyUnlocked) return;
         void tapi.save({ tapi_daily: true }).then((ok) => ok && setJustUnlocked(true));
     }, [tapi]);
-    const cast = useMemo(
-        () =>
-            parseCast(
-                creditsCast(
-                    (Object.keys(CREDIT_LINES) as CreditSectionKey[]).map((k) => ({ title: t(SECTION_TITLE[k]), lines: [...CREDIT_LINES[k]] })),
-                    { title: "Telepy", tagline: t("about.creditsTagline"), thanks: t("about.creditsThanks") },
-                ),
-            ),
-        [t],
-    );
+    const cast = useMemo(() => {
+        const mascot = kind === "shadow" ? shadowArt(tapiArt("happy", look)) : tapiArt("happy", look);
+        const sections = (Object.keys(CREDIT_LINES) as CreditSectionKey[]).map((k) => ({
+            title: t(SECTION_TITLE[k]),
+            // 還沒見過的吉祥物沒有名字。/ A mascot you have not met has no name yet.
+            lines: k === "mascot" && kind === "shadow" ? ["???"] : [...CREDIT_LINES[k]],
+            note: k === "contributors" ? t("about.creditsContributorsNote") : undefined,
+            art: k === "mascot" ? mascot : CREDIT_ART[k],
+        }));
+        return parseCast(
+            creditsCast(sections, {
+                title: "Telepy",
+                tagline: t("about.creditsTagline"),
+                thanks: t("about.creditsThanks"),
+                hint: kind === "shadow" ? t("about.creditsWhoIsThis") : undefined,
+                finale: tapiFinale(kind, look),
+            }),
+        );
+    }, [t, kind, look]);
+    const shadow = kind === "shadow";
+    const message = shadow && ended ? t("about.creditsFindTapi") : justUnlocked ? t("about.tapiDailyUnlocked") : t("about.creditsThanks");
     return (
         <Modal
             isOpen
@@ -106,14 +129,18 @@ function CreditsDialog({ onClose }: { onClose: () => void }) {
             description={t("about.creditsDescription")}
             footer={
                 <div className="flex w-full items-center gap-3">
-                    <Tapi pose="wave" size="2.75rem" className="shrink-0 animate-tapi-bob" />
-                    <span className={justUnlocked ? "text-sm text-foreground" : "text-sm text-muted-foreground"} role={justUnlocked ? "status" : undefined}>
-                        {justUnlocked ? t("about.tapiDailyUnlocked") : t("about.creditsThanks")}
+                    {shadow ? (
+                        ended && <Gift className="size-5 shrink-0 text-primary" aria-hidden />
+                    ) : (
+                        <Tapi pose="wave" size="2.75rem" className="shrink-0 animate-tapi-bob" />
+                    )}
+                    <span className={ended && (shadow || justUnlocked) ? "text-sm text-foreground" : "text-sm text-muted-foreground"} role={ended ? "status" : undefined}>
+                        {message}
                     </span>
                 </div>
             }
         >
-            <CastPlayer cast={cast} tunnelId={null} autoPlay onEnded={onEnded} />
+            <CastPlayer cast={cast} tunnelId={null} autoPlay onEnded={onEnded} pixelArt />
         </Modal>
     );
 }
@@ -139,7 +166,16 @@ function CrossSwatch({ fills }: { fills: string[] }) {
 function YourTapi() {
     const { t } = useI18n();
     const tapi = useTapi();
-    if (!tapi.unlocked) return null;
+    if (!tapi.unlocked) {
+        // 片尾名單看完了、Tapi 還沒找到：留一句話，免得忘了禮物還在等。/ Credits watched, Tapi not found yet: a reminder that the present is waiting.
+        if (!tapi.dailyUnlocked) return null;
+        return (
+            <p className="mt-3.5 flex items-center gap-2 border-t border-border pt-3.5 text-sm text-muted-foreground">
+                <Gift className="size-4 shrink-0 text-primary" aria-hidden />
+                {t("about.tapiWaiting")}
+            </p>
+        );
+    }
     const pick = (choice: string) => void tapi.save({ tapi_color: choice });
     const swatch = "grid size-9 place-items-center rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
     return (

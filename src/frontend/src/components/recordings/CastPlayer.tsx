@@ -21,7 +21,20 @@ const SPEEDS = ["1", "2", "4", "8"] as const;
 /** `tunnelId` = 用哪台裝置的終端機外觀（null = 我的預設，片尾名單用）；`autoPlay` 一準備好就播。 */
 /** `tunnelId` picks the device's terminal look (null = my default, for the credits); `autoPlay` starts when ready. */
 /** `onEnded`：播到最後時呼叫（片尾名單看完解鎖彩蛋）。/ `onEnded` runs when playback reaches the end (the credits' unlock). */
-export function CastPlayer({ cast, tunnelId, autoPlay = false, onEnded }: { cast: Cast; tunnelId: number | null; autoPlay?: boolean; onEnded?: () => void }) {
+/** `pixelArt`：畫面裡有背景色像素圖（片尾名單），縮小時補掉列間的細縫（globals.css；原尺寸沒有縫）。/ The screen holds background-colour pixel art (the credits): fills the hairlines between rows when scaled (globals.css; full size has none). */
+export function CastPlayer({
+    cast,
+    tunnelId,
+    autoPlay = false,
+    onEnded,
+    pixelArt = false,
+}: {
+    cast: Cast;
+    tunnelId: number | null;
+    autoPlay?: boolean;
+    onEnded?: () => void;
+    pixelArt?: boolean;
+}) {
     const endedRef = useRef(onEnded);
     useEffect(() => {
         endedRef.current = onEnded;
@@ -157,7 +170,7 @@ export function CastPlayer({ cast, tunnelId, autoPlay = false, onEnded }: { cast
         <div className="space-y-3">
             <div ref={frameRef} className="overflow-hidden rounded-lg border border-border p-2" style={{ background: resolved.scheme.theme.background }}>
                 <div style={{ transform: `scale(${box.scale})`, transformOrigin: "top left", height: box.scale < 1 ? box.height : undefined }}>
-                    <div ref={hostRef} className="inline-block" />
+                    <div ref={hostRef} className={pixelArt && box.scale < 1 ? "cast-pixel-art inline-block" : "inline-block"} />
                 </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
