@@ -17,6 +17,7 @@
 import "./discreet.css";
 import React, { useEffect, useRef } from "react";
 import { AuthPrefs } from "@/components/auth/AuthShell";
+import { useMeasuringPreview } from "@/components/ui/preview-frame";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useTypewriter } from "@/hooks/useTypewriter";
 import { useI18n } from "@/lib/i18n";
@@ -330,10 +331,13 @@ function runField(canvas: HTMLCanvasElement, host: HTMLElement, reduced: boolean
 function DiscreetArt({ host }: { host: React.RefObject<HTMLDivElement | null> }) {
     const canvas = useRef<HTMLCanvasElement>(null);
     const reduced = useReducedMotion();
+    // 只拿來量高度的預覽不畫（canvas 是絕對定位，不佔高度）。/ Not drawn where the preview is only measured (it takes no height).
+    const measuring = useMeasuringPreview();
     useEffect(() => {
         if (!host.current || !canvas.current) return;
         return runField(canvas.current, host.current, reduced);
     }, [host, reduced]);
+    if (measuring) return null;
     return <canvas ref={canvas} className="dsc-canvas" style={{ "--half": `${FIELD_HALF}px` } as CSSVars} aria-hidden />;
 }
 
@@ -376,9 +380,10 @@ function Wordmark() {
 function Tagline({ message, pin }: { message: string; pin: number | null }) {
     const { t } = useI18n();
     const reduced = useReducedMotion();
+    const measuring = useMeasuringPreview();
     const own = messageLines(message);
     const lines = own.length ? own : LINES.map((key) => t(key));
-    const { text, caret } = useTypewriter(lines, pin !== null && pin < lines.length ? pin : null, !reduced);
+    const { text, caret } = useTypewriter(lines, pin !== null && pin < lines.length ? pin : null, !reduced && !measuring);
     return (
         <div className="max-w-md text-lg leading-relaxed text-muted-foreground">
             <p className="sr-only">{lines.join(" ")}</p>

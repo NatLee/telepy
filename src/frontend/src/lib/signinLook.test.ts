@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, allStandard, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, PREVIEW_MIN_HEIGHT, allStandard, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, previewHeight, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
     assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", consent_style: "discreet", message: "Hi" }), {
@@ -108,4 +108,22 @@ test("the sunflower starts at the centre, stays inside the radius and is determi
     assert.ok(dots.every((d, i) => i === 0 || d.t >= dots[i - 1].t));
     assert.deepEqual(sunflower(0, 100), []);
     assert.deepEqual(sunflower(1, 100), [{ x: 0, y: 0, t: 0 }]);
+});
+
+test("preview screens fit the tallest page, never below the minimum, in steps of 20", () => {
+    // 還沒量到 / 量到怪值：最矮的高度。/ Not measured yet or a bad value: the minimum.
+    assert.equal(previewHeight(null), PREVIEW_MIN_HEIGHT);
+    assert.equal(previewHeight(undefined), PREVIEW_MIN_HEIGHT);
+    assert.equal(previewHeight(0), PREVIEW_MIN_HEIGHT);
+    assert.equal(previewHeight(Number.NaN), PREVIEW_MIN_HEIGHT);
+    assert.equal(previewHeight(Number.POSITIVE_INFINITY), PREVIEW_MIN_HEIGHT);
+    // 比最矮的還矮：留在 800（內容置中）。/ Shorter pages stay at 800 (centred).
+    assert.equal(previewHeight(612), 800);
+    assert.equal(previewHeight(800), 800);
+    // 比較高：往上取到 20 的倍數，內容一定放得下。/ Taller: rounded up to 20, so the content always fits.
+    assert.equal(previewHeight(801), 820);
+    assert.equal(previewHeight(1052), 1060);
+    assert.equal(previewHeight(1060), 1060);
+    assert.equal(previewHeight(1153.4), 1160);
+    for (const h of [801, 999, 1052, 1153, 2047]) assert.ok(previewHeight(h) >= h && previewHeight(h) - h < 20);
 });

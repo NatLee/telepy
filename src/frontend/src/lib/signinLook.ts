@@ -163,6 +163,22 @@ export function pinnedLine(rows: string[], row: number | null): number | null {
     return rows.slice(0, row).filter((r) => r.trim()).length;
 }
 
+/** 預覽螢幕最矮的高度（px），也就是還沒量到之前的高度。/ The preview screens' minimum height (px), also used until measured. */
+export const PREVIEW_MIN_HEIGHT = 800;
+const PREVIEW_STEP = 20;
+
+/**
+ * 預覽螢幕（網站設定 → 登入）要多高：四頁裡最高那一頁的內容放得下，所以每一頁都一樣高、也都看得到全部；至少 800，
+ * 往上取到 20 的倍數，晚到的字型或多打一個字不會讓外框跳一兩 px。還沒量到 = 最矮的高度。
+ * How tall the preview screens (Site settings → Sign-in) are: tall enough for the tallest of the four pages, so every
+ * page gets the same height and shows all of its content; at least 800 and rounded up to 20 px, so a late font or one
+ * more typed character does not nudge the frames by a pixel or two. Not measured yet = the minimum.
+ */
+export function previewHeight(measured: number | null | undefined): number {
+    if (!measured || !Number.isFinite(measured) || measured <= PREVIEW_MIN_HEIGHT) return PREVIEW_MIN_HEIGHT;
+    return Math.ceil(measured / PREVIEW_STEP) * PREVIEW_STEP;
+}
+
 export interface SunflowerDot {
     /** 相對中心的座標（px）。/ Offset from the centre in px. */
     x: number;
