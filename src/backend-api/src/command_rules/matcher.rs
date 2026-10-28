@@ -26,7 +26,9 @@ pub enum Action {
     Block,
     /// 等 owner / ADMIN（或規則指定的人）核准。/ Held until the owner, an ADMIN or the rule's own approvers approve.
     Approve,
-    /// 例外：豁免同範圍的擋下 / 要核准規則。/ An exception: exempt from the same scope's block / approve rules.
+    /// 提醒：指令照跑，打的人看到一行提示（自己可以靜音）。/ A reminder: the command runs and its typist sees a note (mutable).
+    Warn,
+    /// 例外：豁免同範圍的擋下 / 要核准 / 提醒規則。/ An exception: exempt from the same scope's block / approve / warn rules.
     Allow,
 }
 
@@ -35,6 +37,7 @@ impl Action {
         match s {
             "block" => Some(Self::Block),
             "approve" => Some(Self::Approve),
+            "warn" => Some(Self::Warn),
             "allow" => Some(Self::Allow),
             _ => None,
         }
@@ -43,7 +46,34 @@ impl Action {
         match self {
             Self::Block => "block",
             Self::Approve => "approve",
+            Self::Warn => "warn",
             Self::Allow => "allow",
+        }
+    }
+}
+
+/// 全站規則能不能覆寫。/ Whether a site rule can be overridden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// 誰都不能覆寫（🔒）。/ Nobody overrides it.
+    Enforced,
+    /// 隧道的 owner / ADMIN 可以在自己的隧道上關掉或用自己的例外豁免；提醒每個人可以靜音。
+    /// Owners / ADMINs may turn it off on their tunnels or exempt it with their own exceptions; anyone may mute a reminder.
+    Default,
+}
+
+impl Mode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "enforced" => Some(Self::Enforced),
+            "default" => Some(Self::Default),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enforced => "enforced",
+            Self::Default => "default",
         }
     }
 }
@@ -214,6 +244,10 @@ pub struct Rule {
     pub owner: Option<i64>,
     /// 個人規則主人的帳號名稱（給畫面與紀錄）。/ The personal rule owner's username (for the UI and the logs).
     pub owner_name: Option<String>,
+    /// 全站規則能不能覆寫（個人規則一律 Default）。/ Whether a site rule can be overridden (personal rules: Default).
+    pub mode: Mode,
+    /// 「要核准」等多久（秒）；None = 網站設定。/ How long an approval waits; None = the site setting.
+    pub approval_timeout: Option<i64>,
     pub action: Action,
     pub who: Who,
     pub via: Via,
@@ -244,10 +278,20 @@ impl Rule {
         }
     }
 
-    /// 這條規則管不管這個人、這個來源。個人規則（管別人的）只在主人還是這條隧道的 owner / ADMIN 時算數。
+    /// 這條規則可以被覆寫嗎（強制的全站規則不行）。/ Whether it can be overridden (enforced site rules can't).
+    pub fn overridable(&self) -> bool {
+        self.mode == Mode::Default
+    }
+
+    /// 這條規則管不管這個人、這個來源。個人規則（管別人的）只在主人還是這條隧道的 owner / ADMIN 時算數；被這條隧道的
+    /// owner / ADMIN 關掉的（`ctx.off`）或這個人靜音的提醒（`ctx.muted`）不算——強制的全站規則除外。
     /// Whether the rule covers this person and source. A personal rule for other people only counts while its owner
-    /// still owns or administers the tunnel.
+    /// still owns or administers the tunnel; a rule turned off here (`ctx.off`) or a reminder this person muted
+    /// (`ctx.muted`) doesn't — unless it is an enforced site rule.
     fn applies(&self, ctx: &Ctx<'_>) -> bool {
+        if self.overridable() && (ctx.off.contains(&self.id) || (self.action == Action::Warn && ctx.muted.contains(&self.id))) {
+            return false;
+        }
         let who = match (self.who, self.owner) {
             (Who::Me, owner) => owner.is_some() && ctx.user == owner,
             (_, Some(owner)) if !ctx.managers.contains(&owner) => false,
@@ -286,6 +330,10 @@ pub struct Ctx<'a> {
     /// 這條隧道的 owner 與 ADMIN sharee。/ The tunnel's owner and ADMIN sharees.
     pub managers: &'a [i64],
     pub source: Source,
+    /// 在這條隧道上被 owner / ADMIN 關掉的規則。/ Rules an owner / ADMIN turned off on this tunnel.
+    pub off: &'a [i64],
+    /// 這個人靜音的提醒規則。/ Reminder rules this person muted.
+    pub muted: &'a [i64],
 }
 
 /// 一個範圍（全站或隧道）的結果：符合的擋下 / 要核准規則，與豁免它的允許規則（有允許就不算）。
@@ -310,9 +358,10 @@ impl<'a> ScopeVerdict<'a> {
     }
 }
 
-/// 一行的完整結果：全站與個人規則各自的結果（個人 = 每位主人各自算完後最嚴的那個），合起來擋下 > 要核准 > 放行。
-/// The whole verdict: the site-wide and the personal outcome (personal = the strictest of each owner's own outcome);
-/// combined, block > approve > allowed.
+/// 一行的完整結果：全站與個人規則各自的結果（全站 = 強制與可覆寫兩組、個人 = 每位主人各自算完後最嚴的那個），合起來
+/// 擋下 > 要核准 > 提醒 > 放行。
+/// The whole verdict: the site-wide outcome (enforced and overridable rules, each on its own) and the personal one
+/// (the strictest of each owner's own outcome); combined, block > approve > warn > allowed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Verdict<'a> {
     pub site: ScopeVerdict<'a>,
@@ -323,7 +372,7 @@ impl<'a> Verdict<'a> {
     /// 要執行的決定：擋下或要核准的那條規則；None = 放行。/ The decision: the block or approve rule; None = allowed.
     pub fn decision(&self) -> Option<&'a Rule> {
         let effective = [self.site.effective(), self.personal.effective()];
-        effective.iter().flatten().find(|r| r.action == Action::Block).or_else(|| effective.iter().flatten().next()).copied()
+        [Action::Block, Action::Approve, Action::Warn].into_iter().find_map(|a| effective.iter().flatten().find(|r| r.action == a)).copied()
     }
 
     /// 放行而且是因為允許規則的（本來會被擋下 / 要核准）。/ Allowed because of an allow rule (it would otherwise be caught).
@@ -335,11 +384,13 @@ impl<'a> Verdict<'a> {
     }
 }
 
-/// 一行（或好幾個候選行）的結果。每位主人（全站算一位）：先找符合的允許規則；有，就豁免同一位主人的擋下 / 要核准；
-/// 個人規則再取各主人裡最嚴的（擋下 > 要核准 > 被豁免 > 只有允許），最後全站與個人合起來（擋下 > 要核准 > 放行）。
-/// The verdict for a line (or several candidate readings of it). Per owner (the site counts as one): an allow rule
-/// that matches exempts the same owner's block / approve rules; the personal outcome is the strictest owner's (block >
-/// approve > exempted > allow only); site and personal then combine as block > approve > allowed.
+/// 一行（或好幾個候選行）的結果。每位主人：先找符合的允許規則；有，就豁免同一位主人的擋下 / 要核准 / 提醒。全站分兩組：
+/// 強制的只有全站自己的例外能豁免；可以覆寫的，這條隧道的 owner / ADMIN 的例外也能豁免。每一邊再取最嚴的
+/// （擋下 > 要核准 > 提醒 > 被豁免 > 只有允許），最後全站與個人合起來（擋下 > 要核准 > 提醒 > 放行）。
+/// The verdict for a line (or several candidate readings of it). Per owner: an allow rule that matches exempts the same
+/// owner's block / approve / warn rules. Site rules come in two groups: enforced ones only yield to site exceptions;
+/// overridable ones also yield to exceptions of this tunnel's owner / ADMINs. Each side takes its strictest outcome
+/// (block > approve > warn > exempted > allow only), then site and personal combine as block > approve > warn > allowed.
 pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], ctx: &Ctx<'_>) -> Verdict<'a> {
     let parsed: Vec<(&str, Vec<SimpleCommand>)> = lines
         .iter()
@@ -350,13 +401,21 @@ pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], ctx: &Ctx<'_>) -> Verdi
     if parsed.is_empty() {
         return Verdict::default();
     }
-    let hit = |owner: Option<i64>, action: Action| {
-        rules
-            .iter()
-            .filter(|r| r.owner == owner && r.action == action && r.applies(ctx))
-            .find(|r| parsed.iter().any(|(line, cmds)| r.matcher.matches(line, cmds)))
+    let matching = |r: &&Rule| parsed.iter().any(|(line, cmds)| r.matcher.matches(line, cmds));
+    let find = |pick: &dyn Fn(&Rule) -> bool| rules.iter().filter(|r| pick(r) && r.applies(ctx)).find(matching);
+    let caught = |pick: &dyn Fn(&Rule) -> bool| {
+        [Action::Block, Action::Approve, Action::Warn].into_iter().find_map(|a| find(&|r: &Rule| pick(r) && r.action == a))
     };
-    let of = |owner: Option<i64>| ScopeVerdict { hit: hit(owner, Action::Block).or_else(|| hit(owner, Action::Approve)), allowed_by: hit(owner, Action::Allow) };
+    let of = |owner: Option<i64>| ScopeVerdict {
+        hit: caught(&|r: &Rule| r.owner == owner && r.action != Action::Allow),
+        allowed_by: find(&|r: &Rule| r.owner == owner && r.action == Action::Allow),
+    };
+    // 全站：強制的只認全站的例外；可以覆寫的也認這條隧道 owner / ADMIN 的例外。
+    // Site: enforced rules only yield to site exceptions; overridable ones also to the tunnel managers' exceptions.
+    let site_allow = find(&|r: &Rule| r.owner.is_none() && r.action == Action::Allow);
+    let manager_allow = find(&|r: &Rule| r.action == Action::Allow && r.owner.is_some_and(|o| ctx.managers.contains(&o)));
+    let enforced = ScopeVerdict { hit: caught(&|r: &Rule| r.owner.is_none() && r.mode == Mode::Enforced && r.action != Action::Allow), allowed_by: site_allow };
+    let default = ScopeVerdict { hit: caught(&|r: &Rule| r.owner.is_none() && r.mode == Mode::Default && r.action != Action::Allow), allowed_by: site_allow.or(manager_allow) };
     let mut owners: Vec<i64> = Vec::new();
     for o in rules.iter().filter_map(|r| r.owner) {
         if !owners.contains(&o) {
@@ -364,14 +423,19 @@ pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], ctx: &Ctx<'_>) -> Verdi
         }
     }
     let each: Vec<ScopeVerdict<'a>> = owners.into_iter().map(|o| of(Some(o))).collect();
-    let strictest = |action: Action| each.iter().find(|v| v.effective().is_some_and(|r| r.action == action));
-    let personal = strictest(Action::Block)
-        .or_else(|| strictest(Action::Approve))
+    Verdict { site: strictest(&[enforced, default]), personal: strictest(&each) }
+}
+
+/// 幾組結果裡最嚴的那組（擋下 > 要核准 > 提醒 > 被豁免 > 只有允許）。/ The strictest of several outcomes.
+fn strictest<'a>(each: &[ScopeVerdict<'a>]) -> ScopeVerdict<'a> {
+    let by = |action: Action| each.iter().find(|v| v.effective().is_some_and(|r| r.action == action));
+    by(Action::Block)
+        .or_else(|| by(Action::Approve))
+        .or_else(|| by(Action::Warn))
         .or_else(|| each.iter().find(|v| v.hit.is_some()))
         .or_else(|| each.iter().find(|v| v.allowed_by.is_some()))
         .copied()
-        .unwrap_or_default();
-    Verdict { site: of(None), personal }
+        .unwrap_or_default()
 }
 
 fn truncate(s: &str) -> &str {
@@ -796,6 +860,8 @@ mod tests {
             id: 1,
             owner: None,
             owner_name: None,
+            mode: Mode::Default,
+            approval_timeout: None,
             action,
             who: Who::Everyone,
             via: Via::All,
@@ -820,7 +886,7 @@ mod tests {
     const MANAGERS: &[i64] = &[7, 8];
 
     fn ctx(approver: bool, source: Source) -> Ctx<'static> {
-        Ctx { approver, user: None, managers: MANAGERS, source }
+        Ctx { approver, user: None, managers: MANAGERS, source, off: &[], muted: &[] }
     }
 
     fn eval<'a>(rules: &'a [Rule], line: &str, approver: bool, source: Source) -> Verdict<'a> {
@@ -829,6 +895,11 @@ mod tests {
 
     fn site_rule(id: i64, action: Action, pattern: &str) -> Rule {
         Rule { id, ..rule(action, Kind::Command, pattern) }
+    }
+
+    /// 強制（誰都不能覆寫）的全站規則。/ An enforced site rule.
+    fn enforced(id: i64, action: Action, pattern: &str) -> Rule {
+        Rule { mode: Mode::Enforced, ..site_rule(id, action, pattern) }
     }
 
     fn hits(pattern: &str, line: &str) -> bool {
@@ -945,9 +1016,9 @@ mod tests {
 
     #[test]
     fn allow_exempts_only_its_own_scope() {
-        // 全站擋 `rm -rf`，隧道允許 `rm -rf /tmp/build/*`：還是擋（管理員的規則優先）。
-        // A tunnel allow never overrides a site-wide block.
-        let rules = [site_rule(1, Action::Block, "rm -rf"), tunnel_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
+        // 強制的全站規則擋 `rm -rf`，隧道允許 `rm -rf /tmp/build/*`：還是擋（管理員的規則優先）。
+        // A tunnel allow never overrides an enforced site-wide block.
+        let rules = [enforced(1, Action::Block, "rm -rf"), tunnel_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
         let v = eval(&rules, "rm -rf /tmp/build/x", false, Source::Terminal);
         assert_eq!(v.decision().map(|r| r.id), Some(1));
         assert_eq!(v.personal.allowed_by.map(|r| r.id), Some(2), "the tunnel allow matched, it just has nothing to exempt there");
@@ -1023,7 +1094,7 @@ mod tests {
         mine.who = Who::Me;
         mine.via = Via::Agents;
         let rules = [mine];
-        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Agent };
+        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Agent, off: &[], muted: &[] };
         let as_7 = Ctx { user: Some(7), approver: true, ..as_9 };
         let v = evaluate(&rules, &["apt install x".to_string()], &as_9);
         assert_eq!(v.decision().map(|r| r.id), Some(1));
@@ -1048,13 +1119,58 @@ mod tests {
         let mut escape = owned(9, 2, Action::Allow, "rm -rf /tmp/*");
         escape.who = Who::Me;
         let rules = [owned(7, 1, Action::Block, "rm -rf"), escape];
-        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Terminal };
+        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Terminal, off: &[], muted: &[] };
         assert_eq!(evaluate(&rules, &["rm -rf /tmp/x".to_string()], &as_9).decision().map(|r| r.id), Some(1));
         // 兩位主人：擋下比要核准嚴。/ Two owners: a block beats an approval.
         let rules = [owned(7, 1, Action::Approve, "rm"), owned(8, 2, Action::Block, "rm -rf")];
         let v = eval(&rules, "rm -rf /x", false, Source::Terminal);
         assert_eq!(v.decision().map(|r| r.id), Some(2));
         assert_eq!(v.personal.hit.map(|r| r.id), Some(2));
+    }
+
+    #[test]
+    fn overridable_site_rules_yield_to_the_tunnel_managers() {
+        // 可以覆寫的全站擋下：這條隧道 owner / ADMIN（7）的例外豁免它；不管這條隧道的人（9）的例外不行。
+        // An overridable site block yields to an exception of the tunnel's owner / ADMIN (7), not of someone else (9).
+        let rules = [site_rule(1, Action::Block, "rm -rf"), owned(7, 2, Action::Allow, "rm -rf /tmp/*")];
+        let v = eval(&rules, "rm -rf /tmp/x", false, Source::Terminal);
+        assert!(v.decision().is_none());
+        assert_eq!(v.allowed_by().map(|r| r.id), Some(2));
+        assert_eq!(v.site.hit.map(|r| r.id), Some(1), "the exempted site rule is still reported");
+        let rules = [site_rule(1, Action::Block, "rm -rf"), owned(9, 2, Action::Allow, "rm -rf /tmp/*")];
+        assert_eq!(decided(&rules, "rm -rf /tmp/x", false, Source::Terminal), Some(1));
+        // 強制的不行，可以覆寫的跟強制的同時符合時強制的照樣擋。/ Enforced ones don't yield, even next to an overridable one.
+        let rules = [enforced(1, Action::Approve, "rm"), site_rule(3, Action::Block, "rm -rf"), owned(7, 2, Action::Allow, "rm -rf /tmp/*")];
+        let v = eval(&rules, "rm -rf /tmp/x", false, Source::Terminal);
+        assert_eq!(v.decision().map(|r| r.id), Some(1), "the overridable block is exempted, the enforced approval stays");
+
+        // 在這條隧道上被關掉：可以覆寫的不算，強制的照算。/ Turned off here: overridable ones stop counting, enforced ones don't.
+        let rules = [site_rule(1, Action::Block, "reboot"), enforced(2, Action::Approve, "sudo")];
+        let off = Ctx { off: &[1, 2], ..ctx(false, Source::Terminal) };
+        assert!(evaluate(&rules, &["reboot".to_string()], &off).decision().is_none());
+        assert_eq!(evaluate(&rules, &["sudo ls".to_string()], &off).decision().map(|r| r.id), Some(2));
+    }
+
+    #[test]
+    fn reminders_run_the_command_and_can_be_muted() {
+        let rules = [site_rule(1, Action::Warn, "systemctl restart")];
+        let v = eval(&rules, "sudo systemctl restart nginx", false, Source::Terminal);
+        assert_eq!(v.decision().map(|r| r.action), Some(Action::Warn));
+        // 擋下 / 要核准都比提醒嚴。/ Block and approval beat a reminder.
+        let rules = [site_rule(1, Action::Warn, "systemctl restart"), owned(7, 2, Action::Approve, "sudo")];
+        assert_eq!(decided(&rules, "sudo systemctl restart nginx", false, Source::Terminal), Some(2));
+        // 同一位主人的例外豁免提醒。/ The same owner's exception exempts a reminder.
+        let rules = [owned(7, 1, Action::Warn, "systemctl restart"), owned(7, 2, Action::Allow, "systemctl restart myapp")];
+        assert!(decided(&rules, "systemctl restart myapp", false, Source::Terminal).is_none());
+        // 靜音：可以覆寫的不提醒，強制的照樣提醒。/ Muted: overridable reminders go quiet, enforced ones still remind.
+        let rules = [site_rule(1, Action::Warn, "reboot"), enforced(2, Action::Warn, "shutdown"), owned(7, 3, Action::Warn, "halt")];
+        let muted = Ctx { muted: &[1, 2, 3], ..ctx(false, Source::Terminal) };
+        assert!(evaluate(&rules, &["reboot".to_string()], &muted).decision().is_none());
+        assert!(evaluate(&rules, &["halt".to_string()], &muted).decision().is_none(), "someone else's reminder to you is yours to mute");
+        assert_eq!(evaluate(&rules, &["shutdown".to_string()], &muted).decision().map(|r| r.id), Some(2));
+        // 靜音只對提醒有用：被「靜音」的擋下規則照擋。/ Muting only applies to reminders.
+        let rules = [site_rule(1, Action::Block, "reboot")];
+        assert!(evaluate(&rules, &["reboot".to_string()], &Ctx { muted: &[1], ..ctx(false, Source::Terminal) }).decision().is_some());
     }
 
     #[test]

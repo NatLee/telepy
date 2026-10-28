@@ -12,7 +12,7 @@ import React from "react";
 import { CircleCheck, Keyboard, Scissors, type LucideIcon } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { decisionPath, type DecisionPath, type Outcome, type ScopeStep } from "@/lib/commandRules";
+import { ACTION_KEY, caughtAs, decisionPath, type DecisionPath, type Outcome, type ScopeStep } from "@/lib/commandRules";
 import type { CheckVerdict, MatchedRule, RuleAction, RuleScope } from "@/types/commandRules";
 import type { TranslationKey } from "@/locales/en";
 import { ActionIcon } from "./RuleList";
@@ -27,28 +27,30 @@ export interface DecisionFlowProps {
     personalCounts: boolean;
 }
 
-const LANES: RuleAction[] = ["allow", "block", "approve"];
+const LANES: RuleAction[] = ["allow", "block", "approve", "warn"];
 
 const LANE_LIT: Record<RuleAction, string> = {
     allow: "border-success/60 bg-success/10 text-success",
     block: "border-destructive/60 bg-destructive/10 text-destructive",
     approve: "border-warning/60 bg-warning/12 text-warning",
+    warn: "border-foreground/40 bg-muted text-foreground",
 };
 
-const OUTCOME_TONE: Record<Outcome, string> = { allow: "text-success", block: "text-destructive", approve: "text-warning" };
-const OUTCOME_BORDER: Record<Outcome, string> = { allow: "border-success/50", block: "border-destructive/70", approve: "border-warning/60" };
-const OUTCOME_KEY: Record<Outcome, TranslationKey> = { allow: "commands.flow.outcome.allow", block: "commands.flow.outcome.block", approve: "commands.flow.outcome.approve" };
+const OUTCOME_TONE: Record<Outcome, string> = { allow: "text-success", block: "text-destructive", approve: "text-warning", warn: "text-foreground" };
+const OUTCOME_BORDER: Record<Outcome, string> = { allow: "border-success/50", block: "border-destructive/70", approve: "border-warning/60", warn: "border-foreground/40" };
+const OUTCOME_KEY: Record<Outcome, TranslationKey> = { allow: "commands.flow.outcome.allow", block: "commands.flow.outcome.block", approve: "commands.flow.outcome.approve", warn: "commands.flow.outcome.warn" };
 const SCOPE_KEY: Record<ScopeStep, TranslationKey> = {
     none: "commands.flow.scope.none",
     block: "commands.flow.scope.block",
     approve: "commands.flow.scope.approve",
+    warn: "commands.flow.scope.warn",
     exempted: "commands.flow.scope.exempted",
     allowOnly: "commands.flow.scope.allowOnly",
 };
 
 /** 哪些道要亮：攔到的那條（被豁免時劃掉）與豁免它的允許。/ Which lanes light: the caught one (struck when exempted) and the allow. */
 function laneState(step: ScopeStep, hit: MatchedRule | null, lane: RuleAction): "lit" | "struck" | "off" {
-    const caught: RuleAction | null = hit ? (hit.action === "block" ? "block" : "approve") : step === "block" || step === "approve" ? step : null;
+    const caught: RuleAction | null = hit ? (caughtAs(hit.action) ?? "approve") : step === "block" || step === "approve" || step === "warn" ? step : null;
     if (lane === "allow") return step === "exempted" || step === "allowOnly" ? "lit" : "off";
     if (lane !== caught) return "off";
     return step === "exempted" ? "struck" : "lit";
@@ -99,7 +101,7 @@ function ScopeBox({ scope, step, hit, allowedBy, lit, dim }: { scope: RuleScope;
                         <li key={lane} className={cn("flex flex-col rounded-sm border px-1.5 py-0.5 text-xs", state === "off" ? "border-transparent text-muted-foreground" : LANE_LIT[lane])}>
                             <span className={cn("flex items-center gap-1.5", state === "struck" && "line-through decoration-2")}>
                                 <ActionIcon action={lane} size={13} className="shrink-0" />
-                                <span className="truncate">{t(lane === "block" ? "commands.action.block" : lane === "approve" ? "commands.action.approve" : "commands.action.allow")}</span>
+                                <span className="truncate">{t(ACTION_KEY[lane])}</span>
                             </span>
                             {/* 亮起的道標出那條規則；被豁免的劃掉。/ A lit lane names its rule; an exempted one is struck through. */}
                             {state !== "off" && rule && <code className={cn("truncate pl-5 font-mono text-foreground", state === "struck" && "line-through decoration-2")}>{rule.pattern}</code>}

@@ -3,8 +3,10 @@
  * Types for command rules, approval requests and the terminal's binary notices.
  */
 
-/** 擋下 / 要核准 / 允許（例外：只豁免同範圍的規則）。/ block, approve, or allow (an exception within its own scope). */
-export type RuleAction = "block" | "approve" | "allow";
+/** 擋下 / 要核准 / 提醒（照跑，跳一行提示）/ 允許（例外）。/ block, approve, warn (runs with a note) or allow (an exception). */
+export type RuleAction = "block" | "approve" | "warn" | "allow";
+/** 全站規則能不能覆寫：default = 可以（預設）、enforced = 誰都不行。/ Whether a site rule can be overridden. */
+export type RuleMode = "default" | "enforced";
 export type RuleKind = "command" | "regex";
 /** everyone / sharees（ADMIN 以下）/ me（只有寫規則的人自己，個人規則才有）。/ me = only the rule's author (personal rules only). */
 export type RuleWho = "everyone" | "sharees" | "me";
@@ -33,6 +35,14 @@ export interface CommandRule {
     tunnels: RuleTunnel[];
     /** 我看不到的隧道有幾條。/ Covered tunnels I can't see. */
     hidden_tunnels: number;
+    /** 全站規則能不能覆寫（個人規則一律 default）。/ Whether a site rule can be overridden (personal: default). */
+    mode: RuleMode;
+    /** 「要核准」等多久（秒）；null = 網站設定。/ How long an approval waits (s); null = the site setting. */
+    approval_timeout: number | null;
+    /** 我的覆寫：在我的哪些隧道關掉、有沒有靜音。/ My overrides: off on which of my tunnels, muted or not. */
+    my_override?: { off: { all_tunnels: boolean; tunnels: { id: number; name: string }[] } | null; muted: boolean };
+    /** 看一條隧道時：誰在這裡關掉了它。/ On one tunnel: who turned it off there. */
+    off_here?: UserBrief[];
     action: RuleAction;
     kind: RuleKind;
     pattern: string;
@@ -65,6 +75,9 @@ export interface RuleInput {
     approver_ids: number[];
     all_tunnels: boolean;
     tunnel_ids: number[];
+    /** 全站規則才有。/ Site rules only. */
+    mode: RuleMode;
+    approval_timeout: number | null;
 }
 
 /** 規則表單的隧道選項（`manage` = 我是 owner / ADMIN）。/ A tunnel choice (`manage` = I own or administer it). */
@@ -80,6 +93,8 @@ export interface RulesList {
     site: CommandRule[];
     can_edit_site: boolean;
     limit: number;
+    /** 規則自己的核准等待最多幾秒（網站設定）。/ The longest a rule's own approval wait may be. */
+    approval_timeout_max?: number;
     tunnels: TunnelChoice[];
     /** 個人規則可以指定的核准人。/ Who a personal rule may name. */
     approver_candidates: UserBrief[];
@@ -106,6 +121,7 @@ export interface MatchedRule {
     scope: RecordScope;
     /** 個人規則的主人（終端機通知、試跑結果）。/ The personal rule's owner (terminal notices, the tester). */
     owner?: UserBrief | null;
+    mode?: RuleMode;
     action?: RuleAction;
     kind: RuleKind;
     pattern: string;
@@ -172,6 +188,6 @@ export interface CheckResult {
 
 /** 終端機的指令規則通知（binary JSON frame）。/ The terminal's command notice (a binary JSON frame). */
 export type TerminalCommandNotice =
-    | { type: "command"; state: "blocked" | "error"; command: string; rule: MatchedRule }
+    | { type: "command"; state: "blocked" | "error" | "warned"; command: string; rule: MatchedRule }
     | { type: "command"; state: "pending"; command: string; rule: MatchedRule; request: CommandRequest; can_decide: boolean }
     | { type: "command"; state: "approved" | "denied" | "cancelled" | "expired"; request_id: number; by: string | null; reason: string | null };

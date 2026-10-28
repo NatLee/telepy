@@ -24,7 +24,7 @@ export type RulesView = "mine" | "site";
 /** 存規則時欄位的錯誤（`{pattern: [msg]}`）。/ Field errors from saving a rule. */
 export type RuleErrors = Partial<Record<keyof RuleInput, string>>;
 
-const FIELDS = ["action", "kind", "pattern", "who", "via", "note", "enabled", "approver_ids", "all_tunnels", "tunnel_ids"] as const;
+const FIELDS = ["action", "kind", "pattern", "who", "via", "note", "enabled", "approver_ids", "all_tunnels", "tunnel_ids", "mode", "approval_timeout"] as const;
 
 export function useCommandRulesPage(view: RulesView = "mine") {
     const { t } = useI18n();
@@ -153,6 +153,29 @@ export function useCommandRulesPage(view: RulesView = "mine") {
         [tunnelId, view],
     );
 
+    /**
+     * 我的覆寫：在我管的隧道上關掉一條全站規則（`target` = null 拿掉）、或替自己靜音一條提醒。
+     * My overrides: turn a site rule off on tunnels I manage (`target` = null removes it), or mute a reminder for myself.
+     */
+    const setOff = async (rule: CommandRule, target: { all_tunnels: boolean; tunnel_ids: number[] } | null): Promise<boolean> => {
+        const res = target
+            ? await apiFetch(`/api/command-rules/${rule.id}/off`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(target) })
+            : await apiFetch(`/api/command-rules/${rule.id}/off`, { method: "DELETE" });
+        if (res.ok) showSuccess(t("commands.override.saved"));
+        else showError(responseError(res, await readJson(res), t("commands.override.failed")));
+        await loadRules();
+        return res.ok;
+    };
+    const setMute = async (rule: CommandRule, muted: boolean): Promise<boolean> => {
+        const res = muted
+            ? await apiFetch(`/api/command-rules/${rule.id}/mute`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" })
+            : await apiFetch(`/api/command-rules/${rule.id}/mute`, { method: "DELETE" });
+        if (res.ok && muted) showSuccess(t("commands.override.mutedToast"));
+        else if (!res.ok) showError(responseError(res, await readJson(res), t("commands.override.failed")));
+        await loadRules();
+        return res.ok;
+    };
+
     const withdraw = async (id: number) => {
         const res = await apiFetch(`/api/command-requests/${id}/cancel`, { method: "POST" });
         if (!res.ok) showError(responseError(res, await readJson(res), t("commands.decideFailed")));
@@ -186,6 +209,12 @@ export function useCommandRulesPage(view: RulesView = "mine") {
         /** 規則表單能指定的核准人。/ Who the rule form may name. */
         approverCandidates: (view === "site" ? data?.site_approver_candidates : data?.approver_candidates) ?? [],
         loaded: data !== null,
+        /** 我是 owner / Admin 的隧道。/ The tunnels I own or administer. */
+        managed: (data?.tunnels ?? []).filter((x) => x.manage).map((x) => x.id),
+        /** 規則自己的核准等待最多幾秒。/ The longest a rule's own approval wait may be. */
+        approvalTimeoutMax: data?.approval_timeout_max ?? 300,
+        setOff,
+        setMute,
         failed,
         history,
         reload: async () => {

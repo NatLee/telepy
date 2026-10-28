@@ -30,7 +30,7 @@ use crate::permissions::{self, Permission};
 use crate::state::AppState;
 use crate::util::{db_time, db_to_iso_utc_z, now_db};
 use crate::webhooks::{Event, Kind as WebhookKind};
-pub use matcher::{Action, Ctx, Kind, Matcher, Rule, Scope, Source, Verdict, Via, Who};
+pub use matcher::{Action, Ctx, Kind, Matcher, Mode, Rule, Scope, Source, Verdict, Via, Who};
 
 /// agent 的一次 tool call 最多等核准這麼久，之後回「還在等」。/ How long one agent tool call waits for a decision.
 pub const AGENT_WAIT: Duration = Duration::from_secs(45);
@@ -67,7 +67,7 @@ impl Outcome {
 /// requests wait on.
 #[derive(Default)]
 pub struct CommandRules {
-    cache: Mutex<HashMap<i64, Arc<Vec<Rule>>>>,
+    cache: Mutex<HashMap<i64, Arc<RuleSet>>>,
     waiters: DashMap<i64, watch::Sender<Outcome>>,
 }
 
@@ -89,6 +89,36 @@ impl CommandRules {
     }
 }
 
+/// 一條隧道可能用到的規則，加上這裡的覆寫（誰在這裡關掉哪條、誰靜音了哪條提醒）。誰還管這條隧道、誰在跑，評估時才看。
+/// The rules that may apply to a tunnel plus the overrides that cover it (who turned which rule off here, who muted
+/// which reminder). Who still manages the tunnel and who is running the command are looked at when evaluating.
+#[derive(Debug, Default)]
+pub struct RuleSet {
+    pub rules: Vec<Rule>,
+    /// (規則, 人)：這個人在這條隧道上關掉了這條可以覆寫的全站規則（他還是 owner / ADMIN 時才算）。
+    /// (rule, user): that person turned this overridable site rule off here (counts while they manage the tunnel).
+    pub off: Vec<(i64, i64)>,
+    /// (規則, 人)：這個人靜音了這條提醒。/ (rule, user): that person muted this reminder.
+    pub mutes: Vec<(i64, i64)>,
+}
+
+impl RuleSet {
+    /// 在這裡被現在的 owner / ADMIN 關掉的規則。/ Rules turned off here by people who manage the tunnel now.
+    pub fn off_for(&self, managers: &[i64]) -> Vec<i64> {
+        self.off.iter().filter(|(_, u)| managers.contains(u)).map(|(r, _)| *r).collect()
+    }
+
+    /// 這個人靜音的提醒。/ The reminders this person muted.
+    pub fn muted_for(&self, user: Option<i64>) -> Vec<i64> {
+        self.mutes.iter().filter(|(_, u)| Some(*u) == user).map(|(r, _)| *r).collect()
+    }
+
+    /// 誰在這裡關掉了這條規則（現在還管這條隧道的）。/ Who turned this rule off here (and still manages the tunnel).
+    pub fn off_by(&self, rule_id: i64, managers: &[i64]) -> Vec<i64> {
+        self.off.iter().filter(|(r, u)| *r == rule_id && managers.contains(u)).map(|(_, u)| *u).collect()
+    }
+}
+
 /// 一列規則 → 能比對的規則；停用或不合法（理論上存不進來）就略過。/ A row → a rule; disabled or invalid rows are skipped.
 pub fn compile(row: &RuleRow) -> Option<Rule> {
     if !row.enabled {
@@ -100,6 +130,9 @@ pub fn compile(row: &RuleRow) -> Option<Rule> {
         id: row.id,
         owner,
         owner_name: owner.and(row.owner_name.clone()),
+        // 個人規則沒有強制這回事（主人自己就能改）。/ Personal rules are never enforced (their owner edits them anyway).
+        mode: if owner.is_some() { Mode::Default } else { Mode::parse(&row.mode).unwrap_or(Mode::Default) },
+        approval_timeout: row.approval_timeout,
         action: Action::parse(&row.action)?,
         who: Who::parse(&row.who)?,
         via: Via::parse(&row.via)?,
@@ -129,15 +162,32 @@ pub fn approver_ids_json(ids: &[i64]) -> Option<String> {
 /// The rules that may apply to a tunnel (site-wide first). Who manages it and who is running the command are looked
 /// at when evaluating ([`Ctx`]), so sharing changes need no cache flush. A database error means no rules (a guard
 /// rail, not a lock).
-pub async fn rules_for(state: &AppState, tunnel_id: i64) -> Arc<Vec<Rule>> {
+pub async fn rules_for(state: &AppState, tunnel_id: i64) -> Arc<RuleSet> {
     if let Some(r) = state.commands.cache.lock().unwrap().get(&tunnel_id) {
         return r.clone();
     }
-    let rules = match db::command_rules::rules_targeting(&state.db, tunnel_id).await {
-        Ok(rows) => Arc::new(rows.iter().filter_map(compile).collect::<Vec<_>>()),
+    let load = async {
+        let rows = db::command_rules::rules_targeting(&state.db, tunnel_id).await?;
+        let rules: Vec<Rule> = rows.iter().filter_map(compile).collect();
+        let ids: Vec<i64> = rules.iter().map(|r| r.id).collect();
+        let mut set = RuleSet { rules, ..Default::default() };
+        for (o, tunnels) in db::command_rules::overrides_for(&state.db, &ids).await? {
+            if !(o.all_tunnels || tunnels.contains(&tunnel_id)) {
+                continue;
+            }
+            match o.kind.as_str() {
+                "off" => set.off.push((o.rule_id, o.user_id)),
+                "mute" => set.mutes.push((o.rule_id, o.user_id)),
+                _ => {}
+            }
+        }
+        Ok::<_, sqlx::Error>(set)
+    };
+    let rules = match load.await {
+        Ok(set) => Arc::new(set),
         Err(e) => {
             tracing::warn!(error = %e, tunnel_id, "command rules: load failed");
-            return Arc::new(Vec::new());
+            return Arc::new(RuleSet::default());
         }
     };
     state.commands.cache.lock().unwrap().insert(tunnel_id, rules.clone());
@@ -167,7 +217,7 @@ pub struct Requester {
 /// Whether any rule could apply to this person on this tunnel (other people's "only me" rules don't count): if not,
 /// the terminal needn't wait for the echo.
 pub async fn may_apply(state: &AppState, tunnel_id: i64, user_id: i64) -> bool {
-    rules_for(state, tunnel_id).await.iter().any(|r| r.who != Who::Me || r.owner == Some(user_id))
+    rules_for(state, tunnel_id).await.rules.iter().any(|r| r.who != Who::Me || r.owner == Some(user_id))
 }
 
 /// 預設的核准人：owner 與 ADMIN sharee。/ The default approvers: the owner and ADMIN sharees.
@@ -229,20 +279,21 @@ pub async fn decides(state: &AppState, user_id: i64, row: &EventRow) -> bool {
     }
 }
 
-/// 比對規則：擋下 / 要核准 / None = 放行。/ Match the rules: block, approve, or None = allowed.
+/// 比對規則：擋下 / 要核准 / 提醒 / None = 放行。/ Match the rules: block, approve, warn, or None = allowed.
 pub async fn check(state: &AppState, r: &Requester, lines: &[String]) -> Option<Rule> {
     if lines.iter().all(|l| l.trim().is_empty()) {
         return None;
     }
-    let rules = rules_for(state, r.tunnel_id).await;
-    if rules.is_empty() {
+    let set = rules_for(state, r.tunnel_id).await;
+    if set.rules.is_empty() {
         return None;
     }
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await.ok().flatten()?;
     let approver = is_approver(state, r.user_id, &tunnel).await;
     let managers = default_approvers(state, &tunnel).await;
-    let ctx = Ctx { approver, user: Some(r.user_id), managers: &managers, source: r.source };
-    matcher::evaluate(&rules, lines, &ctx).decision().cloned()
+    let (off, muted) = (set.off_for(&managers), set.muted_for(Some(r.user_id)));
+    let ctx = Ctx { approver, user: Some(r.user_id), managers: &managers, source: r.source, off: &off, muted: &muted };
+    matcher::evaluate(&set.rules, lines, &ctx).decision().cloned()
 }
 
 fn clip(command: &str) -> String {
@@ -258,6 +309,15 @@ fn scope_of(rule: &Rule) -> &'static str {
 
 /// 「the site-wide rule `rm -rf`」/「alice's rule `sudo`」/「their own rule」（「只有我」不寫比對式：看 Logs 的人不用知道）。
 /// A rule in words for the Logs ("only me" rules keep their pattern private).
+/// agent 看到的提醒：說明（沒有就比對式）。/ A reminder as an agent reads it: the note, else the pattern.
+pub fn reminder_text(rule: &Rule) -> String {
+    if rule.note.is_empty() {
+        format!("Telepy reminder (rule `{}`): this command matched a reminder rule. It ran; mention it to the user.", rule.pattern)
+    } else {
+        format!("Telepy reminder (rule `{}`): {}", rule.pattern, rule.note)
+    }
+}
+
 fn rule_words(rule: &Rule) -> String {
     match (rule.scope(), rule.who) {
         (Scope::Site, _) => format!("the site-wide rule `{}`", rule.pattern),
@@ -345,7 +405,9 @@ pub async fn record_block(state: &AppState, r: &Requester, command: &str, rule: 
 /// and ADMINs) and the requester, return it with its channel.
 pub async fn request(state: &AppState, r: &Requester, command: &str, rule: &Rule) -> anyhow::Result<(EventRow, watch::Receiver<Outcome>)> {
     let command = clip(command);
-    let timeout = db::settings::get_solo(&state.db).await.map(|s| s.command_approval_timeout).unwrap_or(300).clamp(30, 86_400);
+    // 規則自己的時間比網站設定短才算（網站設定是上限）。/ A rule's own wait counts only below the site setting (a ceiling).
+    let site = db::settings::get_solo(&state.db).await.map(|s| s.command_approval_timeout).unwrap_or(300).clamp(30, 86_400);
+    let timeout = rule.approval_timeout.map_or(site, |t| t.clamp(30, site));
     let expires = db_time(Utc::now() + chrono::Duration::seconds(timeout));
     let tunnel = db::tunnels::by_id(&state.db, r.tunnel_id).await?.ok_or_else(|| anyhow::anyhow!("tunnel is gone"))?;
     let deciders = approvers_for(state, &tunnel, rule).await;
@@ -621,6 +683,9 @@ pub fn rule_json(r: &RuleRow) -> Value {
         "scope": if site { "site" } else { "personal" },
         "owner": if site { Value::Null } else { json!({ "id": r.user_id, "username": r.owner_name }) },
         "all_tunnels": r.all_tunnels,
+        // 個人規則沒有強制（主人自己就能改）。/ Personal rules are never enforced.
+        "mode": if site { r.mode.as_str() } else { "default" },
+        "approval_timeout": r.approval_timeout,
         "action": r.action,
         "kind": r.kind,
         "pattern": r.pattern,
@@ -640,6 +705,7 @@ pub fn matched_json(r: &Rule) -> Value {
         "id": r.id,
         "scope": r.scope().as_str(),
         "owner": r.owner.map(|id| json!({ "id": id, "username": r.owner_name })),
+        "mode": r.mode.as_str(),
         "action": r.action.as_str(),
         "kind": r.kind.as_str(),
         "pattern": r.pattern,

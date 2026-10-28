@@ -381,6 +381,29 @@ const TABLES: &[(&str, &str)] = &[
             PRIMARY KEY ("rule_id", "tunnel_id")
         )"#,
     ),
+    // Rust 自有：某人對一條規則的覆寫（`off` = 隧道的 owner / ADMIN 在自己管的隧道上關掉一條「允許覆寫」的全站規則；
+    // `mute` = 自己靜音一條「提醒」規則）；隧道清單在 `telepy_command_rule_override_target`（`all_tunnels` = 0 才有）。
+    // Someone's override of a rule (`off` = an owner / ADMIN turns an overridable site rule off on tunnels they manage;
+    // `mute` = muting a reminder rule for yourself); the tunnels are in `telepy_command_rule_override_target`.
+    (
+        "telepy_command_rule_override",
+        r#"CREATE TABLE "telepy_command_rule_override" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "rule_id" integer NOT NULL,
+            "user_id" integer NOT NULL,
+            "kind" varchar(8) NOT NULL,
+            "all_tunnels" bool NOT NULL DEFAULT 1,
+            "created_at" datetime NOT NULL
+        )"#,
+    ),
+    (
+        "telepy_command_rule_override_target",
+        r#"CREATE TABLE "telepy_command_rule_override_target" (
+            "override_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            PRIMARY KEY ("override_id", "tunnel_id")
+        )"#,
+    ),
     // Rust 自有：工具箱的指令片段（scope user = 某人的、tunnel = 某條隧道的、site = 全站）。
     // Toolbox command snippets (scope user = someone's own, tunnel = one tunnel's, site = site-wide).
     (
@@ -878,6 +901,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_owner" ON "telepy_command_rule" ("scope", "user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_target_tunnel" ON "telepy_command_rule_target" ("tunnel_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_command_rule_override_one" ON "telepy_command_rule_override" ("rule_id", "user_id", "kind")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_override_target_tunnel" ON "telepy_command_rule_override_target" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_user" ON "telepy_snippet" ("scope", "user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_tunnel" ON "telepy_snippet" ("scope", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_user" ON "telepy_webhook" ("user_id")"#,
@@ -977,6 +1002,12 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("telepy_command_rule", "scope", "varchar(8) NULL"),
     ("telepy_command_rule", "user_id", "integer NULL"),
     ("telepy_command_rule", "all_tunnels", "bool NOT NULL DEFAULT 1"),
+    // 全站規則能不能覆寫：default = 隧道的 owner / ADMIN 可以在自己的隧道上關掉（提醒規則每個人可以靜音）；enforced = 誰都不行。
+    // 升級前的全站規則照使用者的決定一律算 default。/ Whether a site rule can be overridden: default = owners / ADMINs may
+    // turn it off on their tunnels (anyone may mute a reminder); enforced = nobody. Pre-upgrade rules become default.
+    ("telepy_command_rule", "mode", "varchar(8) NOT NULL DEFAULT 'default'"),
+    // 「要核准」等多久（秒）；NULL = 網站設定，比網站設定長的照網站設定。/ How long an approval waits; NULL = the site setting (a ceiling).
+    ("telepy_command_rule", "approval_timeout", "integer NULL"),
     // 指令申請來自哪把個人 API token（agent 的核准沿用要對同一把）。/ The API token an agent request came from.
     ("telepy_command_event", "token_id", "integer NULL"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).

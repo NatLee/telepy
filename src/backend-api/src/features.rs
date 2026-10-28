@@ -200,6 +200,8 @@ pub fn for_route(method: &str, path: &str) -> Option<Feature> {
 
         ("POST", ["api", "command-rules"]) => CommandRulesManage,
         ("PATCH" | "DELETE", ["api", "command-rules", rid]) if *rid != "check" => CommandRulesManage,
+        // 在自己的隧道上關掉全站規則 = 管規則；靜音提醒只是自己的偏好，不擋。/ Turning a site rule off is rule management; muting isn't.
+        ("PUT" | "DELETE", ["api", "command-rules", _, "off"]) => CommandRulesManage,
         ("POST", ["api", "reverse", "server", _, "command-rules"]) => CommandRulesManage,
 
         (_, ["api", "webhooks", ..]) => WebhooksPersonal,
@@ -557,6 +559,8 @@ mod tests {
             ("POST", "/api/command-rules", Some(CommandRulesManage)),
             ("PATCH", "/api/command-rules/3", Some(CommandRulesManage)),
             ("POST", "/api/command-rules/check", None),
+            ("PUT", "/api/command-rules/3/off", Some(CommandRulesManage)),
+            ("DELETE", "/api/command-rules/3/mute", None),
             ("GET", "/api/command-rules", None),
             ("POST", "/api/reverse/server/4/command-rules", Some(CommandRulesManage)),
             ("POST", "/api/command-requests/3/approve", None),

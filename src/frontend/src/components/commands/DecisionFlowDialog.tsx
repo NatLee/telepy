@@ -22,6 +22,7 @@ export function DecisionFlowDialog({ isOpen, onClose, ...flow }: { isOpen: boole
                         <li>{t("commands.flow.rule2")}</li>
                         <li>{t("commands.flow.rule3")}</li>
                         <li>{t("commands.flow.rule4")}</li>
+                        <li>{t("commands.flow.rule5")}</li>
                     </ol>
                 </section>
             </div>

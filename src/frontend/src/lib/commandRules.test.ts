@@ -7,16 +7,20 @@ import {
     coversTunnel,
     decisionPath,
     dropRequest,
+    flipOffHere,
+    formatWait,
     matchesFilter,
     newRuleInput,
     nextBanner,
     parseTerminalFrame,
     pickableIds,
     ruleCoverage,
+    ruleLayers,
     ruleSource,
     ruleToInput,
     secondsLeft,
     showsInCenter,
+    timeoutChoices,
     tunnelPickable,
     upsertRequest,
     verdictToDraw,
@@ -188,6 +192,8 @@ test("rule reach: every tunnel of which kind, or the listed ones", () => {
         approvers: [],
         created_at: "",
         updated_at: "",
+        mode: "default",
+        approval_timeout: null,
     };
     assert.deepEqual(ruleCoverage(base), { kind: "every", whose: "managed" });
     assert.deepEqual(ruleCoverage({ ...base, who: "me" }), { kind: "every", whose: "used" });
@@ -217,3 +223,72 @@ test("verdictToDraw follows whether you approve", () => {
     assert.equal(verdictToDraw({ ...base, you_approve: true }).action, "allow");
     assert.equal(verdictToDraw({ ...base, you_approve: false }).action, "approve");
 });
+
+test("who decides: locked, turned off here, muted, and the result", () => {
+    const base: CommandRule = {
+        id: 1,
+        scope: "site",
+        owner: null,
+        mine: false,
+        all_tunnels: true,
+        tunnels: [],
+        hidden_tunnels: 0,
+        action: "approve",
+        kind: "command",
+        pattern: "sudo",
+        who: "everyone",
+        via: "all",
+        note: "",
+        enabled: true,
+        approver_ids: [],
+        approvers: [],
+        created_at: "",
+        updated_at: "",
+        mode: "default",
+        approval_timeout: null,
+        my_override: { off: null, muted: false },
+    };
+    const here = { tunnelId: 7, managesSome: true };
+    // 強制：第二、三層都鎖住，結果生效。/ Enforced: layers 2 and 3 are locked.
+    let l = ruleLayers({ ...base, mode: "enforced", action: "warn" }, here);
+    assert.deepEqual([l.source, l.tunnel.state, l.me.state, l.result], [{ kind: "site", locked: true }, "locked", "locked", "applies"]);
+    // 允許覆寫、在這裡被關掉。/ Overridable and turned off here.
+    l = ruleLayers({ ...base, off_here: [{ id: 2, username: "alice" }] }, here);
+    assert.deepEqual(l.tunnel, { state: "off", by: ["alice"] });
+    assert.equal(l.result, "off");
+    assert.equal(l.me.state, "na", "only reminders can be muted");
+    // 提醒被我靜音。/ A reminder I muted.
+    l = ruleLayers({ ...base, action: "warn", my_override: { off: null, muted: true } }, here);
+    assert.deepEqual([l.tunnel.state, l.me.state, l.result], ["follows", "muted", "muted"]);
+    // 沒選隧道：我的隧道全部 / 幾條 / 沒有（我沒管任何隧道）。/ No tunnel: all / some / none of mine.
+    const none = { tunnelId: null, managesSome: true };
+    assert.equal(ruleLayers({ ...base, my_override: { off: { all_tunnels: true, tunnels: [] }, muted: false } }, none).result, "offOnMine");
+    assert.deepEqual(ruleLayers({ ...base, my_override: { off: { all_tunnels: false, tunnels: [{ id: 7, name: "box" }] }, muted: false } }, none).tunnel, { state: "mineSome", count: 1 });
+    assert.deepEqual(ruleLayers(base, { tunnelId: null, managesSome: false }).tunnel, { state: "mineNone", canChange: false });
+    // 個人規則與例外：第二層不適用；沒套用到這條隧道。/ Personal rules and exceptions; a rule not covering the tunnel.
+    assert.equal(ruleLayers({ ...base, scope: "personal", owner: { id: 3, username: "bob" } }, here).tunnel.state, "na");
+    assert.equal(ruleLayers({ ...base, action: "allow" }, here).tunnel.state, "na");
+    assert.equal(ruleLayers({ ...base, all_tunnels: false, tunnels: [{ id: 8, name: "nas" }] }, here).result, "notHere");
+});
+
+test("turning a site rule off on one tunnel keeps the rest of mine", () => {
+    assert.deepEqual(flipOffHere(null, 7, [7, 8], true), { all_tunnels: false, tunnel_ids: [7] });
+    assert.equal(flipOffHere({ all_tunnels: false, tunnels: [{ id: 7 }] }, 7, [7, 8], false), null);
+    assert.deepEqual(flipOffHere({ all_tunnels: true, tunnels: [] }, 7, [7, 8, 9], false), { all_tunnels: false, tunnel_ids: [8, 9] });
+    assert.deepEqual(flipOffHere({ all_tunnels: true, tunnels: [] }, 7, [7, 8], true), { all_tunnels: true, tunnel_ids: [] });
+    assert.deepEqual(flipOffHere({ all_tunnels: false, tunnels: [{ id: 8 }] }, 7, [7, 8], true), { all_tunnels: false, tunnel_ids: [7, 8] });
+    assert.deepEqual(timeoutChoices(300), [60, 120, 300]);
+    assert.equal(formatWait(300, "en"), "5 minutes");
+    assert.equal(formatWait(3600, "en"), "1 hour");
+});
+
+test("a reminder banner and the decision path", () => {
+    const rule = { id: 5, scope: "site" as const, kind: "command" as const, pattern: "systemctl restart", note: "Tell #ops", action: "warn" as const };
+    const b = nextBanner(null, { type: "command", state: "warned", command: "systemctl restart nginx", rule });
+    assert.equal(b.state, "warned");
+    assert.equal(b.rule?.id, 5);
+    assert.equal(bannerLifetime("warned"), 15000);
+    const p = decisionPath({ action: "warn", rule, site: { hit: rule, allowed_by: null, exempted: false } });
+    assert.deepEqual([p.outcome, p.site, p.decidedBy], ["warn", "warn", "site"]);
+});
+

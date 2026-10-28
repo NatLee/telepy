@@ -19,7 +19,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use super::AppJson;
 use crate::auth::AuthUser;
-use crate::command_rules::{self as rules, matcher, Action, Ctx, DecideError, Kind, Matcher, Rule, Source, Who};
+use crate::command_rules::{self as rules, matcher, Action, Ctx, DecideError, Kind, Matcher, Mode, Rule, Source, Who};
 use crate::db::{self, command_rules::{NewRule, RuleRow}, tunnels::Tunnel, users::User};
 use crate::error::{ApiError, ApiResult};
 use crate::permissions::{self, Permission};
@@ -37,6 +37,8 @@ pub fn router() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(list, create))
         .routes(routes!(update, destroy))
+        .routes(routes!(set_off, clear_off))
+        .routes(routes!(set_mute, clear_mute))
         .routes(routes!(tunnel_list, tunnel_create))
         .routes(routes!(check))
         .routes(routes!(requests))
@@ -106,6 +108,10 @@ struct Parsed {
     note: String,
     enabled: bool,
     all_tunnels: bool,
+    /// enforced / default（個人規則一律 default）。/ enforced / default (always default for personal rules).
+    mode: String,
+    /// 「要核准」等多久（秒）；None = 網站設定。/ How long an approval waits; None = the site setting.
+    approval_timeout: Option<i64>,
     /// 已排序去重；`all_tunnels` 時是空的。/ Sorted, de-duplicated; empty with `all_tunnels`.
     tunnel_ids: Vec<i64>,
     /// 已排序去重；空 = 預設核准人。/ Sorted, de-duplicated; empty = the default approvers.
@@ -153,7 +159,7 @@ fn parse_rule(body: &Value, current: Option<(&RuleRow, &[i64])>, site: bool) -> 
     };
     let action = text("action", row.map(|c| c.action.as_str()), "");
     if rules::Action::parse(&action).is_none() {
-        return Err(ApiError::field("action", "Choose block, approve or allow."));
+        return Err(ApiError::field("action", "Choose block, approve, warn or allow."));
     }
     let kind = text("kind", row.map(|c| c.kind.as_str()), "command");
     let Some(k) = Kind::parse(&kind) else { return Err(ApiError::field("kind", "Choose command or regex.")) };
@@ -195,7 +201,22 @@ fn parse_rule(body: &Value, current: Option<(&RuleRow, &[i64])>, site: bool) -> 
         return Err(ApiError::field("tunnel_ids", format!("Pick at most {MAX_TUNNELS} tunnels.")));
     }
     let approver_ids = parse_approvers(body, row, &action, &who)?;
-    Ok(Parsed { action, kind, pattern, who, via, note, enabled, all_tunnels, tunnel_ids, approver_ids })
+    // 能不能覆寫：只有全站規則有；沒帶 = 照舊（新的 = 可以覆寫）。/ Overridable or not: site rules only; omitted = unchanged (new = default).
+    let mode = if site { text("mode", row.map(|c| c.mode.as_str()), "default") } else { "default".to_string() };
+    if Mode::parse(&mode).is_none() {
+        return Err(ApiError::field("mode", "Choose enforced or default."));
+    }
+    // 等多久：只有「要核准」有；null = 網站設定。/ The wait: approve rules only; null = the site setting.
+    let approval_timeout = match body.get("approval_timeout") {
+        None => row.and_then(|c| c.approval_timeout),
+        Some(Value::Null) => None,
+        Some(v) => match v.as_i64() {
+            Some(n) if (30..=86_400).contains(&n) => Some(n),
+            _ => return Err(ApiError::field("approval_timeout", "Wait between 30 seconds and a day, or leave it to the site setting.")),
+        },
+    };
+    let approval_timeout = if action == "approve" { approval_timeout } else { None };
+    Ok(Parsed { action, kind, pattern, who, via, note, enabled, all_tunnels, mode, approval_timeout, tunnel_ids, approver_ids })
 }
 
 impl Parsed {
@@ -204,6 +225,8 @@ impl Parsed {
             scope,
             user_id,
             all_tunnels: self.all_tunnels,
+            mode: &self.mode,
+            approval_timeout: self.approval_timeout,
             action: &self.action,
             kind: &self.kind,
             pattern: &self.pattern,
@@ -279,6 +302,16 @@ async fn check_approvers(state: &AppState, me: &User, reach: &Reach, site: bool,
     Ok(())
 }
 
+/// 規則自己的等待時間不能比網站設定長（網站設定是上限）。/ A rule's own wait can't exceed the site setting (a ceiling).
+async fn check_timeout(state: &AppState, p: &Parsed) -> ApiResult<()> {
+    let Some(t) = p.approval_timeout else { return Ok(()) };
+    let site = db::settings::get_solo(&state.db).await?.command_approval_timeout.clamp(30, 86_400);
+    if t > site {
+        return Err(ApiError::field("approval_timeout", format!("Approvals wait at most {site} seconds here (the site setting); pick a shorter wait.")));
+    }
+    Ok(())
+}
+
 /// 「block `rm -rf` (everyone, terminal + agents)」：Logs 用。/ A rule in words, for the Logs.
 fn rule_words(r: &RuleRow) -> String {
     let via = match r.via.as_str() {
@@ -295,8 +328,10 @@ fn rule_words(r: &RuleRow) -> String {
     let what = match r.action.as_str() {
         "block" => "block",
         "allow" => "allow (exception)",
+        "warn" => "reminder",
         _ => "needs approval",
     };
+    let off = if r.is_site() && r.mode == "enforced" { format!(", enforced{off}") } else { off.to_string() };
     let approvers = match rules::parse_approver_ids(r.approver_ids.as_deref()).len() {
         0 => String::new(),
         n => format!(", {n} named approver{}", if n == 1 { "" } else { "s" }),
@@ -304,14 +339,23 @@ fn rule_words(r: &RuleRow) -> String {
     format!("{what} `{}` ({who}, {via}{approvers}{off})", r.pattern)
 }
 
-/// 規則 JSON：核准人的名字、套用的隧道（看不到的只算數量），自己的個人規則再說每條隧道算不算數。
-/// Rules as JSON: approvers' names, the tunnels covered (ones the viewer can't see only counted), and for the viewer's
-/// own personal rules whether each tunnel counts.
-async fn rules_json(state: &AppState, me: &User, reach: &Reach, rows: &[RuleRow]) -> ApiResult<Vec<Value>> {
-    let ids: Vec<i64> = rows.iter().flat_map(|r| rules::parse_approver_ids(r.approver_ids.as_deref())).collect();
+/// 看規則清單的那條隧道（有的話）：它的 id 與現在的 owner / ADMIN。/ The tunnel a list is about (if any), with its managers.
+type Here<'a> = Option<(i64, &'a [i64])>;
+
+/// 規則 JSON：核准人的名字、套用的隧道（看不到的只算數量），自己的個人規則再說每條隧道算不算數；加上我的覆寫
+/// （`my_override`：在我的哪些隧道關掉、有沒有靜音），在一條隧道上看時還有誰在這裡關掉了它（`off_here`）。
+/// Rules as JSON: approvers' names, the tunnels covered (ones the viewer can't see only counted), for the viewer's own
+/// personal rules whether each tunnel counts; plus my overrides (`my_override`: off on which of my tunnels, muted or
+/// not) and, on one tunnel, who turned it off there (`off_here`).
+async fn rules_json(state: &AppState, me: &User, reach: &Reach, rows: &[RuleRow], here: Here<'_>) -> ApiResult<Vec<Value>> {
+    let rule_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let overrides = db::command_rules::overrides_for(&state.db, &rule_ids).await?;
+    let mut ids: Vec<i64> = rows.iter().flat_map(|r| rules::parse_approver_ids(r.approver_ids.as_deref())).collect();
+    ids.extend(overrides.iter().map(|(o, _)| o.user_id));
     let names = db::users::usernames_for(&state.db, &ids).await?;
     let limited: Vec<i64> = rows.iter().filter(|r| !r.all_tunnels).map(|r| r.id).collect();
     let map = db::command_rules::tunnel_map(&state.db, &limited).await?;
+    let tunnel_brief = |id: &i64| reach.names.get(id).map(|n| json!({ "id": id, "name": n }));
     Ok(rows
         .iter()
         .map(|r| {
@@ -339,6 +383,20 @@ async fn rules_json(state: &AppState, me: &User, reach: &Reach, rows: &[RuleRow]
             tunnels.sort_by(|a, b| a["name"].as_str().unwrap_or("").to_lowercase().cmp(&b["name"].as_str().unwrap_or("").to_lowercase()));
             v["tunnels"] = json!(tunnels);
             v["hidden_tunnels"] = json!(hidden);
+            let mine_of = |kind: &str| overrides.iter().find(|(o, _)| o.rule_id == r.id && o.user_id == me.id && o.kind == kind);
+            v["my_override"] = json!({
+                "off": mine_of("off").map(|(o, t)| json!({ "all_tunnels": o.all_tunnels, "tunnels": t.iter().filter_map(tunnel_brief).collect::<Vec<_>>() })),
+                "muted": mine_of("mute").is_some(),
+            });
+            if let Some((tid, managers)) = here {
+                let by: Vec<Value> = overrides
+                    .iter()
+                    .filter(|(o, t)| o.rule_id == r.id && o.kind == "off" && managers.contains(&o.user_id) && (o.all_tunnels || t.contains(&tid)))
+                    .map(|(o, _)| json!({ "id": o.user_id, "username": names.get(&o.user_id).cloned().unwrap_or_else(|| format!("#{}", o.user_id)) }))
+                    .collect();
+                // 強制的關不掉：就算有人留著舊的關掉紀錄也不算。/ Enforced rules can't be off, whatever was left behind.
+                v["off_here"] = if r.is_site() && r.mode == "default" { json!(by) } else { json!([]) };
+            }
             v
         })
         .collect())
@@ -392,10 +450,12 @@ async fn list(State(state): State<AppState>, AuthUser(me): AuthUser) -> ApiResul
         (json!([]), Value::Null)
     };
     Ok(Json(json!({
-        "mine": rules_json(&state, &me, &reach, &mine).await?,
-        "site": rules_json(&state, &me, &reach, &site).await?,
+        "mine": rules_json(&state, &me, &reach, &mine, None).await?,
+        "site": rules_json(&state, &me, &reach, &site, None).await?,
         "can_edit_site": me.is_superuser,
         "limit": MAX_RULES,
+        // 規則自己的核准等待最多多久（網站設定）。/ The longest a rule's own approval wait may be (the site setting).
+        "approval_timeout_max": db::settings::get_solo(&state.db).await?.command_approval_timeout.clamp(30, 86_400),
         "tunnels": reach.visible.iter().map(|t| json!({ "id": t.id, "name": t.host_friendly_name, "manage": reach.manage.contains(&t.id) })).collect::<Vec<_>>(),
         "approver_candidates": briefs(&candidates, &names),
         "site_approver_candidates": site_candidates,
@@ -439,12 +499,13 @@ async fn create_rule(state: &AppState, me: &User, site: bool, body: &Value) -> A
     }
     check_targets(state, &reach, site, &p, None).await?;
     check_approvers(state, me, &reach, site, &p.approver_ids, &[]).await?;
+    check_timeout(state, &p).await?;
     let approvers = rules::approver_ids_json(&p.approver_ids);
     let (scope, owner) = if site { ("site", None) } else { ("user", Some(me.id)) };
     let row = db::command_rules::create_rule(&state.db, &p.new_rule(scope, owner, approvers.as_deref()), &p.tunnel_ids, me.id).await?;
     state.commands.invalidate();
     log_rule(state, me, "added", &row).await;
-    Ok((StatusCode::CREATED, Json(rules_json(state, me, &reach, std::slice::from_ref(&row)).await?.pop().unwrap_or(Value::Null))))
+    Ok((StatusCode::CREATED, Json(rules_json(state, me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null))))
 }
 
 /// 這條規則能不能改：全站 = 管理員；個人 = 寫它的人。看得到（它管到我看得到的隧道）但不能改 = 403，否則 404。
@@ -477,12 +538,13 @@ async fn update(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid)
     let reach = Reach::of(&state, &me).await?;
     check_targets(&state, &reach, site, &p, Some((&row, &tunnels))).await?;
     check_approvers(&state, &me, &reach, site, &p.approver_ids, &rules::parse_approver_ids(row.approver_ids.as_deref())).await?;
+    check_timeout(&state, &p).await?;
     let approvers = rules::approver_ids_json(&p.approver_ids);
     let scope = if site { "site" } else { "user" };
     let row = db::command_rules::update_rule(&state.db, rid, &p.new_rule(scope, row.user_id, approvers.as_deref()), &p.tunnel_ids).await?.ok_or_else(rule_not_found)?;
     state.commands.invalidate();
     log_rule(&state, &me, "changed", &row).await;
-    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row)).await?.pop().unwrap_or(Value::Null)))
+    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null)))
 }
 
 /// 刪除規則。/ Delete a rule.
@@ -493,6 +555,128 @@ async fn destroy(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid
     db::command_rules::delete_rule(&state.db, rid).await?;
     state.commands.invalidate();
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `PUT …/off` 與 `…/mute` 的範圍：`all_tunnels`（預設 true）或 `tunnel_ids`。/ The reach of an override.
+fn override_targets(body: &Value) -> ApiResult<(bool, Vec<i64>)> {
+    let all = match body.get("all_tunnels") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(ApiError::field("all_tunnels", "all_tunnels must be true or false")),
+    };
+    let ids = match body.get("tunnel_ids") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => id_list(v, "tunnel_ids", "tunnel")?,
+    };
+    if !all && ids.is_empty() {
+        return Err(ApiError::field("tunnel_ids", "Pick at least one tunnel, or choose every tunnel."));
+    }
+    if ids.len() > MAX_TUNNELS {
+        return Err(ApiError::field("tunnel_ids", format!("Pick at most {MAX_TUNNELS} tunnels.")));
+    }
+    Ok((all, if all { Vec::new() } else { ids }))
+}
+
+/// 這條規則（給覆寫用）：不存在或看不到 = 404。全站規則大家都看得到；個人規則 = 自己的，或管到我看得到的隧道、不是「只有我」的。
+/// A rule for an override: missing or invisible = 404. Site rules are visible to everyone; personal ones when mine,
+/// or when they cover a tunnel I can see and aren't "only me".
+async fn visible_rule(state: &AppState, me: &User, reach: &Reach, rid: i64) -> ApiResult<(RuleRow, Vec<i64>)> {
+    let row = db::command_rules::rule(&state.db, rid).await?.ok_or_else(rule_not_found)?;
+    let tunnels = db::command_rules::tunnel_map(&state.db, &[rid]).await?.remove(&rid).unwrap_or_default();
+    let visible = row.is_site() || row.user_id == Some(me.id) || (row.who != "me" && (row.all_tunnels || tunnels.iter().any(|t| reach.sees(*t))));
+    if visible {
+        Ok((row, tunnels))
+    } else {
+        Err(rule_not_found())
+    }
+}
+
+/// 在我管的隧道上關掉一條可以覆寫的全站規則（`all_tunnels` = 我現在與之後管的全部）。只有 owner / ADMIN 的隧道算數。
+/// Turn an overridable site rule off on tunnels I own or administer (`all_tunnels` = all of them, later ones too).
+#[utoipa::path(put, path = "/api/command-rules/{rid}/off", tag = "Command Rules", security(("bearer" = [])), params(("rid" = i64, Path, description = "Rule id")), request_body = super::schemas::CommandRuleOverrideInput, responses((status = 200, body = super::schemas::CommandRule), (status = 400, description = "{field: [message]} or {code: enforced | not_site}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+async fn set_off(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let reach = Reach::of(&state, &me).await?;
+    let (row, _) = visible_rule(&state, &me, &reach, rid).await?;
+    if !row.is_site() {
+        return Err(coded(StatusCode::BAD_REQUEST, "not_site", "Only site-wide rules are turned off this way; change your own rules directly."));
+    }
+    if row.mode != "default" {
+        return Err(coded(StatusCode::BAD_REQUEST, "enforced", "This site-wide rule is enforced: nobody can turn it off."));
+    }
+    let (all, ids) = override_targets(&body)?;
+    if reach.manage.is_empty() {
+        return Err(ApiError::field("tunnel_ids", "You don't own or administer any tunnel, so there is nowhere to turn it off."));
+    }
+    if let Some(t) = ids.iter().find(|id| !reach.manage.contains(id)) {
+        let name = reach.names.get(t).cloned().unwrap_or_else(|| format!("#{t}"));
+        return Err(ApiError::field("tunnel_ids", format!("{name} isn't yours to change: you need to own it or be an Admin there.")));
+    }
+    db::command_rules::set_override(&state.db, rid, me.id, "off", all, &ids).await?;
+    state.commands.invalidate();
+    log_off(&state, &me, &row, true, all, &ids).await;
+    let row = db::command_rules::rule(&state.db, rid).await?.ok_or_else(rule_not_found)?;
+    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null)))
+}
+
+/// 不再關掉（這條全站規則在我的隧道上又算數）。/ Stop turning it off (the site rule counts on my tunnels again).
+#[utoipa::path(delete, path = "/api/command-rules/{rid}/off", tag = "Command Rules", security(("bearer" = [])), params(("rid" = i64, Path, description = "Rule id")), responses((status = 200, body = super::schemas::CommandRule), (status = 404, body = super::schemas::ErrorBody)))]
+async fn clear_off(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): Path<i64>) -> ApiResult<Json<Value>> {
+    let reach = Reach::of(&state, &me).await?;
+    let (row, _) = visible_rule(&state, &me, &reach, rid).await?;
+    let before = db::command_rules::overrides_for(&state.db, &[rid]).await?.into_iter().find(|(o, _)| o.user_id == me.id && o.kind == "off");
+    if db::command_rules::clear_override(&state.db, rid, me.id, "off").await? {
+        state.commands.invalidate();
+        if let Some((o, ids)) = before {
+            log_off(&state, &me, &row, false, o.all_tunnels, &ids).await;
+        }
+    }
+    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null)))
+}
+
+/// 替自己靜音一條提醒（強制的不行）。只影響你自己，不進 Logs。/ Mute a reminder for yourself (not an enforced one); yours alone, not logged.
+#[utoipa::path(put, path = "/api/command-rules/{rid}/mute", tag = "Command Rules", security(("bearer" = [])), params(("rid" = i64, Path, description = "Rule id")), request_body = super::schemas::CommandRuleOverrideInput, responses((status = 200, body = super::schemas::CommandRule), (status = 400, description = "{code: not_reminder | enforced}", body = Object), (status = 404, body = super::schemas::ErrorBody)))]
+async fn set_mute(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): Path<i64>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
+    let reach = Reach::of(&state, &me).await?;
+    let (row, _) = visible_rule(&state, &me, &reach, rid).await?;
+    if row.action != "warn" {
+        return Err(coded(StatusCode::BAD_REQUEST, "not_reminder", "Only reminder rules can be muted."));
+    }
+    if row.is_site() && row.mode != "default" {
+        return Err(coded(StatusCode::BAD_REQUEST, "enforced", "This reminder is enforced: it can't be muted."));
+    }
+    let (all, ids) = override_targets(&body)?;
+    if let Some(t) = ids.iter().find(|id| !reach.sees(**id)) {
+        return Err(ApiError::field("tunnel_ids", format!("Tunnel #{t} isn't one you can use.")));
+    }
+    db::command_rules::set_override(&state.db, rid, me.id, "mute", all, &ids).await?;
+    state.commands.invalidate();
+    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null)))
+}
+
+/// 取消靜音。/ Unmute a reminder.
+#[utoipa::path(delete, path = "/api/command-rules/{rid}/mute", tag = "Command Rules", security(("bearer" = [])), params(("rid" = i64, Path, description = "Rule id")), responses((status = 200, body = super::schemas::CommandRule), (status = 404, body = super::schemas::ErrorBody)))]
+async fn clear_mute(State(state): State<AppState>, AuthUser(me): AuthUser, Path(rid): Path<i64>) -> ApiResult<Json<Value>> {
+    let reach = Reach::of(&state, &me).await?;
+    let (row, _) = visible_rule(&state, &me, &reach, rid).await?;
+    if db::command_rules::clear_override(&state.db, rid, me.id, "mute").await? {
+        state.commands.invalidate();
+    }
+    Ok(Json(rules_json(&state, &me, &reach, std::slice::from_ref(&row), None).await?.pop().unwrap_or(Value::Null)))
+}
+
+/// Logs：在哪幾條隧道（或全部）關掉 / 打開一條全站規則。/ The Logs: a site rule turned off / back on, and where.
+async fn log_off(state: &AppState, me: &User, r: &RuleRow, off: bool, all: bool, ids: &[i64]) {
+    let verb = if off { "turned off" } else { "turned back on" };
+    if all {
+        let line = format!("{} {verb} the site-wide rule `{}` on every tunnel they own or administer", me.username, r.pattern);
+        state.gateway.event("command_rule", None, None, None, line).await;
+        return;
+    }
+    for id in ids.iter().take(20) {
+        let t = db::tunnels::by_id(&state.db, *id).await.ok().flatten();
+        let line = format!("{} {verb} the site-wide rule `{}` on {}", me.username, r.pattern, t.as_ref().map(|t| t.host_friendly_name.as_str()).unwrap_or("a tunnel"));
+        state.gateway.event("command_rule", None, t.as_ref().and_then(|t| u16::try_from(t.reverse_port).ok()), Some(*id), line).await;
+    }
 }
 
 /// 一條隧道上現在算數的規則：管理它的人（owner / ADMIN）寫的個人規則、我自己「只有我」的規則，加上也套用到它的全站規則。
@@ -525,8 +709,8 @@ async fn tunnel_list(State(state): State<AppState>, AuthUser(me): AuthUser, Path
     };
     Ok(Json(json!({
         "tunnel": { "id": t.id, "name": t.host_friendly_name },
-        "rules": rules_json(&state, &me, &reach, &personal).await?,
-        "site_rules": rules_json(&state, &me, &reach, &site).await?,
+        "rules": rules_json(&state, &me, &reach, &personal, Some((t.id, &managers))).await?,
+        "site_rules": rules_json(&state, &me, &reach, &site, Some((t.id, &managers))).await?,
         "can_edit": can_edit,
         "can_edit_site": me.is_superuser,
         "approver_candidates": candidates,
@@ -575,12 +759,14 @@ async fn check(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(bo
     };
     let site_only = body.get("scope").and_then(Value::as_str) == Some("site");
     let tunnel_id = body.get("tunnel_id").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
-    let (rule_set, me_approver, tunnel, managers): (Vec<Rule>, bool, Option<Tunnel>, Vec<i64>) = match tunnel_id {
+    let (rule_set, me_approver, tunnel, managers, overrides): (Vec<Rule>, bool, Option<Tunnel>, Vec<i64>, rules::RuleSet) = match tunnel_id {
         Some(id) => {
             let (t, approver) = tunnel_access(&state, &me, id).await?;
-            let set = rules::rules_for(&state, t.id).await.iter().filter(|r| !site_only || r.owner.is_none()).cloned().collect();
+            let loaded = rules::rules_for(&state, t.id).await;
+            let set = loaded.rules.iter().filter(|r| !site_only || r.owner.is_none()).cloned().collect();
             let managers = rules::default_approvers(&state, &t).await;
-            (set, approver, Some(t), managers)
+            let overrides = rules::RuleSet { rules: Vec::new(), off: loaded.off.clone(), mutes: loaded.mutes.clone() };
+            (set, approver, Some(t), managers, overrides)
         }
         // 沒選隧道：想成一條你管的隧道（你自己的規則才算數）。/ No tunnel: think of a tunnel you manage.
         None => {
@@ -588,13 +774,24 @@ async fn check(State(state): State<AppState>, AuthUser(me): AuthUser, AppJson(bo
             if !site_only {
                 rows.extend(db::command_rules::user_rules(&state.db, me.id).await?.into_iter().filter(|r| r.all_tunnels));
             }
-            (rows.iter().filter_map(rules::compile).collect(), !site_only, None, if site_only { Vec::new() } else { vec![me.id] })
+            // 我在所有隧道上的覆寫也算。/ My every-tunnel overrides count too.
+            let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+            let mut overrides = rules::RuleSet::default();
+            for (o, _) in db::command_rules::overrides_for(&state.db, &ids).await?.into_iter().filter(|(o, _)| o.user_id == me.id && o.all_tunnels) {
+                match o.kind.as_str() {
+                    "off" => overrides.off.push((o.rule_id, o.user_id)),
+                    _ => overrides.mutes.push((o.rule_id, o.user_id)),
+                }
+            }
+            (rows.iter().filter_map(rules::compile).collect(), !site_only, None, if site_only { Vec::new() } else { vec![me.id] }, overrides)
         }
     };
     let lines = vec![command.clone()];
     let mut verdicts = Vec::with_capacity(2);
     for approver in [true, false] {
-        let ctx = Ctx { approver, user: (approver == me_approver).then_some(me.id), managers: &managers, source };
+        let user = (approver == me_approver).then_some(me.id);
+        let (off, muted) = (overrides.off_for(&managers), overrides.muted_for(user));
+        let ctx = Ctx { approver, user, managers: &managers, source, off: &off, muted: &muted };
         let v = matcher::evaluate(&rule_set, &lines, &ctx);
         let decision = v.decision();
         // 誰核准：規則指定的人（「只有我」= 寫它的人），否則這條隧道的 owner + ADMIN（沒選隧道 = 不知道是誰，`default: true`）。

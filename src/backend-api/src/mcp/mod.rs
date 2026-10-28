@@ -480,12 +480,15 @@ pub(crate) async fn exec_in_session(state: &AppState, p: &McpPrincipal, s: &Arc<
         token_id: p.credential.token_id(),
         session_ref: Some(s.id.clone()),
     };
+    let mut reminder: Option<String> = None;
     if let Some(rule) = command_rules::check(state, &requester, &[command.to_string()]).await {
         let why = if rule.note.is_empty() { String::new() } else { format!(" The rule says: {}", rule.note) };
         let refused = |msg: String| Audit { session: Some(s), detail: Some(command.to_string()), error: Some(msg), ..Default::default() };
         match rule.action {
-            // `check` 只回擋下 / 要核准（允許 = None）。/ `check` only returns block / approve (allow = None).
+            // `check` 只回擋下 / 要核准 / 提醒（允許 = None）。/ `check` only returns block / approve / warn (allow = None).
             Action::Allow => {}
+            // 提醒：照跑，結果附上提醒給 agent 轉告。/ A reminder: it runs, and the result carries the note for the agent.
+            Action::Warn => reminder = Some(command_rules::reminder_text(&rule)),
             Action::Block => {
                 command_rules::record_block(state, &requester, command, &rule).await;
                 audit_call(state, p, "ssh_exec", started, refused(format!("blocked by the rule `{}`", rule.pattern))).await;
@@ -529,6 +532,7 @@ pub(crate) async fn exec_in_session(state: &AppState, p: &McpPrincipal, s: &Arc<
                 "stdout_bytes": r.stdout.bytes,
                 "stderr_bytes": r.stderr.bytes,
                 "truncated": r.stdout.truncated || r.stderr.truncated,
+                "reminder": reminder,
             }))
         }
         Err(e) => {
@@ -1032,7 +1036,7 @@ impl TelepyMcp {
                 self.audit(&p, "shell_send", started, Audit { session: Some(&s), detail: Some(detail), bytes_out: Some(r.sent as i64), error, ..Default::default() }).await;
                 match refused {
                     Some(msg) => Ok(fail(msg)),
-                    None => Ok(CallToolResult::structured(json!({ "shell_id": sh.id, "bytes_sent": r.sent, "hint": "Call shell_read to see what happened." }))),
+                    None => Ok(CallToolResult::structured(json!({ "shell_id": sh.id, "bytes_sent": r.sent, "reminders": r.reminders, "hint": "Call shell_read to see what happened." }))),
                 }
             }
             Err(e) => {

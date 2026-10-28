@@ -22,7 +22,9 @@ import { CommandHistory } from "@/components/commands/CommandHistory";
 import { CommandTester } from "@/components/commands/CommandTester";
 import { DecisionFlowDialog } from "@/components/commands/DecisionFlowDialog";
 import { RuleDialog } from "@/components/commands/RuleDialog";
-import { RuleList } from "@/components/commands/RuleList";
+import { OffDialog } from "@/components/commands/OffDialog";
+import { RuleLayersDialog } from "@/components/commands/RuleLayers";
+import { RuleList, type RuleOverrides } from "@/components/commands/RuleList";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -30,7 +32,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { useCommandRulesPage, type RulesView } from "@/hooks/useCommandRulesPage";
-import { verdictToDraw } from "@/lib/commandRules";
+import { flipOffHere, verdictToDraw } from "@/lib/commandRules";
 import { useI18n } from "@/lib/i18n";
 import type { CheckResult, CommandRule } from "@/types/commandRules";
 
@@ -58,6 +60,9 @@ export function CommandRulesView({ view }: { view: RulesView }) {
     const { pending, decide } = useCommandApprovals();
     const [editing, setEditing] = useState<CommandRule | "new" | null>(null);
     const [deleting, setDeleting] = useState<CommandRule | null>(null);
+    // 覆寫：「在我的隧道上關掉」與「誰說了算？」。/ Overrides: "turn off on my tunnels" and "Who decides?".
+    const [offing, setOffing] = useState<CommandRule | null>(null);
+    const [why, setWhy] = useState<CommandRule | null>(null);
     // 「指令是怎麼決定的」：上一個試跑結果點亮路徑圖。/ "How a command is decided": the last test lights the path.
     const [flowOpen, setFlowOpen] = useState(false);
     const [tested, setTested] = useState<{ command: string; result: CheckResult | null }>({ command: "", result: null });
@@ -69,6 +74,21 @@ export function CommandRulesView({ view }: { view: RulesView }) {
     // 這一頁看的範圍內、等我決定的。/ Requests waiting for me within the scope on screen.
     const waiting = site ? [] : pending.filter((r) => !page.tunnelId || r.tunnel_id === page.tunnelId);
     const testerHint = site ? t("commands.tester.hintSite") : page.tunnelId ? t("commands.tester.hintTunnel") : t("commands.tester.hintMine");
+
+    // 個人頁才有覆寫（全站頁是管理員改規則本身）。/ Overrides live on the personal page (the site page edits the rules).
+    const overrides: RuleOverrides = {
+        tunnelId: page.tunnelId,
+        managed: page.managed,
+        onWhy: setWhy,
+        onOffMine: setOffing,
+        onOffHere: (r, off) => {
+            if (page.tunnelId === null) return;
+            void page.setOff(r, flipOffHere(r.my_override?.off ?? null, page.tunnelId, page.managed, off));
+        },
+        onMute: (r, muted) => void page.setMute(r, muted),
+        controls: true,
+    };
+    const whyOnly: RuleOverrides = { ...overrides, managed: [], controls: false };
 
     const manageSite = !site && page.canEditSite && (
         <Button asChild size="sm" variant="outline">
@@ -92,7 +112,14 @@ export function CommandRulesView({ view }: { view: RulesView }) {
                     <p className="rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">{t("commands.siteNone")}</p>
                 )
             ) : (
-                <RuleList rules={page.siteRules} canEdit={site && page.canEditSite} onEdit={(r) => setEditing(r)} onToggle={(r) => void page.toggleRule(r)} onDelete={setDeleting} />
+                <RuleList
+                    rules={page.siteRules}
+                    canEdit={site && page.canEditSite}
+                    onEdit={(r) => setEditing(r)}
+                    onToggle={(r) => void page.toggleRule(r)}
+                    onDelete={setDeleting}
+                    overrides={site ? whyOnly : overrides}
+                />
             )}
         </section>
     );
@@ -110,7 +137,7 @@ export function CommandRulesView({ view }: { view: RulesView }) {
                     <Empty title={t("commands.empty")} hint={t("commands.emptyHint")} onAdd={add} addLabel={addLabel} />
                 )
             ) : (
-                <RuleList rules={page.personalRules} canEdit={(r) => r.mine} showOwner onEdit={(r) => setEditing(r)} onToggle={(r) => void page.toggleRule(r)} onDelete={setDeleting} />
+                <RuleList rules={page.personalRules} canEdit={(r) => r.mine} showOwner onEdit={(r) => setEditing(r)} onToggle={(r) => void page.toggleRule(r)} onDelete={setDeleting} overrides={overrides} />
             )}
             {page.loaded && page.used > 0 && !page.tunnelId && <p className="mt-2 text-xs text-muted-foreground">{t("commands.mineUsage", { used: page.used, max: page.limit })}</p>}
         </section>
@@ -224,6 +251,7 @@ export function CommandRulesView({ view }: { view: RulesView }) {
                 startTunnel={page.tunnelId}
                 tunnels={page.formTunnels}
                 approverCandidates={page.approverCandidates}
+                approvalTimeoutMax={page.approvalTimeoutMax}
                 onSave={page.saveRule}
                 check={page.check}
             />
@@ -235,6 +263,8 @@ export function CommandRulesView({ view }: { view: RulesView }) {
                 who={tested.result?.you_approve ? "approvers" : "sharees"}
                 personalCounts={!site}
             />
+            <OffDialog rule={offing} onClose={() => setOffing(null)} tunnels={page.tunnels.filter((x) => page.managed.includes(x.id))} onSave={page.setOff} />
+            <RuleLayersDialog rule={why} onClose={() => setWhy(null)} tunnelId={page.tunnelId} tunnelName={page.scopeName} managesSome={page.managed.length > 0} />
             <ConfirmDialog
                 isOpen={deleting !== null}
                 onClose={() => setDeleting(null)}
