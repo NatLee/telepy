@@ -20,7 +20,7 @@ import { SignInLinesEditor, type LinesDraft } from "@/components/auth/SignInLine
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
 import { NativeSelect } from "@/components/ui/native-select";
-import { PreviewFrame } from "@/components/ui/preview-frame";
+import { PreviewFrame, PreviewSizer } from "@/components/ui/preview-frame";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { rememberSignInLook } from "@/hooks/useSignInLook";
@@ -28,7 +28,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ConsentInfo } from "@/hooks/useOAuthConsent";
 import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_LOOK, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { DEFAULT_LOOK, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, previewHeight, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
 import { LOGIN_SCOPES } from "@/lib/cliGuide";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -166,24 +166,47 @@ function PreviewScreen({ page, look, pin }: { page: SignInPageKind; look: SignIn
     return <SignInScreen style={look.style} message={look.message} Form={LoginFormPreview} pin={pin} />;
 }
 
-/** 桌機 + 手機兩個預覽框；`pin` = 正在編輯的那句（只打那一句）。/ The desktop and phone frames; `pin` = the line being edited. */
+const DESKTOP = 1280;
+const PHONE = 390;
+
+/**
+ * 桌機 + 手機兩個預覽框；`pin` = 正在編輯的那句（只打那一句）。兩個看不到的 PreviewSizer 量出四頁在各自寬度最高要多高，
+ * 預覽框就用那個高度：換頁時框不會變高變矮，每一頁的內容（授權頁的隧道、側欄的說明）也都完整看得到。
+ * The desktop and phone frames; `pin` = the line being edited. Two invisible PreviewSizers measure the tallest of the
+ * four pages at each width and both frames use that height, so switching pages never resizes them and every page's
+ * content (the approval page's tunnels, the side panel's notes) is shown in full.
+ */
 export function SignInPreview({ page, look, pin = null }: { page: SignInPageKind; look: SignInLook; pin?: number | null }) {
     const { t } = useI18n();
+    const [measured, setMeasured] = useState<{ desktop: number | null; phone: number | null }>({ desktop: null, phone: null });
     const pageName = t(PAGE_NAME[page]);
+    const desktopH = previewHeight(measured.desktop);
+    const phoneH = previewHeight(measured.phone);
     const screen = <PreviewScreen page={page} look={look} pin={pin} />;
+    const every = PAGES.map((p) => <PreviewScreen key={p} page={p} look={look} pin={pin} />);
     return (
         <div className="grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_10.5rem]">
+            <PreviewSizer width={DESKTOP} onHeight={(h) => setMeasured((m) => ({ ...m, desktop: h }))}>
+                {every}
+            </PreviewSizer>
+            <PreviewSizer width={PHONE} onHeight={(h) => setMeasured((m) => ({ ...m, phone: h }))}>
+                {every}
+            </PreviewSizer>
             <figure className="min-w-0">
-                <PreviewFrame width={1280} height={800} title={t("signinLook.previewFrame", { page: pageName, device: t("signinLook.previewDesktop") })}>
+                <PreviewFrame width={DESKTOP} height={desktopH} title={t("signinLook.previewFrame", { page: pageName, device: t("signinLook.previewDesktop") })}>
                     {screen}
                 </PreviewFrame>
-                <figcaption className="mt-1.5 text-center text-xs text-muted-foreground">{t("signinLook.previewDesktop")} · 1280 × 800</figcaption>
+                <figcaption className="mt-1.5 text-center text-xs text-muted-foreground">
+                    {t("signinLook.previewDesktop")} · {DESKTOP} × {desktopH}
+                </figcaption>
             </figure>
             <figure className="mx-auto w-40 md:w-full">
-                <PreviewFrame width={390} height={800} title={t("signinLook.previewFrame", { page: pageName, device: t("signinLook.previewPhone") })} className="rounded-xl">
+                <PreviewFrame width={PHONE} height={phoneH} title={t("signinLook.previewFrame", { page: pageName, device: t("signinLook.previewPhone") })} className="rounded-xl">
                     {screen}
                 </PreviewFrame>
-                <figcaption className="mt-1.5 text-center text-xs text-muted-foreground">{t("signinLook.previewPhone")} · 390 × 800</figcaption>
+                <figcaption className="mt-1.5 text-center text-xs text-muted-foreground">
+                    {t("signinLook.previewPhone")} · {PHONE} × {phoneH}
+                </figcaption>
             </figure>
         </div>
     );
