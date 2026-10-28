@@ -27,6 +27,7 @@ import { TerminalMainView } from "@/lib/tunnelUrls";
 import type { KeyboardMode } from "@/hooks/useKeyboardController";
 import { useI18n } from "@/lib/i18n";
 import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
+import { ensureMeasured } from "@/lib/xtermMeasure";
 import { nextBanner, parseTerminalFrame, type HoldBanner } from "@/lib/commandRules";
 import {
     canResume, isDropCode, loadShells, parseShellFrame, reconnectDelay, shellStoreKey, SHELL_GONE_CLOSE_CODE, SHELL_TAKEN_CLOSE_CODE,
@@ -261,6 +262,8 @@ export function useTerminalPage(serverId: string | null, accessToken: string | n
     const fitAndResize = useCallback((s: Session) => {
         if (s.disposed || s.el.style.display === "none") return;
         try {
+            // 隱藏時換過字型 / 字級的分頁先重新量,不然字距會照舊格子撐開。/ Re-measure a tab whose font changed while hidden.
+            ensureMeasured(s.term);
             s.fit.fit();
             s.term.scrollToBottom();
         } catch { /* noop */ }

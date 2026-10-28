@@ -19,6 +19,7 @@ import "xterm/css/xterm.css";
 import { refreshAccessToken } from "@/lib/api";
 import { getWsOrigin } from "@/lib/websocket";
 import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/lib/xterm";
+import { ensureMeasured } from "@/lib/xtermMeasure";
 import { useLiveTerminalLook, useTerminalAppearance } from "@/hooks/useTerminalAppearance";
 import { translate } from "@/lib/translate";
 import { requestStepUp, STEP_UP_CLOSE_CODE, stepUpToken } from "@/lib/stepUp";
@@ -78,7 +79,11 @@ export function LanTerminal({ session, visible, onStatus, onShell }: Props) {
         const x = termRef.current;
         const ws = wsRef.current;
         if (!x) return;
-        try { x.fit.fit(); } catch { /* not laid out yet */ }
+        try {
+            // 縮小 / 非作用中時換過字型就先重新量。/ Re-measure if the font changed while minimised or inactive.
+            ensureMeasured(x.term);
+            x.fit.fit();
+        } catch { /* not laid out yet */ }
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ action: "pty_resize", payload: { size: { rows: x.term.rows, cols: x.term.cols, height: x.term.rows * 20, width: x.term.cols * 9 } } }));
         }
