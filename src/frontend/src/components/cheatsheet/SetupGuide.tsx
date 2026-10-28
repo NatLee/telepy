@@ -1,18 +1,19 @@
 "use client";
 
 /**
- * 第一次使用的設定（對話框）：照相依順序的四步清單——登記金鑰 → 裝置在線 → 金鑰裝到裝置 → ~/.ssh/config。
- * 上方進度條一眼看出還差幾步；第一個沒完成的步驟自動展開並加框標成「下一步」，完成的收成一行摘要，
- * 做完一步就自動跳到下一步。~/.ssh/config 那步用共用的 SshConfigInstall：一行指令寫進去，或手動貼上逐行註解的兩段。
- * First-time setup (dialog): a four-step checklist in dependency order — register a key → device online → key on
- * the device → ~/.ssh/config. A progress bar shows what's left; the first unfinished step opens by itself and is
- * framed as "next", finished steps collapse to a one-line summary, and finishing a step moves on to the next.
- * The ~/.ssh/config step uses the shared SshConfigInstall: one command writes it, or paste the two annotated blocks.
+ * 第一次使用的設定（指令速查第 ① 步裡的清單）：照相依順序的四項——登記金鑰 → 裝置在線 → 金鑰裝到裝置 → ~/.ssh/config。
+ * 第一個沒完成的自動展開並加框標成「下一步」，完成的收成一行摘要，做完一項就自動跳到下一項；全部做完就收成一行
+ * 「都好了」，要看再展開。上面的就緒圖（ReadinessPath）點哪一項就打開哪一項（`openRequest`）。
+ * ~/.ssh/config 那項用共用的 SshConfigInstall：一行指令寫進去，或手動貼上逐行註解的兩段。
+ * First-time setup (the checklist inside the command sheet's step ①): four items in dependency order — register a
+ * key → device online → key on the device → ~/.ssh/config. The first unfinished one opens by itself and is framed as
+ * "next", finished ones collapse to a one-line summary, and finishing one moves on; once all are done the list
+ * folds into one "all set" line. Clicking an item on the readiness diagram above opens it (`openRequest`).
+ * The ~/.ssh/config item uses the shared SshConfigInstall: one command writes it, or paste the annotated blocks.
  */
 import React, { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, ChevronDown, CircleAlert, Clock3, KeyRound, ListChecks, Loader2 } from "lucide-react";
-import { Modal } from "@/components/ui/Modal";
+import { Check, ChevronDown, CircleAlert, CircleCheck, Clock3, KeyRound, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MiniCommand } from "@/components/cheatsheet/CommandView";
 import { TargetChip } from "@/components/keys/TargetChips";
@@ -69,12 +70,17 @@ interface StepCardProps {
     onToggle: () => void;
     title: React.ReactNode;
     summary: React.ReactNode;
+    /** 從就緒圖打開時遞增：捲進視野。/ Bumped when the readiness diagram opens it: scroll it into view. */
+    scrollKey?: number;
     children: React.ReactNode;
 }
 
-function StepCard({ n, state, current, open, onToggle, title, summary, children }: StepCardProps) {
+function StepCard({ n, state, current, open, onToggle, title, summary, scrollKey = 0, children }: StepCardProps) {
     const bodyId = `setup-step-${n}`;
     const ref = useRef<HTMLLIElement>(null);
+    useEffect(() => {
+        if (scrollKey > 0) requestAnimationFrame(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    }, [scrollKey]);
     // 使用者打開的那一步捲進視野（內容可能在對話框下緣之外）。/ Bring a step the user opens into view.
     const toggle = () => {
         onToggle();
@@ -117,8 +123,6 @@ function StepCard({ n, state, current, open, onToggle, title, summary, children 
 }
 
 interface SetupGuideProps {
-    isOpen: boolean;
-    onClose: () => void;
     tunnelId: number;
     alias: string;
     /** 目前的目標帳號（沒有時 null）。/ The selected target account, if any. */
@@ -132,21 +136,32 @@ interface SetupGuideProps {
     /** 舊版共用的伺服器別名（安裝指令確定安全時清掉）。/ The old shared server alias. */
     legacyAlias?: string | null;
     checklist: SetupChecklist;
+    /** 就緒圖上點了哪一項（n 每次點都加一，同一項再點一次也會打開）。/ The item clicked on the readiness diagram. */
+    openRequest?: { id: SetupStepId; n: number } | null;
 }
 
-export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online, mode, setMode, configText, knownHosts, legacyAlias, checklist }: SetupGuideProps) {
+export function SetupGuide({ openRequest, tunnelId, alias, username, online, mode, setMode, configText, knownHosts, legacyAlias, checklist }: SetupGuideProps) {
     const { t, tn } = useI18n();
-    const { steps, done, total, current } = checklist;
+    const { steps, current } = checklist;
     const allDone = current === null;
     const code = (s: string) => <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-foreground">{s}</code>;
     const stateOf = (id: SetupStepId) => steps.find((s) => s.id === id)!.state;
 
-    // 預設展開「下一步」；使用者點開別的就照他的，直到那一步完成或重新打開對話框。
-    // The "next" step is open by default; a step the user opens stays open until it completes or the dialog reopens.
+    // 預設展開「下一步」；使用者點開別的就照他的，直到那一項完成或換了裝置。
+    // The "next" item is open by default; one the user opens stays open until it completes or the device changes.
     const [picked, setPicked] = useState<SetupStepId | "none" | null>(null);
+    // 全部做完時清單收成一行；showList = 使用者要看。/ All done folds the list into one line; showList = the user wants it.
+    const [showList, setShowList] = useState(false);
     useEffect(() => {
-        if (isOpen) setPicked(null);
-    }, [isOpen]);
+        setPicked(null);
+        setShowList(false);
+    }, [tunnelId]);
+    // 就緒圖上點了某一項：打開它（全部做完時也把清單展開）。/ An item clicked on the readiness diagram: open it.
+    useEffect(() => {
+        if (!openRequest) return;
+        setPicked(openRequest.id);
+        setShowList(true);
+    }, [openRequest]);
     // 使用者點開的那一步剛完成 → 回到跟著「下一步」走。/ The step the user opened just finished → follow "next" again.
     const pickedStep = picked && picked !== "none" ? picked : null;
     const pickedState = pickedStep ? stateOf(pickedStep) : null;
@@ -331,44 +346,25 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
         config: configStep,
     };
 
-    return (
-        <Modal
-            isOpen={isOpen}
-            onClose={onClose}
-            title={t("sheet.setup.title")}
-            description={t("sheet.setup.subtitle")}
-            icon={<ListChecks />}
-            size="2xl"
-            footer={
-                <Button variant={allDone ? "default" : "outline"} onClick={onClose}>
-                    {allDone ? t("sheet.setup.start") : t("common.close")}
-                </Button>
-            }
-        >
-            {/* 進度：每格一步，點了就展開那一步。/ Progress: one segment per step; click to open it. */}
-            <div className="mb-4">
-                <div className="flex items-center justify-between gap-3 text-xs">
-                    <span className={allDone ? "text-success" : "text-muted-foreground"}>
-                        {allDone ? t("sheet.setup.allDone") : t("sheet.setup.progress", { done, total })}
-                    </span>
-                </div>
-                <div className="mt-2 grid gap-1.5" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
-                    {steps.map((s, i) => (
-                        <button
-                            key={s.id}
-                            type="button"
-                            onClick={() => setPicked(s.id)}
-                            aria-label={t("sheet.setup.goToStep", { n: i + 1 })}
-                            className={cn(
-                                "h-1.5 rounded-full transition-colors",
-                                // 完成 = 實心綠；下一步 = 淡色加脈動，跟完成分得開。/ Done = solid; next = faint + pulse, so the two never look alike.
-                                s.state === "done" ? "bg-success" : s.id === current ? "animate-pulse bg-primary/35" : s.state === "working" ? "bg-warning/60" : s.state === "error" ? "bg-destructive/60" : "bg-muted"
-                            )}
-                        />
-                    ))}
-                </div>
+    if (allDone && !showList) {
+        return (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-success/[0.06] px-3.5 py-3 ring-1 ring-inset ring-success/30">
+                <CircleCheck size={18} className="shrink-0 text-success" aria-hidden />
+                <span className="min-w-0 flex-1 basis-56 text-sm text-foreground">{t("sheet.setup.allDone")}</span>
+                <Button size="sm" variant="outline" onClick={() => setShowList(true)}>{t("sheet.ready.showChecklist")}</Button>
             </div>
+        );
+    }
 
+    return (
+        <div className="space-y-2.5">
+            {/* 沒做完時的進度已經在就緒圖與步驟列上，這裡只在全部做完、使用者展開時給收起。/ Progress lives on the diagram and step bar. */}
+            {allDone && (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="text-success">{t("sheet.setup.allDone")}</span>
+                    <Button size="xs" variant="outline" onClick={() => setShowList(false)}>{t("sheet.ready.hideChecklist")}</Button>
+                </div>
+            )}
             <ol className="list-none space-y-2.5">
                 {steps.map((s, i) => {
                     const c = content[s.id]();
@@ -382,12 +378,13 @@ export function SetupGuide({ isOpen, onClose, tunnelId, alias, username, online,
                             onToggle={() => toggle(s.id)}
                             title={titles[s.id]}
                             summary={c.summary}
+                            scrollKey={openRequest && openRequest.id === s.id ? openRequest.n : 0}
                         >
                             {c.body}
                         </StepCard>
                     );
                 })}
             </ol>
-        </Modal>
+        </div>
     );
 }

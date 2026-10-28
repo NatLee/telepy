@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { firstOpenStep } from "./stepTabs.ts";
 import {
     CLI_COMMANDS,
     CLI_TOPICS,
@@ -21,6 +22,7 @@ import {
     installCommand,
     shq,
     startSteps,
+    CLI_START_STEPS,
     verifyCommand,
     type CliContext,
 } from "./cliGuide.ts";
@@ -171,8 +173,12 @@ test("every command the page lists is a real subcommand", () => {
 });
 
 test("getting-started steps", () => {
-    assert.deepEqual(startSteps(0), ["current", "todo", "todo"]);
-    assert.deepEqual(startSteps(2), ["done", "done", "current"]);
+    assert.deepEqual(startSteps(0), { install: "todo", signIn: "todo", try: "todo" });
+    assert.deepEqual(startSteps(2), { install: "done", signIn: "done", try: "todo" });
+    // 打開在第一個沒打勾的：還沒登入 → 安裝；登入過 → 試試看。/ Opens on the first unticked step.
+    const open = (n: number) => firstOpenStep(CLI_START_STEPS.map((value) => ({ value, state: startSteps(n)[value] })));
+    assert.equal(open(0), "install");
+    assert.equal(open(1), "try");
 });
 
 test("the hidden command only shows up when searched for by name", () => {

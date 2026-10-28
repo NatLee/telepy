@@ -1,57 +1,18 @@
 "use client";
 
 /**
- * CLI 頁的小積木：編號步驟（左邊圓點 + 直線，做完變綠勾）、一行指令（等寬 + 複製）、範例需要什麼的小標籤、
- * 終端機輸出的樣子（左邊可以放一張圖：真的 CLI 在 `login` / `doctor` 旁邊畫 Tapi）。
- * Small blocks of the CLI page: a numbered step (dot + straight rail, a green tick when done), one command
- * (mono + copy), the chips saying what an example needs, and what a terminal prints (art on the left: the real CLI
- * draws Tapi beside `login` / `doctor`).
+ * CLI 頁的小積木：一行指令（等寬 + 複製）、範例需要什麼的小標籤、終端機輸出的樣子（左邊可以放一張圖：
+ * 真的 CLI 在 `login` / `doctor` 旁邊畫 Tapi）。
+ * Small blocks of the CLI page: one command (mono + copy), the chips saying what an example needs, and what a
+ * terminal prints (art on the left: the real CLI draws Tapi beside `login` / `doctor`).
  */
 import React from "react";
-import { Check, KeyRound, Ticket } from "lucide-react";
+import { KeyRound, Ticket } from "lucide-react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { LOGIN_SCOPES, type CliNeed, type OutputLine, type StepState } from "@/lib/cliGuide";
-
-export function CliStep({ n, state, title, hint, last = false, children }: {
-    n: number;
-    state: StepState;
-    title: React.ReactNode;
-    hint?: React.ReactNode;
-    last?: boolean;
-    children: React.ReactNode;
-}) {
-    const { t } = useI18n();
-    // 寬螢幕：左邊圓點 + 直線、內容縮排在右邊；手機：圓點跟標題同一行，內容用整張卡的寬度（不留直線那一欄）。
-    // Wide: dot + rail on the left, content indented beside it. Phones: the dot sits on the title row and the
-    // content uses the card's full width (no rail column).
-    return (
-        <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 sm:gap-x-4" aria-current={state === "current" ? "step" : undefined}>
-            <span
-                className={cn(
-                    "col-start-1 row-start-1 grid size-7 shrink-0 place-items-center self-start rounded-full text-sm tabular-nums",
-                    state === "done" ? "bg-success text-success-foreground" : state === "current" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground",
-                )}
-                aria-hidden
-            >
-                {state === "done" ? <Check size={15} /> : n}
-            </span>
-            <div className="col-start-2 row-start-1 min-w-0">
-                <div className="flex min-h-7 flex-wrap items-center gap-x-2.5 gap-y-1">
-                    <h3 className="text-lg text-foreground">{title}</h3>
-                    {state === "done" && <Chip tone="success">{t("cli.step.done")}</Chip>}
-                </div>
-            </div>
-            {!last && <span className={cn("col-start-1 row-span-2 row-start-1 mx-auto mt-8 hidden w-px sm:block", state === "done" ? "bg-success/50" : "bg-border")} aria-hidden />}
-            <div className={cn("col-span-2 row-start-2 min-w-0 space-y-3 pt-1 sm:col-span-1 sm:col-start-2", last ? "pb-1" : "pb-8")}>
-                {hint && <p className="text-sm leading-relaxed text-muted-foreground">{hint}</p>}
-                {children}
-            </div>
-        </li>
-    );
-}
+import { LOGIN_SCOPES, type CliNeed, type OutputLine } from "@/lib/cliGuide";
 
 /**
  * 指令的字：在空白處換行；每個片段是一個 inline-block，所以 `--online`、`[--group` 不會從連字號切開，
