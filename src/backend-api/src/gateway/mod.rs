@@ -482,6 +482,25 @@ impl Gateway {
         Ok(false)
     }
 
+    /// `direct-tcpip` 的名稱 → 隧道號碼。OpenSSH 會把 `HostName` 轉成小寫再放進 ProxyCommand 的 `%h`（`MyBox` 到這裡是
+    /// `mybox`），所以不分大小寫：完全相同的排前面，挑第一條這個身分有權連的；都沒有權限就回完全相同的那條（沒有完全相同、
+    /// 又只有一條時就是那條），拒絕才記在對的隧道上。只差大小寫又都能連的兩條：完全相同的那條。
+    /// A `direct-tcpip` name → the tunnel's number. OpenSSH lowercases `HostName` before ProxyCommand's `%h` (`MyBox`
+    /// arrives as `mybox`), so case is ignored: exact first, then the first match this identity may reach; with none
+    /// reachable, the exact match (else the only one), so a refusal is logged on the right tunnel.
+    async fn port_by_name(&self, id: Option<&Identity>, name: &str) -> anyhow::Result<Option<u16>> {
+        let matches = db::tunnels::by_name_ignoring_case(&self.db, name).await?;
+        if let Some(Identity::User { user_id }) = id {
+            for t in &matches {
+                if self.reaches(*user_id, t).await? {
+                    return Ok(u16::try_from(t.reverse_port).ok());
+                }
+            }
+        }
+        let fallback = matches.iter().find(|t| t.host_friendly_name == name).or(if matches.len() == 1 { matches.first() } else { None });
+        Ok(fallback.and_then(|t| u16::try_from(t.reverse_port).ok()))
+    }
+
     /// 這個人能不能經 gateway 連到這條隧道的裝置（`user_can_reach` 與招呼的裝置清單共用）。
     /// Whether this person may reach the tunnel's device through the gateway (shared by `user_can_reach` and the greeting).
     async fn reaches(&self, user_id: i64, t: &db::tunnels::Tunnel) -> anyhow::Result<bool> {
@@ -877,14 +896,7 @@ impl Handler for GatewayHandler {
         // `localhost:<號碼>`（舊寫法）或 `<隧道名稱>:<任意 port>`：名稱全站唯一，直接換成那條隧道的號碼。
         // `localhost:<number>` (the old form) or `<tunnel name>:<any port>`: names are unique, so the name picks the tunnel.
         let loopback = matches!(host_to_connect, "localhost" | "127.0.0.1" | "::1");
-        let port = if loopback {
-            u16::try_from(port_to_connect).ok()
-        } else {
-            match db::tunnels::by_name(&self.gw.db, host_to_connect).await? {
-                Some(t) => u16::try_from(t.reverse_port).ok(),
-                None => None,
-            }
-        };
+        let port = if loopback { u16::try_from(port_to_connect).ok() } else { self.gw.port_by_name(self.identity.as_ref(), host_to_connect).await? };
         let allowed = match (port, &self.identity) {
             (Some(p), Some(id)) => self.gw.may_connect(id, p).await?,
             _ => false,

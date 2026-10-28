@@ -71,3 +71,43 @@ async fn the_key_picks_the_tunnel_whatever_number_the_device_asks_for() {
         assert!(!out.status.success(), "a user key must not forward {asked}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
+
+/// OpenSSH 把 `HostName` 轉成小寫再交給 ProxyCommand 的 `%h`：名稱有大寫的隧道（`MyBox`）到閘道時是 `-W mybox:22`，
+/// 以前精確比對找不到 → "administratively prohibited"。現在不分大小寫也找得到；只差大小寫的兩條隧道各連各的。
+/// OpenSSH lowercases `HostName` before ProxyCommand's `%h`, so a tunnel named `MyBox` arrives as `-W mybox:22`; the
+/// exact lookup used to miss it ("administratively prohibited"). Now it is found ignoring case, and two tunnels that
+/// differ only in case still each reach their own.
+#[tokio::test]
+async fn a_tunnel_name_with_capitals_survives_ssh_lowercasing_it() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let m1 = lab.machine("caps1", &[("ubuntu", &[&lab.service, &alice.key])], false).await;
+    let m2 = lab.machine("caps2", &[("ubuntu", &[&lab.service, &bob.key])], false).await;
+    let mixed = lab.device(&alice, "MyBox", &m1).await;
+    lab.username(&alice, &mixed, "ubuntu").await;
+
+    let (cfg, alias) = lab.generated_ssh_config(&alice, &mixed, "ubuntu").await;
+    assert!(std::fs::read_to_string(&cfg).unwrap().contains("HostName MyBox\n"));
+    let r = lab.ssh_with_config(&cfg, &alias, "whereami").await;
+    assert_eq!(r.stdout, "ubuntu@caps1", "{r:?}");
+
+    // 名稱對但連不到的人照樣被拒，並記在那條隧道上。/ Someone who may not reach it is still refused, logged on the tunnel.
+    // carol 有自己的隧道（閘道才讓她的金鑰登入），但不能連 MyBox。/ carol has a tunnel of her own (so the gateway lets her key in), not MyBox.
+    let carol = lab.user("carol").await;
+    let m3 = lab.machine("caps3", &[("ubuntu", &[&lab.service])], false).await;
+    let _own = lab.device(&carol, "carols", &m3).await;
+    let ghost = common::lab::Device { tunnel_id: mixed.tunnel_id, name: "MYBOX".into(), reverse_port: mixed.reverse_port, target: m1.clone(), key: mixed.key.clone() };
+    let run = lab.ssh_with_config(&lab.laptop_config_named(&carol, &ghost, "ubuntu"), "hop0", "whoami").await;
+    assert!(!run.ok, "{run:?}");
+    let r = lab.app.get(&format!("/api/log/ssh/events?tunnel_id={}", mixed.tunnel_id), Some(&alice.token)).await;
+    assert!(r.json.as_array().unwrap().iter().any(|e| e["event"] == "refused_direct"), "carol's attempt is logged on MyBox: {run:?} {}", r.json);
+    // bob 的 `mybox`（只差大小寫）：兩個人各自連到自己的。/ bob's `mybox`, differing only in case: each reaches their own.
+    let lower = lab.device(&bob, "mybox", &m2).await;
+    lab.username(&bob, &lower, "ubuntu").await;
+    let r = lab.ssh_with_config(&cfg, &alias, "whereami").await;
+    assert_eq!(r.stdout, "ubuntu@caps1", "alice still reaches MyBox, not bob's mybox: {r:?}");
+    let (bob_cfg, bob_alias) = lab.generated_ssh_config(&bob, &lower, "ubuntu").await;
+    assert_eq!(lab.ssh_with_config(&bob_cfg, &bob_alias, "whereami").await.stdout, "ubuntu@caps2");
+
+}

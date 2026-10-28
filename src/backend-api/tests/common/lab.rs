@@ -961,7 +961,7 @@ impl Lab {
 
     /// 建隧道（owner 的）並讓「裝置」用真的 `ssh -NR` 連上 gateway，等到 forward 註冊好才回來。
     pub async fn device(&self, owner: &LabUser, name: &str, target: &Machine) -> Device {
-        let key = self.keygen(&format!("{name}-tunnel"));
+        let key = self.keygen(&format!("{name}-tunnel-{}", next_id())); // 流水號：macOS 不分大小寫（MyBox / mybox）。/ Counter: macOS ignores case.
         let reverse_port = free_port();
         let t = db::tunnels::create(
             &self.app.state.db,
@@ -979,7 +979,7 @@ impl Lab {
     /// 建隧道，但裝置的 `ssh -NR` 連到 `gw_port`（例如 WebSocket 橋）而不是 gateway 的 listener。
     /// Create a tunnel whose device dials `gw_port` (e.g. a WebSocket bridge) instead of the gateway listener.
     pub async fn device_via_port(&self, owner: &LabUser, name: &str, target: &Machine, gw_port: u16, extra_opts: &[String]) -> Device {
-        let key = self.keygen(&format!("{name}-tunnel"));
+        let key = self.keygen(&format!("{name}-tunnel-{}", next_id())); // 流水號：macOS 不分大小寫（MyBox / mybox）。/ Counter: macOS ignores case.
         let reverse_port = free_port();
         let t = db::tunnels::create(
             &self.app.state.db,
@@ -997,7 +997,7 @@ impl Lab {
 
     /// 建隧道，但裝置的 `-R` 要求別的號碼（0 = 讓伺服器挑）。/ A tunnel whose device asks for another number (0 = server picks).
     pub async fn device_requesting(&self, owner: &LabUser, name: &str, target: &Machine, requested: u16) -> Device {
-        let key = self.keygen(&format!("{name}-tunnel"));
+        let key = self.keygen(&format!("{name}-tunnel-{}", next_id())); // 流水號：macOS 不分大小寫（MyBox / mybox）。/ Counter: macOS ignores case.
         let reverse_port = free_port();
         let t = db::tunnels::create(
             &self.app.state.db,
