@@ -58,6 +58,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::join::router())
         .merge(api::terminal_profile::router())
         .merge(api::terminal_schemes::router())
+        .merge(api::notify_prefs::router())
 }
 
 /// 完整的 OpenAPI 文件（不需要 AppState；`telepy-server openapi` 子命令與測試用）。

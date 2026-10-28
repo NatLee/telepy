@@ -15,6 +15,7 @@ import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/ui/Toast";
 import { useNotificationHandlers } from "@/lib/websocket";
+import { allowNotification } from "@/hooks/useNotifyPrefs";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/types/notification";
 import { toolLabel } from "@/lib/aiAccess";
 import { countCalls, filterCalls, withTimes, type CallTimes, type ToolFilter, type WhoFilter } from "@/lib/aiActivity";
@@ -230,7 +231,7 @@ export function useAiActivityPage(scope: ViewScope = "mine") {
     // Live updates: session notifications refresh the lists; toast when someone else's agent used my tunnel.
     const onSessionEvent = useCallback(
         (msg: NotificationPayload) => {
-            if (msg.by && msg.by !== user?.username && msg.details) showSuccess(msg.details);
+            if (msg.by && msg.by !== user?.username && msg.details && allowNotification(msg, "toast")) showSuccess(msg.details);
             fetchSessions();
             fetchActivity();
         },

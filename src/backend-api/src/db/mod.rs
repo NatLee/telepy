@@ -16,6 +16,7 @@ pub mod host_keys;
 pub mod keys;
 pub mod lan;
 pub mod mfa;
+pub mod notify_prefs;
 pub mod oauth;
 pub mod pool;
 pub mod recordings;

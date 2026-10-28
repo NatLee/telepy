@@ -13,6 +13,7 @@ import { endedNotice, lostToast } from "@/lib/liveSessions";
 import type { TranslationKey } from "@/locales/en";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
+import { allowNotification } from "@/hooks/useNotifyPrefs";
 
 export function SessionEndedNotice() {
     const { t } = useI18n();
@@ -41,7 +42,7 @@ export function SessionEndedNotice() {
         },
         // 有人開始看你的終端機（停止的那一則不吵你，終端機裡已經有一行）。/ Someone started watching your terminal.
         [NOTIFICATION_ACTIONS.TERMINAL_WATCHED]: (msg) => {
-            if (msg.watching !== true) return;
+            if (msg.watching !== true || !allowNotification(msg, "toast")) return;
             showToast(t("watch.toast", { by: String(msg.by ?? ""), tunnel: String(msg.tunnel_name ?? "") }), "info");
         },
     });

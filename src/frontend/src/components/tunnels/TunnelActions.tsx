@@ -11,11 +11,18 @@ import {
     DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
+    DropdownMenuRadioGroup,
+    DropdownMenuRadioItem,
     DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
     ArrowLeftRight,
+    Bell,
+    BellOff,
     ChevronDown,
     Clapperboard,
     FileCode2,
@@ -39,6 +46,9 @@ import { cn } from "@/lib/utils";
 import { Tunnel, TunnelActionHandlers } from "@/types/tunnel";
 import { useI18n } from "@/lib/i18n";
 import { useFeatures } from "@/hooks/useFeatures";
+import { useNotifyPrefs } from "@/hooks/useNotifyPrefs";
+import { useToast } from "@/components/ui/Toast";
+import type { MuteScope } from "@/lib/notifyPrefs";
 
 interface TunnelActionsProps extends TunnelActionHandlers {
     tunnel: Tunnel;
@@ -70,6 +80,44 @@ function ActionItem({
                 {hint && <span className="text-[0.75rem] leading-snug text-muted-foreground whitespace-normal">{hint}</span>}
             </span>
         </DropdownMenuItem>
+    );
+}
+
+/**
+ * 這條隧道的通知靜音（只影響自己；強制的通知還是會顯示）：全部顯示 / 靜音狀態變化 / 全部靜音。
+ * Mute this tunnel's notifications (only for you; enforced ones still show): show all / mute status / mute all.
+ */
+function MuteMenu({ tunnel }: { tunnel: Tunnel }) {
+    const { t } = useI18n();
+    const { showError } = useToast();
+    const { prefs, setMute } = useNotifyPrefs();
+    const scope: MuteScope | "none" = prefs?.mutes.find((m) => m.tunnel_id === tunnel.id)?.scope ?? "none";
+    const hint = scope === "all" ? t("notifyPrefs.menuHintAll") : scope === "status" ? t("notifyPrefs.menuHintStatus") : t("notifyPrefs.menuHintOn");
+    const Icon = scope === "none" ? Bell : BellOff;
+    const choose = (v: string) => {
+        const next = v === "all" || v === "status" ? v : null;
+        setMute(tunnel.id, tunnel.host_friendly_name, next).catch((e: unknown) =>
+            showError(t("notifyPrefs.saveFailed", { error: e instanceof Error ? e.message : "" })),
+        );
+    };
+    return (
+        <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="items-start gap-3 rounded-md py-1.5">
+                <Icon className="mt-0.5" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="font-medium leading-tight">{t("notifyPrefs.menu")}</span>
+                    <span className="whitespace-normal text-[0.75rem] leading-snug text-muted-foreground">{hint}</span>
+                </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-[16rem] max-w-[calc(100vw-1.5rem)]">
+                <DropdownMenuRadioGroup value={scope} onValueChange={choose}>
+                    <DropdownMenuRadioItem value="none">{t("notifyPrefs.menuShowAll")}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="status">{t("notifyPrefs.menuMuteStatus")}</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem value="all">{t("notifyPrefs.menuMuteAll")}</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+                <p className="px-2 pt-1.5 pb-1 text-xs leading-snug text-muted-foreground">{t("notifyPrefs.menuNote")}</p>
+            </DropdownMenuSubContent>
+        </DropdownMenuSub>
     );
 }
 
@@ -227,6 +275,7 @@ export function TunnelActions({
                         hint={t("tunnelActions.logsHint")}
                         onSelect={() => onLogs(tunnel.id)}
                     />
+                    <MuteMenu tunnel={tunnel} />
                     {tunnel.record_sessions && has("recordings.manage") && (
                         <ActionItem
                             icon={Clapperboard}

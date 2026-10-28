@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
 import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
+import { allowNotification } from "@/hooks/useNotifyPrefs";
 import { placeLabel, type IpGeo } from "@/lib/geo";
 
 export function NewSignInNotice() {
@@ -15,6 +16,7 @@ export function NewSignInNotice() {
     const { showToast } = useToast();
     useNotificationHandlers({
         [NOTIFICATION_ACTIONS.SIGN_IN_NEW_DEVICE]: (msg) => {
+            if (!allowNotification(msg, "toast")) return;
             const geo = (msg.geo ?? null) as IpGeo | null;
             const ip = typeof msg.ip === "string" ? msg.ip : "";
             const place = [ip, placeLabel(geo, locale)].filter(Boolean).join(", ") || "?";
