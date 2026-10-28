@@ -42,6 +42,7 @@ import {
     wave,
 } from "@/lib/discreetField";
 import { messageLines } from "@/lib/signinLook";
+import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 
 const WORD = "Telepy";
@@ -396,16 +397,36 @@ function Tagline({ message, pin }: { message: string; pin: number | null }) {
     );
 }
 
-export function DiscreetShell({ message, pin = null, children }: { message: string; /** 預覽正在看哪一句。/ The line the preview shows. */ pin?: number | null; children: React.ReactNode }) {
+export function DiscreetShell({
+    message,
+    pin = null,
+    wide = false,
+    children,
+}: {
+    message: string;
+    /** 預覽正在看哪一句。/ The line the preview shows. */
+    pin?: number | null;
+    /** 內容多的頁面（授權頁）用寬一點的卡片。/ A wider card for content-heavy pages (the approval page). */
+    wide?: boolean;
+    children: React.ReactNode;
+}) {
     const root = useRef<HTMLDivElement>(null);
+    // overflow-clip（不是 hidden）：裁掉超出的背景，但不變成捲動容器，授權頁黏在底部的決定列才會跟著視窗。
+    // overflow-clip, not hidden: clips the background without becoming a scroll container, so the approval page's
+    // sticky decision bar follows the viewport.
     return (
-        <div ref={root} className="relative flex min-h-screen flex-col overflow-hidden bg-background text-foreground">
+        <div ref={root} className="relative flex min-h-screen flex-col overflow-clip bg-background text-foreground">
             {/* 頁首在版面裡（不是浮在上面）：表單再高也不會壓到語言 / 主題切換。/ In the flow, so a tall form never covers it. */}
             <header className="relative z-10 flex justify-end p-4 sm:p-6">
                 <AuthPrefs />
             </header>
 
-            <div className="relative mx-auto grid w-full max-w-6xl flex-1 grid-cols-[minmax(0,1fr)] content-center items-center gap-10 px-4 pb-12 pt-6 sm:px-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-16 lg:px-12 lg:pb-14 lg:pt-2">
+            <div
+                className={cn(
+                    "relative mx-auto grid w-full max-w-6xl flex-1 grid-cols-[minmax(0,1fr)] content-center items-center gap-10 px-4 pb-12 pt-6 sm:px-8 lg:gap-16 lg:px-12 lg:pb-14 lg:pt-2",
+                    wide ? "lg:grid-cols-[minmax(0,1fr)_32rem]" : "lg:grid-cols-[minmax(0,1fr)_24rem]",
+                )}
+            >
                 <section className="dsc-hero flex flex-col items-center gap-5 text-center lg:items-start lg:text-left">
                     <div className="relative">
                         <DiscreetArt host={root} />
@@ -415,7 +436,12 @@ export function DiscreetShell({ message, pin = null, children }: { message: stri
                     <Tagline message={message} pin={pin} />
                 </section>
 
-                <div className="relative w-full max-w-sm justify-self-center animate-fade-in-up rounded-xl border border-border bg-card p-6 shadow-card sm:p-8 lg:justify-self-end">
+                <div
+                    className={cn(
+                        "relative w-full justify-self-center animate-fade-in-up rounded-xl border border-border bg-card p-6 shadow-card sm:p-8 lg:justify-self-end",
+                        wide ? "max-w-lg" : "max-w-sm",
+                    )}
+                >
                     {children}
                 </div>
             </div>

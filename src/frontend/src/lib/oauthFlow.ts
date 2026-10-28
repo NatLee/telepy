@@ -49,3 +49,23 @@ export function matchesTunnel(name: string, query: string): boolean {
 
 /** 這麼多條以上才顯示隧道搜尋框。/ Show the tunnel search from this many tunnels. */
 export const TUNNEL_SEARCH_FROM = 7;
+
+/** `telepy login` 換完 token 後把瀏覽器送來的頁面（後端 metadata 的 `telepy_cli_done_page`）。/ Where `telepy login` sends the browser afterwards. */
+export const OAUTH_DONE_PATH = "/oauth/done";
+
+export type CliDoneOutcome = { kind: "ok" } | { kind: "denied" } | { kind: "failed"; reason: "state" | "exchange" | "error" };
+
+/**
+ * 完成頁的查詢參數 → 結果。只認 CLI 送的那幾個固定的字（頁面從不顯示網址裡的任意文字，免得被拿來騙人）；
+ * 看不懂的一律當作「沒完成」。
+ * The done page's query → the outcome. Only the CLI's fixed words are recognised (the page never shows free text
+ * from the URL, so it can't be used to mislead); anything else counts as "didn't finish".
+ */
+export function parseCliDone(params: { get(name: string): string | null }): { clientId: string | null; outcome: CliDoneOutcome } {
+    const clientId = params.get("client_id")?.trim() || null;
+    const result = params.get("result");
+    if (result === "ok") return { clientId, outcome: { kind: "ok" } };
+    if (result === "denied") return { clientId, outcome: { kind: "denied" } };
+    const reason = params.get("reason");
+    return { clientId, outcome: { kind: "failed", reason: reason === "state" || reason === "exchange" ? reason : "error" } };
+}

@@ -734,6 +734,7 @@ mod tests {
             signin_oauth_style: "standard".into(),
             signin_page_message: String::new(),
             signin_cli_style: "standard".into(),
+            signin_consent_style: "standard".into(),
         };
         assert_eq!(Limits::from_settings(&s), Limits { idle_timeout: Duration::from_secs(600), max_lifetime: Duration::from_secs(7200), max_sessions_per_user: 3 });
         s.ai_session_idle_timeout = 0;

@@ -1,19 +1,20 @@
 "use client";
 
 /**
- * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁、應用程式連接頁與 CLI 登入頁（`telepy login`）各自選一般 / 低調、低調頁上輪流打出來的句子
- * （SignInLinesEditor）、即時預覽（PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個；正在編輯的那句會被釘住），
- * 以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
- * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in, app connection and CLI (`telepy login`) pages, the
- * discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame renders the real page components,
- * desktop and phone; the line being edited is pinned) and the "How it works" dialog (path diagram + a comparison of
- * the two looks).
+ * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁、應用程式連接頁、CLI 登入頁（`telepy login`）與登入後的授權頁各自選一般 / 低調、
+ * 低調頁上輪流打出來的句子（SignInLinesEditor）、即時預覽（PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個；
+ * 正在編輯的那句會被釘住；授權頁用範例資料），以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
+ * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in, app connection, CLI (`telepy
+ * login`) and approval pages, the discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame
+ * renders the real page components, desktop and phone; the line being edited is pinned; the approval page uses
+ * sample data) and the "How it works" dialog (path diagram + a comparison of the two looks).
  */
 import React, { useState } from "react";
-import { Eye, EyeOff, Globe, Info, ScanEye, SquareDashed, SquareTerminal } from "lucide-react";
+import { CornerDownLeft, Eye, EyeOff, Globe, Info, ScanEye, SquareDashed, SquareTerminal, UserCheck } from "lucide-react";
 import { LoginFormPreview } from "@/components/auth/LoginForm";
 import { OAuthSignInScreen, SignInScreen } from "@/components/auth/SignInScreens";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
+import { ConsentForm, ConsentFrame, type ConsentFormActions, type ConsentFormState } from "@/components/oauth/ConsentScreen";
 import { Button } from "@/components/ui/button";
 import { SignInLinesEditor, type LinesDraft } from "@/components/auth/SignInLinesEditor";
 import { Callout } from "@/components/ui/callout";
@@ -24,27 +25,43 @@ import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { rememberSignInLook } from "@/hooks/useSignInLook";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import type { ConsentInfo } from "@/hooks/useOAuthConsent";
+import { useAuth } from "@/lib/auth";
 import { useI18n } from "@/lib/i18n";
-import { DEFAULT_LOOK, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { DEFAULT_LOOK, allStandard, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
 import { LOGIN_SCOPES } from "@/lib/cliGuide";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 
-/** 這四個設定由這個面板編輯，不再出現在一般的設定清單。/ Edited here, so the generic list leaves them out. */
-export const SIGNIN_LOOK_KEYS = ["signin_page_style", "signin_oauth_style", "signin_cli_style", "signin_page_message"];
+/** 這五個設定由這個面板編輯，不再出現在一般的設定清單。/ Edited here, so the generic list leaves them out. */
+export const SIGNIN_LOOK_KEYS = ["signin_page_style", "signin_oauth_style", "signin_cli_style", "signin_consent_style", "signin_page_message"];
 
-type StyleKey = "signin_page_style" | "signin_oauth_style" | "signin_cli_style";
-const STYLE_KEY: Record<SignInPageKind, StyleKey> = { signin: "signin_page_style", oauth: "signin_oauth_style", cli: "signin_cli_style" };
-const LOOK_FIELD: Record<SignInPageKind, "style" | "oauthStyle" | "cliStyle"> = { signin: "style", oauth: "oauthStyle", cli: "cliStyle" };
+const PAGES = ["signin", "oauth", "cli", "consent"] as const;
+type StyleKey = "signin_page_style" | "signin_oauth_style" | "signin_cli_style" | "signin_consent_style";
+const STYLE_KEY: Record<SignInPageKind, StyleKey> = { signin: "signin_page_style", oauth: "signin_oauth_style", cli: "signin_cli_style", consent: "signin_consent_style" };
+const LOOK_FIELD: Record<SignInPageKind, "style" | "oauthStyle" | "cliStyle" | "consentStyle"> = { signin: "style", oauth: "oauthStyle", cli: "cliStyle", consent: "consentStyle" };
 /** 應用程式與 CLI 是同一個網址，看要求的是誰決定用哪個。/ Apps and the CLI share the address; who is asking decides. */
-const PATH: Record<SignInPageKind, string> = { signin: "/login", oauth: "/oauth/login", cli: "/oauth/login" };
-const PAGE_NAME: Record<SignInPageKind, TranslationKey> = { signin: "signinLook.previewSignin", oauth: "signinLook.previewOauth", cli: "signinLook.previewCli" };
+const PATH: Record<SignInPageKind, string> = { signin: "/login", oauth: "/oauth/login", cli: "/oauth/login", consent: "/oauth/authorize" };
+const PAGE_NAME: Record<SignInPageKind, TranslationKey> = {
+    signin: "signinLook.previewSignin",
+    oauth: "signinLook.previewOauth",
+    cli: "signinLook.previewCli",
+    consent: "signinLook.previewConsent",
+};
+/** 路徑可以在「/」前換行（/oauth/authorize 比連線的空隙寬）。/ A path may wrap before a "/" (/oauth/authorize is wider than the link's gap). */
+const breakablePath = (path: string) => path.replace(/(?!^)\//g, "\u200b/");
 const BUILT_IN_LINES: TranslationKey[] = ["discreet.line1", "discreet.line2", "discreet.line3"];
 const noop = () => {};
 
 function lookFrom(values: Record<string, unknown>): SignInLook {
     return (
-        parseSignInLook({ style: values.signin_page_style, oauth_style: values.signin_oauth_style, cli_style: values.signin_cli_style, message: values.signin_page_message }) ??
+        parseSignInLook({
+            style: values.signin_page_style,
+            oauth_style: values.signin_oauth_style,
+            cli_style: values.signin_cli_style,
+            consent_style: values.signin_consent_style,
+            message: values.signin_page_message,
+        }) ??
         DEFAULT_LOOK
     );
 }
@@ -61,12 +78,12 @@ function useStyleOptions() {
 function usePageOptions(look: SignInLook) {
     const { t } = useI18n();
     const name = (s: SignInStyle) => t(s === "discreet" ? "signinLook.discreet" : "signinLook.standard");
-    return (["signin", "oauth", "cli"] as const).map((p) => ({ value: p, label: `${t(PAGE_NAME[p])} · ${name(styleOf(look, p))}` }));
+    return PAGES.map((p) => ({ value: p, label: `${t(PAGE_NAME[p])} · ${name(styleOf(look, p))}` }));
 }
 
 /**
- * 選哪一頁：三個長標籤在手機上會各擠成三行，所以手機用一行的下拉。
- * Which page: three long labels would each wrap to three lines on a phone, so phones get a one-line select.
+ * 選哪一頁：四個長標籤在手機上會各擠成好幾行，所以手機用一行的下拉。
+ * Which page: four long labels would each wrap to several lines on a phone, so phones get a one-line select.
  */
 function PagePicker({ look, value, onChange, kind }: { look: SignInLook; value: SignInPageKind; onChange: (p: SignInPageKind) => void; kind: "tabs" | "toggle" }) {
     const { t } = useI18n();
@@ -86,9 +103,58 @@ function PagePicker({ look, value, onChange, kind }: { look: SignInLook; value: 
     return <Segmented kind={kind} size="sm" fullWidth={kind === "tabs"} options={options} value={value} onChange={onChange} aria-label={t("signinLook.previewTitle")} />;
 }
 
+const PREVIEW_ACTIONS: ConsentFormActions = {
+    switchAccount: noop,
+    setReplace: noop,
+    toggleScope: noop,
+    setTunnelMode: noop,
+    toggleTunnel: noop,
+    setTunnelQuery: noop,
+    setShownTunnels: noop,
+    approve: noop,
+    deny: noop,
+};
+
+/**
+ * 授權頁的預覽：範例 app、範例隧道、你自己的帳號名稱；按鈕都不做事。
+ * The approval page's preview: a sample app and tunnels with your own account name; the buttons do nothing.
+ */
+function ConsentPreview({ look, pin }: { look: SignInLook; pin: number | null }) {
+    const { t } = useI18n();
+    const { user } = useAuth();
+    const tunnels = ["web-01", "nas", "pi-lab"].map((name, i) => ({ id: i + 1, name, permission: null }));
+    const info: ConsentInfo = {
+        client: { client_id: "preview", client_name: t("signinLook.previewApp") },
+        redirect_uri: "https://app.example.com/oauth/callback",
+        redirect_host: "app.example.com",
+        scopes: ["tunnels:read", "ssh:exec", "ssh:files"].map((name) => ({ name, description: "" })),
+        tunnels,
+        user: { id: 0, username: user?.username || "admin" },
+    };
+    const state: ConsentFormState = {
+        info,
+        selectedScopes: ["tunnels:read", "ssh:exec"],
+        tunnelMode: "all",
+        tunnelIds: [],
+        tunnelQuery: "",
+        allTunnels: tunnels,
+        shownTunnels: tunnels,
+        replace: true,
+        submitting: false,
+        canApprove: true,
+        stepUpError: null,
+    };
+    return (
+        <ConsentFrame style={look.consentStyle} message={look.message} pin={pin} step={1} appName={info.client.client_name}>
+            <ConsentForm state={state} actions={PREVIEW_ACTIONS} surface={look.consentStyle === "discreet" ? "card" : "background"} />
+        </ConsentFrame>
+    );
+}
+
 /** 某一頁、某個樣子的畫面（預覽用：表單不會登入）。/ One page in one look, with the inert preview form. */
 function PreviewScreen({ page, look, pin }: { page: SignInPageKind; look: SignInLook; pin: number | null }) {
     const { t } = useI18n();
+    if (page === "consent") return <ConsentPreview look={look} pin={pin} />;
     if (page === "oauth" || page === "cli") {
         // CLI 的預覽：名字照 CLI 註冊的樣子（`telepy CLI (<電腦>)`），導回本機、預設的 scope。/ The CLI as it registers itself.
         const app =
@@ -165,7 +231,7 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
     const problem = messageProblem(message);
     const look: SignInLook = { ...saved, message };
     const pin = lines.mode === "custom" ? pinnedLine(lines.rows, editing) : null;
-    const unused = saved.style === "standard" && saved.oauthStyle === "standard" && saved.cliStyle === "standard";
+    const unused = allStandard(saved);
 
     const setStyle = (p: SignInPageKind, v: SignInStyle) => {
         void onSave(STYLE_KEY[p], v);
@@ -199,6 +265,7 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
                 <StyleRow page="signin" value={saved.style} onChange={(v) => setStyle("signin", v)} />
                 <StyleRow page="oauth" value={saved.oauthStyle} onChange={(v) => setStyle("oauth", v)} />
                 <StyleRow page="cli" value={saved.cliStyle} onChange={(v) => setStyle("cli", v)} />
+                <StyleRow page="consent" value={saved.consentStyle} onChange={(v) => setStyle("consent", v)} />
                 <li className="p-4 sm:px-6 sm:py-5">
                     <h4 className="text-[1rem] text-foreground">{t("siteSettings.signin_page_message.label")}</h4>
                     <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
@@ -246,16 +313,22 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
 
 /* ── 運作方式 / How it works ─────────────────────────────────────── */
 
-type Cell = "shown" | "hidden" | "afterSignIn" | "emptyFrame" | "unchanged";
+type Cell = "shown" | "hidden" | "afterSignIn" | "emptyFrame" | "unchanged" | "inFull" | "brief";
 
-const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; oauthOnly?: boolean }[] = [
-    { label: "signinLook.cmp.name", standard: "shown", discreet: "shown" },
-    { label: "signinLook.cmp.product", standard: "shown", discreet: "hidden" },
-    { label: "signinLook.cmp.methods", standard: "shown", discreet: "shown" },
-    { label: "signinLook.cmp.app", standard: "shown", discreet: "shown", oauthOnly: true },
-    { label: "signinLook.cmp.scopes", standard: "shown", discreet: "afterSignIn", oauthOnly: true },
-    { label: "signinLook.cmp.html", standard: "emptyFrame", discreet: "emptyFrame" },
-    { label: "signinLook.cmp.after", standard: "unchanged", discreet: "unchanged" },
+const SIGN_IN_PAGES: readonly SignInPageKind[] = ["signin", "oauth", "cli"];
+const APP_PAGES: readonly SignInPageKind[] = ["oauth", "cli", "consent"];
+
+/** 每一列只出現在相關的頁面（授權頁是登入之後，所以沒有登入方式、權限一律列出）。/ Each row only on the pages it is about. */
+const ROWS: { label: TranslationKey; standard: Cell; discreet: Cell; pages: readonly SignInPageKind[] }[] = [
+    { label: "signinLook.cmp.name", standard: "shown", discreet: "shown", pages: PAGES },
+    { label: "signinLook.cmp.product", standard: "shown", discreet: "hidden", pages: PAGES },
+    { label: "signinLook.cmp.methods", standard: "shown", discreet: "shown", pages: SIGN_IN_PAGES },
+    { label: "signinLook.cmp.app", standard: "shown", discreet: "shown", pages: APP_PAGES },
+    { label: "signinLook.cmp.scopes", standard: "shown", discreet: "afterSignIn", pages: ["oauth", "cli"] },
+    { label: "signinLook.cmp.choices", standard: "shown", discreet: "shown", pages: ["consent"] },
+    { label: "signinLook.cmp.cliDone", standard: "inFull", discreet: "brief", pages: ["consent"] },
+    { label: "signinLook.cmp.html", standard: "emptyFrame", discreet: "emptyFrame", pages: PAGES },
+    { label: "signinLook.cmp.after", standard: "unchanged", discreet: "unchanged", pages: SIGN_IN_PAGES },
 ];
 
 const CELL_TEXT: Record<Cell, TranslationKey> = {
@@ -264,13 +337,15 @@ const CELL_TEXT: Record<Cell, TranslationKey> = {
     afterSignIn: "signinLook.cmp.afterSignIn",
     emptyFrame: "signinLook.cmp.emptyFrame",
     unchanged: "signinLook.cmp.unchanged",
+    inFull: "signinLook.cmp.inFull",
+    brief: "signinLook.cmp.brief",
 };
 
 function CellText({ cell }: { cell: Cell }) {
     const { t } = useI18n();
-    const Icon = cell === "shown" ? Eye : cell === "hidden" || cell === "afterSignIn" ? EyeOff : null;
+    const Icon = cell === "shown" || cell === "inFull" ? Eye : cell === "hidden" || cell === "afterSignIn" || cell === "brief" ? EyeOff : null;
     return (
-        <span className={cn("inline-flex items-center gap-1 text-xs", cell === "shown" ? "text-foreground" : "text-muted-foreground")}>
+        <span className={cn("inline-flex items-center gap-1 text-xs", cell === "shown" || cell === "inFull" ? "text-foreground" : "text-muted-foreground")}>
             {Icon && <Icon size={13} aria-hidden />}
             {t(CELL_TEXT[cell])}
         </span>
@@ -286,8 +361,9 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
     const { t, tn } = useI18n();
     const style = styleOf(look, page);
     const styleName = t(style === "discreet" ? "signinLook.discreet" : "signinLook.standard");
-    const rows = ROWS.filter((r) => page !== "signin" || !r.oauthOnly);
+    const rows = ROWS.filter((r) => r.pages.includes(page));
     const cli = page === "cli";
+    const consent = page === "consent";
 
     return (
         <Modal
@@ -307,12 +383,14 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
             <div className="space-y-6">
                 <div className="space-y-2">
                     <FlowPath>
-                        {cli ? (
+                        {consent ? (
+                            <FlowNode icon={UserCheck} title={t("signinLook.flow.signedInUser")} sub={t("signinLook.flow.signedInSub")} state="ok" stateText={t("signinLook.flow.signedIn")} />
+                        ) : cli ? (
                             <FlowNode icon={SquareTerminal} title="telepy login" sub={t("signinLook.flow.cliSub")} state="waiting" stateText={t("signinLook.flow.signedOut")} />
                         ) : (
                             <FlowNode icon={Globe} title={t("signinLook.flow.visitor")} sub={t("signinLook.flow.visitorSub")} state="waiting" stateText={t("signinLook.flow.signedOut")} />
                         )}
-                        <FlowLink label={t("signinLook.flow.opens", { path: PATH[page] })} state="ok" />
+                        <FlowLink label={t("signinLook.flow.opens", { path: breakablePath(PATH[page]) })} state="ok" />
                         <FlowNode icon={SquareDashed} title={t("signinLook.flow.frame")} sub={t("signinLook.flow.frameSub")} state="ok" stateText={t("signinLook.flow.noCopy")} />
                         <FlowLink label={t("signinLook.flow.asks")} state="ok" />
                         <FlowNode
@@ -323,13 +401,22 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                             stateText={t("signinLook.flow.now")}
                             className="border-primary/60"
                         />
-                        <FlowLink label={t("signinLook.flow.signsIn")} state="waiting" />
-                        <FlowNode brand title={t("signinLook.flow.app")} sub={t("signinLook.flow.appSub")} state="waiting" stateText={t("signinLook.flow.afterSignIn")} />
+                        {consent ? (
+                            <>
+                                <FlowLink label={t("signinLook.flow.decides")} state="waiting" />
+                                <FlowNode icon={CornerDownLeft} title={t("signinLook.flow.backToApp")} sub={t("signinLook.flow.backToAppSub")} state="waiting" stateText={t("signinLook.flow.afterDecision")} />
+                            </>
+                        ) : (
+                            <>
+                                <FlowLink label={t("signinLook.flow.signsIn")} state="waiting" />
+                                <FlowNode brand title={t("signinLook.flow.app")} sub={t("signinLook.flow.appSub")} state="waiting" stateText={t("signinLook.flow.afterSignIn")} />
+                            </>
+                        )}
                     </FlowPath>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                         {tn("signinLook.flow.endpoint", { path: <code className="rounded-sm bg-muted px-1 font-mono">GET /api/auth/sign-in-page</code> })} {t("signinLook.flow.cached")}
                     </p>
-                    {page !== "signin" && (
+                    {(page === "oauth" || page === "cli") && (
                         <p className="text-xs leading-relaxed text-muted-foreground">
                             {tn("signinLook.flow.whichApp", { name: <code className="rounded-sm bg-muted px-1 font-mono">telepy CLI (…)</code> })}
                         </p>
@@ -337,7 +424,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                 </div>
 
                 <div>
-                    <h4 className="mb-2 text-sm text-foreground">{t("signinLook.cmp.title")}</h4>
+                    <h4 className="mb-2 text-sm text-foreground">{t(consent ? "signinLook.cmp.titleConsent" : "signinLook.cmp.title")}</h4>
                     <div className="overflow-hidden rounded-lg border border-border">
                         <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] text-sm">
                             <div className="bg-surface px-3 py-2 text-xs text-muted-foreground">{t("signinLook.cmp.item")}</div>

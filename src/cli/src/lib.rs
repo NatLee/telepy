@@ -17,6 +17,7 @@ pub mod tapi;
 #[path = "../../backend-api/src/mascot.rs"]
 pub mod mascot;
 pub mod oauth;
+pub mod signed_in;
 pub mod snippets;
 pub mod sshcfg;
 pub mod table;

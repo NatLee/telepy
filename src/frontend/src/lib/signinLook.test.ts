@@ -1,10 +1,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, allStandard, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
-    assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", message: "Hi" }), { style: "discreet", oauthStyle: "standard", cliStyle: "discreet", message: "Hi" });
-    assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", message: "" }), { style: "standard", oauthStyle: "discreet", cliStyle: "standard", message: "" });
+    assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", consent_style: "discreet", message: "Hi" }), {
+        style: "discreet",
+        oauthStyle: "standard",
+        cliStyle: "discreet",
+        consentStyle: "discreet",
+        message: "Hi",
+    });
+    assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", consentStyle: "standard", message: "" }), {
+        style: "standard",
+        oauthStyle: "discreet",
+        cliStyle: "standard",
+        consentStyle: "standard",
+        message: "",
+    });
+    // 舊後端 / 舊快取沒有授權頁那個：一般（以前就是這樣）。/ No approval-page look = standard, as before.
+    assert.equal(parseSignInLook({ style: "discreet", oauth_style: "discreet", cli_style: "discreet" })?.consentStyle, "standard");
+    assert.equal(parseSignInLook({ style: "standard", oauth_style: "standard", consent_style: "neon" })?.consentStyle, "standard");
     // 舊後端 / 舊快取沒有 CLI 那個：跟 OAuth 頁一樣（以前就是這樣）；不認得的值也是。/ No CLI look = the OAuth page's.
     assert.equal(parseSignInLook({ style: "standard", oauth_style: "discreet", message: "" })?.cliStyle, "discreet");
     assert.equal(parseSignInLook({ style: "standard", oauth_style: "standard", cli_style: "neon" })?.cliStyle, "standard");
@@ -22,6 +37,10 @@ test("each page reads its own look", () => {
     assert.equal(styleOf(look, "oauth"), "discreet");
     assert.equal(styleOf(look, "cli"), "standard");
     assert.equal(styleOf({ ...DEFAULT_LOOK, cliStyle: "discreet" }, "cli"), "discreet");
+    assert.equal(styleOf(look, "consent"), "standard", "the approval page has its own setting");
+    assert.equal(styleOf({ ...DEFAULT_LOOK, consentStyle: "discreet" }, "consent"), "discreet");
+    assert.equal(allStandard(DEFAULT_LOOK), true);
+    assert.equal(allStandard({ ...DEFAULT_LOOK, consentStyle: "discreet" }), false, "a discreet approval page uses the lines too");
 });
 
 test("the OAuth page uses the CLI look only when the telepy CLI is asking", () => {

@@ -220,9 +220,12 @@ async fn browser_sign_in_with_pkce_and_loopback() {
     assert_eq!(r.status.as_u16(), 200, "{}", r.text);
     let redirect = r.json["redirect_to"].as_str().unwrap().to_string();
     assert!(redirect.starts_with("http://127.0.0.1:"), "{redirect}");
-    // 瀏覽器打開 loopback 網址。/ The browser follows the loopback redirect.
+    // 瀏覽器打開 loopback 網址：CLI 換完 token 才回，把瀏覽器送到伺服器的完成頁。
+    // The browser follows the loopback redirect: the CLI answers after the exchange, sending it to the server's done page.
     let page = reqwest_get(&redirect).await;
-    assert!(page.contains("Signed in"), "{page}");
+    let client_id = url.query_pairs().find(|(k, _)| k == "client_id").unwrap().1.into_owned();
+    assert!(page.starts_with("HTTP/1.1 303"), "{page}");
+    assert!(page.contains(&format!("location: {base}/oauth/done?client_id={client_id}&result=ok\r\n")), "{page}");
     let status = child.wait().await.unwrap();
     let mut rest = String::new();
     while let Ok(Some(l)) = lines.next_line().await {
@@ -241,6 +244,32 @@ async fn browser_sign_in_with_pkce_and_loopback() {
     let o = telepy(&h, &["exec", "box", "--", "id"]).await;
     assert_ne!(o.code, 0);
     assert!(o.stderr.contains("ssh:exec"), "{}", o.stderr);
+
+    // 再登入一次、在同意頁按拒絕：完成頁說 denied，CLI 失敗。/ Again, denied on the approval page: the done page says so.
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_telepy"))
+        .args(["login", &base, "--no-browser"])
+        .env("HOME", &h)
+        .env("TELEPY_CONFIG_DIR", h.join("config"))
+        .env("TELEPY_NO_KEYRING", "1")
+        .env_remove("TELEPY_URL")
+        .env_remove("TELEPY_TOKEN")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
+    let url = loop {
+        let line = lines.next_line().await.unwrap().expect("the CLI printed the sign-in URL");
+        if let Some(u) = line.trim().strip_prefix("http") {
+            break url::Url::parse(&format!("http{u}")).unwrap();
+        }
+    };
+    let mut body: serde_json::Map<String, Value> = url.query_pairs().map(|(k, v)| (k.into_owned(), Value::String(v.into_owned()))).collect();
+    body.insert("approve".into(), json!(false));
+    let r = lab.app.post("/api/oauth/authorize", Some(&alice.token), Value::Object(body)).await;
+    let page = reqwest_get(r.json["redirect_to"].as_str().unwrap()).await;
+    assert!(page.starts_with("HTTP/1.1 303") && page.contains("&result=denied\r\n"), "{page}");
+    assert!(!child.wait().await.unwrap().success(), "a denied sign-in fails");
 }
 
 /// 最小的 HTTP GET（測試不想為了一個請求多拉 reqwest 的 async 版）。/ A minimal HTTP GET.
