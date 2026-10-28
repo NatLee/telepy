@@ -17,14 +17,15 @@
  * - Appearance: theme, display size (S/M/L + fine slider), card / list per page (on the account).
  * - Terminal: default font / size / colour scheme (a device's own override lives behind the terminal page's
  *   Appearance button), keeping shells after a disconnect.
- * - Remote desktop: clipboard direction (on the account, capped by the site setting), quality and sound defaults
+ * - Remote desktop: clipboard direction (on the account, capped by the site setting), quality, display (scaling,
+ *   resolution, HiDPI) and sound defaults
  *   (this browser). Changes apply instantly; account-level values sync to the backend UserSettings.
  * - Security: sign-in security (passkeys, authenticator app, recovery codes).
  * - Connected apps: authorized MCP / AI clients with revoke, plus a pointer to the MCP page.
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX, ZoomIn } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
@@ -50,8 +51,9 @@ import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useDesktopClipboard } from "@/hooks/useDesktopClipboard";
 import { useViewModes } from "@/hooks/useViewMode";
 import { VIEW_PAGES, viewModeOf } from "@/lib/viewModes";
-import { AUDIO_PREF_VALUES, CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, type AudioPref, type DesktopQuality } from "@/lib/desktop";
-import { useStoredChoice } from "@/hooks/useStoredChoice";
+import { DisplaySettings } from "@/components/desktop/DisplaySettings";
+import { useDesktopDisplay } from "@/hooks/useDesktopDisplay";
+import { CLIPBOARD_LABEL, CLIPBOARD_VALUES, clipboardAllowed, QUALITY_HINT, QUALITY_LABEL, QUALITY_VALUES, type AudioPref, type DesktopQuality } from "@/lib/desktop";
 import { resolveTerminalAppearance } from "@/lib/terminalAppearance";
 import { defaultsPatch, TerminalAppearanceFields, TerminalPreview } from "@/components/tunnels/TerminalAppearance";
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
@@ -91,9 +93,12 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
     const terminalLook = resolveTerminalAppearance(terminalDefaults, null, customSchemes);
     const clipboard = useDesktopClipboard();
     const [viewModes, setViewModeFor] = useViewModes();
-    // 遠端桌面頁用的同一組 localStorage 值(這台瀏覽器),改了那邊也跟著動。/ The desktop page's own per-browser choices.
-    const [quality, setQuality] = useStoredChoice<DesktopQuality>("telepy.desktopQuality", QUALITY_VALUES, "auto");
-    const [audio, setAudio] = useStoredChoice<AudioPref>("telepy.desktopAudio", AUDIO_PREF_VALUES, "off");
+    // 遠端桌面的偏好(存在帳號上;桌面頁讀寫同一份)。/ The remote desktop preferences, on the account (shared with the desktop page).
+    const [desktopPrefs, setDesktopPrefs] = useDesktopDisplay();
+    const quality = desktopPrefs.quality;
+    const setQuality = (q: DesktopQuality) => setDesktopPrefs({ quality: q });
+    const audio: AudioPref = desktopPrefs.audio ? "on" : "off";
+    const setAudio = (a: AudioPref) => setDesktopPrefs({ audio: a === "on" });
     const [chosenTab, setTab] = useState<PrefsTab>("general");
     // 從別的頁指定分頁打開。/ Opened at a given tab from another page.
     React.useEffect(() => {
@@ -307,7 +312,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             {tab === "desktop" && (
                 <div className="space-y-6">
                     {/* 遠端桌面剪貼簿（存在帳號上；超過站台上限的選項關掉）。/ Remote desktop clipboard (on the account; choices above the site's limit are disabled). */}
-                    <Section icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>
+                    <Section wrapTitle icon={<ClipboardPaste />} title={t("prefs.desktopClipboard")} description={t("prefs.desktopClipboardDescription")}>
                         <Segmented
                             fullWidth
                             options={CLIPBOARD_VALUES.map((v) => ({ value: v, label: t(CLIPBOARD_LABEL[v]), disabled: !clipboardAllowed(v, clipboard.limit) }))}
@@ -323,7 +328,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
                     {/* 畫質 / 聲音的預設:和遠端桌面頁的欄位是同一份(這台瀏覽器)。
                         Quality / sound defaults: the same values as the desktop page's fields (this browser). */}
-                    <Section icon={<Gauge />} title={t("desktop.field.quality")} description={t("prefs.desktopQualityDescription")}>
+                    <Section wrapTitle icon={<Gauge />} title={t("desktop.field.quality")} description={t("prefs.desktopQualityDescription")}>
                         <Segmented
                             fullWidth
                             options={QUALITY_VALUES.map((v) => ({ value: v, label: t(QUALITY_LABEL[v]) }))}
@@ -334,7 +339,13 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         <p className="text-xs text-muted-foreground">{t(QUALITY_HINT[quality])}</p>
                     </Section>
 
-                    <Section icon={<Volume2 />} title={t("desktop.field.sound")} description={t("prefs.desktopSoundDescription")}>
+                    {/* 顯示：縮放、解析度、HiDPI（這台瀏覽器；桌面頁的「顯示」選單是同一份）。
+                        Display: scaling, resolution, HiDPI (this browser; shared with the desktop page's Display menu). */}
+                    <Section wrapTitle icon={<ZoomIn />} title={t("desktop.display.title")} description={t("prefs.desktopDisplayDescription")}>
+                        <DisplaySettings />
+                    </Section>
+
+                    <Section wrapTitle icon={<Volume2 />} title={t("desktop.field.sound")} description={t("prefs.desktopSoundDescription")}>
                         <Segmented
                             fullWidth
                             options={[

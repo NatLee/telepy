@@ -47,7 +47,7 @@ function PartyHat({ className }: { className?: string }) {
 
 /** Tapi 跳出來的小卡（portal 到 body：logo 在連結裡，卡片裡的按鈕不能放進 <a>）。 */
 /** Tapi's card, portalled to body: the mark sits inside a link and a button cannot live in an <a>. */
-function FoundCard({ at, onClose }: { at: { left: number; top: number; first: boolean }; onClose: () => void }) {
+function FoundCard({ at, onClose }: { at: { left: number; top: number; first: boolean; banked: boolean }; onClose: () => void }) {
     const { t } = useI18n();
     useEffect(() => {
         const timer = setTimeout(onClose, CARD_MS);
@@ -71,6 +71,7 @@ function FoundCard({ at, onClose }: { at: { left: number; top: number; first: bo
                 <p className="text-sm text-foreground">{t("eggs.found.title")}</p>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("eggs.found.body")}</p>
                 {at.first && <p className="mt-1.5 text-xs leading-relaxed text-foreground">{t("eggs.found.unlocked")}</p>}
+                {at.first && at.banked && <p className="mt-1.5 text-xs leading-relaxed text-foreground">{t("eggs.found.banked")}</p>}
             </div>
             <button
                 type="button"
@@ -92,7 +93,7 @@ export function BrandMark({ collapsed = false, className, playful = false }: { c
     const tileRef = useRef<HTMLSpanElement | null>(null);
     const clicks = useRef<number[]>([]);
     const [drawing, setDrawing] = useState(0);
-    const [card, setCard] = useState<{ left: number; top: number; first: boolean } | null>(null);
+    const [card, setCard] = useState<{ left: number; top: number; first: boolean; banked: boolean } | null>(null);
     const closeCard = useCallback(() => setCard(null), []);
 
     const onClick = useCallback(() => {
@@ -106,7 +107,7 @@ export function BrandMark({ collapsed = false, className, playful = false }: { c
         // 第一次找到：解鎖「關於 Telepy」裡的「你的 Tapi」（存在帳號上）。/ The first find unlocks "Your Tapi" (on the account).
         const first = !tapi.unlocked;
         if (first) void tapi.save({ tapi_color: "teal" });
-        if (r) setCard({ left: Math.max(8, Math.min(r.left, window.innerWidth - 264)), top: r.bottom + 10, first });
+        if (r) setCard({ left: Math.max(8, Math.min(r.left, window.innerWidth - 264)), top: r.bottom + 10, first, banked: tapi.dailyUnlocked });
     }, [playful, tapi]);
 
     const title = festival?.kind === "lunarNewYear" ? t("eggs.lunarNewYear") : festival?.kind === "birthday" ? t("eggs.birthday", { age: festival.age }) : undefined;

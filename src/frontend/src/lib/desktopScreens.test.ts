@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { arrangeBySize, fitScale, guessScreens, parseStoredArea, placePositioned, rectFromPoints, screenChoices, splitChoices, type DetectedScreen } from "./desktopScreens.ts";
+import { arrangeBySize, guessScreens, parseStoredArea, placePositioned, rectFromPoints, screenChoices, splitChoices, type DetectedScreen } from "./desktopScreens.ts";
 
 const laptop: DetectedScreen = { name: "eDP-1", x: 0, y: 0, width: 1920, height: 1080, primary: true };
 const external: DetectedScreen = { name: "HDMI-1", x: 1920, y: 0, width: 2560, height: 1440, primary: false };
@@ -141,9 +141,3 @@ test("stored custom areas are validated against the picture", () => {
     assert.equal(parseStoredArea('{"x":"0","y":0,"width":900,"height":768}', fb), null);
 });
 
-test("fitScale never upscales past the cap", () => {
-    assert.equal(fitScale({ width: 1280, height: 720 }, { x: 0, y: 0, width: 2560, height: 1440 }), 0.5);
-    assert.equal(fitScale({ width: 4000, height: 4000 }, { x: 0, y: 0, width: 1920, height: 1080 }), 1);
-    assert.equal(fitScale({ width: 4000, height: 4000 }, { x: 0, y: 0, width: 1920, height: 1080 }, 0.5), 0.5);
-    assert.equal(fitScale({ width: 0, height: 0 }, { x: 0, y: 0, width: 1920, height: 1080 }), 1);
-});

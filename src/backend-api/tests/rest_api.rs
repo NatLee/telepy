@@ -339,10 +339,10 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
     // 各頁的卡片 / 清單顯示：整份取代，跟著帳號（profile 也帶）。/ Card / list per page: replaced whole, on the account (and the profile).
     let r = app.post("/api/user/settings", Some(&admin), json!({"view_modes": {"tunnels": "list", "key_groups": "card"}})).await;
     assert_eq!(r.json["view_modes"], json!({"key_groups": "card", "tunnels": "list"}), "{}", r.text);
@@ -353,6 +353,18 @@ async fn user_keys_settings_and_admin_users() {
     assert!(r.json["view_modes"][0].as_str().unwrap().starts_with("Must be an object"), "{}", r.text);
     let r = app.post("/api/user/settings", Some(&admin), json!({"view_modes": {"key_groups": "list"}})).await;
     assert_eq!(r.json["view_modes"], json!({"key_groups": "list"}), "{}", r.text);
+    // 遠端桌面顯示偏好：存在帳號上、整份取代、缺的補預設、百分比夾住、壞值 400、個人資料也帶。
+    // Desktop display preferences: on the account, replaced whole, defaults filled, percent clamped, bad values 400.
+    let r = app.post("/api/user/settings", Some(&admin), json!({"desktop_display": {"scale": "custom", "percent": 999, "resolution": "fixed", "width": 1600, "height": 900, "hidpi": true, "quality": "sharp", "audio": true}})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["desktop_display"], json!({"scale": "custom", "percent": 400, "resolution": "fixed", "width": 1600, "height": 900, "hidpi": true, "vnc_resize": false, "quality": "sharp", "audio": true}), "{}", r.text);
+    assert_eq!(app.get("/api/auth/user/profile", Some(&admin)).await.json["desktop_display"]["width"], 1600);
+    let r = app.post("/api/user/settings", Some(&admin), json!({"desktop_display": {"width": 50}})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["desktop_display"][0].as_str().unwrap().starts_with("Must be an object"), "{}", r.text);
+    assert_eq!(app.get("/api/user/settings", Some(&admin)).await.json["desktop_display"]["width"], 1600, "a refused value changes nothing");
+    let r = app.post("/api/user/settings", Some(&admin), json!({"desktop_display": null})).await;
+    assert_eq!(r.json["desktop_display"], Value::Null, "{}", r.text);
     // Tapi（彩蛋）：找到後存顏色；「每天換一個」要先看完片尾名單解鎖。/ Tapi: a colour once found; daily needs the credits.
     let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_color": "grape"})).await;
     assert_eq!((r.json["tapi_color"].as_str(), r.json["tapi_daily"].as_bool()), (Some("grape"), Some(false)), "{}", r.text);

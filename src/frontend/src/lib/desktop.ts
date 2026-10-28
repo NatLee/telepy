@@ -77,23 +77,21 @@ export interface DesktopStart {
     quality: DesktopQuality;
     /** 這次有聲音（只有 RDP）。/ Sound is on for this session (RDP only). */
     audio?: boolean;
+    /** 遠端解析度跟著框走（瀏覽器送 `size`）。/ The remote resolution follows the frame. */
+    resize?: boolean;
+    /** 站台的解析度上限（長邊）。/ The site's resolution ceiling (longer side). */
+    max_resolution?: number;
     target: { host: string; port: number; label: string; lan_host_id: number | null };
     username: string;
 }
 
-/** 聲音偏好（localStorage `telepy.desktopAudio`，預設關：吃頻寬）。/ The sound preference (off by default: it costs bandwidth). */
+/** 聲音偏好（帳號上的遠端桌面偏好 `audio`，預設關：吃頻寬）。/ The sound preference (on the account; off by default: it costs bandwidth). */
 export type AudioPref = "on" | "off";
 export const AUDIO_PREF_VALUES: readonly AudioPref[] = ["on", "off"];
 
 /** 這種連法有沒有聲音可開：RDP、RustDesk 有；guacd 的 VNC 沒有。/ Whether this mode can carry sound (not guacd's VNC). */
 export function soundAvailable(mode: DesktopMode): boolean {
     return mode !== "vnc";
-}
-
-/** sharp 時向 guacd 要原生解析度的倍率（最多 2 倍）。/ The HiDPI factor requested for the sharp preset (capped at 2). */
-export function pixelRatioFor(quality: DesktopQuality, devicePixelRatio: number): number {
-    if (quality !== "sharp") return 1;
-    return Math.min(2, Math.max(1, Math.round(devicePixelRatio * 100) / 100));
 }
 
 /** Ctrl 是否送成 ⌘。/ Whether Control goes out as Command. */

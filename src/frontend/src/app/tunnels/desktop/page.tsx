@@ -13,7 +13,7 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, FolderOpen, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, TextCursorInput, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, ClipboardPaste, Crop, ExternalLink, FolderOpen, Info, KeyRound, Keyboard, Loader2, Maximize2, Minimize2, Monitor, MonitorX, Plus, RefreshCw, Route, ScreenShare, Settings2, Shrink, TextCursorInput, XCircle } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { RustDeskFiles } from "@/components/desktop/RustDeskFiles";
 import { hasAudioDecoder, streamRows } from "@/lib/desktopStreams";
@@ -54,6 +54,11 @@ import { wayFor } from "@/lib/connectionWays";
 import { RustDeskSetup } from "@/components/desktop/RustDeskSetup";
 import { setupStatus, tunnelProblem } from "@/lib/rustdeskSetup";
 import { DesktopStatsButton } from "@/components/desktop/DesktopStats";
+import { DisplayMenu } from "@/components/desktop/DisplayMenu";
+import { EMPTY_ZOOM, type ZoomInfo } from "@/hooks/useDesktopZoom";
+import { followsWindow, resolutionStatus, sizeLabel } from "@/lib/desktopDisplay";
+import { SCALE_LABEL } from "@/components/desktop/DisplaySettings";
+import { openPreferences } from "@/components/layout/UserPreferencesModal";
 import type { FlowContext } from "@/components/desktop/DesktopFlow";
 import { CommandBar } from "@/components/cheatsheet/CommandView";
 import { useDesktopPage } from "@/hooks/useDesktopPage";
@@ -72,18 +77,32 @@ const CARD = "rounded-xl border border-border bg-card shadow-card";
  * icon-only buttons; wider screens flow as before. 協定 chip 手機上不顯示（說明和延遲面板都有）。/ The protocol chip is
  * hidden on phones (the info dialog and the stats panel name it).
  */
-const TOOLBAR = "flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-border bg-card px-3 py-2 sm:gap-2";
-const TOOLBAR_TARGET = "flex min-w-0 basis-full items-center gap-2 sm:basis-auto";
+const TOOLBAR = "flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-border bg-card px-3 py-2 sm:flex-nowrap sm:gap-2";
+/* 從 sm 起工具列一行：目標名稱讓位（截斷），按鈕不換行 —— 換行會把畫面框往下推出視窗。
+ * From sm up the toolbar is one row: the target name gives way (truncates) so buttons never wrap and push the frame down. */
+const TOOLBAR_TARGET = "flex min-w-0 basis-full items-center gap-2 sm:flex-initial sm:basis-auto";
 const TARGET_LABEL = "line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere] sm:truncate";
 const TOOL = "max-sm:has-[>svg]:px-1.5";
+/** 工具列按鈕的文字：側欄旁 1440 寬時放不下一行（會把「中斷連線」擠到第二行、畫面框被往下推），寬螢幕才顯示。
+ * Toolbar button labels: at 1440 px beside the sidebar they no longer fit one row, so only wide screens show them. */
+const TOOL_LABEL = "hidden min-[96rem]:inline";
 /**
  * 畫面框：RDP 的解析度跟著框走，所以照舊佔滿高度；VNC / RustDesk 的解析度固定，手機上框改成畫面的比例
  * （不再是高高的黑框中間一張小圖），最高不超過原本的高度。
  * The screen frame: RDP sizes the remote desktop to the frame, so it keeps the full height; VNC / RustDesk have a
  * fixed resolution, so on phones the frame takes the picture's shape instead of a tall black box around a small picture.
  */
-const SCREEN_TALL = "h-[calc(100dvh-15rem)] min-h-80";
-const SCREEN_FITTED = `${SCREEN_TALL} max-sm:aspect-(--screen-ratio) max-sm:h-auto max-sm:max-h-[calc(100dvh-15rem)] max-sm:min-h-0`;
+/*
+ * 高度 = 視窗 − 黏著的頁首（4rem）− 工具列 − 一點邊距：連線時卡片捲到頁首下方（scroll-mt），畫面框剛好佔滿看得到的高度
+ * （以前是 100dvh − 15rem 又不捲，標題和說明佔掉上面、框的下緣還在視窗外）。
+ * （手機上工具列兩行，多扣 2.5rem。）Height = viewport − the sticky header (4rem) − the toolbar (two rows on phones, 2.5rem more) − a margin: on connect the card scrolls up under the
+ * header, so the frame fills the visible height (it used to be 100dvh − 15rem without scrolling, and its bottom
+ * edge sat below the window).
+ */
+const SCREEN_TALL = "h-[calc(100dvh-11rem)] min-h-80 sm:h-[calc(100dvh-8.5rem)]";
+/** 「佔滿瀏覽器視窗」：整個視窗，蓋住側欄與頁首。/ "Fill the browser window": the whole viewport over the app chrome. */
+const FILLED = "fixed inset-0 z-40 bg-black";
+const SCREEN_FITTED = `${SCREEN_TALL} max-sm:aspect-(--screen-ratio) max-sm:h-auto max-sm:max-h-[calc(100dvh-11rem)] max-sm:min-h-0`;
 const screenRatio = (size: { width: number; height: number } | null) =>
     ({ "--screen-ratio": size && size.width > 0 && size.height > 0 ? `${size.width} / ${size.height}` : "16 / 10" }) as React.CSSProperties;
 
@@ -131,6 +150,10 @@ function DesktopPageInner() {
     const liveId = session?.session_id ?? rdSession?.session_id ?? null;
     const remoteClip = remoteClipState && liveId !== null && remoteClipState.sid === liveId ? remoteClipState.text : null;
     const [fullscreen, setFullscreen] = useState(false);
+    // 「佔滿瀏覽器視窗」：蓋住側欄與頁首（不是瀏覽器的全螢幕；Esc 留給遠端）。/ Fill the browser window (not full screen; Esc stays with the remote).
+    const [fill, setFill] = useState(false);
+    // 縮放狀態（viewer 回報，工具列顯示百分比）。/ The zoom the viewer reports, for the toolbar.
+    const [zoomInfo, setZoomInfo] = useState<ZoomInfo>(EMPTY_ZOOM);
     // 聲音：RDP 的靜音（只在這一頁，串流照收）與「正在播」；RustDesk 直接切 disable-audio。檔案面板：RustDesk 才有。
     // Sound: RDP's local mute and "playing" indicator; RustDesk switches disable-audio itself. Files panel: RustDesk only.
     const [mutedState, setMuted] = useState<{ sid: string; muted: boolean } | null>(null);
@@ -160,6 +183,11 @@ function DesktopPageInner() {
         const id = setInterval(() => setNow(Date.now()), 1000);
         return () => clearInterval(id);
     }, [phase]);
+    // 開始連線、離開「佔滿視窗」：卡片捲到頁首下方，畫面框佔滿看得到的高度（佔滿時頁面變短、捲動位置會歸零）。
+    // On connect and after leaving "fill the window", scroll the card up under the header (filling resets the page scroll).
+    useEffect(() => {
+        if (liveId && !fill) wrapRef.current?.scrollIntoView({ block: "start" });
+    }, [liveId, fill]);
     useEffect(() => {
         const onChange = () => setFullscreen(document.fullscreenElement === wrapRef.current && !!wrapRef.current);
         document.addEventListener("fullscreenchange", onChange);
@@ -288,12 +316,12 @@ function DesktopPageInner() {
             <PageHeader icon={<ScreenShare />} title={t("desktop.title")} description={t("desktop.description")} actions={!session && !rdSession && headerActions} />
 
             {session ? (
-                <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
+                <div ref={wrapRef} className={cn("flex scroll-mt-[4.5rem] flex-col overflow-hidden", fullscreen ? "h-full bg-black" : fill ? FILLED : CARD)}>
                     <div className={TOOLBAR}>
                         <div className={TOOLBAR_TARGET}>
                             <StatusDot online={connected} />
                             <span className={TARGET_LABEL} title={targetLabel}>{targetLabel}</span>
-                            <Chip mono className="shrink-0 max-sm:hidden">{MODE_LABEL[form.protocol]}</Chip>
+                            <Chip mono className="hidden shrink-0 min-[96rem]:inline-flex">{MODE_LABEL[form.protocol]}</Chip>
                             {connected && connectedAt && <Chip mono className="shrink-0">{formatElapsed((now - connectedAt) / 1000)}</Chip>}
                             {disconnectButton(viewerRef, "ml-auto shrink-0 sm:hidden")}
                         </div>
@@ -304,7 +332,7 @@ function DesktopPageInner() {
                                 <DropdownMenuTrigger asChild>
                                     <Button size="sm" variant="ghost" className={TOOL} disabled={!connected || selecting} title={t("desktop.screen.menu")}>
                                         <Monitor size={15} />
-                                        <span className="hidden max-w-32 truncate sm:inline">{chosen ? choiceLabel(chosen) : t("desktop.screen.whole")}</span>
+                                        <span className={cn(TOOL_LABEL, "max-w-32 truncate")}>{chosen ? choiceLabel(chosen) : t("desktop.screen.whole")}</span>
                                         <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                     </Button>
                                 </DropdownMenuTrigger>
@@ -368,10 +396,22 @@ function DesktopPageInner() {
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         )}
+                        <DisplayMenu
+                            info={zoomInfo}
+                            commands={() => viewerRef.current?.zoom}
+                            status={resolutionStatus(session.protocol, !!session.resize)}
+                            remoteSize={framebuffer}
+                            hidpi={state.display.hidpi}
+                            onHidpi={(on) => actions.setDisplay({ hidpi: on })}
+                            fill={fill}
+                            onFill={setFill}
+                            disabled={!connected || selecting}
+                            className={TOOL}
+                        />
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button size="sm" variant="ghost" className={TOOL} disabled={!connected || selecting} title={t("desktop.keyboard.menu")}>
-                                    <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
+                                    <Keyboard size={15} /> <span className={TOOL_LABEL}>{t("desktop.keyboard.menu")}</span>
                                     <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
@@ -409,7 +449,12 @@ function DesktopPageInner() {
                         )}
                         {clipboard !== "off" && (
                             <Button size="sm" variant="ghost" className={TOOL} onClick={() => setPasteOpen(true)} disabled={!connected || selecting} title={t("desktop.pasteTitle")}>
-                                <ClipboardPaste size={15} /> <span className="hidden md:inline">{t("desktop.paste")}</span>
+                                <ClipboardPaste size={15} /> <span className={TOOL_LABEL}>{t("desktop.paste")}</span>
+                            </Button>
+                        )}
+                        {fill && !fullscreen && (
+                            <Button size="sm" variant="secondary" className={TOOL} onClick={() => setFill(false)} title={t("desktop.display.fillExit")} aria-label={t("desktop.display.fillExit")}>
+                                <Shrink size={15} /> <span className={TOOL_LABEL}>{t("desktop.display.fillExit")}</span>
                             </Button>
                         )}
                         <Button size="sm" variant="ghost" className={TOOL} onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
@@ -427,7 +472,7 @@ function DesktopPageInner() {
                             <CopyButton value={remoteClip} />
                         </div>
                     )}
-                    <div className={cn("relative", fullscreen ? "flex-1" : session.protocol === "vnc" ? SCREEN_FITTED : SCREEN_TALL)} style={screenRatio(viewport ?? framebuffer)}>
+                    <div className={cn("relative", fullscreen || fill ? "min-h-0 flex-1" : session.protocol === "vnc" && !session.resize ? SCREEN_FITTED : SCREEN_TALL)} style={screenRatio(viewport ?? framebuffer)}>
                         <DesktopViewer
                             ref={viewerRef}
                             start={session}
@@ -435,6 +480,8 @@ function DesktopPageInner() {
                             selecting={selecting}
                             onAreaSelected={actions.finishSelecting}
                             pixelRatio={pixelRatio}
+                            display={state.display}
+                            onZoom={setZoomInfo}
                             ctrlAsCmd={ctrlAsCmd}
                             onConnected={actions.onConnected}
                             onEnded={actions.onEnded}
@@ -458,12 +505,12 @@ function DesktopPageInner() {
                     </div>
                 </div>
             ) : rdSession ? (
-                <div ref={wrapRef} className={cn("flex flex-col overflow-hidden", fullscreen ? "h-full bg-black" : CARD)}>
+                <div ref={wrapRef} className={cn("flex scroll-mt-[4.5rem] flex-col overflow-hidden", fullscreen ? "h-full bg-black" : fill ? FILLED : CARD)}>
                     <div className={TOOLBAR}>
                         <div className={TOOLBAR_TARGET}>
                             <StatusDot online={connected} />
                             <span className={TARGET_LABEL} title={targetLabel}>{targetLabel}</span>
-                            <Chip mono className="shrink-0 max-sm:hidden">RustDesk</Chip>
+                            <Chip mono className="hidden shrink-0 min-[96rem]:inline-flex">RustDesk</Chip>
                             {connected && connectedAt && <Chip mono className="shrink-0">{formatElapsed((now - connectedAt) / 1000)}</Chip>}
                             {disconnectButton(rdViewerRef, "ml-auto shrink-0 sm:hidden")}
                         </div>
@@ -473,7 +520,7 @@ function DesktopPageInner() {
                             <DropdownMenuTrigger asChild>
                                 <Button size="sm" variant="ghost" className={TOOL} disabled={!connected} title={t("desktop.screen.menu")}>
                                     <Monitor size={15} />
-                                    <span className="hidden max-w-32 truncate sm:inline">{rdInfo && rdInfo.displays.length > 1 ? t("desktop.screen.display", { n: rdInfo.currentDisplay + 1 }) : t("desktop.screen.whole")}</span>
+                                    <span className={cn(TOOL_LABEL, "max-w-32 truncate")}>{rdInfo && rdInfo.displays.length > 1 ? t("desktop.screen.display", { n: rdInfo.currentDisplay + 1 }) : t("desktop.screen.whole")}</span>
                                     <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
@@ -500,10 +547,22 @@ function DesktopPageInner() {
                                 </DropdownMenuRadioGroup>
                             </DropdownMenuContent>
                         </DropdownMenu>
+                        <DisplayMenu
+                            info={zoomInfo}
+                            commands={() => rdViewerRef.current?.zoom}
+                            status="remote"
+                            remoteSize={rdDisplay}
+                            hidpi={null}
+                            onHidpi={() => undefined}
+                            fill={fill}
+                            onFill={setFill}
+                            disabled={!connected}
+                            className={TOOL}
+                        />
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button size="sm" variant="ghost" className={TOOL} disabled={!connected} title={t("desktop.keyboard.menu")}>
-                                    <Keyboard size={15} /> <span className="hidden md:inline">{t("desktop.keyboard.menu")}</span>
+                                    <Keyboard size={15} /> <span className={TOOL_LABEL}>{t("desktop.keyboard.menu")}</span>
                                     <ChevronDown size={13} className="hidden text-muted-foreground sm:block" aria-hidden />
                                 </Button>
                             </DropdownMenuTrigger>
@@ -531,8 +590,13 @@ function DesktopPageInner() {
                             />
                         )}
                         <Button size="sm" variant={filesOpen ? "secondary" : "ghost"} className={TOOL} onClick={() => setFilesFor(filesOpen ? null : rdSession.session_id)} disabled={!connected || !fileTransfer} aria-pressed={filesOpen} title={fileTransfer ? t("desktop.files.button") : t("desktop.files.err.disabled")}>
-                            <FolderOpen size={15} /> <span className="hidden md:inline">{t("desktop.files.button")}</span>
+                            <FolderOpen size={15} /> <span className={TOOL_LABEL}>{t("desktop.files.button")}</span>
                         </Button>
+                        {fill && !fullscreen && (
+                            <Button size="sm" variant="secondary" className={TOOL} onClick={() => setFill(false)} title={t("desktop.display.fillExit")} aria-label={t("desktop.display.fillExit")}>
+                                <Shrink size={15} /> <span className={TOOL_LABEL}>{t("desktop.display.fillExit")}</span>
+                            </Button>
+                        )}
                         <Button size="sm" variant="ghost" className={TOOL} onClick={toggleFullscreen} title={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")} aria-label={fullscreen ? t("desktop.exitFullscreen") : t("desktop.fullscreen")}>
                             {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                         </Button>
@@ -548,8 +612,8 @@ function DesktopPageInner() {
                             <CopyButton value={remoteClip} />
                         </div>
                     )}
-                    <div className={cn("flex min-h-0 flex-col lg:flex-row", fullscreen && "flex-1")}>
-                    <div className={cn("relative min-w-0 lg:flex-1", fullscreen ? "flex-1" : SCREEN_FITTED)} style={screenRatio(rdDisplay)}>
+                    <div className={cn("flex min-h-0 flex-col lg:flex-row", (fullscreen || fill) && "flex-1")}>
+                    <div className={cn("relative min-w-0 lg:flex-1", fullscreen || fill ? "min-h-0 flex-1" : SCREEN_FITTED)} style={screenRatio(rdDisplay)}>
                         <RustDeskViewer
                             audio={state.audio}
                             onSound={onSound}
@@ -561,6 +625,8 @@ function DesktopPageInner() {
                             onPeerInfo={actions.onRdPeerInfo}
                             onStats={actions.onRdStats}
                             onRemoteClipboard={onRemoteClipboard}
+                            display={state.display}
+                            onZoom={setZoomInfo}
                         />
                         {!connected && (
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-4 text-center text-sm text-white">
@@ -704,6 +770,8 @@ function ConnectPanel({ state, actions, onInfo, onCompare }: { state: PageState;
                 </Field>
 
                 <ClipboardField state={state} actions={actions} rustdesk={isRustDesk} />
+
+                <DisplayField state={state} />
 
                 {soundAvailable(form.protocol) && (
                     <Field label={t("desktop.field.sound")} hint={t(isRustDesk ? "desktop.sound.hintRd" : "desktop.sound.hintRdp")}>
@@ -897,5 +965,32 @@ function RustDeskPanel({ state, actions }: { state: PageState; actions: PageActi
                 )}
             </div>
         </div>
+    );
+}
+
+/**
+ * 連線前的「顯示」欄：目前的預設（縮放 · 解析度怎麼來）+ 這種方式什麼會跟著視窗；改在偏好設定裡（和連線中的「顯示」選單同一份）。
+ * The connect form's Display field: the current defaults, what follows the window for this way, and a link to change them.
+ */
+function DisplayField({ state }: { state: PageState }) {
+    const { t } = useI18n();
+    const { display, form } = state;
+    const follows = followsWindow(display, form.protocol);
+    const scale = display.scale === "custom" ? `${display.percent}%` : t(SCALE_LABEL[display.scale]);
+    const res = form.protocol === "rdp"
+        ? (follows ? t("desktop.display.sum.window") : t("desktop.display.sum.fixed", { size: sizeLabel(display.fixed) }))
+        : form.protocol === "vnc" && follows ? t("desktop.display.sum.vncAsk") : t("desktop.display.sum.remote");
+    const hint: TranslationKey = form.protocol === "rdp" ? "desktop.display.dynamic.rdp" : form.protocol === "vnc" ? "desktop.display.dynamic.vnc" : "desktop.display.dynamic.rustdesk";
+    return (
+        <Field label={t("desktop.display.title")} hint={t(hint)}>
+            <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="min-w-0 flex-1 text-sm text-foreground">
+                    {scale} · {res}{display.hidpi && form.protocol !== "rustdesk" ? " · HiDPI" : ""}
+                </span>
+                <Button type="button" size="sm" variant="outline" onClick={() => openPreferences("desktop")}>
+                    <Settings2 size={14} /> {t("desktop.display.change")}
+                </Button>
+            </div>
+        </Field>
     );
 }

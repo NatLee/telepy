@@ -23,6 +23,8 @@ export interface UserProfile {
     terminal_ligatures?: boolean;
     /** 各頁的卡片 / 清單顯示（lib/viewModes.ts）。/ Card / list view per page. */
     view_modes?: Record<string, string>;
+    /** 遠端桌面的偏好（null = 帳號還沒選過）。/ Remote desktop preferences (null = never chosen). */
+    desktop_display?: unknown;
     /** Tapi（彩蛋）十字髮夾的顏色；空 = 還沒找到 Tapi；`daily` = 每天換一個。/ Tapi's clip colour; empty = not found yet. */
     tapi_color?: string;
     /** 「每天換一個」解鎖了（看完片尾名單）。/ "Daily" is unlocked (watched the credits). */

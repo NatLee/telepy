@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, parseClientIpCheck, probeOutcome, type ClientIpCheck } from "./clientIp.ts";
+import { PROBE_FORWARDED_FOR, PROBE_REAL_IP, checkPassed, hopState, parseClientIpCheck, probeOutcome, viaCdn, type ClientIpCheck } from "./clientIp.ts";
 
 const production = {
     ip: "172.19.0.1",
@@ -54,4 +54,12 @@ test("the made-up address test says which header leaked through", () => {
     assert.equal(probeOutcome(at(PROBE_REAL_IP)), "real_ip");
     assert.equal(probeOutcome(at(PROBE_FORWARDED_FOR)), "forwarded_for");
     assert.equal(probeOutcome(at("172.19.0.1")), "safe");
+});
+
+test("a CDN counts only when its own header arrived", () => {
+    const c = parseClientIpCheck(production)!;
+    assert.equal(viaCdn(c), false, "x-real-ip is set by the proxy, not a CDN");
+    const cf = parseClientIpCheck({ ...production, headers: [...production.headers, { name: "cf-connecting-ip", value: "203.0.113.9", addresses: [{ ip: "203.0.113.9", scope: "public" }] }] })!;
+    assert.equal(viaCdn(cf), true);
+    assert.equal(viaCdn({ ...c, headers: [{ name: "True-Client-IP", value: "", addresses: [] }] }), true);
 });

@@ -7,7 +7,8 @@
  *   同一條；後端看第一則訊息分角色）→ `session_add_sync {id: 目標位址, password}` → `session_start`。
  *   密碼由核心在瀏覽器裡做雜湊挑戰，不會送到 Telepy。不加密的直連會跳 msgbox，這裡自動確認（隧道本身加密）。
  * - 影像：`onVideoFrame(display, VideoFrame)` 畫到 canvas，`onRgba` 備援；canvas 等比縮進框裡，滑鼠座標除以比例。
- * - 縮放：雙指捏合 / 拖曳（useDesktopZoom），手機上被縮小的畫面一打開放大一級；canvas 放在裁切框裡、往左上挪平移量。
+ * - 縮放（useDesktopZoom）：解析度由遠端決定（網頁核心沒有實作改解析度），只在瀏覽器裡縮放 —— 塞進框裡 / 只縮不放 /
+ *   1:1 / 自訂百分比，工具列與手機上的 − / % / + 都能改，雙指捏合 / 拖曳；canvas 放在裁切框裡、往左上挪平移量。
  * - 鍵盤：焦點放在隱藏的 textarea（輸入法才能組字），按鍵走 `input_key`（legacy 鍵名），組好的字走 `input_string`。
  * - 游標：`cursor_data`（RGBA）→ data URL → CSS cursor，`cursor_id` 切換。
  * - 聲音：核心自己解（WebCodecs Opus → AudioContext）。關掉 = 這台的 `disable-audio`（登入時就請裝置別送，不是只靜音）；
@@ -26,7 +27,9 @@ import type { DesktopFailure } from "@/lib/desktop";
 import type { StreamStats } from "@/lib/desktopStats";
 import { EMPTY_SNAPSHOT, type SoundSnapshot } from "@/lib/desktopSound";
 import { installRustDeskTap, sameSnapshot, SoundTap } from "@/lib/soundTap";
-import { useDesktopZoom } from "@/hooks/useDesktopZoom";
+import { useDesktopZoom, type ZoomInfo } from "@/hooks/useDesktopZoom";
+import type { ZoomCommands } from "@/components/desktop/DesktopViewer";
+import type { DisplayPrefs } from "@/lib/desktopDisplay";
 import { ZoomControl } from "@/components/desktop/ZoomControl";
 import {
     classifyMsgbox,
@@ -56,6 +59,8 @@ export interface RustDeskViewerHandle {
     focus: () => void;
     /** 在點擊裡呼叫：讓被自動播放限制擋住的聲音動起來。/ From a click: let sound the browser held back play. */
     resumeSound: () => void;
+    /** 工具列的縮放。/ The toolbar's zoom commands. */
+    zoom: ZoomCommands;
 }
 
 export type RustDeskQuality = "best" | "balanced" | "low";
@@ -73,6 +78,10 @@ interface Props {
     audio: boolean;
     /** 聲音的狀況變了。/ The sound's situation changed. */
     onSound?: (snapshot: SoundSnapshot) => void;
+    /** 顯示偏好（縮放方式）。/ Display preferences (the scaling mode). */
+    display: DisplayPrefs;
+    /** 縮放狀態變了。/ The zoom changed. */
+    onZoom?: (info: ZoomInfo) => void;
 }
 
 type Globals = Partial<RustDeskCore> & {
@@ -83,7 +92,7 @@ type Globals = Partial<RustDeskCore> & {
     onInitFinished?: (() => void) | null;
 };
 
-export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, audio, onSound }, ref) {
+export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function RustDeskViewer({ start, password, onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, audio, onSound, display, onZoom }, ref) {
     const { t } = useI18n();
     const frameRef = useRef<HTMLDivElement | null>(null);
     const hostRef = useRef<HTMLDivElement | null>(null);
@@ -105,11 +114,17 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         callbacks.current = { onConnected, onEnded, onPeerInfo, onStats, onRemoteClipboard, onSound };
     });
     const [focused, setFocused] = useState(false);
-    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => true);
+    const zoom = useDesktopZoom(frameRef, () => rescaleRef.current?.(), () => true, { mode: display.scale, percent: display.percent });
     const zoomRef = useRef({ layout: zoom.layout, restart: zoom.restart });
+    const zoomCmds = useRef<ZoomCommands>(zoom);
     useLayoutEffect(() => {
         zoomRef.current = { layout: zoom.layout, restart: zoom.restart };
+        zoomCmds.current = zoom;
     });
+    const zoomInfo = zoom.info;
+    useEffect(() => {
+        onZoom?.(zoomInfo);
+    }, [zoomInfo, onZoom]);
 
     const call = (name: string, arg?: unknown) => {
         const core = coreRef.current;
@@ -125,6 +140,7 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
         setQuality: (quality: RustDeskQuality) => call("image_quality", quality),
         focus: () => sinkRef.current?.focus(),
         resumeSound: () => soundRef.current.resume(),
+        zoom: { zoomIn: () => zoomCmds.current.zoomIn(), zoomOut: () => zoomCmds.current.zoomOut(), setMode: (m) => zoomCmds.current.setMode(m), setPercent: (p) => zoomCmds.current.setPercent(p) },
     }), []);
 
     useEffect(() => {
@@ -144,14 +160,13 @@ export const RustDeskViewer = forwardRef<RustDeskViewerHandle, Props>(function R
             callbacks.current.onEnded(failure);
         };
 
-        // 等比縮進框裡（不放大過 1:1），再乘上縮放倍率；host 是裁切框，canvas 往左上挪平移量。
-        // Fit the canvas into the frame (never above 1:1), times the zoom; the host clips, the canvas shifts by the pan.
+        // 比例由縮放模式決定（1:1 = 一個遠端像素一個 CSS px）；host 是裁切框，canvas 往左上挪平移量。
+        // The scale comes from the zoom mode (1:1 = one remote pixel per CSS px); the host clips, the canvas shifts by the pan.
         const rescale = () => {
             const { width, height } = sizeRef.current;
             if (!width || !height) return;
             const box = frame.getBoundingClientRect();
-            const fit = Math.min(box.width / width, box.height / height, 1);
-            const l = zoomRef.current.layout(box, { width, height }, fit, fit < 0.99);
+            const l = zoomRef.current.layout(box, { width, height }, 1);
             scaleRef.current = l.scale;
             host.style.width = `${l.hostWidth}px`;
             host.style.height = `${l.hostHeight}px`;

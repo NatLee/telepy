@@ -186,6 +186,7 @@ async fn profile(State(state): State<AppState>, AuthUser(user): AuthUser, d: cra
         "terminal_bold": settings.as_ref().map(|s| s.terminal_bold.clone()).unwrap_or_else(|| "face".into()),
         "terminal_ligatures": settings.as_ref().map(|s| s.terminal_ligatures).unwrap_or(false),
         "view_modes": settings.as_ref().map(|s| super::users::view_modes_json(&s.view_modes)).unwrap_or_else(|| json!({})),
+        "desktop_display": settings.as_ref().map(|s| crate::desktop::display::json(&s.desktop_display)).unwrap_or(Value::Null),
         // Tapi（彩蛋吉祥物）：十字髮夾顏色（空 = 還沒找到）與「每天換一個」解鎖了沒。/ Tapi's clip colour and the daily unlock.
         "tapi_color": settings.as_ref().map(|s| s.tapi_color.clone()).unwrap_or_default(),
         "tapi_daily": settings.as_ref().is_some_and(|s| s.tapi_daily),

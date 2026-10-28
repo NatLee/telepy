@@ -475,6 +475,18 @@
     position: fixed !important;
   }
 
+  /* 片尾名單的像素圖是有背景色的空白格。畫面縮小（transform: scale）時，每一列的上下緣會反鋸齒，列與列之間
+     透出一條細線；讓每格背景往下多蓋 1px（壓在下一列底下），接縫就被填滿。只用在片尾名單（CastPlayer pixelArt）。
+     The credits draw pixels as background-coloured cells. Scaled down (transform: scale), each row's edges are
+     anti-aliased and a hairline shows between rows; letting every cell reach 1px into the next row fills the
+     seam. Credits only (CastPlayer pixelArt). */
+  .cast-pixel-art .xterm-rows > div {
+    overflow: visible !important;
+  }
+  .cast-pixel-art .xterm-rows span {
+    height: calc(100% + 1px) !important;
+  }
+
   /* 沒有粗體可用,<strong> 改成螢光筆底線式強調(跟著文字顏色)。
      With no bold to fall back on, <strong> becomes a highlighter mark tinted by the text colour. */
   strong,
