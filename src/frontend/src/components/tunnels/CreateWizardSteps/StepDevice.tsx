@@ -6,7 +6,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, KeyRound, Loader2, Lock, ShieldAlert } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, KeyRound, Laptop, Loader2, Lock, ShieldAlert } from "lucide-react";
 import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -119,6 +119,12 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                         </p>
                     )}
                     {kc.kind !== "private" && <FieldError>{d.errors.key}</FieldError>}
+                    {/* 貼的是自己的個人金鑰：可以，但只適合「這台就是你平常用的電腦」。/ Your own personal key: fine only for the computer you work from. */}
+                    {kc.kind === "valid" && !d.errors.key && d.ownPersonalKey && (
+                        <Callout tone="info" className="mt-2" icon={<Laptop size={17} className="mt-0.5 shrink-0" aria-hidden />}>
+                            {t("wizard.device.keyOwnPersonal", { name: d.ownPersonalKey })}
+                        </Callout>
+                    )}
                     {kc.kind === "empty" && !d.errors.key && (
                         <p className="text-xs text-muted-foreground">{t("wizard.device.keyHelper")}</p>
                     )}

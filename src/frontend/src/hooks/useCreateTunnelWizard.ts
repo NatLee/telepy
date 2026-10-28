@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { useI18n } from "@/lib/i18n";
 import {
+    bareKey,
     checkPublicKey,
     classifyLoginError,
     isValidTunnelName,
@@ -103,7 +104,10 @@ export function useCreateTunnelWizard() {
     // 裝置的金鑰清單從哪裡開始："mine" = 我所有的金鑰（Telepy 連上後自己裝），"empty" = 空的。
     // Where the device key list starts: "mine" = all my keys (Telepy installs them itself), "empty" = nothing.
     const [keyList, setKeyList] = useState<"mine" | "empty">("mine");
-    const [myKeyCount, setMyKeyCount] = useState<number | null>(null);
+    // 我的個人金鑰（名稱 + 去掉註解的公鑰）：數量決定「放入我的金鑰」能不能選，公鑰用來認出「貼的就是我的個人金鑰」。
+    // My personal keys (name + comment-free key): the count gates "install my keys", the keys spot a pasted personal key.
+    const [myKeys, setMyKeys] = useState<{ name: string; bare: string }[] | null>(null);
+    const myKeyCount = myKeys?.length ?? null;
     const [deviceOs, setDeviceOs] = useState<DeviceOs>("unix");
     // 按「我已經執行了」那一刻的帳號與金鑰；之後再新增帳號或改金鑰，Step 3 就要重做。
     // Accounts and keys at the moment "I've run it" was pressed; adding an account or changing keys later means redo.
@@ -339,13 +343,13 @@ export function useCreateTunnelWizard() {
     const newSinceAuthorize = authorizedFor ? accounts.map((a) => a.username).filter((u) => !authorizedFor.accounts.includes(u)) : [];
     const keysChangedSinceAuthorize = !!authorizedFor && authorizedFor.keys !== authorizedKeys.join("\n");
 
-    // Step 1 要知道我有幾把金鑰（決定「放入我的金鑰」能不能選）。/ Step 1 needs my key count.
+    // Step 1 要知道我的金鑰（數量與公鑰）。/ Step 1 needs my keys (count and public keys).
     useEffect(() => {
         let cancelled = false;
         apiFetch("/api/reverse/user/keys")
-            .then((res) => (res.ok ? readJson<unknown[]>(res) : null))
+            .then((res) => (res.ok ? readJson<{ host_friendly_name?: string; key?: string }[]>(res) : null))
             .then((rows) => {
-                if (!cancelled) setMyKeyCount(rows?.length ?? 0);
+                if (!cancelled) setMyKeys((rows ?? []).map((r) => ({ name: r.host_friendly_name ?? "", bare: bareKey(r.key ?? "") })));
             })
             .catch(() => {});
         return () => {
@@ -481,6 +485,10 @@ export function useCreateTunnelWizard() {
     const unverified = accounts.map((a) => a.username).filter((u) => checks[u]?.state !== "ok");
     if (maxStep >= 5 && step !== 5 && Object.keys(checks).length > 0 && unverified.length > 0) review[5] = { kind: "unverified", names: unverified };
 
+    // 貼上的是我自己的個人金鑰：可以（那台就是我平常用的電腦，同一把兩個身分），但先講清楚。
+    // The pasted key is one of my personal keys: allowed (that device is the computer I work from), but said up front.
+    const ownPersonalKey = keyCheck.kind === "valid" ? (myKeys?.find((k) => k.bare === bareKey(keyCheck.normalized))?.name ?? null) : null;
+
     return {
         step, maxStep, setStep, goTo,
         created, connected, rttMs, review,
@@ -489,7 +497,7 @@ export function useCreateTunnelWizard() {
             hostName, onNameChange,
             sshPort, onPortChange,
             errors, creating, submitDevice,
-            keyList, setKeyList, myKeyCount,
+            keyList, setKeyList, myKeyCount, ownPersonalKey,
         },
         accounts: {
             list: accounts, newAccount, setNewAccount, adding: addingAccount, add: addAccount, remove: removeAccount,

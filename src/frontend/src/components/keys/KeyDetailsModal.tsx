@@ -331,6 +331,12 @@ function KeyDetailsBody({
                         <Property label={t("keys.expiry.label")}>
                             <KeyExpiryText expiresAt={keyItem.expires_at} />
                         </Property>
+                        {!!keyItem.device_of?.length && (
+                            <Property label={t("keys.deviceOf.label")}>
+                                <span className="block">{keyItem.device_of.map((d) => d.name).join(", ")}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">{t("keys.deviceOf.hint")}</span>
+                            </Property>
+                        )}
                         <Property label={t("keys.created")}>{fmt(keyItem.created_at)}</Property>
                         <Property label={t("keys.lastUsed")}>
                             {keyItem.last_used_at ? (

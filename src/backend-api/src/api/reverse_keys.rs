@@ -49,7 +49,8 @@ pub enum KeyProblem {
     Invalid(&'static str),
     /// 已經是某條隧道的金鑰（不看註解、不分誰的）。/ Already a tunnel's key (any user, comment ignored).
     Taken,
-    /// 是某人的個人金鑰。/ Someone's personal key.
+    /// 是別人的個人金鑰（自己的可以：同一台電腦既是裝置、也拿來連別的裝置）。
+    /// Someone else's personal key (your own is fine: the computer you work from can also be a device).
     Personal,
     /// 是 Telepy 自己的服務金鑰。/ Telepy's own service key.
     Service,
@@ -69,18 +70,19 @@ impl KeyProblem {
         match self {
             Self::Invalid(reason) => reason,
             Self::Taken => "This key is already registered as a device key. Each device needs its own key pair.",
-            Self::Personal => "This is a personal key. A device needs its own key pair (ssh-keygen -t ed25519 on the device).",
+            Self::Personal => "This is another user's personal key. A device needs its own key pair (ssh-keygen -t ed25519 on the device).",
             Self::Service => "This is Telepy's own service key. A device needs its own key pair.",
         }
     }
 }
 
-/// 裝置金鑰的檢查：格式、強度，而且不能是任何人的隧道金鑰、個人金鑰或服務金鑰（都不看註解）。
-/// 不分誰的，因為公鑰不是祕密：別人拿你裝置的公鑰換個註解就能在自己帳號下登記，gateway 只認金鑰，
-/// 先登記的那條隧道就會被當成那台裝置。
-/// Format, strength, and not any user's tunnel key, personal key or the service key (comments ignored): public
-/// keys are not secret, and the gateway identifies a connection by its key alone.
-pub async fn device_key_problem(state: &AppState, key: &str) -> ApiResult<Option<KeyProblem>> {
+/// 裝置金鑰的檢查：格式、強度，而且不能是任何人的隧道金鑰、別人的個人金鑰或服務金鑰（都不看註解）。
+/// 隧道金鑰不分誰的，因為公鑰不是祕密：別人拿你裝置的公鑰換個註解就能在自己帳號下登記，gateway 只認金鑰，
+/// 先登記的那條隧道就會被當成那台裝置。`owner` 自己的個人金鑰可以：那台就是他平常用的電腦，gateway 給它兩個身分。
+/// Format, strength, and not any user's tunnel key, another user's personal key or the service key (comments
+/// ignored): public keys are not secret, and the gateway identifies a connection by its key alone. The `owner`'s
+/// own personal key is fine — that device is the computer they work from, and the gateway gives it both roles.
+pub async fn device_key_problem(state: &AppState, key: &str, owner: i64) -> ApiResult<Option<KeyProblem>> {
     let Some(parsed) = parse_public_key(key) else { return Ok(Some(KeyProblem::Invalid("Invalid SSH public key format"))) };
     if let Some(reason) = weak_key_reason(&parsed) {
         return Ok(Some(KeyProblem::Invalid(reason)));
@@ -89,7 +91,7 @@ pub async fn device_key_problem(state: &AppState, key: &str) -> ApiResult<Option
     if db::tunnels::by_key_prefix(&state.db, &like).await?.is_some() {
         return Ok(Some(KeyProblem::Taken));
     }
-    if db::keys::user_key_bare_taken(&state.db, &like, None).await? {
+    if db::keys::user_key_owners_by_prefix(&state.db, &like).await?.iter().any(|&u| u != owner) {
         return Ok(Some(KeyProblem::Personal));
     }
     let service = db::keys::service_keys(&state.db).await?;
@@ -110,7 +112,7 @@ async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token):
         return Err(ApiError::bad_request("Host friendly name cannot start with a number."));
     }
     let key = json_str(&body, "key").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Key is required"))?;
-    if let Some(problem) = device_key_problem(&state, &key).await? {
+    if let Some(problem) = device_key_problem(&state, &key, user.id).await? {
         return Err(ApiError::bad_request(problem.message()));
     }
     let description = json_str(&body, "description").unwrap_or_default();
@@ -150,9 +152,20 @@ async fn check_duplicate(State(state): State<AppState>, _user: AuthUser, Path(to
     let name_exists = db::tunnels::exists_name_for_user(&state.db, user.id, &name).await?;
     // `key_exists` = 這把不能用（別人的裝置金鑰、個人金鑰、服務金鑰、格式錯 / 太弱），`key_reason` 說為什麼。
     // `key_exists` = the key cannot be used; `key_reason` says why.
-    let problem = device_key_problem(&state, &key).await?;
+    let problem = device_key_problem(&state, &key, user.id).await?;
     let key_exists = problem.is_some();
-    let base = json!({ "host_friendly_name_exists": name_exists, "key_exists": key_exists, "key_reason": problem.as_ref().map(KeyProblem::code) });
+    // 用得了、而且是自己的個人金鑰：精靈提醒「這台就是你平常用的電腦嗎？」。
+    // Usable and one of your own personal keys: the wizard asks whether this device is the computer you work from.
+    let personal = match (&problem, parse_public_key(&key)) {
+        (None, Some(p)) => db::keys::user_key_by_prefix(&state.db, user.id, &db::tunnels::like_prefix(&p.bare)).await?,
+        _ => None,
+    };
+    let base = json!({
+        "host_friendly_name_exists": name_exists,
+        "key_exists": key_exists,
+        "key_reason": problem.as_ref().map(KeyProblem::code),
+        "key_personal": personal.map(|k| json!({ "id": k.id, "name": k.host_friendly_name })),
+    });
     let mut obj = base.as_object().cloned().unwrap();
     let err = match (name_exists, &problem) {
         (true, Some(KeyProblem::Taken)) => Some("Host friendly name and key already exists".to_string()),

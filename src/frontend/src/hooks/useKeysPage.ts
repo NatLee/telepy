@@ -138,6 +138,7 @@ export function useKeysPage() {
                     }
                 }
                 if (failed.length) showError(t("keys.addedButNotOn", { devices: failed.join(", ") }));
+                else if (body.device_of?.length) showSuccess(t("keys.addedAlsoDevice", { name: body.device_of.map((d) => d.name).join(", ") }));
                 else showSuccess(k.deviceIds.length ? t("keys.addedAndQueued", { count: k.deviceIds.length }) : t("keys.added"));
                 await Promise.all([fetchKeys(), fetchDevices()]);
                 return true;

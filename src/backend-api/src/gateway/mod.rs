@@ -39,11 +39,26 @@ use crate::monitor::{Endpoint, StatusState};
 use crate::hub::Hub;
 use crate::presence::{self, Presence, PresenceGuard};
 
-/// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。
+/// 誰在連線：隧道金鑰（裝置）、使用者金鑰（人）。一把金鑰可以同時是自己隧道的裝置金鑰與自己的個人金鑰
+/// （那台電腦既是裝置、也拿來連別的裝置）：那就是 `Tunnel { person: true }`，forward 照隧道的規則，
+/// 招呼與 direct-tcpip 照人的規則。
+/// Who is connecting: a tunnel key (a device) or a user key (a person). A key may be both its owner's tunnel key
+/// and their personal key (the computer they work from is also a device): `Tunnel { person: true }` forwards by the
+/// tunnel's rule and gets the person's greeting and direct-tcpip.
 #[derive(Debug, Clone)]
 pub enum Identity {
-    Tunnel { tunnel_id: i64, user_id: i64, reverse_port: i64 },
+    Tunnel { tunnel_id: i64, user_id: i64, reverse_port: i64, person: bool },
     User { user_id: i64 },
+}
+
+impl Identity {
+    /// 以人的身分做事時是誰（筆電：招呼、direct-tcpip、在場）。/ The person behind it, for what a laptop may do.
+    pub fn person(&self) -> Option<i64> {
+        match self {
+            Self::User { user_id } | Self::Tunnel { user_id, person: true, .. } => Some(*user_id),
+            Self::Tunnel { .. } => None,
+        }
+    }
 }
 
 pub struct Forward {
@@ -434,20 +449,16 @@ impl Gateway {
     async fn identify(&self, bare: &str) -> anyhow::Result<Option<Identity>> {
         let like = like_prefix(bare);
         if let Some(t) = db::tunnels::by_key_prefix(&self.db, &like).await? {
-            return Ok(Some(Identity::Tunnel { tunnel_id: t.id, user_id: t.user_id, reverse_port: t.reverse_port }));
+            // 也是擁有者自己（沒到期）的個人金鑰？是的話這條連線也能當人用。只認同一個人的：別人的個人金鑰
+            // 本來就登記不成裝置金鑰，舊資料也不給。
+            // Also the owner's own (unexpired) personal key? Then the connection may act as that person too. Only the
+            // same person's: another user's personal key cannot become a device key, and old rows don't count either.
+            let person = db::keys::user_key_owner_by_prefix(&self.db, &like).await? == Some(t.user_id) && self.person_allowed(t.user_id).await?;
+            return Ok(Some(Identity::Tunnel { tunnel_id: t.id, user_id: t.user_id, reverse_port: t.reverse_port, person }));
         }
         if let Some(uid) = db::keys::user_key_owner_by_prefix(&self.db, &like).await? {
-            // 功能權限：「個人 SSH 金鑰」被關掉的人不能用金鑰經 gateway 連裝置。/ Personal SSH keys turned off: refused.
-            if let Some(user) = db::users::by_id(&self.db, uid).await? {
-                // 停用的帳號：金鑰還在，但不能再經 gateway 連裝置。/ A disabled account's keys stay but are refused.
-                if !user.is_active {
-                    tracing::info!(user_id = uid, "gateway: the key's account is disabled; rejected");
-                    return Ok(None);
-                }
-                if !self.features.allowed(&user, crate::features::Feature::KeysPersonal).await? {
-                    tracing::info!(user_id = uid, "gateway: personal SSH keys are turned off for this user; rejected");
-                    return Ok(None);
-                }
+            if !self.person_allowed(uid).await? {
+                return Ok(None);
             }
             let has_tunnels = !db::tunnels::keys_for_user(&self.db, uid).await?.is_empty();
             let has_shares = db::sharing::user_has_any_share(&self.db, uid).await?;
@@ -458,6 +469,23 @@ impl Gateway {
             return Ok(None);
         }
         Ok(None)
+    }
+
+    /// 這個人現在可以用個人金鑰經 gateway 連裝置嗎（帳號啟用、功能沒關）。
+    /// Whether this person may use a personal key through the gateway now (account active, feature on).
+    async fn person_allowed(&self, uid: i64) -> anyhow::Result<bool> {
+        let Some(user) = db::users::by_id(&self.db, uid).await? else { return Ok(true) };
+        // 停用的帳號：金鑰還在，但不能再經 gateway 連裝置。/ A disabled account's keys stay but are refused.
+        if !user.is_active {
+            tracing::info!(user_id = uid, "gateway: the key's account is disabled; rejected");
+            return Ok(false);
+        }
+        // 功能權限：「個人 SSH 金鑰」被關掉的人不能用金鑰經 gateway 連裝置。/ Personal SSH keys turned off: refused.
+        if !self.features.allowed(&user, crate::features::Feature::KeysPersonal).await? {
+            tracing::info!(user_id = uid, "gateway: personal SSH keys are turned off for this user; rejected");
+            return Ok(false);
+        }
+        Ok(true)
     }
 
     /// 誰可以要求在 port 上做 reverse forward：隧道金鑰只能開自己的 port；使用者金鑰只能開自己擁有的隧道。
@@ -490,9 +518,9 @@ impl Gateway {
     /// reachable, the exact match (else the only one), so a refusal is logged on the right tunnel.
     async fn port_by_name(&self, id: Option<&Identity>, name: &str) -> anyhow::Result<Option<u16>> {
         let matches = db::tunnels::by_name_ignoring_case(&self.db, name).await?;
-        if let Some(Identity::User { user_id }) = id {
+        if let Some(user_id) = id.and_then(Identity::person) {
             for t in &matches {
-                if self.reaches(*user_id, t).await? {
+                if self.reaches(user_id, t).await? {
                     return Ok(u16::try_from(t.reverse_port).ok());
                 }
             }
@@ -532,9 +560,9 @@ impl Gateway {
         if !self.forwards.contains_key(&port) {
             return Ok(false);
         }
-        Ok(match id {
-            Identity::User { user_id } => self.user_can_reach(*user_id, port).await?,
-            Identity::Tunnel { .. } => false,
+        Ok(match id.person() {
+            Some(user_id) => self.user_can_reach(user_id, port).await?,
+            None => false,
         })
     }
 
@@ -671,7 +699,7 @@ impl GatewayHandler {
             session.channel_failure(channel)?;
             return Ok(());
         };
-        let Some(Identity::User { user_id }) = self.identity else {
+        let Some(user_id) = self.identity.as_ref().and_then(Identity::person) else {
             session.channel_failure(channel)?;
             session.close(channel)?;
             return Ok(());
@@ -742,7 +770,7 @@ impl Handler for GatewayHandler {
             _ => None,
         };
         // 使用者金鑰：記下最後使用時間與來源（金鑰頁顯示）。/ Record when and from where a user key was last used.
-        if let (Some(Identity::User { .. }), Some(bare)) = (&self.identity, &self.offered) {
+        if let (Some(_), Some(bare)) = (self.identity.as_ref().and_then(Identity::person), &self.offered) {
             if let Err(e) = db::keys::touch_last_used(&self.gw.db, &like_prefix(bare), &self.peer.ip().to_string()).await {
                 tracing::debug!(error = %e, "gateway: cannot record user key use");
             }
@@ -828,7 +856,7 @@ impl Handler for GatewayHandler {
     async fn channel_open_session(&mut self, channel: Channel<Msg>, reply: server::ChannelOpenHandle, _session: &mut Session) -> Result<(), Self::Error> {
         // 隧道金鑰（裝置）不開 session；個人金鑰只開來印招呼（最多同時 2 個），不配 pty、不執行任何東西。
         // Tunnel keys get no session; a personal key gets one only for the greeting (≤ 2 at once): no pty, nothing run.
-        if !matches!(self.identity, Some(Identity::User { .. })) || self.greetings.len() >= MAX_GREETINGS {
+        if self.identity.as_ref().and_then(Identity::person).is_none() || self.greetings.len() >= MAX_GREETINGS {
             reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
             return Ok(());
         }
@@ -913,12 +941,12 @@ impl Handler for GatewayHandler {
         };
         // 敏感隧道：這個人 15 分鐘內在網頁確認過才放行；沒有就拒絕，並請他到網頁確認。
         // Sensitive tunnel: only after a web confirmation within the window; otherwise refuse and ask in the web.
-        if let (Some(Identity::User { user_id }), Some(p)) = (&self.identity, port) {
-            if let Some(t) = self.gw.step_up_blocks(*user_id, p).await? {
+        if let (Some(user_id), Some(p)) = (self.identity.as_ref().and_then(Identity::person), port) {
+            if let Some(t) = self.gw.step_up_blocks(user_id, p).await? {
                 let msg = format!("Refused direct-tcpip to tunnel {} for user {user_id}: confirm it's you in Telepy first (step-up) from {} port {}", t.host_friendly_name, self.peer.ip(), self.peer.port());
                 self.gw.event("step_up_required", Some(self.peer), port, Some(t.id), msg).await;
                 self.gw.hub.notify_user(
-                    *user_id,
+                    user_id,
                     &serde_json::json!({ "action": "STEP-UP-REQUIRED", "tunnel_id": t.id, "tunnel_name": t.host_friendly_name,
                                          "details": format!("SSH to \"{}\" needs you to confirm it's you in Telepy first", t.host_friendly_name) }),
                 );
@@ -928,8 +956,8 @@ impl Handler for GatewayHandler {
         }
         reply.accept().await;
         let originator = originator_address.to_string();
-        let guard = match (&self.identity, port) {
-            (Some(Identity::User { user_id }), Some(p)) => self.gw.ssh_presence(*user_id, p, self.peer).await,
+        let guard = match (self.identity.as_ref().and_then(Identity::person), port) {
+            (Some(user_id), Some(p)) => self.gw.ssh_presence(user_id, p, self.peer).await,
             _ => None,
         };
         let gw = self.gw.clone();
@@ -977,6 +1005,7 @@ impl Drop for GatewayHandler {
             _ => None,
         };
         let who = match identity {
+            Some(Identity::Tunnel { tunnel_id, user_id, person: true, .. }) => format!(" (tunnel {tunnel_id}, user {user_id})"),
             Some(Identity::Tunnel { tunnel_id, .. }) => format!(" (tunnel {tunnel_id})"),
             Some(Identity::User { user_id }) => format!(" (user {user_id})"),
             None => String::new(),

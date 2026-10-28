@@ -10,7 +10,7 @@
  * the details. With many keys a screen now holds a dozen of them instead of three large cards.
  */
 import React from "react";
-import { CalendarClock, Clock3, HardDrive, KeyRound, Layers, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
+import { CalendarClock, Clock3, HardDrive, KeyRound, Laptop, Layers, Trash2, TriangleAlert, PanelRightOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { useI18n } from "@/lib/i18n";
@@ -88,6 +88,24 @@ function GroupChip({ name }: { name: string }) {
     );
 }
 
+/**
+ * 這把也是你某條隧道的裝置金鑰：那台電腦既是裝置、也用同一把連別的裝置。
+ * The key also keeps one of your tunnels up: that computer is a device and reaches your other devices with it.
+ */
+export function DeviceKeyChip({ tunnels }: { tunnels: NonNullable<UserKey["device_of"]> }) {
+    const { t } = useI18n();
+    if (!tunnels.length) return null;
+    const names = tunnels.map((d) => d.name).join(", ");
+    return (
+        <span
+            className="inline-flex max-w-[14rem] shrink-0 items-center gap-1 rounded-sm bg-info/10 px-1.5 py-px text-[0.75rem] text-info"
+            title={t("keys.deviceOf.title", { name: names })}
+        >
+            <Laptop size={12} className="shrink-0" aria-hidden /> <span className="truncate">{t("keys.deviceOf.chip", { name: names })}</span>
+        </span>
+    );
+}
+
 function KeyRow({
     keyItem,
     placements,
@@ -136,9 +154,10 @@ function KeyRow({
                     </p>
                     {/* 第二行。寬：群組、註解與說明；窄：群組、使用 / 裝置 / 到期（指紋在詳細資訊）。
                         Second line. Wide: group, comment + description; narrow: group, use / devices / expiry. */}
-                    {(groupName || keyItem.comment || keyItem.description) && (
+                    {(groupName || keyItem.device_of?.length || keyItem.comment || keyItem.description) && (
                         <p className="mt-0.5 hidden min-w-0 items-center gap-1.5 text-[0.75rem] text-muted-foreground @3xl:flex">
                             {groupName && <GroupChip name={groupName} />}
+                            <DeviceKeyChip tunnels={keyItem.device_of ?? []} />
                             <span className="min-w-0 truncate" title={[keyItem.comment, keyItem.description].filter(Boolean).join(" · ")}>
                                 {keyItem.comment && <span className="font-mono">{keyItem.comment}</span>}
                                 {keyItem.comment && keyItem.description && " · "}
@@ -148,6 +167,7 @@ function KeyRow({
                     )}
                     <p className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.75rem] text-muted-foreground @3xl:hidden">
                         {groupName && <GroupChip name={groupName} />}
+                        <DeviceKeyChip tunnels={keyItem.device_of ?? []} />
                         <span className="inline-flex min-w-0 items-center gap-1">
                             <Clock3 size={12} className="shrink-0" aria-hidden />
                             <LastUsed keyItem={keyItem} />

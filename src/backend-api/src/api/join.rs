@@ -192,7 +192,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     }
     // 腳本自己產的金鑰不會撞到，但 gateway 先認隧道金鑰：把某人的個人金鑰登記成裝置金鑰會讓那個人再也登不上 gateway。
     // The script's own key never collides, but a personal or service key registered here would shadow its real use.
-    match super::reverse_keys::device_key_problem(state, &key).await.map_err(|e| internal(e.body))? {
+    match super::reverse_keys::device_key_problem(state, &key, user.id).await.map_err(|e| internal(e.body))? {
         Some(p @ (KeyProblem::Personal | KeyProblem::Service | KeyProblem::Invalid(_))) => return Err(bad(p.message())),
         _ => {}
     }

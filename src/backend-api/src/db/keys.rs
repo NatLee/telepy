@@ -73,6 +73,19 @@ pub async fn user_key_owner_by_prefix(db: &Db, like: &str) -> sqlx::Result<Optio
         .await
 }
 
+/// 用這把公鑰的個人金鑰屬於哪些人（不看 comment、到期的也算）。同一把可以同時是自己隧道的裝置金鑰，
+/// 但不能是別人的：gateway 只認金鑰。
+/// Who has a personal key with this public key (comment ignored, expired ones included). A key may also be its
+/// owner's own tunnel key, never someone else's: the gateway identifies by key alone.
+pub async fn user_key_owners_by_prefix(db: &Db, like: &str) -> sqlx::Result<Vec<i64>> {
+    sqlx::query_scalar(&format!("SELECT DISTINCT user_id FROM {UK} WHERE key LIKE ? ESCAPE '\\' ORDER BY user_id")).bind(like).fetch_all(&db.read).await
+}
+
+/// 這個人用這把公鑰的個人金鑰（不看 comment）。/ This user's personal key with this public key (comment ignored).
+pub async fn user_key_by_prefix(db: &Db, user_id: i64, like: &str) -> sqlx::Result<Option<UserKey>> {
+    sqlx::query_as(&format!("SELECT {UK_COLS} FROM {UK} WHERE user_id = ? AND key LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1")).bind(user_id).bind(like).fetch_optional(&db.read).await
+}
+
 /// 已到期的那把（名稱與到期時間），gateway 拒絕時寫進事件。/ The expired key, for the gateway's refusal event.
 pub async fn expired_user_key_by_prefix(db: &Db, like: &str) -> sqlx::Result<Option<(String, String)>> {
     sqlx::query_as(&format!("SELECT host_friendly_name, expires_at FROM {UK} WHERE key LIKE ? ESCAPE '\\' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY id LIMIT 1"))

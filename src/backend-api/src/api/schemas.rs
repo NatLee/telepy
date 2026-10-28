@@ -673,6 +673,9 @@ pub struct UserKey {
     pub expired: bool,
     /// 它在哪個金鑰群組（`/api/reverse/user/key-groups`）；null = 未分組。/ Its key group; null = none.
     pub group_id: Option<i64>,
+    /// 這把也是你哪些隧道的裝置金鑰（那台電腦既是裝置、也拿這把連別的裝置）；通常是空的。
+    /// Your tunnels whose device key this also is (that computer is a device and reaches others with it); usually empty.
+    pub device_of: Vec<NamedRef>,
 }
 
 #[derive(ToSchema)]
@@ -808,10 +811,12 @@ pub struct DuplicateCheckRequest {
 #[derive(ToSchema)]
 pub struct DuplicateCheck {
     pub host_friendly_name_exists: bool,
-    /// The key cannot be used: it is any user's device key already (comment ignored), a personal key, or Telepy's service key
+    /// The key cannot be used: it is any user's device key already (comment ignored), another user's personal key, or Telepy's service key
     pub key_exists: bool,
     /// Why: taken | personal | service (null when the key is free)
     pub key_reason: Option<String>,
+    /// The key is free and is one of your own personal keys: the device will be the computer you work from (both roles); null otherwise
+    pub key_personal: Option<NamedRef>,
     pub message: Option<String>,
     pub error: Option<String>,
 }

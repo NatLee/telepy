@@ -40,22 +40,42 @@ pub fn unique_error(e: sqlx::Error) -> ApiError {
 async fn list(State(state): State<AppState>, AuthUser(user): AuthUser) -> ApiResult<Json<Value>> {
     let rows = db::keys::user_keys(&state.db, user.id).await?;
     let groups = db::groups::key_group_of(&state.db, user.id).await?;
+    let devices = OwnDevices::load(&state.db, user.id).await?;
     let tz = state.config.tz_offset_minutes;
     Ok(Json(Value::Array(
         rows.iter()
             .map(|k| {
                 let mut v = user_key_json(k, tz);
                 v["group_id"] = json!(groups.get(&k.id));
+                v["device_of"] = devices.of(&k.key);
                 v
             })
             .collect(),
     )))
 }
 
-/// 單筆金鑰的 JSON，加上它在哪個金鑰群組。/ One key's JSON plus its key group.
+/// 自己隧道的裝置金鑰（去掉註解）：標出「這把個人金鑰也是哪條隧道的裝置金鑰」。
+/// The user's own tunnels' device keys (comment-free), to mark personal keys that are also a tunnel's key.
+struct OwnDevices(Vec<(i64, String, String)>);
+
+impl OwnDevices {
+    async fn load(db: &Db, user_id: i64) -> ApiResult<Self> {
+        let rows = db::tunnels::owned_device_keys(db, user_id).await?;
+        Ok(Self(rows.into_iter().filter_map(|(id, name, key)| parse_public_key(&key).map(|p| (id, name, p.bare))).collect()))
+    }
+
+    /// `[{id, name}]`：用這把金鑰當裝置金鑰的隧道。/ The tunnels whose device key this is.
+    fn of(&self, key: &str) -> Value {
+        let Some(p) = parse_public_key(key) else { return json!([]) };
+        Value::Array(self.0.iter().filter(|(_, _, bare)| *bare == p.bare).map(|(id, name, _)| json!({ "id": id, "name": name })).collect())
+    }
+}
+
+/// 單筆金鑰的 JSON，加上它在哪個金鑰群組、也是哪條隧道的裝置金鑰。/ One key's JSON plus its key group and the tunnels it is the device key of.
 async fn key_reply(state: &AppState, k: &UserKey) -> ApiResult<Value> {
     let mut v = user_key_json(k, state.config.tz_offset_minutes);
     v["group_id"] = json!(db::groups::key_group_of_key(&state.db, k.id).await?);
+    v["device_of"] = OwnDevices::load(&state.db, k.user_id).await?.of(&k.key);
     Ok(v)
 }
 
@@ -89,9 +109,13 @@ async fn own_key(state: &AppState, user_id: i64, id: i64) -> ApiResult<UserKey> 
 }
 
 /// 用 russh 解析公鑰：格式、強度（拒收 DSA / 短 RSA）、與既有金鑰重複（不看 comment）。回傳去掉前後空白的那一行。
-/// Parse with russh: format, strength and duplicates (ignoring the comment). Returns the trimmed line.
+/// `owner` 自己隧道的裝置金鑰可以：那台電腦已經是一條隧道，現在也要拿它連別的裝置（gateway 給這把金鑰兩個身分）。
+/// 別人的隧道金鑰、任何隧道的服務金鑰、Telepy 的服務金鑰都不行。
+/// Parse with russh: format, strength and duplicates (ignoring the comment). Returns the trimmed line. The `owner`'s
+/// own tunnel key is fine — that computer is a tunnel already and now also reaches other devices (the gateway gives
+/// the key both roles); someone else's tunnel key, a tunnel's service key or Telepy's service key is not.
 /// `import-user-keys` 也用這個。/ Shared with `telepy-server import-user-keys`.
-pub async fn checked_key(db: &Db, raw: &str, except_id: Option<i64>) -> ApiResult<String> {
+pub async fn checked_key(db: &Db, raw: &str, except_id: Option<i64>, owner: i64) -> ApiResult<String> {
     let key = raw.trim();
     let parsed = parse_public_key(key).ok_or_else(|| ApiError::field("key", "Invalid SSH public key. Paste a single line such as \"ssh-ed25519 AAAA… user@host\"."))?;
     if let Some(reason) = weak_key_reason(&parsed) {
@@ -102,7 +126,7 @@ pub async fn checked_key(db: &Db, raw: &str, except_id: Option<i64>) -> ApiResul
         return Err(ApiError::field("key", "user keys with this SSH Key (public) already exists."));
     }
     let service = db::keys::service_keys(db).await?;
-    if db::tunnels::by_key_prefix(db, &like).await?.is_some()
+    if db::tunnels::by_key_prefix(db, &like).await?.is_some_and(|t| t.user_id != owner)
         || db::tunnel_keys::tunnel_by_key_prefix(db, &like).await?.is_some()
         || service.iter().any(|s| parse_public_key(&s.key).is_some_and(|p| p.bare == parsed.bare))
     {
@@ -151,9 +175,9 @@ pub async fn new_key_expiry(db: &Db, given: Option<&Value>) -> ApiResult<Option<
 
 /// `POST /api/reverse/user/keys` 的全部檢查（名稱、公鑰、重複、到期），`import-user-keys` 共用。
 /// Every check of `POST /api/reverse/user/keys` (name, key, duplicates, expiry); shared with `import-user-keys`.
-pub async fn prepare_new(db: &Db, body: &Value) -> ApiResult<NewKey> {
+pub async fn prepare_new(db: &Db, body: &Value, owner: i64) -> ApiResult<NewKey> {
     let (name, key) = validate_full(body)?;
-    let key = checked_key(db, &key, None).await?;
+    let key = checked_key(db, &key, None, owner).await?;
     let description = json_str(body, "description");
     let expires_at = new_key_expiry(db, body.get("expires_at")).await?;
     Ok(NewKey { name, key, description, expires_at })
@@ -166,7 +190,7 @@ pub async fn insert_new(db: &Db, user_id: i64, k: &NewKey) -> ApiResult<UserKey>
 
 #[utoipa::path(post, path = "/api/reverse/user/keys", tag = "Reverse Server Keys", security(("bearer" = [])), request_body = super::schemas::UserKeyWrite, responses((status = 201, body = super::schemas::UserKey), (status = 400, description = "Validation error {field: [message]}", body = Object)))]
 async fn create(State(state): State<AppState>, AuthUser(user): AuthUser, AppJson(body): AppJson<Value>) -> ApiResult<(StatusCode, Json<Value>)> {
-    let new = prepare_new(&state.db, &body).await?;
+    let new = prepare_new(&state.db, &body, user.id).await?;
     let group = group_choice(&state, user.id, &body).await?;
     let k = insert_new(&state.db, user.id, &new).await?;
     // 放進金鑰群組：那組授予的裝置都會裝上它。/ Into a key group: every device the group is granted to gets it.
@@ -195,7 +219,7 @@ async fn update(State(state): State<AppState>, AuthUser(user): AuthUser, Path(id
     let group = group_choice(&state, user.id, &body).await?;
     let name = json_str(&body, "host_friendly_name");
     let key = match json_str(&body, "key") {
-        Some(k) => Some(checked_key(&state.db, &k, Some(id)).await?),
+        Some(k) => Some(checked_key(&state.db, &k, Some(id), user.id).await?),
         None => None,
     };
     let description = body.get("description").map(|v| v.as_str().map(str::to_string));
