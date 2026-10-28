@@ -565,7 +565,15 @@ pub async fn open_shell(state: &AppState, s: &Arc<AiSession>, cols: u32, rows: u
         }
         None => None,
     };
-    let sh = AiShell::open(&s.conn.device, &s.id, s.tunnel_id, cols, rows, slot, recorder).await.map_err(|e| format!("Cannot open a shell: {e:#}"))?;
+    // 這個人在這條隧道上選了不寫歷史檔：先問登入 shell。/ History kept out on this tunnel: ask for the login shell first.
+    let login_shell = match crate::shell_history::effective_for(state, s.user_id, s.tunnel_id).await.0 {
+        crate::shell_history::Mode::Skip => Some(match crate::ssh::exec::run(&s.conn.device, crate::shell_history::PROBE, Duration::from_secs(8), 4096).await {
+            Ok(r) => crate::shell_history::parse_probe(&r.stdout.text),
+            Err(_) => crate::shell_history::LoginShell::Unknown,
+        }),
+        crate::shell_history::Mode::Keep => None,
+    };
+    let sh = AiShell::open(&s.conn.device, &s.id, s.tunnel_id, cols, rows, slot, recorder, login_shell.as_ref()).await.map_err(|e| format!("Cannot open a shell: {e:#}"))?;
     s.shells.lock().unwrap().insert(sh.id.clone(), sh.clone());
     tracing::info!(session = %s.id, shell = %sh.id, cols, rows, "AI shell opened");
     Ok(sh)

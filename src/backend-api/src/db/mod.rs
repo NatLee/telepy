@@ -24,6 +24,7 @@ pub mod retention;
 pub mod schema;
 pub mod settings;
 pub mod sharing;
+pub mod shell_history;
 pub mod sign_ins;
 pub mod terminal_profile;
 pub mod terminal_scheme;

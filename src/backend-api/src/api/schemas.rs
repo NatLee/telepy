@@ -1071,6 +1071,11 @@ pub struct UserSettings {
     pub tapi_color: String,
     /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
     pub tapi_daily: bool,
+    /// keep = commands typed in Telepy's shells (web terminal, your agents' shells) go into the device's shell
+    /// history as usual; skip = Telepy turns the history file off in each new shell (per-tunnel override:
+    /// `/api/reverse/server/{id}/shell-history`)
+    #[schema(example = "keep")]
+    pub shell_history: String,
 }
 
 #[derive(ToSchema)]
@@ -1110,6 +1115,35 @@ pub struct UserSettingsPatch {
     pub tapi_color: Option<String>,
     /// 解鎖「每天換一個」（只能是 true）。/ Unlock "daily" (true only).
     pub tapi_daily: Option<bool>,
+    /// keep | skip
+    #[schema(example = "skip")]
+    pub shell_history: Option<String>,
+}
+
+/// The caller's shell history choice for one tunnel
+#[derive(ToSchema)]
+pub struct ShellHistoryPref {
+    pub tunnel_id: i64,
+    /// keep | skip; null = follow the personal default
+    #[schema(example = "skip")]
+    pub mode: Option<String>,
+    /// The personal default (`shell_history` in /api/user/settings): keep | skip
+    #[schema(example = "keep")]
+    pub default: String,
+    /// What new shells on this tunnel get: keep | skip
+    #[schema(example = "skip")]
+    pub effective: String,
+    /// Which one decided: default | tunnel
+    #[schema(example = "tunnel")]
+    pub source: String,
+}
+
+/// PUT body
+#[derive(ToSchema)]
+pub struct ShellHistoryPrefPatch {
+    /// keep | skip; null = follow my default
+    #[schema(example = "skip")]
+    pub mode: Option<String>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default

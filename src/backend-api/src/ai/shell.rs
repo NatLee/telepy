@@ -65,6 +65,8 @@ pub struct AiShell {
     pub created: Instant,
     /// 這個 shell 有錄影。/ This shell is being recorded.
     pub recorded: bool,
+    /// 「指令不寫進歷史檔」的結果（設定是照常寫時 None）。/ What came of keeping history out (None = kept as usual).
+    pub history: Option<crate::shell_history::Applied>,
     tx: ChannelWriteHalf<Msg>,
     state: Mutex<State>,
     /// 有新輸出或 shell 結束時喚醒等著讀的人。/ Wakes readers on new output or exit.
@@ -146,7 +148,9 @@ pub fn describe_input(input: &str) -> String {
 impl AiShell {
     /// 在 session 的連線上開 PTY + shell。/ Open a PTY shell channel on the session's connection.
     #[allow(clippy::too_many_arguments)]
-    pub async fn open(device: &Handle<ClientHandler>, session_id: &str, tunnel_id: i64, cols: u32, rows: u32, slot: OwnedSemaphorePermit, recorder: Option<Recorder>) -> anyhow::Result<Arc<Self>> {
+    /// `history` = 要不寫歷史檔時的登入 shell（`crate::shell_history`）。/ `history` = the login shell when history is kept out.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open(device: &Handle<ClientHandler>, session_id: &str, tunnel_id: i64, cols: u32, rows: u32, slot: OwnedSemaphorePermit, recorder: Option<Recorder>, history: Option<&crate::shell_history::LoginShell>) -> anyhow::Result<Arc<Self>> {
         let channel = device.channel_open_session().await.context("open a channel (is the device still connected?)")?;
         if let Err(e) = channel.request_pty(true, "xterm-256color", cols, rows, 0, 0, &[]).await {
             let _ = channel.close().await;
@@ -156,13 +160,27 @@ impl AiShell {
             let _ = channel.close().await;
             return Err(e).context("request a shell");
         }
-        let (rx, tx) = channel.split();
+        let (mut rx, tx) = channel.split();
+        // 不寫歷史檔：提示字元出來後先打設定那行；之前的輸出（失敗時連回顯）照常交給讀的人。
+        // Keeping history out: type the setup once the prompt is up; earlier output (the echo too, on failure) is kept.
+        let (first, ended, applied) = match history {
+            Some(login) => {
+                let (out, applied) = crate::shell_history::keep_out(&mut rx, &tx, login).await;
+                let ended = match out.result {
+                    crate::shell_history::SetupResult::Ended(code) => Some(code),
+                    _ => None,
+                };
+                (out.shown, ended, Some(applied))
+            }
+            None => (Vec::new(), None, None),
+        };
         let shell = Arc::new(Self {
             id: format!("sh_{}", crate::util::random_alnum(12).to_lowercase()),
             session_id: session_id.to_string(),
             tunnel_id,
             created: Instant::now(),
             recorded: recorder.is_some(),
+            history: applied,
             tx,
             state: Mutex::new(State {
                 guard: TerminalGuard::new(rows.min(u32::from(u16::MAX)) as u16, cols.min(u32::from(u16::MAX)) as u16),
@@ -181,7 +199,7 @@ impl AiShell {
             bytes_out: AtomicU64::new(0),
             _slot: slot,
         });
-        let task = tokio::spawn(read_loop(shell.clone(), rx));
+        let task = tokio::spawn(read_loop(shell.clone(), rx, first, ended));
         *shell.reader.lock().unwrap() = Some(task);
         Ok(shell)
     }
@@ -353,11 +371,25 @@ impl AiShell {
 }
 
 /// 背景讀：餵畫面模型、錄影與緩衝區。/ The reader task: screen model, recording and the buffer.
-async fn read_loop(shell: Arc<AiShell>, mut rx: ChannelReadHalf) {
+async fn read_loop(shell: Arc<AiShell>, mut rx: ChannelReadHalf, first: Vec<u8>, ended: Option<Option<u32>>) {
     let mut decoder = Utf8Decoder::default();
     let mut exit = None;
+    // 設定歷史檔時讀到的輸出先交出去；那時 shell 就結束了的話，交完就收。
+    // Output read during the history setup goes first; if the shell already ended then, stop after it.
+    let mut first = (!first.is_empty()).then_some(first);
+    let mut ended = ended;
     loop {
-        let msg = rx.wait().await;
+        let msg = match first.take() {
+            Some(d) => Some(ChannelMsg::Data { data: d.into() }),
+            None => match ended.take() {
+                Some(code) => {
+                    shell.state.lock().unwrap().exited = Some(code);
+                    shell.changed.notify_waiters();
+                    return;
+                }
+                None => rx.wait().await,
+            },
+        };
         let data = match msg {
             Some(ChannelMsg::Data { data }) => data.to_vec(),
             Some(ChannelMsg::ExtendedData { data, .. }) => data.to_vec(),

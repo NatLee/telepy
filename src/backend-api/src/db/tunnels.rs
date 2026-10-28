@@ -250,6 +250,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM telepy_credential WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_device_host_key WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_terminal_profile WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_shell_history_pref WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_endpoint WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_pin WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_notify_tunnel_mute WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;

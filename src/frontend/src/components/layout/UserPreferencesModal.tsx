@@ -63,6 +63,7 @@ import type { TranslationKey } from "@/locales/en";
 import { SavedLogins } from "@/components/layout/SavedLogins";
 import { hasFeature } from "@/lib/features";
 import { TerminalDetachPref } from "@/components/tunnels/TerminalDetachPref";
+import { ShellHistoryPref } from "@/components/tunnels/ShellHistoryPref";
 import { ConnectedApps } from "./ConnectedApps";
 import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
@@ -289,6 +290,10 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                     {/* 網頁終端機斷線後 shell 留多久（存在帳號上；站台上限、裝置政策會再收窄）。
                         How long a web terminal's shell is kept after a drop (on the account; narrowed by the site and device). */}
                     <TerminalDetachPref />
+
+                    {/* Telepy 的 shell 打的指令寫不寫進裝置的歷史檔（存在帳號上；每條隧道可個別覆寫）。
+                        Whether commands typed in Telepy's shells go into the device's history (on the account; per-tunnel override). */}
+                    <ShellHistoryPref />
                 </div>
             )}
 

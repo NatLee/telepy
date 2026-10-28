@@ -630,6 +630,20 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：某使用者在某條隧道上「連線中打的指令不寫進 shell 歷史檔」的個人覆寫（mode = keep / skip）；
+    // 沒有列 = 跟隨 user_management_usersettings.shell_history。隧道刪除時一併刪（db::tunnels::delete）。
+    // Per-user override of "keep this connection's commands out of the shell history" for one tunnel (keep / skip);
+    // no row = the personal default in user_management_usersettings.shell_history. Deleted with the tunnel.
+    (
+        "telepy_shell_history_pref",
+        r#"CREATE TABLE "telepy_shell_history_pref" (
+            "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "mode" varchar(8) NOT NULL,
+            "updated_at" datetime NOT NULL
+        )"#,
+    ),
     // Rust 自有：使用者自訂的終端機配色（colors = JSON：前景 / 背景 / 游標 / 選取 + 16 色 ANSI，都是 #rrggbb）。
     // scheme_id 是 API 上的 id（`custom-<8 hex>`），存在 terminal_scheme / 每條隧道的覆寫裡；刪掉後前端回到預設配色。
     // User-defined terminal colour schemes (colors = JSON: foreground / background / cursor / selection + the 16 ANSI
@@ -917,6 +931,7 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_terminal_profile_user_tunnel" ON "telepy_terminal_profile" ("user_id", "tunnel_id")"#,
+    r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_shell_history_pref_user_tunnel" ON "telepy_shell_history_pref" ("user_id", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_scheme_user" ON "telepy_terminal_scheme" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_web_session_user" ON "telepy_web_session" ("user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_passkey_user_id" ON "telepy_passkey" ("user_id")"#,
@@ -1114,6 +1129,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("user_management_usersettings", "tapi_color", "varchar(16) NOT NULL DEFAULT ''"),
     // 「每天換一個」解鎖了沒（看完片尾名單）。/ Whether "a new colour every day" is unlocked (watched the credits).
     ("user_management_usersettings", "tapi_daily", "bool NOT NULL DEFAULT 0"),
+    // 網頁終端機 / agent shell 打的指令要不要寫進裝置的 shell 歷史檔（keep = 照常，skip = 不寫；每條隧道可個別覆寫）。
+    // Whether web terminal / agent shell commands go into the device's shell history (keep / skip; per-tunnel override).
+    ("user_management_usersettings", "shell_history", "varchar(8) NOT NULL DEFAULT 'keep'"),
     // 通道群組 / 金鑰群組的說明與標籤（標籤 = JSON 字串陣列，規則同通道標籤）。/ Group description and labels (JSON array).
     ("telepy_tunnel_group", "description", "text NOT NULL DEFAULT ''"),
     ("telepy_tunnel_group", "labels", "text NOT NULL DEFAULT '[]'"),
