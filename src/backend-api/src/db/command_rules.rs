@@ -13,6 +13,8 @@ use crate::util::now_db;
 
 const R: &str = "telepy_command_rule";
 const RT: &str = "telepy_command_rule_target";
+const O: &str = "telepy_command_rule_override";
+const OT: &str = "telepy_command_rule_override_target";
 const E: &str = "telepy_command_event";
 /// 紀錄最多留幾列（等待中的不刪）。/ Row cap for the event log (pending rows are kept).
 pub const MAX_EVENTS: i64 = 20_000;
@@ -29,7 +31,11 @@ pub struct RuleRow {
     /// 套用所有隧道（個人規則：自己管的 / 自己能用的全部）；否則只有 `telepy_command_rule_target` 那幾條。
     /// Every tunnel (personal: all the owner manages / can use); otherwise only the listed ones.
     pub all_tunnels: bool,
-    /// block / approve / allow
+    /// enforced（誰都不能覆寫）/ default（可以覆寫）；只對全站規則有意義。/ enforced / default; site rules only.
+    pub mode: String,
+    /// 「要核准」等多久（秒）；None = 網站設定。/ How long an approval waits (seconds); None = the site setting.
+    pub approval_timeout: Option<i64>,
+    /// block / approve / warn / allow
     pub action: String,
     /// command / regex
     pub kind: String,
@@ -55,7 +61,7 @@ impl RuleRow {
     }
 }
 
-const R_SELECT: &str = "SELECT r.id, r.scope, r.user_id, u.username AS owner_name, r.all_tunnels, r.action, r.kind, r.pattern, r.who, r.via, \
+const R_SELECT: &str = "SELECT r.id, r.scope, r.user_id, u.username AS owner_name, r.all_tunnels, r.mode, r.approval_timeout, r.action, r.kind, r.pattern, r.who, r.via, \
      r.note, r.enabled, r.approver_ids, r.created_by_id, r.created_at, r.updated_at FROM telepy_command_rule r LEFT JOIN auth_user u ON u.id = r.user_id";
 
 pub struct NewRule<'a> {
@@ -64,6 +70,8 @@ pub struct NewRule<'a> {
     /// 個人規則的主人。/ The owner of a personal rule.
     pub user_id: Option<i64>,
     pub all_tunnels: bool,
+    pub mode: &'a str,
+    pub approval_timeout: Option<i64>,
     pub action: &'a str,
     pub kind: &'a str,
     pub pattern: &'a str,
@@ -80,12 +88,14 @@ pub async fn create_rule(db: &Db, r: &NewRule<'_>, tunnel_ids: &[i64], by: i64) 
     let now = now_db();
     let mut tx = db.write.begin().await?;
     let id = sqlx::query(&format!(
-        "INSERT INTO {R} (tunnel_id, scope, user_id, all_tunnels, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at) \
-         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO {R} (tunnel_id, scope, user_id, all_tunnels, mode, approval_timeout, action, kind, pattern, who, via, note, enabled, approver_ids, created_by_id, created_at, updated_at) \
+         VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ))
     .bind(r.scope)
     .bind(r.user_id)
     .bind(r.all_tunnels)
+    .bind(r.mode)
+    .bind(r.approval_timeout)
     .bind(r.action)
     .bind(r.kind)
     .bind(r.pattern)
@@ -111,9 +121,11 @@ pub async fn create_rule(db: &Db, r: &NewRule<'_>, tunnel_ids: &[i64], by: i64) 
 pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>, tunnel_ids: &[i64]) -> sqlx::Result<Option<RuleRow>> {
     let mut tx = db.write.begin().await?;
     sqlx::query(&format!(
-        "UPDATE {R} SET all_tunnels = ?, action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, approver_ids = ?, updated_at = ? WHERE id = ?"
+        "UPDATE {R} SET all_tunnels = ?, mode = ?, approval_timeout = ?, action = ?, kind = ?, pattern = ?, who = ?, via = ?, note = ?, enabled = ?, approver_ids = ?, updated_at = ? WHERE id = ?"
     ))
     .bind(r.all_tunnels)
+    .bind(r.mode)
+    .bind(r.approval_timeout)
     .bind(r.action)
     .bind(r.kind)
     .bind(r.pattern)
@@ -137,6 +149,8 @@ pub async fn update_rule(db: &Db, id: i64, r: &NewRule<'_>, tunnel_ids: &[i64]) 
 pub async fn delete_rule(db: &Db, id: i64) -> sqlx::Result<bool> {
     let mut tx = db.write.begin().await?;
     sqlx::query(&format!("DELETE FROM {RT} WHERE rule_id = ?")).bind(id).execute(&mut *tx).await?;
+    sqlx::query(&format!("DELETE FROM {OT} WHERE override_id IN (SELECT id FROM {O} WHERE rule_id = ?)")).bind(id).execute(&mut *tx).await?;
+    sqlx::query(&format!("DELETE FROM {O} WHERE rule_id = ?")).bind(id).execute(&mut *tx).await?;
     let gone = sqlx::query(&format!("DELETE FROM {R} WHERE id = ?")).bind(id).execute(&mut *tx).await?.rows_affected() > 0;
     tx.commit().await?;
     Ok(gone)
@@ -198,9 +212,96 @@ pub async fn forget_tunnel(tx: &mut sqlx::SqliteConnection, tunnel_id: i64) -> s
     .await?
     .rows_affected();
     sqlx::query(&format!("DELETE FROM {RT} WHERE tunnel_id = ?")).bind(tunnel_id).execute(&mut *tx).await?;
+    // 覆寫：只列這條隧道的刪掉，其他的清單拿掉它；規則不在了的覆寫也收掉。/ Overrides: the same, plus those of deleted rules.
+    sqlx::query(&format!(
+        "DELETE FROM {O} WHERE all_tunnels = 0 AND id IN (SELECT override_id FROM {OT} WHERE tunnel_id = ?) \
+         AND NOT EXISTS (SELECT 1 FROM {OT} x WHERE x.override_id = {O}.id AND x.tunnel_id <> ?)"
+    ))
+    .bind(tunnel_id)
+    .bind(tunnel_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(&format!("DELETE FROM {OT} WHERE tunnel_id = ? OR override_id NOT IN (SELECT id FROM {O})")).bind(tunnel_id).execute(&mut *tx).await?;
+    sqlx::query(&format!("DELETE FROM {O} WHERE rule_id NOT IN (SELECT id FROM {R})")).execute(&mut *tx).await?;
     // 還沒轉換的舊隧道規則。/ Pre-upgrade tunnel rules not converted yet.
     sqlx::query(&format!("DELETE FROM {R} WHERE scope IS NULL AND tunnel_id = ?")).bind(tunnel_id).execute(&mut *tx).await?;
     Ok(gone)
+}
+
+// ---------------------------------------------------------------- overrides
+
+/// 某人對一條規則的覆寫。/ Someone's override of a rule.
+#[derive(Debug, Clone, FromRow)]
+pub struct OverrideRow {
+    pub id: i64,
+    pub rule_id: i64,
+    pub user_id: i64,
+    pub username: Option<String>,
+    /// off / mute
+    pub kind: String,
+    pub all_tunnels: bool,
+    pub created_at: String,
+}
+
+const O_SELECT: &str = "SELECT o.id, o.rule_id, o.user_id, u.username, o.kind, o.all_tunnels, o.created_at FROM telepy_command_rule_override o LEFT JOIN auth_user u ON u.id = o.user_id";
+
+/// 設定（取代）我對這條規則的一種覆寫。/ Set (replace) my override of one kind on a rule.
+pub async fn set_override(db: &Db, rule_id: i64, user_id: i64, kind: &str, all_tunnels: bool, tunnel_ids: &[i64]) -> sqlx::Result<()> {
+    let mut tx = db.write.begin().await?;
+    let old: Option<i64> = sqlx::query_scalar(&format!("SELECT id FROM {O} WHERE rule_id = ? AND user_id = ? AND kind = ?")).bind(rule_id).bind(user_id).bind(kind).fetch_optional(&mut *tx).await?;
+    let id = match old {
+        Some(id) => {
+            sqlx::query(&format!("UPDATE {O} SET all_tunnels = ? WHERE id = ?")).bind(all_tunnels).bind(id).execute(&mut *tx).await?;
+            sqlx::query(&format!("DELETE FROM {OT} WHERE override_id = ?")).bind(id).execute(&mut *tx).await?;
+            id
+        }
+        None => sqlx::query(&format!("INSERT INTO {O} (rule_id, user_id, kind, all_tunnels, created_at) VALUES (?, ?, ?, ?, ?)"))
+            .bind(rule_id)
+            .bind(user_id)
+            .bind(kind)
+            .bind(all_tunnels)
+            .bind(now_db())
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid(),
+    };
+    for t in tunnel_ids {
+        sqlx::query(&format!("INSERT OR IGNORE INTO {OT} (override_id, tunnel_id) VALUES (?, ?)")).bind(id).bind(t).execute(&mut *tx).await?;
+    }
+    tx.commit().await
+}
+
+/// 拿掉我的覆寫；回傳原本有沒有。/ Remove my override; whether there was one.
+pub async fn clear_override(db: &Db, rule_id: i64, user_id: i64, kind: &str) -> sqlx::Result<bool> {
+    let mut tx = db.write.begin().await?;
+    let old: Option<i64> = sqlx::query_scalar(&format!("SELECT id FROM {O} WHERE rule_id = ? AND user_id = ? AND kind = ?")).bind(rule_id).bind(user_id).bind(kind).fetch_optional(&mut *tx).await?;
+    if let Some(id) = old {
+        sqlx::query(&format!("DELETE FROM {OT} WHERE override_id = ?")).bind(id).execute(&mut *tx).await?;
+        sqlx::query(&format!("DELETE FROM {O} WHERE id = ?")).bind(id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(old.is_some())
+}
+
+/// 這些規則的覆寫（含限定的隧道）。/ The overrides of these rules, with their tunnels.
+pub async fn overrides_for(db: &Db, rule_ids: &[i64]) -> sqlx::Result<Vec<(OverrideRow, Vec<i64>)>> {
+    if rule_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = rule_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let rows: Vec<OverrideRow> = sqlx::query_as(&format!("{O_SELECT} WHERE o.rule_id IN ({ids}) ORDER BY o.id")).fetch_all(&db.read).await?;
+    let oids = rows.iter().map(|o| o.id.to_string()).collect::<Vec<_>>().join(",");
+    let mut targets: HashMap<i64, Vec<i64>> = HashMap::new();
+    if !oids.is_empty() {
+        let pairs: Vec<(i64, i64)> = sqlx::query_as(&format!("SELECT override_id, tunnel_id FROM {OT} WHERE override_id IN ({oids}) ORDER BY tunnel_id")).fetch_all(&db.read).await?;
+        for (o, t) in pairs {
+            targets.entry(o).or_default().push(t);
+        }
+    }
+    Ok(rows.into_iter().map(|o| {
+        let t = targets.remove(&o.id).unwrap_or_default();
+        (o, t)
+    }).collect())
 }
 
 // ---------------------------------------------------------------- events

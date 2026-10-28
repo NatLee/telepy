@@ -290,10 +290,12 @@ export function runNowKey(stage: RunStage): TranslationKey {
 }
 
 /** 指令規則通知 → 這次執行的結果（沒有通知 = 已送出）。/ A command-rule notice → the run's outcome. */
-export function stageFromBanner(state: "pending" | "blocked" | "error" | "approved" | "denied" | "cancelled" | "expired"): RunStage {
+export function stageFromBanner(state: "pending" | "blocked" | "error" | "warned" | "approved" | "denied" | "cancelled" | "expired"): RunStage {
     switch (state) {
         case "pending":
             return "held";
+        // 提醒：指令照跑了。/ A reminder: the command ran.
+        case "warned":
         case "approved":
             return "sent";
         default:

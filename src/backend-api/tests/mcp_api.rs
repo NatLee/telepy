@@ -684,6 +684,12 @@ async fn command_rules_block_and_hold_agent_commands() {
     // 只管終端機的規則不管 agent。/ A terminal-only rule leaves agents alone.
     let (err, v) = call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "cat keep.txt"})).await;
     assert!(!err && v["stdout"] == "x", "{v}");
+    // 提醒：照跑，結果附上提醒。/ A reminder: it runs, and the result carries the note.
+    let r = app.post(&rules, Some(&s.web), json!({"action": "warn", "pattern": "ls", "note": "Mind the noise"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    let (err, v) = call(app, &token, "ssh_exec", json!({"session_id": sid, "command": "ls keep.txt"})).await;
+    assert!(!err && v["stdout"].as_str().unwrap().contains("keep.txt"), "{v}");
+    assert!(v["reminder"].as_str().unwrap().contains("Mind the noise"), "{v}");
 
     // 要核准：tool call 等著，owner 核准後才跑。/ Held: the call waits until the owner approves.
     let mut owner_rx = app.state.hub.subscribe_user(s.admin_id);

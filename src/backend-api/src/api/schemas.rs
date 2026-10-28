@@ -3065,6 +3065,17 @@ pub struct CommandRule {
     /// 限定的隧道（你看不到的只算在 `hidden_tunnels`）。/ The tunnels it is limited to (ones you can't see are only counted).
     pub tunnels: Vec<CommandRuleTunnel>,
     pub hidden_tunnels: i64,
+    /// 全站規則能不能覆寫：default（隧道的 owner / ADMIN 可以在自己的隧道上關掉；提醒每個人可以靜音）/ enforced（誰都不行）。個人規則一律 default。
+    /// Site rules: default (owners / ADMINs may turn it off on their tunnels; anyone may mute a reminder) or enforced (nobody). Personal rules: default.
+    #[schema(example = "default")]
+    pub mode: String,
+    /// 「要核准」等多久（秒）；null = 網站設定。/ How long an approval waits (seconds); null = the site setting.
+    pub approval_timeout: Option<i64>,
+    /// 我的覆寫：`{off: {all_tunnels, tunnels} | null, muted}`。/ My overrides: `{off: {all_tunnels, tunnels} | null, muted}`.
+    #[schema(value_type = Object)]
+    pub my_override: serde_json::Value,
+    /// 在一條隧道上看時：誰（現在的 owner / ADMIN）在這裡關掉了它。/ On one tunnel: who (current owners / ADMINs) turned it off there.
+    pub off_here: Option<Vec<UserRef>>,
     /// block / approve / allow（例外：只豁免同一位主人的規則）。/ block, approve or allow (an exception for the same owner's rules only).
     pub action: String,
     /// command（程式 + 必要參數）/ regex（整行）。/ command (program + required arguments) or regex (whole line).
@@ -3090,6 +3101,10 @@ pub struct CommandRule {
 pub struct CommandRuleInput {
     /// 新增時：personal（預設）/ site（管理員）。/ On create: personal (default) or site (admins).
     pub scope: Option<String>,
+    /// 全站規則：default（預設，可以覆寫）/ enforced。/ Site rules: default (overridable, the default) or enforced.
+    pub mode: Option<String>,
+    /// 「要核准」等多久（30–86400 秒，不能比網站設定長）；null = 網站設定。/ Approval wait (30–86400 s, ≤ the site setting); null = the site setting.
+    pub approval_timeout: Option<i64>,
     /// block / approve / allow
     pub action: Option<String>,
     pub kind: Option<String>,
@@ -3107,6 +3122,14 @@ pub struct CommandRuleInput {
     pub all_tunnels: Option<bool>,
     /// `all_tunnels` false 時的隧道（≤ 200）。管別人的個人規則只能選你是 owner / ADMIN 的。
     /// The tunnels when `all_tunnels` is false (≤ 200). A personal rule about other people only takes tunnels you own or administer.
+    pub tunnel_ids: Option<Vec<i64>>,
+}
+
+/// 覆寫的範圍。/ The reach of an override.
+#[derive(ToSchema)]
+pub struct CommandRuleOverrideInput {
+    /// 預設 true：我現在與之後管（關掉）/ 能用（靜音）的全部隧道。/ Default true: all tunnels I manage (off) / use (mute), later ones too.
+    pub all_tunnels: Option<bool>,
     pub tunnel_ids: Option<Vec<i64>>,
 }
 
@@ -3128,6 +3151,8 @@ pub struct CommandRuleList {
     pub can_edit_site: bool,
     /// 每個人 / 全站最多幾條。/ Rules per person / site-wide at most.
     pub limit: i64,
+    /// 規則自己的核准等待最多幾秒（網站設定）。/ The longest a rule's own approval wait may be (the site setting).
+    pub approval_timeout_max: i64,
     /// 你看得到的隧道。/ The tunnels you can see.
     pub tunnels: Vec<CommandRuleTunnelChoice>,
     /// 個人規則可以指定的核准人。/ Who a personal rule may name.

@@ -8,7 +8,7 @@
  * changes size (no PTY resize).
  */
 import React, { useEffect, useState } from "react";
-import { Ban, Check, CircleCheck, Hourglass, Info, OctagonX, X } from "lucide-react";
+import { Ban, Bell, BellOff, Check, CircleCheck, Hourglass, Info, OctagonX, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api";
 import { bannerLifetime, countdown, ruleSource, type HoldBanner } from "@/lib/commandRules";
@@ -22,6 +22,7 @@ const TONE: Record<HoldBanner["state"], string> = {
     pending: "border-warning/40",
     blocked: "border-destructive/40",
     error: "border-warning/40",
+    warned: "border-foreground/30",
     approved: "border-success/40",
     denied: "border-destructive/40",
     cancelled: "border-border",
@@ -32,6 +33,7 @@ const ICON: Record<HoldBanner["state"], React.ReactNode> = {
     pending: <Hourglass size={16} className="text-warning" aria-hidden />,
     blocked: <Ban size={16} className="text-destructive" aria-hidden />,
     error: <Info size={16} className="text-warning" aria-hidden />,
+    warned: <Bell size={16} className="text-foreground" aria-hidden />,
     approved: <CircleCheck size={16} className="text-success" aria-hidden />,
     denied: <OctagonX size={16} className="text-destructive" aria-hidden />,
     cancelled: <Info size={16} className="text-muted-foreground" aria-hidden />,
@@ -51,6 +53,16 @@ export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: H
         const id = setTimeout(onDismiss, ms);
         return () => clearTimeout(id);
     }, [banner, onDismiss]);
+
+    // 提醒：不再提醒我（強制的不能）。/ A reminder: mute it for me (not an enforced one).
+    const canMute = banner.state === "warned" && banner.rule?.id != null && banner.rule.mode !== "enforced";
+    const muteIt = async () => {
+        if (!banner.rule?.id) return;
+        setBusy(true);
+        const res = await apiFetch(`/api/command-rules/${banner.rule.id}/mute`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" });
+        setBusy(false);
+        if (res.ok) onDismiss();
+    };
 
     const approveSelf = async () => {
         if (banner.requestId === null) return;
@@ -81,6 +93,10 @@ export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: H
             break;
         case "error":
             title = t("commands.banner.error");
+            break;
+        case "warned":
+            title = t("commands.banner.warned");
+            detail = t("commands.banner.warnedHint");
             break;
         case "approved":
             title = t("commands.banner.approved", { by: banner.by ?? "?" });
@@ -116,6 +132,13 @@ export function CommandHoldBanner({ banner, onWithdraw, onDismiss }: { banner: H
                     </Button>
                 )}
             </div>
+            {canMute && (
+                <div className="mt-2 flex justify-end">
+                    <Button size="xs" variant="outline" onClick={() => void muteIt()} disabled={busy}>
+                        <BellOff /> {t("commands.banner.mute")}
+                    </Button>
+                </div>
+            )}
             {banner.state === "pending" && (
                 <div className="mt-2 flex justify-end gap-2">
                     <Button size="xs" variant="outline" onClick={onWithdraw} disabled={busy}>

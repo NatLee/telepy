@@ -115,6 +115,8 @@ pub struct SendResult {
     /// 規則停下來之後沒送出的輸入（bytes）。/ Input left unsent after a rule stepped in.
     pub unsent: usize,
     pub hold: Hold,
+    /// 送出時碰到的提醒規則（指令照跑）。/ Reminder rules met on the way (the commands ran).
+    pub reminders: Vec<String>,
 }
 
 pub fn clamp_size(cols: Option<u32>, rows: Option<u32>) -> (u32, u32) {
@@ -218,12 +220,13 @@ impl AiShell {
         let _lock = self.send_lock.lock().await;
         self.touch();
         let mut sent = 0usize;
+        let mut reminders: Vec<String> = Vec::new();
         let mut input = input.to_string();
         loop {
             let split = self.state.lock().unwrap().guard.split(&input, Instant::now());
             self.write(split.send.as_bytes()).await?;
             sent += split.send.len();
-            let Some(rest) = split.enter else { return Ok(SendResult { sent, unsent: 0, hold: Hold::Sent }) };
+            let Some(rest) = split.enter else { return Ok(SendResult { sent, unsent: 0, hold: Hold::Sent, reminders }) };
             let started = self.state.lock().unwrap().guard.tracker.started();
             if !started || !command_rules::may_apply(state, self.tunnel_id, requester.user_id).await {
                 self.write(b"\r").await?;
@@ -252,7 +255,10 @@ impl AiShell {
             };
             let abandon = |s: &Self| s.state.lock().unwrap().guard.reset();
             match rule.action {
-                Action::Allow => {
+                Action::Allow | Action::Warn => {
+                    if rule.action == Action::Warn {
+                        reminders.push(command_rules::reminder_text(&rule));
+                    }
                     self.write(b"\r").await?;
                     sent += 1;
                     abandon(self);
@@ -263,7 +269,7 @@ impl AiShell {
                     sent += 1;
                     abandon(self);
                     command_rules::record_block(state, requester, &command, &rule).await;
-                    return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Blocked { rule, command } });
+                    return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Blocked { rule, command }, reminders });
                 }
                 Action::Approve => match command_rules::agent_approval(state, requester, &command, &rule).await {
                     Ok(AgentApproval::Approved { .. }) => {
@@ -276,15 +282,15 @@ impl AiShell {
                         self.write(b"\x03").await?;
                         sent += 1;
                         abandon(self);
-                        return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Denied { rule, command, id, message } });
+                        return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Denied { rule, command, id, message }, reminders });
                     }
                     // 那一行留在提示上；核准後 agent 再送一次 Enter。/ The line stays; the agent sends Enter again once approved.
-                    Ok(AgentApproval::Waiting { id }) => return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Waiting { rule, command, id } }),
+                    Ok(AgentApproval::Waiting { id }) => return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Waiting { rule, command, id }, reminders }),
                     Err(e) => {
                         self.write(b"\x03").await?;
                         sent += 1;
                         abandon(self);
-                        return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Error { rule, command, message: format!("{e:#}") } });
+                        return Ok(SendResult { sent, unsent: rest.len(), hold: Hold::Error { rule, command, message: format!("{e:#}") }, reminders });
                     }
                 },
             }

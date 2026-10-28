@@ -341,9 +341,10 @@ async fn allow_rules_and_named_approvers() {
     let check = |cmd: &str| json!({"tunnel_id": dev.tunnel_id, "command": cmd});
 
     // ---- 允許規則 / allow rules
-    let site_block = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "block", "pattern": "rm -rf"})).await;
+    let site_block = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "block", "pattern": "rm -rf", "mode": "enforced"})).await;
     assert_eq!(site_block["approver_ids"], json!([]));
-    // 個人的允許蓋不過全站的擋下。/ A personal allow never beats a site-wide block.
+    assert_eq!(site_block["mode"], "enforced");
+    // 個人的允許蓋不過強制的全站擋下。/ A personal allow never beats an enforced site-wide block.
     let tunnel_allow = add_rule(&lab, &alice.token, Some(dev.tunnel_id), json!({"action": "allow", "pattern": "rm -rf /tmp/build/*"})).await;
     assert_eq!(tunnel_allow["action"], "allow");
     let r = lab.app.post("/api/command-rules/check", Some(&alice.token), check("rm -rf /tmp/build/x")).await;
@@ -710,4 +711,98 @@ async fn old_tunnel_rules_become_personal_rules() {
     let r = lab.app.post("/api/command-rules/check", Some(&bob.token), json!({"tunnel_id": dev.tunnel_id, "command": "sudo reboot"})).await;
     assert_eq!(r.json["for_sharees"]["action"], "block", "{}", r.text);
     assert_eq!(r.json["for_sharees"]["rule"]["owner"]["username"], "carol");
+}
+
+/// 全站規則的覆寫：可以覆寫的，隧道的 owner / ADMIN 可以在自己的隧道上關掉（失去 ADMIN 就不算）；強制的誰都不行。提醒規則：
+/// 指令照跑、終端機顯示一行提示，每個人可以替自己靜音（強制的不行）。規則自己的核准等待不能比網站設定長。
+/// Overriding site rules: owners / ADMINs turn overridable ones off on their tunnels (until they lose ADMIN); enforced
+/// ones can't be. Reminders: the command runs with a notice, anyone mutes them for themselves (not enforced ones). A
+/// rule's own approval wait can't exceed the site setting.
+#[tokio::test]
+async fn site_rules_can_be_overridden_and_reminders_muted() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let carol = lab.user("carol").await;
+    let (m, dev) = echo_device(&lab, &alice).await;
+    let ubuntu = lab.username(&alice, &dev, "ubuntu").await;
+    lab.share(&alice, &dev, &bob, "view", &[ubuntu]).await;
+    lab.share(&alice, &dev, &carol, "admin", &[]).await;
+    let check = |cmd: &str| json!({"tunnel_id": dev.tunnel_id, "command": cmd});
+    let tunnel = format!("/api/reverse/server/{}/command-rules", dev.tunnel_id);
+
+    // 新的全站規則預設可以覆寫。/ New site rules are overridable by default.
+    let sudo = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "approve", "pattern": "sudo"})).await;
+    assert_eq!(sudo["mode"], "default");
+    let reboot = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "block", "pattern": "reboot", "mode": "enforced"})).await;
+    let (sid, rid) = (sudo["id"].as_i64().unwrap(), reboot["id"].as_i64().unwrap());
+
+    // 誰能關：VIEW 什麼都不管 → 400；強制的 → 400 enforced；alice 在 box 上關掉。/ Who may turn it off.
+    let r = lab.app.put(&format!("/api/command-rules/{sid}/off"), Some(&bob.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    let r = lab.app.put(&format!("/api/command-rules/{rid}/off"), Some(&alice.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].clone()), (StatusCode::BAD_REQUEST, json!("enforced")), "{}", r.text);
+    let r = lab.app.put(&format!("/api/command-rules/{sid}/off"), Some(&alice.token), json!({"all_tunnels": false, "tunnel_ids": [dev.tunnel_id]})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["my_override"]["off"]["tunnels"], json!([{"id": dev.tunnel_id, "name": "box"}]));
+    let here = lab.app.get(&tunnel, Some(&bob.token)).await;
+    let row = here.json["site_rules"].as_array().unwrap().iter().find(|x| x["id"] == sudo["id"]).cloned().unwrap();
+    assert_eq!(row["off_here"], json!([{"id": alice.id, "username": "alice"}]), "{}", here.text);
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("sudo ls")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "allow", "{}", r.text);
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("sudo reboot")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "block", "the enforced rule still holds: {}", r.text);
+    let mut t = lab.terminal(&bob, &dev, "ubuntu").await.expect("terminal");
+    t.expect("$ ").await;
+    t.input("sudo ls\r").await;
+    t.expect("ran:sudo ls").await;
+
+    // carol（ADMIN）也關掉；alice 打開回來還是關著；carol 降成 VIEW 之後她的關掉不算了。
+    // carol (ADMIN) turns it off too; alice turning it back on isn't enough; carol losing ADMIN ends hers.
+    assert_eq!(lab.app.put(&format!("/api/command-rules/{sid}/off"), Some(&carol.token), json!({})).await.status, StatusCode::OK);
+    let r = lab.app.delete(&format!("/api/command-rules/{sid}/off"), Some(&alice.token)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert!(r.json["my_override"]["off"].is_null());
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("sudo ls")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "allow", "carol's still counts: {}", r.text);
+    let r = lab.app.patch(&format!("/tunnels/update-permission/{}/{}", dev.tunnel_id, carol.id), Some(&alice.token), json!({"permission_type": "view"})).await;
+    assert!(r.status.is_success(), "{}", r.text);
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("sudo ls")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "approve", "{}", r.text);
+
+    // 提醒：照跑、終端機有提示；bob 靜音後就安靜了；強制的提醒不能靜音。
+    // A reminder: it runs with a notice; quiet once bob mutes it; an enforced reminder can't be muted.
+    let warn = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "warn", "pattern": "systemctl restart", "note": "Tell #ops"})).await;
+    let wid = warn["id"].as_i64().unwrap();
+    t.input("systemctl restart nginx\r").await;
+    let n = t.expect_notice("warned").await;
+    assert_eq!(n["rule"]["note"], "Tell #ops");
+    t.expect("ran:systemctl restart nginx").await;
+    let r = lab.app.put(&format!("/api/command-rules/{wid}/mute"), Some(&bob.token), json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["my_override"]["muted"], true);
+    let r = lab.app.post("/api/command-rules/check", Some(&bob.token), check("systemctl restart nginx")).await;
+    assert_eq!(r.json["for_sharees"]["action"], "allow", "muted for bob: {}", r.text);
+    let r = lab.app.post("/api/command-rules/check", Some(&alice.token), check("systemctl restart nginx")).await;
+    assert_eq!(r.json["for_approvers"]["action"], "warn", "still reminds alice: {}", r.text);
+    let hard = add_rule(&lab, &lab.admin_token, None, json!({"scope": "site", "action": "warn", "pattern": "halt", "mode": "enforced"})).await;
+    let r = lab.app.put(&format!("/api/command-rules/{}/mute", hard["id"]), Some(&bob.token), json!({})).await;
+    assert_eq!((r.status, r.json["code"].clone()), (StatusCode::BAD_REQUEST, json!("enforced")), "{}", r.text);
+    let r = lab.app.put(&format!("/api/command-rules/{sid}/mute"), Some(&bob.token), json!({})).await;
+    assert_eq!(r.json["code"], "not_reminder", "{}", r.text);
+
+    // 規則自己的核准等待：比網站設定長 → 400；45 秒 → 申請 45 秒後到期。/ A rule's own wait.
+    let r = lab.app.post(&tunnel, Some(&alice.token), json!({"action": "approve", "pattern": "apt", "approval_timeout": 99_999})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    assert!(r.json["approval_timeout"].is_array(), "{}", r.text);
+    let apt = add_rule(&lab, &alice.token, Some(dev.tunnel_id), json!({"action": "approve", "pattern": "apt", "approval_timeout": 45})).await;
+    assert_eq!(apt["approval_timeout"], 45);
+    t.input("apt update\r").await;
+    let n = t.expect_notice("pending").await;
+    let at = |k: &str| chrono::DateTime::parse_from_rfc3339(n["request"][k].as_str().unwrap()).unwrap();
+    assert!((44..=45).contains(&(at("expires_at") - at("created_at")).num_seconds()), "{n}");
+    t.input("\x03").await;
+    t.expect_notice("cancelled").await;
+    t.close().await;
+    assert!(!m.commands().iter().any(|c| c == "apt update"), "{:?}", m.commands());
 }

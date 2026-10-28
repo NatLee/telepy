@@ -17,8 +17,9 @@ import { ActionIcon, RuleSource } from "./RuleList";
 
 function Verdict({ label, v }: { label: string; v: CheckVerdict }) {
     const { t } = useI18n();
-    const icon = v.action === "allow" ? <CircleCheck size={15} className="text-success" aria-hidden /> : <ActionIcon action={v.action} className={v.action === "block" ? "text-destructive" : "text-warning"} />;
-    const text = v.action === "block" ? t("commands.tester.blocked") : v.action === "approve" ? t("commands.tester.held") : t("commands.tester.allowed");
+    const icon =
+        v.action === "allow" ? <CircleCheck size={15} className="text-success" aria-hidden /> : <ActionIcon action={v.action} className={v.action === "block" ? "text-destructive" : v.action === "warn" ? "text-foreground" : "text-warning"} />;
+    const text = v.action === "block" ? t("commands.tester.blocked") : v.action === "approve" ? t("commands.tester.held") : v.action === "warn" ? t("commands.tester.warned") : t("commands.tester.allowed");
     const approvers = v.action === "approve" && v.approvers ? (v.approvers.default && v.approvers.users.length === 0 ? t("commands.tester.approversDefault") : t("commands.tester.approvers", { names: v.approvers.users.map((u) => u.username).join(", ") })) : null;
     return (
         <li className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">

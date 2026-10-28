@@ -462,6 +462,13 @@ impl Shell {
                         self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, requester.user_id, rest).await;
                         Vec::new()
                     }
+                    // 提醒：照樣送出 Enter，瀏覽器顯示一行提示。/ A reminder: the Enter goes out, the browser shows a note.
+                    Some(rule) if rule.action == Action::Warn => {
+                        pty_write(&self.pty, b"\r").await;
+                        self.guard.reset();
+                        self.hold = feed(state, &mut self.guard, &self.pty, tunnel_id, requester.user_id, rest).await;
+                        vec![json!({ "type": "command", "state": "warned", "command": shown, "rule": command_rules::matched_json(&rule) })]
+                    }
                     Some(rule) if rule.action == Action::Block => {
                         pty_write(&self.pty, b"\x03").await;
                         self.guard.reset();

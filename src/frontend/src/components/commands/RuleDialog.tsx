@@ -11,7 +11,7 @@
  * first step with an error.
  */
 import React, { useEffect, useState } from "react";
-import { Minus, Search, ShieldCheck } from "lucide-react";
+import { Lock, Minus, Search, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Field } from "@/components/ui/field";
@@ -22,7 +22,8 @@ import { Segmented } from "@/components/ui/segmented";
 import { StepTabs, type StepTab } from "@/components/ui/step-tabs";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { RULE_PRESETS, WHO_KEY, newRuleInput, pickableIds, ruleToInput, tunnelPickable } from "@/lib/commandRules";
+import { RULE_PRESETS, WHO_KEY, formatWait, newRuleInput, pickableIds, ruleToInput, timeoutChoices, tunnelPickable } from "@/lib/commandRules";
+import { NativeSelect } from "@/components/ui/native-select";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { RuleErrors } from "@/hooks/useCommandRulesPage";
@@ -47,6 +48,8 @@ interface Props {
     tunnels: TunnelChoice[];
     /** 可以指定的核准人。/ Who may be named as an approver. */
     approverCandidates: UserBrief[];
+    /** 規則自己的核准等待最多幾秒（網站設定）。/ The longest a rule's own approval wait may be (the site setting). */
+    approvalTimeoutMax: number;
     onSave: (input: RuleInput, existing: CommandRule | null) => Promise<RuleErrors | null>;
     check: (command: string, draft?: { kind: string; pattern: string }) => Promise<CheckResult | null>;
 }
@@ -56,8 +59,8 @@ export function RuleDialog(props: Props) {
     return props.isOpen ? <RuleForm key={props.rule?.id ?? "new"} {...props} /> : null;
 }
 
-function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approverCandidates, onSave, check }: Props) {
-    const { t } = useI18n();
+function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approverCandidates, approvalTimeoutMax, onSave, check }: Props) {
+    const { t, locale } = useI18n();
     const site = scope === "site";
     const [input, setInput] = useState<RuleInput>(rule ? ruleToInput(rule) : newRuleInput(startTunnel));
     const [errors, setErrors] = useState<RuleErrors>({});
@@ -105,7 +108,7 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
     const selfApproved = !site && input.who === "me";
     const wantsNames = input.action === "approve" && pickApprovers && !selfApproved;
     const stepOf = (e: RuleErrors): RuleStep | null =>
-        e.action || e.kind || e.pattern ? "match" : e.who || e.via || e.tunnel_ids || e.all_tunnels ? "scope" : e.approver_ids || e.note || e.enabled ? "extra" : null;
+        e.action || e.kind || e.pattern ? "match" : e.who || e.via || e.tunnel_ids || e.all_tunnels || e.mode ? "scope" : e.approver_ids || e.note || e.enabled || e.approval_timeout ? "extra" : null;
     const save = async () => {
         const local: RuleErrors = {};
         if (!input.all_tunnels && pickedIds.length === 0) local.tunnel_ids = t("commands.form.tunnelsEmpty");
@@ -122,6 +125,7 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
                 ...(rule ? {} : { scope }),
                 tunnel_ids: input.all_tunnels ? [] : pickedIds,
                 approver_ids: wantsNames ? input.approver_ids : [],
+                approval_timeout: input.action === "approve" ? input.approval_timeout : null,
             },
             rule,
         );
@@ -189,12 +193,15 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
                             options={[
                                 { value: "block", label: t("commands.action.block"), icon: <ActionIcon action="block" /> },
                                 { value: "approve", label: t("commands.action.approve"), icon: <ActionIcon action="approve" /> },
+                                { value: "warn", label: t("commands.action.warn"), icon: <ActionIcon action="warn" /> },
                                 { value: "allow", label: t("commands.action.allow"), icon: <ActionIcon action="allow" /> },
                             ]}
                             aria-label={t("commands.form.action")}
                         />
                     </Field>
-                    <p className="-mt-3 text-xs text-muted-foreground">{t(input.action === "block" ? "commands.form.blockHint" : input.action === "approve" ? "commands.form.approveHint" : "commands.form.allowHint")}</p>
+                    <p className="-mt-3 text-xs text-muted-foreground">
+                        {t(input.action === "block" ? "commands.form.blockHint" : input.action === "approve" ? "commands.form.approveHint" : input.action === "warn" ? "commands.form.warnHint" : "commands.form.allowHint")}
+                    </p>
 
                     <Field label={t("commands.form.match")} error={errors.kind}>
                         <Segmented
@@ -248,8 +255,8 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
                                     shownResult.error
                                 ) : shownResult.matches ? (
                                     <>
-                                        <ActionIcon action={input.action} className={input.action === "block" ? "text-destructive" : input.action === "approve" ? "text-warning" : "text-success"} />
-                                        {t(input.action === "block" ? "commands.form.wouldBlock" : input.action === "approve" ? "commands.form.wouldHold" : "commands.form.wouldAllow")}
+                                        <ActionIcon action={input.action} className={input.action === "block" ? "text-destructive" : input.action === "approve" ? "text-warning" : input.action === "warn" ? "text-foreground" : "text-success"} />
+                                        {t(input.action === "block" ? "commands.form.wouldBlock" : input.action === "approve" ? "commands.form.wouldHold" : input.action === "warn" ? "commands.form.wouldWarn" : "commands.form.wouldAllow")}
                                     </>
                                 ) : (
                                     <>
@@ -303,6 +310,19 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
                             aria-label={t("commands.form.scope")}
                         />
                     </Field>
+                    {/* 全站規則：允許覆寫（預設開）；關掉 = 強制。/ Site rules: let people override (on by default); off = enforced. */}
+                    {site && (
+                        <Field label={t("commands.form.override")} error={errors.mode} hint={t(input.mode === "enforced" ? "commands.form.overrideOffHint" : "commands.form.overrideOnHint")}>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Switch size="sm" checked={input.mode !== "enforced"} onCheckedChange={(on) => set("mode", on ? "default" : "enforced")} aria-label={t("commands.form.override")} />
+                                {input.mode === "enforced" && (
+                                    <Chip>
+                                        <Lock /> {t("commands.mode.enforced")}
+                                    </Chip>
+                                )}
+                            </div>
+                        </Field>
+                    )}
                     {!input.all_tunnels && (
                         <div className="-mt-2 space-y-2">
                             {choices.length >= SEARCH_FROM && (
@@ -380,6 +400,26 @@ function RuleForm({ isOpen, onClose, rule, scope, startTunnel, tunnels, approver
                                 </div>
                             </Field>
                         ))}
+
+                    {input.action === "approve" && (
+                        <Field label={t("commands.form.wait")} error={errors.approval_timeout} hint={t("commands.form.waitHint")}>
+                            <NativeSelect
+                                value={input.approval_timeout ?? ""}
+                                onChange={(e) => set("approval_timeout", e.target.value ? Number(e.target.value) : null)}
+                                className="h-9 w-full sm:w-72"
+                                aria-label={t("commands.form.wait")}
+                            >
+                                <option value="">{t("commands.form.waitSite", { time: formatWait(approvalTimeoutMax, locale) })}</option>
+                                {[...new Set([...timeoutChoices(approvalTimeoutMax), ...(input.approval_timeout ? [input.approval_timeout] : [])])]
+                                    .sort((a, b) => a - b)
+                                    .map((secs) => (
+                                        <option key={secs} value={secs}>
+                                            {formatWait(secs, locale)}
+                                        </option>
+                                    ))}
+                            </NativeSelect>
+                        </Field>
+                    )}
 
                     <Field label={t("commands.form.note")} addon={<span className="text-xs text-muted-foreground">{t("commands.form.optional")}</span>} error={errors.note} hint={t("commands.form.noteHint")}>
                         <Textarea value={input.note} onChange={(e) => set("note", e.target.value)} maxLength={300} rows={2} placeholder={t("commands.form.notePlaceholder")} />
