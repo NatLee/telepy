@@ -15,6 +15,8 @@ export type ViewModes = Record<string, ViewMode>;
 /** 有卡片 / 清單切換的頁面（偏好設定照這個順序列出）。/ Pages with a card / list switch (listed in this order in Preferences). */
 export const VIEW_PAGES = [
     { id: "tunnels", label: "prefs.view.tunnels", fallback: "card" },
+    // 金鑰頁原本只有列表，沒選過的人維持列表。/ The keys page used to be a list only; keep it for people who never chose.
+    { id: "keys", label: "prefs.view.keys", fallback: "list" },
     { id: "key_groups", label: "prefs.view.keyGroups", fallback: "card" },
 ] as const satisfies readonly { id: string; label: TranslationKey; fallback: ViewMode }[];
 export type ViewPage = (typeof VIEW_PAGES)[number]["id"];

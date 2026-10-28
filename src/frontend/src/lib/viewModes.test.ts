@@ -12,6 +12,9 @@ test("a page without a choice uses its default", () => {
     assert.equal(viewModeOf({}, "tunnels"), "card");
     assert.equal(viewModeOf({ tunnels: "list" }, "tunnels"), "list");
     assert.equal(viewModeOf({ tunnels: "list" }, "key_groups"), "card");
+    // 金鑰頁沒選過還是列表（以前只有列表）。/ The keys page stays a list until chosen (it used to be list-only).
+    assert.equal(viewModeOf({}, "keys"), "list");
+    assert.equal(viewModeOf({ keys: "card" }, "keys"), "card");
 });
 
 test("the old tunnels-view value moves over unless the cache has one", () => {

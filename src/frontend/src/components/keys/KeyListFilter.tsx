@@ -17,7 +17,7 @@ import { useI18n } from "@/lib/i18n";
 import type { TranslationKey } from "@/locales/en";
 import type { UserKey } from "@/types/keys";
 import { filterKeys, KEY_LIST_FILTER_FROM, type KeyListBucket, type KeyListSort } from "@/lib/userKeyList";
-import { pageSlice } from "@/lib/pagination";
+import { CARD_PAGE_SIZES, PAGE_SIZES, pageSlice } from "@/lib/pagination";
 import { usePagination } from "@/hooks/usePagination";
 import { Pagination } from "@/components/ui/pagination";
 
@@ -34,7 +34,11 @@ const SORTS: { value: KeyListSort; label: TranslationKey }[] = [
     { value: "newest", label: "keys.list.sort.newest" },
 ];
 
-export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => number) {
+/**
+ * `cards` = 卡片檢視：每頁 12 / 24 / 48 / 96 張（1–3 欄剛好排滿），每頁張數另記在 `telepy.keyCardsPageSize`。
+ * `cards` = the card view: 12 / 24 / 48 / 96 per page (fills 1–3 columns), kept in `telepy.keyCardsPageSize`.
+ */
+export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => number, cards = false) {
     const { locale } = useI18n();
     const [query, setQuery] = useState("");
     const deferred = useDeferredValue(query);
@@ -52,7 +56,11 @@ export function useKeyListFilter(keys: UserKey[], devicesOf: (id: number) => num
     }, [keys, deferred, bucket, sort, devicesOf, locale, showControls]);
 
     const filtering = showControls && (deferred.trim() !== "" || result.bucket !== "all");
-    const pager = usePagination(result.keys.length, { storageKey: "telepy.keysPageSize", resetKey: `${deferred}|${result.bucket}|${sort}` });
+    const pager = usePagination(result.keys.length, {
+        storageKey: cards ? "telepy.keyCardsPageSize" : "telepy.keysPageSize",
+        resetKey: `${deferred}|${result.bucket}|${sort}|${cards}`,
+        sizes: cards ? CARD_PAGE_SIZES : PAGE_SIZES,
+    });
     const visible = pageSlice(result.keys, pager.page, pager.size);
     const reset = useCallback(() => {
         setQuery("");
@@ -98,14 +106,31 @@ export function KeyListFilterBar({ filter }: { filter: KeyListFilterState }) {
                     className="h-8 pl-8"
                 />
             </div>
+            {/* 分類：手機上是一行下拉（分段在日文裡比畫面寬，會把整頁撐出橫向捲動）。
+                Buckets: a one-line select on phones (the segments are wider than the screen in Japanese and pushed the page sideways). */}
             {shown.length > 1 && (
-                <Segmented
-                    size="sm"
-                    value={filter.bucket}
-                    onChange={filter.setBucket}
-                    aria-label={t("keys.list.bucketAria")}
-                    options={shown.map((b) => ({ value: b.value, label: `${t(b.label)} (${filter.counts[b.value]})` }))}
-                />
+                <>
+                    <Segmented
+                        size="sm"
+                        value={filter.bucket}
+                        onChange={filter.setBucket}
+                        aria-label={t("keys.list.bucketAria")}
+                        className="hidden sm:inline-flex"
+                        options={shown.map((b) => ({ value: b.value, label: `${t(b.label)} (${filter.counts[b.value]})` }))}
+                    />
+                    <NativeSelect
+                        value={filter.bucket}
+                        onChange={(e) => filter.setBucket(e.target.value as KeyListBucket)}
+                        aria-label={t("keys.list.bucketAria")}
+                        className="w-auto min-w-0 sm:hidden [&>select]:h-8"
+                    >
+                        {shown.map((b) => (
+                            <option key={b.value} value={b.value}>
+                                {`${t(b.label)} (${filter.counts[b.value]})`}
+                            </option>
+                        ))}
+                    </NativeSelect>
+                </>
             )}
             <NativeSelect value={filter.sort} onChange={(e) => filter.setSort(e.target.value as KeyListSort)} aria-label={t("keys.list.sort")} className="w-auto [&>select]:h-8">
                 {SORTS.map((s) => (
