@@ -104,6 +104,19 @@ pub async fn by_name(db: &Db, name: &str) -> sqlx::Result<Option<Tunnel>> {
     sqlx::query_as(&format!("SELECT {T_COLS} FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_optional(&db.read).await
 }
 
+/// 不分大小寫找名稱，完全相同的排前面。OpenSSH 會把 `HostName` 轉成小寫再交給 ProxyCommand 的 `%h`，所以名稱有大寫的
+/// 隧道（`MyBox`）到閘道時是 `mybox`；SQLite 的 `lower()` 跟 OpenSSH 一樣只轉 ASCII。UNIQUE 是分大小寫的，所以可能有好幾條。
+/// Names ignoring case, the exact one first. OpenSSH lowercases `HostName` before ProxyCommand's `%h`, so a tunnel named
+/// `MyBox` reaches the gateway as `mybox`; SQLite's `lower()` folds ASCII only, like OpenSSH. UNIQUE is case-sensitive,
+/// so several rows may match.
+pub async fn by_name_ignoring_case(db: &Db, name: &str) -> sqlx::Result<Vec<Tunnel>> {
+    sqlx::query_as(&format!("SELECT {T_COLS} FROM {T} WHERE lower(host_friendly_name) = lower(?) ORDER BY host_friendly_name = ? DESC, id"))
+        .bind(name)
+        .bind(name)
+        .fetch_all(&db.read)
+        .await
+}
+
 /// 名稱全站唯一（UNIQUE）。/ Names are unique across all users.
 pub async fn name_taken(db: &Db, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {T} WHERE host_friendly_name = ?")).bind(name).fetch_one(&db.read).await?;

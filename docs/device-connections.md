@@ -216,6 +216,8 @@ gateway 在公鑰認證時就知道是哪條隧道（`Identity::Tunnel`），所
 
 筆電的 `direct-tcpip` 除了 `localhost:<號碼>`，也接受 `<隧道名稱>:<任意 port>`（名稱全站唯一）：產生的 ssh config
 裝置區塊改成 `HostName <名稱>` / `Port 22`，經 `ProxyCommand ssh -W %h:%p <伺服器區塊>` 跳過去；舊的設定檔照常可用。
+名稱**不分大小寫**比對：OpenSSH 會先把 `HostName` 轉成小寫才放進 `%h`（`MyBox` 到閘道時是 `mybox`）。完全相同的優先，
+否則挑這把金鑰連得到的那條；以前精確比對，名稱有大寫的隧道會被拒（`administratively prohibited`）。
 伺服器區塊的別名是 `telepy-<網域>-<port>`（跟 `HostKeyAlias` 同一個字串），每台 Telepy 各自一個，裝在同一份 config 裡互不干擾；
 舊版共用的 `telepy-ssh-server` 區塊由安裝指令在「確定是這台、又沒有區塊再用它」時清掉。
 兩台 Telepy 有同名裝置時，安裝指令看同名區塊的 ProxyCommand 跳到哪台伺服器：是別台的就保留、不覆蓋，並列出這些名字；
