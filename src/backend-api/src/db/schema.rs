@@ -832,6 +832,7 @@ const TABLES: &[(&str, &str)] = &[
 const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_user" ON "telepy_api_call" ("user_id", "id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_token" ON "telepy_api_call" ("token_id", "at")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_grant" ON "telepy_api_call" ("grant_id", "at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_api_call_at" ON "telepy_api_call" ("at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_user_group_member_user" ON "telepy_user_group_member" ("user_id")"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS "telepy_lan_host_tunnel_address" ON "telepy_lan_host" ("tunnel_id", "address")"#,

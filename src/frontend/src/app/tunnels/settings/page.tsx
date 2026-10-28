@@ -43,6 +43,7 @@ import { SignInHistory } from "@/components/layout/SignInHistory";
 import { SignInDevices } from "@/components/layout/SignInDevices";
 import { ApiTokens } from "@/components/tokens/ApiTokens";
 import { ConnectedApps } from "@/components/layout/ConnectedApps";
+import { CliSignIns } from "@/components/tokens/CliSignIns";
 import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
@@ -380,6 +381,11 @@ function McpEndpointPanel() {
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
                 {tn("settings.mcpEndpointHint", { env: <code className="px-1 rounded bg-muted font-mono text-[0.85em]">PUBLIC_URL</code> })}
             </p>
+            {/* telepy login 也走這台 OAuth 伺服器、telepy exec 也算進 AI 上限；它的登入列在 API 頁，不在 MCP app 裡。
+                telepy login uses this OAuth server too and telepy exec counts toward the AI limits; its sign-ins live on the API page. */}
+            <Callout tone="info" className="mt-3">
+                {t("settings.mcpCliNote")}
+            </Callout>
             <div className="mt-3 flex flex-wrap gap-2">
                 <Link href="/tunnels/mcp" prefetch={false} className={linkClass}>
                     <Plug size={13} /> {t("nav.mcp")} <ArrowRight size={12} className="opacity-60" />
@@ -687,13 +693,14 @@ function UserEditModal({
                 <SignInHistory endpoint={`/api/user/users/${user.id}/sign-ins`} description={t("security.signInsAdminDescription")} />
             )}
 
-            {/* 這個人的個人 API token（可撤銷）/ Their personal API tokens (revoke) */}
-            {/* 這個人核可過的 OAuth 應用程式（可看詳細、可撤銷）/ The OAuth apps they approved (details, revoke) */}
-            {tab === "apps" && <ConnectedApps userId={user.id} />}
+            {/* 這個人核可過的 MCP app（可看詳細、可撤銷）；CLI 登入在 API 與 CLI 分頁。/ Their MCP apps; CLI sign-ins are on the API tab. */}
+            {tab === "apps" && <ConnectedApps userId={user.id} onShowCli={() => setTab("tokens")} />}
 
+            {/* 這個人的個人 API token 與 CLI 登入（可撤銷）/ Their personal API tokens and CLI sign-ins (revoke) */}
             {tab === "tokens" && (
-                <div className="space-y-4">
+                <div className="space-y-6">
                     <ApiTokens userId={user.id} />
+                    <CliSignIns userId={user.id} />
                     {/* 這個人的 token 呼叫紀錄在管理區的 API 活動。/ Their token calls are in the admin section's API activity. */}
                     <Link
                         href={`/tunnels/admin/api-activity?user=${user.id}`}

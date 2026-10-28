@@ -22,6 +22,7 @@ import { useI18n } from "@/lib/i18n";
 import { REACH_BRANCHES, reachFor, type ReachBranch } from "@/lib/aiAccess";
 import { cn } from "@/lib/utils";
 import type { OAuthGrant } from "@/types/oauth";
+import { splitGrants } from "@/lib/cliSignIns";
 
 const BRANCH_ICON: Record<ReachBranch, LucideIcon> = {
     tunnels: Eye,
@@ -103,7 +104,8 @@ export function AgentReachDialog({ isOpen, onClose }: { isOpen: boolean; onClose
         (async () => {
             try {
                 const res = await apiFetch("/api/oauth/grants");
-                const data: OAuthGrant[] = res.ok ? await res.json() : [];
+                // 只有 MCP app：CLI 的瀏覽器登入不是 AI app，到不了 MCP 工具。/ MCP apps only; CLI sign-ins are not AI apps.
+                const data: OAuthGrant[] = res.ok ? splitGrants((await res.json()) as OAuthGrant[]).apps : [];
                 if (cancelled) return;
                 setGrants(data);
                 setPicked((prev) => (prev && data.some((g) => String(g.id) === prev) ? prev : data[0] ? String(data[0].id) : ""));

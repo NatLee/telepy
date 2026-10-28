@@ -353,10 +353,10 @@ export type CliStartStep = "install" | "signIn" | "try";
 export const CLI_START_STEPS: readonly CliStartStep[] = ["install", "signIn", "try"];
 
 /**
- * 三步（安裝 → 登入 → 試試看）：看過 CLI 的登入（Connected apps 裡有 `telepy CLI (…)`）就表示裝好也登入了。
+ * 三步（安裝 → 登入 → 試試看）：看過 CLI 的登入（API 頁「CLI 登入」裡有 `telepy CLI (…)`）就表示裝好也登入了。
  * 用 token 登入的看不出來，所以登入那步不會因為有 token 就打勾。「試試看」沒辦法從這邊看出來，所以不會打勾。
  * 頁面打開在第一個沒打勾的那一步（`firstOpenStep`）。
- * The three steps (install → sign in → try it): a CLI sign-in under Connected apps means it is installed and
+ * The three steps (install → sign in → try it): a CLI sign-in (the API page's CLI sign-ins) means it is installed and
  * signed in. A token sign-in can't be told apart, so having tokens never ticks the sign-in step; "try it" can't be
  * seen from here, so it is never ticked. The page opens on the first unticked step (`firstOpenStep`).
  */

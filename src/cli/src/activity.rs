@@ -1,7 +1,7 @@
 //! `telepy api tokens` / `telepy api activity`：自己的 API token 與用它們（以及已連接 app）打過的呼叫，跟網頁 API 頁的
 //! 「你的 token」「活動」同一份資料（`GET /api/auth/tokens`、`GET /api/auth/tokens/calls`）。這裡只放純函式：參數解析
 //! （`--since` 的長度、狀態分組、方法）、查詢字串、表格列、`--follow` 的單行格式。
-//! `telepy api tokens` / `telepy api activity`: your API tokens and the calls made with them (and with connected apps),
+//! `telepy api tokens` / `telepy api activity`: your API tokens and the calls made with them (and with CLI sign-ins),
 //! the same data as the web API page's tokens and Activity tabs. Pure helpers only: argument parsing (`--since`
 //! durations, status buckets, methods), the query string, table rows and the one-line `--follow` format.
 

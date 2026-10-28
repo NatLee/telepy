@@ -279,6 +279,102 @@ async fn reconnecting_an_app_can_replace_the_old_connection() {
     assert_eq!(app.get("/api/oauth/grants", Some(&web)).await.json.as_array().unwrap().len(), 2);
 }
 
+async fn register_named(app: &TestApp, name: &str) -> String {
+    let r = app.post("/api/oauth/register", None, json!({"client_name": name, "redirect_uris": [REDIRECT], "token_endpoint_auth_method": "none"})).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
+    r.json["client_id"].as_str().unwrap().to_string()
+}
+
+/// `telepy login` = 一次註冊 + 同意 + 換 token（CLI 每次都重新註冊）。回（client_id, access token）。
+/// One `telepy login`: register anew, approve, exchange. Returns (client_id, access token).
+async fn cli_login(app: &TestApp, web: &str, host: &str, extra: Value) -> (String, String) {
+    let client_id = register_named(app, &format!("telepy CLI ({host})")).await;
+    let code = approve(app, web, &client_id, "tunnels:read", extra).await;
+    let r = exchange(app, &client_id, &code).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    (client_id, r.json["access_token"].as_str().unwrap().to_string())
+}
+
+fn kinds(grants: &Value) -> (usize, usize) {
+    let list = grants.as_array().unwrap();
+    (list.iter().filter(|g| g["kind"] == "cli").count(), list.iter().filter(|g| g["kind"] == "app").count())
+}
+
+#[tokio::test]
+async fn cli_sign_ins_are_told_apart_replace_per_computer_and_are_capped() {
+    let app = common::spawn().await;
+    let web = app.login("admin", "pw").await;
+    let ch = challenge(VERIFIER);
+
+    // 一個 MCP app：kind = app，沒有呼叫摘要，同意頁的 cli = null。/ An MCP app: kind app, no call summary, cli null.
+    let claude = register_public(&app).await;
+    let code = approve(&app, &web, &claude, "", json!({})).await;
+    let claude_access = exchange(&app, &claude, &code).await.json["access_token"].as_str().unwrap().to_string();
+    let info = app.get(&format!("/api/oauth/authorize?{}", query(&authorize_params(&claude, &ch, ""))), Some(&web)).await.json;
+    assert_eq!(info["cli"], Value::Null);
+
+    // 第一次從 mac 登入：kind = cli、cli_host = mac、帶呼叫摘要。/ First sign-in from the mac.
+    let (_, mac1) = cli_login(&app, &web, "mac", json!({})).await;
+    let grants = app.get("/api/oauth/grants", Some(&web)).await.json;
+    assert_eq!(kinds(&grants), (1, 1), "{grants}");
+    let cli = grants.as_array().unwrap().iter().find(|g| g["kind"] == "cli").unwrap().clone();
+    assert_eq!(cli["cli_host"], "mac");
+    assert_eq!(cli["calls"]["calls_7d"], 0, "{cli}");
+    let app_row = grants.as_array().unwrap().iter().find(|g| g["kind"] == "app").unwrap();
+    assert_eq!(app_row["cli_host"], Value::Null);
+    assert!(app_row.get("calls").is_none(), "apps' MCP calls are in the AI audit, not the call log");
+
+    // 它的 REST 請求算進摘要（API 頁的「CLI 登入」）。/ Its REST calls count in the summary.
+    let mac1_grant = cli["id"].as_i64().unwrap();
+    let call = db::api_calls::NewCall {
+        at: telepy_server::util::now_db(),
+        user_id: db::users::by_username(&app.state.db, "admin").await.unwrap().unwrap().id,
+        grant_id: Some(mac1_grant),
+        client_name: "telepy CLI (mac)".into(),
+        kind: "rest",
+        method: "GET".into(),
+        route: "/api/reverse/server/dashboard".into(),
+        status: 200,
+        duration_ms: 4,
+        ..Default::default()
+    };
+    db::api_calls::insert_batch(&app.state.db, &[call]).await.unwrap();
+    let grants = app.get("/api/oauth/grants", Some(&web)).await.json;
+    let cli = grants.as_array().unwrap().iter().find(|g| g["id"] == mac1_grant).unwrap();
+    assert_eq!((cli["calls"]["calls_24h"].as_i64(), cli["calls"]["last_status"].as_i64()), (Some(1), Some(200)), "{cli}");
+    assert_eq!(app.get(&format!("/api/oauth/grants/{mac1_grant}"), Some(&web)).await.json["calls"]["calls_24h"], 1);
+
+    // 同一台電腦再登入：新註冊的 client，但同意頁認得它先前的登入，取代後舊的失效。
+    // Signing in again from the same computer: a new client, yet the consent page finds the earlier sign-in.
+    let mac2_client = register_named(&app, "telepy CLI (mac)").await;
+    let info = app.get(&format!("/api/oauth/authorize?{}", query(&authorize_params(&mac2_client, &ch, "tunnels:read"))), Some(&web)).await.json;
+    assert_eq!(info["existing"].as_array().unwrap().len(), 1, "{info}");
+    assert_eq!(info["existing"][0]["id"], mac1_grant);
+    assert_eq!(info["cli"], json!({"host": "mac", "signed_in": 1, "limit": 10}));
+    let code = approve(&app, &web, &mac2_client, "tunnels:read", json!({"replace": true})).await;
+    assert_eq!(exchange(&app, &mac2_client, &code).await.status, StatusCode::OK);
+    assert_eq!(mcp::resolve(&app.state, &mac1).await.unwrap_err(), McpAuthError::Invalid, "the mac's earlier sign-in is replaced");
+    assert_eq!(kinds(&app.get("/api/oauth/grants", Some(&web)).await.json), (1, 1));
+
+    // 另一台電腦不算「同一個」。/ Another computer is not the same app.
+    let pc_client = register_named(&app, "telepy CLI (pc)").await;
+    let info = app.get(&format!("/api/oauth/authorize?{}", query(&authorize_params(&pc_client, &ch, "tunnels:read"))), Some(&web)).await.json;
+    assert_eq!(info["existing"], json!([]));
+
+    // 上限：最多 10 個 CLI 登入，第 11 個進來時最久沒用的登出；MCP app 不算在內。
+    // The limit: at most 10 CLI sign-ins; the 11th signs out the least recently used. MCP apps don't count.
+    let mut first_extra = None;
+    for i in 0..10 {
+        let (_, access) = cli_login(&app, &web, &format!("host-{i}"), json!({})).await;
+        first_extra.get_or_insert(access);
+    }
+    let grants = app.get("/api/oauth/grants", Some(&web)).await.json;
+    assert_eq!(kinds(&grants), (10, 1), "{grants}");
+    assert!(grants.as_array().unwrap().iter().all(|g| g["cli_host"] != "mac"), "the mac's sign-in was the oldest: {grants}");
+    assert!(mcp::resolve(&app.state, first_extra.as_deref().unwrap()).await.is_ok());
+    assert!(mcp::resolve(&app.state, &claude_access).await.is_ok(), "the MCP app is untouched");
+}
+
 #[tokio::test]
 async fn code_exchange_refresh_rotation_and_revocation() {
     let app = common::spawn().await;

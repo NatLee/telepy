@@ -373,8 +373,8 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
             {tab === "apps" && (
                 <div className="space-y-6">
-                    {/* 已連接的應用程式 / Connected apps (MCP / AI clients) */}
-                    <ConnectedApps />
+                    {/* MCP app（AI 工具）；CLI 的瀏覽器登入不在這裡，指到 API 頁。/ MCP apps (AI clients); CLI sign-ins point to the API page. */}
+                    <ConnectedApps onNavigate={onClose} />
 
                     {/* 新增 AI 工具的設定步驟在 MCP 頁。/ Setting up a new AI tool happens on the MCP page. */}
                     <Link
@@ -392,10 +392,10 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </span>
                         <ArrowRight size={15} className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
                     </Link>
-                    {/* 個人 API token 在 API 頁（從這裡搬走了）。/ Personal API tokens live on the API page now. */}
-                    {hasFeature(user, "api.tokens") && (
+                    {/* 個人 API token 與 CLI 登入在 API 頁。/ Personal API tokens and CLI sign-ins live on the API page. */}
+                    {(hasFeature(user, "api.tokens") || hasFeature(user, "mcp.connect")) && (
                         <Link
-                            href="/tunnels/api"
+                            href={hasFeature(user, "api.tokens") ? "/tunnels/api" : "/tunnels/api?tab=cli"}
                             prefetch={false}
                             onClick={onClose}
                             className="group flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 transition-colors hover:border-foreground/25 hover:bg-muted/50"

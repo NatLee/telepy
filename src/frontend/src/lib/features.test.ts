@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FEATURES, featureForPath, laneFor, cellValue, deniedCount, featureKey, filterUsers, grantBody, hasFeature, overrideCount, resolveFeature, type AccessPolicy } from "./features.ts";
+import { FEATURES, featureForPath, featuresForPath, laneFor, cellValue, deniedCount, featureKey, filterUsers, grantBody, hasFeature, overrideCount, resolveFeature, type AccessPolicy } from "./features.ts";
 
 const policy: AccessPolicy = {
     features: FEATURES.map((f) => ({ id: f.id, default: true })),
@@ -72,6 +72,9 @@ test("pages that belong to a feature", () => {
     assert.equal(featureForPath("/tunnels/create"), "tunnels.create");
     assert.equal(featureForPath("/tunnels/webhooks"), "webhooks.personal");
     assert.equal(featureForPath("/tunnels/api"), "api.tokens");
+    assert.deepEqual(featuresForPath("/tunnels/api"), ["api.tokens", "mcp.connect"], "the API page also lists the CLI's browser sign-ins");
+    assert.deepEqual(featuresForPath("/tunnels/terminal"), ["terminal"]);
+    assert.deepEqual(featuresForPath("/tunnels"), []);
     assert.equal(featureForPath("/tunnels/admin/api-activity"), null, "the admin page is admin-gated, not feature-gated");
     assert.equal(featureForPath("/tunnels"), null);
     assert.equal(featureForPath("/tunnels/terminals"), null, "prefix match on whole segments");

@@ -299,6 +299,42 @@ pub fn without_tunnel(ids: &[i64], tunnel_id: i64) -> Vec<i64> {
     ids.iter().copied().filter(|&i| i != tunnel_id).collect()
 }
 
+/// 同時保留幾個 `telepy` CLI 的瀏覽器登入（每次 `telepy login` 一個 grant）；再多一個時最久沒用的那個自動登出，
+/// 像 GitHub 對同一個 OAuth app 的 token 上限。同一台電腦再登入一次則在同意頁取代它先前的登入。
+/// How many browser sign-ins of the `telepy` CLI one person keeps (one grant per `telepy login`); one more signs out
+/// the least recently used, like GitHub's per-app token limit. Signing in again from the same computer replaces it.
+pub const MAX_CLI_SIGNINS: usize = 10;
+
+/// `telepy` CLI 註冊的名字是 `telepy CLI (<電腦>)`（`src/cli/src/oauth.rs`）→ Some(電腦，可能是空字串)；其他 app → None。
+/// 名字是對方自己報的，只拿來分類與顯示（CLI 登入列在 API 頁、不混進 MCP app），不決定權限。對應前端 `lib/cliClient.ts`。
+/// The CLI registers as `telepy CLI (<host>)` → Some(host, maybe empty); any other app → None. Self-declared, so it
+/// only sorts and labels (CLI sign-ins live on the API page, apart from MCP apps), never grants anything.
+pub fn cli_host(client_name: &str) -> Option<String> {
+    let rest = client_name.trim().strip_prefix("telepy CLI")?;
+    if rest.is_empty() {
+        return Some(String::new());
+    }
+    let host = rest.strip_prefix(" (")?.strip_suffix(')')?;
+    (!host.is_empty()).then(|| host.to_string())
+}
+
+/// 兩個 client 算不算「同一個 app」（同意頁的「取代先前的連線」）：同一個 client_id，或都是 CLI 而且同一台電腦——
+/// CLI 每次 `telepy login` 都重新註冊，client_id 永遠不同。
+/// Whether two clients are "the same app" for replacing earlier connections: the same client_id, or both the CLI
+/// on the same computer (the CLI registers anew on every `telepy login`, so its client_id always differs).
+pub fn same_app(a_id: &str, a_name: &str, b_id: &str, b_name: &str) -> bool {
+    a_id == b_id || cli_host(a_name).is_some_and(|h| cli_host(b_name).as_deref() == Some(h.as_str()))
+}
+
+/// 超過上限要登出的 CLI 登入：`(grant id, 最後活動時間)`，新的那個一定留下，其餘依最近活動留 `keep - 1` 個。純函式。
+/// CLI sign-ins over the limit, as `(grant id, last activity)`: the new one always stays, then the `keep - 1` most
+/// recently active; the rest are returned (to revoke). Pure.
+pub fn cli_overflow(signins: &[(i64, String)], new_id: i64, keep: usize) -> Vec<i64> {
+    let mut others: Vec<&(i64, String)> = signins.iter().filter(|(id, _)| *id != new_id).collect();
+    others.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.cmp(&a.0)));
+    others.into_iter().skip(keep.saturating_sub(1)).map(|(id, _)| *id).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,5 +441,34 @@ mod tests {
     fn query_appending_keeps_existing_params() {
         assert_eq!(append_query("https://a.example/cb?x=1", &[("code", "c d"), ("state", "s")]), "https://a.example/cb?x=1&code=c+d&state=s");
         assert_eq!(append_query("http://localhost:9/cb", &[("error", "access_denied")]), "http://localhost:9/cb?error=access_denied");
+    }
+
+    #[test]
+    fn the_cli_is_recognised_by_its_registered_name() {
+        assert_eq!(cli_host("telepy CLI (mac-studio.local)").as_deref(), Some("mac-studio.local"));
+        assert_eq!(cli_host("  telepy CLI  ").as_deref(), Some(""));
+        assert_eq!(cli_host("telepy CLI ((x))").as_deref(), Some("(x)"));
+        assert_eq!(cli_host("telepy CLI ()"), None);
+        assert_eq!(cli_host("telepy CLIx"), None);
+        assert_eq!(cli_host("my telepy CLI (x)"), None);
+        assert_eq!(cli_host("Claude Code"), None);
+    }
+
+    #[test]
+    fn the_same_app_means_the_same_client_or_the_cli_on_the_same_computer() {
+        assert!(same_app("a", "Cursor", "a", "Cursor"));
+        assert!(!same_app("a", "Cursor", "b", "Cursor"), "two registrations of an app are two apps");
+        assert!(same_app("a", "telepy CLI (mac)", "b", "telepy CLI (mac)"));
+        assert!(!same_app("a", "telepy CLI (mac)", "b", "telepy CLI (pc)"));
+        assert!(!same_app("a", "telepy CLI (mac)", "b", "mac"));
+    }
+
+    #[test]
+    fn the_least_recently_used_cli_sign_ins_go_first() {
+        let rows: Vec<(i64, String)> = vec![(1, "2026-10-01".into()), (2, "2026-10-20".into()), (3, "2026-10-10".into()), (4, "2026-10-28".into())];
+        assert_eq!(cli_overflow(&rows, 4, 10), Vec::<i64>::new());
+        assert_eq!(cli_overflow(&rows, 4, 3), vec![1], "the new one plus the two most recent stay");
+        assert_eq!(cli_overflow(&rows, 1, 2), vec![2, 3], "the new one stays even when it is the oldest");
+        assert_eq!(cli_overflow(&rows, 4, 1), vec![2, 3, 1]);
     }
 }

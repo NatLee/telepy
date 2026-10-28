@@ -39,6 +39,9 @@ export interface ConsentInfo {
     reauth?: { required: boolean; methods: MfaMethod[] };
     /** 這個帳號先前連接過同一個 app（仍有效的連線）。/ Earlier, still active connections of this same app. */
     existing?: { id: number; scopes: string[]; created_at: string; last_used_at: string | null }[];
+    /** `telepy` CLI 在要求：電腦名稱、目前幾個 CLI 登入、上限；其他 app = null（較舊的後端沒有）。
+     *  The CLI asking: its computer, how many CLI sign-ins exist and the limit; null for apps (missing on older backends). */
+    cli?: { host: string; signed_in: number; limit: number } | null;
 }
 
 /** 送出決定之後：導回 app 的網址，畫面停在結果。/ After a decision: where the app is, and the result view. */

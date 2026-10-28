@@ -85,12 +85,14 @@ export function formatDuration(ms: number): string {
     return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 }
 
-// ---------------------------------------------------------------- the overview: three ways in
+// ---------------------------------------------------------------- the overview: four ways in
 
-export type WayId = "web" | "token" | "app";
-/** 「如果我…」：什麼都不做 / 撤銷一把 token / 中斷一個 app / 登出這個瀏覽器。/ What if I…: nothing / revoke / disconnect / sign out. */
-export type WhatIf = "none" | "token" | "app" | "web";
-export const WHAT_IFS: readonly WhatIf[] = ["none", "token", "app", "web"];
+/** `cli` = `telepy login` 的瀏覽器登入：跟 MCP app 同一套 OAuth，但自成一條（列在 API 頁）。/ The CLI's own lane. */
+export type WayId = "web" | "token" | "cli" | "app";
+/** 「如果我…」：什麼都不做 / 撤銷一把 token / 登出一台電腦的 CLI / 中斷一個 app / 登出這個瀏覽器。
+ *  What if I…: nothing / revoke a token / sign a CLI out / disconnect an app / sign out here. */
+export type WhatIf = "none" | "token" | "cli" | "app" | "web";
+export const WHAT_IFS: readonly WhatIf[] = ["none", "token", "cli", "app", "web"];
 
 export interface Way {
     id: WayId;
@@ -104,13 +106,13 @@ export interface Way {
 }
 
 /**
- * 三條路各用各的鑰匙：撤銷一把 token 只切 token 那條（它開的 session / 瀏覽器一起關）、中斷 app 只切 app、登出只切這個瀏覽器；
- * 另外兩條照常——總覽圖要說的就是這件事。
- * Each way in has its own key: revoking a token cuts only the token lane (its sessions and browsers close), disconnecting
- * an app only the app lane, signing out only this browser; the other two keep working.
+ * 每條路各用各的鑰匙：撤銷一把 token 只切 token 那條（它開的 session / 瀏覽器一起關）、登出一台電腦的 CLI 只切 CLI、
+ * 中斷 app 只切 app、登出只切這個瀏覽器；其他照常——總覽圖要說的就是這件事。
+ * Each way in has its own key: revoking a token cuts only the token lane (its sessions and browsers close), signing a
+ * CLI out only the CLI lane, disconnecting an app only the app lane, signing out only this browser; the rest keep working.
  */
 export function waysIn(whatIf: WhatIf): Way[] {
-    const order: WayId[] = ["web", "token", "app"];
+    const order: WayId[] = ["web", "token", "cli", "app"];
     return order.map((id) => {
         const cut = whatIf === id;
         return cut ? { id, from: "ok", credential: "failed", telepy: "waiting", devices: "waiting", cut } : { id, from: "ok", credential: "ok", telepy: "ok", devices: "ok", cut };

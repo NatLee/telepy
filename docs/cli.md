@@ -40,7 +40,7 @@ works**.
 - Admins can turn the **API tokens** feature off for everyone, a user group or one person (Site settings → Access):
   that person's tokens then stop working. Other features they turn off for you (web terminal, file manager, …) are
   refused to your tokens too (403 `feature_disabled`).
-- If an admin disables your account, your tokens and connected apps are suspended, not revoked: they are refused
+- If an admin disables your account, your tokens and CLI sign-ins are suspended, not revoked: they are refused
   while the account is off and work again once it is enabled.
 
 ## Scopes
@@ -116,8 +116,12 @@ telepy whoami                                           # who, and with which to
 telepy logout
 ```
 
-The browser sign-in registers the CLI as an MCP-style OAuth app (it shows up under **Connected apps**, in
-Preferences and on the MCP page, where you can revoke it) and stores the access + refresh tokens. Credentials live in
+The browser sign-in uses the same OAuth approval as MCP apps — that is why the approval page looks alike — but the
+CLI is not an MCP app: it is listed on the **API page → CLI sign-ins** (one per computer, with its calls in the API
+activity), never among MCP apps, and you sign it out there or with `telepy logout`. Running `telepy login` again on
+the same computer offers to replace its earlier sign-in, and at most 10 CLI sign-ins are kept per person: an 11th
+signs out the least recently used one. Browser sign-in follows the **MCP apps** feature an admin can turn off (Site
+settings → Access); a token keeps working without it. The CLI stores the access + refresh tokens. Credentials live in
 the macOS Keychain or the Windows Credential Manager; on Linux (and with `TELEPY_NO_KEYRING=1`, or when the keyring
 fails) in `credentials.json` with mode 0600 in the config directory (`TELEPY_CONFIG_DIR`, else
 `$XDG_CONFIG_HOME/telepy` or `~/.config/telepy`; Windows `%APPDATA%\telepy`). `logout` forgets the sign-in and
@@ -178,7 +182,7 @@ telepy browse ls
 telepy browse close "$ID"
 
 telepy api tokens                          # your tokens: scopes, expiry, last use, calls 24 h / 7 d, errors
-telepy api activity                        # the last 50 calls made with your tokens and connected apps
+telepy api activity                        # the last 50 calls made with your tokens and CLI sign-ins
 telepy api activity --api-token ci --status 4xx --since 2h
 telepy api activity --method DELETE --limit 200 --json
 telepy api activity --follow               # like tail -f: new calls every 2 s, Ctrl+C stops
@@ -231,7 +235,7 @@ The **What a token can call** tab gives a `curl` for every endpoint with the bas
 ## The call log
 
 Every REST request made with a personal API token or an OAuth app's token (the CLI's browser sign-in) is logged —
-reads included — and so is every MCP tool call made with a personal token (connected apps' MCP calls are already in
+reads included — and so is every MCP tool call made with a personal token (MCP apps' tool calls are already in
 the AI activity log). A row is: when, who, which token / app, method + **route template** (never the query string),
 tunnel, status, duration, IP; MCP rows are `MCP <tool>` with 200 or 400 (the tool returned an error) and the start of
 the error. Refused requests (`token_route`, `token_scope`, `404` outside the token's tunnels) are logged too.
