@@ -49,6 +49,7 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "ssh_alias_prefix": s.ssh_alias_prefix,
         "tapi_color": s.tapi_color,
         "tapi_daily": s.tapi_daily,
+        "shell_history": crate::shell_history::Mode::parse(&s.shell_history).unwrap_or(crate::shell_history::Mode::Keep).as_str(),
     }))
 }
 
@@ -224,6 +225,12 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             None => None,
             Some(Value::Bool(true)) => Some(true),
             Some(_) => return Err(ApiError::field("tapi_daily", "Can only be true.")),
+        },
+        // 網頁終端機 / agent shell 的指令寫不寫進裝置的歷史檔。/ Whether Telepy's shells write the device's shell history.
+        shell_history: match body.get("shell_history") {
+            None => None,
+            Some(Value::String(m)) if crate::shell_history::Mode::parse(m).is_some() => Some(m.trim().to_string()),
+            Some(_) => return Err(ApiError::field("shell_history", format!("Must be one of: {}.", crate::shell_history::Mode::VALUES.join(", ")))),
         },
         // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
         terminal_detach_secs: match body.get("terminal_detach_secs") {

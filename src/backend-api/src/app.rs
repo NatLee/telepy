@@ -57,6 +57,7 @@ fn api_router() -> OpenApiRouter<AppState> {
         .merge(api::lan::router())
         .merge(api::join::router())
         .merge(api::terminal_profile::router())
+        .merge(api::shell_history::router())
         .merge(api::terminal_schemes::router())
         .merge(api::notify_prefs::router())
 }

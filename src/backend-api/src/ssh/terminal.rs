@@ -15,6 +15,8 @@ pub struct PtySession {
     tx: ChannelWriteHalf<Msg>,
     /// 呼叫端沒讀完的資料，下次 `next` 先回它。/ Bytes the caller could not take yet.
     pending: Vec<u8>,
+    /// 設定歷史檔途中 shell 就結束了：`pending` 之後回這個。/ The shell ended during the history setup.
+    ended: Option<Option<u32>>,
     _lease: Lease,
 }
 
@@ -47,7 +49,18 @@ impl PtySession {
         channel.request_pty(true, "xterm", size.cols, size.rows, size.width, size.height, &[]).await.context("request a pty")?;
         channel.request_shell(true).await.context("request a shell")?;
         let (rx, tx) = channel.split();
-        Ok(Self { rx, tx, pending: Vec::new(), _lease: lease })
+        Ok(Self { rx, tx, pending: Vec::new(), ended: None, _lease: lease })
+    }
+
+    /// 剛開好的 shell：讓它不寫歷史檔（`crate::shell_history`）。提示字元之前的輸出（失敗時連回顯）留給 `next` 照常交出。
+    /// A fresh shell: turn its history file off. The output before the setup (and the echo on failure) is kept for `next`.
+    pub async fn keep_history_out(&mut self, shell: &crate::shell_history::LoginShell) -> crate::shell_history::Applied {
+        let (out, applied) = crate::shell_history::keep_out(&mut self.rx, &self.tx, shell).await;
+        self.pending = out.shown;
+        if let crate::shell_history::SetupResult::Ended(code) = out.result {
+            self.ended = Some(code);
+        }
+        applied
     }
 
     /// 把沒用完的資料放回去。/ Push unconsumed bytes back.
@@ -59,6 +72,9 @@ impl PtySession {
     pub async fn next(&mut self) -> Option<Output> {
         if !self.pending.is_empty() {
             return Some(Output::Data(std::mem::take(&mut self.pending)));
+        }
+        if let Some(code) = self.ended.take() {
+            return Some(Output::Exit(code));
         }
         let mut exit = None;
         loop {

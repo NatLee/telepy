@@ -236,10 +236,15 @@ impl Slot {
     }
 }
 
+/// 登入 shell 的答案留多久（`crate::shell_history`）。/ How long a login shell answer is kept.
+const LOGIN_SHELL_TTL: Duration = Duration::from_secs(600);
+
 #[derive(Default)]
 pub struct DevicePool {
     slots: DashMap<(i64, String), Arc<Slot>>,
     handshakes: AtomicU64,
+    /// (port, 帳號) 的登入 shell：開終端機前不必每次都 exec 問一次。/ Each account's login shell, cached.
+    login_shells: DashMap<(i64, String), (crate::shell_history::LoginShell, Instant)>,
 }
 
 impl DevicePool {
@@ -416,6 +421,31 @@ impl DevicePool {
     /// 開機以來總共握手幾次。/ Handshakes since start.
     pub fn handshakes(&self) -> u64 {
         self.handshakes.load(Ordering::SeqCst)
+    }
+
+    /// 這個帳號的登入 shell（一個 exec 問 `echo $SHELL $PSHOME`，看得懂的答案快取 10 分鐘；問不到 = Unknown、下次再問）。
+    /// The account's login shell: one exec, a recognised answer cached for 10 minutes; a failure is retried next time.
+    pub async fn login_shell(&self, state: &AppState, reverse_port: i64, username: &str) -> crate::shell_history::LoginShell {
+        use crate::shell_history::{parse_probe, LoginShell, PROBE};
+        let key = (reverse_port, username.to_string());
+        if let Some(hit) = self.login_shells.get(&key).filter(|e| e.1.elapsed() < LOGIN_SHELL_TTL) {
+            return hit.0.clone();
+        }
+        let probe = async {
+            let (_lease, channel) = self.session_channel(state, reverse_port, username).await?;
+            crate::ssh::exec::run_on(channel, PROBE, Duration::from_secs(8), 4096).await
+        };
+        let shell = match probe.await {
+            Ok(r) => parse_probe(&r.stdout.text),
+            Err(e) => {
+                tracing::debug!(reverse_port, %username, error = format!("{e:#}"), "login shell probe failed");
+                LoginShell::Unknown
+            }
+        };
+        if shell != LoginShell::Unknown {
+            self.login_shells.insert(key, (shell.clone(), Instant::now()));
+        }
+        shell
     }
 }
 

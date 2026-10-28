@@ -339,10 +339,10 @@ async fn user_keys_settings_and_admin_users() {
 
     // personal settings
     let r = app.get("/api/user/settings", Some(&admin)).await;
-    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
+    assert_eq!(r.json, json!({"language": null, "theme": "system", "terminal_font_size": 14, "ui_scale": 100, "terminal_font": "hack", "terminal_scheme": "telepy", "terminal_bold": "face", "terminal_ligatures": false, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "shell_history": "keep"}));
     let r = app.post("/api/user/settings", Some(&admin), json!({"language": "zh-TW", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true})).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.text);
-    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false}));
+    assert_eq!(r.json, json!({"language": "zh-TW", "theme": "system", "terminal_font_size": 16, "ui_scale": 115, "terminal_font": "fira-code", "terminal_scheme": "solarized-dark", "terminal_bold": "bright", "terminal_ligatures": true, "desktop_clipboard": "both", "desktop_clipboard_limit": "both", "terminal_detach_secs": 0, "terminal_detach_max_secs": 1800, "view_modes": {}, "desktop_display": null, "ssh_alias_prefix": "", "tapi_color": "", "tapi_daily": false, "shell_history": "keep"}));
     // 各頁的卡片 / 清單顯示：整份取代，跟著帳號（profile 也帶）。/ Card / list per page: replaced whole, on the account (and the profile).
     let r = app.post("/api/user/settings", Some(&admin), json!({"view_modes": {"tunnels": "list", "key_groups": "card"}})).await;
     assert_eq!(r.json["view_modes"], json!({"key_groups": "card", "tunnels": "list"}), "{}", r.text);
@@ -372,9 +372,9 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_color": "daily"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "daily is locked until the credits: {}", r.text);
-    let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_daily": false})).await;
+    let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_daily": false, "shell_history": "keep"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
-    let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_daily": true})).await;
+    let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_daily": true, "shell_history": "keep"})).await;
     assert_eq!(r.json["tapi_daily"], true, "{}", r.text);
     let r = app.post("/api/user/settings", Some(&admin), json!({"tapi_color": "daily"})).await;
     assert_eq!(r.json["tapi_color"], "daily", "{}", r.text);

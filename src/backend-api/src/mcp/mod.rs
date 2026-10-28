@@ -969,13 +969,16 @@ impl TelepyMcp {
         let (cols, rows) = shell::clamp_size(args.cols, args.rows);
         match ai::open_shell(&self.state, &s, cols, rows).await {
             Ok(sh) => {
-                self.audit(&p, "shell_open", started, Audit { session: Some(&s), detail: Some(format!("shell {}: {cols}x{rows}{}", sh.id, if sh.recorded { ", recorded" } else { "" })), ..Default::default() }).await;
+                let history = sh.history.as_ref().map(|h| format!(", {}", h.audit_note())).unwrap_or_default();
+                self.audit(&p, "shell_open", started, Audit { session: Some(&s), detail: Some(format!("shell {}: {cols}x{rows}{}{history}", sh.id, if sh.recorded { ", recorded" } else { "" })), ..Default::default() }).await;
                 Ok(CallToolResult::structured(json!({
                     "shell_id": sh.id,
                     "session_id": s.id,
                     "cols": cols,
                     "rows": rows,
                     "recorded": sh.recorded,
+                    // off = 這個 shell 打的指令不進裝置的歷史檔；null = 照常寫（使用者的設定）。/ off = kept out of the history file; null = saved as usual.
+                    "history": sh.history.as_ref().map(|h| h.status()),
                     "hint": "Read the prompt with shell_read, then type with shell_send (press_enter: true runs the line).",
                 })))
             }

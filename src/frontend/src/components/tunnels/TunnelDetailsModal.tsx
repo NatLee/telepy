@@ -23,6 +23,7 @@ import { StepUpSetting } from "@/components/tunnels/StepUpSetting";
 import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
 import { useFeatures } from "@/hooks/useFeatures";
 import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
+import { ShellHistorySetting } from "@/components/tunnels/ShellHistorySetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
 import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { sshSafeName, suggestTunnelName } from "@/lib/tunnelName";
@@ -284,6 +285,8 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                         <StepUpSetting tunnelId={details.id} required={!!details.require_step_up} canManage={manager} onChanged={onUpdate} />
                         {has("recordings.manage") && <RecordingSetting tunnelId={details.id} enabled={!!details.record_sessions} canManage={manager} onChanged={onUpdate} />}
                         <TerminalDetachSetting tunnelId={details.id} policy={details.terminal_detach_policy} canManage={manager} onChanged={onUpdate} />
+                        {/* 只影響自己：這條隧道上打的指令寫不寫進裝置的歷史檔。/ Just for you: this tunnel's shell history choice. */}
+                        {has("terminal") && <ShellHistorySetting tunnelId={details.id} />}
                     </div>
 
                     {/* 連線紀錄 / Connection history */}

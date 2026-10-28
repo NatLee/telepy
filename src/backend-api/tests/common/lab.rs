@@ -227,6 +227,11 @@ pub struct MachineOpts {
     /// `windows_admins`, and those accounts trust only the shared admin file (never their own).
     pub pretend_windows: bool,
     pub windows_admins: &'static [&'static str],
+    /// 帳號的登入 shell（例如 `/bin/bash`）：exec 的 `$SHELL` 是它；要了 PTY 的 shell 請求在 PTY 裡跑**真的**這個
+    /// shell（互動模式，HOME = 帳號的 `<home>/<user>`，bash 讀那裡的 `.bashrc`、zsh 讀那裡的 `.zshrc`，不讀系統的
+    /// rc），所以歷史檔也寫在那裡。/ The account's login shell: exec sees it as `$SHELL`, and a shell request with a PTY
+    /// runs the real thing, interactive, with HOME (and its rc file and history file) in the account's scratch home.
+    pub login_shell: Option<&'static str>,
 }
 
 struct MachineState {
@@ -351,6 +356,57 @@ impl server::Handler for SshdHandler {
         let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
         let pty = self.ptys.get(&channel).cloned();
         let banner = format!("login:{}@{}\r\n", self.user.clone().unwrap_or_default(), self.m.name);
+        if let (Some(login), Some(pty)) = (self.m.opts.login_shell, pty.as_ref()) {
+            let user = self.user.clone().unwrap_or_default();
+            let home = self.m.home.join(&user);
+            std::fs::create_dir_all(&home)?;
+            let h = home.to_string_lossy().into_owned();
+            let args: Vec<String> = match login.rsplit('/').next().unwrap_or_default() {
+                "bash" => vec!["--noprofile".into(), "--rcfile".into(), format!("{h}/.bashrc"), "-i".into()],
+                // -d：不讀 /etc/zshrc 這類系統 rc（macOS 那份會蓋掉 HISTFILE），只讀 ZDOTDIR 的 .zshrc。/ No global rc files.
+                "zsh" => vec!["-d".into(), "-i".into()],
+                _ => vec!["-i".into()],
+            };
+            let envs: Vec<(String, String)> = vec![
+                ("HOME".into(), h.clone()),
+                ("ZDOTDIR".into(), h.clone()),
+                ("USER".into(), user.clone()),
+                ("LOGNAME".into(), user),
+                ("SHELL".into(), login.into()),
+            ];
+            let (cols, rows) = {
+                let p = pty.lock().unwrap();
+                (p.cols, p.rows)
+            };
+            let child = telepy_server::ssh::process::spawn_in_pty(login, &args, &envs)?;
+            let _ = child.resize(rows as u16, cols as u16, 0, 0);
+            tokio::spawn(async move {
+                let mut child = child;
+                let (mut r, mut w) = tokio::io::split(ch.into_stream());
+                let (mut a, mut b) = ([0u8; 4096], [0u8; 4096]);
+                loop {
+                    tokio::select! {
+                        n = child.read(&mut a) => match n {
+                            Ok(n) if n > 0 => {
+                                if w.write_all(&a[..n]).await.is_err() {
+                                    break;
+                                }
+                            }
+                            _ => break,
+                        },
+                        n = r.read(&mut b) => match n {
+                            Ok(n) if n > 0 => {
+                                let _ = child.write_nonblocking(&b[..n]);
+                            }
+                            _ => break,
+                        },
+                    }
+                }
+                child.terminate().await;
+                let _ = w.shutdown().await;
+            });
+            return Ok(());
+        }
         if self.m.opts.echo_shell {
             let commands = self.m.commands.clone();
             tokio::spawn(async move {
@@ -449,12 +505,17 @@ impl server::Handler for SshdHandler {
         let cmd = String::from_utf8_lossy(data).trim().to_string();
         let user = self.user.clone().unwrap_or_default();
         if self.m.opts.shell {
+            let login_shell = self.m.opts.login_shell;
             let home = self.m.home.join(&user);
             let tmp = home.join("tmp");
             std::fs::create_dir_all(&tmp)?;
             let Some(ch) = self.channels.remove(&channel) else { return Ok(()) };
             tokio::spawn(async move {
-                let out = Command::new("/bin/sh")
+                let mut sh = Command::new("/bin/sh");
+                if let Some(login) = login_shell {
+                    sh.env("SHELL", login);
+                }
+                let out = sh
                     .arg("-c")
                     .arg(&cmd)
                     .current_dir(&home)

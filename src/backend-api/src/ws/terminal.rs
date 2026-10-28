@@ -894,6 +894,9 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
     let mut lan_label: Option<String> = None;
     // 區網那一跳的金鑰 / 密碼檔：shell 結束才刪。/ The hop's key / password files, kept until the shell ends.
     let mut lan_auth_files: Option<LanAuthFiles> = None;
+    // 「指令不寫進歷史檔」的結果（只有裝置本身的 shell；區網主機那一跳不知道對面是什麼 shell）。
+    // What came of "keep commands out of the history" (device shells only; the LAN hop's shell is unknown).
+    let mut history: Option<crate::shell_history::Applied> = None;
     // 區網主機（經裝置跳過去）：主機要屬於這條隧道，帳號要是安全字元。/ A LAN host behind the device.
     let pty = match lan_raw {
         None => {
@@ -901,12 +904,25 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
                 tracing::warn!(user = %user.username, tunnel_id, "Terminal refused: device offline");
                 return Err(4005);
             }
+            // 不寫歷史檔：先用 exec 問登入 shell（PTY 開了之後就不能讓探測跟 shell 搶輸出）。
+            // Keeping history out: ask for the login shell first, with an exec (before the PTY exists).
+            let login_shell = match crate::shell_history::effective_for(state, user.id, tunnel_id).await.0 {
+                crate::shell_history::Mode::Skip => Some(state.pool.login_shell(state, reverse_port, username).await),
+                crate::shell_history::Mode::Keep => None,
+            };
             let opened = async {
                 let (lease, channel) = state.pool.session_channel(state, reverse_port, username).await?;
                 PtySession::open(lease, channel, WindowSize::default()).await
             };
             match opened.await {
-                Ok(s) => Pty::Channel(s),
+                Ok(mut s) => {
+                    if let Some(shell) = &login_shell {
+                        let applied = s.keep_history_out(shell).await;
+                        tracing::info!(user = %user.username, tunnel_id, %username, result = applied.status(), shell = %shell.label(), "Terminal shell history");
+                        history = Some(applied);
+                    }
+                    Pty::Channel(s)
+                }
                 Err(e) => {
                     tracing::error!(error = format!("{e:#}"), "Error starting SSH connection");
                     return Err(4005);
@@ -947,6 +963,10 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
                 _ => (LanAuth::Telepy, "Telepy's key".to_string()),
             };
             lan_audit = Some(format!("Web terminal by {} to {}@{}:{} through {}@device with {}", user.username, login, host.address, host.ssh_port, username, auth_note));
+            // 區網主機那一跳的 shell 不知道是什麼：不打任何東西，但要說清楚這裡不算。/ The hop's shell is unknown: say it isn't covered.
+            if crate::shell_history::effective_for(state, user.id, tunnel_id).await.0 == crate::shell_history::Mode::Skip {
+                history = Some(crate::shell_history::Applied::Unsupported { shell: "a LAN host's shell".into() });
+            }
             lan_label = Some(format!("{login}@{}", host.address));
             if device_offline(state, reverse_port) {
                 return Err(4005);
@@ -995,9 +1015,23 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
     tracing::info!(%username, reverse_port, "SSH connection started");
     // 連線期間算「在用這條隧道」。/ Counts as using the tunnel while connected.
     let presence = state.presence.join(Entry::new(tunnel_id, user.id, &user.username, Kind::Terminal, meta.ip.clone()).as_account(username));
+    let tunnel_row = db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten();
     let audit = match lan_audit {
-        Some(what) => ConsoleSession::open(state, ConsoleKind::LanTerminal, tunnel_id, what).await,
-        None => ConsoleSession::open_for(state, ConsoleKind::Terminal, tunnel_id, &user.username, Some(username)).await,
+        Some(what) => {
+            let what = match &history {
+                Some(h) => format!("{what} ({})", h.audit_note()),
+                None => what,
+            };
+            ConsoleSession::open(state, ConsoleKind::LanTerminal, tunnel_id, what).await
+        }
+        None => {
+            let name = tunnel_row.as_ref().map(|t| t.host_friendly_name.clone()).unwrap_or_else(|| format!("#{tunnel_id}"));
+            let mut what = crate::session_audit::describe(ConsoleKind::Terminal, &user.username, Some(username), &name);
+            if let Some(h) = &history {
+                what = format!("{what} ({})", h.audit_note());
+            }
+            ConsoleSession::open(state, ConsoleKind::Terminal, tunnel_id, what).await
+        }
     };
     let session_kind = if lan_label.is_some() { "lan_terminal" } else { "terminal" };
     crate::session_audit::webhook_started(state, tunnel_id, user.id, &user.username, session_kind, Some(lan_label.as_deref().unwrap_or(username))).await;
@@ -1005,7 +1039,6 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
     // 這條隧道要錄影：先告訴使用者（緩衝裡的第一行），再開始錄（只錄輸出與視窗大小，不錄鍵盤）。
     // Recorded tunnel: tell the user first (the backlog's first line), then record (output and resizes only, never keystrokes).
     let mut backlog = Backlog::default();
-    let tunnel_row = db::tunnels::by_id(&state.db, tunnel_id).await.ok().flatten();
     let recorder = match tunnel_row.as_ref().filter(|t| t.record_sessions) {
         Some(t) => {
             backlog.push(RECORDED_LINE);
@@ -1014,6 +1047,10 @@ async fn open_shell(state: &AppState, user: &User, meta: &ClientMeta, msg: &Valu
         }
         None => None,
     };
+    // 歷史檔的結果也是一行提示（在 shell 的輸出之前）。/ The history result is a notice line too, before the shell's output.
+    if let Some(h) = &history {
+        backlog.push(&h.notice());
+    }
     let requester = Requester {
         tunnel_id,
         user_id: user.id,
