@@ -424,3 +424,32 @@ async fn a_sign_in_from_a_new_browser_is_announced() {
     let msg: serde_json::Value = serde_json::from_str(&rx.recv().await.unwrap()).unwrap();
     assert_eq!(msg["message"]["device"], "Firefox · Windows");
 }
+
+/// 續期時沒有來源資訊（後端直接被叫、沒有代理）不會把記下的 IP / User-Agent 洗成空的；有新位址就更新。
+/// A renewal without address info keeps the stored IP and user agent; one from a new address updates it.
+#[tokio::test]
+async fn a_renewal_without_address_keeps_the_stored_ip() {
+    use axum::body::Body;
+    use axum::http::{header, Method, Request};
+    let app = common::spawn().await;
+    let (_, _) = login(&app, "admin").await;
+    let (a, rf, sid) = login_as(&app, "admin", MAC_CHROME).await;
+    let ip_of = |r: &common::Resp| r.json["sessions"].as_array().unwrap().iter().find(|s| s["id"] == sid).map(|s| (s["ip"].clone(), s["device"].clone())).unwrap();
+
+    let r = refresh(&app, &rf).await; // in-process: no XFF, no peer, no user agent
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let rf2 = r.json["refresh_token"].as_str().unwrap().to_string();
+    let list = app.get("/api/auth/sessions", Some(&a)).await;
+    assert_eq!(ip_of(&list), (json!("198.51.100.7"), json!("Chrome · macOS")), "{}", list.text);
+
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/token/refresh")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-forwarded-for", "203.0.113.20")
+        .body(Body::from(json!({"refresh": rf2}).to_string()))
+        .unwrap();
+    assert_eq!(app.send(req).await.status, StatusCode::OK);
+    let list = app.get("/api/auth/sessions", Some(&a)).await;
+    assert_eq!(ip_of(&list).0, json!("203.0.113.20"));
+}

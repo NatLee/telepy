@@ -127,3 +127,45 @@ async fn whoami_returns_the_callers_own_address() {
     assert!(r.headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/plain"));
     assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
 }
+
+async fn ip_check(app: &TestApp, token: &str, xff: &str, extra: &[(&str, &str)]) -> Resp {
+    let mut b = Request::builder().method(Method::GET).uri("/api/auth/client-ip-check").header(header::AUTHORIZATION, format!("Bearer {token}")).header("x-forwarded-for", xff);
+    for (k, v) in extra {
+        b = b.header(*k, *v);
+    }
+    let mut req = b.body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(TRAEFIK.parse::<SocketAddr>().unwrap()));
+    app.send(req).await
+}
+
+/// 管理員的「Telepy 怎麼看你的位址」：攤開鏈、相關標頭與判定；一般使用者 403。
+/// The admin's address check spells out the chain, related headers and the verdict; others get 403.
+#[tokio::test]
+async fn client_ip_check_explains_the_chain() {
+    let app = common::spawn().await;
+    let admin = app.login("admin", "pw").await;
+    app.post("/api/site/settings", Some(&admin), json!({"allow_registration": true})).await;
+    let bob = app.login("bob", "pw").await;
+
+    let r = ip_check(&app, &bob, "198.51.100.7", &[]).await;
+    assert_eq!((r.status, r.json["code"].as_str()), (StatusCode::FORBIDDEN, Some("admin_only")));
+
+    // 預設 TRUSTED_PROXY_HOPS = 1（只有 Traefik）。/ Default hops = 1 (Traefik only).
+    let r = ip_check(&app, &admin, "6.6.6.6, 198.51.100.7", &[]).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!((r.json["ip"].as_str(), r.json["verdict"].as_str(), r.json["from"].as_str()), (Some("198.51.100.7"), Some("ok"), Some("chain")));
+    assert_eq!(r.json["trusted_proxy_hops"], 1);
+    let roles: Vec<&str> = r.json["chain"].as_array().unwrap().iter().map(|h| h["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["ignored", "client", "proxy"]);
+    assert_eq!(r.json["chain"][2]["source"], "peer");
+
+    // 上游代理把每個人都換成 Docker 的位址：每一段都是內部位址。/ The upstream proxy hands everyone a Docker address.
+    let r = ip_check(&app, &admin, "172.19.0.1", &[("x-real-ip", "172.19.0.1")]).await;
+    assert_eq!((r.json["verdict"].as_str(), r.json["scope"].as_str()), (Some("all_private"), Some("private")), "{}", r.text);
+    assert_eq!(r.json["headers"][0]["name"], "x-real-ip");
+    assert_eq!(r.json["headers"][0]["addresses"][0]["scope"], "private");
+
+    // 多一層代理沒算到：建議把 TRUSTED_PROXY_HOPS 調成 2。/ An uncounted proxy: suggest hops = 2.
+    let r = ip_check(&app, &admin, "198.51.100.7, 10.0.0.2", &[]).await;
+    assert_eq!((r.json["verdict"].as_str(), r.json["suggest"]["trusted_proxy_hops"].as_i64()), (Some("hops_too_low"), Some(2)), "{}", r.text);
+}

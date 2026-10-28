@@ -207,6 +207,19 @@ pub async fn run(config: &Config) -> Vec<Check> {
         check("OUI vendors", Status::Info, "not installed (optional): LAN hosts show no NIC vendor. Run ./telepy.sh oui")
     });
 
+    // 最近登入記到的來源 IP：全是內部位址 = 前面的代理把真實位址弄丟了（或層數設錯）。
+    // Recent sign-in addresses: all internal = a proxy in front loses the real address (or the hop count is off).
+    if let Some(db) = &db {
+        let since = crate::util::db_time(chrono::Utc::now() - chrono::Duration::days(30));
+        let ips: Vec<String> = sqlx::query_scalar("SELECT ip FROM telepy_sign_in_event WHERE ip IS NOT NULL AND at >= ? ORDER BY id DESC LIMIT 50")
+            .bind(since)
+            .fetch_all(&db.read)
+            .await
+            .unwrap_or_default();
+        let (status, detail) = client_addresses(&ips, config.trusted_proxy_hops, config.client_ip_header.as_deref());
+        out.push(check("client addresses", status, detail));
+    }
+
     // 審計鏈。/ Audit chain.
     if let Some(db) = &db {
         db.audit.set_anchors_file(config.log_root.join(db::audit_chain::ANCHORS_FILE));
@@ -230,6 +243,33 @@ pub async fn run(config: &Config) -> Vec<Check> {
     out
 }
 
+/// 純函式：最近登入的來源 IP 有幾個是公網位址。/ How many recent sign-in addresses are public.
+fn client_addresses(ips: &[String], hops: usize, header: Option<&str>) -> (Status, String) {
+    let setting = match header {
+        Some(h) => format!("CLIENT_IP_HEADER={h}, TRUSTED_PROXY_HOPS={hops}"),
+        None => format!("TRUSTED_PROXY_HOPS={hops}"),
+    };
+    let parsed: Vec<std::net::IpAddr> = ips.iter().filter_map(|ip| ip.parse().ok()).collect();
+    if parsed.is_empty() {
+        return (Status::Info, format!("no sign-ins with an address in the last 30 days ({setting})"));
+    }
+    let internal: Vec<&std::net::IpAddr> = parsed.iter().filter(|ip| crate::geoip::scope(**ip) != crate::geoip::Scope::Public).collect();
+    if internal.len() < parsed.len() {
+        return (Status::Ok, format!("{} of the last {} sign-ins came from public addresses ({setting})", parsed.len() - internal.len(), parsed.len()));
+    }
+    let mut distinct: Vec<String> = internal.iter().map(|ip| ip.to_string()).collect();
+    distinct.sort();
+    distinct.dedup();
+    (
+        Status::Warn,
+        format!(
+            "all of the last {} sign-ins came from internal addresses ({}; {setting}): a proxy in front of Telepy replaces the visitor's address. As an admin, open Site settings → Sign-in → \"How Telepy sees your address\"",
+            parsed.len(),
+            distinct.into_iter().take(3).collect::<Vec<_>>().join(", ")
+        ),
+    )
+}
+
 /// 有沒有 ✗。/ Whether anything failed.
 pub fn failed(checks: &[Check]) -> bool {
     checks.iter().any(|c| c.status == Status::Fail)
@@ -250,6 +290,16 @@ pub fn render(checks: &[Check]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_addresses_warn_when_every_sign_in_is_internal() {
+        let v = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(client_addresses(&v(&[]), 2, None).0, Status::Info);
+        assert_eq!(client_addresses(&v(&["172.19.0.1", "198.51.100.7"]), 2, None).0, Status::Ok);
+        let (s, d) = client_addresses(&v(&["172.19.0.1", "172.19.0.1"]), 2, None);
+        assert_eq!(s, Status::Warn);
+        assert!(d.contains("172.19.0.1;") && d.contains("TRUSTED_PROXY_HOPS=2"), "{d}");
+    }
 
     #[test]
     fn render_and_summary() {
