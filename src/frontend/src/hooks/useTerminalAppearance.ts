@@ -32,6 +32,7 @@ import {
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
 import { applyLigatures, loadTerminalFont, resolveCssVar, waitForFont } from "@/lib/xterm";
+import { markIfHidden } from "@/lib/xtermMeasure";
 
 const KEY_PREFIX = "telepy.terminalProfile.";
 const PROFILE_EVENT = "telepy:terminal-profile";
@@ -168,12 +169,14 @@ export function useTerminalAppearance(tunnelId: string | null): TerminalAppearan
  * 把外觀變更即時套用到開著的 xterm(終端機頁的每個分頁、網路頁的內嵌終端機):配色、粗體畫法、連字立即換;
  * 字級換完 refit;字型等它載好(最多 1.5 s;粗體用真實字體時連 Bold 一起等)再換,之後才載好的強迫 xterm 重新量字寬
  * (xterm 只在值變了才量,所以先換成 monospace 再換回來),否則字距會照後備字型算而對不齊;斜體 / 粗斜體是用到才
- * 下載的,所以 document.fonts 的 loadingdone 也會觸發同樣的重新量寬。`forEachTerm` / `refit` 要是穩定的 callback。
+ * 下載的,所以 document.fonts 的 loadingdone 也會觸發同樣的重新量寬。隱藏中的終端機(背景分頁、縮小的 dock)量不到,
+ * 由 markIfHidden 記下,顯示後 fit 前 ensureMeasured 再量(lib/xtermMeasure.ts)。`forEachTerm` / `refit` 要是穩定的 callback。
  * Applies appearance changes to open xterms live: the scheme, bold style and ligatures at once, the size followed
  * by a refit, the font once loaded (1.5 s cap; the Bold face too when the bold style uses it). A late load forces a
  * re-measure (xterm only measures when the value changes, hence the monospace round trip); otherwise cells keep the
  * fallback font's width. Italic / bold-italic faces download on first use, so document.fonts' loadingdone triggers
- * the same re-measure. Pass stable callbacks.
+ * the same re-measure. A hidden terminal (background tab, minimised dock) can't be measured, so markIfHidden records
+ * it and ensureMeasured re-measures it once shown, before the fit (lib/xtermMeasure.ts). Pass stable callbacks.
  */
 export function useLiveTerminalLook(
     resolved: ResolvedTerminalAppearance,
@@ -191,7 +194,10 @@ export function useLiveTerminalLook(
     }, [resolved.scheme, each]);
 
     useEffect(() => {
-        each((term) => { term.options.fontSize = resolved.fontSize; });
+        each((term) => {
+            term.options.fontSize = resolved.fontSize;
+            markIfHidden(term);
+        });
         refit();
     }, [resolved.fontSize, each, refit]);
 
@@ -216,6 +222,7 @@ export function useLiveTerminalLook(
             each((term) => {
                 if (remeasure) term.options.fontFamily = "monospace";
                 term.options.fontFamily = family;
+                markIfHidden(term);
             });
             refit();
         };
