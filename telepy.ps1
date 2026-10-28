@@ -107,13 +107,13 @@ switch ($Command) {
     default {
         Write-ColorMessage $Colors.Yellow "Usage: .\telepy.ps1 <sub-command> [args]"
         Write-ColorMessage $Colors.Blue "Sub-commands:"
-        Write-ColorMessage $Colors.Green "  keygen: Generate SSH host keys (gateway) and the backend service key."
-        Write-ColorMessage $Colors.Green "  create-superuser: Create an admin account for Telepy management."
+        Write-ColorMessage $Colors.Green "  keygen: Generate the SSH gateway host keys and the backend service key (run once before the first start; devices pin the host keys)."
+        Write-ColorMessage $Colors.Green "  create-superuser: Create an admin account for Telepy management (the first account to sign up is an admin anyway)."
         Write-ColorMessage $Colors.Green "  shell: Open a shell in the backend container."
         Write-ColorMessage $Colors.Green "  migration: Reconcile the database schema (also runs automatically on start)."
         Write-ColorMessage $Colors.Green "  backend-debug: Recreate the backend container and follow its logs."
-        Write-ColorMessage $Colors.Green "  geoip: Download the offline IP geolocation databases (DB-IP Lite; re-run monthly)."
-        Write-ColorMessage $Colors.Green "  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor (re-run now and then)."
+        Write-ColorMessage $Colors.Green "  geoip: Download the offline IP geolocation databases (DB-IP Lite) into ./telepy-data/geoip; re-run monthly, then restart the backend."
+        Write-ColorMessage $Colors.Green "  oui: Download the IEEE OUI registry into ./telepy-data/oui so LAN hosts show their NIC vendor; then restart the backend."
         Write-ColorMessage $Colors.Green "  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken."
         break
     }

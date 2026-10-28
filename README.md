@@ -1,190 +1,244 @@
 <h1 align="center"><img src="./docs/brand/banner.png" alt="Telepy: reach every device from your browser" width="100%"></h1>
 
-**English** | [繁體中文](./README.zh-TW.md) | [日本語](./README.ja.md)
+<p align="center"><b>English</b> | <a href="./README.zh-TW.md">繁體中文</a> | <a href="./README.ja.md">日本語</a></p>
 
-A self-hosted web platform for managing **reverse SSH tunnels**. Register a device once, then reach it from anywhere: monitor tunnel health on a live dashboard, open a terminal in your browser, manage files over SFTP, share access with teammates, and even browse the web *through* the remote device.
+Telepy is a self-hosted web console for machines you can't reach directly: servers behind NAT, a Raspberry Pi at
+home, an office PC behind a firewall. Each device dials out **one reverse SSH tunnel** to your Telepy server, and from
+then on you work on it from the browser — terminal, files, remote desktop, a browser that goes online through the
+device, and the machines on its LAN. Share devices with teammates under fine-grained permissions, and script
+everything with the `telepy` command line, the REST API or MCP. Nothing is opened or installed on the device's
+network beyond that one outbound SSH connection.
 
-## Features
+![The tunnels page: health, latency, public and LAN addresses, labels, who is connected](./docs/screenshots/en/tunnels.png)
 
-- **Tunnel dashboard** — live online/offline status and per-hop latency (you → Telepy → device), in list or card view.
-- **Guided tunnel creation** — a five-step wizard issues keys and generates ready-to-run connection scripts: plain SSH, AutoSSH, systemd service, PowerShell, Docker Run, and Docker Compose, plus a single-use `curl` URL for fetching the script on the target machine.
-- **One-command device join** — on Linux or macOS, paste one `curl … | sudo sh` command on the device: it creates the tunnel key, registers the device, authorizes Telepy, pins Telepy's host key, installs the tunnel as a systemd/launchd service and waits until Telepy has logged in through it. The command works once and expires after 30 minutes; the create page follows each step live.
-- **Web terminal** — multi-tab xterm.js terminal over WebSocket, with per-user sessions and live latency readout; pick a Nerd Font (real bold and italic faces, optional ligatures) and a colour scheme — built-in or your own, imported from a Windows Terminal or base16 scheme — as your default or per device. A dropped connection (network switch, sleeping laptop, reload) can keep the shell running for a time you choose and the tab picks it up again — or end it at once, which stays the default and can be enforced per device.
-- **Watch a terminal** — tunnel owners and admins can open a read-only live view of anyone's web terminal from Live sessions; the person is told in their terminal and by a notification, can let the watcher type along (command rules then count those lines as the watcher's) and take control back at any time, and every step lands in the tunnel's Logs.
-- **File manager** — SFTP file manager alongside the terminal: drag-and-drop uploads with progress, multi-select, move / copy / rename / delete / permissions, image and text preview, and an in-browser editor that never leaves half a file and warns when the file changed on the device.
-- **Remote desktop** — RDP and VNC in the browser through the tunnel (guacd), or RustDesk decoded right in the tab; the RDP desktop's sound and RustDesk's sound play in the browser when you turn them on, and RustDesk sessions get a Files panel to upload and download files and whole folders (folders arrive as one .zip), rename, move and delete (up to 2 GB per file; deletes and renames are logged). An info diagram shows the path and which streams — picture, input, clipboard, sound, files — travel on the connection, and why one is off.
-- **Remote proxy browser** — launch a real Chromium desktop (KasmVNC) whose traffic is tunneled through the target device, so external requests appear to come from that machine.
-- **Sharing & permissions** — share tunnels with other users under hierarchical VIEW / EDIT / ADMIN permissions; taking access away (unsharing, a smaller account list, a lower permission) ends that person's open terminals, file managers, remote browsers and desktops, laptop SSH and terminal watching right away, and disabling an account also signs it out everywhere while its API tokens and connected apps are only suspended.
-- **Feature permissions & user groups** — administrators decide which Telepy features each person may use (creating or sharing tunnels, terminal, toolbox, files, remote browser and desktop, LAN discovery, personal keys, recordings, command rules, webhooks, MCP apps, API docs) for everyone, per user group or per person, where a person's own setting is final; separate from sharing, and enforced by the API, the sockets, MCP tools and the SSH gateway alike. A diagram shows which layer decided and how it differs from tunnel sharing.
-- **Command sheet** — pick a tunnel and get copy-ready `ssh -L` / `-R` / `-D` / `-J` / `scp` commands for forwarding ports or copying files from your own computer, each with a live diagram of where the traffic flows; works with your `~/.ssh/config` or as standalone one-liners.
-- **Device facts** — each device's OS, kernel, uptime, CPU, memory, root disk, load and SSH version, read once a day by the same read-only login Telepy already makes (nothing installed, nothing sent elsewhere), with warnings for a full disk, low memory, heavy load or a pending reboot on the tunnel list, in the Logs and to webhooks.
-- **Network topology (jump hosts)** — see the machines behind each device at a glance: scan a device's LAN without installing anything (the device's own sshd makes the connections), label hosts and set their login, then open a web terminal on one through the device, or copy an `ssh -J` one-liner or a `ProxyJump` ssh config stanza.
-- **Webhooks** — everyone can send the notifications they get (a tunnel going offline or changing IP, a share, an access request, a command waiting for approval, a sign-in…) to Slack, Discord, Google Chat, Microsoft Teams, Telegram, ntfy or their own service, per tunnel and in their own language; admins add site-wide webhooks for outages and security events. Requests are signed (Standard Webhooks) and personal URLs may only reach public addresses.
-- **Command rules** — block commands, or hold them until someone approves, site-wide or per tunnel, for the web terminal and MCP agents alike; "allow" exceptions carve out the safe cases within the same scope, an approval rule can name its own approvers (a security team for `sudo` everywhere), and an info diagram shows the path every tested command takes.
-- **Toolbox** — saved command snippets beside the web terminal (and in the LAN terminal dock): your own, per device or site-wide, with `$variables` filled in before each run (secret ones masked and never stored), favourites, "ask first" for risky ones and a dozen built-in examples; a snippet is typed into the shell like your own keystrokes, so command rules still apply, and an info diagram shows each step of a run.
-- **Keys & logs** — manage authorized keys and inspect the SSH gateway log from the UI, globally or per tunnel (users only see their own and shared tunnels). Per-device key lists put your keys into exactly the accounts you may use — or a chosen subset — including the administrators file on Windows devices, and a key removed from a device by hand can be put back for 7 days.
-- **Authentication** — Google OAuth2 or username/password, JWT-backed API. The first user to log in becomes the superuser. Optional two-factor sign-in with passkeys (also passwordless) or an authenticator app (TOTP), plus one-time recovery codes; administrators can reset a user's second factors. "Your devices" lists every browser signed in to your account and signs any of them out at once (open pages close too); a sign-in from a new country or browser is announced, and admins can sign users out.
-- **`telepy` command line & API tokens** — `telepy ls`, `telepy ssh box`, `telepy exec --label env=prod -- uptime`, `telepy cp`, live sessions, recordings and your tokens' call log (`telepy api activity`) from your terminal; `telepy lan`, `telepy browse` (a scripted browser on a device's network: read pages, screenshots, clicks); sign in through the browser or with a personal API token (scopes, tunnel limit, required expiry, revoked at once) that scripts, CI and headless MCP agents can use too.
-- **API page** — your tokens, every endpoint a token can call (grouped by scope, with copy-ready `curl` and the matching CLI command, built from the server's own allow-list), and an activity log of every call your tokens made; admins get everyone's. A diagram compares the three ways in (web sign-in, API token, MCP app) and what each revoke cuts.
-- **Internationalization & theming** — English, 繁體中文, and 日本語; light and dark themes.
+## What you can do
 
-## Usage
+### Connect devices
 
-### Create a tunnel
+- **One command on Linux / macOS.** Paste a `curl … | sudo sh` line on the device: it creates the tunnel key,
+  registers the device, authorizes Telepy, pins Telepy's host key, installs a systemd / launchd service and waits
+  until Telepy has logged in through the tunnel. For everything else a five-step wizard generates SSH, AutoSSH,
+  systemd, PowerShell, Docker run and Docker Compose scripts.
+- **SSH port or web port only.** Devices reach the gateway on its SSH port, or tunnel SSH over the web port
+  (WebSocket) when only HTTPS gets out.
+- **Health at a glance.** Online / degraded / offline / never connected, per-hop latency, uptime and connection
+  history, the device's public and LAN addresses with IP-change alerts, and daily device facts (OS, memory, disk,
+  load, pending reboot) with warnings.
+- **Organize hundreds of devices.** Labels, pins, personal groups, and a search with filters such as
+  `status:down`, `label:env=prod` or `lastseen:>1d`.
 
-Go to **Tunnels → Create Tunnel**, paste the device's SSH public key, and follow the wizard. Run the generated script on the device and the tunnel comes online.
+### Work on a device
 
-![Create a tunnel](./docs/gifs/create-tunnel.gif)
+- **Web terminal** with tabs, Nerd Fonts, built-in and custom colour schemes, shells that survive a dropped
+  connection (when you allow it), session recording, and a **toolbox** of saved command snippets with variables.
+- **File manager** over SFTP: drag-and-drop uploads, move / copy / rename / delete / permissions, zip downloads,
+  image preview and an in-browser editor that never leaves half a file.
+- **Remote desktop** in the browser: RDP and VNC through the tunnel (guacd), or RustDesk decoded in the tab, with
+  sound, clipboard control, file transfer and multi-monitor cropping.
+- **Remote browser:** a real Chromium (KasmVNC) whose traffic leaves through the device, for web consoles that only
+  answer on the device's network.
+- **Network topology:** scan a device's LAN without installing anything, see vendors and open ports, then open a
+  terminal or desktop on a LAN host through the device, or copy an `ssh -J` / `ProxyJump` setup.
+- **From your own computer:** one command adds every device to `~/.ssh/config`, and the command sheet gives
+  copy-ready `ssh -L` / `-R` / `-D` / `-J`, `scp` and `rsync` lines.
 
-### Web terminal
+### Teams and control
 
-Click **Terminal** on any online tunnel to get a shell on the device, straight from the browser.
+- **Sharing** with VIEW / EDIT / ADMIN permissions, per-account allow-lists, shares that expire, and access requests
+  for temporary extra rights. Taking access away ends that person's open sessions at once.
+- **Feature permissions and user groups:** decide who may use the terminal, files, desktop, LAN discovery, API
+  tokens, MCP apps and more — for everyone, a group or one person.
+- **Command rules:** block commands or hold them for approval, site-wide or per device, in the web terminal and for
+  MCP agents alike.
+- **Live sessions:** see who is connected where, watch a terminal live (and hand over the keyboard), or end a session.
+- **Sign-in security:** passkeys and authenticator apps, a second-factor check before sensitive devices, a list of
+  your signed-in browsers, new-device alerts, and an optional discreet sign-in page.
+- **Audit:** tamper-evident logs (hash chains), terminal recordings, sign-in history, and webhooks to Slack, Discord,
+  Google Chat, Teams, Telegram, ntfy or your own service.
 
-![Web terminal](./docs/gifs/web-terminal.gif)
+### Automate
 
-### Remote proxy browser
+- **`telepy` command line:** `telepy ls`, `telepy ssh web-01`, `telepy exec --label env=prod -- uptime`, `telepy cp`,
+  live sessions, recordings, snippets, LAN hosts and scripted browsers.
+- **REST API** with personal API tokens (scopes, tunnel limits, expiry, a call log) and a generated OpenAPI document.
+- **MCP server** for AI agents (Claude Code, Cursor, …): approved per app through OAuth, every tool call audited,
+  command rules and permissions applied.
 
-Click **Browser** on an online tunnel to start a Chromium session that browses the web through the device (SSH SOCKS proxy + KasmVNC streaming).
+## Screenshots
 
-![Remote proxy browser](./docs/gifs/remote-browser.gif)
+<table>
+  <tr>
+    <td width="50%"><img src="./docs/screenshots/en/terminal.png" alt="Web terminal with the file manager"><br><sub><b>Web terminal + file manager</b> — tabs, the SFTP side panel and the latency of each hop.</sub></td>
+    <td width="50%"><img src="./docs/screenshots/en/network.png" alt="Network topology"><br><sub><b>Network</b> — the LAN behind a device, scanned through its own sshd, with vendors and open ports.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/screenshots/en/desktop.png" alt="Remote desktop"><br><sub><b>Remote desktop</b> — a VNC desktop through the tunnel, with stream stats and screen selection.</sub></td>
+    <td><img src="./docs/screenshots/en/browser.png" alt="Remote browser"><br><sub><b>Remote browser</b> — Chromium that goes online through the device.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/screenshots/en/create.png" alt="One-command device join"><br><sub><b>Add a device</b> — one command, followed live until Telepy has logged in.</sub></td>
+    <td><img src="./docs/screenshots/en/commands.png" alt="Command rules"><br><sub><b>Command rules</b> — block, approve or allow, with a tester that shows who would be asked.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/screenshots/en/sessions.png" alt="Live sessions"><br><sub><b>Live sessions</b> — who is connected, from where; watch or end a session.</sub></td>
+    <td><img src="./docs/screenshots/en/access.png" alt="Feature permissions"><br><sub><b>Feature permissions</b> — per person, per user group or for everyone.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/screenshots/en/api.png" alt="API tokens"><br><sub><b>API</b> — personal tokens with scopes, tunnel limits and a per-token call summary.</sub></td>
+    <td><img src="./docs/screenshots/en/activity.png" alt="Agent activity"><br><sub><b>Agent activity</b> — every MCP tool call, including commands waiting for approval.</sub></td>
+  </tr>
+</table>
 
 ## How it works
 
-The device keeps a reverse SSH connection (`ssh -NR <port>:localhost:22 telepy@server`) to Telepy's backend, which terminates it with its built-in SSH gateway and assigns each tunnel a dedicated port. The web terminal, file manager, and proxy browser all reach the device through that port — no inbound firewall rules or public IP needed on the device side.
+```
+ your browser ──https──▶ Traefik ──▶ frontend (Next.js)
+                            │
+                            └──────▶ backend (Rust) ◀══ reverse SSH (outbound from the device) ══ device ── LAN hosts
+                                       │   REST API · WebSockets · built-in SSH gateway · monitor
+                                       ├──▶ kasm-browser (Chromium for remote browsing)
+                                       └──▶ guacd (RDP / VNC)
+```
 
-Telepy runs as four containers orchestrated by Docker Compose:
+A device runs `ssh -R 0:localhost:22 telepy@<server>` (the join script and the generated scripts set this up as a
+service). The backend's built-in SSH gateway accepts it, recognises the tunnel by its key and keeps the forward in
+memory — nothing is bound on the host. Everything Telepy does on the device — terminal, files, desktop, remote
+browser, LAN scans — opens a channel inside that one connection and logs in to the device's own sshd with that
+tunnel's service key. The device needs no public IP and no inbound firewall rule; Telepy pins each device's host key,
+and the device pins Telepy's.
 
-| Service        | Role                                                        |
-| -------------- | ----------------------------------------------------------- |
-| `traefik`      | Reverse proxy; routes `/api/*` & `/ws/*` to the backend, everything else to the frontend |
-| `frontend`     | Next.js web UI                                              |
-| `backend`      | Rust (axum) service: REST API, WebSocket terminal/file manager/relay, and the SSH gateway that terminates the reverse tunnels |
-| `kasm-browser` | KasmVNC + Chromium for remote browser sessions              |
+Telepy runs as five containers:
+
+| Service        | Role                                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| `traefik`      | Reverse proxy: `/api/*`, `/ws/*`, `/mcp` and OAuth discovery go to the backend, everything else to the frontend |
+| `frontend`     | Next.js web UI                                                                                        |
+| `backend`      | One Rust process (axum + russh): REST API, WebSockets, the SSH gateway, monitoring, SQLite             |
+| `kasm-browser` | KasmVNC + Chromium for remote browser sessions                                                        |
+| `guacd`        | Apache Guacamole's RDP / VNC engine for remote desktops (internal network only)                       |
 
 ## Quick start
 
 Requires Docker with the Compose plugin.
 
-1. Create your environment file and adjust as needed:
+1. Create the environment file and set at least `SECRET_KEY`, `INTERNAL_API_TOKEN` and `SERVER_DOMAIN`
+   (`PUBLIC_URL` too if Telepy sits behind an HTTPS proxy):
 
    ```bash
    cp .env.example .env
    ```
 
-2. Generate the SSH server keys:
+2. Generate the gateway's host keys and the service key (once — devices pin the host keys):
 
    ```bash
    ./telepy.sh keygen
    ```
 
-3. Build and start the stack:
+3. Build and start the stack, then check it:
 
    ```bash
    docker compose up -d --build
+   ./telepy.sh doctor
    ```
 
-4. Open `http://localhost:<WEB_SERVER_PORT>/login` (default: `http://localhost:8787/login`) and sign in.
+4. Open `http://localhost:<WEB_SERVER_PORT>` (default `http://localhost:8787`) and sign in.
 
 > [!NOTE]
-> The **first user** created becomes the superuser — whether via Google login or `./telepy.sh create-superuser` (check `dev-scripts/dev-create-superuser.sh` to change the default username/password before running it).
+> The **first account** becomes the administrator — whether it signs in with Google or is created with
+> `./telepy.sh create-superuser`.
+
+For production, put an HTTPS proxy in front of Traefik, set `PUBLIC_URL` and `TRUSTED_PROXY_HOPS=2`, and make the
+gateway port (`REVERSE_SERVER_SSH_PORT`) reachable for your devices.
 
 ### Connect a device
 
-1. **Tunnels → Create Tunnel**, paste the device's SSH public key, and complete the wizard (add at least one OS username that exists on the device).
-2. Append the shown service key to `~/.ssh/authorized_keys` on the device.
-3. Run the generated connection script on the device (SSH for quick tests, AutoSSH/systemd/Docker for something persistent). Scripts can be retrieved any time from the tunnel's **Scripts** action.
-4. When the tunnel shows **Online**, the terminal, file manager, and remote browser are ready to use.
+- **Linux / macOS:** **Tunnels → Create Tunnel → One command**, copy the command and run it on the device. The page
+  follows each step and turns green once Telepy has logged in through the tunnel.
+- **Anything else (Windows, Docker, appliances):** **Step by step** — paste the device's public key, choose the
+  login accounts, authorize Telepy's key, run one of the generated scripts, and verify the login.
+
+When the tunnel is **Online**, the terminal, files, desktop and browser buttons on its card are ready.
 
 ## Configuration
 
-Environment variables in `.env`:
+Environment variables in `.env` (see [`.env.example`](./.env.example) for the full comments):
 
-| Variable                  | Default     | Description                                  |
-| ------------------------- | ----------- | -------------------------------------------- |
-| `PROJECT_NAME`            | `main`      | Suffix for container names                   |
-| `DEBUG`                   | `false`     | Debug logging                                |
-| `SECRET_KEY`              | —           | JWT signing key (set in production)          |
-| `WEB_SERVER_PORT`         | `8787`      | Port Traefik exposes the web UI on           |
-| `REVERSE_SERVER_SSH_PORT` | `24242`     | Port devices connect their reverse SSH to    |
-| `SOCIAL_GOOGLE_CLIENT_ID` | —           | Google OAuth client ID                       |
-| `SERVER_DOMAIN`           | `localhost` | Public hostname of your Telepy server        |
-| `PUBLIC_URL`              | —           | Public base URL, e.g. `https://telepy.example.com` (OAuth issuer for MCP clients and the passkey origin; derived from the request when empty). Passkeys need a domain name with https (or `localhost`) |
-| `INTERNAL_API_TOKEN`      | —           | Secret for internal service-to-service calls |
-| `OPENAPI_ENABLED`         | `true`      | Serve Swagger UI + OpenAPI spec (see below)  |
+| Variable                      | Default     | Description                                                                 |
+| ----------------------------- | ----------- | --------------------------------------------------------------------------- |
+| `PROJECT_NAME`                | `main`      | Suffix of container and network names (one per stack on a host)             |
+| `DEBUG` / `LOG_LEVEL`         | `false` / — | Debug logging; log level or a full tracing filter                           |
+| `WEB_SERVER_PORT`             | `8787`      | Port Traefik publishes for the web UI, API and WebSockets                   |
+| `REVERSE_SERVER_SSH_PORT`     | `24242`     | Port devices dial for their reverse SSH tunnel                              |
+| `SERVER_DOMAIN`               | `localhost` | Host name devices and laptops use; written into scripts and SSH configs     |
+| `PUBLIC_URL`                  | —           | Public base URL, e.g. `https://telepy.example.com` (OAuth issuer, passkey origin, join URL); empty = from the request |
+| `SECRET_KEY`                  | —           | Signs sign-ins and seals stored secrets; set a long random value before real use |
+| `INTERNAL_API_TOKEN`          | —           | Secret between the backend and the kasm-browser container                  |
+| `SOCIAL_GOOGLE_CLIENT_ID`     | —           | Google sign-in (baked into the frontend image at build time)               |
+| `TRUSTED_PROXY_HOPS`          | `1`         | Trusted proxies in front of the backend, Traefik included (client IPs)      |
+| `CLIENT_IP_HEADER`            | —           | Take the client IP from this header instead (e.g. `CF-Connecting-IP`)       |
+| `GATEWAY_PROXY_PROTOCOL_FROM` | —           | IPs / CIDRs of an L4 proxy in front of the gateway that sends PROXY protocol |
+| `DEVICE_PROBE`                | `true`      | Daily read-only login for each device's addresses and facts                 |
+| `KEEP_SHARED_SERVICE_KEY`     | `false`     | Never remove the old shared service key from devices (for a parallel move)  |
+| `OPENAPI_ENABLED`             | `true`      | Swagger UI and the OpenAPI document (signed-in users only)                  |
 
-### AI tools (MCP)
+Everything else — registration, sign-in lifetimes and two-factor requirements, remote browser and desktop limits,
+MCP sessions, webhooks, terminal and command-rule defaults, feature permissions — is a **site setting** in the web UI
+(**Site settings**, administrators only).
 
-Telepy is its own OAuth 2.1 authorization server, so any MCP-capable AI tool (Claude, Cursor, …) can
-be pointed at `https://<your-host>/mcp`. The first use opens an approval page in your browser where you
-check the app's redirect address, choose the permissions (see tunnels / run commands / read and write
-files) and the tunnels it may use. Approved apps appear under **Preferences → Connected apps**, where
-revoking stops their access and closes their sessions immediately. Sessions opened by AI tools close on
-their own when idle; the limits are site settings. **AI activity** in the sidebar shows the open sessions (with
-a close button) and every tool call the agents made; owners of shared tunnels are notified when an agent
-connects. Details: [docs/mcp.md](./docs/mcp.md).
+## Command line, API and MCP
 
-For Claude Code: `claude mcp add --transport http telepy https://<your-host>/mcp`. Tools: `list_tunnels`,
-`tunnel_status`, `ssh_session_open` / `ssh_exec` / `ssh_session_list` / `ssh_session_close`, `sftp_list` /
-`sftp_read` / `sftp_write`, interactive shells for TUIs and prompts (`shell_open` / `shell_send` / `shell_read` — the
-agent reads the screen as text; command rules gate every Enter; recorded on recorded tunnels) and, with the
-`browser:use` permission, a remote browser that goes online through the device (`browser_open` / `browser_navigate` /
-`browser_read` / `browser_click` / `browser_type` / `browser_screenshot`). The MCP page's "What can an app reach?"
-diagram shows what each connected app's permissions open up. Every tool call is audited (`/api/ai/activity`), and a tunnel's owner is notified when
-someone it is shared with opens an AI session on it. Details: [docs/mcp.md](docs/mcp.md).
-
-### API docs
-
-The backend publishes its OpenAPI 3 document at `/api/openapi.json` and a Swagger UI at
-`/api/__hidden_swagger`. Both require a login: the page reuses your web session (open it in the
-browser you are logged in with; otherwise it sends you to `/login`), and the spec needs a Bearer
-token (`Authorization: Bearer <access_token>` from `POST /api/auth/token`). "Try it out" requests
-carry your login automatically; **Authorize** lets you test with another token. The spec is
-generated from the actual routes (`utoipa`), so it is always in sync with the server;
-`telepy-server openapi` prints the same document from the CLI. Set `OPENAPI_ENABLED=false` to
-remove both. The **API** page in the web app links to it ("Full reference") and lists, from the same document, which
-endpoints a personal API token may call.
-
-## CLI helper
-
-`./telepy.sh` wraps the day-to-day maintenance scripts:
-
-```
-Usage: ./telepy.sh sub-command [args]
-Sub-commands:
-  keygen: Generate SSH host keys (gateway) and the backend service key.
-  create-superuser: Create an admin account for Telepy management.
-  shell: Open a shell in the backend container.
-  migration: Reconcile the database schema (also runs automatically on start).
-  backend-debug: Recreate the backend container and follow its logs.
-  oui: Download the IEEE OUI registry so LAN hosts show their NIC vendor.
-  doctor: Check .env, containers, ports and the backend's configuration; exits 1 when something is broken.
-```
-
-## Command line (`telepy`)
-
-Install a release build (macOS, Linux, Windows; see [docs/cli.md](./docs/cli.md)) or `cargo install --git https://github.com/NatLee/telepy telepy-cli`, then:
+**`telepy` CLI** — install a release build (macOS, Linux, Windows) or
+`cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`:
 
 ```sh
-telepy login https://telepy.example.com          # browser sign-in, or --token tpt_… (the API page → Your tokens)
-telepy ls                                        # tunnels with health, latency, accounts and labels
-telepy ssh box@pi                                # system ssh through the tunnel, Telepy's host key pinned
-telepy exec --label env=prod -- uptime           # many devices at once; command rules and audit apply
-telepy cp ./app.conf box@pi:/etc/app/
-telepy api activity --follow                     # every call your API tokens make, as it happens
+telepy login https://telepy.example.com        # browser sign-in, or --token tpt_… from the API page
+telepy ls                                      # tunnels with health, latency, accounts and labels
+telepy ssh web-01                              # your system ssh through the tunnel, Telepy's host key pinned
+telepy exec --label env=prod -- uptime         # many devices at once; command rules and audit apply
+telepy cp ./app.conf web-01:/etc/app/
+telepy api activity --follow                   # every call your API tokens make, as it happens
 ```
 
-In CI set `TELEPY_URL` and `TELEPY_TOKEN` instead of signing in.
+In CI set `TELEPY_URL` and `TELEPY_TOKEN` instead of signing in. Details: [docs/cli.md](./docs/cli.md).
 
-## Further reading
+**REST API** — create a personal token on the **API** page; it lists every endpoint a token may call, with `curl`
+examples. The OpenAPI document is at `/api/openapi.json` and Swagger UI at `/api/__hidden_swagger` (both need a
+sign-in; `telepy-server openapi` prints the document).
 
-- [Remote browser architecture](./docs/remote-browser.md)
-- [Remote desktop (RDP / VNC) architecture](./docs/remote-desktop.md)
-- [Webhooks: events, formats and signatures](./docs/webhooks.md)
+**MCP** — point an MCP client at `https://<your-host>/mcp`, e.g.
+`claude mcp add --transport http telepy https://<your-host>/mcp`. The first use opens an approval page where you pick
+the permissions and tunnels; the **MCP** page has the setup for each client. Details: [docs/mcp.md](./docs/mcp.md).
+
+## Maintenance
+
+`./telepy.sh` (or `telepy.ps1` on Windows) wraps the day-to-day tasks:
+
+| Sub-command        | What it does                                                                     |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `keygen`           | Generate the gateway host keys and the backend service key (once)                |
+| `create-superuser` | Create an administrator account                                                   |
+| `doctor`           | Check `.env`, containers, ports and the backend's configuration (exit 1 on a problem) |
+| `geoip`            | Download offline IP geolocation (DB-IP Lite); re-run monthly                     |
+| `oui`              | Download the IEEE vendor list so LAN hosts show their NIC vendor                 |
+| `migration`        | Reconcile the database schema (also runs on every start)                         |
+| `shell`            | Open a shell in the backend container                                            |
+| `backend-debug`    | Recreate the backend container and follow its logs                               |
+
+Upgrading is `git pull && docker compose up -d --build`; the database schema is reconciled on start.
+
+## Documentation
+
 - [The `telepy` command line and API tokens](./docs/cli.md)
+- [MCP: AI agents on your devices](./docs/mcp.md)
+- [Webhooks: events, formats and signatures](./docs/webhooks.md)
+- [Remote desktop (RDP / VNC / RustDesk)](./docs/remote-desktop.md)
+- [Remote browser (KasmVNC)](./docs/remote-browser.md)
+- [How the backend reaches devices](./docs/device-connections.md)
 - [Latency measurement deep dive](./docs/latency-deep-dive.md)
-- [Rust backend migration plan](./docs/rust-migration-plan.md)
-- [Backend benchmark: Django vs Rust](./docs/benchmarks.md)
+- [Rust backend migration plan](./docs/rust-migration-plan.md) and [benchmark: Django vs Rust](./docs/benchmarks.md)
+- [How the README screenshots are made](./docs/screenshots/README.md)
 - [Articles](./docs/articles/)
+- Release notes: [GitHub Releases](https://github.com/NatLee/telepy/releases)
 
 ## Contributors
 

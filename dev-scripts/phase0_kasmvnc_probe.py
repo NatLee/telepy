@@ -6,8 +6,8 @@ KasmVNC websocket 探測工具 —— 用「非 KasmVNC 自家前端」的 WebSo
   B. Basic Auth 有沒有關(Xkasmvnc 的 -disableBasicAuth 有沒有生效;沒關會回 401)。
   C. websocket path / subprotocol 對不對、server 會不會先送 greeting(VNC 是 server 先說話)。
 
-**只用 Python 標準函式庫**,不需 pip 裝任何東西 —— 可直接在 kasm-browser 或 backend 容器內跑
-(兩者都只有 python3 stdlib)。
+**只用 Python 標準函式庫**,不需 pip 裝任何東西 —— 可直接在 kasm-browser 容器內跑(它有 python3 stdlib;
+Rust 版 backend 的映像沒有 python3)。
 
 ──────────────────────────────────────────────────────────────────────────────
 怎麼跑(在你的 Docker 環境):
@@ -31,7 +31,7 @@ KasmVNC websocket 探測工具 —— 用「非 KasmVNC 自家前端」的 WebSo
            'Xkasmvnc :10 -geometry 1280x720 -depth 24 -SecurityTypes None -disableBasicAuth \
             -websocketPort 8453 -interface 0.0.0.0 -desktop telepy & sleep 3'
 
-  2) 把本檔複製進容器並跑探測(host 用 127.0.0.1 在 kasm-browser 內、或 kasm-browser 在 backend 內):
+  2) 把本檔複製進 kasm-browser 容器並跑探測(在容器內 host 用預設的 127.0.0.1):
          docker compose cp dev-scripts/phase0_kasmvnc_probe.py kasm-browser:/tmp/probe.py
          docker compose exec kasm-browser python3 /tmp/probe.py --port 8453
 
@@ -40,11 +40,12 @@ KasmVNC websocket 探測工具 —— 用「非 KasmVNC 自家前端」的 WebSo
 
   3) 判讀:
        ✅ PASS(某 path 回 101 + 收到 greeting,如 "RFB 003.00x")
-          → 採 KasmVNC WS-proxy。把命中的 path/scheme/subprotocol 寫進 backend env:
-            KASM_WS_PATH / KASM_WS_SCHEME / KASM_WS_SUBPROTOCOL(見 tunnels/consumers.py)。
+          → 上游正常。backend 預設就是 ws + /websockify + binary;要改就把命中的 path/scheme/subprotocol
+            設成 backend 的 KASM_WS_PATH / KASM_WS_SCHEME / KASM_WS_SUBPROTOCOL(docker-compose.yml 預設沒帶,
+            要加在 backend 的 environment;讀取處見 src/backend-api/src/config.rs、ws/remote_browser.rs)。
        ❌ 全部 401 → basic auth 沒關乾淨(檢查 -disableBasicAuth / kasmvnc.yaml)。
        ❌ 只有 wss 能連(ws 被拒/timeout)→ require_ssl 沒關成功;設 KASM_WS_SCHEME=wss。
-       ❌ 全部連不上/沒 greeting → path/subprotocol 兜不攏;回報 no-go,維持 TigerVNC。
+       ❌ 全部連不上/沒 greeting → path/subprotocol 兜不攏;檢查 kasmvnc.yaml 與 session_manager.py 的 Xkasmvnc 參數。
 ──────────────────────────────────────────────────────────────────────────────
 """
 import sys
@@ -236,7 +237,7 @@ def main():
 
     print("\n" + "=" * 70)
     if hit:
-        print("PASS ✅  KasmVNC websocket 可連、交握成功。backend 的 consumer 已內建這些預設,若要固定可設 env:")
+        print("PASS ✅  KasmVNC websocket 可連、交握成功。backend 已內建這些預設(src/backend-api/src/config.rs),若要固定可在 backend 的 environment 設:")
         print(f"    KASM_WS_SCHEME={'wss' if hit['tls'] else 'ws'}")
         print(f"    KASM_WS_PATH={hit['path']}")
         print(f"    KASM_WS_SUBPROTOCOL={hit.get('chosen_subprotocol') or subproto or ''}")

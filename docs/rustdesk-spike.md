@@ -1,11 +1,15 @@
 # RustDesk 進 Telepy 瀏覽器：可行性研究（2026-10-25）
 
 > 問題：能不能把 RustDesk 的畫面放進 Telepy 的網頁介面、自己客製；這樣是不是就不需要 SSH 隧道了？
-> 這份是研究紀錄，不是功能文件。程式碼沒有進產品；重現用的腳本在當時的 scratchpad（已清），做法寫在附錄。
+> 這份是研究紀錄，不是功能文件。研究用的程式碼沒有進產品；重現用的腳本在當時的 scratchpad（已清），做法寫在附錄。
+>
+> **狀態：** 依下面的「設計」做出來了——瀏覽器裡的 RustDesk（#195，存密碼 #196），之後又補上 MVP 刻意不做的聲音與傳檔
+> （#245、#256）。程式在 `src/backend-api/src/rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`，前端用 vendored 的社群核心
+> `src/frontend/public/vendor/rustdesk-web-core/`；使用方式見 [`remote-desktop.md`](remote-desktop.md)。
 
 > **2026-10-26 更新：** 下面「『不用 SSH』是反的」那一點已被推翻。RustDesk 1.5.0 能經 WebSocket 主動連 ID 伺服器，
 > Telepy 自己當 ID＋中繼伺服器就不需要 SSH、也不用開新埠，還多了端對端加密；見 [`rustdesk-id-server.md`](rustdesk-id-server.md)
-> （做過後又移除：Telepy 只經隧道連 RustDesk）。
+> （#201–#208 做過，#212 又移除：Telepy 只經隧道連 RustDesk）。
 
 ## 結論
 

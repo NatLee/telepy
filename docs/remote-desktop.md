@@ -1,9 +1,14 @@
-# Remote desktop（RDP / VNC in the browser）
+# Remote desktop（RDP / VNC / RustDesk in the browser）
 
-> 在瀏覽器裡看、操作裝置（或它區網裡電腦）的 RDP / VNC 桌面。裝置上不裝任何東西：連線由裝置自己的 sshd
-> 轉接，畫面由 guacd 轉成 Guacamole 協定。程式：`src/backend-api/src/desktop/`、`api/desktop.rs`、
-> `ws/desktop.rs`；前端 `app/tunnels/desktop/`、`components/desktop/`、`hooks/useDesktopPage.ts`、`lib/desktop.ts`；
-> 測試 `tests/desktop_api.rs`。
+> 在瀏覽器裡看、操作裝置（或它區網裡電腦）的 RDP / VNC 桌面，以及經隧道連 RustDesk。裝置上不裝任何東西：連線由裝置
+> 自己的 sshd 轉接，RDP / VNC 的畫面由 guacd 轉成 Guacamole 協定，RustDesk 由瀏覽器裡的 RustDesk 核心解碼。程式：
+> `src/backend-api/src/desktop/`、`api/desktop.rs`、`ws/desktop.rs`（RustDesk：`rustdesk/`、`api/rustdesk.rs`、
+> `ws/rustdesk.rs`）；前端 `app/tunnels/desktop/`、`components/desktop/`、`hooks/useDesktopPage.ts`、`lib/desktop.ts`；
+> 測試 `tests/desktop_api.rs`、`tests/rustdesk_api.rs`。
+>
+> 入口：`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`（側欄、隧道選單、區網主機面板、隧道列表的 Desktop 按鈕）。表單最上面是
+> 和終端機頁共用的路徑圖選擇器（`DesktopPathPicker`：目標、協定、埠在最後一個節點裡），下面是畫質、剪貼簿、聲音與登入。
+> 整個功能受功能權限 `remote_desktop` 管（關掉 = REST 回 403 `feature_disabled`，頁面換成說明）。
 
 ## 架構
 
@@ -27,18 +32,20 @@ backend desktop/bridge.rs
 
 ## 流程
 
-1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username, port?, lan_host_id?, login?, password?, domain?, quality?, clipboard?}`：
-   檢查 `desktop_enabled`、隧道 VIEW、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號）、
-   區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip 通道到目標，所以
-   `device_offline` / `device_auth` / `target_unreachable` 在這一步就回 502，不必等 WebSocket。
-   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, target, username}`；帳密只留在記憶體。
+1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?}`：
+   檢查 `desktop_enabled`、隧道 VIEW、step-up（敏感隧道）、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號；
+   沒帶就用 `choose_username` 挑預設）、區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip
+   通道到目標，所以 `device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` /
+   `device_unreachable` 在這一步就回 502（`desktop_disabled` / `desktop_busy` 是 503），不必等 WebSocket。
+   回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, target, username}`；帳密只留在記憶體。
    `clipboard`：沒帶就用使用者的個人設定 `desktop_clipboard`，再套上站台的同名上限（取較窄的）；回應的 `clipboard` 是實際用的方向。
    帶 `credential_id` 時改用憑證庫裡那筆的 login / password / domain（見下方「憑證庫」），請求裡的帳密欄位被忽略。
 2. 瀏覽器用票證開 WS。後端重驗權限、開 rendezvous、連 guacd 握手（`hostname` / `port` = rendezvous），
    guacd 連回來的那條接到第 1 步的通道。握手完成後先送 `0.,<uuid>;`（guacamole-common-js 收到才把 tunnel 標成開啟），
    再把握手期間已讀進解析器的指令送出（guacd 常把 `ready` 和第一批畫面放在同一個封包）。
-3. 中繼直到任一端結束。結束原因：使用者、guacd、閒置（`desktop_session_idle_timeout`）、`/desktop/{sid}/stop`、
-   權限被收回（reaper 每 10 秒重驗）。
+3. 中繼直到任一端結束。結束原因：使用者、guacd、閒置（`desktop_session_idle_timeout`，reaper 每 10 秒看一次）、
+   `POST /api/reverse/server/desktop/{sid}/stop`（4014）、從即時 session 頁結束、失去權限（4009，見「稽核與可見性」）、
+   開它的那個網頁登入被登出（4010）。
 
 ## 延遲與串流狀況（`desktop/stats.rs`、前端 `lib/desktopStats.ts`、`components/desktop/DesktopStats.tsx`）
 
@@ -47,7 +54,7 @@ backend desktop/bridge.rs
 | 指令 | 方向 | 內容 |
 |---|---|---|
 | `telepy-ping <n>` | 中繼 → 瀏覽器 | 瀏覽器立刻回 `telepy-pong <n>`；中繼結算網路往返，**不轉給 guacd** |
-| `telepy-stats <json>` | 中繼 → 瀏覽器 | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind}` |
+| `telepy-stats <json>` | 中繼 → 瀏覽器 | `{ms, frame_ms, net_ms, tunnel_ms, frames, merged, down, up, behind, audio}`（`audio` 見「聲音」） |
 
 - **畫面往返 `frame_ms`**：guacd 每一幀結尾送 `sync <ts>`，瀏覽器把那一幀畫完才回 `sync <ts>`；中繼從送出到收到回音的時間
   = WebSocket 來回 + 瀏覽器解碼繪製，就是使用者感覺到的「卡」。3 秒沒有新樣本就回 null（桌面靜止）。
@@ -68,13 +75,23 @@ backend desktop/bridge.rs
 | `speed` | `color-depth 16`、不平滑字型 | `color-depth 16`、`compress-level 6`、`quality-level 5` | — |
 | `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | 向 guacd 要 devicePixelRatio 倍（≤ 2）的解析度、`dpi` 同倍，縮回 CSS 大小 |
 
-記在 localStorage `telepy.desktopQuality`；start 回應帶 `quality`。
+記在 localStorage `telepy.desktopQuality`（這台瀏覽器；偏好設定 → 遠端桌面也改得到同一個值）；start 回應帶 `quality`。
+
+## 剪貼簿方向（每個人自己選，站台設定是上限）
+
+- 三個方向：`both`（雙向）/ `to_remote`（只能貼進遠端）/ `off`。個人設定 `desktop_clipboard` 存在帳號上
+  （`/api/user/settings`，同一個回應帶唯讀的 `desktop_clipboard_limit` = 站台設定），在桌面頁的「剪貼簿」欄與
+  偏好設定 → 遠端桌面（`hooks/useDesktopClipboard.ts`，兩處共用一份）都能改；超過上限的選項在介面上停用。
+- 每個 start（RDP / VNC、RustDesk）可以帶 `clipboard` 蓋過這次，沒帶就用個人設定；實際用的是它和站台 `desktop_clipboard`
+  較窄的那個（`desktop::Clipboard::within` / `effective`，前端 `lib/desktop.ts` 的 `clipboardWithin`），回應的 `clipboard` 是實際值。
+- 誰把關：guacd 用 `disable-copy` / `disable-paste`；RustDesk 的資料流後端看不到，由瀏覽器裡的核心套用（off = 那台的
+  `disable-clipboard`，to_remote = 不收遠端的剪貼簿事件）。測試 `desktop_clipboard_is_the_users_choice_within_the_site_limit`。
 
 ## 聲音（RDP 經 guacd；RustDesk 見下一節）
 
 - 表單的「聲音」開關（RDP 與 RustDesk 才有；guacd 的 VNC 沒有聲音 —— 它要另接 PulseAudio，裝置那邊不會有 —— 所以 VNC
   不顯示；VNC 協定本身只有畫面與輸入。macOS 的「螢幕共享」就是 VNC，所以要聽 Mac 的聲音請用 RustDesk），記在 localStorage
-  `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬）。
+  `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬；偏好設定 → 遠端桌面改的是同一個值）。
 - RDP：`POST …/desktop/start` 帶 `audio: true`（VNC 帶了也當 false；非布林 → 欄位錯誤），回應帶 `audio`（實際）。
   開：握手的 `audio` 指令列出 `audio/L8`、`audio/L16`（guacamole-common-js 的 RawAudioPlayer 會播的原始 PCM），
   guacd 開音訊串流（`audio` / `blob` / `end`）。guacd → 瀏覽器本來就整個透傳；瀏覽器 → guacd 的白名單放 `ack`（接受串流），
@@ -130,9 +147,24 @@ VNC 伺服器把所有螢幕拼成一張大畫面送來（macOS 螢幕共享、x
 
 RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只有一個虛擬螢幕。
 
+## 觸控縮放（`lib/desktopZoom.ts` 純函式 + 測試、`hooks/useDesktopZoom.ts`、`components/desktop/ZoomControl.tsx`）
+
+兩個畫面元件（guacd 的 `DesktopViewer`、`RustDeskViewer`）都經 `useDesktopZoom().layout()` 排版：在「塞進框裡」的比例上再乘
+一個倍率，超出框的部分由框裁切、用平移看。
+
+- 雙指捏合縮放、雙指拖曳平移；單指照舊是遠端滑鼠（點一下 = 點擊、長按 = 右鍵）。
+- 觸控裝置（`pointer: coarse`）右上角有 − / 倍率 / + 的小膠囊（點倍率 = 回到塞進框裡），倍率停在 `ZOOM_STEPS`，上限至少 4 倍。
+- 手機（`(pointer: coarse) and (max-width: 639px)`）上，畫面被縮小時（VNC / RustDesk 的固定解析度）一打開就是 `PHONE_ZOOM`
+  （1.5 倍、從左上角開始），遠端的字才看得清楚；RDP 的解析度跟著框走，不放大。新的連線、換螢幕 / 區域、解析度改變時重新套用。
+- 只有滑鼠的瀏覽器看不到任何差別。
+
 ## RustDesk（瀏覽器裡連，或經隧道轉發給原生 client）
 
-RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，桌面頁協定選「RustDesk」時預設走第一條：
+RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，**都經隧道**，桌面頁協定選「RustDesk」時預設走第一條：
+
+> 歷史：「Telepy 當 RustDesk 的 ID / 中繼伺服器」（裝置不需要隧道）的模式在 #201–#208 做過，#212 又拿掉了，只留經隧道這條
+> （終端機、檔案、分享、即時 session、錄影等功能都走同一條路）。研究紀錄在 [`rustdesk-id-server.md`](rustdesk-id-server.md)；
+> 資料遷移 `2026-10-26-drop-rustdesk-server-devices` 刪掉它存的登入與兩張表。
 
 ### 瀏覽器裡連（`rustdesk/`、`api/rustdesk.rs`、`ws/rustdesk.rs`；前端 `components/desktop/RustDeskViewer.tsx`、`lib/rustdesk.ts`）
 
@@ -140,20 +172,22 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 來源與版本記在旁邊的 `README.md`）在瀏覽器裡跑：解碼影像（WebCodecs）、做密碼挑戰、送鍵鼠。Telepy **不架 hbbs / hbbr**：
 核心以為自己在連 ID 伺服器與 relay，其實兩條都連到同一個 WebSocket，後端看第一則訊息分角色，然後把 relay 那條
 重新分框成 RustDesk 的 TCP 線路格式，接到裝置 Direct IP 埠（21118）的 `direct-tcpip` 通道。研究紀錄與量測在
-`docs/rustdesk-spike.md`（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
+[`rustdesk-spike.md`](rustdesk-spike.md)（1280×800 高動態：核心經中繼 28 fps / ~645 KB/s，guacd VNC 4–5 fps / 0.5–1.3 MB/s）。
 
-- `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?}`；和桌面同一道門：`desktop_enabled`、VIEW、
-  step-up、`choose_username` / `allowed_usernames`、`desktop_max_sessions` 算的是 guacd + RustDesk 的總數）：先 `desktop::prepare`
-  —— 池的 lease + 對目標 Direct IP 埠開好 `direct-tcpip`（`device_offline` / `target_unreachable` … 在這裡就是 502）——
-  再發 60 秒單次票證：`{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username}`。
+- `POST /api/reverse/server/{id}/rustdesk/start`（`{username?, port?, lan_host_id?, credential_id?, clipboard?}`；和桌面同一道門：
+  `desktop_enabled`、VIEW、step-up、`choose_username` / `allowed_usernames`、`desktop_max_sessions` 算的是 guacd + RustDesk 的總數）：
+  先 `desktop::prepare` —— 池的 lease + 對目標 Direct IP 埠開好 `direct-tcpip`（`device_offline` / `target_unreachable` … 在這裡就是
+  502）—— 再發 60 秒單次票證：`{session_id, ws_path: "/ws/rustdesk/{sid}/", ticket, expires_in, target, username, clipboard,
+  clipboard_limit, file_transfer}`（帶 `credential_id` 時多一個 `password`，見憑證庫）。
   **密碼不經後端**：固定密碼只交給瀏覽器裡的核心，它用 RustDesk 的雜湊挑戰回應；Telepy 只中繼。
 - `/ws/rustdesk/{sid}/?ticket=`：核心會連兩次（`custom-rendezvous-server` 與 `relay-server` 都設成這個網址）。第一則 binary
   訊息是 `RendezvousMessage`：`punch_hole_request`（欄位 8）= hbbs 角色，後端回 `relay_response`（欄位 19：uuid + relay_server =
   同一網址）後只等著、再有 punch 就再回；`request_relay`（欄位 18）= relay 角色，接過 `prepare` 好的通道，之後 WS 的每則
   binary 訊息 → `codec::encode_frame`（1–4 byte LE 前綴，低 2 bits = 前綴長 − 1）→ 通道；通道的 bytes → `decode_frame`
   （上限 16 MiB）→ 一則一訊息。presence kind `rustdesk`，gateway events `rustdesk_open` / `rustdesk_close`（含時長、原因、
-  兩個方向的 byte 數）。關閉碼：4404 票證無效 / 過期、4403 權限、4013 裝置端關閉、4014 被停止（`POST
-  /api/reverse/server/rustdesk/{sid}/stop`、reaper 收權限、閒置）、4400 協定錯、4009 從即時 session 頁結束。
+  兩個方向的 byte 數）。關閉碼：4404 票證無效 / 過期、4403 權限或登入守門拒絕、4013 裝置端關閉、4014 被伺服器停止（`POST
+  /api/reverse/server/rustdesk/{sid}/stop`；檔案 session 另有「畫面那條結束了」「站台關掉傳檔」「被新的取代」）、4400 協定錯、
+  4009 從即時 session 頁結束或失去權限、4010 開它的網頁登入被登出。RustDesk 沒有閒置斷線（`desktop_session_idle_timeout` 只管 guacd）。
 - 前端（桌面頁）：表單多「RustDesk 密碼」欄（留在瀏覽器），主要按鈕「在瀏覽器裡連線」；`RustDeskViewer` 載入核心（一頁
   同時只能有一個，核心是 window 上的全域物件），設兩個 server 選項 = `rustdeskWsUrl()`、`session_add_sync` + `session_start`，
   自動確認「不加密的直連」msgbox（隧道本身加密），`onVideoFrame` 畫到 canvas（等比縮小、不放大），鍵盤焦點在隱藏的
@@ -239,8 +273,8 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   `setTimeout(…, 0)` 下一個 tick 再答。裝置端 RustDesk 跑在 C locale（沒有 `LANG`）時 xdo 拒絕多位元組文字（log
   `Invalid multi-byte sequence encountered`），`input_string` 的中文打不進去 —— 那是裝置的環境，不是 Telepy。
 - 實測（OrbStack 裡的 Debian + RustDesk 1.5.0 + Xvfb，headless Chrome）：連上 < 1 s，點擊 / 滾輪 / 移動落在裝置上的座標
-  分毫不差（`xev`），打字到達 xterm，即時 session 頁列出 `rustdesk`，Logs 有兩個事件。腳本：scratchpad 的
-  `pw/rd-browser-e2e.js`（見記憶 `rustdesk-browser`）。
+  分毫不差（`xev`），打字到達 xterm，即時 session 頁列出 `rustdesk`，Logs 有兩個事件。（這個瀏覽器端的 E2E 腳本沒有放進
+  repo；repo 裡的是 `tests/rustdesk_api.rs` 的假裝置測試。）
 
 ### 用 RustDesk app（埠轉發）
 
@@ -275,10 +309,13 @@ WebSocket 關閉時把代碼也放進 reason（guacamole-common-js 的 WebSocket
 | 4403 | 已沒有權限（VIEW 或裝置帳號） |
 | 4011 | guacd 連不上或握手失敗 |
 | 4013 | guacd 斷線或送了壞指令 |
-| 4014 | 伺服器端結束（閒置、stop、權限被收回） |
+| 4014 | 伺服器端結束（閒置、`…/desktop/{sid}/stop`） |
 | 4400 | 瀏覽器送了解析不了的指令 |
-| 4009 | 從即時 session 頁被結束 |
-| 4010 | 開它的那個網頁登入被登出（「這個瀏覽器已被登出」） |
+| 4009 | 從即時 session 頁被結束（reason = 誰），或失去權限（reason = `Telepy (access changed)`） |
+| 4010 | 開它的那個網頁登入被登出（「這個瀏覽器已被登出」；reason = user / admin / logout / reuse / disabled） |
+
+上表是 guacd 這條（`/ws/desktop/`）；RustDesk（`/ws/rustdesk/`）的關閉碼見上面 RustDesk 一節。兩條 socket 都沒有 auth frame
+（一次性 `?ticket=`），功能權限與 step-up 在 REST start 就擋了，所以不會出現 4012 / 4008。
 
 guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203 / 0x0301 = RDP 登入被拒），
 前端 `lib/desktop.ts` 的 `sessionFailure` 對到翻譯與「卡在哪一段」。
@@ -290,11 +327,12 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 - 每位使用者自己的：`GET /api/credentials`（可用 `tunnel_id` / `lan_host_id` / `protocol` 篩選）、`POST`、
   `PATCH /api/credentials/{id}`、`DELETE`。只有本人看得到、用得到；管理員也不例外。
 - 每筆綁一個桌面：`protocol`（`rdp` / `vnc` / `rustdesk`）+ `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`
-  （RustDesk 只有固定密碼，`login` 留空）。
+  （RustDesk 只有固定密碼，`login` 留空）。同一個憑證庫也存 `ssh` 列（網路頁區網主機那一跳的登入：密碼和 / 或私鑰），
+  那是終端機的事，不在這份文件的範圍。
   `start` 收到的 `credential_id` 若不是同一個目標（隧道、區網主機、協定）就回 `credential_id` 欄位錯誤，
   所以一筆 Windows 密碼不會被拿去登另一台。
 - 密碼以 AES-256-GCM 封存，金鑰由 `SECRET_KEY` 衍生（前綴 `telepy-vault-v1:`），AAD =
-  `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`，密碼永不回傳；
+  `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`（`ssh` 列另有 `has_key`），密碼永不回傳；
   解密只發生在 `start`，結果跟手打的一樣只留在 session 記憶體。輪換 `SECRET_KEY` 會讓舊的存檔解不開（重存即可）。
   **RustDesk 是唯一的例外**：挑戰回應由瀏覽器裡的核心做，後端代答不了，所以 `POST …/rustdesk/start` 帶 `credential_id`
   時後端解開後放進回應的 `password`（只有這一次、走 TLS、不記錄），前端交給核心後不留在頁面狀態。
@@ -306,8 +344,16 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 
 ## 稽核與可見性
 
-- gateway 事件 `desktop_open` / `desktop_close`（含持續時間、結束原因、guacd 的最後錯誤），在該隧道的 Logs。
-- presence 種類 `desktop`：擁有者在隧道列表看得到誰正開著。
+- gateway 事件 `desktop_open` / `desktop_close`（含持續時間、結束原因、串流摘要、guacd 的最後錯誤）與 `rustdesk_open` /
+  `rustdesk_close`（含兩個方向的 byte 數）、`rustdesk_file_delete` / `rustdesk_file_rename`，在該隧道的 Logs。
+- presence 種類 `desktop` / `rustdesk`（帶它登入的裝置帳號）：擁有者 / ADMIN 在隧道列表的「N 人使用中」看得到誰正開著，
+  即時 session 頁（`/tunnels/sessions`、管理員 `/tunnels/admin/sessions`）列出並可結束（4009，reason = 誰結束的）。
+- **失去權限就結束**（`access_recheck.rs`，和終端機、檔案、遠端瀏覽器同一套）：取消分享 / 分享到期、權限或允許清單變小、
+  裝置帳號改名或刪除、功能 `remote_desktop` 被關、帳號停用等一發生就 `access_recheck::kick`，另有每 10 秒的 `run` 接住其他的；
+  判斷是純函式 `lost()`（VIEW + 這個 session 用的裝置帳號還在允許清單）。結束走即時 session 的路徑：socket 4009、reason
+  `Telepy (access changed)`，`desktop_close` / `rustdesk_close` 附上 `ended by …: <為什麼>`，本人收到 `SESSION-ENDED`。
+  桌面 / RustDesk 自己的 reaper 不再重驗權限。測試 `desktop_ends_when_access_is_lost`、`rustdesk_ends_when_access_is_lost`。
+- 開它的網頁登入被撤銷（從「你的裝置」登出、管理員登出、帳號停用）：start 時記下的 web session 一被撤銷就 4010。
 
 ## 站台設定（Settings → Remote desktop）
 
@@ -318,14 +364,27 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 | `desktop_session_idle_timeout` | 900 | 沒有鍵盤 / 滑鼠 / 剪貼簿輸入多久就斷線（秒），0 = 不斷 |
 | `desktop_clipboard` | both | **上限**：both / to_remote / off。每個人在桌面頁或偏好設定裡自己選方向（個人設定 `desktop_clipboard`），實際用兩者較窄的那個；guacd 用 disable-copy / disable-paste 把關，RustDesk 由瀏覽器裡的核心套用（off = 那台的 `disable-clipboard`） |
 | `desktop_max_resolution` | 2560 | 寬或高的上限（像素） |
-| `desktop_file_transfer` | true | 網頁內 RustDesk 的「檔案」面板（上傳 / 下載）；關掉時中繼也拒絕傳檔登入、收掉開著的 |
+| `desktop_file_transfer` | true | 網頁內 RustDesk 的「檔案」面板（上傳 / 下載 / 改名 / 刪除）；關掉時中繼也拒絕傳檔登入、收掉開著的 |
 
 ## 這條連線上走什麼（info 對話框的資料流圖）
 
 `lib/desktopStreams.ts`（純函式 + 測試）→ `components/desktop/DesktopStreams.tsx`，放在 `DesktopFlow` 路徑圖下面：畫面、鍵盤與
 滑鼠、剪貼簿、聲音、檔案五條並排的直線（左 = 你的瀏覽器、右 = 桌面，箭頭 = 方向），每條的狀態 on / oneWay（剪貼簿 to_remote）/
 off（自己關的、RDP 在這個分頁靜音）/ blocked（站台上限）/ unsupported（這種連法沒有：guacd 的 VNC 沒聲音、RDP / VNC 畫面不傳檔、
-瀏覽器沒有 WebCodecs 音訊），旁邊一句為什麼。「比較連線方式」的 `ROWS` 也多了聲音與檔案兩列。
+瀏覽器沒有 WebCodecs 音訊），旁邊一句為什麼。聲音那一條跟著 `lib/desktopSound.ts` 的判斷（等遠端 / 被擋住 / 沒有聲音），
+檔案那一列在 RustDesk 底下列出下載 / 上傳 / 改名 / 刪除各自的狀態。
+
+info 對話框（`DesktopInfoDialog`）上半是 `DesktopFlow` 的路徑圖：你的瀏覽器 ─ Telepy ─ 裝置 ─ 桌面，每一點 waiting / active /
+ok / failed（`lib/desktop.ts` 的 `spotStates`，失敗由 `sessionFailure` 對到卡在哪一段），連線中兩段線上標往返時間；RustDesk
+在瀏覽器裡連時用 `inBrowser` 變體，用 app 時畫埠轉發那條路。
+
+## 連線方式比較（`components/desktop/ConnectionWays.tsx`、純函式 `lib/connectionWays.ts` + 測試）
+
+一個對話框並排比較兩種都經隧道的連法：RDP / VNC 經 guacd（Telepy 把畫面轉成圖片）與 RustDesk（瀏覽器裡的核心解碼）。
+兩條路徑欄位對齊（瀏覽器 ─ Telepy ─ 裝置 ─ 桌面；隧道 = 雙線、裝置到桌面的那一跳 = 虛線），每條下面是「誰加密哪一段」
+的標尺（TLS / SSH / 協定自己的，`layerColumns`），標出畫面在哪裡畫；再來是一張事實表（手機上變卡片，`ROWS`：含聲音與檔案）
+和怎麼選。現在用的那種（`wayFor(protocol)`）會被標出來。從桌面頁標題列、協定欄的提示、info 對話框的頁尾都打得開。
+事實變了就改 `ROWS`。
 
 ## 部署
 

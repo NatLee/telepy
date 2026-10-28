@@ -26,9 +26,9 @@ Tokens are managed on the **API** page (`/tunnels/api`, sidebar "API"): your tok
  an MCP app ─────────────────── keeps working
 ```
 
-The same picture, live, is at the top of the **API** page ("Three ways into Telepy", with a "What if I…" switch:
-revoking a token, disconnecting an app or signing out each cuts only its own lane), and per token behind **Your
-tokens → How it works**.
+The same picture, live, is behind the **API** page's **Three ways in** button (with a "What if I…" switch: revoking a
+token, disconnecting an app or signing out each cuts only its own lane), and per token behind **Your tokens → How it
+works**.
 
 - A token **is you**: your tunnels, the accounts you may use on them, the feature switches an admin set for you and
   command rules all apply. It never gets more than you have.
@@ -37,13 +37,17 @@ tokens → How it works**.
   can call** tab is built from that same table (`GET /api/auth/tokens/routes`), so it can't disagree with the server.
 - Tunnels that ask you to confirm it's you (**step-up**) refuse tokens, exactly like MCP agents.
 - Every token expires (at most a year). Revoking takes effect at once.
-- Admins can turn the **API tokens** feature off (Site settings → Access): existing tokens then stop working.
+- Admins can turn the **API tokens** feature off for everyone, a user group or one person (Site settings → Access):
+  that person's tokens then stop working. Other features they turn off for you (web terminal, file manager, …) are
+  refused to your tokens too (403 `feature_disabled`).
+- If an admin disables your account, your tokens and connected apps are suspended, not revoked: they are refused
+  while the account is off and work again once it is enabled.
 
 ## Scopes
 
 | Scope | Lets the token | CLI commands |
 | --- | --- | --- |
-| `tunnels:read` | list tunnels, status, uptime, accounts, the generated ssh config | `ls`, `status`, `ssh`, `scp`, `sftp`, `config install` |
+| `tunnels:read` | list tunnels, status, uptime, accounts, the generated ssh config, live sessions | `ls`, `status`, `ssh`, `scp`, `sftp`, `config install`, `sessions`, `lan ls` |
 | `ssh:exec` | open exec sessions and run commands (command rules apply), read recordings and snippets | `exec`, `run`, `recordings`, `snippets` |
 | `ssh:files` | every SFTP operation | `cp` |
 | `network:scan` | LAN scans (MCP `lan_scan`, the scan REST route) | — |
@@ -58,13 +62,18 @@ with **your personal SSH key** through the gateway, as the web's SSH config dial
 ## Install
 
 Release builds are attached to the `cli-v*` releases on GitHub (macOS arm64 / x86_64, Linux x86_64 / arm64 (static,
-musl), Windows x86_64), each with a `.sha256`:
+musl), Windows x86_64). Each archive is `telepy-<version>-<target>.tar.gz` (Windows: `.zip`) with the binary at its
+top level, next to a `<archive>.sha256`:
 
 ```sh
 # macOS / Linux: pick your target from the release page
 VER=cli-v0.1.0
 TARGET=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-curl -fsSL "https://github.com/NatLee/telepy/releases/download/$VER/telepy-${VER#cli-}-$TARGET.tar.gz" | tar xz
+FILE="telepy-${VER#cli-}-$TARGET.tar.gz"   # e.g. telepy-v0.1.0-aarch64-apple-darwin.tar.gz
+curl -fsSLO "https://github.com/NatLee/telepy/releases/download/$VER/$FILE"
+curl -fsSLO "https://github.com/NatLee/telepy/releases/download/$VER/$FILE.sha256"
+shasum -a 256 -c "$FILE.sha256"            # or: sha256sum -c
+tar xzf "$FILE"
 sudo install -m 755 telepy /usr/local/bin/telepy
 ```
 
@@ -75,7 +84,8 @@ Invoke-WebRequest "https://github.com/NatLee/telepy/releases/download/$ver/telep
 Expand-Archive telepy.zip -DestinationPath "$env:LOCALAPPDATA\telepy"   # then add that folder to PATH
 ```
 
-Or build it yourself: `cargo install --git https://github.com/NatLee/telepy telepy-cli`.
+Or build it yourself (Rust 1.88 or newer): `cargo install --locked --git https://github.com/NatLee/telepy telepy-cli`.
+`ssh`, `scp` and `sftp` also need the system OpenSSH client on your PATH (`telepy doctor` checks).
 
 Maintainers: push a `cli-v<version>` tag; `.github/workflows/release-cli.yml` builds the five targets and creates the
 release (it runs on those tags only).
@@ -85,14 +95,18 @@ release (it runs on those tags only).
 ```sh
 telepy login https://telepy.example.com                 # browser: OAuth + PKCE, loopback callback
 telepy login https://telepy.example.com --scope "tunnels:read ssh:exec ssh:files network:scan"
-telepy login https://telepy.example.com --token tpt_…   # a personal API token (the API page → Your tokens)
-telepy whoami
+telepy login https://telepy.example.com --no-browser    # print the sign-in URL instead of opening a browser
+telepy login https://telepy.example.com --token tpt_…   # a personal API token (the API page → Your tokens); --with-token works too
+telepy whoami                                           # who, and with which token / app, scopes, tunnels and expiry
 telepy logout
 ```
 
-The browser sign-in registers the CLI as an MCP-style OAuth app (it shows up under **Connected apps**, where you can
-revoke it) and stores the access + refresh tokens. Credentials live in the macOS Keychain or the Windows Credential
-Manager; on Linux (and with `TELEPY_NO_KEYRING=1`) in `~/.config/telepy/credentials.json` with mode 0600.
+The browser sign-in registers the CLI as an MCP-style OAuth app (it shows up under **Connected apps**, in
+Preferences and on the MCP page, where you can revoke it) and stores the access + refresh tokens. Credentials live in
+the macOS Keychain or the Windows Credential Manager; on Linux (and with `TELEPY_NO_KEYRING=1`, or when the keyring
+fails) in `credentials.json` with mode 0600 in the config directory (`TELEPY_CONFIG_DIR`, else
+`$XDG_CONFIG_HOME/telepy` or `~/.config/telepy`; Windows `%APPDATA%\telepy`). `logout` forgets the sign-in and
+revokes a browser sign-in on the server; a token stays valid until you revoke it on the API page.
 
 In CI there is nothing to store: set `TELEPY_URL` and `TELEPY_TOKEN` (or pass `--server` / `--token`).
 
@@ -111,12 +125,16 @@ telepy ssh box                             # the tunnel's default account
 telepy ssh box@pi -- uname -a              # <tunnel>@<account> (pi@box works too)
 telepy ssh box -L 8080:localhost:80        # forward a port; -D 1080 for SOCKS
 telepy ssh box -i ~/.ssh/id_work           # a specific key for both hops
+telepy ssh box --ssh-opt "-o ServerAliveInterval=30"   # any other ssh option (repeatable; scp / sftp take it too)
 telepy scp ./build.tar.gz box@pi:/tmp/
+telepy scp -r box@pi:/var/log/app ./logs
 telepy sftp box@pi
 telepy config install box nas              # the web dialog's install command, done for you (~/.ssh/config, marked blocks, backup)
+telepy config install --all --print        # every tunnel you can use; print the blocks instead of writing (--file <path> writes elsewhere)
 
 telepy exec box -- systemctl is-active nginx
 telepy exec --label env=prod -- uptime     # every tunnel with the label, in parallel, "name | " prefixes
+telepy exec --group Lab -u root --timeout 300 -- apt-get -y upgrade   # a tunnel group of yours, one account, timeout ≤ 600 s
 telepy exec box nas --json -- df -h /
 telepy exec box --wait-approval -- sudo reboot   # keep waiting while a command rule holds it for approval
 
@@ -126,9 +144,9 @@ telepy cp ./config.yml box@pi:/etc/app/
 telepy sessions                            # live sessions on your tunnels
 telepy sessions end 42
 telepy recordings ls --tunnel box
-telepy recordings play 17 --speed 2        # with its timing, pauses capped at 2 s
+telepy recordings play 17 --speed 2        # with its timing, pauses capped at 2 s (--idle-limit 0 keeps every pause)
 telepy snippets ls --tunnel box
-telepy run "restart service" box --var svc=nginx
+telepy run "restart service" box --var svc=nginx   # -y skips the "ask first" confirmation
 
 telepy lan ls box                          # the LAN hosts Telepy knows behind a device
 telepy lan add box 192.168.1.20 --label nas --user pi --port 22
@@ -155,12 +173,16 @@ telepy doctor                              # server, sign-in, scopes, expiry, ss
 
 `ssh` / `scp` / `sftp` write `~/.ssh/telepy/<alias>.conf` (the generated config with the ProxyCommand pointing back at
 that file) and `~/.ssh/telepy/known_hosts-<server>` (Telepy's gateway host key, pinned), then run the system OpenSSH
-with `-F`. Your own `~/.ssh/config` is untouched unless you run `telepy config install`.
+with `-F` (`TELEPY_SSH_DIR` moves that folder). Your own `~/.ssh/config` is untouched unless you run
+`telepy config install`, which keeps a `config.bak`, saves the host keys to `~/.ssh/telepy_known_hosts` and, like the
+web dialog, leaves alone same-named devices that belong to another Telepy server (set a name prefix, `ssh_alias_prefix`,
+to have both).
 
 `exec` opens a short-lived session per tunnel through the backend (`POST /api/ai/sessions`, then
 `POST /api/ai/sessions/{id}/exec`, then closes it): the same reaper, command rules and audit as MCP agents. The
-calls appear on the **AI activity** page under the token's name, and REST writes made with a token leave a
-`token_call` entry in the tunnel's Logs.
+commands appear on the **AI activity** page under the token's name (or the CLI's app name after a browser sign-in);
+other REST writes made with a token (sharing, labels, LAN hosts, ending sessions…) leave a `token_call` entry in the
+tunnel's Logs.
 
 `browse` drives a **scripted browser**: a real Chromium that browses as if it sat on the device, so it sees the
 device's LAN, its localhost and its public IP — a router's admin page, an intranet dashboard, a site that only allows
@@ -169,8 +191,9 @@ per-person session limit (`ai_max_sessions_per_user`), so it suits scripted chec
 jobs, not a high-volume crawler. Browsers close themselves when idle; every action is in the AI activity log (typed
 text by its length unless `--show`), and step-up tunnels refuse them.
 
-Exit codes: a single target exits with the remote command's code; several targets exit 1 when any failed; errors
-from Telepy exit 1 with the server's message.
+Exit codes: `exec` / `run` on a single target exit with the remote command's code (124 when it timed out and was
+killed, 255 when Telepy refused or could not run it); several targets exit 1 when any failed. `ssh` / `scp` / `sftp`
+exit with OpenSSH's code. Other errors from Telepy exit 1 and print the server's message.
 
 ## Using a token with curl or an MCP client
 
@@ -183,7 +206,7 @@ curl -H "Authorization: Bearer $TELEPY_TOKEN" https://telepy.example.com/api/rev
 ```
 
 On `/mcp` a token works like an OAuth app token (same tools, scopes and tunnel limit) as long as the **MCP apps**
-feature is on for you.
+feature is on for you (besides **API tokens**). See [mcp.md](mcp.md) for the tools.
 
 The **What a token can call** tab gives a `curl` for every endpoint with the base URL filled in and the secret as
 `$TELEPY_TOKEN` (export it once; the page never shows a real secret again). Path variables are shell variables too

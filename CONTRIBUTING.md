@@ -6,10 +6,17 @@ too.
 ## Pull requests
 
 - Keep a PR to one change, and describe what it does and how you tested it.
-- Backend: `cd src/backend-api && cargo test`. Anything on an SSH path (gateway, device login, terminal, SFTP,
-  permissions) needs an end-to-end test on the SSH lab in `tests/common/lab.rs`.
-- Frontend: `cd src/frontend && npm run build`. Every user-visible string goes through i18n: add the key to
-  `src/locales/en.ts`, then to `zh-TW.ts` and `ja.ts`.
+- Backend: `cd src/backend-api && cargo test` (needs `ssh` / `ssh-keygen`, and a local `sftp-server` for the SFTP
+  tests; tests that need them skip without them). Anything on an SSH path (gateway, device login, terminal, SFTP,
+  permissions) needs an end-to-end test on the SSH lab in `src/backend-api/tests/common/lab.rs`;
+  `tests/ssh_topology.rs` shows how.
+- CLI: `cd src/cli && cargo test`. It has its own `Cargo.lock`, and its end-to-end test builds the server too, so
+  pointing `CARGO_TARGET_DIR` at the backend's `target` directory saves a second build.
+- Frontend: `cd src/frontend && npm ci`, then `npm test` (unit tests; Node 22.18+ or 23.6+ runs the `.ts` files
+  directly), `npx tsc --noEmit` and `npm run build`. Every user-visible string goes through i18n: add the key to
+  `src/locales/en.ts`, then to `zh-TW.ts` and `ja.ts` (the type check fails until all three agree). After adding
+  UI text with new Chinese or Japanese characters, re-run `python3 scripts/subset-huninn.py` from `src/frontend`
+  (needs `pip install fonttools brotli`) so they land in the small UI font file.
 - New dependencies must be compatible with the AGPL-3.0 (MIT, BSD, Apache-2.0, MPL-2.0, LGPL and the like are
   fine; GPL-2.0-only, SSPL and proprietary licenses are not).
 - Agree to the Contributor License Agreement below by ticking the box in the PR description.
