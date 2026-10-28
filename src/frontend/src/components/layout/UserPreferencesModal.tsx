@@ -227,7 +227,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
                     </Section>
 
-                    {/* 關於（授權、原始碼、字型；兩個彩蛋）/ About (licence, source, typeface; two easter eggs) */}
+                    {/* 關於（授權、原始碼、字型、使用聲明；兩個彩蛋）/ About (licence, source, typeface, disclaimer; two easter eggs) */}
                     <Section icon={<Info />} title={t("about.title")}>
                         <AboutTelepy />
                     </Section>
