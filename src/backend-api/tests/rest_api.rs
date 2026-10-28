@@ -462,9 +462,10 @@ async fn user_keys_settings_and_admin_users() {
     assert_eq!(r.json["values"]["valid_register_domains"], "");
     let r = app.get("/api/site/settings", Some(&admin)).await;
     let keys: Vec<&String> = r.json["values"].as_object().unwrap().keys().collect();
-    assert_eq!(keys.len(), 35);
+    assert_eq!(keys.len(), 36);
     assert_eq!(r.json["values"]["signin_page_style"], "standard", "the sign-in page shows the product by default");
     assert_eq!(r.json["values"]["signin_oauth_style"], "standard");
+    assert_eq!(r.json["values"]["signin_cli_style"], "standard");
     assert_eq!(r.json["values"]["signin_page_message"], "");
     assert_eq!(r.json["values"]["desktop_file_transfer"], true, "RustDesk file transfer is allowed by default");
     assert_eq!(r.json["values"]["terminal_detach_max_secs"], 1800, "a detached web terminal is kept at most 30 minutes by default");

@@ -7,6 +7,9 @@
  * Shared pieces of the app-connection (OAuth) flow: the side panel (diagram + three steps), the phone step
  * strip, the requesting-app card, scope icons / labels and the problem view. Used by the OAuth sign-in page
  * and the consent page, so both read as one flow that looks nothing like the normal sign-in.
+ * 要求的是 `telepy` CLI（`telepy login`）時，面板與步驟改講終端機：終端機 ─HTTPS─ Telepy ─SSH─ 裝置、最後一步回到終端機。
+ * When the `telepy` CLI is asking (`telepy login`), the panel and steps speak of the terminal instead: terminal
+ * ─HTTPS─ Telepy ─SSH─ devices, and the last step goes back to the terminal.
  */
 import React from "react";
 import { Bot, CornerDownLeft, Eye, FolderTree, Globe, Radar, Server, Settings2, ShieldAlert, ShieldCheck, SquareTerminal, type LucideIcon } from "lucide-react";
@@ -16,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
 import { Chip } from "@/components/ui/section";
 import { useI18n } from "@/lib/i18n";
+import { cliHost } from "@/lib/cliClient";
 import type { TranslationKey } from "@/locales/en";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +30,13 @@ const STEPS: { title: TranslationKey; body: TranslationKey }[] = [
     { title: "oauth.step.signIn", body: "oauth.step.signInBody" },
     { title: "oauth.step.review", body: "oauth.step.reviewBody" },
     { title: "oauth.step.return", body: "oauth.step.returnBody" },
+];
+
+/** CLI（`telepy login`）的三步：一樣的流程，最後回到終端機。/ The CLI's three steps: the same flow, ending in the terminal. */
+const CLI_STEPS: { title: TranslationKey; body: TranslationKey }[] = [
+    { title: "oauth.step.signIn", body: "oauth.cli.signInBody" },
+    { title: "oauth.step.review", body: "oauth.cli.reviewBody" },
+    { title: "oauth.cli.return", body: "oauth.cli.returnBody" },
 ];
 
 /** scope 的圖示、標籤與性質（唯讀 / 會改東西）；名稱固定（後端 SCOPES）。/ Scope icon, labels and impact. */
@@ -49,56 +60,64 @@ export function ScopeImpact({ scope }: { scope: string }) {
 /** 左側面板（lg 以上）：連接一個 app 的示意圖與三個步驟。/ Side panel (lg+): the diagram and the three steps. */
 export function ConnectAppAside({ step, appName }: { step: ConnectStep; appName?: string | null }) {
     const { t } = useI18n();
+    const host = cliHost(appName);
+    const cli = host !== null;
+    const steps = cli ? CLI_STEPS : STEPS;
     return (
         <div>
-            <h2 className="text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">{t("oauth.panelTitle")}</h2>
-            <p className="mt-4 text-base leading-relaxed text-muted-foreground">{t("oauth.panelBody")}</p>
+            <h2 className="text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">{t(cli ? "oauth.cli.panelTitle" : "oauth.panelTitle")}</h2>
+            <p className="mt-4 text-base leading-relaxed text-muted-foreground">
+                {cli ? t("oauth.cli.panelBody", { host: host || t("oauth.cli.thisComputer") }) : t("oauth.panelBody")}
+            </p>
 
-            {/* app ─MCP→ Telepy ─SSH→ 裝置：app 永遠只透過 Telepy 碰到裝置。/ The app reaches devices only through Telepy. */}
+            {/* app ─MCP→ Telepy ─SSH→ 裝置（CLI：終端機 ─HTTPS→ …）：永遠只透過 Telepy 碰到裝置。/ Devices are reached only through Telepy. */}
             <div className="mt-10 flex items-center gap-2" aria-hidden>
-                <DiagramNode Icon={Bot} label={appName || t("oauth.diagramApp")} />
-                <DiagramLink label="MCP" />
+                {cli ? <DiagramNode Icon={SquareTerminal} label={host || "telepy CLI"} /> : <DiagramNode Icon={Bot} label={appName || t("oauth.diagramApp")} />}
+                <DiagramLink label={cli ? "HTTPS" : "MCP"} />
                 <DiagramNode Icon={TelepyGlyph} label="Telepy" accent />
                 <DiagramLink label="SSH" />
                 <DiagramNode Icon={Server} label={t("oauth.diagramDevices")} />
             </div>
 
             <div className="mt-10">
-                <FlowSteps steps={STEPS.map(({ title, body }) => ({ title: t(title), body: t(body) }))} current={step} />
+                <FlowSteps steps={steps.map(({ title, body }) => ({ title: t(title), body: t(body) }))} current={step} />
             </div>
 
             <p className="mt-10 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                 <ShieldCheck size={14} className="mt-px shrink-0 text-primary" aria-hidden />
-                {t("oauth.panelNote")}
+                {t(cli ? "oauth.cli.panelNote" : "oauth.panelNote")}
             </p>
         </div>
     );
 }
 
 /** 手機 / 平板（沒有左側面板時）的步驟條。/ Step strip for narrow screens, where the side panel is hidden. */
-export function ConnectProgress({ step }: { step: ConnectStep }) {
+export function ConnectProgress({ step, appName }: { step: ConnectStep; appName?: string | null }) {
     const { t } = useI18n();
+    const STEPS_NOW = cliHost(appName) !== null ? CLI_STEPS : STEPS;
     return (
         <div className="mb-6 lg:hidden">
             <div className="flex gap-1.5" aria-hidden>
-                {STEPS.map((s, i) => (
+                {STEPS_NOW.map((s, i) => (
                     <span key={s.title} className={cn("h-1 flex-1 rounded-full", i < step ? "bg-success/60" : i === step ? "bg-primary" : "bg-border")} />
                 ))}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-                {t("oauth.stepOf", { n: step + 1, total: STEPS.length })}
+                {t("oauth.stepOf", { n: step + 1, total: STEPS_NOW.length })}
                 <span aria-hidden> · </span>
-                <span className="text-foreground">{t(STEPS[step].title)}</span>
+                <span className="text-foreground">{t(STEPS_NOW[step].title)}</span>
             </p>
         </div>
     );
 }
 
 /** app 的方塊圖示（中性色：名稱是對方自己取的，不給品牌感）。/ Neutral app tile: the name is self-declared. */
-export function AppTile({ className }: { className?: string }) {
+export function AppTile({ className, appName }: { className?: string; appName?: string | null }) {
+    // CLI 用終端機圖示，其他 app 用機器人。/ A terminal for the CLI, a robot for other apps.
+    const Icon = cliHost(appName) !== null ? SquareTerminal : Bot;
     return (
         <span className={cn("grid size-11 shrink-0 place-items-center rounded-xl border border-border bg-surface text-muted-foreground", className)}>
-            <Bot size={22} aria-hidden />
+            <Icon size={22} aria-hidden />
         </span>
     );
 }
@@ -123,7 +142,7 @@ export function AppRequestCard({ name, host, scopes, loading }: { name?: string;
     return (
         <div className="mb-8 rounded-xl border border-border bg-card p-4 shadow-card">
             <div className="flex items-start gap-3">
-                <AppTile />
+                <AppTile appName={name} />
                 <div className="min-w-0 flex-1">
                     {loading ? (
                         <>

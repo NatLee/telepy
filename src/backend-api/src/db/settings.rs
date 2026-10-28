@@ -50,6 +50,8 @@ pub struct SiteSettings {
     pub signin_oauth_style: String,
     /// 低調登入頁上的一句話（空白 = 內建的句子）。/ The discreet page's line (blank = the built-in ones).
     pub signin_page_message: String,
+    /// `telepy login` 的瀏覽器登入頁：standard | discreet。/ The page `telepy login` opens: standard | discreet.
+    pub signin_cli_style: String,
 }
 
 /// 欄位順序 = serializer 的 fields 順序（決定 values/meta 的輸出順序）。
@@ -88,6 +90,7 @@ pub const FIELDS: &[&str] = &[
     "terminal_detach_max_secs",
     "signin_page_style",
     "signin_oauth_style",
+    "signin_cli_style",
     "signin_page_message",
 ];
 
@@ -96,7 +99,7 @@ const COLS: &str = "id, allow_registration, valid_register_domains, remote_brows
     remote_browser_kasm_create_timeout, remote_browser_homepage, remote_browser_language, ai_session_idle_timeout, \
     ai_session_max_lifetime, ai_max_sessions_per_user, lan_scan_enabled, device_ip_lookup_url, notify_user_webhooks, notify_private_targets, notify_max_webhooks, user_key_max_days, \
     desktop_enabled, desktop_max_sessions, desktop_session_idle_timeout, desktop_clipboard, desktop_max_resolution, desktop_file_transfer, mfa_require_totp, mfa_require_passkey, recording_retention_days, command_approval_timeout, signin_lifetime, signin_access_lifetime, terminal_detach_max_secs, \
-    signin_page_style, signin_oauth_style, signin_page_message";
+    signin_page_style, signin_oauth_style, signin_page_message, signin_cli_style";
 
 pub async fn get_solo(db: &Db) -> sqlx::Result<SiteSettings> {
     if let Some(s) = sqlx::query_as::<_, SiteSettings>(&format!("SELECT {COLS} FROM site_settings_sitesettings WHERE id = 1"))

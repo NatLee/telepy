@@ -39,7 +39,7 @@ function ConsentInner() {
     const step: ConnectStep = decision ? 2 : 1;
     const frame = (children: React.ReactNode) => (
         <AuthShell wide aside={<ConnectAppAside step={step} appName={appName || null} />}>
-            <ConnectProgress step={step} />
+            <ConnectProgress step={step} appName={appName || null} />
             {children}
         </AuthShell>
     );
@@ -58,7 +58,7 @@ function ConsentInner() {
         <div>
             {/* 誰在要求、會導回哪裡（防冒名）。/ Who is asking and where it returns (anti-impersonation). */}
             <header className="flex items-start gap-3">
-                <AppTile />
+                <AppTile appName={appName} />
                 <div className="min-w-0">
                     <h1 className="text-2xl font-semibold tracking-tight break-words text-foreground">{appName}</h1>
                     <p className="mt-0.5 text-sm text-muted-foreground">{t("oauth.wantsAccess")}</p>

@@ -1,10 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_LOOK, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
+import { DEFAULT_LOOK, joinLines, lineLength, mergeUp, messageLines, messageProblem, moveRow, needsClient, pageForClient, parseSignInLook, pasteRows, pinnedLine, removeRow, styleOf, sunflower, tidyMessage } from "./signinLook.ts";
 
 test("the public endpoint and the cache both parse", () => {
-    assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", message: "Hi" }), { style: "discreet", oauthStyle: "standard", message: "Hi" });
-    assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", message: "" }), { style: "standard", oauthStyle: "discreet", message: "" });
+    assert.deepEqual(parseSignInLook({ style: "discreet", oauth_style: "standard", cli_style: "discreet", message: "Hi" }), { style: "discreet", oauthStyle: "standard", cliStyle: "discreet", message: "Hi" });
+    assert.deepEqual(parseSignInLook({ style: "standard", oauthStyle: "discreet", cliStyle: "standard", message: "" }), { style: "standard", oauthStyle: "discreet", cliStyle: "standard", message: "" });
+    // 舊後端 / 舊快取沒有 CLI 那個：跟 OAuth 頁一樣（以前就是這樣）；不認得的值也是。/ No CLI look = the OAuth page's.
+    assert.equal(parseSignInLook({ style: "standard", oauth_style: "discreet", message: "" })?.cliStyle, "discreet");
+    assert.equal(parseSignInLook({ style: "standard", oauth_style: "standard", cli_style: "neon" })?.cliStyle, "standard");
     // 不認得的樣子、缺欄位、不是物件 → null（頁面改用預設或重抓）。/ Unknown looks or shapes → null.
     assert.equal(parseSignInLook({ style: "neon", oauth_style: "standard" }), null);
     assert.equal(parseSignInLook({ style: "discreet" }), null);
@@ -17,6 +20,19 @@ test("each page reads its own look", () => {
     const look = { ...DEFAULT_LOOK, oauthStyle: "discreet" as const };
     assert.equal(styleOf(look, "signin"), "standard");
     assert.equal(styleOf(look, "oauth"), "discreet");
+    assert.equal(styleOf(look, "cli"), "standard");
+    assert.equal(styleOf({ ...DEFAULT_LOOK, cliStyle: "discreet" }, "cli"), "discreet");
+});
+
+test("the OAuth page uses the CLI look only when the telepy CLI is asking", () => {
+    assert.equal(pageForClient("telepy CLI (mac-studio.local)"), "cli");
+    assert.equal(pageForClient("telepy CLI"), "cli");
+    assert.equal(pageForClient("Claude Desktop"), "oauth");
+    assert.equal(pageForClient("my telepy CLI (x)"), "oauth");
+    assert.equal(pageForClient(undefined), "oauth", "unknown yet / failed request = the app page");
+    // 兩個設定一樣就不用等是誰在要求。/ Same setting for both = no need to wait for who is asking.
+    assert.equal(needsClient(DEFAULT_LOOK), false);
+    assert.equal(needsClient({ ...DEFAULT_LOOK, cliStyle: "discreet" }), true);
 });
 
 test("the lines are tidied and limited like the backend", () => {

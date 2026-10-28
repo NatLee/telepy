@@ -25,7 +25,7 @@ function readCache(): SignInLook | null {
 }
 
 function publish(next: SignInLook) {
-    const same = current && current.style === next.style && current.oauthStyle === next.oauthStyle && current.message === next.message;
+    const same = current && current.style === next.style && current.oauthStyle === next.oauthStyle && current.cliStyle === next.cliStyle && current.message === next.message;
     current = next;
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));

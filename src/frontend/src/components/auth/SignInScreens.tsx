@@ -8,13 +8,14 @@
  * is built from exactly the components a visitor gets.
  */
 import React from "react";
-import { AppWindow, CornerDownLeft } from "lucide-react";
+import { AppWindow, CornerDownLeft, SquareTerminal } from "lucide-react";
 import { AuthShell } from "@/components/auth/AuthShell";
 import { AuthHighlights } from "@/components/auth/AuthPanels";
 import { DiscreetShell } from "@/components/auth/DiscreetShell";
 import type { LoginFormProps } from "@/components/auth/LoginForm";
 import { AppRequestCard, ConnectAppAside, ConnectProgress, ReturnsTo } from "@/components/oauth/ConnectFlow";
 import { useI18n } from "@/lib/i18n";
+import { cliHost } from "@/lib/cliClient";
 import type { SignInStyle } from "@/lib/signinLook";
 
 type FormComponent = React.ComponentType<LoginFormProps>;
@@ -43,9 +44,9 @@ export interface OAuthAppInfo {
     loading: boolean;
 }
 
-/** 「取消並回到 <host>」。/ "Cancel and go back to <host>". */
-function CancelToApp({ host, onCancel }: { host: string; onCancel: () => void }) {
-    const { tn } = useI18n();
+/** 「取消並回到 <host>」（CLI：回到終端機）。/ "Cancel and go back to <host>" (the CLI: to the terminal). */
+function CancelToApp({ host, cli, onCancel }: { host: string; cli: boolean; onCancel: () => void }) {
+    const { t, tn } = useI18n();
     return (
         <button
             type="button"
@@ -53,7 +54,7 @@ function CancelToApp({ host, onCancel }: { host: string; onCancel: () => void })
             className="mt-8 inline-flex w-full items-center justify-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
             <CornerDownLeft size={14} aria-hidden />
-            {tn("oauth.cancelReturn", { host: <span className="font-mono">{host}</span> })}
+            {cli ? t("oauth.cli.cancel") : tn("oauth.cancelReturn", { host: <span className="font-mono">{host}</span> })}
         </button>
     );
 }
@@ -65,10 +66,11 @@ function CancelToApp({ host, onCancel }: { host: string; onCancel: () => void })
  */
 function DiscreetAppNote({ app }: { app: OAuthAppInfo }) {
     const { t } = useI18n();
+    const Icon = cliHost(app.name) !== null ? SquareTerminal : AppWindow;
     return (
         <div className="mb-6 flex items-start gap-3 rounded-lg border border-border bg-surface p-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground" aria-hidden>
-                <AppWindow size={18} />
+                <Icon size={18} />
             </span>
             <div className="min-w-0 flex-1">
                 {app.loading ? (
@@ -110,7 +112,9 @@ export function OAuthSignInScreen({
     pin?: number | null;
 }) {
     const { t } = useI18n();
-    const cancel = onCancel && app.host ? <CancelToApp host={app.host} onCancel={onCancel} /> : null;
+    const host = cliHost(app.name);
+    const cli = host !== null;
+    const cancel = onCancel && app.host ? <CancelToApp host={app.host} cli={cli} onCancel={onCancel} /> : null;
     if (style === "discreet") {
         return (
             <DiscreetShell message={message} pin={pin}>
@@ -122,12 +126,12 @@ export function OAuthSignInScreen({
     return (
         <AuthShell aside={<ConnectAppAside step={0} appName={app.name} />}>
             <Form
-                title={t("oauth.signInTitle")}
-                description={t("oauth.signInSubtitle", { app: app.name ?? t("oauth.theApp") })}
+                title={t(cli ? "oauth.cli.signInTitle" : "oauth.signInTitle")}
+                description={cli ? t("oauth.cli.signInSubtitle", { host: host || t("oauth.cli.thisComputer") }) : t("oauth.signInSubtitle", { app: app.name ?? t("oauth.theApp") })}
                 googleText="continue_with"
                 intro={
                     <>
-                        <ConnectProgress step={0} />
+                        <ConnectProgress step={0} appName={app.name} />
                         <AppRequestCard loading={app.loading} name={app.name ?? undefined} host={app.host} scopes={app.scopes} />
                     </>
                 }
