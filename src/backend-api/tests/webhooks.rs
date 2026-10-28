@@ -524,3 +524,61 @@ async fn site_webhooks_can_be_limited_to_any_tunnel() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(site.of("tunnel.ip_changed").len(), 1, "alice-b is not on the list");
 }
+
+#[tokio::test]
+async fn everyone_sees_a_redacted_summary_of_the_site_webhooks() {
+    let Some(lab) = Lab::start().await else { return };
+    let alice = lab.user("alice").await;
+    let bob = lab.user("bob").await;
+    let (k1, k2, k3) = (lab.keygen("a-tunnel"), lab.keygen("b-tunnel"), lab.keygen("c-tunnel"));
+    let a = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "zeta-alice", &k1)).await.unwrap();
+    let a2 = db::tunnels::create(&lab.app.state.db, new_tunnel(alice.id, "alpha-alice", &k2)).await.unwrap();
+    let b = db::tunnels::create(&lab.app.state.db, new_tunnel(bob.id, "bob-secret", &k3)).await.unwrap();
+    let url = "https://hooks.slack.com/services/T000/B000/s3cretpath";
+    let (picked, _) = create(
+        &lab,
+        &lab.admin_token,
+        json!({"scope": "site", "name": "Ops channel", "url": url, "events": ["tunnel.offline", "user.created"], "all_tunnels": false,
+               "tunnel_ids": [a.id, a2.id, b.id], "headers": [{"name": "Authorization", "value": "Bearer h3ader"}]}),
+    )
+    .await;
+    let (everything, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "name": "Everything", "url": url, "events": ["tunnel.online"]})).await;
+    let (off, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "name": "Off one", "url": url, "events": ["tunnel.online"], "enabled": false})).await;
+    let (paused, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "name": "Paused one", "url": url, "events": ["tunnel.online"]})).await;
+    // 沒取名 = 名稱是網址的主機：非管理員看不到。/ Left unnamed = named after the URL's host: hidden from non-admins.
+    let (unnamed, _) = create(&lab, &lab.admin_token, json!({"scope": "site", "url": "https://alerts.corp.internal.example/hook", "events": ["tunnel.online"]})).await;
+    sqlx::query("UPDATE telepy_webhook SET enabled = 0, paused_reason = 'failing' WHERE id = ?").bind(paused).execute(&lab.app.state.db.write).await.unwrap();
+    lab.app.state.webhooks.invalidate();
+    let secret = lab.app.get(&format!("/api/webhooks/{picked}/secret"), Some(&lab.admin_token)).await.json["secret"].as_str().unwrap().to_string();
+
+    let list = lab.app.get("/api/webhooks", Some(&alice.token)).await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.text);
+    assert!(list.json["site"].is_null(), "still no full site list for non-admins");
+    let summary = list.json["site_summary"].as_array().unwrap();
+    let ids: Vec<i64> = summary.iter().map(|s| s["id"].as_i64().unwrap()).collect();
+    assert_eq!(ids, vec![picked, everything, paused, unnamed], "the disabled one is hidden from non-admins: {}", list.text);
+    assert!(summary[3]["name"].is_null(), "{}", list.text);
+    let first = &summary[0];
+    assert_eq!(first["name"], "Ops channel");
+    assert_eq!(first["service"], "slack");
+    assert_eq!(first["events"], json!(["tunnel.offline", "user.created"]));
+    assert_eq!(first["all_tunnels"], false);
+    assert_eq!(first["tunnels"], json!([{"id": a2.id, "name": "alpha-alice"}, {"id": a.id, "name": "zeta-alice"}]), "only alice's, by name");
+    assert_eq!(first["hidden_tunnels"], 1);
+    assert_eq!((first["enabled"].as_bool(), first["paused"].as_bool()), (Some(true), Some(false)));
+    assert_eq!(summary[1]["all_tunnels"], true);
+    assert_eq!(summary[1]["tunnels"], json!([]));
+    assert_eq!((summary[2]["enabled"].as_bool(), summary[2]["paused"].as_bool()), (Some(false), Some(true)), "paused ones stay listed");
+    for leak in ["s3cretpath", "hooks.slack.com", "h3ader", "Authorization", secret.as_str(), "bob-secret", "created_by", "corp.internal"] {
+        assert!(!list.text.contains(leak), "{leak} leaked: {}", list.text);
+    }
+
+    // 管理員：全部（含關掉的），隧道全看得到。/ Admins: every one (disabled included), every tunnel visible.
+    let admin = lab.app.get("/api/webhooks", Some(&lab.admin_token)).await;
+    let summary = admin.json["site_summary"].as_array().unwrap();
+    assert_eq!(summary.iter().map(|s| s["id"].as_i64().unwrap()).collect::<Vec<_>>(), vec![picked, everything, off, paused, unnamed], "{}", admin.text);
+    assert_eq!(summary[4]["name"], "alerts.corp.internal.example", "admins see the name they saved");
+    assert_eq!(summary[0]["tunnels"].as_array().unwrap().len(), 3);
+    assert_eq!(summary[0]["hidden_tunnels"], 0);
+    assert_eq!((summary[2]["enabled"].as_bool(), summary[2]["paused"].as_bool()), (Some(false), Some(false)));
+}

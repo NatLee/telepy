@@ -3330,11 +3330,33 @@ pub struct WebhookCatalogEvent {
     pub severity: String,
 }
 
+/// 全站 webhook 的摘要：沒有網址、header、密鑰、送出紀錄或建立者。
+/// A redacted site-wide webhook: no URL, headers, secret, deliveries or creator.
+#[derive(ToSchema)]
+pub struct SiteWebhookSummary {
+    pub id: i64,
+    /// 沒取名（= 網址的主機）時非管理員拿到 null。/ null for non-admins when it was left unnamed (= the URL's host).
+    pub name: Option<String>,
+    /// 實際的送出格式（`auto` 已依網址判斷）。/ The effective format (`auto` resolved from the URL).
+    pub service: Option<String>,
+    pub events: Vec<String>,
+    pub all_tunnels: bool,
+    /// 選的隧道裡呼叫者看得到的 `{id, name}`，依名稱排序。/ Picked tunnels the caller can see, by name.
+    #[schema(value_type = Vec<Object>)]
+    pub tunnels: Vec<serde_json::Value>,
+    /// 選的隧道裡呼叫者看不到的數量。/ How many picked tunnels the caller cannot see.
+    pub hidden_tunnels: i64,
+    pub enabled: bool,
+    pub paused: bool,
+}
+
 #[derive(ToSchema)]
 pub struct WebhookList {
     pub mine: Vec<Webhook>,
     /// 全站 webhook（只有管理員）。/ Site-wide webhooks (admins only).
     pub site: Option<Vec<Webhook>>,
+    /// 全站 webhook 的摘要，給每個登入者（非管理員只有開著的）。/ Redacted site-wide webhooks for everyone (non-admins: enabled only).
+    pub site_summary: Vec<SiteWebhookSummary>,
     /// `{personal: [...], site: [...] | null}`
     #[schema(value_type = Object)]
     pub catalog: serde_json::Value,
