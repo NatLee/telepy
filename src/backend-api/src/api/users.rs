@@ -46,6 +46,8 @@ async fn settings_json(state: &AppState, s: &UserSettings) -> ApiResult<Value> {
         "terminal_detach_max_secs": site.terminal_detach_max_secs,
         "view_modes": view_modes_json(&s.view_modes),
         "ssh_alias_prefix": s.ssh_alias_prefix,
+        "tapi_color": s.tapi_color,
+        "tapi_daily": s.tapi_daily,
     }))
 }
 
@@ -200,6 +202,22 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             Some(Value::Null) => Some(String::new()),
             Some(_) => return Err(ApiError::field("ssh_alias_prefix", "Must be a string.")),
         },
+        // Tapi 的十字髮夾顏色（找到 Tapi 才會設；null / "" = 回到沒解鎖）。/ Tapi's clip colour (null / "" = locked again).
+        tapi_color: match body.get("tapi_color") {
+            None => None,
+            Some(Value::Null) => Some(String::new()),
+            Some(Value::String(c)) if c.is_empty() || crate::mascot::clip_color(c).is_some() || c == crate::mascot::DAILY => Some(c.clone()),
+            Some(_) => {
+                let names = crate::mascot::CLIP_COLORS.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ");
+                return Err(ApiError::field("tapi_color", format!("Must be one of: {names}, {}.", crate::mascot::DAILY)));
+            }
+        },
+        // 只能打開（看完片尾名單）；關回去沒有意義。/ Can only be turned on (credits watched).
+        tapi_daily: match body.get("tapi_daily") {
+            None => None,
+            Some(Value::Bool(true)) => Some(true),
+            Some(_) => return Err(ApiError::field("tapi_daily", "Can only be true.")),
+        },
         // 網頁終端機斷線保留秒數：只收固定的幾個選項。/ Web terminal detach grace: one of the fixed choices.
         terminal_detach_secs: match body.get("terminal_detach_secs") {
             None => None,
@@ -212,6 +230,12 @@ async fn update_settings(State(state): State<AppState>, AuthUser(user): AuthUser
             },
         },
     };
+    if patch.tapi_color.as_deref() == Some(crate::mascot::DAILY) && patch.tapi_daily != Some(true) {
+        let unlocked = db::users::settings_for(&state.db, user.id).await?.is_some_and(|s| s.tapi_daily);
+        if !unlocked {
+            return Err(ApiError::field("tapi_color", "Watch the credits to the end to unlock it."));
+        }
+    }
     let s = db::users::settings_update(&state.db, user.id, patch).await?;
     Ok(Json(settings_json(&state, &s).await?))
 }

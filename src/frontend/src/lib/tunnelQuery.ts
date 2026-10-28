@@ -38,6 +38,8 @@ export interface ParsedQuery {
     filters: QueryFilter[];
     /** 看起來像篩選、但 key 或值不認得的詞（被略過）。/ Filter-looking terms with an unknown key or bad value (ignored). */
     invalid: string[];
+    /** 彩蛋（xkcd 149）：整句是「make me a sandwich」時的回答，這時不篩選。/ Easter egg (xkcd 149); nothing is filtered then. */
+    reply?: "okay" | "makeItYourself";
 }
 
 export interface MatchContext {
@@ -87,7 +89,11 @@ function validValue(key: QueryKey, v: string): boolean {
     }
 }
 
+const SANDWICH = /^\s*(sudo\s+)?make\s+me\s+a\s+sandwich\s*[.!]*\s*$/i;
+
 export function parseQuery(input: string): ParsedQuery {
+    const sandwich = SANDWICH.exec(input);
+    if (sandwich) return { text: [], filters: [], invalid: [], reply: sandwich[1] ? "okay" : "makeItYourself" };
     const parsed: ParsedQuery = { text: [], filters: [], invalid: [] };
     for (const token of tokenize(input)) {
         const m = /^(-?)([a-z]+):(.*)$/i.exec(token);
