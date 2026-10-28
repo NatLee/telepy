@@ -19,12 +19,12 @@ import type { SignInStyle } from "@/lib/signinLook";
 
 type FormComponent = React.ComponentType<LoginFormProps>;
 
-/** 一般登入頁（/login）。/ The sign-in page. */
-export function SignInScreen({ style, message, Form }: { style: SignInStyle; message: string; Form: FormComponent }) {
+/** 一般登入頁（/login）。`pin` = 設定頁預覽正在看的那句。/ The sign-in page; `pin` = the line the settings preview shows. */
+export function SignInScreen({ style, message, Form, pin }: { style: SignInStyle; message: string; Form: FormComponent; pin?: number | null }) {
     const { t } = useI18n();
     if (style === "discreet") {
         return (
-            <DiscreetShell message={message}>
+            <DiscreetShell message={message} pin={pin}>
                 <Form title={t("discreet.signIn")} description={t("discreet.signInBody")} />
             </DiscreetShell>
         );
@@ -98,6 +98,7 @@ export function OAuthSignInScreen({
     Form,
     app,
     onCancel,
+    pin,
 }: {
     style: SignInStyle;
     message: string;
@@ -105,12 +106,14 @@ export function OAuthSignInScreen({
     app: OAuthAppInfo;
     /** 有導回網址時才有「取消」。/ Only when the backend gave a cancel URL. */
     onCancel?: () => void;
+    /** 設定頁預覽正在看的那句。/ The line the settings preview shows. */
+    pin?: number | null;
 }) {
     const { t } = useI18n();
     const cancel = onCancel && app.host ? <CancelToApp host={app.host} onCancel={onCancel} /> : null;
     if (style === "discreet") {
         return (
-            <DiscreetShell message={message}>
+            <DiscreetShell message={message} pin={pin}>
                 <Form title={t("discreet.oauthTitle")} description={t("discreet.oauthBody")} googleText="continue_with" intro={<DiscreetAppNote app={app} />} />
                 {cancel}
             </DiscreetShell>

@@ -114,7 +114,7 @@ pub struct SignInPage {
     /// The OAuth (app connection) sign-in page: standard | discreet
     #[schema(example = "standard")]
     pub oauth_style: String,
-    /// The discreet page's line; blank = the built-in ones
+    /// The discreet page's lines, one per line, typed in turn; blank = the built-in ones
     #[schema(example = "")]
     pub message: String,
 }

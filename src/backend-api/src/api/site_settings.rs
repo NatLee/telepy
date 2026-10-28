@@ -71,7 +71,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_file_transfer", kind: Kind::Bool, label: "Remote Desktop File Transfer (RustDesk)", description: "允許在網頁內的 RustDesk 連線裡上傳 / 下載檔案（桌面頁的「檔案」面板）。關閉後面板不出現，中繼也會拒絕 RustDesk 的檔案傳輸登入。RDP / VNC 不經這裡傳檔。下次開面板時生效。" },
     FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面。變更後立即生效。" },
     FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
-    FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page message", description: "低調登入頁在 Telepy 下面顯示的一句話(最多 200 字、3 行)。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
+    FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -255,26 +255,33 @@ pub fn normalize_domains(raw: &str, max: usize) -> Result<String, String> {
 
 /// 登入頁的兩種樣子。/ The two sign-in page looks.
 pub const SIGNIN_STYLES: [&str; 2] = ["standard", "discreet"];
-/// 低調登入頁那句話的上限（字元 / 行）。/ Limits of the discreet page's line (characters / lines).
-pub const SIGNIN_MESSAGE_MAX: usize = 200;
-const SIGNIN_MESSAGE_LINES: usize = 3;
+/// 低調登入頁的句子：一行一句，最多幾句、每句幾個字。/ The discreet page's lines: how many, and characters per line.
+const SIGNIN_MESSAGE_LINES: usize = 6;
+const SIGNIN_LINE_MAX: usize = 80;
+/// 整段的上限（六句各 80 字加換行，永遠不會比逐行的限制先碰到）。/ The whole text (never reached before the per-line limits).
+pub const SIGNIN_MESSAGE_MAX: usize = SIGNIN_MESSAGE_LINES * (SIGNIN_LINE_MAX + 1);
 
 /**
- * 可以空白的短文字：換行統一成 `\n`、每行去掉尾端空白、整段去頭尾空白；超過字數、超過三行或有其他控制字元就拒絕。
- * Blank-able short text: newlines normalised to `\n`, trailing spaces per line and outer whitespace trimmed; too long,
- * more than three lines or other control characters are refused.
+ * 低調登入頁的句子（一行一句，輪流打出來）：換行統一成 `\n`、每句去頭尾空白、空行拿掉；超過句數、某句太長、
+ * 整段太長或有其他控制字元就拒絕。與前端 `lib/signinLook.ts` 的 `joinLines` / `messageProblem` 一致。
+ * The discreet page's lines (one per line, typed in turn): newlines normalised to `\n`, each line trimmed, blank
+ * lines dropped; too many lines, a line or the whole text too long, or other control characters are refused.
+ * Mirrors `joinLines` / `messageProblem` in the frontend's `lib/signinLook.ts`.
  */
 fn normalize_text(raw: &str, max: usize) -> Result<String, String> {
-    let lines: Vec<&str> = raw.split('\n').map(|l| l.trim_end_matches('\r').trim_end()).collect();
-    let text = lines.join("\n").trim().to_string();
+    let lines: Vec<&str> = raw.split('\n').map(|l| l.trim_end_matches('\r').trim()).filter(|l| !l.is_empty()).collect();
+    let text = lines.join("\n");
     if text.chars().any(|c| c.is_control() && c != '\n') {
         return Err("Use plain text without control characters.".into());
     }
+    if lines.len() > SIGNIN_MESSAGE_LINES {
+        return Err(format!("Use at most {SIGNIN_MESSAGE_LINES} lines."));
+    }
+    if lines.iter().any(|l| l.chars().count() > SIGNIN_LINE_MAX) {
+        return Err(format!("Keep each line to {SIGNIN_LINE_MAX} characters or fewer."));
+    }
     if text.chars().count() > max {
         return Err(format!("Ensure this field has no more than {max} characters."));
-    }
-    if text.lines().count() > SIGNIN_MESSAGE_LINES {
-        return Err(format!("Use at most {SIGNIN_MESSAGE_LINES} lines."));
     }
     Ok(text)
 }
@@ -381,13 +388,17 @@ mod tests {
     }
 
     #[test]
-    fn signin_message_is_trimmed_and_limited() {
-        assert_eq!(normalize_text("  Hello \r\n  world  \n", 200).unwrap(), "Hello\n  world");
-        assert_eq!(normalize_text("   ", 200).unwrap(), "", "blank = the built-in lines");
-        assert!(normalize_text(&"字".repeat(200), 200).is_ok(), "counted in characters, not bytes");
-        assert!(normalize_text(&"x".repeat(201), 200).is_err());
-        assert!(normalize_text("a\nb\nc\nd", 200).is_err(), "at most three lines");
-        assert!(normalize_text("tab\there", 200).is_err());
-        assert!(normalize_text("bell\u{7}", 200).is_err());
+    fn signin_lines_are_trimmed_and_limited() {
+        let max = SIGNIN_MESSAGE_MAX;
+        assert_eq!(normalize_text("  Hello \r\n\n   \n  world  \n", max).unwrap(), "Hello\nworld", "trimmed, blank lines dropped");
+        assert_eq!(normalize_text("   \n \n", max).unwrap(), "", "blank = the built-in lines");
+        assert!(normalize_text(&"字".repeat(80), max).is_ok(), "counted in characters, not bytes");
+        assert_eq!(normalize_text(&"x".repeat(81), max).unwrap_err(), "Keep each line to 80 characters or fewer.");
+        let six = vec!["a"; 6].join("\n");
+        assert!(normalize_text(&six, max).is_ok());
+        assert_eq!(normalize_text(&format!("{six}\nb"), max).unwrap_err(), "Use at most 6 lines.");
+        assert!(normalize_text(&vec!["字".repeat(80); 6].join("\n"), max).is_ok(), "the whole-text cap never bites first");
+        assert!(normalize_text("tab\there", max).is_err());
+        assert!(normalize_text("bell\u{7}", max).is_err());
     }
 }
