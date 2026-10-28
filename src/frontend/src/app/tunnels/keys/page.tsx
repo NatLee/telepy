@@ -1,19 +1,22 @@
 "use client";
 
 /**
- * SSH 金鑰 › 我的金鑰：到期提醒、搜尋 / 分類 / 排序與分頁的金鑰清單（一把一列，點了看詳細資訊）。
- * 外框、資料與視窗在 `layout.tsx` / `KeysArea`。
- * SSH keys › Your keys: the expiry notice and the key list with search / buckets / sort and pages (one row per
- * key; a click opens the details). The frame, data and dialogs live in `layout.tsx` / `KeysArea`.
+ * SSH 金鑰 › 我的金鑰：到期提醒、搜尋 / 分類 / 排序與分頁的金鑰清單或卡片（點了看詳細資訊）。卡片 / 列表跟著帳號走
+ * （`view_modes.keys`，偏好設定 → 外觀也能改）。外框、資料與視窗在 `layout.tsx` / `KeysArea`。
+ * SSH keys › Your keys: the expiry notice and the keys as a list or cards with search / buckets / sort and pages (a
+ * click opens the details). Card / list follows the account (`view_modes.keys`, also in Preferences → Appearance).
+ * The frame, data and dialogs live in `layout.tsx` / `KeysArea`.
  */
 import React, { useCallback, useMemo, useRef } from "react";
 import { Key as KeyIcon, Plus } from "lucide-react";
 import { useFeatures } from "@/hooks/useFeatures";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/callout";
-import { KeyList } from "@/components/keys/KeyList";
+import { KeyCards, KeyList } from "@/components/keys/KeyList";
 import { KeyListFilterBar, KeyListFilterFooter, useKeyListFilter } from "@/components/keys/KeyListFilter";
 import { useKeysArea } from "@/components/keys/KeysArea";
+import { ViewToggle } from "@/components/ui/ViewToggle";
+import { useViewMode } from "@/hooks/useViewMode";
 import { useI18n } from "@/lib/i18n";
 import { expiryState } from "@/lib/keyExpiry";
 
@@ -24,7 +27,9 @@ export default function YourKeysPage() {
     const keysOn = useFeatures().has("keys.personal");
     // 金鑰多時：搜尋 / 分類 / 排序（對全部金鑰），結果再分頁。/ Many keys: search, buckets and sort over every key, then pages.
     const devicesOf = useCallback((id: number) => (page.placements.get(id) ?? []).length, [page.placements]);
-    const keyFilter = useKeyListFilter(page.keys, devicesOf);
+    // 卡片 / 列表跟著帳號（偏好設定也能改）。/ Card / list follows the account (also in Preferences).
+    const [view, setView] = useViewMode("keys");
+    const keyFilter = useKeyListFilter(page.keys, devicesOf, view === "card");
     const expiry = useMemo(() => {
         const states = page.keys.map((k) => expiryState(k.expires_at));
         return { expired: states.filter((s) => s === "expired").length, soon: states.filter((s) => s === "soon").length };
@@ -32,7 +37,10 @@ export default function YourKeysPage() {
 
     return (
         <section aria-label={t("keys.mine")} ref={top} className="scroll-mt-20 space-y-3">
-            <p className="max-w-3xl text-sm text-muted-foreground">{t("keys.mineDescription")}</p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="max-w-3xl text-sm text-muted-foreground">{t("keys.mineDescription")}</p>
+                {page.keys.length > 0 && <ViewToggle value={view} onChange={setView} />}
+            </div>
 
             {/* 到期提醒：已到期的被拒絕、也從裝置移除；7 天內到期的先提醒。/ Expired keys are refused and removed; warn a week ahead. */}
             {(expiry.expired > 0 || expiry.soon > 0) && (
@@ -62,9 +70,19 @@ export default function YourKeysPage() {
             ) : (
                 <div>
                     <KeyListFilterBar filter={keyFilter} />
-                    {keyFilter.visible.length > 0 && (
-                        <KeyList keys={keyFilter.visible} placements={page.placements} groupNameOf={groupNameOf} onDetails={(k) => setDetailsId(k.id)} onDelete={setDeleting} />
-                    )}
+                    {keyFilter.visible.length > 0 &&
+                        (view === "card" ? (
+                            <KeyCards
+                                keys={keyFilter.visible}
+                                placements={page.placements}
+                                groupNameOf={groupNameOf}
+                                onDetails={(k) => setDetailsId(k.id)}
+                                onDelete={setDeleting}
+                                onDevice={page.openDevice}
+                            />
+                        ) : (
+                            <KeyList keys={keyFilter.visible} placements={page.placements} groupNameOf={groupNameOf} onDetails={(k) => setDetailsId(k.id)} onDelete={setDeleting} />
+                        ))}
                     <KeyListFilterFooter filter={keyFilter} anchor={top} />
                 </div>
             )}
