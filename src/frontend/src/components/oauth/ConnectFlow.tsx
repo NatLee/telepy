@@ -23,8 +23,8 @@ import { cliHost } from "@/lib/cliClient";
 import type { TranslationKey } from "@/locales/en";
 import { cn } from "@/lib/utils";
 
-/** 0 = 登入、1 = 檢視並決定、2 = 回到 app。/ 0 = sign in, 1 = review, 2 = back to the app. */
-export type ConnectStep = 0 | 1 | 2;
+/** 0 = 登入、1 = 檢視並決定、2 = 回到 app、3 = 全部完成（CLI 的完成頁）。/ 0 = sign in, 1 = review, 2 = back to the app, 3 = all done (the CLI's done page). */
+export type ConnectStep = 0 | 1 | 2 | 3;
 
 const STEPS: { title: TranslationKey; body: TranslationKey }[] = [
     { title: "oauth.step.signIn", body: "oauth.step.signInBody" },
@@ -95,6 +95,8 @@ export function ConnectAppAside({ step, appName }: { step: ConnectStep; appName?
 export function ConnectProgress({ step, appName }: { step: ConnectStep; appName?: string | null }) {
     const { t } = useI18n();
     const STEPS_NOW = cliHost(appName) !== null ? CLI_STEPS : STEPS;
+    // 3 = 全部完成：每一格都是綠的，文字停在最後一步。/ 3 = all done: every bar green, the text on the last step.
+    const shown = Math.min(step, STEPS_NOW.length - 1);
     return (
         <div className="mb-6 lg:hidden">
             <div className="flex gap-1.5" aria-hidden>
@@ -103,9 +105,9 @@ export function ConnectProgress({ step, appName }: { step: ConnectStep; appName?
                 ))}
             </div>
             <p className="mt-2 text-xs text-muted-foreground">
-                {t("oauth.stepOf", { n: step + 1, total: STEPS_NOW.length })}
+                {t("oauth.stepOf", { n: shown + 1, total: STEPS_NOW.length })}
                 <span aria-hidden> · </span>
-                <span className="text-foreground">{t(STEPS_NOW[step].title)}</span>
+                <span className="text-foreground">{t(STEPS_NOW[shown].title)}</span>
             </p>
         </div>
     );

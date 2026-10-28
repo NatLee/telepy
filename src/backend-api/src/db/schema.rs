@@ -1046,6 +1046,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // `telepy login`（CLI 的瀏覽器登入）沒登入時那一頁的樣子；以前跟著 OAuth 登入頁，所以升級時先抄一份（見 CLI_SIGNIN_STYLE）。
     // The look of the page `telepy login` shows a signed-out browser; it used to follow the OAuth page, so upgrades copy that (CLI_SIGNIN_STYLE).
     ("site_settings_sitesettings", "signin_cli_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
+    // 登入後的授權（同意）頁 /oauth/authorize 的樣子（`telepy login` 的完成頁也跟著它）；以前一律是一般樣子。
+    // The approval (consent) page's look, /oauth/authorize (telepy login's done page follows it); always standard before.
+    ("site_settings_sitesettings", "signin_consent_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {

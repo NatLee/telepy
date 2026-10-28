@@ -31,6 +31,11 @@ pub const SCOPES: &[(&str, &str)] = &[
 pub const MCP_PATH: &str = "/mcp";
 /// 前端的同意頁（authorization_endpoint）。/ Frontend consent page (the authorization endpoint).
 pub const AUTHORIZE_PAGE: &str = "/oauth/authorize";
+/// `telepy login` 換到 token 之後把瀏覽器送去的那一頁（前端，跟著授權頁的樣子）。用 metadata 的
+/// `telepy_cli_done_page` 告訴 CLI；舊伺服器沒有這個欄位，CLI 就自己畫一頁。
+/// Where `telepy login` sends the browser once it has its token (a frontend page in the approval page's look).
+/// Announced as `telepy_cli_done_page` in the metadata; without it (older servers) the CLI draws its own page.
+pub const CLI_DONE_PAGE: &str = "/oauth/done";
 pub const ACCESS_TOKEN_TTL: Duration = Duration::from_secs(3600);
 pub const REFRESH_TOKEN_TTL: Duration = Duration::from_secs(30 * 86400);
 /// 動態註冊後一直沒換到 token 的 client 保留多久。/ How long a registered client without any grant is kept.
@@ -203,6 +208,7 @@ pub fn authorization_server_metadata(issuer: &str) -> Value {
         "revocation_endpoint_auth_methods_supported": auth_methods,
         "code_challenge_methods_supported": ["S256"],
         "authorization_response_iss_parameter_supported": true,
+        "telepy_cli_done_page": format!("{issuer}{CLI_DONE_PAGE}"),
     })
 }
 
@@ -431,6 +437,7 @@ mod tests {
         assert_eq!(m["authorization_endpoint"], "https://t.example/oauth/authorize");
         assert_eq!(m["token_endpoint"], "https://t.example/api/oauth/token");
         assert_eq!(m["code_challenge_methods_supported"], json!(["S256"]));
+        assert_eq!(m["telepy_cli_done_page"], "https://t.example/oauth/done");
         let p = protected_resource_metadata("https://t.example");
         assert_eq!(p["resource"], "https://t.example/mcp");
         assert_eq!(p["authorization_servers"], json!(["https://t.example"]));

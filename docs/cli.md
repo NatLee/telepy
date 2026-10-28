@@ -116,6 +116,10 @@ telepy whoami                                           # who, and with which to
 telepy logout
 ```
 
+After you approve, the browser lands on Telepy's "signed in" page (`/oauth/done`: what the CLI may do now and a few
+commands to try; it follows the approval page's look from Site settings → Sign-in). An older Telepy server without
+that page gets a small page drawn by the CLI itself.
+
 The browser sign-in uses the same OAuth approval as MCP apps — that is why the approval page looks alike — but the
 CLI is not an MCP app: it is listed on the **API page → CLI sign-ins** (one per computer, with its calls in the API
 activity), never among MCP apps, and you sign it out there or with `telepy logout`. Running `telepy login` again on

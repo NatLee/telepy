@@ -11,21 +11,26 @@ import { cliHost } from "./cliClient.ts";
 
 export type SignInStyle = "standard" | "discreet";
 /**
- * 哪一頁：一般登入頁 / 應用程式（MCP）的 OAuth 登入頁 / `telepy login` 打開的那一頁（同一個 /oauth/login，要求的 app 是 CLI）。
- * Which page: the sign-in page, the OAuth page for apps (MCP), or the one `telepy login` opens (the same /oauth/login, asked by the CLI).
+ * 哪一頁：一般登入頁 / 應用程式（MCP）的 OAuth 登入頁 / `telepy login` 打開的那一頁（同一個 /oauth/login，要求的 app 是 CLI）/
+ * 登入後的授權（同意）頁 /oauth/authorize（應用程式與 CLI 共用；CLI 登入完成的那一頁也跟著它）。
+ * Which page: the sign-in page, the OAuth page for apps (MCP), the one `telepy login` opens (the same /oauth/login,
+ * asked by the CLI), or the approval (consent) page after signing in, /oauth/authorize (apps and the CLI alike; the
+ * CLI's "signed in" page follows it too).
  */
-export type SignInPageKind = "signin" | "oauth" | "cli";
+export type SignInPageKind = "signin" | "oauth" | "cli" | "consent";
 
 export interface SignInLook {
     style: SignInStyle;
     oauthStyle: SignInStyle;
     cliStyle: SignInStyle;
+    /** 授權頁（與 CLI 的完成頁）。/ The approval page (and the CLI's done page). */
+    consentStyle: SignInStyle;
     /** 低調頁的句子，一行一句；空白 = 輪播內建的問候語。/ The discreet page's lines, one per line; blank = the built-in ones. */
     message: string;
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
-export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", message: "" };
+export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", consentStyle: "standard", message: "" };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
 export const LINE_MAX = 80;
@@ -35,10 +40,10 @@ export const MESSAGE_MAX = MESSAGE_LINES * (LINE_MAX + 1);
 const asStyle = (v: unknown): SignInStyle | null => (v === "standard" || v === "discreet" ? v : null);
 
 /**
- * 公開端點（`{style, oauth_style, cli_style, message}`）或快取（`{style, oauthStyle, cliStyle, message}`）→ SignInLook；
- * 看不懂 = null。沒有 CLI 那個（舊後端、舊快取）= 跟 OAuth 頁一樣，以前就是這樣。
+ * 公開端點（`{style, oauth_style, cli_style, consent_style, message}`）或快取（同名的 camelCase）→ SignInLook；
+ * 看不懂 = null。沒有 CLI 那個（舊後端、舊快取）= 跟 OAuth 頁一樣；沒有授權頁那個 = 一般，以前就是這樣。
  * The public endpoint's JSON or the cached object → a SignInLook; anything else = null. No CLI look (an older
- * backend or cache) = the OAuth page's, as it used to be.
+ * backend or cache) = the OAuth page's, no approval-page look = standard — as they used to be.
  */
 export function parseSignInLook(raw: unknown): SignInLook | null {
     if (!raw || typeof raw !== "object") return null;
@@ -47,10 +52,15 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
     const oauthStyle = asStyle(o.oauth_style ?? o.oauthStyle);
     if (!style || !oauthStyle) return null;
     const cliStyle = asStyle(o.cli_style ?? o.cliStyle) ?? oauthStyle;
-    return { style, oauthStyle, cliStyle, message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "" };
+    const consentStyle = asStyle(o.consent_style ?? o.consentStyle) ?? "standard";
+    return { style, oauthStyle, cliStyle, consentStyle, message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "" };
 }
 
-export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle => (page === "cli" ? look.cliStyle : page === "oauth" ? look.oauthStyle : look.style);
+export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle =>
+    page === "consent" ? look.consentStyle : page === "cli" ? look.cliStyle : page === "oauth" ? look.oauthStyle : look.style;
+
+/** 四頁都用一般樣子（低調的句子用不到）。/ Every page uses the standard look (the discreet lines are unused). */
+export const allStandard = (look: SignInLook) => (["signin", "oauth", "cli", "consent"] as const).every((p) => styleOf(look, p) === "standard");
 
 /** OAuth 登入頁上要求的 app → 用哪一頁的設定。/ The app asking on the OAuth page → which page's setting applies. */
 export const pageForClient = (clientName: string | null | undefined): "oauth" | "cli" => (cliHost(clientName) !== null ? "cli" : "oauth");

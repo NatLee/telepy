@@ -72,6 +72,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面。變更後立即生效。" },
     FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
     FieldMeta { name: "signin_cli_style", kind: Kind::Str(16), label: "CLI sign-in page look", description: "在終端機打 telepy login、瀏覽器還沒登入時看到的那一頁:standard = 跟應用程式連接頁一樣的流程與權限;discreet = 同樣的低調畫面,只寫 telepy CLI 與它從哪台電腦登入(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
+    FieldMeta { name: "signin_consent_style", kind: Kind::Str(16), label: "Approval page look", description: "登入後允許 MCP 應用程式或 telepy login 的授權頁(/oauth/authorize):standard = 連接流程面板與步驟;discreet = 只寫 Telepy 的低調外框。兩種都列出應用程式、導回哪裡、權限與隧道。telepy login 登入完成後顯示的那一頁也跟著它。變更後立即生效。" },
     FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
@@ -112,6 +113,7 @@ fn values_json(s: &SiteSettings) -> Value {
     m.insert("signin_page_style".into(), json!(s.signin_page_style));
     m.insert("signin_oauth_style".into(), json!(s.signin_oauth_style));
     m.insert("signin_cli_style".into(), json!(s.signin_cli_style));
+    m.insert("signin_consent_style".into(), json!(s.signin_consent_style));
     m.insert("signin_page_message".into(), json!(s.signin_page_message));
     Value::Object(m)
 }
@@ -335,7 +337,7 @@ fn validate(name: &str, value: &SettingValue) -> Result<(), ApiError> {
         ("desktop_clipboard", SettingValue::Str(s)) if !crate::desktop::Clipboard::VALUES.contains(&s.as_str()) => {
             Err(ApiError::field(name, format!("Must be one of: {}.", crate::desktop::Clipboard::VALUES.join(", "))))
         }
-        ("signin_page_style" | "signin_oauth_style" | "signin_cli_style", SettingValue::Str(s)) if !SIGNIN_STYLES.contains(&s.as_str()) => {
+        ("signin_page_style" | "signin_oauth_style" | "signin_cli_style" | "signin_consent_style", SettingValue::Str(s)) if !SIGNIN_STYLES.contains(&s.as_str()) => {
             Err(ApiError::field(name, format!("Must be one of: {}.", SIGNIN_STYLES.join(", "))))
         }
         ("desktop_max_resolution", SettingValue::Int(n)) if !(640..=16384).contains(n) => Err(ApiError::field(name, "Must be between 640 and 16384.")),

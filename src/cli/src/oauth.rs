@@ -4,6 +4,9 @@
 //! `telepy login <url>` without `--token`: OAuth 2.1 with PKCE as a dynamically registered public client and a
 //! loopback redirect (RFC 8252; Telepy ignores the port for loopback). The browser opens Telepy's consent page,
 //! where you pick scopes and tunnels; the code comes back and is exchanged for access + refresh tokens.
+//! 瀏覽器等到換完 token 才拿到回應：伺服器有完成頁就導過去，否則是 CLI 自己的一頁（`signed_in`）。
+//! The browser gets its answer only after the exchange: the server's done page when it has one, else the CLI's own
+//! page (`signed_in`).
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -18,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::api::{self, read};
 use crate::creds::Secret;
+use crate::signed_in::{self, Failure, Outcome};
 
 fn random(n: usize) -> String {
     let mut b = vec![0u8; n];
@@ -29,18 +33,40 @@ pub fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
+/// 回呼沒帶授權碼：OAuth 的錯誤碼（`access_denied`…，沒有就是 `invalid_request`）與說明。
+/// A callback without a code: the OAuth error code (`access_denied`…, else `invalid_request`) and its description.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallbackError {
+    pub code: String,
+    pub message: String,
+}
+
 /// 回呼請求的第一行 → (code, state) 或錯誤。純函式。/ Parse the callback request line. Pure.
-pub fn parse_callback(request_line: &str) -> Result<(String, String), String> {
-    let target = request_line.split_whitespace().nth(1).ok_or("bad request")?;
-    let url = url::Url::parse(&format!("http://127.0.0.1{target}")).map_err(|_| "bad request".to_string())?;
+pub fn parse_callback(request_line: &str) -> Result<(String, String), CallbackError> {
+    let bad = |m: &str| CallbackError { code: "invalid_request".into(), message: m.into() };
+    let target = request_line.split_whitespace().nth(1).ok_or_else(|| bad("bad request"))?;
+    let url = url::Url::parse(&format!("http://127.0.0.1{target}")).map_err(|_| bad("bad request"))?;
     let q: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
     if let Some(e) = q.get("error") {
-        return Err(q.get("error_description").cloned().unwrap_or_else(|| e.clone()));
+        return Err(CallbackError { code: e.clone(), message: q.get("error_description").cloned().unwrap_or_else(|| e.clone()) });
     }
     match (q.get("code"), q.get("state")) {
         (Some(c), Some(s)) => Ok((c.clone(), s.clone())),
-        _ => Err("the callback had no code".into()),
+        _ => Err(bad("the callback had no code")),
     }
+}
+
+/// 回給瀏覽器：伺服器有完成頁 → 303 導過去；沒有 → CLI 自己的一頁。
+/// Answer the browser: 303 to the server's done page when it has one, else the CLI's own page.
+fn answer(stream: &mut std::net::TcpStream, done_page: Option<&str>, client_id: &str, accept_language: &str, outcome: Outcome) {
+    let _ = match done_page.and_then(|p| signed_in::done_location(p, client_id, outcome)) {
+        Some(location) => write!(stream, "HTTP/1.1 303 See Other\r\nlocation: {location}\r\ncache-control: no-store\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"),
+        None => {
+            let body = signed_in::fallback_page(signed_in::page_lang(accept_language), outcome);
+            write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncache-control: no-store\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len())
+        }
+    };
+    let _ = stream.flush();
 }
 
 fn open_browser(url: &str) -> bool {
@@ -76,6 +102,8 @@ pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
         .context("this server has no OAuth sign-in (is it a Telepy server?)")?;
     let endpoint = |k: &str| meta.get(k).and_then(Value::as_str).map(str::to_string).ok_or_else(|| anyhow!("the server's OAuth metadata has no {k}"));
     let (authorize, token, register) = (endpoint("authorization_endpoint")?, endpoint("token_endpoint")?, endpoint("registration_endpoint")?);
+    // 換完 token 後瀏覽器去哪（Telepy 的擴充欄位；舊伺服器沒有）。/ Where the browser goes afterwards (a Telepy extension).
+    let done_page = meta.get("telepy_cli_done_page").and_then(Value::as_str).map(str::to_string);
 
     let listener = TcpListener::bind("127.0.0.1:0").context("open a local port for the sign-in callback")?;
     let port = listener.local_addr()?.port();
@@ -116,27 +144,28 @@ pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
     // 等瀏覽器回呼（最多 10 分鐘，同意頁的授權碼也只活 10 分鐘）。/ Wait for the callback (10 minutes, like the code).
     listener.set_nonblocking(true)?;
     let deadline = Instant::now() + Duration::from_secs(600);
-    let (code, got_state) = loop {
+    let (mut stream, line, accept_language) = loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
                 stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+                let mut reader = BufReader::new(stream.try_clone()?);
                 let mut line = String::new();
-                BufReader::new(&stream).read_line(&mut line)?;
+                reader.read_line(&mut line)?;
+                // 標頭讀到空行為止（要 Accept-Language）。/ Headers up to the blank line (for Accept-Language).
+                let mut headers = Vec::new();
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() || headers.len() > 100 {
+                        break;
+                    }
+                    headers.push(h);
+                }
                 if !line.contains("/callback") {
-                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n");
+                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
                     continue;
                 }
-                let outcome = parse_callback(&line);
-                let page = match &outcome {
-                    Ok(_) => "Signed in. You can close this tab and go back to the terminal.",
-                    Err(_) => "The sign-in did not finish. Go back to the terminal for details.",
-                };
-                let body = format!("<!doctype html><meta charset=utf-8><title>telepy</title><body style=\"font-family:system-ui;padding:3rem\"><p>{page}</p>");
-                let _ = write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
-                match outcome {
-                    Ok(v) => break v,
-                    Err(e) => bail!("The sign-in was not approved: {e}"),
-                }
+                break (stream, line, signed_in::accept_language(headers.iter().map(String::as_str)));
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() > deadline {
@@ -147,16 +176,38 @@ pub fn login(server: &str, scope: &str, no_browser: bool) -> Result<Login> {
             Err(e) => return Err(e.into()),
         }
     };
+    // 瀏覽器等著：先確認、換到 token，再告訴它結果（頁面說的才是真的）。
+    // The browser waits while we check and exchange, so the page it gets tells the truth.
+    let done = done_page.as_deref();
+    let fail = |stream: &mut std::net::TcpStream, outcome: Outcome| answer(stream, done, &client_id, &accept_language, outcome);
+    let (code, got_state) = match parse_callback(&line) {
+        Ok(v) => v,
+        Err(e) => {
+            fail(&mut stream, if e.code == "access_denied" { Outcome::Denied } else { Outcome::Failed(Failure::Error) });
+            bail!("The sign-in was not approved: {}", e.message);
+        }
+    };
     if got_state != state {
+        fail(&mut stream, Outcome::Failed(Failure::State));
         bail!("The callback did not match this sign-in (state mismatch). Try again.");
     }
-    let v = read(
-        http.post(&token)
-            .form(&[("grant_type", "authorization_code"), ("code", code.as_str()), ("client_id", client_id.as_str()), ("code_verifier", verifier.as_str()), ("redirect_uri", redirect.as_str())])
-            .send()?,
-    )
-    .context("exchange the code for a token")?;
-    Ok(Login { secret: api::secret_from_token_response(&v)?, client_id })
+    let secret = http
+        .post(&token)
+        .form(&[("grant_type", "authorization_code"), ("code", code.as_str()), ("client_id", client_id.as_str()), ("code_verifier", verifier.as_str()), ("redirect_uri", redirect.as_str())])
+        .send()
+        .map_err(anyhow::Error::from)
+        .and_then(read)
+        .context("exchange the code for a token")
+        .and_then(|v| api::secret_from_token_response(&v));
+    let secret = match secret {
+        Ok(s) => s,
+        Err(e) => {
+            fail(&mut stream, Outcome::Failed(Failure::Exchange));
+            return Err(e);
+        }
+    };
+    answer(&mut stream, done, &client_id, &accept_language, Outcome::Ok);
+    Ok(Login { secret, client_id })
 }
 
 #[cfg(test)]
@@ -166,7 +217,10 @@ mod tests {
     #[test]
     fn callbacks_and_pkce() {
         assert_eq!(parse_callback("GET /callback?code=abc&state=xyz&iss=https%3A%2F%2Ft HTTP/1.1"), Ok(("abc".into(), "xyz".into())));
-        assert_eq!(parse_callback("GET /callback?error=access_denied HTTP/1.1"), Err("access_denied".into()));
+        let denied = parse_callback("GET /callback?error=access_denied HTTP/1.1").unwrap_err();
+        assert_eq!((denied.code.as_str(), denied.message.as_str()), ("access_denied", "access_denied"));
+        let described = parse_callback("GET /callback?error=invalid_scope&error_description=no+such+scope HTTP/1.1").unwrap_err();
+        assert_eq!((described.code.as_str(), described.message.as_str()), ("invalid_scope", "no such scope"));
         assert!(parse_callback("GET /callback HTTP/1.1").is_err());
         // RFC 7636 附錄 B 的範例。/ The RFC 7636 appendix B example.
         assert_eq!(challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");

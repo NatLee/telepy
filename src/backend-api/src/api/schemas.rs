@@ -117,6 +117,9 @@ pub struct SignInPage {
     /// The page `telepy login` (the CLI's browser sign-in) shows a signed-out browser: standard | discreet
     #[schema(example = "discreet")]
     pub cli_style: String,
+    /// The approval (consent) page `/oauth/authorize`, and the page `telepy login` shows once signed in: standard | discreet
+    #[schema(example = "standard")]
+    pub consent_style: String,
     /// The discreet page's lines, one per line, typed in turn; blank = the built-in ones
     #[schema(example = "")]
     pub message: String,
@@ -1800,6 +1803,9 @@ pub struct OAuthServerMetadata {
     pub grant_types_supported: Vec<String>,
     pub token_endpoint_auth_methods_supported: Vec<String>,
     pub code_challenge_methods_supported: Vec<String>,
+    /// Telepy extension: where `telepy login` sends the browser once it has its token (`?client_id=&result=ok|denied|failed[&reason=]`)
+    #[schema(example = "https://telepy.example.com/oauth/done")]
+    pub telepy_cli_done_page: String,
 }
 
 #[derive(ToSchema)]
