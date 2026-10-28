@@ -20,6 +20,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/Toast";
 import { I18nProvider, UserSettingsSync } from "@/lib/i18n";
+import { ConsoleHello } from "@/components/brand/ConsoleHello";
 
 // 粉圓(jf-openhuninn)不走 next/font:整顆 2.2MB,會讓每頁都等它下載完才從系統字換過來。改由
 // scripts/subset-huninn.py 切成 unicode-range 子集(huninn.css),瀏覽器只抓頁面上出現的字所在的區塊,
@@ -99,6 +100,7 @@ export default function RootLayout({
           <ToastProvider>
             <AuthProvider>
               <UserSettingsSync />
+              <ConsoleHello />
               {children}
             </AuthProvider>
           </ToastProvider>

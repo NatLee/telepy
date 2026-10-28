@@ -35,10 +35,16 @@ async fn admins_choose_the_sign_in_page_look_and_anyone_can_read_it() {
     let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_style": "neon"})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     assert_eq!(r.json, json!({"signin_page_style": ["Must be one of: standard, discreet."]}));
-    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "x".repeat(201)})).await;
-    assert_eq!(r.json, json!({"signin_page_message": ["Ensure this field has no more than 200 characters."]}));
-    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "a\nb\nc\nd"})).await;
-    assert_eq!(r.json, json!({"signin_page_message": ["Use at most 3 lines."]}));
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "x".repeat(81)})).await;
+    assert_eq!(r.json, json!({"signin_page_message": ["Keep each line to 80 characters or fewer."]}));
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "a\nb\nc\nd\ne\nf\ng"})).await;
+    assert_eq!(r.json, json!({"signin_page_message": ["Use at most 6 lines."]}));
+    // 輪播的句子：一行一句，空行拿掉。/ Rotating lines, one per line, blank lines dropped.
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": "One\n\n  Two  \nThree\nFour\nFive\nSix"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(app.get("/api/auth/sign-in-page", None).await.json["message"], "One\nTwo\nThree\nFour\nFive\nSix");
+    let r = app.post("/api/site/settings", Some(&admin), json!({"signin_page_message": ""})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
 
     // 一般使用者不能改；其中一頁單獨切回一般樣子。/ Others cannot change it; one page goes back on its own.
     let r = app.post("/api/site/settings", Some(&bob), json!({"signin_page_style": "standard"})).await;

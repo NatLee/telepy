@@ -40,7 +40,7 @@ export function Header() {
                     <SheetHeader className="h-16 flex justify-center border-b border-sidebar-border px-4">
                         <SheetTitle className="m-0 p-0 text-left">
                             <Link href="/tunnels" className="flex items-center" onClick={() => setIsOpen(false)}>
-                                <BrandMark />
+                                <BrandMark playful />
                             </Link>
                         </SheetTitle>
                         <SheetDescription className="sr-only">

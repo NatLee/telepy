@@ -25,6 +25,8 @@ enum Kind {
     Url(usize),
     /// 可以空白的短文字（`signin_page_message`）。/ Short text that may be blank.
     Text(usize),
+    /// 逗號分隔的 email 網域清單，可以空白（= 系統預設）。/ Comma-separated email domains; may be blank (= the system default).
+    Domains(usize),
 }
 
 struct FieldMeta {
@@ -36,7 +38,7 @@ struct FieldMeta {
 
 const META: &[FieldMeta] = &[
     FieldMeta { name: "allow_registration", kind: Kind::Bool, label: "Allow registration", description: "是否開放新帳號自行註冊。關閉時只有管理員能建立帳號。變更後立即生效。" },
-    FieldMeta { name: "valid_register_domains", kind: Kind::Str(512), label: "Allowed Registration Email Domains", description: "允許用 Google 登入自行註冊的 email 網域白名單,用逗號分隔(例如 gmail.com,mycorp.com)。只有這些網域的 Google 帳號能註冊。留空則沿用系統預設。變更後立即生效。" },
+    FieldMeta { name: "valid_register_domains", kind: Kind::Domains(512), label: "Allowed Registration Email Domains", description: "允許用 Google 登入的 email 網域白名單,用逗號分隔(例如 gmail.com,mycorp.com);網域須完全相符,子網域要另外列出。只有這些網域的 Google 帳號能登入或註冊。留空則使用系統預設 gmail.com。變更後立即生效。" },
     FieldMeta { name: "remote_browser_session_idle_timeout", kind: Kind::Int, label: "Remote Browser Session Idle Timeout (seconds)", description: "閒置多久沒有心跳就自動關閉並回收該瀏覽器 session(秒),避免沒人用的 session 一直占用資源與目標機連線。你開著瀏覽器分頁時,伺服器每 20 秒會自動續命,所以正常使用不會被關;只有分頁關掉/斷線後才開始倒數。變更後即時生效。" },
     FieldMeta { name: "remote_browser_max_sessions", kind: Kind::Int, label: "Remote Browser Max Concurrent Sessions", description: "同時可存在的代理瀏覽器 session 數上限,用來控管資源。達到上限時,新的「開啟瀏覽器」會被拒絕並提示稍後再試。設 0 = 不限制。下次開啟瀏覽器時生效。" },
     FieldMeta { name: "remote_browser_geometry", kind: Kind::Str(32), label: "Remote Browser Screen Geometry", description: "每個代理瀏覽器桌面的解析度,格式「寬x高」(例如 1280x720、1920x1080)。下次開啟瀏覽器時生效。" },
@@ -69,7 +71,7 @@ const META: &[FieldMeta] = &[
     FieldMeta { name: "desktop_file_transfer", kind: Kind::Bool, label: "Remote Desktop File Transfer (RustDesk)", description: "允許在網頁內的 RustDesk 連線裡上傳 / 下載檔案（桌面頁的「檔案」面板）。關閉後面板不出現，中繼也會拒絕 RustDesk 的檔案傳輸登入。RDP / VNC 不經這裡傳檔。下次開面板時生效。" },
     FieldMeta { name: "signin_page_style", kind: Kind::Str(16), label: "Sign-in page look", description: "登入頁的樣子:standard = 產品介紹 + 連線示意圖;discreet = 只寫 Telepy 的低調畫面(動畫背景 + 一句話),不提遠端連線相關的任何字,路過的人只看得到一個叫 Telepy 的登入畫面。變更後立即生效。" },
     FieldMeta { name: "signin_oauth_style", kind: Kind::Str(16), label: "App connection sign-in page look", description: "MCP 應用程式要求連接、使用者還沒登入時看到的 OAuth 登入頁:standard = 連接流程與要求的權限;discreet = 同樣的低調畫面,只寫要連接的應用程式與會回到哪裡(權限仍會在登入後的同意頁列出)。變更後立即生效。" },
-    FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page message", description: "低調登入頁在 Telepy 下面顯示的一句話(最多 200 字、3 行)。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
+    FieldMeta { name: "signin_page_message", kind: Kind::Text(SIGNIN_MESSAGE_MAX), label: "Discreet sign-in page lines", description: "低調登入頁在 Telepy 下面像打字一樣出現的句子,一行一句(最多 6 句、每句 80 字)。一句 = 打出來後留著;兩句以上 = 打出來、刪掉、換下一句輪流。留空 = 輪播內建的幾句問候語(會跟著訪客的語言)。登入前任何人都看得到,不要寫內部資訊。" },
 ];
 
 fn values_json(s: &SiteSettings) -> Value {
@@ -121,6 +123,7 @@ fn meta_json() -> Value {
             Kind::Str(_) => "string",
             Kind::Url(_) => "url",
             Kind::Text(_) => "text",
+            Kind::Domains(_) => "string",
         };
         m.insert(f.name.into(), json!({ "label": f.label, "description": f.description, "type": kind }));
     }
@@ -173,31 +176,112 @@ fn parse_value(f: &FieldMeta, v: &Value) -> Result<SettingValue, ApiError> {
             Value::Null => Ok(SettingValue::Str(String::new())),
             _ => Err(ApiError::field(f.name, "Not a valid string.")),
         },
+        Kind::Domains(max) => match v {
+            Value::String(s) => normalize_domains(s, max).map(SettingValue::Str).map_err(|msg| ApiError::field(f.name, msg)),
+            Value::Null => Ok(SettingValue::Str(String::new())),
+            _ => Err(ApiError::field(f.name, "Not a valid string.")),
+        },
     }
+}
+
+/**
+ * 一個 email 網域：小寫、去掉前面的 `@` 或整個信箱的使用者部分、結尾的 `.`；要是合法的主機名稱（ASCII、至少兩段、
+ * 每段 1–63 字、不以 `-` 開頭或結尾、最後一段不是純數字）。不支援萬用字元，子網域要另外列出。與前端 `lib/registerDomains.ts` 一致。
+ * One email domain: lower-cased, a leading `@` or a whole address's local part and a trailing `.` removed; must be a valid
+ * hostname (ASCII, at least two labels, 1–63 characters each, no leading / trailing `-`, last label not all digits). No
+ * wildcards: subdomains are listed separately. Mirrors `lib/registerDomains.ts`.
+ */
+pub fn normalize_domain(raw: &str) -> Result<String, String> {
+    let mut d = raw.trim();
+    if let Some((_, after)) = d.rsplit_once('@') {
+        d = after;
+    }
+    let d = d.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d.is_empty() {
+        return Err("is empty".into());
+    }
+    if d.contains('*') {
+        return Err("wildcards are not supported; list each subdomain".into());
+    }
+    if !d.is_ascii() {
+        return Err("use the ASCII (xn--) form of the domain".into());
+    }
+    if d.len() > 253 {
+        return Err("is longer than 253 characters".into());
+    }
+    if !d.contains('.') {
+        return Err("needs a dot, like example.com".into());
+    }
+    for label in d.split('.') {
+        if label.is_empty() {
+            return Err("has an empty part between dots".into());
+        }
+        if label.len() > 63 {
+            return Err("has a part longer than 63 characters".into());
+        }
+        if !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            return Err("may only contain letters, digits, hyphens and dots".into());
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return Err("has a part that starts or ends with a hyphen".into());
+        }
+    }
+    if d.rsplit('.').next().is_some_and(|tld| tld.bytes().all(|b| b.is_ascii_digit())) {
+        return Err("must end in a name, not a number".into());
+    }
+    Ok(d)
+}
+
+/**
+ * 網域清單：以逗號、分號或空白分開，逐一正規化、去重（保留順序），用逗號接起來；空白 = 沿用系統預設。
+ * 第一個壞掉的值會被點名。接起來的長度不可超過 `max`。
+ * A domain list: split on commas, semicolons or whitespace, each normalised and de-duplicated (order kept), joined with
+ * commas; blank = the system default. The first bad value is named. The joined text may not exceed `max`.
+ */
+pub fn normalize_domains(raw: &str, max: usize) -> Result<String, String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+        let d = normalize_domain(part).map_err(|why| format!("\"{part}\" {why}."))?;
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    let joined = out.join(",");
+    if joined.chars().count() > max {
+        return Err(format!("Ensure this field has no more than {max} characters."));
+    }
+    Ok(joined)
 }
 
 /// 登入頁的兩種樣子。/ The two sign-in page looks.
 pub const SIGNIN_STYLES: [&str; 2] = ["standard", "discreet"];
-/// 低調登入頁那句話的上限（字元 / 行）。/ Limits of the discreet page's line (characters / lines).
-pub const SIGNIN_MESSAGE_MAX: usize = 200;
-const SIGNIN_MESSAGE_LINES: usize = 3;
+/// 低調登入頁的句子：一行一句，最多幾句、每句幾個字。/ The discreet page's lines: how many, and characters per line.
+const SIGNIN_MESSAGE_LINES: usize = 6;
+const SIGNIN_LINE_MAX: usize = 80;
+/// 整段的上限（六句各 80 字加換行，永遠不會比逐行的限制先碰到）。/ The whole text (never reached before the per-line limits).
+pub const SIGNIN_MESSAGE_MAX: usize = SIGNIN_MESSAGE_LINES * (SIGNIN_LINE_MAX + 1);
 
 /**
- * 可以空白的短文字：換行統一成 `\n`、每行去掉尾端空白、整段去頭尾空白；超過字數、超過三行或有其他控制字元就拒絕。
- * Blank-able short text: newlines normalised to `\n`, trailing spaces per line and outer whitespace trimmed; too long,
- * more than three lines or other control characters are refused.
+ * 低調登入頁的句子（一行一句，輪流打出來）：換行統一成 `\n`、每句去頭尾空白、空行拿掉；超過句數、某句太長、
+ * 整段太長或有其他控制字元就拒絕。與前端 `lib/signinLook.ts` 的 `joinLines` / `messageProblem` 一致。
+ * The discreet page's lines (one per line, typed in turn): newlines normalised to `\n`, each line trimmed, blank
+ * lines dropped; too many lines, a line or the whole text too long, or other control characters are refused.
+ * Mirrors `joinLines` / `messageProblem` in the frontend's `lib/signinLook.ts`.
  */
 fn normalize_text(raw: &str, max: usize) -> Result<String, String> {
-    let lines: Vec<&str> = raw.split('\n').map(|l| l.trim_end_matches('\r').trim_end()).collect();
-    let text = lines.join("\n").trim().to_string();
+    let lines: Vec<&str> = raw.split('\n').map(|l| l.trim_end_matches('\r').trim()).filter(|l| !l.is_empty()).collect();
+    let text = lines.join("\n");
     if text.chars().any(|c| c.is_control() && c != '\n') {
         return Err("Use plain text without control characters.".into());
     }
+    if lines.len() > SIGNIN_MESSAGE_LINES {
+        return Err(format!("Use at most {SIGNIN_MESSAGE_LINES} lines."));
+    }
+    if lines.iter().any(|l| l.chars().count() > SIGNIN_LINE_MAX) {
+        return Err(format!("Keep each line to {SIGNIN_LINE_MAX} characters or fewer."));
+    }
     if text.chars().count() > max {
         return Err(format!("Ensure this field has no more than {max} characters."));
-    }
-    if text.lines().count() > SIGNIN_MESSAGE_LINES {
-        return Err(format!("Use at most {SIGNIN_MESSAGE_LINES} lines."));
     }
     Ok(text)
 }
@@ -276,13 +360,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn signin_message_is_trimmed_and_limited() {
-        assert_eq!(normalize_text("  Hello \r\n  world  \n", 200).unwrap(), "Hello\n  world");
-        assert_eq!(normalize_text("   ", 200).unwrap(), "", "blank = the built-in lines");
-        assert!(normalize_text(&"字".repeat(200), 200).is_ok(), "counted in characters, not bytes");
-        assert!(normalize_text(&"x".repeat(201), 200).is_err());
-        assert!(normalize_text("a\nb\nc\nd", 200).is_err(), "at most three lines");
-        assert!(normalize_text("tab\there", 200).is_err());
-        assert!(normalize_text("bell\u{7}", 200).is_err());
+    fn domains_are_normalised_and_deduplicated() {
+        assert_eq!(normalize_domains(" Gmail.com, @MyCorp.com ;alice@mycorp.com  sub.mycorp.com. ", 512).unwrap(), "gmail.com,mycorp.com,sub.mycorp.com");
+        assert_eq!(normalize_domains("", 512).unwrap(), "", "blank = the system default");
+        assert_eq!(normalize_domains(" , ,", 512).unwrap(), "");
+        assert_eq!(normalize_domains("xn--fiqs8s.cn", 512).unwrap(), "xn--fiqs8s.cn");
+    }
+
+    #[test]
+    fn bad_domains_are_named() {
+        for bad in ["localhost", "*.mycorp.com", "a..com", "-a.com", "a-.com", "exa_mple.com", "1.2.3.4", "公司.tw", "mycorp.123"] {
+            let e = normalize_domains(&format!("gmail.com,{bad}"), 512);
+            assert!(e.is_err(), "{bad} should be refused");
+            assert!(e.unwrap_err().contains(bad), "the message names {bad}");
+        }
+        assert!(normalize_domains("my corp@.com", 512).is_err(), "split on the space: `my` has no dot");
+        assert!(normalize_domains(&format!("{}.com", "a".repeat(64)), 512).is_err(), "label over 63");
+        assert!(normalize_domains(&format!("{}.com", "a".repeat(250)), 512).is_err(), "domain over 253");
+    }
+
+    #[test]
+    fn domains_respect_the_length_limit() {
+        let many: Vec<String> = (0..60).map(|i| format!("d{i:02}.example.com")).collect();
+        let e = normalize_domains(&many.join(","), 512).unwrap_err();
+        assert!(e.contains("512"));
+        assert!(normalize_domains(&many[..20].join(","), 512).is_ok());
+    }
+
+    #[test]
+    fn signin_lines_are_trimmed_and_limited() {
+        let max = SIGNIN_MESSAGE_MAX;
+        assert_eq!(normalize_text("  Hello \r\n\n   \n  world  \n", max).unwrap(), "Hello\nworld", "trimmed, blank lines dropped");
+        assert_eq!(normalize_text("   \n \n", max).unwrap(), "", "blank = the built-in lines");
+        assert!(normalize_text(&"字".repeat(80), max).is_ok(), "counted in characters, not bytes");
+        assert_eq!(normalize_text(&"x".repeat(81), max).unwrap_err(), "Keep each line to 80 characters or fewer.");
+        let six = vec!["a"; 6].join("\n");
+        assert!(normalize_text(&six, max).is_ok());
+        assert_eq!(normalize_text(&format!("{six}\nb"), max).unwrap_err(), "Use at most 6 lines.");
+        assert!(normalize_text(&vec!["字".repeat(80); 6].join("\n"), max).is_ok(), "the whole-text cap never bites first");
+        assert!(normalize_text("tab\there", max).is_err());
+        assert!(normalize_text("bell\u{7}", max).is_err());
     }
 }

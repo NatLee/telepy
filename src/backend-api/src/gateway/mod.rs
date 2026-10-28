@@ -6,13 +6,15 @@
 //! - `tcpip-forward`：只**記住** port → 這條連線（不綁任何本機 port；`reverse_port` 只是識別號碼）。後端要連裝置時
 //!   用 [`Gateway::open_stream`] 在行程內開 `forwarded-tcpip` channel（終端機、檔案、SFTP、SOCKS、AI 都是）。
 //! - `direct-tcpip`（使用者金鑰的 `ProxyCommand ssh -W <隧道名稱>:22 telepy-<網域>-<port>`）：橋到同一條 forward。
-//! - 其餘（session/shell/exec/pty/subsystem/agent/x11）一律拒絕，等同現在 `Match User telepy` 的 sshd 設定。
+//! - session channel：隧道金鑰一律拒絕；個人金鑰只拿到一段招呼（[`greeting`]：怎麼連到自己的裝置）就關掉，
+//!   什麼都不執行（exec 的指令不看也不記）；subsystem/agent/x11/env 一律拒絕。
 //!
 //! 狀態：forward 註冊/消失即時寫入 `StatusState`（取代 `ss` 取樣）；延遲：每 15s 開一條 forwarded 通道讀
 //! 裝置 sshd banner 的第一個 byte（與 probe_latency.sh 相同的量法，但零子程序）。
 //! 日誌：sshd 風格的 `Accepted publickey … / Disconnected …` 行寫到 ssh-gateway.log，Logs 頁沿用。
 //! In-process SSH gateway terminating the devices' reverse tunnels (pubkey + tcpip-forward only).
 
+pub mod greeting;
 pub mod proxy_protocol;
 
 use std::collections::{HashMap, HashSet};
@@ -26,7 +28,7 @@ use anyhow::bail;
 use dashmap::DashMap;
 use russh::keys::{load_secret_key, HashAlg, PrivateKey};
 use russh::server::{self, Auth, Config as ServerConfig, Handle, Handler, Msg, Session};
-use russh::{Channel, ChannelOpenFailure, ChannelStream, Disconnect, MethodKind, MethodSet};
+use russh::{Channel, ChannelId, ChannelOpenFailure, ChannelStream, Disconnect, MethodKind, MethodSet};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -473,16 +475,38 @@ impl Gateway {
     /// Owner, ADMIN sharee, or a sharee with at least one allowed account; a status-only sharee never reaches the device's sshd.
     async fn user_can_reach(&self, user_id: i64, port: u16) -> anyhow::Result<bool> {
         for t in db::tunnels::by_port(&self.db, port as i64).await? {
-            if t.user_id == user_id {
-                return Ok(true);
-            }
-            let Some(share) = db::sharing::get(&self.db, t.id, user_id).await? else { continue };
-            let eff = crate::permissions::effective(user_id, t.user_id, Some(share.permission()));
-            if crate::permissions::can_reach_device(eff, !db::sharing::allowed_usernames(&self.db, share.id).await?.is_empty()) {
+            if self.reaches(user_id, &t).await? {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// 這個人能不能經 gateway 連到這條隧道的裝置（`user_can_reach` 與招呼的裝置清單共用）。
+    /// Whether this person may reach the tunnel's device through the gateway (shared by `user_can_reach` and the greeting).
+    async fn reaches(&self, user_id: i64, t: &db::tunnels::Tunnel) -> anyhow::Result<bool> {
+        if t.user_id == user_id {
+            return Ok(true);
+        }
+        let Some(share) = db::sharing::get(&self.db, t.id, user_id).await? else { return Ok(false) };
+        let eff = crate::permissions::effective(user_id, t.user_id, Some(share.permission()));
+        Ok(crate::permissions::can_reach_device(eff, !db::sharing::allowed_usernames(&self.db, share.id).await?.is_empty()))
+    }
+
+    /// 招呼全文：使用者的語言、名稱、能連的裝置（照名稱排序）。/ The greeting in the user's language with their reachable devices.
+    async fn greeting(&self, user_id: i64, tty: bool) -> anyhow::Result<String> {
+        let username = db::users::by_id(&self.db, user_id).await?.map(|u| u.username).unwrap_or_default();
+        let settings = db::users::settings_for(&self.db, user_id).await?;
+        let language = settings.as_ref().and_then(|s| s.language.clone());
+        let clip = settings.as_ref().and_then(|s| crate::mascot::clip_color(crate::mascot::clip_name(&s.tapi_color, crate::mascot::unix_day())));
+        let mut names = Vec::new();
+        for t in db::tunnels::visible_to(&self.db, user_id).await? {
+            if self.reaches(user_id, &t).await? {
+                names.push(t.host_friendly_name);
+            }
+        }
+        names.sort_by_key(|n| n.to_lowercase());
+        Ok(greeting::text(greeting::Lang::from_setting(language.as_deref()), &username, &names, tty, self.config.public_url.as_deref(), clip))
     }
 
     async fn may_connect(&self, id: &Identity, port: u16) -> anyhow::Result<bool> {
@@ -613,6 +637,40 @@ pub struct GatewayHandler {
     offered: Option<String>,
     key_desc: String,
     authed: Arc<AtomicBool>,
+    /// 開著的招呼 channel → 有沒有要過 pty。/ Open greeting channels → whether a pty was asked for.
+    greetings: HashMap<ChannelId, bool>,
+}
+
+/// 一條連線最多同時開幾個招呼 channel。/ Greeting channels open at once per connection.
+const MAX_GREETINGS: usize = 2;
+
+impl GatewayHandler {
+    /// 招呼一個 shell / exec 要求：印出招呼、exit 1、關掉。什麼都不執行。
+    /// Answer a shell / exec request: print the greeting, exit 1, close. Nothing is run.
+    async fn greet(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), anyhow::Error> {
+        let Some(tty) = self.greetings.remove(&channel) else {
+            session.channel_failure(channel)?;
+            return Ok(());
+        };
+        let Some(Identity::User { user_id }) = self.identity else {
+            session.channel_failure(channel)?;
+            session.close(channel)?;
+            return Ok(());
+        };
+        session.channel_success(channel)?;
+        let text = match self.gw.greeting(user_id, tty).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "gateway: cannot build the greeting");
+                greeting::text(greeting::Lang::En, "", &[], tty, None, None)
+            }
+        };
+        session.data(channel, text.into_bytes())?;
+        session.exit_status_request(channel, 1)?;
+        session.eof(channel)?;
+        session.close(channel)?;
+        Ok(())
+    }
 }
 
 impl Handler for GatewayHandler {
@@ -748,9 +806,61 @@ impl Handler for GatewayHandler {
         Ok(released)
     }
 
-    async fn channel_open_session(&mut self, _channel: Channel<Msg>, reply: server::ChannelOpenHandle, _session: &mut Session) -> Result<(), Self::Error> {
-        // 不開 shell/exec/pty（= PermitTTY no + 無 shell 的 sshd 設定）。
-        reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
+    async fn channel_open_session(&mut self, channel: Channel<Msg>, reply: server::ChannelOpenHandle, _session: &mut Session) -> Result<(), Self::Error> {
+        // 隧道金鑰（裝置）不開 session；個人金鑰只開來印招呼（最多同時 2 個），不配 pty、不執行任何東西。
+        // Tunnel keys get no session; a personal key gets one only for the greeting (≤ 2 at once): no pty, nothing run.
+        if !matches!(self.identity, Some(Identity::User { .. })) || self.greetings.len() >= MAX_GREETINGS {
+            reply.reject(ChannelOpenFailure::AdministrativelyProhibited).await;
+            return Ok(());
+        }
+        self.greetings.insert(channel.id(), false);
+        reply.accept().await;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn pty_request(&mut self, channel: ChannelId, _term: &str, _cols: u32, _rows: u32, _pw: u32, _ph: u32, _modes: &[(russh::Pty, u32)], session: &mut Session) -> Result<(), Self::Error> {
+        // 只記下「要了 pty」（招呼可以畫圖、上色）；什麼都不配。/ Only remember a pty was asked for; nothing is allocated.
+        match self.greetings.get_mut(&channel) {
+            Some(tty) => {
+                *tty = true;
+                session.channel_success(channel)?;
+            }
+            None => session.channel_failure(channel)?,
+        }
+        Ok(())
+    }
+
+    async fn shell_request(&mut self, channel: ChannelId, session: &mut Session) -> Result<(), Self::Error> {
+        self.greet(channel, session).await
+    }
+
+    async fn exec_request(&mut self, channel: ChannelId, _data: &[u8], session: &mut Session) -> Result<(), Self::Error> {
+        // 指令內容不看、不記、不執行。/ The command is neither read, logged nor run.
+        self.greet(channel, session).await
+    }
+
+    async fn subsystem_request(&mut self, channel: ChannelId, _name: &str, session: &mut Session) -> Result<(), Self::Error> {
+        // sftp 等 subsystem：拒絕並關掉。/ sftp and other subsystems: refused, channel closed.
+        session.channel_failure(channel)?;
+        if self.greetings.remove(&channel).is_some() {
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn x11_request(&mut self, channel: ChannelId, _single: bool, _proto: &str, _cookie: &str, _screen: u32, session: &mut Session) -> Result<(), Self::Error> {
+        session.channel_failure(channel)?;
+        Ok(())
+    }
+
+    async fn env_request(&mut self, channel: ChannelId, _name: &str, _value: &str, session: &mut Session) -> Result<(), Self::Error> {
+        session.channel_failure(channel)?;
+        Ok(())
+    }
+
+    async fn channel_close(&mut self, channel: ChannelId, _session: &mut Session) -> Result<(), Self::Error> {
+        self.greetings.remove(&channel);
         Ok(())
     }
 
@@ -928,7 +1038,7 @@ where
     let authed = Arc::new(AtomicBool::new(false));
     // `live` 在 GatewayHandler::drop 歸還，握手失敗 / 逾時時 handler 也會被 drop。/ Released in GatewayHandler::drop.
     gw.live.fetch_add(1, Ordering::SeqCst);
-    let handler = GatewayHandler { gw: gw.clone(), conn_id, peer, transport, identity: None, offered: None, key_desc: String::new(), authed: authed.clone() };
+    let handler = GatewayHandler { gw: gw.clone(), conn_id, peer, transport, identity: None, offered: None, key_desc: String::new(), authed: authed.clone(), greetings: HashMap::new() };
     let grace = gw.config.gateway_login_grace;
     // 握手（版本交換 + KEX）也受 LoginGraceTime 約束：連上來不講話的連線不能無限期占位。
     // The handshake is bounded by the login grace time too, so an idle pre-KEX connection cannot hold a slot forever.

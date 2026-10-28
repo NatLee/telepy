@@ -142,6 +142,8 @@ export function LatencyIndicator({
                                     : t("latency.offline")}
                         </span>
                     )}
+                    {/* 彩蛋：不到 1 ms，大概就在旁邊。/ Easter egg: under 1 ms, it is probably right next to you. */}
+                    {known && (rttMs as number) < 1 && <span className="mt-1 block opacity-75">{t("eggs.nextToIt")}</span>}
                 </TooltipContent>
             </Tooltip>
         </TooltipProvider>
