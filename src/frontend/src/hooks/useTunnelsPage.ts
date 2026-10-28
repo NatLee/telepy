@@ -3,6 +3,7 @@ import { apiFetch, readJson } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/lib/auth";
 import { useNotificationHandlers } from "@/lib/websocket";
+import { allowNotification } from "@/hooks/useNotifyPrefs";
 import { NOTIFICATION_ACTIONS } from "@/types/notification";
 import { Tunnel, type DeviceWarningKind, type TunnelDetailsTab } from "@/types/tunnel";
 import { WARNING_KINDS } from "@/lib/deviceFacts";
@@ -111,11 +112,11 @@ export function useTunnelsPage() {
             if (id === undefined || (health !== "online" && health !== "degraded" && health !== "offline")) return;
             const tunnel = tunnelsRef.current.find(tn => tn.id === id);
             setTunnels(prev => prev.map(tn => (tn.id === id ? { ...tn, health } : tn)));
-            if (health === "degraded" && tunnel) showToast(t("tunnels.degradedToast", { name: tunnel.host_friendly_name }), "warning");
+            if (health === "degraded" && tunnel && allowNotification(msg, "toast")) showToast(t("tunnels.degradedToast", { name: tunnel.host_friendly_name }), "warning");
         },
         [NOTIFICATION_ACTIONS.TUNNEL_IP_CHANGED]: (msg) => {
             // 可能是浮動 IP，也可能是金鑰外流：提醒一下，並刷新列表上的 IP。/ Dynamic IP or a leaked key: tell the owner.
-            if (typeof msg.ip === "string" && typeof msg.previous_ip === "string") {
+            if (typeof msg.ip === "string" && typeof msg.previous_ip === "string" && allowNotification(msg, "toast")) {
                 showToast(t("tunnels.ipChangedToast", { name: String(msg.tunnel_name ?? ""), ip: msg.ip, previous: msg.previous_ip }), "warning");
             }
             reloadSoon();
@@ -123,7 +124,7 @@ export function useTunnelsPage() {
         [NOTIFICATION_ACTIONS.DEVICE_WARNING]: (msg) => {
             // 裝置需要注意（磁碟快滿、記憶體不足…）：提醒一次並刷新列表上的標記。/ A device needs attention: tell, then refresh the chip.
             const kinds = Array.isArray(msg.warnings) ? (msg.warnings as string[]).filter((k) => (WARNING_KINDS as string[]).includes(k)) : [];
-            if (kinds.length > 0) {
+            if (kinds.length > 0 && allowNotification(msg, "toast")) {
                 const what = kinds.map((k) => t(`deviceFacts.chip.${k as DeviceWarningKind}`)).join(", ");
                 showToast(t("tunnels.deviceWarningToast", { name: String(msg.tunnel_name ?? ""), what }), "warning");
             }
@@ -141,12 +142,12 @@ export function useTunnelsPage() {
             if (detailed) reloadSoon();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_SHARED]: (msg) => {
-            if (msg.details) showSuccess(msg.details);
+            if (msg.details && allowNotification(msg, "toast")) showSuccess(msg.details);
             fetchData();
         },
         [NOTIFICATION_ACTIONS.TUNNEL_UNSHARED]: (msg) => {
             // 限時分享到期是提醒，不是成功。/ A timed share ending is a heads-up, not a success.
-            if (msg.details) {
+            if (msg.details && allowNotification(msg, "toast")) {
                 if (msg.expired) showToast(msg.details, "warning");
                 else showSuccess(msg.details);
             }
@@ -163,11 +164,11 @@ export function useTunnelsPage() {
         // 存取申請：新申請（給 owner / ADMIN）、決定（給申請人）、其他變動只刷新。
         // Access requests: new (owner / ADMIN), decided (requester), other changes just refresh.
         [NOTIFICATION_ACTIONS.ACCESS_REQUEST_CREATED]: (msg) => {
-            if (msg.details) showToast(msg.details, "info");
+            if (msg.details && allowNotification(msg, "toast")) showToast(msg.details, "info");
             fetchData();
         },
         [NOTIFICATION_ACTIONS.ACCESS_REQUEST_DECIDED]: (msg) => {
-            if (msg.details) {
+            if (msg.details && allowNotification(msg, "toast")) {
                 if (msg.status === "approved") showSuccess(msg.details);
                 else showToast(msg.details, "warning");
             }
@@ -185,21 +186,21 @@ export function useTunnelsPage() {
         },
         // 別人的 AI agent 連上／離開我的隧道時提示（自己的 agent 不吵）。/ Toast when someone else's agent uses my tunnel.
         [NOTIFICATION_ACTIONS.AI_SESSION_OPENED]: (msg) => {
-            if (msg.details && msg.by && msg.by !== user?.username) showSuccess(msg.details);
+            if (msg.details && msg.by && msg.by !== user?.username && allowNotification(msg, "toast")) showSuccess(msg.details);
         },
         [NOTIFICATION_ACTIONS.AI_SESSION_CLOSED]: (msg) => {
-            if (msg.details && msg.by && msg.by !== user?.username) showSuccess(msg.details);
+            if (msg.details && msg.by && msg.by !== user?.username && allowNotification(msg, "toast")) showSuccess(msg.details);
         },
         // 裝置的 host key 變了：連線已被擋，提示去詳細資訊核對。/ A device's host key changed: connections are blocked.
         [NOTIFICATION_ACTIONS.HOST_KEY_CHANGED]: (msg) => {
             const name = tunnels.find((tn) => tn.id === msg.tunnel_id)?.host_friendly_name ?? `#${msg.tunnel_id ?? "?"}`;
-            showError(t("hostKey.notify", { name }));
+            if (allowNotification(msg, "toast")) showError(t("hostKey.notify", { name }));
             fetchData();
         },
         // 別的帳號把隧道指到了我的機器（已被拒）：提醒去看誰碰得到那台。/ Another account's tunnel reached my machine (refused).
         [NOTIFICATION_ACTIONS.DEVICE_CLAIM_ATTEMPT]: (msg) => {
             const name = (typeof msg.tunnel_name === "string" && msg.tunnel_name) || tunnels.find((tn) => tn.id === msg.tunnel_id)?.host_friendly_name || `#${msg.tunnel_id ?? "?"}`;
-            showError(t("hostKey.claimNotify", { name, by: String(msg.by ?? "?") }));
+            if (allowNotification(msg, "toast")) showError(t("hostKey.claimNotify", { name, by: String(msg.by ?? "?") }));
         },
     });
 

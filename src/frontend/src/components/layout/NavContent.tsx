@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal } from "lucide-react";
+import { Network, Key, FileText, Settings, LogOut, SlidersHorizontal, SquareTerminal, Bot, Plug, Waypoints, ScreenShare, Activity, Clapperboard, ShieldCheck, Webhook, TerminalSquare, ScrollText, BotMessageSquare, RadioTower, RadioReceiver, Film, Braces, ListChecks, Terminal, BellRing } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { hasFeature, type FeatureId } from "@/lib/features";
 import { useCommandApprovals } from "@/components/commands/CommandApprovals";
@@ -92,6 +92,7 @@ export const navSections: { key: TranslationKey; links: NavLink[]; /** 只有管
             { key: "nav.adminRecordings", href: "/tunnels/admin/recordings", icon: <Film size={18} /> },
             { key: "nav.adminActivity", href: "/tunnels/admin/activity", icon: <BotMessageSquare size={18} /> },
             { key: "nav.adminWebhooks", href: "/tunnels/admin/webhooks", icon: <RadioTower size={18} /> },
+            { key: "nav.adminNotifications", href: "/tunnels/admin/notifications", icon: <BellRing size={18} /> },
             { key: "nav.adminCommands", href: "/tunnels/admin/commands", icon: <ShieldCheck size={18} /> },
             { key: "nav.adminApiActivity", href: "/tunnels/admin/api-activity", icon: <ListChecks size={18} /> },
         ],

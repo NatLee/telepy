@@ -3,7 +3,8 @@
 /**
  * 偏好設定 modal:由 sidebar 左下角的齒輪按鈕開啟。版面是「左側欄 + 內容」:桌面上左欄是帳號與分頁,
  * 手機上分頁變成內容上方的一列;對話框高度固定,切換分頁時大小不變(內容多的分頁自己捲動)。
- * - 一般:帳號資訊(手機)、介面語言、桌面通知。
+ * - 一般:帳號資訊(手機)、介面語言、關於。
+ * - 通知:這個瀏覽器的桌面通知開關、哪些事件要提示(事件 × 管道,蓋在網站預設上)、靜音的隧道。
  * - 外觀:主題(系統/淺色/深色)、顯示大小(小/中/大 + 細調滑桿)、各頁的卡片 / 列表(存在帳號上)。
  * - 終端機:預設字型 / 字級 / 配色(單一裝置的覆寫在終端機頁的「外觀」按鈕)、斷線後保留 shell。
  * - 遠端桌面:剪貼簿方向(存在帳號上,站台設定是上限)、畫質與聲音的預設(這台瀏覽器)。
@@ -13,7 +14,9 @@
  * User preferences modal, opened from the sidebar footer gear button. A rail + content layout: on
  * desktop the rail holds the account and the tabs, on phones the tabs become a row above the content;
  * the dialog has a fixed height, so switching tabs never resizes it (long tabs scroll). Tabs:
- * - General: account (phones), language, desktop notifications.
+ * - General: account (phones), language, about.
+ * - Notifications: this browser's desktop switch, which events notify (event × channel over the site defaults),
+ *   muted tunnels.
  * - Appearance: theme, display size (S/M/L + fine slider), card / list per page (on the account).
  * - Terminal: default font / size / colour scheme (a device's own override lives behind the terminal page's
  *   Appearance button), keeping shells after a disconnect.
@@ -25,9 +28,8 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX, ZoomIn } from "lucide-react";
-import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
-import { Callout } from "@/components/ui/callout";
+import { ALargeSmall, ArrowRight, Bell, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX, ZoomIn } from "lucide-react";
+import { NotifyPrefsPanel } from "@/components/notify/NotifyPrefsPanel";
 import { Modal } from "@/components/ui/Modal";
 import { NavTabs } from "@/components/ui/nav-tabs";
 import { Segmented } from "@/components/ui/segmented";
@@ -66,7 +68,7 @@ import { SecuritySettings } from "./SecuritySettings";
 import { SignInHistory } from "./SignInHistory";
 import { SignInDevices } from "./SignInDevices";
 
-export type PrefsTab = "general" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps";
+export type PrefsTab = "general" | "notify" | "appearance" | "terminal" | "desktop" | "security" | "logins" | "apps";
 
 /** 從別的頁打開偏好設定的某個分頁。/ Open Preferences at a tab from another page. */
 export const OPEN_PREFS_EVENT = "telepy:open-prefs";
@@ -104,15 +106,10 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
     React.useEffect(() => {
         if (isOpen && initialTab) setTab(initialTab);
     }, [isOpen, initialTab]);
-    const [desktopNotify, setDesktopNotify] = useDesktopNotifyPref();
-    const [notifyProblem, setNotifyProblem] = useState<"denied" | "unsupported" | null>(null);
-    const changeDesktopNotify = async (value: "on" | "off") => {
-        const r = await setDesktopNotify(value === "on");
-        setNotifyProblem(r === "denied" || r === "unsupported" ? r : null);
-    };
 
     const tabs = [
         { value: "general" as const, label: t("prefs.tabGeneral"), hint: t("prefs.tabGeneralHint"), icon: <SlidersHorizontal /> },
+        { value: "notify" as const, label: t("notifyPrefs.tab"), hint: t("notifyPrefs.tabHint"), icon: <Bell /> },
         { value: "appearance" as const, label: t("prefs.tabAppearance"), hint: t("prefs.tabAppearanceHint"), icon: <Palette /> },
         // 功能被關掉就不顯示那一頁。/ A tab of a turned-off feature is hidden.
         ...(hasFeature(user, "terminal") ? [{ value: "terminal" as const, label: t("prefs.tabTerminal"), hint: t("prefs.tabTerminalHint"), icon: <TerminalIcon /> }] : []),
@@ -211,28 +208,14 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         </div>
                     </Section>
 
-                    {/* 桌面通知（每台瀏覽器）/ Desktop notifications (per browser) */}
-                    <Section icon={<Bell />} title={t("prefs.desktopNotify")} description={t("prefs.desktopNotifyDescription")}>
-                        <Segmented
-                            fullWidth
-                            options={[
-                                { value: "off" as const, label: t("prefs.desktopNotifyOff"), icon: <BellOff size={15} /> },
-                                { value: "on" as const, label: t("prefs.desktopNotifyOn"), icon: <Bell size={15} /> },
-                            ]}
-                            value={desktopNotify ? "on" : "off"}
-                            onChange={(v) => void changeDesktopNotify(v)}
-                            aria-label={t("prefs.desktopNotify")}
-                        />
-                        {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
-                        {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
-                    </Section>
-
                     {/* 關於（授權、原始碼、字型、使用聲明；兩個彩蛋）/ About (licence, source, typeface, disclaimer; two easter eggs) */}
                     <Section icon={<Info />} title={t("about.title")}>
                         <AboutTelepy />
                     </Section>
                 </div>
             )}
+
+            {tab === "notify" && <NotifyPrefsPanel />}
 
             {tab === "appearance" && (
                 <div className="space-y-6">

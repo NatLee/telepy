@@ -4031,3 +4031,111 @@ pub struct ApiRouteCatalogue {
     pub scopes: Vec<String>,
     pub routes: Vec<ApiRoute>,
 }
+
+/// Per-channel values: `toast` (in-app) and / or `desktop` (desktop notification), only the channels the event has
+#[derive(ToSchema)]
+pub struct NotifyChannels {
+    pub toast: Option<bool>,
+    pub desktop: Option<bool>,
+}
+
+/// One event of the site defaults (`site` value null = built-in on)
+#[derive(ToSchema)]
+pub struct NotifyDefaultEvent {
+    #[schema(example = "tunnel.host_key_changed")]
+    pub event: String,
+    #[schema(example = "device")]
+    pub group: String,
+    #[schema(example = "tunnel")]
+    pub audience: String,
+    /// About a tunnel (tunnel mutes apply)
+    pub tunnel: bool,
+    /// A status event (online / offline / degraded / recovered)
+    pub status: bool,
+    #[schema(example = json!(["toast", "desktop"]))]
+    pub channels: Vec<String>,
+    /// Enforced by an admin: always shown, nobody can turn it off or mute it
+    pub locked: bool,
+    pub site: NotifyChannels,
+}
+
+/// One event of my preferences
+#[derive(ToSchema)]
+pub struct NotifyPrefEvent {
+    pub event: String,
+    pub group: String,
+    pub audience: String,
+    pub tunnel: bool,
+    pub status: bool,
+    pub channels: Vec<String>,
+    pub locked: bool,
+    pub site: NotifyChannels,
+    /// My override per channel (null = follow the site default)
+    pub mine: NotifyChannels,
+    /// The result before any tunnel mute
+    pub effective: NotifyChannels,
+    /// Which layer decided, per channel: locked | mine | site | builtin
+    #[schema(value_type = Object)]
+    pub source: serde_json::Value,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyMute {
+    pub tunnel_id: i64,
+    /// all | status | null (unmuted)
+    pub scope: Option<String>,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyMuteRow {
+    pub tunnel_id: i64,
+    pub tunnel_name: String,
+    /// all | status
+    pub scope: String,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyPreferences {
+    pub events: Vec<NotifyPrefEvent>,
+    pub mutes: Vec<NotifyMuteRow>,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyDefaults {
+    pub events: Vec<NotifyDefaultEvent>,
+}
+
+/// One change: `value` = on | off | inherit (also true / false / null)
+#[derive(ToSchema)]
+pub struct NotifyChange {
+    pub event: String,
+    #[schema(example = "toast")]
+    pub channel: String,
+    #[schema(value_type = String, example = "off")]
+    pub value: serde_json::Value,
+}
+
+/// PUT body: only the listed event × channel pairs change
+#[derive(ToSchema)]
+pub struct NotifyPrefsBody {
+    pub prefs: Vec<NotifyChange>,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyLock {
+    pub event: String,
+    pub locked: bool,
+}
+
+/// PUT body (admins): site values (inherit = built-in on) and locks; both optional
+#[derive(ToSchema)]
+pub struct NotifyDefaultsBody {
+    pub defaults: Option<Vec<NotifyChange>>,
+    pub locks: Option<Vec<NotifyLock>>,
+}
+
+#[derive(ToSchema)]
+pub struct NotifyMuteBody {
+    /// all (default) | status
+    pub scope: Option<String>,
+}

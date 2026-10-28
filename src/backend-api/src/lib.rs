@@ -28,6 +28,7 @@ pub mod lan;
 pub mod mascot;
 pub mod mcp;
 pub mod mfa;
+pub mod notify_prefs;
 pub mod monitor;
 pub mod oui;
 pub mod oauth;

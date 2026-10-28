@@ -252,6 +252,7 @@ pub async fn delete(db: &Db, id: i64) -> sqlx::Result<()> {
     sqlx::query("DELETE FROM telepy_terminal_profile WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_endpoint WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_tunnel_pin WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM telepy_notify_tunnel_mute WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     // 每個人的分組與金鑰群組對它的授予。/ Everyone's grouping of it and key group grants to it.
     sqlx::query("DELETE FROM telepy_tunnel_group_member WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM telepy_key_group_grant WHERE tunnel_id = ?").bind(id).execute(&mut *tx).await?;

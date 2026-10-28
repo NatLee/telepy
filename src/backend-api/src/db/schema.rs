@@ -647,6 +647,42 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：站內通知偏好（見 notify_prefs.rs）。全站預設：每個事件 × 管道（toast / desktop）一列，
+    // enabled NULL = 內建（開），locked = 管理員強制（使用者不能關）。個人的：只存有覆寫的。靜音：每人每條隧道一列。
+    // In-app notification preferences (see notify_prefs.rs): site defaults per event × channel (enabled NULL =
+    // built-in on, locked = enforced), personal overrides only where set, and per-person tunnel mutes.
+    (
+        "telepy_notify_default",
+        r#"CREATE TABLE "telepy_notify_default" (
+            "event" varchar(64) NOT NULL,
+            "channel" varchar(16) NOT NULL,
+            "enabled" bool NULL,
+            "locked" bool NOT NULL DEFAULT 0,
+            "updated_at" datetime NOT NULL,
+            PRIMARY KEY ("event", "channel")
+        )"#,
+    ),
+    (
+        "telepy_notify_pref",
+        r#"CREATE TABLE "telepy_notify_pref" (
+            "user_id" integer NOT NULL,
+            "event" varchar(64) NOT NULL,
+            "channel" varchar(16) NOT NULL,
+            "enabled" bool NOT NULL,
+            "updated_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "event", "channel")
+        )"#,
+    ),
+    (
+        "telepy_notify_tunnel_mute",
+        r#"CREATE TABLE "telepy_notify_tunnel_mute" (
+            "user_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            "scope" varchar(16) NOT NULL,
+            "created_at" datetime NOT NULL,
+            PRIMARY KEY ("user_id", "tunnel_id")
+        )"#,
+    ),
     // Rust 自有：網頁登入 session（refresh token 的 sid）；見 db/web_sessions.rs。
     // Web sign-in sessions (the refresh token's sid); see db/web_sessions.rs.
     (

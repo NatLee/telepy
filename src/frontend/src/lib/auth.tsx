@@ -32,6 +32,7 @@ import { useToast } from "@/components/ui/Toast";
 import { isAuthorizePath, loginPathFor } from "./oauthFlow";
 import { accessTokenExpiring, refreshDelayMs, RETRY_DELAY_MS } from "./session";
 import { resetTerminalSchemes } from "@/hooks/useTerminalSchemes";
+import { resetNotifyPrefs } from "@/hooks/useNotifyPrefs";
 const AuthContext = createContext<AuthContextType>({
     accessToken: null,
     isAuthenticated: false,
@@ -252,6 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (refresh) revokeSession(refresh);
         localStorage.removeItem("accessToken");
         localStorage.removeItem("refreshToken");
+        resetNotifyPrefs(); // 通知偏好也是帳號的 / notification preferences belong to the account too
         resetTerminalSchemes(); // 自訂配色是帳號的,別留給下一個登入的人看 / custom schemes belong to the account
         setAccessToken(null);
         setUser(null);
