@@ -372,6 +372,15 @@ const TABLES: &[(&str, &str)] = &[
             "updated_at" datetime NOT NULL
         )"#,
     ),
+    // Rust 自有：指令規則套用的隧道（`all_tunnels` = 0 的規則才有）。/ The tunnels a command rule is limited to.
+    (
+        "telepy_command_rule_target",
+        r#"CREATE TABLE "telepy_command_rule_target" (
+            "rule_id" integer NOT NULL,
+            "tunnel_id" integer NOT NULL,
+            PRIMARY KEY ("rule_id", "tunnel_id")
+        )"#,
+    ),
     // Rust 自有：工具箱的指令片段（scope user = 某人的、tunnel = 某條隧道的、site = 全站）。
     // Toolbox command snippets (scope user = someone's own, tunnel = one tunnel's, site = site-wide).
     (
@@ -867,6 +876,8 @@ const INDEXES: &[&str] = &[
     r#"CREATE INDEX IF NOT EXISTS "telepy_terminal_recording_tunnel" ON "telepy_terminal_recording" ("tunnel_id", "started_at")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_access_request_tunnel" ON "telepy_access_request" ("tunnel_id", "status")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_tunnel" ON "telepy_command_rule" ("tunnel_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_owner" ON "telepy_command_rule" ("scope", "user_id")"#,
+    r#"CREATE INDEX IF NOT EXISTS "telepy_command_rule_target_tunnel" ON "telepy_command_rule_target" ("tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_user" ON "telepy_snippet" ("scope", "user_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_snippet_tunnel" ON "telepy_snippet" ("scope", "tunnel_id")"#,
     r#"CREATE INDEX IF NOT EXISTS "telepy_webhook_user" ON "telepy_webhook" ("user_id")"#,
@@ -959,6 +970,13 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     // Command rules: the approvers an "approve" rule names (JSON array; NULL / empty = owner + ADMIN). Events keep a snapshot.
     ("telepy_command_rule", "approver_ids", "text NULL"),
     ("telepy_command_event", "approver_ids", "text NULL"),
+    // 指令規則：全站（site）或某人的個人規則（user + user_id），套用所有隧道或 `telepy_command_rule_target` 那幾條。
+    // NULL scope = 舊的（`tunnel_id` NULL = 全站，否則一條隧道的），由 data migration 轉成新的。
+    // Command rules: site-wide or someone's personal rule, for every tunnel or the listed ones. A NULL scope is a
+    // pre-upgrade row (NULL `tunnel_id` = site-wide, else one tunnel's), converted by a data migration.
+    ("telepy_command_rule", "scope", "varchar(8) NULL"),
+    ("telepy_command_rule", "user_id", "integer NULL"),
+    ("telepy_command_rule", "all_tunnels", "bool NOT NULL DEFAULT 1"),
     // 指令申請來自哪把個人 API token（agent 的核准沿用要對同一把）。/ The API token an agent request came from.
     ("telepy_command_event", "token_id", "integer NULL"),
     // 個人金鑰最長效期（天，0 = 不限）。/ Longest a personal key may be valid, in days (0 = no limit).
@@ -1105,6 +1123,13 @@ pub const DROP_RUSTDESK_SERVER: &str = "2026-10-26-drop-rustdesk-server-devices"
 /// The CLI sign-in got its own look setting: start from the OAuth page's current look, so upgrades look the same.
 pub const CLI_SIGNIN_STYLE: &str = "2026-10-28-cli-signin-style-from-oauth";
 
+/// 指令規則改成「個人 + 全站」：舊的隧道規則變成建立者的個人規則（只套用那條隧道；建立者已經不是 owner / ADMIN 就給隧道
+/// owner），舊的全站規則照舊套用所有隧道。隧道已經不在的規則刪掉。
+/// Command rules became personal + site-wide: a tunnel's rule becomes its creator's personal rule limited to that
+/// tunnel (the tunnel owner's when the creator no longer owns or administers it); site-wide rules keep covering every
+/// tunnel. Rules of tunnels that no longer exist are deleted.
+pub const PERSONAL_COMMAND_RULES: &str = "2026-10-28-personal-command-rules";
+
 async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(name).fetch_one(pool).await?;
     Ok(n > 0)
@@ -1115,7 +1140,48 @@ pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     drop_sharee_usernames(pool).await?;
     site_webhook_from_settings(pool).await?;
     drop_rustdesk_server(pool).await?;
-    cli_signin_style(pool).await
+    cli_signin_style(pool).await?;
+    personal_command_rules(pool).await
+}
+
+async fn personal_command_rules(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, PERSONAL_COMMAND_RULES).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE telepy_command_rule SET scope = 'site', all_tunnels = 1 WHERE scope IS NULL AND tunnel_id IS NULL").execute(&mut *tx).await?;
+    let gone = sqlx::query(
+        "DELETE FROM telepy_command_rule WHERE scope IS NULL AND tunnel_id IS NOT NULL \
+         AND tunnel_id NOT IN (SELECT id FROM authorized_keys_reverseserverauthorizedkeys)",
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    // 建立者還是 owner / ADMIN 就歸他，否則歸隧道 owner。/ The creator while they still own / administer it, else the owner.
+    let moved = sqlx::query(
+        "UPDATE telepy_command_rule SET scope = 'user', all_tunnels = 0, user_id = ( \
+             SELECT CASE WHEN r.created_by_id = t.user_id OR EXISTS ( \
+                 SELECT 1 FROM tunnels_tunnelsharing s WHERE s.tunnel_id = t.id AND s.shared_with_id = r.created_by_id \
+                 AND LOWER(s.permission_type) = 'admin') THEN r.created_by_id ELSE t.user_id END \
+             FROM telepy_command_rule r JOIN authorized_keys_reverseserverauthorizedkeys t ON t.id = r.tunnel_id \
+             WHERE r.id = telepy_command_rule.id) \
+         WHERE scope IS NULL AND tunnel_id IS NOT NULL",
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "INSERT OR IGNORE INTO telepy_command_rule_target (rule_id, tunnel_id) \
+         SELECT id, tunnel_id FROM telepy_command_rule WHERE scope = 'user' AND tunnel_id IS NOT NULL",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(PERSONAL_COMMAND_RULES).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    if moved > 0 || gone > 0 {
+        tracing::info!(moved, gone, "data migration: tunnel command rules are now their creators' personal rules");
+    }
+    Ok(())
 }
 
 async fn cli_signin_style(pool: &SqlitePool) -> anyhow::Result<()> {

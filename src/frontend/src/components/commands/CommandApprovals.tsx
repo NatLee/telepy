@@ -26,6 +26,7 @@ import { NOTIFICATION_ACTIONS } from "@/lib/notificationActions";
 import { useNotificationHandlers } from "@/lib/websocket";
 import { cn } from "@/lib/utils";
 import type { CommandRequest } from "@/types/commandRules";
+import { RuleSource } from "./RuleList";
 
 interface Approvals {
     /** 等我決定的申請（新的在前）。/ Requests waiting for my decision, newest first. */
@@ -190,7 +191,7 @@ export function ApprovalCard({ req, onDecide, className }: { req: CommandRequest
             </header>
             <CommandText command={req.command} className="mt-2" />
             <p className="mt-1.5 text-xs text-muted-foreground">
-                {t(req.rule.scope === "site" ? "commands.matchedSiteRule" : "commands.matchedTunnelRule")} <code className="font-mono text-foreground">{req.rule.pattern}</code>
+                <RuleSource rule={req.rule} /> <code className="font-mono text-foreground">{req.rule.pattern}</code>
                 {req.rule.note && <span className="block text-foreground/80">“{req.rule.note}”</span>}
             </p>
             {denying ? (

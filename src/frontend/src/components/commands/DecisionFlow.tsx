@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * 「指令是怎麼決定的」路徑圖：指令 ─ 拆開 ─ 全站規則 ─ 隧道規則 ─ 結果。每個規則格子有三條道（允許 / 擋下 / 要核准），
- * 試跑過指令後，走到的道會亮起來：哪個範圍攔到、有沒有被同範圍的例外豁免、最後誰核准。直線與直角，寬容器橫向、窄容器直向。
- * The "how a command is decided" path: command ─ split ─ site rules ─ tunnel rules ─ verdict. Each rules box has
+ * 「指令是怎麼決定的」路徑圖：指令 ─ 拆開 ─ 全站規則 ─ 個人規則 ─ 結果。每個規則格子有三條道（允許 / 擋下 / 要核准），
+ * 試跑過指令後，走到的道會亮起來：哪個範圍攔到、有沒有被同一位作者的例外豁免、最後誰核准。直線與直角，寬容器橫向、窄容器直向。
+ * The "how a command is decided" path: command ─ split ─ site rules ─ personal rules ─ verdict. Each rules box has
  * three lanes (allow / block / approve); after a test the lanes the command took light up: which scope caught it,
- * whether an exception of that scope exempted it, and who approves. Straight lines and right angles; a row in a wide
- * container, a column in a narrow one.
+ * whether an exception of the same author exempted it, and who approves. Straight lines and right angles; a row in
+ * a wide container, a column in a narrow one.
  */
 import React from "react";
 import { CircleCheck, Keyboard, Scissors, type LucideIcon } from "lucide-react";
@@ -23,8 +23,8 @@ export interface DecisionFlowProps {
     verdict: CheckVerdict | null;
     /** 畫的是誰的結果。/ Whose verdict is drawn. */
     who: "approvers" | "sharees";
-    /** 有選隧道（隧道規則那格才算數）。/ A tunnel is selected (the tunnel box counts). */
-    scopeIsTunnel: boolean;
+    /** 個人規則那格有沒有在算（全站頁不算）。/ Whether the personal box takes part (not on the site page). */
+    personalCounts: boolean;
 }
 
 const LANES: RuleAction[] = ["allow", "block", "approve"];
@@ -90,7 +90,7 @@ function ScopeBox({ scope, step, hit, allowedBy, lit, dim }: { scope: RuleScope;
     const { t } = useI18n();
     const site = scope === "site";
     return (
-        <Box lit={lit} className={cn(dim && "opacity-60")} title={t(site ? "commands.flow.siteRules" : "commands.flow.tunnelRules")} sub={t(site ? "commands.flow.siteRulesSub" : "commands.flow.tunnelRulesSub")}>
+        <Box lit={lit} className={cn(dim && "opacity-60")} title={t(site ? "commands.flow.siteRules" : "commands.flow.personalRules")} sub={t(site ? "commands.flow.siteRulesSub" : "commands.flow.personalRulesSub")}>
             <ul className="mt-1 space-y-1">
                 {LANES.map((lane) => {
                     const state = laneState(step, hit, lane);
@@ -122,7 +122,7 @@ function VerdictBox({ path }: { path: DecisionPath | null }) {
               ? t("commands.flow.allowedBy", { pattern: path.allowedBy.pattern })
               : t("commands.flow.noRule")
           : path.rule
-            ? t(path.decidedBy === "site" ? "commands.flow.decidedBySite" : "commands.flow.decidedByTunnel", { pattern: path.rule.pattern })
+            ? t(path.decidedBy === "site" ? "commands.flow.decidedBySite" : "commands.flow.decidedByPersonal", { pattern: path.rule.pattern })
             : null;
     const approvers = path?.approvers ? (path.approvers.names.length > 0 ? t("commands.flow.approversNamed", { names: path.approvers.names.join(", ") }) : t("commands.flow.approversDefault")) : null;
     return (
@@ -138,7 +138,7 @@ function VerdictBox({ path }: { path: DecisionPath | null }) {
     );
 }
 
-export function DecisionFlow({ command, verdict, who, scopeIsTunnel }: DecisionFlowProps) {
+export function DecisionFlow({ command, verdict, who, personalCounts }: DecisionFlowProps) {
     const { t } = useI18n();
     const path = verdict ? decisionPath(verdict) : null;
     const lit = path !== null;
@@ -163,7 +163,7 @@ export function DecisionFlow({ command, verdict, who, scopeIsTunnel }: DecisionF
                     <Link lit={lit} />
                     <ScopeBox scope="site" step={path?.site ?? "none"} hit={path?.scopes.site.hit ?? null} allowedBy={path?.scopes.site.allowedBy ?? null} lit={lit} dim={false} />
                     <Link lit={lit} />
-                    <ScopeBox scope="tunnel" step={path?.tunnel ?? "none"} hit={path?.scopes.tunnel.hit ?? null} allowedBy={path?.scopes.tunnel.allowedBy ?? null} lit={lit && scopeIsTunnel} dim={!scopeIsTunnel} />
+                    <ScopeBox scope="personal" step={path?.personal ?? "none"} hit={path?.scopes.personal.hit ?? null} allowedBy={path?.scopes.personal.allowedBy ?? null} lit={lit && personalCounts} dim={!personalCounts} />
                     <Link lit={lit} />
                     <VerdictBox path={path} />
                 </ol>

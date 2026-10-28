@@ -1,13 +1,17 @@
 //! 指令規則的比對（純函式）：把一行 shell 拆成一個個簡單指令（看穿 `sudo`、`env`、`sh -c`、`$(…)` 這類包裝），
 //! 再拿規則比對。「指令」規則比程式名稱與必要參數（短旗標一個字母一個字母比，`-rf` = `-r` + `-f`，參數可用 `*` / `?`），
-//! 「正規表示式」規則比整行。「允許」規則是例外：只豁免同一個範圍（全站 / 這條隧道）的擋下與要核准規則——隧道的允許
-//! 蓋不過全站的擋下，全站的允許也蓋不過隧道自己更嚴的規則。這是防手滑的護欄，不是安全邊界：腳本、alias、編輯器裡照樣什麼都能跑。
+//! 「正規表示式」規則比整行。規則有兩種主人：全站（管理員）與個人（某個人寫的，管他是 owner / ADMIN 的隧道上的人，或
+//! 「只有我」= 只管他自己）。「允許」規則是例外：只豁免同一個主人（全站 / 同一個人）的擋下與要核准規則——個人的允許蓋不過
+//! 全站的擋下，全站的允許蓋不過個人更嚴的規則，甲的允許也蓋不過乙的規則。這是防手滑的護欄，不是安全邊界：腳本、alias、
+//! 編輯器裡照樣什麼都能跑。
 //! Rule matching (pure): split a shell line into simple commands (seeing through `sudo`, `env`, `sh -c`, `$(…)` and
 //! similar wrappers), then match rules. "Command" rules compare the program and required arguments (short flags
-//! letter by letter, `-rf` = `-r` + `-f`; arguments may use `*` / `?`); "regex" rules match the whole line. An
-//! "allow" rule is an exception that exempts a command from the block / approve rules **of its own scope only**: a
-//! tunnel allow never overrides a site-wide block, and a site allow never overrides a tunnel's stricter rules. A
-//! guard against mistakes, not a security boundary: scripts, aliases and editors can still run anything.
+//! letter by letter, `-rf` = `-r` + `-f`; arguments may use `*` / `?`); "regex" rules match the whole line.
+//! Rules belong to the site (admins) or to one person (covering people on the tunnels they own or administer, or
+//! "only me" = just themselves). An "allow" rule is an exception that exempts a command from the block / approve
+//! rules **of the same owner only**: a personal allow never overrides a site-wide block, a site allow never overrides
+//! a personal stricter rule, and one person's allow never overrides another's rule. A guard against mistakes, not a
+//! security boundary: scripts, aliases and editors can still run anything.
 
 use regex::{Regex, RegexBuilder};
 
@@ -66,11 +70,13 @@ impl Kind {
     }
 }
 
-/// 規則管誰：所有人，或只管不能核准的人（ADMIN 以下的 sharee）。/ Who a rule applies to.
+/// 規則管誰：所有人、只管不能核准的人（ADMIN 以下的 sharee），或（個人規則）只管寫它的人自己。/ Who a rule applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Who {
     Everyone,
     Sharees,
+    /// 只有規則的主人自己（個人規則才有）。/ Only the rule's owner (personal rules only).
+    Me,
 }
 
 impl Who {
@@ -78,6 +84,7 @@ impl Who {
         match s {
             "everyone" => Some(Self::Everyone),
             "sharees" => Some(Self::Sharees),
+            "me" => Some(Self::Me),
             _ => None,
         }
     }
@@ -85,6 +92,7 @@ impl Who {
         match self {
             Self::Everyone => "everyone",
             Self::Sharees => "sharees",
+            Self::Me => "me",
         }
     }
 }
@@ -202,8 +210,10 @@ impl Matcher {
 #[derive(Debug, Clone)]
 pub struct Rule {
     pub id: i64,
-    /// None = 全站規則。/ None = a site-wide rule.
-    pub tunnel_id: Option<i64>,
+    /// None = 全站規則；Some = 這個人的個人規則。/ None = a site-wide rule; Some = that person's personal rule.
+    pub owner: Option<i64>,
+    /// 個人規則主人的帳號名稱（給畫面與紀錄）。/ The personal rule owner's username (for the UI and the logs).
+    pub owner_name: Option<String>,
     pub action: Action,
     pub who: Who,
     pub via: Via,
@@ -216,21 +226,35 @@ pub struct Rule {
 }
 
 impl Rule {
-    /// 全站（tunnel_id None）或隧道。/ Site-wide (no tunnel) or a tunnel's.
+    /// 全站（沒有主人）或個人。/ Site-wide (no owner) or personal.
     pub fn scope(&self) -> Scope {
-        if self.tunnel_id.is_some() {
-            Scope::Tunnel
+        if self.owner.is_some() {
+            Scope::Personal
         } else {
             Scope::Site
         }
     }
 
-    fn applies(&self, approver: bool, source: Source) -> bool {
-        let who = match self.who {
-            Who::Everyone => true,
-            Who::Sharees => !approver,
+    /// 紀錄用的範圍：site / personal / self（「只有我」）。/ The scope for the records: site / personal / self ("only me").
+    pub fn record_scope(&self) -> &'static str {
+        match (self.scope(), self.who) {
+            (Scope::Site, _) => "site",
+            (Scope::Personal, Who::Me) => "self",
+            (Scope::Personal, _) => "personal",
+        }
+    }
+
+    /// 這條規則管不管這個人、這個來源。個人規則（管別人的）只在主人還是這條隧道的 owner / ADMIN 時算數。
+    /// Whether the rule covers this person and source. A personal rule for other people only counts while its owner
+    /// still owns or administers the tunnel.
+    fn applies(&self, ctx: &Ctx<'_>) -> bool {
+        let who = match (self.who, self.owner) {
+            (Who::Me, owner) => owner.is_some() && ctx.user == owner,
+            (_, Some(owner)) if !ctx.managers.contains(&owner) => false,
+            (Who::Everyone, _) => true,
+            (Who::Sharees, _) => !ctx.approver,
         };
-        let via = matches!((self.via, source), (Via::All, _) | (Via::Terminal, Source::Terminal) | (Via::Agents, Source::Agent));
+        let via = matches!((self.via, ctx.source), (Via::All, _) | (Via::Terminal, Source::Terminal) | (Via::Agents, Source::Agent));
         who && via
     }
 }
@@ -239,16 +263,29 @@ impl Rule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Site,
-    Tunnel,
+    Personal,
 }
 
 impl Scope {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Site => "site",
-            Self::Tunnel => "tunnel",
+            Self::Personal => "personal",
         }
     }
+}
+
+/// 評估一行時的情境：誰在跑、他能不能核准、這條隧道由誰管、指令從哪來。
+/// The context a line is judged in: who runs it, whether they approve here, who manages the tunnel, and the source.
+#[derive(Debug, Clone, Copy)]
+pub struct Ctx<'a> {
+    /// 跑指令的人是 owner / ADMIN（「只管被分享的人」的規則不管他）。/ The person owns or administers the tunnel.
+    pub approver: bool,
+    /// 跑指令的人；None = 假想的另一個人（試跑時）。/ The person running it; None = a hypothetical someone else (tester).
+    pub user: Option<i64>,
+    /// 這條隧道的 owner 與 ADMIN sharee。/ The tunnel's owner and ADMIN sharees.
+    pub managers: &'a [i64],
+    pub source: Source,
 }
 
 /// 一個範圍（全站或隧道）的結果：符合的擋下 / 要核准規則，與豁免它的允許規則（有允許就不算）。
@@ -273,18 +310,19 @@ impl<'a> ScopeVerdict<'a> {
     }
 }
 
-/// 一行的完整結果：兩個範圍各自的結果，合起來擋下（任一範圍）> 要核准（任一範圍）> 放行。
-/// The whole verdict: each scope's outcome; combined, block (either scope) > approve (either scope) > allowed.
+/// 一行的完整結果：全站與個人規則各自的結果（個人 = 每位主人各自算完後最嚴的那個），合起來擋下 > 要核准 > 放行。
+/// The whole verdict: the site-wide and the personal outcome (personal = the strictest of each owner's own outcome);
+/// combined, block > approve > allowed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Verdict<'a> {
     pub site: ScopeVerdict<'a>,
-    pub tunnel: ScopeVerdict<'a>,
+    pub personal: ScopeVerdict<'a>,
 }
 
 impl<'a> Verdict<'a> {
     /// 要執行的決定：擋下或要核准的那條規則；None = 放行。/ The decision: the block or approve rule; None = allowed.
     pub fn decision(&self) -> Option<&'a Rule> {
-        let effective = [self.site.effective(), self.tunnel.effective()];
+        let effective = [self.site.effective(), self.personal.effective()];
         effective.iter().flatten().find(|r| r.action == Action::Block).or_else(|| effective.iter().flatten().next()).copied()
     }
 
@@ -293,15 +331,16 @@ impl<'a> Verdict<'a> {
         if self.decision().is_some() {
             return None;
         }
-        [self.site, self.tunnel].iter().find(|s| s.hit.is_some()).and_then(|s| s.allowed_by)
+        [self.site, self.personal].iter().find(|s| s.hit.is_some()).and_then(|s| s.allowed_by)
     }
 }
 
-/// 一行（或好幾個候選行）的結果。每個範圍：先找符合的允許規則；有，就豁免該範圍的擋下 / 要核准；再把兩個範圍合起來
-/// （擋下 > 要核准 > 放行）。都不符合 = 全空。
-/// The verdict for a line (or several candidate readings of it). Per scope: an allow rule that matches exempts that
-/// scope's block / approve rules; the scopes then combine as block > approve > allowed.
-pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], approver: bool, source: Source) -> Verdict<'a> {
+/// 一行（或好幾個候選行）的結果。每位主人（全站算一位）：先找符合的允許規則；有，就豁免同一位主人的擋下 / 要核准；
+/// 個人規則再取各主人裡最嚴的（擋下 > 要核准 > 被豁免 > 只有允許），最後全站與個人合起來（擋下 > 要核准 > 放行）。
+/// The verdict for a line (or several candidate readings of it). Per owner (the site counts as one): an allow rule
+/// that matches exempts the same owner's block / approve rules; the personal outcome is the strictest owner's (block >
+/// approve > exempted > allow only); site and personal then combine as block > approve > allowed.
+pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], ctx: &Ctx<'_>) -> Verdict<'a> {
     let parsed: Vec<(&str, Vec<SimpleCommand>)> = lines
         .iter()
         .map(|l| truncate(l))
@@ -311,14 +350,28 @@ pub fn evaluate<'a>(rules: &'a [Rule], lines: &[String], approver: bool, source:
     if parsed.is_empty() {
         return Verdict::default();
     }
-    let hit = |scope: Scope, action: Action| {
+    let hit = |owner: Option<i64>, action: Action| {
         rules
             .iter()
-            .filter(|r| r.scope() == scope && r.action == action && r.applies(approver, source))
+            .filter(|r| r.owner == owner && r.action == action && r.applies(ctx))
             .find(|r| parsed.iter().any(|(line, cmds)| r.matcher.matches(line, cmds)))
     };
-    let scope = |scope: Scope| ScopeVerdict { hit: hit(scope, Action::Block).or_else(|| hit(scope, Action::Approve)), allowed_by: hit(scope, Action::Allow) };
-    Verdict { site: scope(Scope::Site), tunnel: scope(Scope::Tunnel) }
+    let of = |owner: Option<i64>| ScopeVerdict { hit: hit(owner, Action::Block).or_else(|| hit(owner, Action::Approve)), allowed_by: hit(owner, Action::Allow) };
+    let mut owners: Vec<i64> = Vec::new();
+    for o in rules.iter().filter_map(|r| r.owner) {
+        if !owners.contains(&o) {
+            owners.push(o);
+        }
+    }
+    let each: Vec<ScopeVerdict<'a>> = owners.into_iter().map(|o| of(Some(o))).collect();
+    let strictest = |action: Action| each.iter().find(|v| v.effective().is_some_and(|r| r.action == action));
+    let personal = strictest(Action::Block)
+        .or_else(|| strictest(Action::Approve))
+        .or_else(|| each.iter().find(|v| v.hit.is_some()))
+        .or_else(|| each.iter().find(|v| v.allowed_by.is_some()))
+        .copied()
+        .unwrap_or_default();
+    Verdict { site: of(None), personal }
 }
 
 fn truncate(s: &str) -> &str {
@@ -339,7 +392,7 @@ enum Token {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Ctx {
+enum Nest {
     /// `$(` 或 `(`。
     Paren,
     Backtick,
@@ -356,7 +409,7 @@ fn lex(line: &str) -> Vec<Token> {
     let mut in_single = false;
     let mut in_double = false;
     // 進入 `$(` / 反引號時記住外面是不是在雙引號裡。/ Saved double-quote state per substitution.
-    let mut stack: Vec<(Ctx, bool)> = Vec::new();
+    let mut stack: Vec<(Nest, bool)> = Vec::new();
     let mut skip_next_word = false;
     let mut i = 0;
 
@@ -405,13 +458,13 @@ fn lex(line: &str) -> Vec<Token> {
                 }
                 '$' if chars.get(i + 1) == Some(&'(') => {
                     brk!();
-                    stack.push((Ctx::Paren, true));
+                    stack.push((Nest::Paren, true));
                     in_double = false;
                     i += 1;
                 }
                 '`' => {
                     brk!();
-                    stack.push((Ctx::Backtick, true));
+                    stack.push((Nest::Backtick, true));
                     in_double = false;
                 }
                 _ => word.get_or_insert_with(String::new).push(c),
@@ -462,16 +515,16 @@ fn lex(line: &str) -> Vec<Token> {
             }
             '$' if chars.get(i + 1) == Some(&'(') => {
                 brk!();
-                stack.push((Ctx::Paren, false));
+                stack.push((Nest::Paren, false));
                 i += 1;
             }
             '(' => {
                 brk!();
-                stack.push((Ctx::Paren, false));
+                stack.push((Nest::Paren, false));
             }
             ')' => {
                 brk!();
-                if let Some(pos) = stack.iter().rposition(|(k, _)| *k == Ctx::Paren) {
+                if let Some(pos) = stack.iter().rposition(|(k, _)| *k == Nest::Paren) {
                     let (_, dq) = stack[pos];
                     stack.truncate(pos);
                     in_double = dq;
@@ -480,11 +533,11 @@ fn lex(line: &str) -> Vec<Token> {
             '`' => {
                 brk!();
                 match stack.last() {
-                    Some((Ctx::Backtick, dq)) => {
+                    Some((Nest::Backtick, dq)) => {
                         in_double = *dq;
                         stack.pop();
                     }
-                    _ => stack.push((Ctx::Backtick, false)),
+                    _ => stack.push((Nest::Backtick, false)),
                 }
             }
             '>' | '<' => {
@@ -741,7 +794,8 @@ mod tests {
     fn rule(action: Action, kind: Kind, pattern: &str) -> Rule {
         Rule {
             id: 1,
-            tunnel_id: None,
+            owner: None,
+            owner_name: None,
             action,
             who: Who::Everyone,
             via: Via::All,
@@ -753,8 +807,24 @@ mod tests {
         }
     }
 
+    /// 7 號（這條隧道的 owner）的個人規則。/ A personal rule of user 7, who owns the tunnel.
     fn tunnel_rule(id: i64, action: Action, pattern: &str) -> Rule {
-        Rule { id, tunnel_id: Some(7), ..rule(action, Kind::Command, pattern) }
+        owned(7, id, action, pattern)
+    }
+
+    fn owned(owner: i64, id: i64, action: Action, pattern: &str) -> Rule {
+        Rule { id, owner: Some(owner), ..rule(action, Kind::Command, pattern) }
+    }
+
+    /// 隧道由 7 與 8 管；跑指令的是假想的另一個人。/ Users 7 and 8 manage the tunnel; a hypothetical someone runs it.
+    const MANAGERS: &[i64] = &[7, 8];
+
+    fn ctx(approver: bool, source: Source) -> Ctx<'static> {
+        Ctx { approver, user: None, managers: MANAGERS, source }
+    }
+
+    fn eval<'a>(rules: &'a [Rule], line: &str, approver: bool, source: Source) -> Verdict<'a> {
+        evaluate(rules, &[line.to_string()], &ctx(approver, source))
     }
 
     fn site_rule(id: i64, action: Action, pattern: &str) -> Rule {
@@ -763,11 +833,11 @@ mod tests {
 
     fn hits(pattern: &str, line: &str) -> bool {
         let r = [rule(Action::Block, Kind::Command, pattern)];
-        evaluate(&r, &[line.to_string()], false, Source::Terminal).decision().is_some()
+        eval(&r, line, false, Source::Terminal).decision().is_some()
     }
 
     fn decided(rules: &[Rule], line: &str, approver: bool, source: Source) -> Option<i64> {
-        evaluate(rules, &[line.to_string()], approver, source).decision().map(|r| r.id)
+        eval(rules, line, approver, source).decision().map(|r| r.id)
     }
 
     fn programs(line: &str) -> Vec<String> {
@@ -868,7 +938,7 @@ mod tests {
     fn any_candidate_line_can_match() {
         let r = [rule(Action::Block, Kind::Command, "reboot")];
         let lines = vec!["nat@box:~$ reboot".to_string(), "reboot".to_string()];
-        assert!(evaluate(&r, &lines, false, Source::Terminal).decision().is_some());
+        assert!(evaluate(&r, &lines, &ctx(false, Source::Terminal)).decision().is_some());
     }
 
     // ---------------------------------------------------------------- allow (exception) rules
@@ -878,9 +948,9 @@ mod tests {
         // 全站擋 `rm -rf`，隧道允許 `rm -rf /tmp/build/*`：還是擋（管理員的規則優先）。
         // A tunnel allow never overrides a site-wide block.
         let rules = [site_rule(1, Action::Block, "rm -rf"), tunnel_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
-        let v = evaluate(&rules, &["rm -rf /tmp/build/x".to_string()], false, Source::Terminal);
+        let v = eval(&rules, "rm -rf /tmp/build/x", false, Source::Terminal);
         assert_eq!(v.decision().map(|r| r.id), Some(1));
-        assert_eq!(v.tunnel.allowed_by.map(|r| r.id), Some(2), "the tunnel allow matched, it just has nothing to exempt there");
+        assert_eq!(v.personal.allowed_by.map(|r| r.id), Some(2), "the tunnel allow matched, it just has nothing to exempt there");
         assert!(v.allowed_by().is_none());
 
         // 隧道要核准 `sudo`，全站允許 `sudo systemctl restart myapp`：還是要核准（owner 自己的規則更嚴）。
@@ -890,7 +960,7 @@ mod tests {
 
         // 同範圍：允許豁免擋下，而且說得出是哪一條。/ Same scope: the allow exempts the block, and names itself.
         let rules = [site_rule(1, Action::Block, "rm -rf"), site_rule(2, Action::Allow, "rm -rf /tmp/build/*")];
-        let v = evaluate(&rules, &["rm -rf /tmp/build/x".to_string()], false, Source::Terminal);
+        let v = eval(&rules, "rm -rf /tmp/build/x", false, Source::Terminal);
         assert!(v.decision().is_none());
         assert_eq!(v.allowed_by().map(|r| r.id), Some(2));
         assert_eq!(v.site.hit.map(|r| r.id), Some(1), "the exempted rule is still reported");
@@ -902,7 +972,7 @@ mod tests {
 
         // 兩個範圍各自豁免後再合併：全站被豁免、隧道還要核准 → 要核准。/ After per-scope exemptions the scopes still combine.
         let rules = [site_rule(1, Action::Block, "rm -rf"), site_rule(2, Action::Allow, "rm -rf /tmp/*"), tunnel_rule(3, Action::Approve, "rm")];
-        let v = evaluate(&rules, &["rm -rf /tmp/x".to_string()], false, Source::Terminal);
+        let v = eval(&rules, "rm -rf /tmp/x", false, Source::Terminal);
         assert_eq!(v.decision().map(|r| r.id), Some(3));
         assert!(v.allowed_by().is_none(), "not allowed overall, so no allow is credited");
         assert_eq!(v.site.allowed_by.map(|r| r.id), Some(2));
@@ -928,9 +998,63 @@ mod tests {
     #[test]
     fn allow_rules_alone_do_nothing() {
         let rules = [site_rule(1, Action::Allow, "ls")];
-        let v = evaluate(&rules, &["ls -la".to_string()], false, Source::Terminal);
+        let v = eval(&rules, "ls -la", false, Source::Terminal);
         assert!(v.decision().is_none());
         assert!(v.allowed_by().is_none(), "nothing to exempt from: the allow is not credited");
+    }
+
+    // ---------------------------------------------------------------- personal rules
+
+    #[test]
+    fn personal_rules_count_only_where_their_owner_manages_the_tunnel() {
+        // 9 號不管這條隧道（不是 owner / ADMIN）：他的規則在這裡不算。/ User 9 doesn't manage this tunnel: no effect here.
+        let rules = [owned(9, 1, Action::Block, "reboot")];
+        assert!(decided(&rules, "reboot", false, Source::Terminal).is_none());
+        let rules = [owned(8, 1, Action::Block, "reboot")];
+        assert_eq!(decided(&rules, "reboot", false, Source::Terminal), Some(1));
+        assert_eq!(decided(&rules, "reboot", true, Source::Terminal), Some(1), "everyone = the approvers too");
+    }
+
+    #[test]
+    fn only_me_rules_cover_their_owner_alone() {
+        // 9 號（只是被分享的人）替自己的 agent 加的護欄：只管他，不管別人，也不管他在這裡有沒有管理權。
+        // User 9 (a plain sharee) guards their own agent: it covers them only, whatever their role here.
+        let mut mine = owned(9, 1, Action::Approve, "apt");
+        mine.who = Who::Me;
+        mine.via = Via::Agents;
+        let rules = [mine];
+        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Agent };
+        let as_7 = Ctx { user: Some(7), approver: true, ..as_9 };
+        let v = evaluate(&rules, &["apt install x".to_string()], &as_9);
+        assert_eq!(v.decision().map(|r| r.id), Some(1));
+        assert_eq!(v.decision().map(Rule::record_scope), Some("self"));
+        assert!(evaluate(&rules, &["apt install x".to_string()], &as_7).decision().is_none(), "never someone else's commands");
+        assert!(evaluate(&rules, &["apt install x".to_string()], &Ctx { source: Source::Terminal, ..as_9 }).decision().is_none(), "agents only");
+        assert!(eval(&rules, "apt install x", false, Source::Agent).decision().is_none(), "a hypothetical someone else");
+    }
+
+    #[test]
+    fn an_allow_exempts_only_its_own_owners_rules() {
+        // 7 擋 `rm -rf`，8 允許 `rm -rf /tmp/*`：還是擋（8 的例外管不到 7 的規則）。
+        // 7 blocks `rm -rf`, 8 allows `rm -rf /tmp/*`: still blocked (8's exception can't touch 7's rule).
+        let rules = [owned(7, 1, Action::Block, "rm -rf"), owned(8, 2, Action::Allow, "rm -rf /tmp/*")];
+        assert_eq!(decided(&rules, "rm -rf /tmp/x", false, Source::Terminal), Some(1));
+        // 同一個人的例外照樣豁免。/ The same person's exception still exempts.
+        let rules = [owned(7, 1, Action::Block, "rm -rf"), owned(7, 2, Action::Allow, "rm -rf /tmp/*")];
+        let v = eval(&rules, "rm -rf /tmp/x", false, Source::Terminal);
+        assert!(v.decision().is_none());
+        assert_eq!(v.allowed_by().map(|r| r.id), Some(2));
+        // 「只有我」的允許蓋不過 owner 的擋下。/ An "only me" allow can't lift the owner's block.
+        let mut escape = owned(9, 2, Action::Allow, "rm -rf /tmp/*");
+        escape.who = Who::Me;
+        let rules = [owned(7, 1, Action::Block, "rm -rf"), escape];
+        let as_9 = Ctx { approver: false, user: Some(9), managers: MANAGERS, source: Source::Terminal };
+        assert_eq!(evaluate(&rules, &["rm -rf /tmp/x".to_string()], &as_9).decision().map(|r| r.id), Some(1));
+        // 兩位主人：擋下比要核准嚴。/ Two owners: a block beats an approval.
+        let rules = [owned(7, 1, Action::Approve, "rm"), owned(8, 2, Action::Block, "rm -rf")];
+        let v = eval(&rules, "rm -rf /x", false, Source::Terminal);
+        assert_eq!(v.decision().map(|r| r.id), Some(2));
+        assert_eq!(v.personal.hit.map(|r| r.id), Some(2));
     }
 
     #[test]

@@ -16,6 +16,7 @@ import { useI18n } from "@/lib/i18n";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import type { CommandRequest } from "@/types/commandRules";
 import { CommandText, RequestOrigin } from "./CommandApprovals";
+import { RuleSource } from "./RuleList";
 
 const FILTERS: { value: HistoryFilter; key: "commands.filter.all" | "commands.filter.pending" | "commands.filter.blocked" | "commands.filter.approved" | "commands.filter.notRun" }[] = [
     { value: "all", key: "commands.filter.all" },
@@ -80,7 +81,7 @@ export function CommandHistory({ list, onWithdraw }: { list: CommandRequest[] | 
                                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                                     <Outcome r={r} />
                                     <span className="text-xs text-muted-foreground">
-                                        {t(r.rule.scope === "site" ? "commands.matchedSiteRule" : "commands.matchedTunnelRule")} <code className="font-mono text-foreground">{r.rule.pattern}</code>
+                                        <RuleSource rule={r.rule} /> <code className="font-mono text-foreground">{r.rule.pattern}</code>
                                     </span>
                                 </span>
                                 {r.can_cancel && (

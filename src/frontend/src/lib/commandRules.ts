@@ -4,17 +4,81 @@
  * status labels and the history filter.
  */
 import type { TranslationKey } from "../locales/en.ts";
-import type { CheckResult, CheckVerdict, CommandRequest, CommandRule, MatchedRule, RequestStatus, RuleAction, RuleInput, RuleScope, RuleVia, RuleWho, ScopeVerdict, TerminalCommandNotice } from "../types/commandRules.ts";
+import type { CheckResult, CheckVerdict, CommandRequest, CommandRule, MatchedRule, RequestStatus, RuleAction, RuleInput, RuleScope, RuleVia, RuleWho, ScopeVerdict, TerminalCommandNotice, TunnelChoice } from "../types/commandRules.ts";
 
-export const DEFAULT_RULE: RuleInput = { action: "block", kind: "command", pattern: "", who: "everyone", via: "all", note: "", enabled: true, approver_ids: [] };
+export const DEFAULT_RULE: RuleInput = { action: "block", kind: "command", pattern: "", who: "everyone", via: "all", note: "", enabled: true, approver_ids: [], all_tunnels: true, tunnel_ids: [] };
+
+/** 新規則的起點：選了一條隧道就先只套用它。/ A new rule's starting point: limited to the tunnel on screen, if any. */
+export function newRuleInput(tunnelId: number | null): RuleInput {
+    return tunnelId ? { ...DEFAULT_RULE, all_tunnels: false, tunnel_ids: [tunnelId] } : DEFAULT_RULE;
+}
 
 export function ruleToInput(r: CommandRule): RuleInput {
-    return { action: r.action, kind: r.kind, pattern: r.pattern, who: r.who, via: r.via, note: r.note, enabled: r.enabled, approver_ids: r.approver_ids ?? [] };
+    return {
+        action: r.action,
+        kind: r.kind,
+        pattern: r.pattern,
+        who: r.who,
+        via: r.via,
+        note: r.note,
+        enabled: r.enabled,
+        approver_ids: r.approver_ids ?? [],
+        all_tunnels: r.all_tunnels ?? true,
+        tunnel_ids: (r.tunnels ?? []).map((x) => x.id),
+    };
+}
+
+/**
+ * 表單裡這條隧道能不能勾：全站規則與「只有我」= 都可以；管別人的個人規則 = 我是 owner / Admin 的才行（已經在規則裡的照樣
+ * 留著，才拿得掉）。
+ * Whether a tunnel can be ticked in the form: site rules and "only me" = any; a personal rule about other people =
+ * only tunnels I own or administer (ones already on the rule stay tickable so they can be removed).
+ */
+export function tunnelPickable(t: TunnelChoice, who: RuleWho, site: boolean, already: boolean): boolean {
+    return site || who === "me" || already || t.manage !== false;
+}
+
+/** 表單送出前：管別人的規則勾了不能管的隧道就拿掉（換成「管別人」時）。/ Drop unmanaged tunnels when the rule is about other people. */
+export function pickableIds(ids: number[], tunnels: TunnelChoice[], who: RuleWho, site: boolean, kept: number[]): number[] {
+    const byId = new Map(tunnels.map((t) => [t.id, t]));
+    return ids.filter((id) => {
+        const t = byId.get(id);
+        return t ? tunnelPickable(t, who, site, kept.includes(id)) : kept.includes(id);
+    });
+}
+
+/** 規則套用範圍的說法：所有隧道（哪一種）或列出的幾條。/ How a rule's reach reads: every tunnel (which kind) or the listed ones. */
+export type Coverage =
+    | { kind: "every"; whose: "site" | "managed" | "used" | "theirs" }
+    | { kind: "some"; tunnels: { id: number; name: string; applies: boolean }[]; hidden: number };
+
+export function ruleCoverage(r: CommandRule): Coverage {
+    if (r.all_tunnels) {
+        const whose = r.scope === "site" ? "site" : !r.mine ? "theirs" : r.who === "me" ? "used" : "managed";
+        return { kind: "every", whose };
+    }
+    return { kind: "some", tunnels: (r.tunnels ?? []).map((x) => ({ id: x.id, name: x.name, applies: x.applies !== false })), hidden: r.hidden_tunnels ?? 0 };
+}
+
+/** 這條規則會不會套用到這條隧道（給「這條隧道上」的篩選）。/ Whether a rule covers a tunnel (for the per-tunnel filter). */
+export function coversTunnel(r: CommandRule, tunnelId: number): boolean {
+    return r.all_tunnels || (r.tunnels ?? []).some((x) => x.id === tunnelId);
+}
+
+/**
+ * 比對到的規則是誰的：全站、我自己的（含「只有我」）、某人的，或說不出是誰的個人規則（舊紀錄）。
+ * Whose rule matched: site-wide, mine (incl. "only me"), someone else's, or a personal rule of unknown author (old records).
+ */
+export function ruleSource(rule: Pick<MatchedRule, "scope" | "owner">, me: number | undefined): { key: TranslationKey; name?: string } {
+    if (rule.scope === "site") return { key: "commands.matchedSiteRule" };
+    if (rule.scope === "self" || (rule.owner && rule.owner.id === me)) return { key: "commands.matchedOwnRule" };
+    if (rule.owner?.username) return { key: "commands.matchedRuleBy", name: rule.owner.username };
+    return { key: "commands.matchedPersonalRule" };
 }
 
 export const ACTION_KEY: Record<RuleAction, TranslationKey> = { block: "commands.action.block", approve: "commands.action.approve", allow: "commands.action.allow" };
 export const ACTION_TONE: Record<RuleAction, Tone> = { block: "danger", approve: "warning", allow: "success" };
-export const WHO_KEY: Record<RuleWho, TranslationKey> = { everyone: "commands.who.everyone", sharees: "commands.who.sharees" };
+export const WHO_KEY: Record<RuleWho, TranslationKey> = { everyone: "commands.who.everyone", sharees: "commands.who.sharees", me: "commands.who.me" };
 export const VIA_KEY: Record<RuleVia, TranslationKey> = { all: "commands.via.all", terminal: "commands.via.terminal", agents: "commands.via.agents" };
 
 export const STATUS_KEY: Record<RequestStatus, TranslationKey> = {
@@ -200,7 +264,7 @@ export type Outcome = "allow" | "block" | "approve";
 export interface DecisionPath {
     outcome: Outcome;
     site: ScopeStep;
-    tunnel: ScopeStep;
+    personal: ScopeStep;
     /** 決定的那條規則在哪個範圍（放行 = null）。/ Which scope's rule decided (null when allowed). */
     decidedBy: RuleScope | null;
     /** 決定的規則 / 豁免的允許規則。/ The deciding rule / the allow that exempted. */
@@ -219,24 +283,31 @@ function scopeStep(v: ScopeVerdict | undefined, counts: boolean): ScopeStep {
     return v.allowed_by ? "allowOnly" : "none";
 }
 
+/** 紀錄 / 通知裡的範圍 → 圖上的兩格（self 與升級前的 tunnel 都算個人）。/ A record scope → one of the two boxes. */
+export function boxOf(scope: MatchedRule["scope"] | undefined): RuleScope | null {
+    if (!scope) return null;
+    return scope === "site" ? "site" : "personal";
+}
+
 /**
  * 從 `/api/command-rules/check` 的一個結果算出圖上要亮的路：每個範圍怎麼了、哪個範圍的規則決定了結果、誰核准。
- * 舊格式（沒有 site / tunnel）就只亮決定的那個範圍。
+ * 舊格式（沒有 site / personal）就只亮決定的那個範圍。
  * The highlighted path from one check verdict: what each scope did, which scope's rule decided, who approves. An
- * older verdict (without site / tunnel) lights only the deciding scope.
+ * older verdict (without site / personal) lights only the deciding scope.
  */
 export function decisionPath(v: CheckVerdict): DecisionPath {
     const outcome: Outcome = v.action === "block" || v.action === "approve" ? v.action : "allow";
-    const decidedBy = outcome === "allow" ? null : (v.rule?.scope ?? null);
+    const decidedBy = outcome === "allow" ? null : boxOf(v.rule?.scope);
+    const personalVerdict = v.personal ?? v.tunnel;
     let site: ScopeStep;
-    let tunnel: ScopeStep;
-    if (v.site || v.tunnel) {
+    let personal: ScopeStep;
+    if (v.site || personalVerdict) {
         site = scopeStep(v.site, decidedBy === "site");
-        tunnel = scopeStep(v.tunnel, decidedBy === "tunnel");
+        personal = scopeStep(personalVerdict, decidedBy === "personal");
     } else {
         const caught: ScopeStep = outcome === "allow" ? "none" : outcome;
         site = decidedBy === "site" ? caught : "none";
-        tunnel = decidedBy === "tunnel" ? caught : "none";
+        personal = decidedBy === "personal" ? caught : "none";
     }
     const approvers = outcome === "approve" ? { byDefault: v.approvers?.default ?? true, names: (v.approvers?.users ?? []).map((u) => u.username) } : null;
     const scopeRefs = (scope: RuleScope, sv: ScopeVerdict | undefined) => ({
@@ -246,12 +317,12 @@ export function decisionPath(v: CheckVerdict): DecisionPath {
     return {
         outcome,
         site,
-        tunnel,
+        personal,
         decidedBy,
         rule: v.rule ?? null,
         allowedBy: v.allowed_by ?? null,
         approvers,
-        scopes: { site: scopeRefs("site", v.site), tunnel: scopeRefs("tunnel", v.tunnel) },
+        scopes: { site: scopeRefs("site", v.site), personal: scopeRefs("personal", personalVerdict) },
     };
 }
 
