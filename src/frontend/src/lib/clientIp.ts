@@ -85,6 +85,16 @@ export function parseClientIpCheck(raw: unknown): ClientIpCheck | null {
 
 export const isPublicScope = (scope: string | null | undefined) => scope === "public";
 
+/**
+ * CDN 自己設定的來源標頭。一個都沒收到 = 這個請求沒經過 CDN（例如 Cloudflare 的記錄是「僅 DNS」灰雲），這時設
+ * CLIENT_IP_HEADER 只會讓訪客能自己寫位址。
+ * Headers a CDN sets itself. None of them arriving means the request did not pass a CDN (a Cloudflare record set
+ * to DNS only, say), and CLIENT_IP_HEADER would then only let visitors write their own address.
+ */
+export const CDN_HEADERS = ["cf-connecting-ip", "true-client-ip", "fastly-client-ip"];
+
+export const viaCdn = (c: ClientIpCheck) => c.headers.some((h) => CDN_HEADERS.includes(h.name.toLowerCase()));
+
 /** 一站的狀態：選中的那段 = 公網綠、內部紅；其他站中性。/ A stop's state on the diagram. */
 export function hopState(hop: ChainHop): SpotState {
     if (hop.role !== "client") return "waiting";

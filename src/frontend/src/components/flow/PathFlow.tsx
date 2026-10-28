@@ -75,19 +75,21 @@ interface FlowNodeProps {
     control?: React.ReactNode;
     /** 橫排時佔兩份寬（放控制項的節點）。/ Twice the width in the row (nodes with controls). */
     wide?: boolean;
+    /** 一列的矮節點（圖示在左、標題與狀態同一行）：一長串節點直排時用。/ A short row node, for long vertical paths. */
+    compact?: boolean;
     className?: string;
 }
 
-export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText, control, wide = false, className }: FlowNodeProps) {
+export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText, control, wide = false, compact = false, className }: FlowNodeProps) {
     const Icon = icon;
     const tile = (size: string, iconSize: number) => (
         <span className={cn("grid shrink-0 place-items-center rounded-lg", size, brand ? "bg-brand-gradient text-white" : "bg-muted text-foreground")} aria-hidden>
             {brand ? <TelepyGlyph size={iconSize + 2} /> : Icon ? <Icon size={iconSize} /> : null}
         </span>
     );
-    if (control) {
+    if (control || compact) {
         return (
-            <li className={cn("flex min-w-0 flex-col gap-2.5 rounded-xl border bg-card p-3 @3xl:basis-0", wide ? "@3xl:flex-[2_1_0%]" : "@3xl:flex-1", NODE_BORDER[state], className)}>
+            <li className={cn("flex min-w-0 flex-col gap-2.5 rounded-xl border bg-card @3xl:basis-0", compact ? "px-3 py-2" : "p-3", wide ? "@3xl:flex-[2_1_0%]" : "@3xl:flex-1", NODE_BORDER[state], className)}>
                 <div className="flex items-start gap-2.5">
                     {tile("size-8", 16)}
                     <div className="min-w-0 flex-1">
@@ -98,7 +100,7 @@ export function FlowNode({ icon, brand, title, sub, state = "waiting", stateText
                         {sub && <span className="block text-xs leading-snug text-muted-foreground">{sub}</span>}
                     </div>
                 </div>
-                <div className="min-w-0">{control}</div>
+                {control && <div className="min-w-0">{control}</div>}
             </li>
         );
     }
@@ -119,17 +121,19 @@ interface FlowLinkProps {
     note?: string;
     /** 這段是最慢的。/ This hop is the slow one. */
     slow?: boolean;
+    /** 直排時線短一點（配 compact 節點）。/ A shorter vertical line, to go with compact nodes. */
+    compact?: boolean;
     className?: string;
 }
 
 /** 兩節點之間的直線：待命 = 短虛線、進行中 / 通了 = 流動的虛線、失敗 = 點線。/ The straight link between two nodes. */
-export function FlowLink({ label, state = "waiting", note, slow, className }: FlowLinkProps) {
+export function FlowLink({ label, state = "waiting", note, slow, compact = false, className }: FlowLinkProps) {
     const motion = !useReducedMotion();
     const animate = motion && (state === "active" || state === "ok");
     const dash = state === "waiting" ? "4 5" : state === "failed" ? "2 6" : "7 5";
     const line = (vertical: boolean) => (
         <svg
-            className={cn(vertical ? "h-10 w-3 @3xl:hidden" : "hidden h-3 w-full @3xl:block", STATE_TONE[state])}
+            className={cn(vertical ? cn(compact ? "h-6" : "h-10", "w-3 @3xl:hidden") : "hidden h-3 w-full @3xl:block", STATE_TONE[state])}
             viewBox={vertical ? "0 0 6 100" : "0 0 100 6"}
             preserveAspectRatio="none"
             aria-hidden
