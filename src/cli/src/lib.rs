@@ -550,7 +550,7 @@ fn login(a: LoginArgs, global_token: Option<&str>) -> Result<()> {
         Some(paint) => {
             // 十字髮夾用帳號選的顏色（「每天換一個」照 UTC 日期）。/ The clips wear the account's colour.
             let clip = mascot::clip_color(mascot::clip_name(s(&me, "tapi_color"), mascot::unix_day()));
-            for line in tapi::beside(&mascot::render_with(mascot::WAVE, paint, clip), &[&msg]) {
+            for line in tapi::beside(&mascot::render_with(mascot::WAVE, paint, clip), &[&msg], tapi::columns(tapi::Out::Stderr)) {
                 eprintln!("{line}");
             }
         }
@@ -1406,7 +1406,7 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
         if let Some(paint) = tapi::paint_for(&std::io::stdout()) {
             println!();
             let clip = mascot::clip_color(mascot::clip_name(&tapi_color, mascot::unix_day()));
-            for line in tapi::beside(&mascot::render_with(mascot::HAPPY, paint, clip), &["Everything looks good."]) {
+            for line in tapi::beside(&mascot::render_with(mascot::HAPPY, paint, clip), &["Everything looks good."], tapi::columns(tapi::Out::Stdout)) {
                 println!("{line}");
             }
         }

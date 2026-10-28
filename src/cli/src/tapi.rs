@@ -29,25 +29,106 @@ pub fn paint_for(stream: &impl IsTerminal) -> Option<Paint> {
     choose(stream.is_terminal(), false, |k| std::env::var(k).ok())
 }
 
-/// 圖在左、文字放在圖中間幾列的右邊。/ Art on the left, the text beside its middle rows.
-pub fn beside(art: &[String], text: &[&str]) -> Vec<String> {
+/// 寫到哪條輸出（量它的終端機寬度）。/ Which stream is written to (whose terminal width counts).
+#[derive(Clone, Copy, Debug)]
+pub enum Out {
+    Stdout,
+    Stderr,
+}
+
+/// 這條輸出的終端機有幾欄；不是終端機或量不到時是 `None`。/ The width of this stream's terminal; `None` when it is not one.
+pub fn columns(out: Out) -> Option<usize> {
+    let size = match out {
+        Out::Stdout => terminal_size::terminal_size_of(std::io::stdout()),
+        Out::Stderr => terminal_size::terminal_size_of(std::io::stderr()),
+    };
+    size.map(|(w, _)| usize::from(w.0)).filter(|&w| w > 0)
+}
+
+/// 圖和文字之間的空白。/ The gap between the art and the text.
+const GAP: usize = 2;
+/// 圖旁邊至少要留這麼寬給文字，不然文字改放到圖下面。/ The narrowest text column beside the art; narrower = text below it.
+const MIN_TEXT: usize = 24;
+
+/// 圖在左、文字放在圖中間幾列的右邊。給了終端機寬度（`cols`）就先把文字折到剩下的寬度：終端機自己換行時，折下去的字
+/// 會從下一列最左邊開始、把圖往下推，臉就被切開了。圖旁邊太窄時文字放到圖下面，連圖都放不下就只印文字。
+/// Art on the left, the text beside its middle rows. With the terminal's width (`cols`) the text is wrapped to the
+/// room left first: when the terminal wraps a line itself, the rest starts at column 0 of the next row and pushes the
+/// art down through the face. Too little room beside the art puts the text below it; no room for the art = text only.
+pub fn beside(art: &[String], text: &[&str], cols: Option<usize>) -> Vec<String> {
     let w = art.first().map(|l| visible_width(l)).unwrap_or(0);
+    let Some(cols) = cols else {
+        return place(art, w, &text.iter().map(|t| t.to_string()).collect::<Vec<_>>());
+    };
+    // 最後一欄不寫：有的終端機（舊的 Windows 主控台）寫滿就先換行，多出一列空白。
+    // The last column stays empty: some terminals (the legacy Windows console) wrap as soon as it is written.
+    let usable = cols.saturating_sub(1).max(1);
+    if usable >= w + GAP + MIN_TEXT {
+        return place(art, w, &wrap(text, usable - w - GAP));
+    }
+    let below = wrap(text, usable);
+    if usable < w {
+        return below;
+    }
+    art.iter().cloned().chain(below).collect()
+}
+
+fn place(art: &[String], w: usize, text: &[String]) -> Vec<String> {
     let rows = art.len().max(text.len());
     let start = (rows - text.len()) / 2;
     (0..rows)
         .map(|i| {
             let left = art.get(i).cloned().unwrap_or_else(|| " ".repeat(w));
             match i.checked_sub(start).and_then(|j| text.get(j)) {
-                Some(t) => format!("{left}  {t}"),
+                Some(t) => format!("{left}{}{t}", " ".repeat(GAP)),
                 None => left,
             }
         })
         .collect()
 }
 
-/// 去掉 ANSI 跳脫碼後的欄數（半格字元算一欄）。/ Columns after stripping ANSI escapes (a half block is one column).
+/// 把每行文字在空白處折到 `width` 欄以內；比整行還長的字（網址）硬切。文字不含跳脫碼。
+/// Wrap each line at spaces to at most `width` columns; a word longer than a whole line (a URL) is cut. Plain text only.
+pub fn wrap(text: &[&str], width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for line in text {
+        let mut cur = String::new();
+        let mut cur_w = 0;
+        for word in line.split_whitespace() {
+            let word_w = visible_width(word);
+            if cur_w > 0 && cur_w + 1 + word_w <= width {
+                cur.push(' ');
+                cur.push_str(word);
+                cur_w += 1 + word_w;
+                continue;
+            }
+            if cur_w > 0 {
+                out.push(std::mem::take(&mut cur));
+                cur_w = 0;
+            }
+            for c in word.chars() {
+                let c_w = char_width(c);
+                if cur_w > 0 && cur_w + c_w > width {
+                    out.push(std::mem::take(&mut cur));
+                    cur_w = 0;
+                }
+                cur.push(c);
+                cur_w += c_w;
+            }
+        }
+        out.push(cur);
+    }
+    out
+}
+
+fn char_width(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+/// 去掉 ANSI 跳脫碼後的欄數（半格字元一欄、中日文兩欄）。/ Columns after stripping ANSI escapes (a half block is one, CJK two).
 pub fn visible_width(s: &str) -> usize {
-    strip_ansi(s).chars().count()
+    strip_ansi(s).chars().map(char_width).sum()
 }
 
 pub fn strip_ansi(s: &str) -> String {
@@ -263,13 +344,21 @@ pub fn frames(paint: Paint) -> Vec<Vec<String>> {
     out
 }
 
+/// 終端機放不下整個場景時不播動畫：折行後往上移 [`height`] 列會移錯地方，畫面全亂。
+/// No animation when the terminal is narrower than the scene: wrapped lines make the [`height`]-row move-up land in the wrong place.
+pub fn animates(cols: Option<usize>) -> bool {
+    cols.is_none_or(|c| c > W)
+}
+
 /// `telepy dig`：終端機裡播動畫（原地重畫，不藏游標），否則印靜態的 Tapi 和說明。
 /// `telepy dig`: animate in place in a terminal (the cursor stays visible), else print a still Tapi and the text.
 pub fn dig() -> std::io::Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    let Some(paint) = choose(std::io::stdout().is_terminal(), true, |k| std::env::var(k).ok()) else {
-        for line in beside(&mascot::render(mascot::WAVE, Paint::Mono), &EXPLAIN) {
+    let cols = columns(Out::Stdout);
+    let paint = choose(std::io::stdout().is_terminal(), true, |k| std::env::var(k).ok());
+    let Some(paint) = paint.filter(|_| animates(cols)) else {
+        for line in beside(&mascot::render(mascot::WAVE, paint.unwrap_or(Paint::Mono)), &EXPLAIN, cols) {
             writeln!(out, "{line}")?;
         }
         return Ok(());
@@ -315,7 +404,7 @@ mod tests {
     #[test]
     fn text_sits_beside_the_middle_rows() {
         let art = mascot::render(mascot::WAVE, Paint::Mono);
-        let lines = beside(&art, &["Signed in"]);
+        let lines = beside(&art, &["Signed in"], None);
         assert_eq!(lines.len(), art.len());
         let mid = (art.len() - 1) / 2;
         assert!(lines[mid].ends_with("  Signed in") && lines[mid].starts_with(&art[mid]), "{lines:?}");
@@ -323,9 +412,81 @@ mod tests {
         // 文字比圖長時，多出來的行前面補空白。/ Text longer than the art is padded on the left.
         let many: Vec<String> = (0..art.len() + 2).map(|i| format!("l{i}")).collect();
         let refs: Vec<&str> = many.iter().map(String::as_str).collect();
-        let lines = beside(&art, &refs);
+        let lines = beside(&art, &refs, None);
         assert_eq!(lines.len(), art.len() + 2);
         assert!(lines.iter().all(|l| visible_width(l) >= mascot::width(mascot::WAVE)));
+    }
+
+    const LOGIN: &str = "Signed in to https://telepy.example.com as alice (credentials in the system keyring).";
+
+    /// 終端機的樣子：每列不超過 `cols`、超過就照終端機的方式折（看折完後圖還在不在原位）。
+    /// What a terminal shows: rows of at most `cols`, longer lines wrapped the way a terminal does.
+    fn on_screen(lines: &[String], cols: usize) -> Vec<String> {
+        let mut rows = Vec::new();
+        for line in lines {
+            let plain: Vec<char> = strip_ansi(line).chars().collect();
+            for chunk in plain.chunks(cols) {
+                rows.push(chunk.iter().collect());
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn long_text_is_wrapped_beside_the_art_so_the_face_stays_whole() {
+        let art = mascot::render(mascot::WAVE, Paint::Mono);
+        let w = mascot::width(mascot::WAVE);
+        for cols in [80, 100, 60] {
+            let lines = beside(&art, &[LOGIN], Some(cols));
+            assert!(lines.iter().all(|l| visible_width(l) < cols), "{cols}: {lines:#?}");
+            // 每一列的左邊就是圖的那一列（沒有被折下來的字插進去）。/ Every row starts with its own art row.
+            let screen = on_screen(&lines, cols);
+            assert_eq!(screen.len(), art.len(), "{cols}: {screen:#?}");
+            for (row, a) in screen.iter().zip(&art) {
+                assert!(row.starts_with(a.as_str()), "{cols}: {screen:#?}");
+            }
+            // 字一個都沒少、順序不變。/ No word lost, same order.
+            let text: Vec<String> = lines.iter().map(|l| strip_ansi(l).chars().skip(w).collect::<String>().trim().to_string()).filter(|t| !t.is_empty()).collect();
+            assert_eq!(text.join(" "), LOGIN, "{cols}");
+        }
+        // 夠寬就跟以前一樣一行。/ Wide enough: one line, as before.
+        assert_eq!(beside(&art, &[LOGIN], Some(200)), beside(&art, &[LOGIN], None));
+    }
+
+    #[test]
+    fn narrow_terminals_put_the_text_below_or_drop_the_art() {
+        let art = mascot::render(mascot::HAPPY, Paint::Ansi256);
+        let w = mascot::width(mascot::HAPPY);
+        // 圖旁邊放不下：圖完整、文字在下面。/ No room beside: the whole art, the text under it.
+        let cols = w + GAP + MIN_TEXT;
+        let lines = beside(&art, &[LOGIN], Some(cols));
+        assert_eq!(&lines[..art.len()], &art[..]);
+        assert_eq!(lines[art.len()..].join(" "), LOGIN);
+        assert!(lines.iter().all(|l| visible_width(l) < cols), "{lines:#?}");
+        // 連圖都放不下：只有文字。/ Not even the art fits: text only.
+        let lines = beside(&art, &[LOGIN], Some(w));
+        assert!(lines.iter().all(|l| !l.contains('\x1b') && visible_width(l) < w), "{lines:#?}");
+        // 網址比一列還長，被切開。/ The URL is longer than a row, so it is cut.
+        assert_eq!(lines.concat().replace(' ', ""), LOGIN.replace(' ', ""));
+    }
+
+    #[test]
+    fn wrapping_cuts_only_words_longer_than_a_line_and_counts_wide_characters() {
+        assert_eq!(wrap(&["one two three"], 7), ["one two", "three"]);
+        assert_eq!(wrap(&["see https://telepy.example.com/x"], 10), ["see", "https://te", "lepy.examp", "le.com/x"]);
+        assert_eq!(wrap(&["", "a"], 5), ["", "a"]);
+        // 中日文一字兩欄。/ CJK takes two columns a character.
+        assert_eq!(visible_width("登入成功"), 8);
+        assert_eq!(wrap(&["已登入 Telepy 伺服器"], 12), ["已登入", "Telepy", "伺服器"]);
+        assert_eq!(wrap(&["一二三四五六七"], 6), ["一二三", "四五六", "七"]);
+    }
+
+    #[test]
+    fn dig_animates_only_when_the_scene_fits() {
+        assert!(animates(None));
+        assert!(animates(Some(W + 1)));
+        assert!(!animates(Some(W)));
+        assert!(!animates(Some(40)));
     }
 
     #[test]
