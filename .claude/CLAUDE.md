@@ -75,7 +75,7 @@ docker compose up -d --build frontend
 ### CLI wrapper (`telepy.sh` / `telepy.ps1`)
 
 ```bash
-./telepy.sh keygen            # Generate gateway host keys + backend service key
+./telepy.sh keygen            # Generate gateway host keys + backend service key (existing keys are kept; .sh and .ps1 alike)
 ./telepy.sh create-superuser  # Create an admin account (first user is a superuser anyway)
 ./telepy.sh shell             # Shell into the backend container
 ./telepy.sh migration         # Reconcile the DB schema (runs automatically on start)
@@ -118,7 +118,7 @@ Copy `.env.example` to `.env` and configure:
 - `SERVER_DOMAIN` — server hostname (default: `localhost`)
 - `INTERNAL_API_TOKEN` — secret for backend → kasm-browser session-manager calls
 - `TRUSTED_PROXY_HOPS` — trusted reverse proxies in front of the backend, Traefik included (default `1`; `2` with an upstream TLS proxy / LB); `CLIENT_IP_HEADER` — optional header to take the client IP from (e.g. `CF-Connecting-IP`)
-- `GEOIP_DIR` — offline GeoIP databases (default `<DATA_DIR>/geoip`; `./telepy.sh geoip` fills it)
+- `GEOIP_DIR` / `OUI_DIR` — offline GeoIP databases / IEEE vendor list, container paths (default `<DATA_DIR>/geoip` / `<DATA_DIR>/oui`; compose passes both, empty = default; `./telepy.sh geoip` / `oui` fill the matching `./telepy-data` folder and refuse a path outside `/data`)
 - `GATEWAY_PROXY_PROTOCOL_FROM` — IPs / CIDRs of an L4 proxy in front of the gateway that sends a PROXY protocol header (empty = off)
 
 ## Architecture Notes

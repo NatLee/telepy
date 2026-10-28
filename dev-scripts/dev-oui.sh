@@ -6,7 +6,7 @@
 
 source "$(dirname "$0")/common.sh"
 
-DEST=./telepy-data/oui
+DEST=$(data_host_dir OUI_DIR /data/oui) || exit 1
 URL=https://standards-oui.ieee.org/oui/oui.csv
 mkdir -p "$DEST"
 tmp="$DEST/.oui.csv.tmp"

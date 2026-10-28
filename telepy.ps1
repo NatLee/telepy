@@ -27,7 +27,7 @@ $Colors = @{
 
 # Get environment variables
 $PROJECT_NAME = $env:PROJECT_NAME
-if (-not $PROJECT_NAME) { $PROJECT_NAME = "default" }
+if (-not $PROJECT_NAME) { $PROJECT_NAME = "main" }  # same default as .env.example / docker-compose.yml
 
 # Constant: container names for Telepy
 $CONTAINER_WEB_NAME = "telepy-web-$PROJECT_NAME"
@@ -107,7 +107,7 @@ switch ($Command) {
     default {
         Write-ColorMessage $Colors.Yellow "Usage: .\telepy.ps1 <sub-command> [args]"
         Write-ColorMessage $Colors.Blue "Sub-commands:"
-        Write-ColorMessage $Colors.Green "  keygen: Generate the SSH gateway host keys and the backend service key (run once before the first start; devices pin the host keys)."
+        Write-ColorMessage $Colors.Green "  keygen: Generate the SSH gateway host keys and the backend service key (keys that already exist are kept: devices pin them)."
         Write-ColorMessage $Colors.Green "  create-superuser: Create an admin account for Telepy management (the first account to sign up is an admin anyway)."
         Write-ColorMessage $Colors.Green "  shell: Open a shell in the backend container."
         Write-ColorMessage $Colors.Green "  migration: Reconcile the database schema (also runs automatically on start)."

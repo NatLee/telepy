@@ -14,7 +14,7 @@ services:
     # The v3.0.x era shipped several WebSocket fixes; pin current stable and pair with
     # readTimeout: 0 in traefik.yml (the v3 default of 60s kills long-lived connections).
     image: traefik:v3.7.6
-    container_name: telepy-traefik-${PROJECT_NAME}
+    container_name: telepy-traefik-${PROJECT_NAME:-main}
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
@@ -25,7 +25,7 @@ services:
 
   frontend:
     <<: [ *common-networks, *common-restart ]
-    container_name: telepy-nextjs-${PROJECT_NAME}
+    container_name: telepy-nextjs-${PROJECT_NAME:-main}
     build:
       context: ./src/frontend
       dockerfile: Dockerfile
@@ -45,8 +45,8 @@ services:
       context: ./src/backend-api
       dockerfile: Dockerfile
     image: telepy-server
-    hostname: telepy-web-${PROJECT_NAME}
-    container_name: telepy-web-${PROJECT_NAME}
+    hostname: telepy-web-${PROJECT_NAME:-main}
+    container_name: telepy-web-${PROJECT_NAME:-main}
     environment:
       - DEBUG=${DEBUG}
       - LOG_LEVEL=${LOG_LEVEL:-}
@@ -85,6 +85,11 @@ services:
       - DEVICE_PROBE=${DEVICE_PROBE:-true}
       # 共用服務金鑰留在裝置上（另一台 Telepy 還用它登入時，例如並行的舊站）。/ Keep the shared service key on devices.
       - KEEP_SHARED_SERVICE_KEY=${KEEP_SHARED_SERVICE_KEY:-false}
+      # 離線 IP 地理資料庫 / 網卡廠商表放在容器裡的哪裡（空 = /data/geoip、/data/oui，./telepy.sh geoip / oui 會填）。
+      # Where the backend reads the IP geolocation databases / NIC vendor list (container paths; empty = /data/geoip,
+      # /data/oui, which ./telepy.sh geoip / oui fill).
+      - GEOIP_DIR=${GEOIP_DIR:-}
+      - OUI_DIR=${OUI_DIR:-}
     volumes:
       # Mutable data (SQLite db)
       - ./telepy-data:/data
@@ -136,8 +141,8 @@ services:
         KASMVNC_PASSWORD: ${KASM_WS_PASSWORD:-telepyvnc}
         # KasmVNC 版本可覆寫:KASMVNC_VERSION: "1.4.0"
     image: telepy-kasm-browser:latest
-    container_name: telepy-kasm-browser-${PROJECT_NAME}
-    hostname: telepy-kasm-browser-${PROJECT_NAME}
+    container_name: telepy-kasm-browser-${PROJECT_NAME:-main}
+    hostname: telepy-kasm-browser-${PROJECT_NAME:-main}
     shm_size: "2gb"                 # chromium 需要較大的 /dev/shm
     environment:
       # session-manager 用此 token 驗證只有 backend 能起/停 session(與 backend 同一把)。
@@ -157,7 +162,7 @@ services:
   guacd:
     <<: *common-restart
     image: guacamole/guacd:1.6.0
-    container_name: telepy-guacd-${PROJECT_NAME}
+    container_name: telepy-guacd-${PROJECT_NAME:-main}
     environment:
       - GUACD_LOG_LEVEL=${GUACD_LOG_LEVEL:-info}
     networks:
@@ -165,7 +170,7 @@ services:
 
 networks:
   telepy-network:
-    name: telepy-network-${PROJECT_NAME}
+    name: telepy-network-${PROJECT_NAME:-main}
   telepy-desktop:
-    name: telepy-desktop-${PROJECT_NAME}
+    name: telepy-desktop-${PROJECT_NAME:-main}
     internal: true

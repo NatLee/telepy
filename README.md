@@ -128,7 +128,7 @@ Requires Docker with the Compose plugin.
    cp .env.example .env
    ```
 
-2. Generate the gateway's host keys and the service key (once — devices pin the host keys):
+2. Generate the gateway's host keys and the service key (re-running keeps existing keys — devices pin them):
 
    ```bash
    ./telepy.sh keygen
@@ -179,6 +179,7 @@ Environment variables in `.env` (see [`.env.example`](./.env.example) for the fu
 | `GATEWAY_PROXY_PROTOCOL_FROM` | —           | IPs / CIDRs of an L4 proxy in front of the gateway that sends PROXY protocol |
 | `DEVICE_PROBE`                | `true`      | Daily read-only login for each device's addresses and facts                 |
 | `KEEP_SHARED_SERVICE_KEY`     | `false`     | Never remove the old shared service key from devices (for a parallel move)  |
+| `GEOIP_DIR` / `OUI_DIR`       | `/data/geoip` / `/data/oui` | Where the backend reads the IP geolocation databases and the NIC vendor list (paths inside the container; `./telepy.sh geoip` / `oui` fill them) |
 | `OPENAPI_ENABLED`             | `true`      | Swagger UI and the OpenAPI document (signed-in users only)                  |
 
 Everything else — registration, sign-in lifetimes and two-factor requirements, remote browser and desktop limits,
@@ -216,7 +217,7 @@ the permissions and tunnels; the **MCP** page has the setup for each client. Det
 
 | Sub-command        | What it does                                                                     |
 | ------------------ | -------------------------------------------------------------------------------- |
-| `keygen`           | Generate the gateway host keys and the backend service key (once)                |
+| `keygen`           | Generate the gateway host keys and the backend service key (keeps existing ones) |
 | `create-superuser` | Create an administrator account                                                   |
 | `doctor`           | Check `.env`, containers, ports and the backend's configuration (exit 1 on a problem) |
 | `geoip`            | Download offline IP geolocation (DB-IP Lite); re-run monthly                     |

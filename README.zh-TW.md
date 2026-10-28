@@ -119,7 +119,7 @@ Telepy 由五個容器組成：
    cp .env.example .env
    ```
 
-2. 產生 gateway 的主機金鑰與服務金鑰（只做一次——裝置會釘選主機金鑰）：
+2. 產生 gateway 的主機金鑰與服務金鑰（重跑會保留已有的金鑰——裝置會釘選它們）：
 
    ```bash
    ./telepy.sh keygen
@@ -169,6 +169,7 @@ Telepy 由五個容器組成：
 | `GATEWAY_PROXY_PROTOCOL_FROM` | —           | gateway 前方送 PROXY protocol 的 L4 代理 IP / CIDR                        |
 | `DEVICE_PROBE`                | `true`      | 每天以唯讀方式登入裝置一次，讀位址與裝置資訊                             |
 | `KEEP_SHARED_SERVICE_KEY`     | `false`     | 永不從裝置移除舊的共用服務金鑰（新舊站並行搬遷時用）                     |
+| `GEOIP_DIR` / `OUI_DIR`       | `/data/geoip` / `/data/oui` | 後端讀離線 IP 地理資料庫與網卡廠牌表的位置（容器內路徑；`./telepy.sh geoip` / `oui` 會下載到這裡） |
 | `OPENAPI_ENABLED`             | `true`      | Swagger UI 與 OpenAPI 文件（需登入）                                      |
 
 其他設定——註冊、登入有效期與兩步驟要求、遠端瀏覽器與桌面的上限、MCP session、webhook、終端機與指令規則預設值、
@@ -204,7 +205,7 @@ CI 裡改設 `TELEPY_URL` 與 `TELEPY_TOKEN`，不用登入。詳見 [docs/cli.m
 
 | 子指令             | 做什麼                                                       |
 | ------------------ | ------------------------------------------------------------ |
-| `keygen`           | 產生 gateway 主機金鑰與後端服務金鑰（只做一次）              |
+| `keygen`           | 產生 gateway 主機金鑰與後端服務金鑰（已有的會保留）          |
 | `create-superuser` | 建立管理員帳號                                               |
 | `doctor`           | 檢查 `.env`、容器、連接埠與後端設定（有問題時回傳 1）        |
 | `geoip`            | 下載離線 IP 地理資料庫（DB-IP Lite）；每月更新一次           |
