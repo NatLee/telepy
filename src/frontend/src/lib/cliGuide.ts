@@ -236,7 +236,11 @@ export function cliRecipes(topic: CliTopicId, c: CliContext): CliRecipe[] {
         case "toolbox": {
             const name = c.snippet ? shq(c.snippet.name) : PLACEHOLDER.snippet;
             const vars = (c.snippet?.vars ?? []).map((v) => ` --var ${shq(v)}=…`).join("");
-            return [r("snippets", `telepy snippets ls --tunnel ${T}`, ["ssh:exec"]), r("run", `telepy run ${name} ${T}${vars}`, ["ssh:exec"], noTunnel || !c.snippet)];
+            return [
+                r("snippets", `telepy snippets ls --tunnel ${T}`, ["ssh:exec"]),
+                r("run", `telepy run ${name} ${T}${vars}`, ["ssh:exec"], noTunnel || !c.snippet),
+                r("update", "telepy update --check\ntelepy update", [], false),
+            ];
         }
         case "network":
             return [
@@ -306,6 +310,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
     { usage: "lan ls | add | rm <tunnel> …", key: "lan", needs: ["tunnels:read"] },
     { usage: "api tokens | activity [--follow]", key: "api", needs: [] },
     { usage: "doctor", key: "doctor", needs: [] },
+    { usage: "update [--check] [--to <version>]", key: "update", needs: [] },
 ];
 
 /**
@@ -343,6 +348,8 @@ export const CLI_ENV: readonly CliEnvVar[] = [
     { name: "TELEPY_CONFIG_DIR", key: "configDir" },
     { name: "TELEPY_SSH_DIR", key: "sshDir" },
     { name: "TELEPY_NO_MASCOT", key: "noMascot" },
+    { name: "TELEPY_NO_UPDATE_CHECK", key: "noUpdateCheck" },
+    { name: "TELEPY_RELEASES_URL", key: "releasesUrl" },
     { name: "NO_COLOR", key: "noColor" },
 ];
 

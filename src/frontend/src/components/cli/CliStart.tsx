@@ -128,6 +128,7 @@ export function CliStart({ base, username, platform, setPlatform, signIns, brows
                         <CommandLine value={install.value} />
                         <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground marker:text-border">
                             <li>{t("cli.install.release")}</li>
+                            <li>{tn("cli.install.update", { cmd: code("telepy update") })}</li>
                             {p.os === "windows" ? <li>{t("cli.install.windowsPath")}</li> : <li>{tn("cli.install.noSudo", { dir: code("~/.local/bin") })}</li>}
                             {p.os === "macos" && <li>{tn("cli.install.quarantine", { cmd: code("xattr -d com.apple.quarantine telepy") })}</li>}
                         </ul>

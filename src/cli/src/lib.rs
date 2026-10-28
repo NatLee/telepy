@@ -22,6 +22,7 @@ pub mod snippets;
 pub mod sshcfg;
 pub mod table;
 pub mod target;
+pub mod update;
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
@@ -101,8 +102,10 @@ pub enum Cmd {
     Lan(LanArgs),
     /// Your API tokens and the calls made with them: `api tokens`, `api activity [--follow]`
     Api(ApiArgs),
-    /// Check the server, the sign-in, its scopes and the local ssh
+    /// Check the server, the sign-in, its scopes, the local ssh and whether a newer telepy is out
     Doctor,
+    /// Update telepy to the latest release (checked against the release's SHA256SUMS); --check only reports
+    Update(UpdateArgs),
     #[command(hide = true)]
     Dig,
 }
@@ -112,6 +115,16 @@ pub struct JsonFlag {
     /// Machine-readable output
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    /// Only say whether a newer release is out; change nothing
+    #[arg(long)]
+    pub check: bool,
+    /// Install this release instead of the latest, e.g. v2.9.0 (also to go back)
+    #[arg(long, value_name = "VERSION")]
+    pub to: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -476,14 +489,33 @@ pub struct ActivityArgs {
 
 // ---------------------------------------------------------------- entry
 
-/// 跑一次指令列；回 process 的結束碼。/ Run one command line; returns the exit code.
+/// 跑一次指令列；回 process 的結束碼。發行版一天最多一次在背景問有沒有新版，指令成功後才印提示
+/// （`update` / `doctor` 自己會說、`dig` 是彩蛋，不問）。
+/// Run one command line; returns the exit code. A release build asks for a newer version in the background at most
+/// once a day and prints the notice only after a successful command (`update` / `doctor` say it themselves, `dig`
+/// is the egg: no check).
 pub fn run(cli: Cli) -> Result<i32> {
+    #[cfg(windows)]
+    if let Ok(exe) = std::env::current_exe() {
+        // Windows 刪不掉正在跑的舊檔，上次更新的備份留到現在才清。/ Windows leaves the previous update's backup for now.
+        update::clean_leftovers(&exe);
+    }
+    let check = if matches!(cli.command, Cmd::Update(_) | Cmd::Doctor | Cmd::Dig) { None } else { update::start() };
+    let result = run_command(cli);
+    if matches!(result, Ok(0)) {
+        update::finish(check);
+    }
+    result
+}
+
+fn run_command(cli: Cli) -> Result<i32> {
     let server = cli.server.as_deref();
     let token = cli.token.as_deref();
     match cli.command {
         Cmd::Login(a) => login(a, token).map(|_| 0),
         Cmd::Logout => logout().map(|_| 0),
         Cmd::Doctor => doctor(server, token),
+        Cmd::Update(a) => update_cmd(a),
         Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
         cmd => {
             let api = Api::open(server, token)?;
@@ -504,7 +536,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
-                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Dig => unreachable!(),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Update(_) | Cmd::Dig => unreachable!(),
             }
         }
     }
@@ -1360,6 +1392,16 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
             bad += 1;
         }
     };
+    // 這個 telepy 的版本與有沒有新版（舊版不算錯，只提醒）。/ This telepy's version and whether a newer one is out (a warning, not a failure).
+    if update::release_build() {
+        match update::latest_tag(Duration::from_secs(5)) {
+            Ok(tag) if update::newer(&tag, VERSION) => println!("! telepy: {VERSION} ({} is out: run `telepy update`)", update::plain(&tag)),
+            Ok(_) => check(true, "telepy", format!("{VERSION} (latest)")),
+            Err(e) => println!("! telepy: {VERSION} (couldn't check for a newer release: {e:#})"),
+        }
+    } else {
+        check(true, "telepy", format!("{VERSION} (a local build, not checked for updates)"));
+    }
     let profile = creds::load_profile();
     // Tapi 的顏色（帳號設定），最後全部通過時用。/ Tapi's colour from the account, for the all-good line.
     let mut tapi_color = String::new();
@@ -1413,6 +1455,52 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
         }
     }
     Ok(if bad > 0 { 1 } else { 0 })
+}
+
+// ---------------------------------------------------------------- update
+
+/// `telepy update [--check] [--to <version>]`：下載這個平台的發行檔、對雜湊、換掉自己（`update::replace`）。
+/// `telepy update [--check] [--to <version>]`: download this platform's release, check its hash, replace ourselves.
+fn update_cmd(a: UpdateArgs) -> Result<i32> {
+    let target = update::target().ok_or_else(|| anyhow!("there is no prebuilt telepy for {}-{}; build it from src/cli", std::env::consts::OS, std::env::consts::ARCH))?;
+    let tag = match &a.to {
+        Some(v) => {
+            let v = v.trim();
+            if update::parse_version(v).is_none() {
+                bail!("{v} is not a version (e.g. v2.9.0)");
+            }
+            if v.starts_with('v') { v.to_string() } else { format!("v{v}") }
+        }
+        None => {
+            let tag = update::latest_tag(Duration::from_secs(15)).context("find the latest release")?;
+            update::write_cache(&update::Cache { checked_at: now(), latest: tag.clone() });
+            tag
+        }
+    };
+    let version = update::plain(&tag).to_string();
+    let is_newer = update::newer(&tag, VERSION);
+    if a.check {
+        if is_newer {
+            println!("telepy {version} is out (you have {VERSION}): run `telepy update`.");
+        } else {
+            println!("telepy {VERSION} is up to date (the latest release is {version}).");
+        }
+        return Ok(0);
+    }
+    if version == VERSION || (a.to.is_none() && !is_newer) {
+        println!("telepy {VERSION} is up to date.");
+        return Ok(0);
+    }
+    let exe = std::env::current_exe().and_then(|p| p.canonicalize()).context("find this telepy")?;
+    if let Some(how) = update::managed_by(&exe) {
+        bail!("this telepy ({}) was installed with {how}", exe.display());
+    }
+    update::clean_leftovers(&exe);
+    eprintln!("Downloading telepy {version} for {target}…");
+    let bytes = update::fetch_binary(&tag, target)?;
+    let reported = update::replace(&exe, &bytes)?;
+    println!("Updated {} from {VERSION} to {version} ({reported}).", exe.display());
+    Ok(0)
 }
 
 // ---------------------------------------------------------------- browse

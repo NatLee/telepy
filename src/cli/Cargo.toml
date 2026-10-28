@@ -23,6 +23,11 @@ base64 = "0.22"
 # 本機時區的時間（`api activity`）。/ Local times for `api activity`.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
+# `telepy update`：發行檔是 .tar.gz（macOS / Linux）或 .zip（Windows）；兩種都在每個平台上編，解壓縮才測得到。
+# `telepy update`: release archives are .tar.gz (macOS / Linux) or .zip (Windows); both are built everywhere so both get tested.
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking", "multipart"] }
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +42,11 @@ urlencoding = "2"
 
 # 憑證存在系統的金鑰圈（macOS Keychain、Windows 認證管理員）；Linux 用 0600 的檔案（無頭伺服器 / CI 常沒有 Secret Service）。
 # Credentials go to the OS keyring on macOS / Windows; Linux uses a 0600 file (headless boxes and CI rarely run a Secret Service).
+# SIGPIPE 回到預設：輸出管線被關掉（`telepy ls | head`）就安靜結束，不是 println! panic。
+# SIGPIPE back to its default: a closed output pipe (`telepy ls | head`) ends telepy quietly instead of a println! panic.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 
