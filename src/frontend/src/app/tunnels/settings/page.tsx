@@ -47,6 +47,7 @@ import { UserActivity } from "@/components/activity/UserActivity";
 import { AccessTab } from "@/components/access/AccessTab";
 import { DisableAccountDialog } from "@/components/users/DisableAccountDialog";
 import { SIGNIN_LOOK_KEYS, SignInLookPanel } from "@/components/auth/SignInLookSettings";
+import { ClientIpCheckPanel } from "@/components/auth/ClientIpCheck";
 import { REGISTER_DOMAIN_KEYS, RegisterDomainsPanel } from "@/components/settings/RegisterDomains";
 
 function titleize(key: string) {
@@ -357,6 +358,7 @@ function SiteSettingsTab({ tab, settings }: { tab: SiteTabId; settings: ReturnTy
 
             {tab === "general" && !loading && <RegisterDomainsPanel values={settingsObj} onSave={handleUpdate} />}
             {tab === "signin" && !loading && <SignInLookPanel values={settingsObj} onSave={handleUpdate} />}
+            {tab === "signin" && <ClientIpCheckPanel />}
         </div>
     );
 }
