@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁與 OAuth 登入頁各自選一般 / 低調、低調頁上輪流打出來的句子
+ * 網站設定 → 登入 →「登入頁的樣子」：一般登入頁、應用程式連接頁與 CLI 登入頁（`telepy login`）各自選一般 / 低調、低調頁上輪流打出來的句子
  * （SignInLinesEditor）、即時預覽（PreviewFrame 裡畫的是真正頁面的同一組元件，桌機與手機各一個；正在編輯的那句會被釘住），
  * 以及「運作方式」說明（路徑圖 + 兩種樣子的對照）。
- * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in and OAuth sign-in pages, the
+ * Site settings → Sign-in → "Sign-in page look": standard / discreet for the sign-in, app connection and CLI (`telepy login`) pages, the
  * discreet page's typed lines (SignInLinesEditor), a live preview (PreviewFrame renders the real page components,
  * desktop and phone; the line being edited is pinned) and the "How it works" dialog (path diagram + a comparison of
  * the two looks).
  */
 import React, { useState } from "react";
-import { Eye, EyeOff, Globe, Info, ScanEye, SquareDashed } from "lucide-react";
+import { Eye, EyeOff, Globe, Info, ScanEye, SquareDashed, SquareTerminal } from "lucide-react";
 import { LoginFormPreview } from "@/components/auth/LoginForm";
 import { OAuthSignInScreen, SignInScreen } from "@/components/auth/SignInScreens";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
@@ -18,25 +18,35 @@ import { Button } from "@/components/ui/button";
 import { SignInLinesEditor, type LinesDraft } from "@/components/auth/SignInLinesEditor";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
+import { NativeSelect } from "@/components/ui/native-select";
 import { PreviewFrame } from "@/components/ui/preview-frame";
 import { Chip, SectionHeading } from "@/components/ui/section";
 import { Segmented } from "@/components/ui/segmented";
 import { rememberSignInLook } from "@/hooks/useSignInLook";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useI18n } from "@/lib/i18n";
 import { DEFAULT_LOOK, joinLines, messageLines, messageProblem, parseSignInLook, pinnedLine, styleOf, type SignInLook, type SignInPageKind, type SignInStyle } from "@/lib/signinLook";
+import { LOGIN_SCOPES } from "@/lib/cliGuide";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
 
-/** 這三個設定由這個面板編輯，不再出現在一般的設定清單。/ Edited here, so the generic list leaves them out. */
-export const SIGNIN_LOOK_KEYS = ["signin_page_style", "signin_oauth_style", "signin_page_message"];
+/** 這四個設定由這個面板編輯，不再出現在一般的設定清單。/ Edited here, so the generic list leaves them out. */
+export const SIGNIN_LOOK_KEYS = ["signin_page_style", "signin_oauth_style", "signin_cli_style", "signin_page_message"];
 
-const STYLE_KEY: Record<SignInPageKind, "signin_page_style" | "signin_oauth_style"> = { signin: "signin_page_style", oauth: "signin_oauth_style" };
-const PATH: Record<SignInPageKind, string> = { signin: "/login", oauth: "/oauth/login" };
+type StyleKey = "signin_page_style" | "signin_oauth_style" | "signin_cli_style";
+const STYLE_KEY: Record<SignInPageKind, StyleKey> = { signin: "signin_page_style", oauth: "signin_oauth_style", cli: "signin_cli_style" };
+const LOOK_FIELD: Record<SignInPageKind, "style" | "oauthStyle" | "cliStyle"> = { signin: "style", oauth: "oauthStyle", cli: "cliStyle" };
+/** 應用程式與 CLI 是同一個網址，看要求的是誰決定用哪個。/ Apps and the CLI share the address; who is asking decides. */
+const PATH: Record<SignInPageKind, string> = { signin: "/login", oauth: "/oauth/login", cli: "/oauth/login" };
+const PAGE_NAME: Record<SignInPageKind, TranslationKey> = { signin: "signinLook.previewSignin", oauth: "signinLook.previewOauth", cli: "signinLook.previewCli" };
 const BUILT_IN_LINES: TranslationKey[] = ["discreet.line1", "discreet.line2", "discreet.line3"];
 const noop = () => {};
 
 function lookFrom(values: Record<string, unknown>): SignInLook {
-    return parseSignInLook({ style: values.signin_page_style, oauth_style: values.signin_oauth_style, message: values.signin_page_message }) ?? DEFAULT_LOOK;
+    return (
+        parseSignInLook({ style: values.signin_page_style, oauth_style: values.signin_oauth_style, cli_style: values.signin_cli_style, message: values.signin_page_message }) ??
+        DEFAULT_LOOK
+    );
 }
 
 function useStyleOptions() {
@@ -51,26 +61,41 @@ function useStyleOptions() {
 function usePageOptions(look: SignInLook) {
     const { t } = useI18n();
     const name = (s: SignInStyle) => t(s === "discreet" ? "signinLook.discreet" : "signinLook.standard");
-    return [
-        { value: "signin" as const, label: `${t("signinLook.previewSignin")} · ${name(look.style)}` },
-        { value: "oauth" as const, label: `${t("signinLook.previewOauth")} · ${name(look.oauthStyle)}` },
-    ];
+    return (["signin", "oauth", "cli"] as const).map((p) => ({ value: p, label: `${t(PAGE_NAME[p])} · ${name(styleOf(look, p))}` }));
+}
+
+/**
+ * 選哪一頁：三個長標籤在手機上會各擠成三行，所以手機用一行的下拉。
+ * Which page: three long labels would each wrap to three lines on a phone, so phones get a one-line select.
+ */
+function PagePicker({ look, value, onChange, kind }: { look: SignInLook; value: SignInPageKind; onChange: (p: SignInPageKind) => void; kind: "tabs" | "toggle" }) {
+    const { t } = useI18n();
+    const options = usePageOptions(look);
+    const phone = useMediaQuery("(max-width: 639.98px)") === true;
+    if (phone) {
+        return (
+            <NativeSelect value={value} onChange={(e) => onChange(e.target.value as SignInPageKind)} aria-label={t("signinLook.previewTitle")}>
+                {options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                        {o.label}
+                    </option>
+                ))}
+            </NativeSelect>
+        );
+    }
+    return <Segmented kind={kind} size="sm" fullWidth={kind === "tabs"} options={options} value={value} onChange={onChange} aria-label={t("signinLook.previewTitle")} />;
 }
 
 /** 某一頁、某個樣子的畫面（預覽用：表單不會登入）。/ One page in one look, with the inert preview form. */
 function PreviewScreen({ page, look, pin }: { page: SignInPageKind; look: SignInLook; pin: number | null }) {
     const { t } = useI18n();
-    if (page === "oauth") {
-        return (
-            <OAuthSignInScreen
-                style={look.oauthStyle}
-                message={look.message}
-                Form={LoginFormPreview}
-                app={{ name: t("signinLook.previewApp"), host: "app.example.com", scopes: ["tunnels:read", "ssh:exec"], loading: false }}
-                onCancel={noop}
-                pin={pin}
-            />
-        );
+    if (page === "oauth" || page === "cli") {
+        // CLI 的預覽：名字照 CLI 註冊的樣子（`telepy CLI (<電腦>)`），導回本機、預設的 scope。/ The CLI as it registers itself.
+        const app =
+            page === "cli"
+                ? { name: "telepy CLI (my-laptop)", host: "127.0.0.1", scopes: [...LOGIN_SCOPES], loading: false }
+                : { name: t("signinLook.previewApp"), host: "app.example.com", scopes: ["tunnels:read", "ssh:exec"], loading: false };
+        return <OAuthSignInScreen style={styleOf(look, page)} message={look.message} Form={LoginFormPreview} app={app} onCancel={noop} pin={pin} />;
     }
     return <SignInScreen style={look.style} message={look.message} Form={LoginFormPreview} pin={pin} />;
 }
@@ -78,7 +103,7 @@ function PreviewScreen({ page, look, pin }: { page: SignInPageKind; look: SignIn
 /** 桌機 + 手機兩個預覽框；`pin` = 正在編輯的那句（只打那一句）。/ The desktop and phone frames; `pin` = the line being edited. */
 export function SignInPreview({ page, look, pin = null }: { page: SignInPageKind; look: SignInLook; pin?: number | null }) {
     const { t } = useI18n();
-    const pageName = t(page === "oauth" ? "signinLook.previewOauth" : "signinLook.previewSignin");
+    const pageName = t(PAGE_NAME[page]);
     const screen = <PreviewScreen page={page} look={look} pin={pin} />;
     return (
         <div className="grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_10.5rem]">
@@ -133,7 +158,6 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
     const [editing, setEditing] = useState<number | null>(null);
     const [page, setPage] = useState<SignInPageKind>("signin");
     const [infoOpen, setInfoOpen] = useState(false);
-    const pageOptions = usePageOptions(saved);
 
     const lines = draft ?? draftFrom(saved.message);
     const message = lines.mode === "custom" ? joinLines(lines.rows) : "";
@@ -141,12 +165,12 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
     const problem = messageProblem(message);
     const look: SignInLook = { ...saved, message };
     const pin = lines.mode === "custom" ? pinnedLine(lines.rows, editing) : null;
-    const unused = saved.style === "standard" && saved.oauthStyle === "standard";
+    const unused = saved.style === "standard" && saved.oauthStyle === "standard" && saved.cliStyle === "standard";
 
     const setStyle = (p: SignInPageKind, v: SignInStyle) => {
         void onSave(STYLE_KEY[p], v);
         // 這個瀏覽器登出後馬上就是新的樣子。/ This browser shows the new look right after signing out.
-        rememberSignInLook({ ...saved, [p === "oauth" ? "oauthStyle" : "style"]: v });
+        rememberSignInLook({ ...saved, [LOOK_FIELD[p]]: v });
         setPage(p);
     };
     const saveLines = async () => {
@@ -174,6 +198,7 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
             <ul className="divide-y divide-border/70 border-t border-border/70">
                 <StyleRow page="signin" value={saved.style} onChange={(v) => setStyle("signin", v)} />
                 <StyleRow page="oauth" value={saved.oauthStyle} onChange={(v) => setStyle("oauth", v)} />
+                <StyleRow page="cli" value={saved.cliStyle} onChange={(v) => setStyle("cli", v)} />
                 <li className="p-4 sm:px-6 sm:py-5">
                     <h4 className="text-[1rem] text-foreground">{t("siteSettings.signin_page_message.label")}</h4>
                     <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
@@ -210,9 +235,7 @@ export function SignInLookPanel({ values, onSave }: { values: Record<string, unk
                         ) : undefined
                     }
                 />
-                <div className="-mx-1 overflow-x-auto px-1 pb-0.5">
-                    <Segmented kind="toggle" size="sm" options={pageOptions} value={page} onChange={setPage} aria-label={t("signinLook.previewTitle")} />
-                </div>
+                <PagePicker look={saved} value={page} onChange={setPage} kind="toggle" />
                 <SignInPreview page={page} look={look} pin={pin} />
             </div>
 
@@ -261,10 +284,10 @@ function CellText({ cell }: { cell: Cell }) {
  */
 export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { isOpen: boolean; onClose: () => void; look: SignInLook; page: SignInPageKind; onPage: (p: SignInPageKind) => void }) {
     const { t, tn } = useI18n();
-    const pageOptions = usePageOptions(look);
     const style = styleOf(look, page);
     const styleName = t(style === "discreet" ? "signinLook.discreet" : "signinLook.standard");
-    const rows = ROWS.filter((r) => page === "oauth" || !r.oauthOnly);
+    const rows = ROWS.filter((r) => page !== "signin" || !r.oauthOnly);
+    const cli = page === "cli";
 
     return (
         <Modal
@@ -274,7 +297,7 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
             description={t("signinLook.infoDescription")}
             icon={<ScanEye />}
             size="4xl"
-            toolbar={<Segmented kind="tabs" size="sm" fullWidth options={pageOptions} value={page} onChange={onPage} aria-label={t("signinLook.previewTitle")} />}
+            toolbar={<PagePicker look={look} value={page} onChange={onPage} kind="tabs" />}
             footer={
                 <Button type="button" variant="outline" onClick={onClose}>
                     {t("common.close")}
@@ -284,7 +307,11 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
             <div className="space-y-6">
                 <div className="space-y-2">
                     <FlowPath>
-                        <FlowNode icon={Globe} title={t("signinLook.flow.visitor")} sub={t("signinLook.flow.visitorSub")} state="waiting" stateText={t("signinLook.flow.signedOut")} />
+                        {cli ? (
+                            <FlowNode icon={SquareTerminal} title="telepy login" sub={t("signinLook.flow.cliSub")} state="waiting" stateText={t("signinLook.flow.signedOut")} />
+                        ) : (
+                            <FlowNode icon={Globe} title={t("signinLook.flow.visitor")} sub={t("signinLook.flow.visitorSub")} state="waiting" stateText={t("signinLook.flow.signedOut")} />
+                        )}
                         <FlowLink label={t("signinLook.flow.opens", { path: PATH[page] })} state="ok" />
                         <FlowNode icon={SquareDashed} title={t("signinLook.flow.frame")} sub={t("signinLook.flow.frameSub")} state="ok" stateText={t("signinLook.flow.noCopy")} />
                         <FlowLink label={t("signinLook.flow.asks")} state="ok" />
@@ -302,6 +329,11 @@ export function SignInLookInfoDialog({ isOpen, onClose, look, page, onPage }: { 
                     <p className="text-xs leading-relaxed text-muted-foreground">
                         {tn("signinLook.flow.endpoint", { path: <code className="rounded-sm bg-muted px-1 font-mono">GET /api/auth/sign-in-page</code> })} {t("signinLook.flow.cached")}
                     </p>
+                    {page !== "signin" && (
+                        <p className="text-xs leading-relaxed text-muted-foreground">
+                            {tn("signinLook.flow.whichApp", { name: <code className="rounded-sm bg-muted px-1 font-mono">telepy CLI (…)</code> })}
+                        </p>
+                    )}
                 </div>
 
                 <div>

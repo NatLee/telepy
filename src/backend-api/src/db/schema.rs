@@ -1024,6 +1024,9 @@ const COLUMNS: &[(&str, &str, &str)] = &[
     ("site_settings_sitesettings", "signin_page_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
     ("site_settings_sitesettings", "signin_oauth_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
     ("site_settings_sitesettings", "signin_page_message", "varchar(200) NOT NULL DEFAULT ''"),
+    // `telepy login`（CLI 的瀏覽器登入）沒登入時那一頁的樣子；以前跟著 OAuth 登入頁，所以升級時先抄一份（見 CLI_SIGNIN_STYLE）。
+    // The look of the page `telepy login` shows a signed-out browser; it used to follow the OAuth page, so upgrades copy that (CLI_SIGNIN_STYLE).
+    ("site_settings_sitesettings", "signin_cli_style", "varchar(16) NOT NULL DEFAULT 'standard'"),
 ];
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
@@ -1097,6 +1100,10 @@ pub const SITE_WEBHOOK_FROM_SETTINGS: &str = "2026-10-26-site-webhook-from-setti
 /// history with IPs whose 90-day purge went with the feature). Columns stay, as always.
 pub const DROP_RUSTDESK_SERVER: &str = "2026-10-26-drop-rustdesk-server-devices";
 
+/// CLI 的登入頁有了自己的樣子設定：先抄 OAuth 登入頁現在的樣子，升級後看起來跟以前一樣。
+/// The CLI sign-in got its own look setting: start from the OAuth page's current look, so upgrades look the same.
+pub const CLI_SIGNIN_STYLE: &str = "2026-10-28-cli-signin-style-from-oauth";
+
 async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
     let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM telepy_data_migration WHERE name = ?").bind(name).fetch_one(pool).await?;
     Ok(n > 0)
@@ -1106,7 +1113,19 @@ async fn applied(pool: &SqlitePool, name: &str) -> sqlx::Result<bool> {
 pub async fn run_data_migrations(pool: &SqlitePool) -> anyhow::Result<()> {
     drop_sharee_usernames(pool).await?;
     site_webhook_from_settings(pool).await?;
-    drop_rustdesk_server(pool).await
+    drop_rustdesk_server(pool).await?;
+    cli_signin_style(pool).await
+}
+
+async fn cli_signin_style(pool: &SqlitePool) -> anyhow::Result<()> {
+    if applied(pool, CLI_SIGNIN_STYLE).await? {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE site_settings_sitesettings SET signin_cli_style = signin_oauth_style WHERE id = 1").execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO telepy_data_migration (name, applied_at) VALUES (?, ?)").bind(CLI_SIGNIN_STYLE).bind(crate::util::now_db()).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 async fn drop_rustdesk_server(pool: &SqlitePool) -> anyhow::Result<()> {

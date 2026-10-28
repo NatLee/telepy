@@ -46,7 +46,7 @@ async fn setup_status(State(state): State<AppState>) -> ApiResult<Json<Value>> {
 #[utoipa::path(get, path = "/api/auth/sign-in-page", tag = "Login", responses((status = 200, description = "How the sign-in pages look", body = super::schemas::SignInPage)))]
 async fn sign_in_page(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let s = db::settings::get_solo(&state.db).await?;
-    Ok(Json(json!({ "style": s.signin_page_style, "oauth_style": s.signin_oauth_style, "message": s.signin_page_message })))
+    Ok(Json(json!({ "style": s.signin_page_style, "oauth_style": s.signin_oauth_style, "cli_style": s.signin_cli_style, "message": s.signin_page_message })))
 }
 
 /// 登入完成 → 開一個 session、發 `{refresh_token, access_token}`（`auth::sessions`）。

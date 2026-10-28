@@ -130,14 +130,7 @@ export function detectPlatform(h: BrowserHints): CliPlatform & { sure: boolean }
 
 // ---------------------------------------------------------------- the CLI under Connected apps
 
-/** CLI 的瀏覽器登入註冊成 OAuth app，名字是 `telepy CLI (<hostname>)`（`src/cli/src/oauth.rs`）。 */
-const CLI_CLIENT = /^telepy CLI(?: \((.+)\))?$/;
-
-/** 這個 grant 是不是 CLI 的；是的話回電腦名稱（可能是空字串）。/ Whether a grant is the CLI's; returns the host name. */
-export function cliHost(clientName: string | null | undefined): string | null {
-    const m = CLI_CLIENT.exec((clientName ?? "").trim());
-    return m ? (m[1] ?? "") : null;
-}
+export { cliHost } from "./cliClient.ts";
 
 // ---------------------------------------------------------------- examples
 

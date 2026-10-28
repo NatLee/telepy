@@ -1,23 +1,31 @@
 /**
  * 登入頁的樣子（網站設定 → 登入）：一般 = 產品介紹；低調 = 只寫 Telepy、動態背景和輪流打出來的句子。這裡是純函式：
- * 解析公開端點 / 快取、低調頁句子的檢查（跟後端同一套規則）與背景的向日葵點陣座標。
+ * 解析公開端點 / 快取、哪一頁用哪個設定（OAuth 登入頁上要求的是 `telepy` CLI 時用 CLI 那個）、低調頁句子的檢查
+ * （跟後端同一套規則）與背景的向日葵點陣座標。
  * How the sign-in pages look (Site settings → Sign-in): standard = product highlights; discreet = only "Telepy", a
- * moving background and lines typed in turn. Pure helpers: parsing the public endpoint / the cache, the lines'
- * limits (same rules as the backend) and the sunflower dot field.
+ * moving background and lines typed in turn. Pure helpers: parsing the public endpoint / the cache, which setting a
+ * page uses (the OAuth page uses the CLI one when the `telepy` CLI is asking), the lines' limits (same rules as the
+ * backend) and the sunflower dot field.
  */
+import { cliHost } from "./cliClient.ts";
+
 export type SignInStyle = "standard" | "discreet";
-/** 哪一頁：一般登入頁 / MCP 應用程式的 OAuth 登入頁。/ Which page: the sign-in page or the OAuth one. */
-export type SignInPageKind = "signin" | "oauth";
+/**
+ * 哪一頁：一般登入頁 / 應用程式（MCP）的 OAuth 登入頁 / `telepy login` 打開的那一頁（同一個 /oauth/login，要求的 app 是 CLI）。
+ * Which page: the sign-in page, the OAuth page for apps (MCP), or the one `telepy login` opens (the same /oauth/login, asked by the CLI).
+ */
+export type SignInPageKind = "signin" | "oauth" | "cli";
 
 export interface SignInLook {
     style: SignInStyle;
     oauthStyle: SignInStyle;
+    cliStyle: SignInStyle;
     /** 低調頁的句子，一行一句；空白 = 輪播內建的問候語。/ The discreet page's lines, one per line; blank = the built-in ones. */
     message: string;
 }
 
 export const SIGNIN_STYLES: readonly SignInStyle[] = ["standard", "discreet"];
-export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", message: "" };
+export const DEFAULT_LOOK: SignInLook = { style: "standard", oauthStyle: "standard", cliStyle: "standard", message: "" };
 /** 低調頁的句子：最多幾句、每句幾個字（跟後端一樣）。/ How many lines and characters per line (as the backend). */
 export const MESSAGE_LINES = 6;
 export const LINE_MAX = 80;
@@ -27,8 +35,10 @@ export const MESSAGE_MAX = MESSAGE_LINES * (LINE_MAX + 1);
 const asStyle = (v: unknown): SignInStyle | null => (v === "standard" || v === "discreet" ? v : null);
 
 /**
- * 公開端點（`{style, oauth_style, message}`）或快取（`{style, oauthStyle, message}`）→ SignInLook；看不懂 = null。
- * The public endpoint's JSON or the cached object → a SignInLook; anything else = null.
+ * 公開端點（`{style, oauth_style, cli_style, message}`）或快取（`{style, oauthStyle, cliStyle, message}`）→ SignInLook；
+ * 看不懂 = null。沒有 CLI 那個（舊後端、舊快取）= 跟 OAuth 頁一樣，以前就是這樣。
+ * The public endpoint's JSON or the cached object → a SignInLook; anything else = null. No CLI look (an older
+ * backend or cache) = the OAuth page's, as it used to be.
  */
 export function parseSignInLook(raw: unknown): SignInLook | null {
     if (!raw || typeof raw !== "object") return null;
@@ -36,10 +46,20 @@ export function parseSignInLook(raw: unknown): SignInLook | null {
     const style = asStyle(o.style);
     const oauthStyle = asStyle(o.oauth_style ?? o.oauthStyle);
     if (!style || !oauthStyle) return null;
-    return { style, oauthStyle, message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "" };
+    const cliStyle = asStyle(o.cli_style ?? o.cliStyle) ?? oauthStyle;
+    return { style, oauthStyle, cliStyle, message: typeof o.message === "string" ? o.message.slice(0, MESSAGE_MAX * 2) : "" };
 }
 
-export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle => (page === "oauth" ? look.oauthStyle : look.style);
+export const styleOf = (look: SignInLook, page: SignInPageKind): SignInStyle => (page === "cli" ? look.cliStyle : page === "oauth" ? look.oauthStyle : look.style);
+
+/** OAuth 登入頁上要求的 app → 用哪一頁的設定。/ The app asking on the OAuth page → which page's setting applies. */
+export const pageForClient = (clientName: string | null | undefined): "oauth" | "cli" => (cliHost(clientName) !== null ? "cli" : "oauth");
+
+/**
+ * OAuth 登入頁要不要先等「是誰在要求」才畫：兩個設定一樣就不用等（直接畫），不一樣才等預覽回來。
+ * Whether the OAuth page must learn who is asking before painting: only when the two settings differ.
+ */
+export const needsClient = (look: SignInLook) => look.oauthStyle !== look.cliStyle;
 
 /** 一句有幾個字（Unicode 碼位，跟後端的 chars().count() 一樣）。/ Characters in a line, counted like the backend. */
 export const lineLength = (line: string) => [...line.trim()].length;

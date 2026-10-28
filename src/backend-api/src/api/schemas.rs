@@ -114,6 +114,9 @@ pub struct SignInPage {
     /// The OAuth (app connection) sign-in page: standard | discreet
     #[schema(example = "standard")]
     pub oauth_style: String,
+    /// The page `telepy login` (the CLI's browser sign-in) shows a signed-out browser: standard | discreet
+    #[schema(example = "discreet")]
+    pub cli_style: String,
     /// The discreet page's lines, one per line, typed in turn; blank = the built-in ones
     #[schema(example = "")]
     pub message: String,
