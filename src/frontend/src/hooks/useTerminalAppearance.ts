@@ -32,7 +32,7 @@ import {
 import { useTerminalDefaults } from "@/hooks/useTerminalDefaults";
 import { useCustomSchemes } from "@/hooks/useTerminalSchemes";
 import { applyLigatures, loadTerminalFont, resolveCssVar, waitForFont } from "@/lib/xterm";
-import { markIfHidden } from "@/lib/xtermMeasure";
+import { ensureMeasured, markIfHidden } from "@/lib/xtermMeasure";
 
 const KEY_PREFIX = "telepy.terminalProfile.";
 const PROFILE_EVENT = "telepy:terminal-profile";
@@ -164,19 +164,24 @@ export function useTerminalAppearance(tunnelId: string | null): TerminalAppearan
     };
 }
 
+/** 格子寬自我檢查的間隔。/ How often the cell-width self-check runs. */
+const CELL_CHECK_MS = 4000;
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * 把外觀變更即時套用到開著的 xterm(終端機頁的每個分頁、網路頁的內嵌終端機):配色、粗體畫法、連字立即換;
  * 字級換完 refit;字型等它載好(最多 1.5 s;粗體用真實字體時連 Bold 一起等)再換,之後才載好的強迫 xterm 重新量字寬
  * (xterm 只在值變了才量,所以先換成 monospace 再換回來),否則字距會照後備字型算而對不齊;斜體 / 粗斜體是用到才
  * 下載的,所以 document.fonts 的 loadingdone 也會觸發同樣的重新量寬。隱藏中的終端機(背景分頁、縮小的 dock)量不到,
- * 由 markIfHidden 記下,顯示後 fit 前 ensureMeasured 再量(lib/xtermMeasure.ts)。`forEachTerm` / `refit` 要是穩定的 callback。
+ * 由 markIfHidden 記下,顯示後 fit 前 ensureMeasured 再量;其他原因造成的格子寬過期由定時的自我檢查補上(lib/xtermMeasure.ts)。
+ * `forEachTerm` / `refit` 要是穩定的 callback。
  * Applies appearance changes to open xterms live: the scheme, bold style and ligatures at once, the size followed
  * by a refit, the font once loaded (1.5 s cap; the Bold face too when the bold style uses it). A late load forces a
  * re-measure (xterm only measures when the value changes, hence the monospace round trip); otherwise cells keep the
  * fallback font's width. Italic / bold-italic faces download on first use, so document.fonts' loadingdone triggers
  * the same re-measure. A hidden terminal (background tab, minimised dock) can't be measured, so markIfHidden records
- * it and ensureMeasured re-measures it once shown, before the fit (lib/xtermMeasure.ts). Pass stable callbacks.
+ * it and ensureMeasured re-measures it once shown, before the fit; a cell width gone stale any other way is caught by a
+ * periodic self-check (lib/xtermMeasure.ts). Pass stable callbacks.
  */
 export function useLiveTerminalLook(
     resolved: ResolvedTerminalAppearance,
@@ -212,6 +217,28 @@ export function useLiveTerminalLook(
     useEffect(() => {
         each((term) => applyLigatures(term, resolved.ligatures));
     }, [resolved.ligatures, each]);
+
+    // 自我檢查:格子寬跟目前字型對不上(不管怎麼走到的)就重新量再 refit。看得到的分頁每隔幾秒、視窗取得焦點、
+    // 分頁變回可見時各查一次;隱藏的終端機 ensureMeasured 直接略過(lib/xtermMeasure.ts)。
+    // Self-check: a cell width that disagrees with the current font (however it got there) is re-measured and refitted.
+    // Runs every few seconds while the tab is visible, on window focus and when the tab becomes visible; hidden
+    // terminals are skipped by ensureMeasured (lib/xtermMeasure.ts).
+    useEffect(() => {
+        const check = () => {
+            if (document.visibilityState !== "visible") return;
+            let changed = false;
+            each((term) => { if (ensureMeasured(term)) changed = true; });
+            if (changed) refit();
+        };
+        const timer = setInterval(check, CELL_CHECK_MS);
+        window.addEventListener("focus", check);
+        document.addEventListener("visibilitychange", check);
+        return () => {
+            clearInterval(timer);
+            window.removeEventListener("focus", check);
+            document.removeEventListener("visibilitychange", check);
+        };
+    }, [each, refit]);
 
     const wantBoldFace = resolved.bold !== "bright";
     useEffect(() => {
