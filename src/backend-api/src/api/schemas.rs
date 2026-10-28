@@ -167,6 +167,10 @@ pub struct UserProfile {
     /// Card or list view per page (`tunnels`, `key_groups`, …); pages missing here use their default
     #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: serde_json::Value,
+    /// Remote desktop display preferences (scale, percent, resolution, width, height, hidpi, vnc_resize, quality,
+    /// audio); null = never chosen on this account
+    #[schema(value_type = Option<Object>, example = json!({"scale": "fit", "percent": 100, "resolution": "window", "width": 1920, "height": 1080, "hidpi": false, "vnc_resize": false, "quality": "auto", "audio": false}))]
+    pub desktop_display: Option<serde_json::Value>,
     /// Tapi 的十字髮夾顏色（空 = 還沒找到 Tapi）。/ Tapi's clip colour (empty = not found yet).
     pub tapi_color: String,
     /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
@@ -1041,6 +1045,10 @@ pub struct UserSettings {
     /// Card or list view per page; pages missing here use their default
     #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: serde_json::Value,
+    /// Remote desktop display preferences (scale, percent, resolution, width, height, hidpi, vnc_resize, quality,
+    /// audio); null = never chosen on this account
+    #[schema(value_type = Option<Object>, example = json!({"scale": "fit", "percent": 100, "resolution": "window", "width": 1920, "height": 1080, "hidpi": false, "vnc_resize": false, "quality": "auto", "audio": false}))]
+    pub desktop_display: Option<serde_json::Value>,
     /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
     #[schema(example = "work-")]
     pub ssh_alias_prefix: String,
@@ -1078,6 +1086,10 @@ pub struct UserSettingsPatch {
     /// Replaces the whole map: page id (lowercase letters, digits, `_`; up to 32) → `card` | `list`, at most 20
     #[schema(value_type = Option<Object>, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: Option<serde_json::Value>,
+    /// Replaces the whole object (missing fields = defaults; percent clamped to 25–400; anything else out of range is a
+    /// field error); null clears it
+    #[schema(value_type = Option<Object>)]
+    pub desktop_display: Option<serde_json::Value>,
     /// 裝置別名前綴：英數字、`.`、`_`、`-`，最多 24 個，不以 `-` 開頭；空字串 = 不加。/ Device alias prefix; empty = none.
     pub ssh_alias_prefix: Option<String>,
     /// Tapi 的十字髮夾顏色；`daily` 要先解鎖（`tapi_daily`）；null / 空 = 回到沒解鎖。/ Tapi's clip colour; `daily` needs `tapi_daily`.
@@ -1614,6 +1626,10 @@ pub struct DesktopStartRequest {
     pub clipboard: Option<String>,
     /// Play the remote's sound (RDP only; ignored for VNC). Default false: audio costs bandwidth
     pub audio: Option<bool>,
+    /// Let the remote resolution follow the browser's frame (the browser sends `size`, clamped to
+    /// `desktop_max_resolution`). Omitted = true for RDP (resize-method display-update), false for VNC (only
+    /// servers with SetDesktopSize, e.g. TigerVNC / KasmVNC virtual desktops, follow; otherwise `disable-display-resize`)
+    pub resize: Option<bool>,
 }
 
 #[derive(ToSchema)]
@@ -1643,6 +1659,10 @@ pub struct DesktopSession {
     pub quality: String,
     /// Remote sound in effect (RDP only; offered to guacd as audio/L8 + audio/L16, otherwise `disable-audio`)
     pub audio: bool,
+    /// Whether the remote resolution follows the browser's frame (see the request's `resize`)
+    pub resize: bool,
+    /// The site's ceiling (`desktop_max_resolution`) for the longer side; larger sizes are scaled down keeping the shape
+    pub max_resolution: i64,
     pub target: DesktopTarget,
     /// The device account used for the hop
     pub username: String,

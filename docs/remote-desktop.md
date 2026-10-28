@@ -73,9 +73,46 @@ backend desktop/bridge.rs
 |---|---|---|---|
 | `auto`（預設） | 和以前一樣（平滑字型） | 不加參數 | — |
 | `speed` | `color-depth 16`、不平滑字型 | `color-depth 16`、`compress-level 6`、`quality-level 5` | — |
-| `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | 向 guacd 要 devicePixelRatio 倍（≤ 2）的解析度、`dpi` 同倍，縮回 CSS 大小 |
+| `sharp` | `color-depth 24`、`force-lossless` | `color-depth 24`、`quality-level 9`、`force-lossless` | — |
 
-記在 localStorage `telepy.desktopQuality`（這台瀏覽器；偏好設定 → 遠端桌面也改得到同一個值）；start 回應帶 `quality`。
+存在帳號上的遠端桌面偏好 `desktop_display.quality`（偏好設定 → 遠端桌面也改得到同一個值）；start 回應帶 `quality`。以前 `sharp` 還順便要 HiDPI 解析度，現在 HiDPI 是「顯示」裡獨立的開關（下一節）。
+
+## 顯示：縮放、解析度、HiDPI（前端 `lib/desktopDisplay.ts`、`lib/desktopZoom.ts`、`hooks/useDesktopZoom.ts`、`components/desktop/DisplayMenu.tsx` / `DisplaySettings.tsx`；後端 `desktop::clamp_size`、`ws/desktop.rs` `browser_size`）
+
+**為什麼以前畫面小（實測，OrbStack + 真 guacd 1.6 + xrdp / x11vnc / Xvnc，1440×900 視窗）：**
+1. 畫面框高 `100dvh − 15rem`、連線時不捲動：1440×900 只有約 1150×684，1280×800 時 990×584，框底在 y = 815（視窗外）。
+2. 「塞進框裡」上限 1:1，VNC / RustDesk 的畫面比框小時不會放大（VNC 1024×768 在 1540×864 的框裡就是 1024×768）。
+3. 畫質選 `sharp` 時，HiDPI 螢幕上上限變成 1 / devicePixelRatio：Retina 上 x11vnc 1024×768 的畫面只畫成 512×384 CSS px（量到的）。
+   RDP 則向 xrdp 要 2 倍像素（2300×1555），xrdp 不理 `dpi`，字只剩一半大。
+4. 站台上限 `desktop_max_resolution` 寬高各自夾（3080×1916 在 2560 下變 2560×1916，比例走樣、畫面加黑邊），而且連線中瀏覽器送的
+   `size` 根本沒經過上限。
+5. 縮放鈕只在觸控裝置上有。
+
+**現在：** 偏好存在帳號上（個人設定 `desktop_display`，一個 JSON：`scale` / `percent` / `resolution` / `width` / `height` / `hidpi` / `vnc_resize` / `quality` / `audio`；
+後端 `desktop::display::parse` 檢查，未知欄位或超出範圍 = 欄位錯誤、百分比夾在 25–400；空 = 還沒選過。localStorage `telepy.desktopDisplay` 只是第一次畫面的快取，
+登入時帳號有值就用帳號的，沒有就把這台瀏覽器的值（含舊的 `telepy.desktopQuality` / `telepy.desktopAudio`）傳上去），
+偏好設定 → 遠端桌面 → 顯示、連線表單的「顯示」欄，與桌面頁工具列的「顯示」選單讀寫同一份：
+- 縮放：`fit`（塞進框裡，小畫面也放大，預設）/ `shrink`（只縮不放 = 以前）/ `actual`（1:1，HiDPI 時一個裝置像素；滑鼠移到邊緣捲動，雙指拖曳）/
+  `custom`（25–400 %）。模式會黏著：視窗變大變小時 fit 重新塞、1:1 維持；工具列 − / % / + 與捏合改成固定比例。
+- RDP 解析度：跟著視窗（預設，`resize-method display-update`，框停 400 ms 才送 `size`）或固定（1280×720、1600×900、1920×1080、2560×1440、自訂）。
+  固定時 start 帶 `resize: false`：guacd 不帶 resize-method，中繼丟掉瀏覽器的 `size`。
+- HiDPI：要 devicePixelRatio 倍（≤ 2）的像素與 `dpi`；預設關。連線中切換、改解析度，跟著視窗的 session 立刻送新的 `size`。
+- VNC 也跟著視窗（預設關）：start 帶 `resize: true` 就不送 `disable-display-resize`，guacd 1.6 用 SetDesktopSize 要伺服器改大小
+  （連線時送一次、之後每個 `size`）；只有虛擬桌面（TigerVNC Xvnc、KasmVNC）照做，實體螢幕（x11vnc、macOS 螢幕共享、多數 Windows 伺服器）
+  維持原解析度。預設關是因為改掉一台真機器的螢幕解析度不是使用者要的。guacd 1.6 的 VNC 預設會送初始大小，所以以前其實就會改 Xvnc 的大小。
+- RustDesk：解析度由遠端決定，只在瀏覽器縮放；網頁核心的 `change_resolution` 沒實作（`setByName change_resolution not implemented (phase 2)`）。
+  **之後可以做：** 像檔案面板的 `ReadEmptyDirs` 一樣，自己編一個 `Misc.change_resolution` 送到核心追蹤的 WebSocket（RustDesk 的 Windows / Linux X11 端支援改解析度），
+  RustDesk 就也能跟著視窗。
+- 「佔滿瀏覽器視窗」：卡片 `fixed inset-0` 蓋住側欄與頁首（不是全螢幕；Esc 照樣送遠端），工具列「回到頁面」退出。
+- 框高改成 `100dvh − 8.5rem`，連線時卡片捲到頁首下方。
+- 上限：`clamp_size` 等比縮到長邊 = `desktop_max_resolution`，握手與連線中每個 `size` 都經過（以前只夾握手，而且各邊分開夾）。start 回 `resize` 與 `max_resolution`。
+
+實測（同一套環境，新框高）：RDP 跟著視窗 1116×764（1440）→ 1534×944（1920）→ 958×664（1280）→ 佔滿 1280×751 → 958×664（`xdpyinfo`）；
+HiDPI 在 Retina 2236×1528，1920 視窗時 2560×1575（等比夾），連線中關 HiDPI → 1534×944；固定 1600×900 不跟著視窗、瀏覽器縮到 70 % / 60 %；
+Xvnc 要求跟著時 1280×800 → 1118×764 → 958×664，不要求時維持、瀏覽器放大到 115 % / 142 %；x11vnc 1024×768 在 Retina 預設畫成
+1019×764（以前 512×384），1:1 → 125 % 後滑鼠移到右緣會往右捲。
+測試：`tests/desktop_api.rs` `desktop_resolution_follows_the_window_within_the_site_limit`，單元測試 `clamp_size`、`browser_size`、
+`lib/desktopZoom.test.ts`、`lib/desktopDisplay.test.ts`。
 
 ## 剪貼簿方向（每個人自己選，站台設定是上限）
 
@@ -90,8 +127,8 @@ backend desktop/bridge.rs
 ## 聲音（RDP 經 guacd；RustDesk 見下一節）
 
 - 表單的「聲音」開關（RDP 與 RustDesk 才有；guacd 的 VNC 沒有聲音 —— 它要另接 PulseAudio，裝置那邊不會有 —— 所以 VNC
-  不顯示；VNC 協定本身只有畫面與輸入。macOS 的「螢幕共享」就是 VNC，所以要聽 Mac 的聲音請用 RustDesk），記在 localStorage
-  `telepy.desktopAudio`（on / off，**預設 off**：聲音多吃頻寬；偏好設定 → 遠端桌面改的是同一個值）。
+  不顯示；VNC 協定本身只有畫面與輸入。macOS 的「螢幕共享」就是 VNC，所以要聽 Mac 的聲音請用 RustDesk），記在
+  帳號上的 `desktop_display.audio`（**預設關**：聲音多吃頻寬；偏好設定 → 遠端桌面改的是同一個值）。
 - RDP：`POST …/desktop/start` 帶 `audio: true`（VNC 帶了也當 false；非布林 → 欄位錯誤），回應帶 `audio`（實際）。
   開：握手的 `audio` 指令列出 `audio/L8`、`audio/L16`（guacamole-common-js 的 RawAudioPlayer 會播的原始 PCM），
   guacd 開音訊串流（`audio` / `blob` / `end`）。guacd → 瀏覽器本來就整個透傳；瀏覽器 → guacd 的白名單放 `ack`（接受串流），
@@ -210,7 +247,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 - 範圍：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質、**聲音**、**傳檔**。沒有終端機、遠端列印、麥克風 —— 要這些用下面的 app 路。
 - **聲音**：核心自己解（RustDesk 送 Opus，WebCodecs `AudioDecoder` → `AudioContext`；瀏覽器沒有 WebCodecs 音訊就沒有聲音，
   按鈕停用並說明）。關 = 那台的 `disable-audio`：登入的 `OptionMessage` 就請裝置別送（裝置不開 audio service，不只是靜音）；
-  連線中工具列切換走核心的 `option:toggle`（送 option 給裝置並靜音 / 取消靜音）。和 RDP 共用 `telepy.desktopAudio`。
+  連線中工具列切換走核心的 `option:toggle`（送 option 給裝置並靜音 / 取消靜音）。和 RDP 共用帳號上的 `desktop_display.audio`。
   裝置那端送什麼（看 RustDesk 1.5 原始碼）：**Linux** 錄 PulseAudio / PipeWire 的 monitor，由已登入桌面工作階段的連線管理員
   （`--cm`）行程負責 —— 沒人登入桌面就沒有聲音；**Windows** 錄預設輸出的 WASAPI loopback；**macOS（Apple 晶片版）** 經
   ScreenCaptureKit 錄系統聲音（用的是本來就要給的「螢幕錄製」權限）；**macOS（Intel 版）** 只錄「音訊輸入裝置」（預設是
@@ -363,7 +400,7 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 | `desktop_max_sessions` | 4 | 整站同時上限（含尚未認領的票證），0 = 不限 |
 | `desktop_session_idle_timeout` | 900 | 沒有鍵盤 / 滑鼠 / 剪貼簿輸入多久就斷線（秒），0 = 不斷 |
 | `desktop_clipboard` | both | **上限**：both / to_remote / off。每個人在桌面頁或偏好設定裡自己選方向（個人設定 `desktop_clipboard`），實際用兩者較窄的那個；guacd 用 disable-copy / disable-paste 把關，RustDesk 由瀏覽器裡的核心套用（off = 那台的 `disable-clipboard`） |
-| `desktop_max_resolution` | 2560 | 寬或高的上限（像素） |
+| `desktop_max_resolution` | 2560 | 要求的遠端大小上限（長邊，像素），超過等比縮小；握手與連線中的 `size` 都夾 |
 | `desktop_file_transfer` | true | 網頁內 RustDesk 的「檔案」面板（上傳 / 下載 / 改名 / 刪除）；關掉時中繼也拒絕傳檔登入、收掉開著的 |
 
 ## 這條連線上走什麼（info 對話框的資料流圖）

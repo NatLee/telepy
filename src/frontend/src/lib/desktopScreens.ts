@@ -474,9 +474,3 @@ export function parseStoredArea(json: string | null, fb: Framebuffer): Viewport 
     if (x < 0 || y < 0 || width < MIN_AREA || height < MIN_AREA || x + width > fb.width || y + height > fb.height) return null;
     return { x, y, width, height };
 }
-
-/** 縮放比例：整個 viewport 放進框，不放大超過 maxScale。/ Fit the viewport into the box, never above maxScale. */
-export function fitScale(box: { width: number; height: number }, viewport: Viewport, maxScale = 1): number {
-    if (viewport.width <= 0 || viewport.height <= 0 || box.width <= 0 || box.height <= 0) return maxScale;
-    return Math.min(box.width / viewport.width, box.height / viewport.height, maxScale);
-}

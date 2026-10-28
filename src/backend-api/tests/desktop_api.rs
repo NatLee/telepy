@@ -31,9 +31,13 @@ struct Seen {
     after_ready: Vec<String>,
     /// 握手時 `audio` 指令帶的格式（空 = 不要聲音）。/ The formats in the handshake's `audio` instruction.
     audio: Vec<String>,
+    /// 握手的 `size`（寬、高、dpi）。/ The handshake's `size` (width, height, dpi).
+    handshake_size: Vec<String>,
+    /// `ready` 之後收到的每個 `size` 的參數。/ The arguments of every `size` after `ready`.
+    sizes: Vec<Vec<String>>,
 }
 
-const ARG_NAMES: [&str; 8] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy", "disable-paste", "disable-audio"];
+const ARG_NAMES: [&str; 12] = ["VERSION_1_5_0", "hostname", "port", "username", "password", "disable-copy", "disable-paste", "disable-audio", "width", "height", "resize-method", "disable-display-resize"];
 
 struct Conn {
     s: TcpStream,
@@ -81,6 +85,9 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                     if i.opcode() == "audio" {
                         audio = i.args().map(str::to_string).collect();
                     }
+                    if i.opcode() == "size" {
+                        seen.lock().unwrap().handshake_size = i.args().map(str::to_string).collect();
+                    }
                     opcodes.push(i.opcode().to_string());
                 };
                 seen.lock().unwrap().audio = audio.clone();
@@ -113,6 +120,9 @@ async fn fake_guacd() -> (String, Arc<Mutex<Seen>>) {
                 }
                 while let Some(i) = c.next().await {
                     let op = i.opcode().to_string();
+                    if op == "size" {
+                        seen.lock().unwrap().sizes.push(i.args().map(str::to_string).collect());
+                    }
                     seen.lock().unwrap().after_ready.push(op.clone());
                     if op == "disconnect" {
                         break;
@@ -141,7 +151,11 @@ async fn echo_service() -> u16 {
 }
 
 async fn open_ws(lab: &Lab, start: &Value) -> Result<Ws, String> {
-    let url = format!("{}{}?ticket={}&width=1024&height=768", lab.ws_base().await, start["ws_path"].as_str().unwrap(), start["ticket"].as_str().unwrap());
+    open_ws_sized(lab, start, 1024, 768).await
+}
+
+async fn open_ws_sized(lab: &Lab, start: &Value, width: u32, height: u32) -> Result<Ws, String> {
+    let url = format!("{}{}?ticket={}&width={width}&height={height}", lab.ws_base().await, start["ws_path"].as_str().unwrap(), start["ticket"].as_str().unwrap());
     let mut req = url.into_client_request().unwrap();
     req.headers_mut().insert("Sec-WebSocket-Protocol", "guacamole".parse().unwrap());
     let (ws, resp) = connect_async(req).await.map_err(|e| e.to_string())?;
@@ -272,14 +286,14 @@ async fn desktop_session_through_the_device() {
         assert_eq!(get("VERSION_1_5_0"), "VERSION_1_5_0");
     }
 
-    // 白名單：put / argv 被丟掉，key / size 轉給 guacd。/ Allowlist: put/argv dropped, key/size forwarded.
-    ws.send(Message::Text("3.put,1.0,10.text/plain;4.argv,1.1,10.text/plain,8.password;3.key,5.65307,1.1;4.size,4.1024,3.768;".into())).await.unwrap();
-    wait_for("key and size at guacd", || {
-        let s = seen.lock().unwrap();
-        s.after_ready.contains(&"key".to_string()) && s.after_ready.contains(&"size".to_string())
-    })
-    .await;
-    assert!(!seen.lock().unwrap().after_ready.iter().any(|o| o == "put" || o == "argv"), "{:?}", seen.lock().unwrap().after_ready);
+    // 白名單：put / argv 被丟掉，key 轉給 guacd；VNC 預設不改遠端解析度，所以 size 也停在中繼（guacd 拿到
+    // disable-display-resize）。/ Allowlist: put/argv dropped, key forwarded; a VNC session keeps the server's size
+    // by default, so size stops at the relay too (and guacd got disable-display-resize).
+    ws.send(Message::Text("3.put,1.0,10.text/plain;4.argv,1.1,10.text/plain,8.password;4.size,4.1024,3.768;3.key,5.65307,1.1;".into())).await.unwrap();
+    wait_for("key at guacd", || seen.lock().unwrap().after_ready.contains(&"key".to_string())).await;
+    assert!(!seen.lock().unwrap().after_ready.iter().any(|o| o == "put" || o == "argv" || o == "size"), "{:?}", seen.lock().unwrap().after_ready);
+    assert_eq!(start["resize"], false);
+    assert!(seen.lock().unwrap().connect.iter().any(|(k, v)| k == "disable-display-resize" && v == "true"));
 
     // 票證只能用一次。/ The ticket is single use.
     let mut again = open_ws(&lab, &start).await.unwrap();
@@ -707,4 +721,88 @@ async fn desktop_ends_when_access_is_lost() {
     }
     let msg = found.expect("desktop_close")["message"].as_str().unwrap().to_string();
     assert!(msg.contains("(ended,") && msg.contains("the login account is no longer allowed"), "{msg}");
+}
+
+/// 解析度：RDP 預設跟著瀏覽器的框（resize-method display-update），站台上限等比夾住握手的大小與之後的每個
+/// `size`；固定解析度的 RDP 不帶 resize-method、`size` 停在中繼；VNC 要求跟著時不帶 disable-display-resize。
+/// Resolution: RDP follows the frame by default, the site ceiling scales the handshake and every later `size`
+/// keeping the shape; a fixed RDP size drops `size` at the relay; a VNC session asked to follow omits disable-display-resize.
+#[tokio::test]
+async fn desktop_resolution_follows_the_window_within_the_site_limit() {
+    let (guacd, seen) = fake_guacd().await;
+    let Some(mut lab) = Lab::start().await else { return };
+    lab.reconfigure(|c| {
+        c.guacd_addr = guacd.clone();
+        c.desktop_callback_host = "127.0.0.1".into();
+    });
+    let app = &lab.app;
+    let alice = lab.user("alice").await;
+    let pc = lab.machine("pc", &[("ubuntu", &[&lab.service])], true).await;
+    let dev = lab.device(&alice, "pc", &pc).await;
+    lab.username(&alice, &dev, "ubuntu").await;
+    let desktop = echo_service().await;
+    let id = dev.tunnel_id;
+    let r = app.post("/api/site/settings", Some(&lab.admin_token), json!({"desktop_max_resolution": 1600})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    let token = alice.token.clone();
+    let start = |body: Value| {
+        let token = token.clone();
+        async move { app.post(&format!("/api/reverse/server/{id}/desktop/start"), Some(&token), body).await }
+    };
+    let get = |n: &str| seen.lock().unwrap().connect.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
+
+    // RDP、跟著視窗（預設）：2880×1800 的框（HiDPI）→ 等比夾成 1600×1000。/ RDP following the window (the default).
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "a", "password": "b"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["resize"], true);
+    assert_eq!(r.json["max_resolution"], 1600);
+    let mut ws = open_ws_sized(&lab, &r.json, 2880, 1800).await.unwrap();
+    recv(&mut ws).await.unwrap();
+    wait_for("the RDP handshake", || get("resize-method").is_some()).await;
+    assert_eq!(get("resize-method").as_deref(), Some("display-update"));
+    assert_eq!((get("width").as_deref(), get("height").as_deref()), (Some("1600"), Some("1000")));
+    assert_eq!(seen.lock().unwrap().handshake_size[..2], ["1600".to_string(), "1000".to_string()]);
+    // 視窗變大：瀏覽器送 3840×2160，guacd 拿到 1600×900；變小的 1280×720 原樣過。
+    // The window grows: 3840×2160 reaches guacd as 1600×900; a smaller 1280×720 passes unchanged.
+    ws.send(Message::Text("4.size,4.3840,4.2160;4.size,4.1280,3.720;".into())).await.unwrap();
+    wait_for("both sizes at guacd", || seen.lock().unwrap().sizes.len() >= 2).await;
+    assert_eq!(seen.lock().unwrap().sizes[..2], [vec!["1600".to_string(), "900".to_string()], vec!["1280".to_string(), "720".to_string()]]);
+    drop(ws);
+    wait_for("the session to end", || app.state.desktop.count() == 0).await;
+    seen.lock().unwrap().sizes.clear();
+    seen.lock().unwrap().connect.clear();
+
+    // RDP、固定解析度：不帶 resize-method，`size` 停在中繼。/ A fixed RDP size: no resize-method, `size` dropped.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "login": "a", "password": "b", "resize": false})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["resize"], false);
+    let mut ws = open_ws_sized(&lab, &r.json, 1280, 720).await.unwrap();
+    recv(&mut ws).await.unwrap();
+    wait_for("the fixed handshake", || get("width").is_some()).await;
+    assert_eq!(get("resize-method").as_deref(), Some(""), "guacd sees no resize method");
+    assert_eq!((get("width").as_deref(), get("height").as_deref()), (Some("1280"), Some("720")));
+    ws.send(Message::Text("4.size,4.1920,4.1080;3.key,5.65307,1.1;".into())).await.unwrap();
+    wait_for("key at guacd", || seen.lock().unwrap().after_ready.iter().filter(|o| *o == "key").count() >= 1).await;
+    assert!(seen.lock().unwrap().sizes.is_empty(), "{:?}", seen.lock().unwrap().sizes);
+    let ev = events(&lab, &alice.token, id).await;
+    assert!(ev.iter().any(|e| e["event"] == "desktop_open" && e["message"].as_str().unwrap().contains("(RDP, fixed size)")), "{ev:?}");
+    drop(ws);
+    wait_for("the session to end", || app.state.desktop.count() == 0).await;
+    seen.lock().unwrap().connect.clear();
+
+    // VNC、要求跟著視窗：guacd 不帶 disable-display-resize，`size` 夾過後轉送。/ VNC asked to follow the window.
+    let r = start(json!({"protocol": "vnc", "username": "ubuntu", "port": desktop, "password": "b", "resize": true})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text);
+    assert_eq!(r.json["resize"], true);
+    let mut ws = open_ws_sized(&lab, &r.json, 1024, 768).await.unwrap();
+    recv(&mut ws).await.unwrap();
+    wait_for("the VNC handshake", || get("disable-display-resize").is_some()).await;
+    assert_eq!(get("disable-display-resize").as_deref(), Some(""));
+    ws.send(Message::Text("4.size,4.2400,4.1200;".into())).await.unwrap();
+    wait_for("the VNC size at guacd", || !seen.lock().unwrap().sizes.is_empty()).await;
+    assert_eq!(seen.lock().unwrap().sizes[0], ["1600".to_string(), "800".to_string()]);
+
+    // 壞的值：400。/ A bad value is a field error.
+    let r = start(json!({"protocol": "rdp", "username": "ubuntu", "port": desktop, "resize": "yes"})).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
 }
