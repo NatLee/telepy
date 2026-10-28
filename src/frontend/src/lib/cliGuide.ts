@@ -10,6 +10,7 @@
  */
 import type { TranslationKey } from "../locales/en.ts";
 import type { SpotState } from "./flow.ts";
+import type { StepState } from "./stepTabs.ts";
 
 export const CLI_REPO = "https://github.com/NatLee/telepy";
 export const CLI_RELEASES_URL = `${CLI_REPO}/releases`;
@@ -354,16 +355,21 @@ export const CLI_ENV: readonly CliEnvVar[] = [
 
 // ---------------------------------------------------------------- the getting-started steps
 
-export type StepState = "done" | "current" | "todo";
+export type CliStartStep = "install" | "signIn" | "try";
+
+export const CLI_START_STEPS: readonly CliStartStep[] = ["install", "signIn", "try"];
 
 /**
  * 三步（安裝 → 登入 → 試試看）：看過 CLI 的登入（Connected apps 裡有 `telepy CLI (…)`）就表示裝好也登入了。
- * 用 token 登入的看不出來，所以登入那步不會因為有 token 就打勾。
+ * 用 token 登入的看不出來，所以登入那步不會因為有 token 就打勾。「試試看」沒辦法從這邊看出來，所以不會打勾。
+ * 頁面打開在第一個沒打勾的那一步（`firstOpenStep`）。
  * The three steps (install → sign in → try it): a CLI sign-in under Connected apps means it is installed and
- * signed in. A token sign-in can't be told apart, so having tokens never ticks the sign-in step.
+ * signed in. A token sign-in can't be told apart, so having tokens never ticks the sign-in step; "try it" can't be
+ * seen from here, so it is never ticked. The page opens on the first unticked step (`firstOpenStep`).
  */
-export function startSteps(cliSignIns: number): [StepState, StepState, StepState] {
-    return cliSignIns > 0 ? ["done", "done", "current"] : ["current", "todo", "todo"];
+export function startSteps(cliSignIns: number): Record<CliStartStep, StepState> {
+    const signed = cliSignIns > 0;
+    return { install: signed ? "done" : "todo", signIn: signed ? "done" : "todo", try: "todo" };
 }
 
 // ---------------------------------------------------------------- what the terminal prints

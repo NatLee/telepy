@@ -108,11 +108,13 @@ export function StepTabs<T extends string>({ tabs, value, onChange, className, .
 }
 
 /** 對話框底部：完成幾步 + 上一步 / 下一步（最後一步換成 `final`，例如關閉）。/ Footer: progress plus back / next. */
-export function StepFooter<T extends string>({ tabs, value, onChange, final }: {
+export function StepFooter<T extends string>({ tabs, value, onChange, final, progress = true }: {
     tabs: StepTab<T>[];
     value: T;
     onChange: (value: T) => void;
     final?: React.ReactNode;
+    /** 「完成 N / M」；頁面上的步驟列已經看得出進度時關掉。/ "N of M done"; off where a step bar already shows it. */
+    progress?: boolean;
 }) {
     const { t } = useI18n();
     const next = nextStep(tabs, value);
@@ -122,10 +124,12 @@ export function StepFooter<T extends string>({ tabs, value, onChange, final }: {
     return (
         <>
             {/* 手機上不顯示（上面的圓點已經看得出進度），按鈕列才放得進一行。/ Hidden on phones: the dots already show it. */}
-            <span className={cn("mr-auto text-sm max-sm:hidden", done === tabs.length ? "text-success" : "text-muted-foreground")}>
-                {done === tabs.length && <Check size={14} className="mr-1 inline align-[-2px]" aria-hidden />}
-                {t("ui.steps.progress", { done, total: tabs.length })}
-            </span>
+            {progress && (
+                <span className={cn("mr-auto text-sm max-sm:hidden", done === tabs.length ? "text-success" : "text-muted-foreground")}>
+                    {done === tabs.length && <Check size={14} className="mr-1 inline align-[-2px]" aria-hidden />}
+                    {t("ui.steps.progress", { done, total: tabs.length })}
+                </span>
+            )}
             {prev && (
                 <Button type="button" variant="outline" onClick={() => onChange(prev)} aria-label={t("ui.steps.back")} title={t("ui.steps.back")}>
                     <ArrowLeft />

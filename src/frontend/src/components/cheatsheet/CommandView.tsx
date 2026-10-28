@@ -30,13 +30,16 @@ function useCopy(text: string) {
     return { copied, copy };
 }
 
-function CopyButton({ text, big = false }: { text: string; big?: boolean }) {
+function CopyButton({ text, big = false, onCopy }: { text: string; big?: boolean; onCopy?: () => void }) {
     const { t } = useI18n();
     const { copied, copy } = useCopy(text);
     return (
         <button
             type="button"
-            onClick={copy}
+            onClick={() => {
+                copy();
+                onCopy?.();
+            }}
             title={t("ui.copyToClipboard")}
             aria-label={t("ui.copyToClipboard")}
             className={cn(
@@ -85,7 +88,7 @@ function Tokens({ segments, wrap = false }: { segments: Segment[]; wrap?: boolea
 }
 
 /** 主指令列：只有指令和一顆大大的複製鈕。/ The main command bar: just the command and a big Copy button. */
-export function CommandBar({ segments }: { segments: Segment[] }) {
+export function CommandBar({ segments, onCopy }: { segments: Segment[]; onCopy?: () => void }) {
     const text = segmentsToString(segments);
     return (
         <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0b1020] p-3 pl-4 shadow-card sm:flex-row sm:items-center">
@@ -93,7 +96,7 @@ export function CommandBar({ segments }: { segments: Segment[] }) {
                 <span className="select-none text-slate-500">$ </span>
                 <Tokens segments={segments} wrap />
             </pre>
-            <CopyButton text={text} big />
+            <CopyButton text={text} big onCopy={onCopy} />
         </div>
     );
 }
