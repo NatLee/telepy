@@ -23,6 +23,7 @@ import type { MatrixSection } from "@/lib/deviceMatrix";
 import { Badge } from "@/components/ui/badge";
 import { TunnelEndpointChip, TunnelLanChip } from "@/components/tunnels/TunnelEndpoint";
 import { Button } from "@/components/ui/button";
+import { HostQuickActions } from "@/components/network/HostOpen";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import type { TranslationKey } from "@/locales/en";
@@ -31,7 +32,7 @@ import type { LanHost, TopologyTunnel } from "@/types/lan";
 
 const KIND_ORDER: readonly HostKind[] = ["ssh", "desktop", "files", "web", "other"];
 
-const KIND_LABEL: Record<HostKind, TranslationKey> = {
+export const KIND_LABEL: Record<HostKind, TranslationKey> = {
     ssh: "network.kind.ssh",
     desktop: "network.kind.desktop",
     files: "network.kind.files",
@@ -39,7 +40,7 @@ const KIND_LABEL: Record<HostKind, TranslationKey> = {
     other: "network.kind.other",
 };
 
-const KIND_ICON: Record<HostKind, React.ReactNode> = {
+export const KIND_ICON: Record<HostKind, React.ReactNode> = {
     ssh: <Terminal size={16} />,
     desktop: <Monitor size={16} />,
     files: <HardDrive size={16} />,
@@ -47,7 +48,7 @@ const KIND_ICON: Record<HostKind, React.ReactNode> = {
     other: <CircleDot size={16} />,
 };
 
-const KIND_TONE: Record<HostKind, string> = {
+export const KIND_TONE: Record<HostKind, string> = {
     ssh: "bg-success/12 text-success ring-success/20",
     desktop: "bg-primary/10 text-primary ring-primary/15",
     files: "bg-warning/12 text-warning ring-warning/20",
@@ -99,47 +100,62 @@ function Branch({ last, first, tickTop, solid, hideFirstStubOnWide, children }: 
     );
 }
 
-function HostChip({ host, selected, onOpen }: { host: LanHost; selected: boolean; onOpen: (h: LanHost) => void }) {
+/** 一列主機能做的事（樹與表共用）。/ What a host entry can do (shared by the tree and the table). */
+export interface HostActions {
+    onOpenHost: (h: LanHost, tab?: "terminal" | "commands") => void;
+    onOpenHere: (h: LanHost) => void;
+    onNavigate: (h: LanHost) => void;
+}
+
+function HostChip({ host, tunnel, online, selected, actions }: { host: LanHost; tunnel: TopologyTunnel; online: boolean; selected: boolean; actions: HostActions }) {
     const { t } = useI18n();
     const kind = hostKind(host);
     const name = hostName(host);
     const shown = host.open_ports.slice(0, 4);
     const more = host.open_ports.length - shown.length;
+    const ssh = hasSsh(host);
     return (
-        <button
-            type="button"
-            onClick={() => onOpen(host)}
-            aria-current={selected ? "true" : undefined}
-            title={name}
+        // 外框是 div：裡面的「開主機」與兩個終端機圖示是並排的按鈕，不互相包。/ A div frame: the open button and the two terminal icons sit side by side, not nested.
+        <div
             className={cn(
-                "group flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition-[background-color,box-shadow] hover:bg-card hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @3xl:w-80",
+                "group flex w-full items-start rounded-xl border transition-[background-color,box-shadow] hover:bg-card hover:shadow-card @3xl:w-80",
                 selected ? "border-primary/60 bg-card ring-1 ring-primary/30" : "border-border bg-surface"
             )}
         >
-            <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset", KIND_TONE[kind])} aria-hidden>
-                {KIND_ICON[kind]}
-            </span>
-            <span className="min-w-0 flex-1">
-                <span className="flex items-baseline gap-1.5">
-                    <span className="line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
-                    {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
+            <button
+                type="button"
+                onClick={() => actions.onOpenHost(host)}
+                aria-current={selected ? "true" : undefined}
+                title={name}
+                className="flex min-w-0 flex-1 items-start gap-3 rounded-xl py-2 pl-3 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+                <span className={cn("grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset", KIND_TONE[kind])} aria-hidden>
+                    {KIND_ICON[kind]}
                 </span>
-                {/* 位址、廠牌、port 放不下就換行，不截斷；port 整組一起換到下一行。/ Address, vendor and ports wrap rather than being cut; the ports move as one group. */}
-                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-                    {name !== host.address && <span className="font-mono [overflow-wrap:anywhere]">{host.address}</span>}
-                    {host.vendor && <span className="text-[0.6875rem]" title={host.vendor}>{shortVendor(host.vendor)}</span>}
-                    <span className="flex min-w-0 flex-wrap items-center gap-1">
-                        {shown.map((p) => (
-                            <span key={p} className={cn("rounded px-1 font-mono text-[0.6875rem] leading-4", p === host.ssh_port && hasSsh(host) ? "bg-success/12 text-success" : "bg-muted")}>
-                                {p}
-                            </span>
-                        ))}
-                        {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
-                        {host.open_ports.length === 0 && <span className="text-[0.6875rem]">{t("network.noOpenPorts")}</span>}
+                <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-1.5">
+                        <span className="line-clamp-2 min-w-0 text-sm text-foreground [overflow-wrap:anywhere]">{name}</span>
+                        {host.source === "manual" && <span className="shrink-0 text-[0.6875rem] text-muted-foreground">{t("network.manualTag")}</span>}
+                    </span>
+                    {/* 位址、廠牌、port 放不下就換行，不截斷；port 整組一起換到下一行。/ Address, vendor and ports wrap rather than being cut; the ports move as one group. */}
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
+                        {name !== host.address && <span className="font-mono [overflow-wrap:anywhere]">{host.address}</span>}
+                        {host.vendor && <span className="text-[0.6875rem]" title={host.vendor}>{shortVendor(host.vendor)}</span>}
+                        <span className="flex min-w-0 flex-wrap items-center gap-1">
+                            {shown.map((p) => (
+                                <span key={p} className={cn("rounded px-1 font-mono text-[0.6875rem] leading-4", p === host.ssh_port && ssh ? "bg-success/12 text-success" : "bg-muted")}>
+                                    {p}
+                                </span>
+                            ))}
+                            {more > 0 && <span className="text-[0.6875rem]">+{more}</span>}
+                            {host.open_ports.length === 0 && <span className="text-[0.6875rem]">{t("network.noOpenPorts")}</span>}
+                        </span>
                     </span>
                 </span>
-            </span>
-        </button>
+            </button>
+            {/* 有 SSH 的主機：直接開終端機（這裡 / 終端機頁）。/ SSH hosts: open a terminal right away (here / terminal page). */}
+            {ssh && <HostQuickActions compact host={host} tunnel={tunnel} online={online} onOpenHere={actions.onOpenHere} onOpenPanel={actions.onOpenHost} onNavigate={actions.onNavigate} className="pr-1 pt-1.5" />}
+        </div>
     );
 }
 
@@ -308,7 +324,7 @@ function DeviceRow({ tn, online, onExpand }: { tn: TopologyTunnel; online: boole
     );
 }
 
-function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, selectedHostId, hostPager, onOpenHost, onScan, onAdd }: {
+function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, selectedHostId, hostPager, hostActions, onScan, onAdd }: {
     tn: TopologyTunnel;
     online: boolean;
     last: boolean;
@@ -318,7 +334,7 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
     focused: boolean;
     selectedHostId: number | null;
     hostPager: PaginationState;
-    onOpenHost: (h: LanHost) => void;
+    hostActions: HostActions;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
 }) {
@@ -355,7 +371,7 @@ function DeviceBranch({ tn, online, last, first, expanded, onToggle, focused, se
                     <ul className="ml-2.5 @md:ml-5 @3xl:ml-0">
                         {hosts.map((h, i) => (
                             <Branch key={h.id} last={i === hosts.length - 1 && !paged} first={i === 0} tickTop={32} solid={online} hideFirstStubOnWide>
-                                <HostChip host={h} selected={h.id === selectedHostId} onOpen={onOpenHost} />
+                                <HostChip host={h} tunnel={tn} online={online} selected={h.id === selectedHostId} actions={hostActions} />
                             </Branch>
                         ))}
                         {paged && (
@@ -418,7 +434,7 @@ export interface TopologyExpansion {
     toggleFolder: (key: string) => void;
 }
 
-export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion, isOnline, focusTunnel, selectedHostId = null, onOpenHost, onScan, onAdd }: {
+export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion, isOnline, focusTunnel, selectedHostId = null, hostActions, onScan, onAdd }: {
     /** 篩選後的裝置（沒分段時用）。/ The filtered devices (used without sections). */
     tunnels: TopologyTunnel[];
     /** 依群組分段（null = 不分段）。/ Group sections (null = no sections). */
@@ -430,7 +446,7 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
     isOnline: (tn: TopologyTunnel) => boolean;
     focusTunnel: string | null;
     selectedHostId?: number | null;
-    onOpenHost: (h: LanHost) => void;
+    hostActions: HostActions;
     onScan: (tn: TopologyTunnel) => void;
     onAdd: (tn: TopologyTunnel) => void;
 }) {
@@ -457,7 +473,7 @@ export function TopologyTree({ tunnels, sections, filtering, pageKey, expansion,
                         focused={focusTunnel === String(tn.id)}
                         selectedHostId={selectedHostId}
                         hostPager={hostPages.pager(String(tn.id), tn.hosts.length)}
-                        onOpenHost={onOpenHost}
+                        hostActions={hostActions}
                         onScan={onScan}
                         onAdd={onAdd}
                     />

@@ -15,6 +15,7 @@ export function SectionHeading({
     description,
     action,
     as: Tag = "h3",
+    wrapTitle = false,
     className,
 }: {
     icon?: React.ReactNode;
@@ -22,6 +23,8 @@ export function SectionHeading({
     description?: React.ReactNode;
     action?: React.ReactNode;
     as?: "h2" | "h3" | "h4";
+    /** 標題放不下時換行，不截成「…」（窄面板裡的長標題）。/ Wrap a long title instead of cutting it to "…" (narrow panels). */
+    wrapTitle?: boolean;
     className?: string;
 }) {
     return (
@@ -29,7 +32,7 @@ export function SectionHeading({
             <div className="min-w-0 flex-1">
                 <Tag className="flex items-center gap-2 text-base leading-snug text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground">
                     {icon}
-                    <span className="min-w-0 truncate">{title}</span>
+                    <span className={cn("min-w-0", wrapTitle ? "[overflow-wrap:anywhere]" : "truncate")}>{title}</span>
                 </Tag>
                 {description && <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">{description}</p>}
             </div>

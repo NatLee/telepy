@@ -26,7 +26,7 @@ function ForwardRow({ target, host, port, mode }: { target: ConnectTarget; host:
     const name = serviceName(port);
     return (
         <li className="space-y-1">
-            <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+            <p className="flex flex-wrap items-baseline gap-x-2 text-sm [overflow-wrap:anywhere]">
                 <span className="font-mono text-foreground">{port}</span>
                 {name && <span className="text-muted-foreground">{name}</span>}
                 <span className="text-xs text-muted-foreground">→ {url ? t("network.cmd.forwardOpen", { url }) : t("network.cmd.forwardLocal", { port: local })}</span>
@@ -51,7 +51,9 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
     const login1 = lanSshSegments(target, host, login, mode);
 
     return (
-        <div className="space-y-5">
+        // 依面板自己的寬度排（旁邊有樹時面板只有 34rem，看視窗寬度的 sm: 會排錯）。
+        // Laid out by the panel's own width (beside the tree it is only 34rem, so viewport breakpoints guess wrong).
+        <div className="@container min-w-0 space-y-5">
             <div className="space-y-1.5">
                 <Segmented
                     options={[
@@ -70,15 +72,15 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
                 </p>
             </div>
 
-            <Section title={t("network.cmd.loginTitle")}>
+            <Section wrapTitle title={t("network.cmd.loginTitle")}>
                 <CommandBar segments={login1} />
-                <details className="group mt-2">
+                <details className="group min-w-0">
                     <summary className="cursor-pointer text-xs text-primary hover:underline">{t("network.cmd.breakdown")}</summary>
-                    <div className="mt-2"><AnnotatedCommand segments={login1} /></div>
+                    <div className="mt-2 min-w-0"><AnnotatedCommand segments={login1} /></div>
                 </details>
             </Section>
 
-            <Section title={t("network.cmd.forwardTitle")} description={t("network.cmd.forwardHint")}>
+            <Section wrapTitle title={t("network.cmd.forwardTitle")} description={t("network.cmd.forwardHint")}>
                 {ports.length > 0 && (
                     <ul className="space-y-3">
                         {ports.map((p) => <ForwardRow key={p} target={target} host={host} port={p} mode={mode} />)}
@@ -93,8 +95,8 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
                 </div>
             </Section>
 
-            <Section title={t("network.cmd.copyTitle")}>
-                <div className="grid gap-3 sm:grid-cols-[auto_1fr_1fr] sm:items-end">
+            <Section wrapTitle title={t("network.cmd.copyTitle")}>
+                <div className="grid grid-cols-[minmax(0,1fr)] gap-3 @lg:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] @lg:items-end">
                     <Segmented
                         options={[
                             { value: "up" as const, label: t("sheet.field.upload") },
@@ -118,7 +120,7 @@ export function LanCommands({ host, target, login }: { host: LanHost; target: Co
             </Section>
 
             {mode === "alias" && (
-                <Section title={t("network.configTitle")}>
+                <Section wrapTitle title={t("network.configTitle")}>
                     <CodeBlock language="ssh" value={lanSshConfig(target.alias, host, login)} />
                     <p className="text-xs text-muted-foreground">
                         {tn("network.configThen", { command: <code className="font-mono">ssh {lanAlias(target.alias, host)}</code> })}
