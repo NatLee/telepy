@@ -11,6 +11,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Constant: container names for Telepy
+PROJECT_NAME=${PROJECT_NAME:-main}  # same default as .env.example / docker-compose.yml
 CONTAINER_WEB_NAME="telepy-web-${PROJECT_NAME}"
 
 # Function to print colored messages
@@ -70,7 +71,7 @@ case "$1" in
     *)
         print_message "$YELLOW" "Usage: $0 <sub-command> [args]"
         print_message "$BLUE" "Sub-commands:"
-        print_message "$GREEN" "  keygen: Generate the SSH gateway host keys and the backend service key (run once before the first start; devices pin the host keys)."
+        print_message "$GREEN" "  keygen: Generate the SSH gateway host keys and the backend service key (keys that already exist are kept: devices pin them)."
         print_message "$GREEN" "  create-superuser: Create an admin account for Telepy management (the first account to sign up is an admin anyway)."
         print_message "$GREEN" "  shell: Open a shell in the backend container."
         print_message "$GREEN" "  migration: Reconcile the database schema (also runs automatically on start)."

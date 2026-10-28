@@ -1,9 +1,11 @@
 # Download the DB-IP Lite country + ASN databases (CC BY 4.0) into ./telepy-data/geoip (/data/geoip in the
-# container, the default GEOIP_DIR). The backend reads them at startup; lookups never leave the server.
+# container, the default GEOIP_DIR; a GEOIP_DIR elsewhere under /data moves it to the matching ./telepy-data
+# folder). The backend reads them at startup; lookups never leave the server.
 
 . "$PSScriptRoot/common.ps1"
 
-$Dest = "./telepy-data/geoip"
+$Dest = Get-DataHostDir "GEOIP_DIR" "/data/geoip"
+if (-not $Dest) { exit 1 }
 New-Item -Path $Dest -ItemType Directory -Force | Out-Null
 
 function Get-DbipDatabase([string]$Kind) {
@@ -32,7 +34,9 @@ function Get-DbipDatabase([string]$Kind) {
 }
 
 Write-ColorMessage $Colors.Blue "Downloading DB-IP Lite databases into $Dest ..."
-$ok = (Get-DbipDatabase "country") -and (Get-DbipDatabase "asn")
+$country = Get-DbipDatabase "country"
+$asn = Get-DbipDatabase "asn"
+$ok = $country -and $asn
 if ($ok) {
     Write-ColorMessage $Colors.Green "Done. Restart the backend to load them: docker compose restart backend"
     Write-ColorMessage $Colors.Yellow "IP geolocation by DB-IP (https://db-ip.com), CC BY 4.0. Re-run monthly for fresh data."

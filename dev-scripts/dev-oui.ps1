@@ -3,7 +3,8 @@
 
 . "$PSScriptRoot/common.ps1"
 
-$Dest = "./telepy-data/oui"
+$Dest = Get-DataHostDir "OUI_DIR" "/data/oui"
+if (-not $Dest) { exit 1 }
 $Url = "https://standards-oui.ieee.org/oui/oui.csv"
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 $Tmp = Join-Path $Dest ".oui.csv.tmp"
