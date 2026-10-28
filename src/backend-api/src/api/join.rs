@@ -93,9 +93,9 @@ fn notify_owner(state: &AppState, t: &Ticket) {
     state.hub.notify_user(t.user_id, &json!({ "action": "JOIN-UPDATED", "join_id": t.id, "phase": t.phase, "tunnel_id": t.tunnel_id, "details": details }));
 }
 
-/// 隧道名稱（要求的或主機名稱）：與建立隧道相同的規則。/ The same rule as creating a tunnel.
+/// 隧道名稱（要求的）：與建立隧道相同的規則（[`crate::tunnel_name`]）。/ The same rule as creating a tunnel.
 fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 64 && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    crate::tunnel_name::ssh_safe(name)
 }
 
 #[utoipa::path(post, path = "/api/reverse/join", tag = "Device join", security(("bearer" = [])), request_body = super::schemas::JoinRequest, responses((status = 201, body = super::schemas::JoinTicketCreated), (status = 400, body = Object), (status = 429, description = "Too many open join commands", body = super::schemas::JoinError)))]
@@ -103,9 +103,9 @@ async fn create_ticket(State(state): State<AppState>, AuthUser(user): AuthUser, 
     let name = json_str(&body, "name").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     if let Some(n) = &name {
         if !valid_name(n) {
-            return Err(ApiError::field("name", "Start with a letter; use letters, digits, '.', '_' or '-' (up to 64)."));
+            return Err(ApiError::field("name", crate::tunnel_name::problem(n).map_or("", |p| p.message())));
         }
-        if db::tunnels::name_taken(&state.db, n).await? {
+        if db::tunnels::name_taken_ignoring_case(&state.db, n, None).await? {
             return Err(ApiError::field("name", "A tunnel with this name already exists."));
         }
     }
@@ -212,7 +212,7 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     let requested = json_str(body, "name").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     if let Some(n) = &requested {
         if !valid_name(n) {
-            return Err(bad("--name must start with a letter and use letters, digits, '.', '_' or '-'"));
+            return Err(bad("--name must start with a letter or digit and use letters, digits, '.', '_' or '-' (up to 63)"));
         }
     }
 
@@ -224,7 +224,8 @@ async fn do_register(state: &AppState, headers: &HeaderMap, t: &Ticket, body: &V
     }
     // 這台機器已經是誰的（host key 被哪些隧道釘選）？別的帳號的 → 拒絕並告訴那位擁有者；自己的 → 提醒。
     // Whose machine is this already (who pins its host key)? Another account's → refuse and tell its owner; mine → a note.
-    let proposed_name = requested.clone().or_else(|| t.name.clone()).unwrap_or_else(|| if hostname.is_empty() { "device".into() } else { hostname.clone() });
+    // 沒指定名稱就用主機名稱，整理成合規的名稱（例如 `Nat's MacBook` → `Nat-s-MacBook`）。/ Else the hostname, made valid.
+    let proposed_name = requested.clone().or_else(|| t.name.clone()).unwrap_or_else(|| crate::tunnel_name::suggest(&hostname));
     let mut same_machine_as = None;
     for hk in &host_keys {
         let others = db::host_keys::claimants(&state.db, &hk.line, existing.as_ref().map_or(0, |e| e.id)).await.map_err(internal)?;
@@ -334,7 +335,7 @@ async fn create_tunnel(state: &AppState, user_id: i64, base: &str, key: &str, de
     for _attempt in 0..3 {
         let mut name = None;
         for candidate in join::name_candidates(base) {
-            if !db::tunnels::name_taken(&state.db, &candidate).await.map_err(internal)? {
+            if !db::tunnels::name_taken_ignoring_case(&state.db, &candidate, None).await.map_err(internal)? {
                 name = Some(candidate);
                 break;
             }

@@ -10,6 +10,7 @@ import { AlertTriangle, CheckCircle2, ChevronRight, Fingerprint, KeyRound, Lapto
 import { Callout } from "@/components/ui/callout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/lib/i18n";
 import type { CreateTunnelWizard } from "@/hooks/useCreateTunnelWizard";
@@ -142,9 +143,13 @@ export function StepDevice({ wizard }: { wizard: CreateTunnelWizard }) {
                         onChange={(e) => d.onNameChange(e.target.value)}
                         placeholder={t("wizard.hostNamePlaceholder")}
                         aria-invalid={!!d.errors.name || undefined}
-                        className="h-10"
+                        aria-describedby="wizard-name-help"
+                        autoComplete="off"
+                        spellCheck={false}
+                        className="h-10 font-mono"
                     />
-                    {d.errors.name ? <FieldError>{d.errors.name}</FieldError> : <p className="text-xs text-muted-foreground">{t("wizard.device.nameHelper")}</p>}
+                    {/* 名稱會變成 ssh 的主機名稱：規則一直看得到，打錯當下就說。/ The name becomes the ssh host name: rules always shown. */}
+                    <TunnelNameHelp id="wizard-name-help" value={d.hostName} error={d.errors.name} onUse={d.onNameChange} />
                 </div>
                 <div className="space-y-1.5">
                     <label htmlFor="wizard-port" className="block text-sm font-medium text-foreground">{t("wizard.device.port")}</label>

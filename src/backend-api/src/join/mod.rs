@@ -244,24 +244,18 @@ impl JoinTickets {
     }
 }
 
-/// 隧道名稱：英數與 `._-`、最多 64 字、要以字母開頭（沿用建立隧道的規則）。
-/// A tunnel name from a hostname: `[A-Za-z0-9._-]`, ≤ 64, starting with a letter (the create rule).
+/// 從主機名稱得到隧道名稱：英數與 `._-`、字母或數字開頭、最多 63 字（建立隧道的規則）。
+/// A tunnel name from a hostname: `[A-Za-z0-9._-]`, starting with a letter or digit, ≤ 63 (the create rule).
 pub fn tunnel_name_from(raw: &str) -> String {
-    let cleaned: String = raw.trim().chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).collect();
-    let cleaned = cleaned.trim_matches(|c| c == '-' || c == '.').to_string();
-    let named = match cleaned.chars().next() {
-        Some(c) if c.is_ascii_alphabetic() => cleaned,
-        Some(_) => format!("device-{cleaned}"),
-        None => "device".to_string(),
-    };
-    named.chars().take(64).collect()
+    // 與網頁建立隧道同一套規則（[`crate::tunnel_name`]）。/ The same rule as creating a tunnel in the web.
+    crate::tunnel_name::suggest(raw)
 }
 
 /// 名稱撞到就加 `-2`、`-3`…（全站唯一）。/ `name`, then `name-2`, `name-3`… (names are globally unique).
 pub fn name_candidates(base: &str) -> impl Iterator<Item = String> + '_ {
     std::iter::once(base.to_string()).chain((2..=99).map(move |i| {
         let suffix = format!("-{i}");
-        let keep = 64usize.saturating_sub(suffix.len());
+        let keep = crate::tunnel_name::MAX_LEN.saturating_sub(suffix.len());
         format!("{}{suffix}", base.chars().take(keep).collect::<String>())
     }))
 }
@@ -303,13 +297,13 @@ mod tests {
     #[test]
     fn names_from_hostnames() {
         assert_eq!(tunnel_name_from("office-pi.local"), "office-pi.local");
-        assert_eq!(tunnel_name_from("123box"), "device-123box");
+        assert_eq!(tunnel_name_from("123box"), "123box", "a digit may start a name");
         assert_eq!(tunnel_name_from("  my host!  "), "my-host");
         assert_eq!(tunnel_name_from("---"), "device");
-        assert_eq!(tunnel_name_from(&"a".repeat(80)).len(), 64);
+        assert_eq!(tunnel_name_from(&"a".repeat(80)).len(), 63);
         let c: Vec<String> = name_candidates("pi").take(3).collect();
         assert_eq!(c, vec!["pi", "pi-2", "pi-3"]);
-        assert_eq!(name_candidates(&"b".repeat(64)).nth(1).unwrap().len(), 64);
+        assert_eq!(name_candidates(&"b".repeat(63)).nth(1).unwrap().len(), 63);
         assert_eq!(clean_hostname("pi;rm -rf /\n"), "pirm-rf");
     }
 

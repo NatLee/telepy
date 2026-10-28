@@ -111,7 +111,7 @@ fn push_device_stanzas(out: &mut String, t: &Tunnel, accounts: &[&db::tunnels::U
         .iter()
         .zip(aliases)
         .map(|(u, alias)| {
-            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name, server_alias));
+            out.push_str(&scripts::render_client_config(&alias, &u.username, &t.host_friendly_name, t.reverse_port, server_alias));
             json!({ "alias": alias, "username": u.username, "username_id": u.id })
         })
         .collect()

@@ -45,8 +45,8 @@ async fn tunnel_lifecycle_and_dashboard() {
     // validation messages
     let r = app.get("/api/reverse/issue/token", Some(&admin)).await;
     let t = r.json["token"].as_str().unwrap().to_string();
-    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&admin), json!({"host_friendly_name": "1abc", "key": KEY_B})).await;
-    assert_eq!(r.json["error"], "Host friendly name cannot start with a number.");
+    let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&admin), json!({"host_friendly_name": "-abc", "key": KEY_B})).await;
+    assert_eq!(r.json["error"], "Start with a letter or a digit: the name becomes an SSH host name.");
     let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&admin), json!({"host_friendly_name": "abc", "key": "garbage"})).await;
     assert_eq!(r.json["error"], "Invalid SSH public key format");
     let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&admin), json!({"host_friendly_name": "box-a", "key": KEY_B})).await;

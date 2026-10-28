@@ -24,6 +24,8 @@ import { RecordingSetting } from "@/components/tunnels/RecordingSetting";
 import { useFeatures } from "@/hooks/useFeatures";
 import { TerminalDetachSetting } from "@/components/tunnels/TerminalDetachSetting";
 import { DeviceFactsSection } from "@/components/tunnels/DeviceFacts";
+import { TunnelNameHelp } from "@/components/tunnels/TunnelNameHelp";
+import { sshSafeName, suggestTunnelName } from "@/lib/tunnelName";
 import { Activity, Cpu, Save, Server, Loader2, KeyRound, Pencil, Hash, Network, ShieldCheck, Tag, UserCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -196,9 +198,24 @@ export function TunnelDetailsModal({ isOpen, onClose, tunnelId, onUpdate, initia
                     <div role="tabpanel" hidden={activeTab !== "general"} className="space-y-6">
                         {!canEdit && <Callout tone="info">{t("tunnelDetails.readOnly")}</Callout>}
                         <Section icon={<Pencil />} title={t("tunnelDetails.basics")}>
-                            <Field id="tunnel-details-name" label={t("tunnelDetails.hostFriendlyName")} required={canEdit} hint={canEdit ? t("tunnelDetails.nameHint") : undefined} error={errors.host_friendly_name}>
-                                <Input value={form.host_friendly_name} onChange={(e) => setField("host_friendly_name", e.target.value)} disabled={!canEdit} maxLength={100} />
-                            </Field>
+                            {/* 名稱 = ssh 的主機名稱：規則與為什麼在欄位下面（不放進 Field 的 hint：那是 <p>）。
+                                The name is the ssh host name: rules + why under the field (not Field's hint, which is a <p>). */}
+                            <div className="space-y-1.5">
+                                <Field id="tunnel-details-name" label={t("tunnelDetails.hostFriendlyName")} required={canEdit}>
+                                    <Input value={form.host_friendly_name} onChange={(e) => setField("host_friendly_name", e.target.value)} disabled={!canEdit} maxLength={100} className="font-mono" spellCheck={false} autoComplete="off" aria-describedby="tunnel-details-name-help" />
+                                </Field>
+                                {canEdit && details && (
+                                    <TunnelNameHelp id="tunnel-details-name-help" value={form.host_friendly_name} original={details.host_friendly_name} error={errors.host_friendly_name} onUse={(v) => setField("host_friendly_name", v)} />
+                                )}
+                                {canEdit && details && !sshSafeName(details.host_friendly_name) && form.host_friendly_name.trim() === details.host_friendly_name && (
+                                    <Callout tone="warning" title={t("tunnelName.old.title")}>
+                                        <span className="block">{t("tunnelName.old.body")}</span>
+                                        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setField("host_friendly_name", suggestTunnelName(details.host_friendly_name))}>
+                                            {t("tunnelName.use", { name: suggestTunnelName(details.host_friendly_name) })}
+                                        </Button>
+                                    </Callout>
+                                )}
+                            </div>
                             <Field id="tunnel-details-description" label={t("common.description")} addon={canEdit ? t("common.optional") : undefined} error={errors.description}>
                                 <Textarea
                                     value={form.description}

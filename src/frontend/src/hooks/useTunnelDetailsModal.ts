@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch, readJson, responseError } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import { useI18n } from "@/lib/i18n";
+import { useTunnelNameError } from "@/components/tunnels/TunnelNameHelp";
 import { keyProblem } from "@/lib/sshKeys";
 import { parseLabels, sameLabels } from "@/lib/tunnelLabels";
 import type { TranslationKey } from "@/locales/en";
@@ -47,6 +48,7 @@ const PROBLEM: Record<NonNullable<ReturnType<typeof keyProblem>>, TranslationKey
 
 export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, onUpdate: () => void, onClose: () => void) {
     const { t } = useI18n();
+    const nameError = useTunnelNameError();
     const [details, setDetails] = useState<TunnelDetails | null>(null);
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState<TunnelForm>({ host_friendly_name: "", key: "", description: "" });
@@ -135,6 +137,11 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
     // 即時檢查(後端會再檢查一次):別名必填、公鑰格式 / 強度。/ Live checks; the backend re-validates.
     const liveErrors: TunnelFormErrors = {};
     if (details && !form.host_friendly_name.trim()) liveErrors.host_friendly_name = t("tunnelDetails.nameRequired");
+    // 改了名才照規則檢查（規則之前的舊名稱沒改就照樣能存）。/ Only a changed name is checked against the rule.
+    else if (patch.host_friendly_name !== undefined) {
+        const nameMsg = nameError(patch.host_friendly_name);
+        if (nameMsg) liveErrors.host_friendly_name = nameMsg;
+    }
     if (keyChanged) {
         const problem = form.key.trim() ? keyProblem(form.key) : "invalid";
         if (problem) liveErrors.key = t(PROBLEM[problem]);
@@ -184,7 +191,7 @@ export function useTunnelDetailsModal(tunnelId: number | null, isOpen: boolean, 
                 const msg = Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
                 if (!msg) continue;
                 fieldErrors[field] = msg.includes("already exists")
-                    ? t(field === "key" ? "tunnelDetails.keyTaken" : "tunnelDetails.nameTaken")
+                    ? t(field === "key" ? "tunnelDetails.keyTaken" : "tunnelName.taken")
                     : msg;
             }
             if (Object.keys(fieldErrors).length) {

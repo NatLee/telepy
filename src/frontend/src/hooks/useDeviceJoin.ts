@@ -6,6 +6,7 @@
  * (a 2 s poll plus `JOIN-UPDATED` notifications).
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { tunnelNameProblem } from "@/lib/tunnelName";
 import { apiFetch, readJson } from "@/lib/api";
 import { useNotificationHandlers, useTunnelConnectionWebSocket } from "@/lib/websocket";
 import { NOTIFICATION_ACTIONS, type NotificationPayload } from "@/lib/notificationActions";
@@ -66,6 +67,9 @@ export function useDeviceJoin() {
     }, []);
 
     const create = useCallback(async () => {
+        // 名稱不合規則：欄位下面已經說了哪裡不行，不送出。/ An invalid name: the field already says why; don't send.
+        const trimmed = name.trim();
+        if (trimmed && tunnelNameProblem(trimmed)) return;
         setCreating(true);
         setError(null);
         setNameError(null);

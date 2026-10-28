@@ -108,8 +108,8 @@ pub async fn device_key_problem(state: &AppState, key: &str, owner: i64) -> ApiR
 async fn create_key(State(state): State<AppState>, _user: AuthUser, Path(token): Path<String>, AppJson(body): AppJson<Value>) -> ApiResult<Json<Value>> {
     let user = token_user(&state, &token).await?;
     let name = json_str(&body, "host_friendly_name").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Host friendly name is required"))?;
-    if !name.chars().next().map(|c| c.is_alphabetic()).unwrap_or(false) {
-        return Err(ApiError::bad_request("Host friendly name cannot start with a number."));
+    if let Some(msg) = super::tunnels::new_name_problem(&state, &name, None).await? {
+        return Err(ApiError::bad_request(msg));
     }
     let key = json_str(&body, "key").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Key is required"))?;
     if let Some(problem) = device_key_problem(&state, &key, user.id).await? {
@@ -149,7 +149,10 @@ async fn check_duplicate(State(state): State<AppState>, _user: AuthUser, Path(to
     let user = token_user(&state, &token).await?;
     let name = json_str(&body, "host_friendly_name").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Host friendly name is required"))?;
     let key = json_str(&body, "key").filter(|s| !s.is_empty()).ok_or_else(|| ApiError::bad_request("Key is required"))?;
-    let name_exists = db::tunnels::exists_name_for_user(&state.db, user.id, &name).await?;
+    // 名稱全站唯一、不分大小寫（ssh 連線時轉小寫）；`host_friendly_name_problem` = 不合規則的原因（精靈即時顯示）。
+    // Names are unique site-wide ignoring case; `host_friendly_name_problem` = why the name breaks the rule.
+    let name_exists = db::tunnels::name_taken_ignoring_case(&state.db, &name, None).await?;
+    let name_problem = crate::tunnel_name::problem(&name).map(|p| p.code());
     // `key_exists` = 這把不能用（別人的裝置金鑰、個人金鑰、服務金鑰、格式錯 / 太弱），`key_reason` 說為什麼。
     // `key_exists` = the key cannot be used; `key_reason` says why.
     let problem = device_key_problem(&state, &key, user.id).await?;
@@ -162,6 +165,7 @@ async fn check_duplicate(State(state): State<AppState>, _user: AuthUser, Path(to
     };
     let base = json!({
         "host_friendly_name_exists": name_exists,
+        "host_friendly_name_problem": name_problem,
         "key_exists": key_exists,
         "key_reason": problem.as_ref().map(KeyProblem::code),
         "key_personal": personal.map(|k| json!({ "id": k.id, "name": k.host_friendly_name })),
