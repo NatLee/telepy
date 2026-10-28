@@ -163,7 +163,7 @@ pub async fn run(state: &AppState, items: &[Result<Item, String>], dry_run: bool
                 continue;
             }
         }
-        let new = match prepare_new(db, &api_body(item)).await {
+        let new = match prepare_new(db, &api_body(item), user.id).await {
             Ok(n) => n,
             Err(e) => {
                 line.outcome = Outcome::Skipped(api_reason(&e));

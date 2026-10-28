@@ -24,6 +24,11 @@ export interface UserKey {
     expired: boolean;
     /** 它在哪個金鑰群組；null = 未分組。/ Its key group; null = none. */
     group_id?: number | null;
+    /**
+     * 這把也是你哪些隧道的裝置金鑰（那台電腦既是裝置、也拿這把連別的裝置）；舊後端沒有。
+     * Your tunnels whose device key this also is (that computer is a device and reaches others with it); absent on older backends.
+     */
+    device_of?: NamedRef[];
 }
 
 export type TunnelRole = "owner" | "admin" | "edit" | "view";

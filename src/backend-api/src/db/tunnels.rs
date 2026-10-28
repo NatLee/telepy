@@ -75,6 +75,12 @@ pub async fn keys_for_user(db: &Db, user_id: i64) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar(&format!("SELECT key FROM {T} WHERE user_id = ?")).bind(user_id).fetch_all(&db.read).await
 }
 
+/// 自己擁有的隧道的 (id, 名稱, 裝置金鑰)：個人金鑰標出「也是哪條隧道的裝置金鑰」用。
+/// (id, name, device key) of the tunnels a user owns, to mark personal keys that double as one of them.
+pub async fn owned_device_keys(db: &Db, user_id: i64) -> sqlx::Result<Vec<(i64, String, String)>> {
+    sqlx::query_as(&format!("SELECT id, host_friendly_name, key FROM {T} WHERE user_id = ? ORDER BY id")).bind(user_id).fetch_all(&db.read).await
+}
+
 /// `user_tunnels_queryset(user)`：owned ∪ shared，依 id 排序。
 pub async fn visible_to(db: &Db, user_id: i64) -> sqlx::Result<Vec<Tunnel>> {
     sqlx::query_as(&format!(

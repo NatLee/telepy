@@ -687,14 +687,21 @@ async fn device_keys_are_unique_across_users_and_never_personal_or_service_keys(
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
     assert!(r.json["error"].as_str().unwrap().starts_with("This key is already registered as a device key"), "{}", r.text);
 
-    // 某人的個人金鑰。/ Someone's personal key.
+    // 別人的個人金鑰。/ Someone else's personal key.
     let r = app.post("/api/reverse/user/keys", Some(&admin), json!({"host_friendly_name": "laptop", "key": USER_KEY})).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.text);
     let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY.replace("laptop", "x")})).await;
     assert_eq!((r.status, r.json["key_reason"].as_str()), (StatusCode::BAD_REQUEST, Some("personal")), "{}", r.text);
-    assert!(r.json["error"].as_str().unwrap().starts_with("This is a personal key"), "{}", r.text);
+    assert!(r.json["error"].as_str().unwrap().starts_with("This is another user's personal key"), "{}", r.text);
     let r = app.post(&format!("/api/reverse/create/key/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY})).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.text);
+    // 自己的個人金鑰可以（那台就是平常用的電腦），查重會說是哪一把。/ Your own personal key is fine; the check names it.
+    let own = issue(admin.clone()).await;
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{own}"), Some(&admin), json!({"host_friendly_name": "my-laptop", "key": USER_KEY})).await;
+    assert_eq!((r.status, r.json["key_exists"].as_bool(), r.json["key_personal"]["name"].as_str()), (StatusCode::OK, Some(false), Some("laptop")), "{}", r.text);
+    // 別人的個人金鑰被擋時不說是誰的那一把。/ Someone else's key never names it.
+    let r = app.post(&format!("/api/reverse/create/key/duplicate/{t}"), Some(&bob), json!({"host_friendly_name": "mine", "key": USER_KEY})).await;
+    assert!(r.json["key_personal"].is_null(), "{}", r.text);
 
     // Telepy 的服務金鑰。/ Telepy's own service key.
     telepy_server::db::keys::service_key_upsert(&app.state.db, "web-service", USER_KEY_2, "").await.unwrap();

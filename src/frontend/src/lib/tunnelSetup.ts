@@ -29,6 +29,14 @@ export function normalizePublicKey(raw: string): string {
     return raw.trim().split(/\s+/).join(" ");
 }
 
+/**
+ * 去掉註解的公鑰（`<type> <base64>`）：比對兩把是不是同一把，跟後端一樣不看註解。
+ * The key without its comment (`<type> <base64>`), to tell whether two lines are the same key — comments ignored, like the backend.
+ */
+export function bareKey(raw: string): string {
+    return normalizePublicKey(raw).split(" ").slice(0, 2).join(" ");
+}
+
 /** 解析使用者貼上的公鑰；私鑰要特別警告。/ Parse a pasted public key; private keys get a dedicated warning. */
 export function checkPublicKey(raw: string): KeyCheck {
     const text = raw.trim();
