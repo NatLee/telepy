@@ -23,3 +23,20 @@ export const TelepyGlyph = forwardRef<SVGSVGElement, LucideProps>(function Telep
         </svg>
     );
 }) as LucideIcon;
+
+/**
+ * 彩蛋：沿著折返線重畫一次（圓點先出現、線往外走再折回、最後是箭頭）。減少動態時直接是完成的樣子。
+ * Easter egg: the glyph draws itself along the hairpin (dot, the line out and back, then the arrow). With reduced
+ * motion the global CSS jumps straight to the finished glyph.
+ */
+export function TelepyGlyphDrawing({ size = 24, className }: { size?: number; className?: string }) {
+    return (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox={VIEW_BOX} width={size} height={size} className={className} aria-hidden>
+            <g fill="none" stroke="currentColor" strokeWidth={8} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M16 16H38a12 12 0 0 1 0 24H20" pathLength={1} strokeDasharray={1} className="animate-glyph-draw" style={{ animationDelay: "0.15s" }} />
+                <path d="M26 32l-8 8 8 8" pathLength={1} strokeDasharray={1} className="animate-glyph-draw" style={{ animationDelay: "0.9s", animationDuration: "0.35s" }} />
+            </g>
+            <circle cx={16} cy={16} r={7} fill="currentColor" className="animate-pop-in" />
+        </svg>
+    );
+}

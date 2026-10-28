@@ -42,6 +42,10 @@ pub struct UserSettings {
     pub view_modes: String,
     /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加，`scripts::alias_prefix_problem` 檢查過）。/ The device alias prefix.
     pub ssh_alias_prefix: String,
+    /// Tapi 十字髮夾的顏色（`mascot::CLIP_COLORS` 的名字）；空 = 還沒找到 Tapi。/ Tapi's clip colour; empty = not found yet.
+    pub tapi_color: String,
+    /// 「每天換一個」解鎖了（看完片尾名單）。/ "A new colour every day" is unlocked (watched the credits).
+    pub tapi_daily: bool,
 }
 
 /// 個人設定的部分更新：None = 不動。/ Partial settings update: None leaves the field alone.
@@ -61,6 +65,8 @@ pub struct SettingsPatch {
     /// 整份取代（已正規化的 JSON）。/ Replaces the whole map (normalised JSON).
     pub view_modes: Option<String>,
     pub ssh_alias_prefix: Option<String>,
+    pub tapi_color: Option<String>,
+    pub tapi_daily: Option<bool>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -181,7 +187,7 @@ pub async fn set_flags(db: &Db, id: i64, is_active: Option<bool>, is_superuser: 
 // ---------------------------------------------------------------- settings
 
 pub async fn settings_for(db: &Db, user_id: i64) -> sqlx::Result<Option<UserSettings>> {
-    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix FROM user_management_usersettings WHERE user_id = ?")
+    sqlx::query_as("SELECT id, user_id, language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix, tapi_color, tapi_daily FROM user_management_usersettings WHERE user_id = ?")
         .bind(user_id)
         .fetch_optional(&db.read)
         .await
@@ -200,7 +206,7 @@ pub async fn settings_get_or_create(db: &Db, user_id: i64) -> sqlx::Result<UserS
 }
 
 pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sqlx::Result<UserSettings> {
-    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix } = patch;
+    let SettingsPatch { language, theme, terminal_font_size, ui_scale, terminal_font, terminal_scheme, terminal_bold, terminal_ligatures, desktop_clipboard, terminal_detach_secs, view_modes, ssh_alias_prefix, tapi_color, tapi_daily } = patch;
     settings_get_or_create(db, user_id).await?;
     if let Some(lang) = language {
         sqlx::query("UPDATE user_management_usersettings SET language = ? WHERE user_id = ?")
@@ -282,6 +288,20 @@ pub async fn settings_update(db: &Db, user_id: i64, patch: SettingsPatch) -> sql
     if let Some(p) = ssh_alias_prefix {
         sqlx::query("UPDATE user_management_usersettings SET ssh_alias_prefix = ? WHERE user_id = ?")
             .bind(p)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(c) = tapi_color {
+        sqlx::query("UPDATE user_management_usersettings SET tapi_color = ? WHERE user_id = ?")
+            .bind(c)
+            .bind(user_id)
+            .execute(&db.write)
+            .await?;
+    }
+    if let Some(d) = tapi_daily {
+        sqlx::query("UPDATE user_management_usersettings SET tapi_daily = ? WHERE user_id = ?")
+            .bind(d)
             .bind(user_id)
             .execute(&db.write)
             .await?;

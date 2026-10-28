@@ -167,6 +167,10 @@ pub struct UserProfile {
     /// Card or list view per page (`tunnels`, `key_groups`, …); pages missing here use their default
     #[schema(value_type = Object, example = json!({"tunnels": "list", "key_groups": "card"}))]
     pub view_modes: serde_json::Value,
+    /// Tapi 的十字髮夾顏色（空 = 還沒找到 Tapi）。/ Tapi's clip colour (empty = not found yet).
+    pub tapi_color: String,
+    /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
+    pub tapi_daily: bool,
     /// A passkey or an authenticator app is set up
     pub mfa_enabled: bool,
     /// Second factors the administrator requires that this account has not set up yet (`totp`, `passkey`).
@@ -982,6 +986,11 @@ pub struct UserSettings {
     /// ~/.ssh/config 裡裝置別名的前綴（空 = 不加）。/ The device alias prefix in ~/.ssh/config (empty = none).
     #[schema(example = "work-")]
     pub ssh_alias_prefix: String,
+    /// Tapi 的十字髮夾顏色（teal / sakura / lemon / grape / sky / cream / daily；空 = 還沒找到 Tapi）。
+    /// Tapi's clip colour (teal / sakura / lemon / grape / sky / cream / daily; empty = Tapi not found yet).
+    pub tapi_color: String,
+    /// 「每天換一個」解鎖了沒。/ Whether "daily" is unlocked.
+    pub tapi_daily: bool,
 }
 
 #[derive(ToSchema)]
@@ -1013,6 +1022,10 @@ pub struct UserSettingsPatch {
     pub view_modes: Option<serde_json::Value>,
     /// 裝置別名前綴：英數字、`.`、`_`、`-`，最多 24 個，不以 `-` 開頭；空字串 = 不加。/ Device alias prefix; empty = none.
     pub ssh_alias_prefix: Option<String>,
+    /// Tapi 的十字髮夾顏色；`daily` 要先解鎖（`tapi_daily`）；null / 空 = 回到沒解鎖。/ Tapi's clip colour; `daily` needs `tapi_daily`.
+    pub tapi_color: Option<String>,
+    /// 解鎖「每天換一個」（只能是 true）。/ Unlock "daily" (true only).
+    pub tapi_daily: Option<bool>,
 }
 
 /// The caller's terminal appearance override for one tunnel; a null field follows the personal default

@@ -24,13 +24,14 @@
  */
 import React, { useState } from "react";
 import Link from "next/link";
-import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX } from "lucide-react";
+import { ALargeSmall, ArrowRight, Bell, BellOff, Bot, Braces, ClipboardPaste, Gauge, Globe, Info, LayoutGrid, List, Monitor, MonitorPlay, Moon, Palette, Plug, ShieldCheck, SlidersHorizontal, Sun, Terminal as TerminalIcon, KeyRound, Volume2, VolumeX } from "lucide-react";
 import { useDesktopNotifyPref } from "@/hooks/useDesktopNotifications";
 import { Callout } from "@/components/ui/callout";
 import { Modal } from "@/components/ui/Modal";
 import { NavTabs } from "@/components/ui/nav-tabs";
 import { Segmented } from "@/components/ui/segmented";
 import { Section } from "@/components/ui/section";
+import { AboutTelepy } from "@/components/brand/AboutTelepy";
 import { useAuth } from "@/lib/auth";
 import { useI18n, LOCALE_NATIVE_NAMES, SUPPORTED_LOCALES, type LanguagePreference } from "@/lib/i18n";
 import {
@@ -219,6 +220,11 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                         />
                         {notifyProblem === "unsupported" && <Callout tone="warning">{t("prefs.desktopNotifyUnsupported")}</Callout>}
                         {notifyProblem === "denied" && <Callout tone="warning">{t("prefs.desktopNotifyDenied")}</Callout>}
+                    </Section>
+
+                    {/* 關於（授權、原始碼、字型；兩個彩蛋）/ About (licence, source, typeface; two easter eggs) */}
+                    <Section icon={<Info />} title={t("about.title")}>
+                        <AboutTelepy />
                     </Section>
                 </div>
             )}

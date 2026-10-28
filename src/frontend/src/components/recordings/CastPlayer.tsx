@@ -18,9 +18,16 @@ import { applyLigatures, loadXtermDeps, waitForFont, xtermLookOptions } from "@/
 
 const SPEEDS = ["1", "2", "4", "8"] as const;
 
-export function CastPlayer({ cast, tunnelId }: { cast: Cast; tunnelId: number }) {
+/** `tunnelId` = 用哪台裝置的終端機外觀（null = 我的預設，片尾名單用）；`autoPlay` 一準備好就播。 */
+/** `tunnelId` picks the device's terminal look (null = my default, for the credits); `autoPlay` starts when ready. */
+/** `onEnded`：播到最後時呼叫（片尾名單看完解鎖彩蛋）。/ `onEnded` runs when playback reaches the end (the credits' unlock). */
+export function CastPlayer({ cast, tunnelId, autoPlay = false, onEnded }: { cast: Cast; tunnelId: number | null; autoPlay?: boolean; onEnded?: () => void }) {
+    const endedRef = useRef(onEnded);
+    useEffect(() => {
+        endedRef.current = onEnded;
+    }, [onEnded]);
     const { t } = useI18n();
-    const { resolved } = useTerminalAppearance(String(tunnelId));
+    const { resolved } = useTerminalAppearance(tunnelId === null ? null : String(tunnelId));
     const hostRef = useRef<HTMLDivElement | null>(null);
     const frameRef = useRef<HTMLDivElement | null>(null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -82,6 +89,7 @@ export function CastPlayer({ cast, tunnelId }: { cast: Cast; tunnelId: number })
             termRef.current = term;
             appliedRef.current = 0;
             setReady(true);
+            if (autoPlay) setPlaying(true);
             cleanup = () => {
                 try {
                     term.dispose();
@@ -126,6 +134,7 @@ export function CastPlayer({ cast, tunnelId }: { cast: Cast; tunnelId: number })
             setTime(next);
             if (next >= cast.duration) {
                 setPlaying(false);
+                endedRef.current?.();
                 return;
             }
             raf = requestAnimationFrame(tick);

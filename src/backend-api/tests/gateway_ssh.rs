@@ -197,8 +197,8 @@ async fn reverse_tunnel_through_real_openssh_client() {
         assert_eq!(&back, b"direct");
         // a port nobody forwards is refused
         assert!(h.channel_open_direct_tcpip("localhost", 1, "127.0.0.1", 0).await.is_err());
-        // session channels (shell) are refused
-        assert!(h.channel_open_session().await.is_err());
+        // session channels only print a greeting (tests/gateway_greeting.rs); a user key may open one
+        assert!(h.channel_open_session().await.is_ok());
     }
 
     // 5) unknown key is rejected; so is the backend's service key (it only belongs on devices)

@@ -106,6 +106,10 @@
   --animate-pop-in: pop-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
   --animate-pop-out: pop-out 0.12s ease-in forwards;
   --animate-toast-in: toast-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 彩蛋 / easter eggs：Tapi 飄啊飄、logo 沿著折返線重畫、粉圓掉下去。 */
+  --animate-tapi-bob: tapi-bob 2.4s ease-in-out infinite;
+  --animate-glyph-draw: glyph-draw 0.9s ease-out both;
+  --animate-pearl-fall: pearl-fall var(--pearl-dur, 1.6s) cubic-bezier(0.45, 0, 0.9, 0.6) forwards;
 
   @keyframes fade-in-up {
     from { opacity: 0; }
@@ -278,6 +282,23 @@
   @keyframes toast-in {
     from { opacity: 0; transform: translateY(-8px) scale(0.98); }
     to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  @keyframes tapi-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-7%); }
+  }
+
+  /* 線條要有 pathLength="1" 與 stroke-dasharray="1"。/ Paths need pathLength="1" and stroke-dasharray="1". */
+  @keyframes glyph-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  @keyframes pearl-fall {
+    0% { transform: translate(0, 0) rotate(0); }
+    18% { transform: translate(calc(var(--dx, 0px) * 0.25), var(--rise, -48px)) rotate(calc(var(--spin, 90deg) * 0.25)); }
+    100% { transform: translate(var(--dx, 0px), 110vh) rotate(var(--spin, 90deg)); }
   }
 }
 

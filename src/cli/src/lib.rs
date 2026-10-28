@@ -12,6 +12,10 @@ pub mod activity;
 pub mod api;
 pub mod cast;
 pub mod creds;
+pub mod tapi;
+/// Tapi 的像素格：與伺服器共用同一個檔（網頁的 `lib/mascot.ts` 是同一份）。/ Tapi's grids, shared with the server.
+#[path = "../../backend-api/src/mascot.rs"]
+pub mod mascot;
 pub mod oauth;
 pub mod snippets;
 pub mod sshcfg;
@@ -89,6 +93,8 @@ pub enum Cmd {
     Api(ApiArgs),
     /// Check the server, the sign-in, its scopes and the local ssh
     Doctor,
+    #[command(hide = true)]
+    Dig,
 }
 
 #[derive(Args, Debug)]
@@ -468,6 +474,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Cmd::Login(a) => login(a, token).map(|_| 0),
         Cmd::Logout => logout().map(|_| 0),
         Cmd::Doctor => doctor(server, token),
+        Cmd::Dig => tapi::dig().map(|_| 0).map_err(Into::into),
         cmd => {
             let api = Api::open(server, token)?;
             match cmd {
@@ -487,7 +494,7 @@ pub fn run(cli: Cli) -> Result<i32> {
                 Cmd::Browse(a) => browse(&api, a).map(|_| 0),
                 Cmd::Lan(a) => lan(&api, a).map(|_| 0),
                 Cmd::Api(a) => api_cmd(&api, a).map(|_| 0),
-                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor => unreachable!(),
+                Cmd::Login(_) | Cmd::Logout | Cmd::Doctor | Cmd::Dig => unreachable!(),
             }
         }
     }
@@ -528,7 +535,18 @@ fn login(a: LoginArgs, global_token: Option<&str>) -> Result<()> {
     let me = probe.get("/api/auth/user/profile").context("check the sign-in")?;
     let store = creds::save_secret(&server, &secret)?;
     creds::save_profile(&api::profile_of(kind, &server, client_id, Some(s(&me, "username").to_string()), store))?;
-    eprintln!("Signed in to {server} as {} (credentials in the {}).", s(&me, "username"), if store == "keyring" { "system keyring" } else { "config file" });
+    let msg = format!("Signed in to {server} as {} (credentials in the {}).", s(&me, "username"), if store == "keyring" { "system keyring" } else { "config file" });
+    match tapi::paint_for(&std::io::stderr()) {
+        // 終端機：Tapi 揮手，訊息在旁邊；不是終端機時輸出跟以前一樣。/ A terminal gets Tapi waving beside it; otherwise unchanged.
+        Some(paint) => {
+            // 十字髮夾用帳號選的顏色（「每天換一個」照 UTC 日期）。/ The clips wear the account's colour.
+            let clip = mascot::clip_color(mascot::clip_name(s(&me, "tapi_color"), mascot::unix_day()));
+            for line in tapi::beside(&mascot::render_with(mascot::WAVE, paint, clip), &[&msg]) {
+                eprintln!("{line}");
+            }
+        }
+        None => eprintln!("{msg}"),
+    }
     Ok(())
 }
 
@@ -1333,6 +1351,8 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
         }
     };
     let profile = creds::load_profile();
+    // Tapi 的顏色（帳號設定），最後全部通過時用。/ Tapi's colour from the account, for the all-good line.
+    let mut tapi_color = String::new();
     let server_url = server.map(creds::normalize_server).or_else(|| profile.as_ref().map(|p| p.server.clone()));
     match &server_url {
         None => check(false, "server", "not signed in; run `telepy login <url>`".into()),
@@ -1346,6 +1366,7 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
                     Ok(me) => {
                         let how = if token.is_some() { "token from the environment".to_string() } else { profile.as_ref().map(|p| format!("{:?} in the {}", p.kind, p.store.clone().unwrap_or_default())).unwrap_or_default() };
                         check(true, "sign-in", format!("{} ({how})", s(&me, "username")));
+                        tapi_color = s(&me, "tapi_color").to_string();
                         if let Some(c) = me.get("credential").filter(|c| c.is_object()) {
                             let scopes: Vec<&str> = c["scopes"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
                             check(!scopes.is_empty(), "scopes", scopes.join(" "));
@@ -1371,6 +1392,16 @@ fn doctor(server: Option<&str>, token: Option<&str>) -> Result<i32> {
     let dir = ssh_dir();
     let writable = std::fs::create_dir_all(&dir).is_ok();
     check(writable, "ssh config dir", dir.display().to_string());
+    if bad == 0 {
+        // 全部通過、而且是終端機：Tapi 開心一下。/ All good in a terminal: a happy Tapi.
+        if let Some(paint) = tapi::paint_for(&std::io::stdout()) {
+            println!();
+            let clip = mascot::clip_color(mascot::clip_name(&tapi_color, mascot::unix_day()));
+            for line in tapi::beside(&mascot::render_with(mascot::HAPPY, paint, clip), &["Everything looks good."]) {
+                println!("{line}");
+            }
+        }
+    }
     Ok(if bad > 0 { 1 } else { 0 })
 }
 
