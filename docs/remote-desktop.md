@@ -1,12 +1,12 @@
 # Remote desktop（RDP / VNC / RustDesk in the browser）
 
-> 在瀏覽器裡看、操作裝置（或它區網裡電腦）的 RDP / VNC 桌面，以及經隧道連 RustDesk。裝置上不裝任何東西：連線由裝置
+> 在瀏覽器裡看、操作裝置（或它區網裡電腦）的 RDP / VNC 桌面，以及經通道連 RustDesk。裝置上不裝任何東西：連線由裝置
 > 自己的 sshd 轉接，RDP / VNC 的畫面由 guacd 轉成 Guacamole 協定，RustDesk 由瀏覽器裡的 RustDesk 核心解碼。程式：
 > `src/backend-api/src/desktop/`、`api/desktop.rs`、`ws/desktop.rs`（RustDesk：`rustdesk/`、`api/rustdesk.rs`、
 > `ws/rustdesk.rs`）；前端 `app/tunnels/desktop/`、`components/desktop/`、`hooks/useDesktopPage.ts`、`lib/desktop.ts`；
 > 測試 `tests/desktop_api.rs`、`tests/rustdesk_api.rs`。
 >
-> 入口：`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`（側欄、隧道選單、區網主機面板、隧道列表的 Desktop 按鈕）。表單最上面是
+> 入口：`/tunnels/desktop?tunnel=<id>[&lanHost=<id>]`（側欄、通道選單、區網主機面板、通道列表的 Desktop 按鈕）。表單最上面是
 > 和終端機頁共用的路徑圖選擇器（`DesktopPathPicker`：目標、協定、埠在最後一個節點裡），下面是畫質、剪貼簿、聲音與登入。
 > 整個功能受功能權限 `remote_desktop` 管（關掉 = REST 回 403 `feature_disabled`，頁面換成說明）。
 
@@ -33,8 +33,8 @@ backend desktop/bridge.rs
 ## 流程
 
 1. `POST /api/reverse/server/{id}/desktop/start` `{protocol, username?, port?, lan_host_id?, login?, password?, domain?, credential_id?, quality?, clipboard?, audio?}`：
-   檢查 `desktop_enabled`、隧道 VIEW、step-up（敏感隧道）、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號；
-   沒帶就用 `choose_username` 挑預設）、區網主機屬於這條隧道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip
+   檢查 `desktop_enabled`、通道 VIEW、step-up（敏感通道）、`username` 在 `permissions::allowed_usernames` 裡（裝置那一跳的帳號；
+   沒帶就用 `choose_username` 挑預設）、區網主機屬於這條通道、`desktop_max_sessions`；接著**先**借池的連線並開 direct-tcpip
    通道到目標，所以 `device_offline` / `device_auth` / `host_key_changed` / `forwarding_disabled` / `target_unreachable` /
    `device_unreachable` 在這一步就回 502（`desktop_disabled` / `desktop_busy` 是 503），不必等 WebSocket。
    回 `{session_id, ws_path, ticket, expires_in, protocol, clipboard, clipboard_limit, quality, audio, target, username}`；帳密只留在記憶體。
@@ -59,11 +59,11 @@ backend desktop/bridge.rs
 - **畫面往返 `frame_ms`**：guacd 每一幀結尾送 `sync <ts>`，瀏覽器把那一幀畫完才回 `sync <ts>`；中繼從送出到收到回音的時間
   = WebSocket 來回 + 瀏覽器解碼繪製，就是使用者感覺到的「卡」。3 秒沒有新樣本就回 null（桌面靜止）。
 - **網路往返 `net_ms`**：ping / pong，不含繪製，靜止時也量得到。
-- **隧道 `tunnel_ms`**：monitor 每 15 秒經轉發通道量到的裝置 sshd 往返（`StatusState::latency`）。
+- **通道 `tunnel_ms`**：monitor 每 15 秒經轉發通道量到的裝置 sshd 往返（`StatusState::latency`）。
 - `frames` = 這一秒的幀數；`merged` = 一次 `sync` 併了幾個邏輯幀（guacd 1.6 的第二個參數；> 1 = 瀏覽器跟不上，guacd 在併幀）；
   `behind` = 送出但還沒回音的幀；`down` / `up` = 這一秒的 bytes。
 - 工具列的按鈕：訊號格 + 畫面往返 + 狀態字（串流中 / 延遲中 / 沒有資料 / 靜止；`streamHealth`），點開是每一段的數字、
-  解析度與縮放，以及「延遲主要在哪一段」（`laggingHop`：網路、隧道，或畫面往返遠大於網路往返 = 瀏覽器自己畫得慢）。
+  解析度與縮放，以及「延遲主要在哪一段」（`laggingHop`：網路、通道，或畫面往返遠大於網路往返 = 瀏覽器自己畫得慢）。
   info 對話框的路徑圖在兩段線上標往返時間，最慢的那段標黃。
 - `desktop_close` 事件多了「12.3 MB to the browser, 2,340 frames, frame latency avg 48 ms (max 210 ms)」。
 
@@ -195,11 +195,11 @@ RDP 不需要：RDP session 的大小由我們（瀏覽器的框）決定，只�
   （1.5 倍、從左上角開始），遠端的字才看得清楚；RDP 的解析度跟著框走，不放大。新的連線、換螢幕 / 區域、解析度改變時重新套用。
 - 只有滑鼠的瀏覽器看不到任何差別。
 
-## RustDesk（瀏覽器裡連，或經隧道轉發給原生 client）
+## RustDesk（瀏覽器裡連，或經通道轉發給原生 client）
 
-RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，**都經隧道**，桌面頁協定選「RustDesk」時預設走第一條：
+RustDesk 用自己的協定，guacd 不認得。Telepy 有兩條路，**都經通道**，桌面頁協定選「RustDesk」時預設走第一條：
 
-> 歷史：「Telepy 當 RustDesk 的 ID / 中繼伺服器」（裝置不需要隧道）的模式在 #201–#208 做過，#212 又拿掉了，只留經隧道這條
+> 歷史：「Telepy 當 RustDesk 的 ID / 中繼伺服器」（裝置不需要通道）的模式在 #201–#208 做過，#212 又拿掉了，只留經通道這條
 > （終端機、檔案、分享、即時 session、錄影等功能都走同一條路）。研究紀錄在 [`rustdesk-id-server.md`](rustdesk-id-server.md)；
 > 資料遷移 `2026-10-26-drop-rustdesk-server-devices` 刪掉它存的登入與兩張表。
 
@@ -227,7 +227,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   4009 從即時 session 頁結束或失去權限、4010 開它的網頁登入被登出。RustDesk 沒有閒置斷線（`desktop_session_idle_timeout` 只管 guacd）。
 - 前端（桌面頁）：表單多「RustDesk 密碼」欄（留在瀏覽器），主要按鈕「在瀏覽器裡連線」；`RustDeskViewer` 載入核心（一頁
   同時只能有一個，核心是 window 上的全域物件），設兩個 server 選項 = `rustdeskWsUrl()`、`session_add_sync` + `session_start`，
-  自動確認「不加密的直連」msgbox（隧道本身加密），`onVideoFrame` 畫到 canvas（等比縮小、不放大），鍵盤焦點在隱藏的
+  自動確認「不加密的直連」msgbox（通道本身加密），`onVideoFrame` 畫到 canvas（等比縮小、不放大），鍵盤焦點在隱藏的
   textarea（輸入法組字 → `input_string`；按鍵 → `input_key`，鍵名表在 `lib/rustdesk.ts`），滑鼠座標除以縮放比例，游標從
   `cursor_data` 轉成 CSS cursor。工具列：延遲 / 串流按鈕（吃核心的 `update_quality_status`：延遲、fps、目標位元率）、
   螢幕選單（對方 `peer_info` 的 displays → `switch_display`，RustDesk 原生切螢幕；畫質 best / balanced / low 對應 Telepy
@@ -242,7 +242,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
   起因：一台 Mac mini 開著 RustDesk 卻沒勾 IP 直接存取、密碼設定是「只用一次性密碼」，頁面只說沒偵測到。
 - 憑證庫：RustDesk 密碼也能存（`protocol: rustdesk`）；表單有「已存的登入」選單與「儲存這組登入」。start 帶
   `credential_id` 時後端解開、放進回應交給核心（見憑證庫一節）；`rustdesk_open` 事件註明 with saved login '<label>'。
-  統計：隧道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
+  統計：通道那一段由 monitor 的延遲補上（連線時讀一次 dashboard，之後跟 `UPDATE-TUNNEL-LATENCY`）；面板不顯示畫面往返 /
   待畫幀（核心在瀏覽器解碼，沒有這兩個數字），「網路往返」是核心自己量的瀏覽器 ↔ 裝置。
 - 範圍：畫面、鍵鼠、剪貼簿文字、切螢幕、畫質、**聲音**、**傳檔**。沒有終端機、遠端列印、麥克風 —— 要這些用下面的 app 路。
 - **聲音**：核心自己解（RustDesk 送 Opus，WebCodecs `AudioDecoder` → `AudioContext`；瀏覽器沒有 WebCodecs 音訊就沒有聲音，
@@ -289,7 +289,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
     `file_action`（`ReadAllFiles` / `RemoveFile` / `RemoveDir` / `Rename`）與裝置回的 `done` / `error`，寫 `rustdesk_file_delete`
     / `rustdesk_file_rename` 事件（只有路徑與數量，不含內容）：刪資料夾整個合成一筆（「deleted folder /x (12 files)」，有失敗就
     附上數量與第一個錯誤），單一檔案與改名等裝置回答後各一筆，session 結束時還沒回答的也寫出來。
-  - 說明圖：面板的 info 鈕（`RustDeskFilesFlow.tsx`）畫 你的瀏覽器（第二份核心）─ Telepy 中繼 ─ 隧道 ─ 裝置上的 RustDesk ─ 磁碟，
+  - 說明圖：面板的 info 鈕（`RustDeskFilesFlow.tsx`）畫 你的瀏覽器（第二份核心）─ Telepy 中繼 ─ 通道 ─ 裝置上的 RustDesk ─ 磁碟，
     依階段與正在做的動作亮起，下面是四種動作各自的狀態；頁面的資料流圖在「檔案」那一列底下也列出下載 / 上傳 / 改名 / 刪除的狀態。
 - **登入守門（`rustdesk::codec::LoginGuard`）**：中繼唯一解析的東西是瀏覽器 → 裝置方向的 peer `Message` 最外層：
   `login_request`（欄位 7）的 oneof 分支決定這條連線登入成什麼（遙控 / 傳檔 / 埠轉發 / 鏡頭 / 終端機）。畫面 session 只准遙控、
@@ -321,7 +321,7 @@ RustDesk 的 web client 核心（社群的 TypeScript 移植，AGPL-3.0，vendor
 - 「從裝置檢查」（`GET /api/reverse/server/{id}/desktop/probe?port=&username=&lan_host_id=`：和 start 同一道門、同一條路 ——
   池的 lease + direct-tcpip 通道，通了立刻關；不看 `desktop_enabled`；錯誤碼同 start）→ `ssh -L 21118:<host>:21118 <alias>`
   （命令表的 `rustdesk` recipe，別名來自 `/tunnels/server/config/{id}`）→ app 的 ID 填 `127.0.0.1`（本機埠非 21118 時
-  `127.0.0.1:<port>`）。info 路徑圖在探測過、瀏覽器裡沒在連時顯示這條路（你的電腦 ─ssh─ Telepy ─隧道─ 裝置 ─ RustDesk）。
+  `127.0.0.1:<port>`）。info 路徑圖在探測過、瀏覽器裡沒在連時顯示這條路（你的電腦 ─ssh─ Telepy ─通道─ 裝置 ─ RustDesk）。
 - 命令表多了「用 RustDesk」情境（`-L`，欄位：主機 `localhost` = 裝置自己、RustDesk 埠、本機埠）；區網掃描預設探測
   21118，`lib/lanConnect.ts` 把它顯示成 RustDesk，網路頁的指令分頁也會列出它的 `-L`。
 
@@ -366,14 +366,14 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 - 每筆綁一個桌面：`protocol`（`rdp` / `vnc` / `rustdesk`）+ `tunnel_id` + 可選的 `lan_host_id` / `port`，外加 `label`、`login`、`domain`
   （RustDesk 只有固定密碼，`login` 留空）。同一個憑證庫也存 `ssh` 列（網路頁區網主機那一跳的登入：密碼和 / 或私鑰），
   那是終端機的事，不在這份文件的範圍。
-  `start` 收到的 `credential_id` 若不是同一個目標（隧道、區網主機、協定）就回 `credential_id` 欄位錯誤，
+  `start` 收到的 `credential_id` 若不是同一個目標（通道、區網主機、協定）就回 `credential_id` 欄位錯誤，
   所以一筆 Windows 密碼不會被拿去登另一台。
 - 密碼以 AES-256-GCM 封存，金鑰由 `SECRET_KEY` 衍生（前綴 `telepy-vault-v1:`），AAD =
   `telepy-credential:{user_id}:{id}`：把密文搬到別人或別筆名下就解不開。API 只回 `has_password`（`ssh` 列另有 `has_key`），密碼永不回傳；
   解密只發生在 `start`，結果跟手打的一樣只留在 session 記憶體。輪換 `SECRET_KEY` 會讓舊的存檔解不開（重存即可）。
   **RustDesk 是唯一的例外**：挑戰回應由瀏覽器裡的核心做，後端代答不了，所以 `POST …/rustdesk/start` 帶 `credential_id`
   時後端解開後放進回應的 `password`（只有這一次、走 TLS、不記錄），前端交給核心後不留在頁面狀態。
-- 隧道或區網主機刪除時，綁在上面的憑證一起刪。使用後更新 `last_used_at`；`desktop_open` 事件會註明
+- 通道或區網主機刪除時，綁在上面的憑證一起刪。使用後更新 `last_used_at`；`desktop_open` 事件會註明
   「with saved login '<label>'」（只有名稱，沒有帳密）。
 - 前端：桌面頁的「已存的登入」選單（`hooks/useSavedLogins.ts`）與「儲存這組登入」勾選（連線前先存，再用
   `credential_id` 連）；偏好設定的 Saved logins 分頁（`components/layout/SavedLogins.tsx`）列出與刪除。
@@ -382,8 +382,8 @@ guacd 自己的錯誤以 Guacamole `error` 指令送到瀏覽器（例如 0x0203
 ## 稽核與可見性
 
 - gateway 事件 `desktop_open` / `desktop_close`（含持續時間、結束原因、串流摘要、guacd 的最後錯誤）與 `rustdesk_open` /
-  `rustdesk_close`（含兩個方向的 byte 數）、`rustdesk_file_delete` / `rustdesk_file_rename`，在該隧道的 Logs。
-- presence 種類 `desktop` / `rustdesk`（帶它登入的裝置帳號）：擁有者 / ADMIN 在隧道列表的「N 人使用中」看得到誰正開著，
+  `rustdesk_close`（含兩個方向的 byte 數）、`rustdesk_file_delete` / `rustdesk_file_rename`，在該通道的 Logs。
+- presence 種類 `desktop` / `rustdesk`（帶它登入的裝置帳號）：擁有者 / ADMIN 在通道列表的「N 人使用中」看得到誰正開著，
   即時 session 頁（`/tunnels/sessions`、管理員 `/tunnels/admin/sessions`）列出並可結束（4009，reason = 誰結束的）。
 - **失去權限就結束**（`access_recheck.rs`，和終端機、檔案、遠端瀏覽器同一套）：取消分享 / 分享到期、權限或允許清單變小、
   裝置帳號改名或刪除、功能 `remote_desktop` 被關、帳號停用等一發生就 `access_recheck::kick`，另有每 10 秒的 `run` 接住其他的；
@@ -417,8 +417,8 @@ ok / failed（`lib/desktop.ts` 的 `spotStates`，失敗由 `sessionFailure` 對
 
 ## 連線方式比較（`components/desktop/ConnectionWays.tsx`、純函式 `lib/connectionWays.ts` + 測試）
 
-一個對話框並排比較兩種都經隧道的連法：RDP / VNC 經 guacd（Telepy 把畫面轉成圖片）與 RustDesk（瀏覽器裡的核心解碼）。
-兩條路徑欄位對齊（瀏覽器 ─ Telepy ─ 裝置 ─ 桌面；隧道 = 雙線、裝置到桌面的那一跳 = 虛線），每條下面是「誰加密哪一段」
+一個對話框並排比較兩種都經通道的連法：RDP / VNC 經 guacd（Telepy 把畫面轉成圖片）與 RustDesk（瀏覽器裡的核心解碼）。
+兩條路徑欄位對齊（瀏覽器 ─ Telepy ─ 裝置 ─ 桌面；通道 = 雙線、裝置到桌面的那一跳 = 虛線），每條下面是「誰加密哪一段」
 的標尺（TLS / SSH / 協定自己的，`layerColumns`），標出畫面在哪裡畫；再來是一張事實表（手機上變卡片，`ROWS`：含聲音與檔案）
 和怎麼選。現在用的那種（`wayFor(protocol)`）會被標出來。從桌面頁標題列、協定欄的提示、info 對話框的頁尾都打得開。
 事實變了就改 `ROWS`。

@@ -5952,8 +5952,6 @@ export const en = {
     "about.tapiColor.cream": "Cream",
     "about.tapiColor.daily": "A new one every day",
     "about.disclaimer": "Disclaimer",
-    "about.disclaimerSummary": "Telepy acts directly on real machines — shells, files, desktops, forwarded ports — and lets API tokens, the CLI and MCP apps do the same on your behalf. You are responsible for everything you do with it and for every access you grant.",
-    "about.disclaimerRead": "Read the full disclaimer",
     "about.disclaimerDescription": "Please read this before you connect a device or give anything access.",
     "about.disclaimerLicence": "Licence (AGPL-3.0)",
     "about.disclaimer.asIsTitle": "Provided as is, with no warranty",

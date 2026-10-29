@@ -136,18 +136,28 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
         ...SUPPORTED_LOCALES.map((l) => ({ value: l, label: LOCALE_NATIVE_NAMES[l] })),
     ];
 
+    // 窄的時候不放圖示，「システム」這類字才不會折成兩行。/ No icons when narrow, so labels like "システム" stay on one line.
+    const themeIcon = (icon: React.ReactNode) => <span className="hidden @sm:inline-flex">{icon}</span>;
     const themeOptions: { value: Theme; label: string; icon: React.ReactNode }[] = [
-        { value: "system", label: t("prefs.themeSystem"), icon: <Monitor size={14} /> },
-        { value: "light", label: t("prefs.themeLight"), icon: <Sun size={14} /> },
-        { value: "dark", label: t("prefs.themeDark"), icon: <Moon size={14} /> },
+        { value: "system", label: t("prefs.themeSystem"), icon: themeIcon(<Monitor size={14} />) },
+        { value: "light", label: t("prefs.themeLight"), icon: themeIcon(<Sun size={14} />) },
+        { value: "dark", label: t("prefs.themeDark"), icon: themeIcon(<Moon size={14} />) },
     ];
 
     // 預設值之外的百分比(滑桿細調過)沒有對應的分段,軌道上就不亮任何一格。
     // A percentage set by the slider that matches no preset leaves every segment unselected.
     const scalePreset = uiScalePreset(scale);
-    const scaleOptions: { value: UiScalePreset | "custom"; label: string }[] = UI_SCALE_PRESET_ORDER.map((p) => ({
+    // 窄的時候只寫小 / 中 / 大（百分比在下面的微調旁，也在滑過提示），一行放得下。
+    // When narrow only Small / Medium / Large (the percentage sits next to the fine-tune below and in the hover text), so it stays on one line.
+    const scaleOptions: { value: UiScalePreset | "custom"; label: React.ReactNode; title: string }[] = UI_SCALE_PRESET_ORDER.map((p) => ({
         value: p,
-        label: `${t(SCALE_LABEL[p])} · ${UI_SCALE_PRESETS[p]}%`,
+        label: (
+            <>
+                {t(SCALE_LABEL[p])}
+                <span className="hidden @md:inline"> · {UI_SCALE_PRESETS[p]}%</span>
+            </>
+        ),
+        title: `${t(SCALE_LABEL[p])} · ${UI_SCALE_PRESETS[p]}%`,
     }));
 
     return (
@@ -175,10 +185,13 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             }
         >
             {tab === "general" && (
-                <div className="space-y-6">
+                // 手機上間距小一點、語言放得下就一排四個：這一頁內容固定，要整頁放得下，不能只差幾 px 要捲動。
+                // Tighter on phones and the languages in one row of four when they fit: this tab's content is fixed,
+                // so it must fit outright instead of scrolling by a few pixels.
+                <div className="@container space-y-5 sm:space-y-6">
                     {/* 帳號:只在手機上(桌面在側欄)。/ Account: phones only (the rail shows it on desktop). */}
-                    <section className="flex items-center gap-3.5 rounded-xl border border-border bg-surface p-3.5 sm:hidden" aria-label={t("settings.accountTitle")}>
-                        <span className="grid size-11 shrink-0 place-items-center rounded-full bg-foreground text-lg text-background uppercase" aria-hidden>
+                    <section className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 sm:hidden" aria-label={t("settings.accountTitle")}>
+                        <span className="grid size-10 shrink-0 place-items-center rounded-full bg-foreground text-lg text-background uppercase" aria-hidden>
                             {initial}
                         </span>
                         <div className="min-w-0 flex-1">
@@ -190,8 +203,8 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
                     {/* 語言 / Language */}
                     <Section icon={<Globe />} title={t("settings.languageTitle")} description={t("settings.languageDescription")}>
-                        {/* 固定 2×2:四欄仍放不太下 CJK 標籤。/ Fixed 2×2 — four columns can't reliably fit CJK labels. */}
-                        <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1" role="group" aria-label={t("settings.languageTitle")}>
+                        {/* 窄的時候 2×2（四欄放不下 CJK 標籤），夠寬就一排四個。/ 2×2 when narrow (four columns can't fit CJK labels), one row of four when wide. */}
+                        <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted p-1 @lg:grid-cols-4" role="group" aria-label={t("settings.languageTitle")}>
                             {languageOptions.map((option) => {
                                 const isActive = language === option.value;
                                 return (
@@ -219,7 +232,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
             {tab === "notify" && <NotifyPrefsPanel />}
 
             {tab === "appearance" && (
-                <div className="space-y-6">
+                <div className="@container space-y-5 sm:space-y-6">
                     {/* 主題 / Theme */}
                     <Section icon={<Sun />} title={t("prefs.theme")} description={t("prefs.themeDescription")}>
                         <Segmented fullWidth options={themeOptions} value={theme} onChange={changeTheme} aria-label={t("prefs.theme")} />
@@ -234,7 +247,7 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
                             onChange={(v) => v !== "custom" && changeScale(UI_SCALE_PRESETS[v])}
                             aria-label={t("prefs.uiScale")}
                         />
-                        <div className="flex items-center gap-3 rounded-xl bg-surface px-3.5 py-3 ring-1 ring-inset ring-border/80">
+                        <div className="flex items-center gap-3 rounded-xl bg-surface px-3.5 py-2.5 ring-1 ring-inset ring-border/80">
                             <span className="shrink-0 text-xs text-muted-foreground">{t("prefs.uiScaleFine")}</span>
                             <input
                                 type="range"
@@ -253,18 +266,21 @@ export function UserPreferencesModal({ isOpen, onClose, initialTab }: { isOpen: 
 
                     {/* 各頁的卡片 / 列表（存在帳號上；頁面上的切換鈕也改這裡）。/ Card / list per page (on the account; the pages' switches change it too). */}
                     <Section icon={<LayoutGrid />} title={t("prefs.views")} description={t("prefs.viewsDescription")}>
-                        <div className="space-y-2">
+                        {/* 每頁一行：窄的時候切換鈕只剩圖示（字留給螢幕閱讀器與滑過提示），不再折成兩行。
+                            One line per page: when narrow the toggle shows icons only (the words stay for screen readers and
+                            the hover text) instead of folding onto a second line. */}
+                        <div className="@container space-y-2">
                             {VIEW_PAGES.map((p) => (
-                                <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
-                                    <span className="text-sm text-foreground">{t(p.label)}</span>
+                                <div key={p.id} className="flex items-center justify-between gap-x-3">
+                                    <span className="min-w-0 text-sm text-foreground">{t(p.label)}</span>
                                     <Segmented
                                         size="sm"
                                         value={viewModeOf(viewModes, p.id)}
                                         onChange={(m) => setViewModeFor(p.id, m)}
                                         aria-label={t(p.label)}
                                         options={[
-                                            { value: "card", label: t("ui.cardView"), icon: <LayoutGrid size={14} /> },
-                                            { value: "list", label: t("ui.listView"), icon: <List size={14} /> },
+                                            { value: "card", label: <span className="sr-only @sm:not-sr-only">{t("ui.cardView")}</span>, title: t("ui.cardView"), icon: <LayoutGrid size={14} /> },
+                                            { value: "list", label: <span className="sr-only @sm:not-sr-only">{t("ui.listView")}</span>, title: t("ui.listView"), icon: <List size={14} /> },
                                         ]}
                                     />
                                 </div>

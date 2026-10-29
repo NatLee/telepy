@@ -5934,8 +5934,6 @@ export const ja: Record<TranslationKey, string> = {
     "about.tapiColor.cream": "クリーム",
     "about.tapiColor.daily": "毎日ちがう色",
     "about.disclaimer": "免責事項",
-    "about.disclaimerSummary": "Telepy は実際のマシン（シェル、ファイル、デスクトップ、転送したポート）を直接操作します。API トークン、CLI、MCP アプリに同じことをあなたの代わりに行わせることもできます。Telepy で行うすべての操作と、あなたが与えるすべての権限は、あなた自身の責任です。",
-    "about.disclaimerRead": "免責事項をすべて読む",
     "about.disclaimerDescription": "デバイスを接続したり、何かにアクセスを許可したりする前にお読みください。",
     "about.disclaimerLicence": "ライセンス（AGPL-3.0）",
     "about.disclaimer.asIsTitle": "現状のまま・無保証で提供",
