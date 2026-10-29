@@ -64,7 +64,7 @@ export function CommandHistory({ list, onWithdraw }: { list: CommandRequest[] | 
                     <p className="mt-1 max-w-md text-xs text-muted-foreground">{t("commands.historyEmptyHint")}</p>
                 </div>
             ) : (
-                <ul className="space-y-2">
+                <ul data-refresh-list className="space-y-2">
                     {rows.map((r) => (
                         <li key={r.id} className="rounded-xl border border-border bg-card px-4 py-3">
                             <div className="flex flex-wrap items-center justify-between gap-2">

@@ -65,7 +65,7 @@ export function useApiCalls(scope: ViewScope) {
     const limit = paging.key === filterKey ? paging.limit : PAGE;
     const [users, setUsers] = useState<{ id: number; label: string }[]>([]);
 
-    const fetchCalls = useCallback(async () => {
+    const fetchCalls = useCallback(async (): Promise<boolean> => {
         const key = `${credFilter}|${userFilter}`;
         try {
             const qs = new URLSearchParams({ limit: String(limit) });
@@ -81,8 +81,10 @@ export function useApiCalls(scope: ViewScope) {
             setRowsLimit(limit);
             setFetchedAt(new Date());
             setFailed(false);
+            return true;
         } catch {
             setFailed(true);
+            return false;
         } finally {
             setRowsFor(key);
         }
@@ -120,8 +122,9 @@ export function useApiCalls(scope: ViewScope) {
 
     const refresh = useCallback(async () => {
         setLoading(true);
-        await fetchCalls();
+        const ok = await fetchCalls();
         setLoading(false);
+        return ok;
     }, [fetchCalls]);
 
     const entries = useMemo<ApiCallEntry[]>(() => withTimes(rows, fetchedAt ?? new Date(0), locale), [rows, fetchedAt, locale]);

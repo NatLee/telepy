@@ -16,6 +16,7 @@ import {
     Keyboard, Link2, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2, Upload, WifiOff, X, CheckCircle2, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -287,9 +288,7 @@ export function FileManagerPanel({ serverId, username, accessToken, initialPath,
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFlowOpen(true)} title={t("files.flow.button")} aria-label={t("files.flow.button")}>
                             {ops.busy ? <Loader2 size={14} className="animate-spin" /> : <Info size={14} />}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={refresh} disabled={!enabled || loading} title={t("files.refresh")}>
-                            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-                        </Button>
+                        <RefreshButton variant="ghost" size="icon" className="h-7 w-7" iconSize={14} onRefresh={refresh} busy={loading} failed={!!error} disabled={!enabled} title={t("files.refresh")} aria-label={t("files.refresh")} />
                     </div>
                 </div>
 

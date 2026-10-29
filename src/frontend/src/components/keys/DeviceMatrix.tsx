@@ -356,7 +356,7 @@ export function DeviceMatrix({
                                 <th scope="col" className="sticky right-0 z-10 bg-surface px-4 py-2.5 text-right font-normal"><span className="sr-only">{t("keys.thActions")}</span></th>
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-border/70">
+                        <tbody data-refresh-list className="divide-y divide-border/70">
                             {grouped
                                 ? sections.map((sec) => {
                                       const { pg, open, items, paged } = sectionPage(sec);
@@ -382,7 +382,7 @@ export function DeviceMatrix({
             )}
 
             {/* 手機：卡片 / Phones: cards */}
-            <div className="space-y-3 md:hidden">
+            <div data-refresh-list className="space-y-3 md:hidden">
                 {grouped
                     ? sections.map((sec) => {
                           const { pg, open, items, paged } = sectionPage(sec);

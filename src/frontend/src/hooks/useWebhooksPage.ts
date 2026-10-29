@@ -26,13 +26,16 @@ export function useWebhooksPage(scope: WebhookScope = "user") {
     const [failed, setFailed] = useState(false);
     const [tunnels, setTunnels] = useState<{ id: number; name: string }[]>([]);
 
-    const load = useCallback(async () => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
+    const load = useCallback(async (): Promise<boolean> => {
         try {
             const res = await apiFetch("/api/webhooks");
             if (res.ok) setData((await res.json()) as WebhookList);
             setFailed(!res.ok);
+            return res.ok;
         } catch {
             setFailed(true);
+            return false;
         }
     }, []);
 

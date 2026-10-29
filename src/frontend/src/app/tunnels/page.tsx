@@ -11,7 +11,7 @@ import { TunnelModals } from "@/components/tunnels/TunnelModals";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Plus, Network, Info, SearchX, FolderTree, FolderPlus, FileCode2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { RefreshButton, rippleIn } from "@/components/ui/refresh-button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import {
     Tooltip,
     TooltipContent,
@@ -33,7 +33,6 @@ import { groupOf, groupSections, TUNNEL_GROUPING_KEY, TUNNEL_GROUPINGS, type Sec
 import { useTunnelsPage } from "@/hooks/useTunnelsPage";
 import { useViewMode } from "@/hooks/useViewMode";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useStoredChoice } from "@/hooks/useStoredChoice";
 import { liveHealth } from "@/lib/tunnelHealth";
 import { compareTunnels, matchTunnel, parseQuery, pinnedFirst, TUNNEL_SORTS, type MatchContext } from "@/lib/tunnelQuery";
@@ -213,16 +212,8 @@ export default function TunnelsPage() {
     );
     const CARD_GRID = "grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-5";
 
-    // 點「重新整理」：拿到新列表後，畫面上的卡片 / 列一張接一張浮回來（等這一輪畫完再動）。
-    // Clicking Refresh: once the new list arrives, the cards / rows on screen fade up one after another (after the
-    // render that shows it).
+    // 點「重新整理」：拿到新列表後，畫面上的卡片 / 列一張接一張浮回來。/ After Refresh, the cards / rows on screen fade back in.
     const listArea = useRef<HTMLDivElement>(null);
-    const reducedMotion = useReducedMotion();
-    const refresh = async () => {
-        const ok = await fetchData();
-        if (ok && !reducedMotion) requestAnimationFrame(() => rippleIn(listArea.current));
-        return ok;
-    };
 
     const clearFilters = () => {
         setFilter("all");
@@ -252,7 +243,7 @@ export default function TunnelsPage() {
                 description={t("tunnels.subtitle")}
                 actions={
                     <>
-                        <RefreshButton onRefresh={refresh} busy={loading} label={t("common.refresh")} aria-label={t("tunnels.refreshAria")} />
+                        <RefreshButton onRefresh={fetchData} busy={loading} ripple={listArea} label={t("common.refresh")} aria-label={t("tunnels.refreshAria")} />
                         {tunnels.length > 0 && (
                             <Button variant="outline" onClick={() => setBulkConfigOpen(true)} title={t("config.bulk.openHint")}>
                                 <FileCode2 size={16} />

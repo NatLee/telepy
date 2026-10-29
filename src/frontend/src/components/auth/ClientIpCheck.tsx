@@ -9,9 +9,10 @@
  * plus the verdict, what to change, and a made-up-address test (can a visitor choose the recorded address?).
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { FlaskConical, Globe, Monitor, Network, RefreshCw, Server } from "lucide-react";
+import { FlaskConical, Globe, Monitor, Network, Server } from "lucide-react";
 import { FlowLink, FlowNode, FlowPath } from "@/components/flow/PathFlow";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { Chip, Property, PropertyList, SectionHeading } from "@/components/ui/section";
 import { apiFetch, readJson } from "@/lib/api";
@@ -169,14 +170,17 @@ export function ClientIpCheckPanel() {
     const [probe, setProbe] = useState<{ outcome: ProbeOutcome; ip: string | null } | null>(null);
     const [probing, setProbing] = useState(false);
 
+    // 回傳有沒有拿到（重新檢查鈕的勾勾）。/ Answers whether the check came back (the Recheck button's check).
     const load = useCallback(async () => {
         setBusy(true);
         try {
             const c = await runCheck(false);
             setCheck(c);
             setFailed(!c);
+            return !!c;
         } catch {
             setFailed(true);
+            return false;
         } finally {
             setBusy(false);
         }
@@ -237,9 +241,17 @@ export function ClientIpCheckPanel() {
                     title={<span className="whitespace-normal">{t("clientIp.title")}</span>}
                     description={t("clientIp.description")}
                     action={
-                        <Button type="button" size="sm" variant="ghost" onClick={() => void load()} disabled={busy} aria-label={t("clientIp.recheck")} title={t("clientIp.recheck")}>
-                            <RefreshCw size={15} className={busy ? "animate-spin" : undefined} /> <span className="hidden sm:inline">{t("clientIp.recheck")}</span>
-                        </Button>
+                        <RefreshButton
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            iconSize={15}
+                            onRefresh={load}
+                            busy={busy}
+                            label={<span className="hidden sm:inline">{t("clientIp.recheck")}</span>}
+                            aria-label={t("clientIp.recheck")}
+                            title={t("clientIp.recheck")}
+                        />
                     }
                 />
                 {failed && !check ? (

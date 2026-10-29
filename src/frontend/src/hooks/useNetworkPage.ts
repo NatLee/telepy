@@ -78,12 +78,13 @@ export function useNetworkPage() {
     const announced = useRef<Set<string>>(new Set());
     const firstLoad = useRef(true);
 
-    const fetchTopology = useCallback(async () => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
+    const fetchTopology = useCallback(async (): Promise<boolean> => {
         try {
             const res = await apiFetch("/api/reverse/lan/topology");
             if (!res.ok) {
                 showError(t("network.loadFailed"));
-                return;
+                return false;
             }
             const data = await readJson<{ tunnels?: TopologyTunnel[] }>(res);
             const list = Array.isArray(data?.tunnels) ? data!.tunnels : [];
@@ -93,8 +94,10 @@ export function useNetworkPage() {
                 for (const tn of list) if (tn.scan && !scanRunning(tn.scan)) announced.current.add(tn.scan.scan_id);
             }
             setTunnels(list);
+            return true;
         } catch {
             showError(t("network.loadFailed"));
+            return false;
         } finally {
             setLoading(false);
         }

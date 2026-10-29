@@ -53,7 +53,7 @@ export function useCommandRulesPage(view: RulesView = "mine") {
         [router, tunnelId, tab, base],
     );
 
-    const loadRules = useCallback(async () => {
+    const loadRules = useCallback(async (): Promise<boolean> => {
         try {
             // 我的頁面選了隧道：另外問那條隧道上生效的規則（別人的也在裡面）。/ Mine + a tunnel: also the rules in force there.
             const perTunnel = view === "mine" && tunnelId;
@@ -61,9 +61,12 @@ export function useCommandRulesPage(view: RulesView = "mine") {
             if (list.ok) setData((await list.json()) as RulesList);
             if (tr?.ok) setTunnelRules((await tr.json()) as TunnelRules);
             else setTunnelRules(null);
-            setFailed(!list.ok || (tr !== null && !tr.ok));
+            const ok = list.ok && (tr === null || tr.ok);
+            setFailed(!ok);
+            return ok;
         } catch {
             setFailed(true);
+            return false;
         }
     }, [tunnelId, view]);
 
@@ -217,8 +220,10 @@ export function useCommandRulesPage(view: RulesView = "mine") {
         setMute,
         failed,
         history,
+        // 回傳規則有沒有拿到（重新整理鈕的勾勾）。/ Answers whether the rules arrived (the Refresh button's check).
         reload: async () => {
-            await Promise.all([loadRules(), loadHistory()]);
+            const [ok] = await Promise.all([loadRules(), loadHistory()]);
+            return ok;
         },
         saveRule,
         toggleRule,

@@ -21,8 +21,9 @@
  * Folder downloads hand the core a look-alike directory handle that streams every file into a zip made here.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUp, CheckCircle2, Download, Eye, EyeOff, File as FileIcon, Folder, FolderPlus, FolderUp, HardDrive, Home, Info, Loader2, MoreHorizontal, PencilLine, RefreshCw, Trash2, Upload, X, XCircle } from "lucide-react";
+import { ArrowUp, CheckCircle2, Download, Eye, EyeOff, File as FileIcon, Folder, FolderPlus, FolderUp, HardDrive, Home, Info, Loader2, MoreHorizontal, PencilLine, Trash2, Upload, X, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -860,9 +861,7 @@ export function RustDeskFiles({ parent, password, onClose, onStateChange, onActi
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setFlowOpen(true)} title={t("desktop.files.flow.open")} aria-label={t("desktop.files.flow.open")}>
                             <Info size={14} />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => dir && open(dir.path)} disabled={!ready || loading} title={t("common.refresh")} aria-label={t("common.refresh")}>
-                            <RefreshCw size={14} className={loading && phase === "ready" ? "animate-spin" : ""} />
-                        </Button>
+                        <RefreshButton variant="ghost" size="icon" className="h-7 w-7" iconSize={14} onRefresh={() => (dir ? open(dir.path) : false)} busy={loading && phase === "ready"} disabled={!ready} title={t("common.refresh")} aria-label={t("common.refresh")} />
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} title={t("common.close")} aria-label={t("common.close")}>
                             <X size={14} />
                         </Button>

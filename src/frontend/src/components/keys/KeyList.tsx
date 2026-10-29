@@ -312,7 +312,7 @@ export function KeyList({
                 <span>{t("keys.onDevices")}</span>
                 <span className="w-[4.125rem]" />
             </div>
-            <ul className="divide-y divide-border/70">
+            <ul data-refresh-list className="divide-y divide-border/70">
                 {keys.map((k) => (
                     <KeyRow
                         key={k.id}
@@ -471,7 +471,7 @@ export function KeyCards({
 }) {
     return (
         <div className="@container">
-            <div className="grid grid-cols-1 gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
+            <div data-refresh-list className="grid grid-cols-1 gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3">
                 {keys.map((k) => (
                     <KeyCard
                         key={k.id}

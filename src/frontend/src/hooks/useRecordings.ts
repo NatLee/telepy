@@ -19,7 +19,8 @@ export function useRecordings(tunnelId: number | null, scope: ViewScope = "mine"
     const [list, setList] = useState<Recording[] | null>(null);
     const [failed, setFailed] = useState(false);
 
-    const reload = useCallback(async () => {
+    // 回傳有沒有拿到（重新整理鈕的勾勾）。/ Answers whether it arrived (the Refresh button's check).
+    const reload = useCallback(async (): Promise<boolean> => {
         try {
             const qs = new URLSearchParams();
             if (tunnelId) qs.set("tunnel_id", String(tunnelId));
@@ -27,12 +28,14 @@ export function useRecordings(tunnelId: number | null, scope: ViewScope = "mine"
             const res = await apiFetch(`/api/recordings${qs.size ? `?${qs.toString()}` : ""}`);
             if (!res.ok) {
                 setFailed(true);
-                return;
+                return false;
             }
             setList(((await res.json()) as { recordings: Recording[] }).recordings);
             setFailed(false);
+            return true;
         } catch {
             setFailed(true);
+            return false;
         }
     }, [tunnelId, scope]);
 

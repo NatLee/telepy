@@ -367,7 +367,7 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
                         <span>{t("groups.list.reach")}</span>
                         <span />
                     </div>
-                    <ul className="divide-y divide-border/70">
+                    <ul data-refresh-list className="divide-y divide-border/70">
                         {api.groups.map((g) => (
                             <KeyGroupRow
                                 key={g.id}
@@ -384,7 +384,7 @@ export function KeyGroupsSection({ api, keys, tunnelGroups, devices }: { api: Ke
                     </ul>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div data-refresh-list className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     {api.groups.map((g) => (
                         <KeyGroupCard
                             key={g.id}

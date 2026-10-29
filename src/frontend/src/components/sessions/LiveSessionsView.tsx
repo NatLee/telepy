@@ -8,13 +8,14 @@
  * Live sessions page (your own plus everyone's on tunnels you own or ADMIN, admins too); `all` = the admin section's
  * site-wide view (everyone's, with a user filter). `?tunnel=<id>` narrows it to one tunnel.
  */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Activity, Eye, Info, Plug, Power, RadioReceiver, RefreshCw, Server, X } from "lucide-react";
+import { Activity, Eye, Info, Plug, Power, RadioReceiver, Server, X } from "lucide-react";
 import { AdminChip, AdminViewLink, type ViewScope } from "@/components/layout/AdminViews";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { Chip } from "@/components/ui/section";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -92,6 +93,8 @@ export function LiveSessionsView({ scope }: { scope: ViewScope }) {
     const site = scope === "all";
     const tunnelParam = Number(params.get("tunnel")) || null;
     const { sessions, failed, reload, end } = useLiveSessions(scope);
+    // 重新整理後畫面上的列依序淡入。/ After Refresh, the rows on screen fade back in.
+    const pageRef = useRef<HTMLDivElement>(null);
     const [kind, setKind] = useState<KindFilter>("all");
     const [mineOnly, setMineOnly] = useState(false);
     // 管理區：只看某個人的。/ Admin section: only one person's.
@@ -107,7 +110,7 @@ export function LiveSessionsView({ scope }: { scope: ViewScope }) {
     const setTunnel = (id: number | null) => router.replace(id ? `${pathname}?tunnel=${id}` : pathname);
 
     return (
-        <div className="flex flex-col animate-fade-in-up">
+        <div ref={pageRef} className="flex flex-col animate-fade-in-up">
             <PageHeader
                 className="mb-6"
                 icon={site ? <RadioReceiver /> : <Activity />}
@@ -120,10 +123,7 @@ export function LiveSessionsView({ scope }: { scope: ViewScope }) {
                             <Info size={16} />
                             {t("sessions.watchInfo")}
                         </Button>
-                        <Button onClick={() => void reload()} variant="outline">
-                            <RefreshCw size={16} />
-                            {t("common.refresh")}
-                        </Button>
+                        <RefreshButton onRefresh={reload} ripple={pageRef} label={t("common.refresh")} />
                     </>
                 }
             />
@@ -214,7 +214,7 @@ export function LiveSessionsView({ scope }: { scope: ViewScope }) {
                                 {g.name}
                                 <span className="text-xs text-muted-foreground tabular-nums">{g.sessions.length}</span>
                             </h2>
-                            <ul className="divide-y divide-border">
+                            <ul data-refresh-list className="divide-y divide-border">
                                 {g.sessions.map((s) => (
                                     <SessionRow key={s.id} s={s} onEnd={() => setPending(s)} fromAdmin={site} />
                                 ))}

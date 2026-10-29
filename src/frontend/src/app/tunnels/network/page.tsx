@@ -13,9 +13,10 @@
  */
 import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Waypoints, RefreshCw, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X } from "lucide-react";
+import { Waypoints, Search, Router, Server, Terminal, ChevronsDownUp, ChevronsUpDown, Network, List, History, X } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Callout } from "@/components/ui/callout";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -169,10 +170,7 @@ function NetworkInner() {
                 title={t("network.title")}
                 description={t("network.subtitle")}
                 actions={
-                    <Button onClick={() => void actions.refresh()} variant="outline">
-                        <RefreshCw size={16} />
-                        {t("common.refresh")}
-                    </Button>
+                    <RefreshButton onRefresh={actions.refresh} ripple={pageRef} label={t("common.refresh")} />
                 }
             />
 

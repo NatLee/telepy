@@ -124,12 +124,14 @@ export function useAiActivityPage(scope: ViewScope = "mine") {
     const [tunnels, setTunnels] = useState<FilterOption[]>([]);
     const [users, setUsers] = useState<FilterOption[]>([]);
 
-    const fetchSessions = useCallback(async () => {
+    const fetchSessions = useCallback(async (): Promise<boolean> => {
         try {
             const res = await apiFetch(all ? "/api/ai/sessions?scope=all" : "/api/ai/sessions");
             if (res.ok) setSessions(await res.json());
+            return res.ok;
         } catch {
             /* keep the previous list */
+            return false;
         }
     }, [all]);
 
@@ -143,7 +145,7 @@ export function useAiActivityPage(scope: ViewScope = "mine") {
         }
     }, [all]);
 
-    const fetchActivity = useCallback(async () => {
+    const fetchActivity = useCallback(async (): Promise<boolean> => {
         try {
             const qs = new URLSearchParams({ limit: String(limit) });
             if (all) qs.set("scope", "all");
@@ -155,20 +157,24 @@ export function useAiActivityPage(scope: ViewScope = "mine") {
                 setRows(await res.json());
                 setRowsLimit(limit);
                 setFetchedAt(new Date());
-            } else {
-                showError(t("activity.fetchFailed"));
+                return true;
             }
+            showError(t("activity.fetchFailed"));
+            return false;
         } catch (e) {
             showError(e instanceof Error ? e.message : t("activity.fetchFailed"));
+            return false;
         } finally {
             setRowsFor(`${tunnelFilter}|${userFilter}|${appFilter}`);
         }
     }, [all, tunnelFilter, userFilter, appFilter, limit, showError, t]);
 
+    // 回傳開著的連線與紀錄都拿到了沒（重新整理鈕的勾勾）。/ Answers whether both lists arrived (the Refresh button's check).
     const refresh = useCallback(async () => {
         setLoading(true);
-        await Promise.all([fetchSessions(), fetchActivity(), fetchApps()]);
+        const [sessionsOk, activityOk] = await Promise.all([fetchSessions(), fetchActivity(), fetchApps()]);
         setLoading(false);
+        return sessionsOk && activityOk;
     }, [fetchSessions, fetchActivity, fetchApps]);
 
     useEffect(() => {
